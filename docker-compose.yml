@@ -1,13 +1,16 @@
 # test stream
 #
 #   certs      makes the https cert once, then exits
-#   frontend   react pages (vite build) served by caddy. /api -> api, /ws -> video, http -> https
+#   pages      builds the react pages, copies them into a volume, then exits
+#   frontend   caddy. serves the pages. /api -> api, /ws -> video, http -> https
 #   api        save a bio, go live, heartbeat, start/end log
 #   database   the bio and the session log. not the video
 #   redis      who is live
 #   video      rust. one upload in, copies it out. media on udp 7882
 #
-# start:  ./deploy.sh
+# start:  ./deploy.sh                 everything, first time or any time
+#         ./deploy.sh api             only the api (also: frontend, video)
+#         ./deploy.sh --pull          git pull, then rebuild what changed
 #         (by hand: cp .env.example .env, set PUBLIC_IP, docker compose up -d --build)
 # open:   https://<PUBLIC_IP from the .env file>
 # ports:  80/tcp 443/tcp 7882/udp
@@ -45,9 +48,17 @@ services:
     volumes:
       - certs-data:/certs
 
-  frontend:
-    # vite builds the react pages inside the image, caddy serves them. no node on the machine.
+  pages:
+    # builds the react pages (vite) and copies them into the volume caddy serves.
+    # runs once per deploy, then exits. redeploying pages never restarts caddy.
     build: ./frontend
+    container_name: pages
+    restart: "no"
+    volumes:
+      - pages-data:/srv
+
+  frontend:
+    image: caddy:2-alpine
     container_name: frontend
     restart: unless-stopped
     environment:
@@ -57,11 +68,15 @@ services:
       - "80:80"
       - "443:443"
     volumes:
+      - ./frontend/Caddyfile:/etc/caddy/Caddyfile:ro
+      - pages-data:/srv:ro
       - certs-data:/certs:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
       certs:
+        condition: service_completed_successfully
+      pages:
         condition: service_completed_successfully
       api:
         condition: service_started
@@ -142,5 +157,6 @@ services:
 volumes:
   database-data:
   certs-data:
+  pages-data:
   caddy-data:
   caddy-config:

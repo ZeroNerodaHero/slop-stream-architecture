@@ -11,10 +11,22 @@ flowchart LR
 
 ## deploy
 
-put the repo on the computer.
-run `./deploy.sh`.
-it prints a url. open it.
-click through the warning.
+on the server:
+
+```
+git clone <repo> && cd slop-stream-architecture
+./deploy.sh
+```
+
+it prints a url. open it. click through the warning.
+
+## update
+
+- `./deploy.sh --pull` — pull, rebuild only what changed
+- `./deploy.sh api` — only the api. streams stay up
+- `./deploy.sh frontend` — only the pages. streams stay up
+- `./deploy.sh video` — ends every stream. it warns first
+- `./deploy.sh` — everything again
 
 ## screens
 
@@ -29,6 +41,7 @@ click through the warning.
 ```mermaid
 flowchart LR
   certs -.->|https cert| frontend
+  pages -.->|built pages| frontend
   browser[browser] --> frontend
   frontend --> api
   frontend -->|video setup| video
@@ -44,6 +57,7 @@ flowchart LR
 - **redis** — who is live right now. the video box gets the final say
 - **video** — rust. one upload in, copies it out
 - **certs** — makes the https cert for your ip, then quits
+- **pages** — builds the react pages, hands them to frontend, then quits
 
 all on one computer for this test.
 

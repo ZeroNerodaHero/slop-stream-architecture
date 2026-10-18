@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
 #
-# deploy.sh — bring the stream lab up on this machine.
+# deploy.sh — bring the stream lab up on this machine, or redeploy part of it.
 #
-#   ./deploy.sh                 auto-detect PUBLIC_IP
-#   ./deploy.sh 203.0.113.7     use this ip
+#   ./deploy.sh                   everything. first time, or any time
+#   ./deploy.sh 203.0.113.7       everything, with this ip
+#   ./deploy.sh api               rebuild and restart only the api
+#   ./deploy.sh frontend video    only these (frontend, api, video)
+#   ./deploy.sh --pull            git pull, then rebuild only what the pull changed
+#   ./deploy.sh --pull api        git pull, then only the api
 #   PUBLIC_IP=10.0.0.5 ./deploy.sh
 #
-# Linux (Ubuntu 22.04/24.04, Debian 12): installs docker if missing, refuses if
-# 80/443 are taken, adds a 2G swapfile on small boxes, opens ufw ports, writes
-# .env, builds the frontend and the two rust images one at a time, starts
-# everything, waits for /api/health. Exits non-zero if the health check fails.
-# macOS (Docker Desktop): same, minus install / swap / ufw; PUBLIC_IP comes from
-# en0/en1 (no ipify lookup).
+# Full run, Linux (Ubuntu 22.04/24.04, Debian 12): installs docker if missing,
+# refuses if 80/443 are taken, adds a 2G swapfile on small boxes, opens ufw
+# ports, writes .env, builds the pages and the two rust images one at a time,
+# starts everything, waits for /api/health. Exits non-zero if the health check
+# fails. macOS (Docker Desktop): same, minus install / swap / ufw; PUBLIC_IP
+# comes from en0/en1 (no ipify lookup).
+#
+# Partial run: keeps PUBLIC_IP from .env, rebuilds the named services, swaps
+# only their containers. frontend = the pages; caddy keeps running, so live
+# streams survive. api = a few seconds of 502, streams survive. video = every
+# live stream ends (the script says so first).
 #
 # Stop everything later with:  docker compose down
 #
@@ -215,6 +224,7 @@ pick_docker_cmd() {   # sets DOCKER
 check_credential_helper() {
   [ "$OS" = mac ] || return 0
   have docker-credential-desktop || return 0
+  grep -q '"credsStore"' "${DOCKER_CONFIG:-$HOME/.docker}/config.json" 2>/dev/null || return 0
   if ! perl -e 'alarm 10; exec @ARGV' docker-credential-desktop list </dev/null >/dev/null 2>&1; then
     warn "docker-credential-desktop is not answering, so image pulls will hang."
     note "fix: restart Docker Desktop, answer its keychain prompt, or remove \"credsStore\" from ~/.docker/config.json"
@@ -353,11 +363,117 @@ build_one() {
 
 compose_up() {
   say "building the images one at a time (first time: several minutes, CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS)"
-  build_one frontend
+  build_one pages
   build_one video
   build_one api
   say "${DOCKER[*]} compose up -d"
   "${DOCKER[@]}" compose up -d
+}
+
+# ---- partial redeploy --------------------------------------------------------
+# `frontend` means the pages: rebuild them and run the one-shot copy. caddy is
+# left alone, so nobody's websocket drops. the Caddyfile is a bind mount; when it
+# changed, caddy reloads it in place.
+redeploy_frontend() {
+  build_one pages
+  say "publishing the new pages (caddy keeps running)"
+  "${DOCKER[@]}" compose up -d --no-deps pages
+  "${DOCKER[@]}" compose wait pages >/dev/null 2>&1 || true
+  "${DOCKER[@]}" compose logs --no-log-prefix --tail 1 pages 2>/dev/null || true
+}
+
+reload_caddy() {
+  say "Caddyfile changed, reloading caddy in place"
+  if ! "${DOCKER[@]}" compose exec -T frontend caddy reload --config /etc/caddy/Caddyfile 2>/dev/null; then
+    warn "reload failed, restarting caddy instead (open websockets drop)"
+    "${DOCKER[@]}" compose up -d --no-deps --force-recreate frontend
+  fi
+}
+
+redeploy_service() {   # api | video
+  if [ "$1" = video ]; then
+    warn "redeploying video ends every live stream right now. watchers reconnect on their own; streamers press start again."
+  fi
+  build_one "$1"
+  say "swapping the $1 container"
+  "${DOCKER[@]}" compose up -d --no-deps "$1"
+}
+
+redeploy_targets() {
+  local t
+  for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
+    case "$t" in
+      frontend) redeploy_frontend ;;
+      api|video) redeploy_service "$t" ;;
+      caddy) reload_caddy ;;
+      compose) say "docker-compose.yml changed, applying it"; "${DOCKER[@]}" compose up -d ;;
+    esac
+  done
+}
+
+# ---- git pull ----------------------------------------------------------------
+pull_repo() {   # sets OLD_HEAD NEW_HEAD
+  have git || die "git not found"
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "this folder is not a git checkout, nothing to pull"
+  git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 \
+    || die "this branch has no upstream to pull from. on your machine: git push -u origin <branch>"
+  OLD_HEAD="$(git rev-parse HEAD)"
+  say "git pull --ff-only"
+  git pull --ff-only || die "pull failed. local edits in the way? see: git status"
+  NEW_HEAD="$(git rev-parse HEAD)"
+  if [ "$OLD_HEAD" = "$NEW_HEAD" ]; then note "already up to date"; else note "$(git log --oneline "$OLD_HEAD..$NEW_HEAD" | wc -l | tr -d ' ') new commit(s)"; fi
+}
+
+# which services the files changed between two commits belong to, one per line
+changed_services() {
+  git diff --name-only "$1" "$2" | while IFS= read -r f; do
+    case "$f" in
+      Cargo.toml|Cargo.lock) printf 'api\nvideo\n' ;;
+      api/*) echo api ;;
+      video/*) echo video ;;
+      frontend/Caddyfile) echo caddy ;;
+      frontend/*) echo frontend ;;
+      docker-compose.yml) echo compose ;;
+    esac
+  done | sort -u
+}
+
+# ---- args --------------------------------------------------------------------
+usage() {
+  cat <<'EOF'
+usage: ./deploy.sh [--pull] [PUBLIC_IP] [frontend|api|video ...]
+
+  no services         full deploy: machine setup, every image, docker compose up
+  frontend api video  rebuild just these and swap their containers
+  --pull              git pull --ff-only first. with no services named, redeploy what the pull changed
+  PUBLIC_IP           use this ip (full deploy only). otherwise: $PUBLIC_IP > .env > auto-detect
+EOF
+}
+
+parse_args() {   # sets IP_ARG PULL TARGETS
+  IP_ARG=""; PULL=0; TARGETS=()
+  local a
+  for a in "$@"; do
+    case "$a" in
+      -h|--help) usage; exit 0 ;;
+      --pull) PULL=1 ;;
+      frontend|api|video) TARGETS+=("$a") ;;
+      pages) TARGETS+=("frontend") ;;
+      *)
+        if is_ipv4 "$a"; then IP_ARG="$a"
+        else die "don't know what '$a' is. services are: frontend api video. see ./deploy.sh --help"
+        fi ;;
+    esac
+  done
+  if [ -n "$IP_ARG" ] && [ ${#TARGETS[@]} -gt 0 ]; then
+    die "changing the ip touches the cert, caddy and video. run a full deploy: ./deploy.sh $IP_ARG"
+  fi
+}
+
+load_public_ip_from_env() {
+  PUBLIC_IP="${PUBLIC_IP:-$(env_file_value PUBLIC_IP)}"
+  is_ipv4 "${PUBLIC_IP:-}" || die "no PUBLIC_IP in $ENV_FILE. run a full deploy first: ./deploy.sh"
+  export PUBLIC_IP
 }
 
 # ---- 8. health ---------------------------------------------------------------
@@ -410,6 +526,7 @@ show_result() {
   Watch logs:   ${DOCKER[*]} compose logs -f video api
   Stop:         ${DOCKER[*]} compose down        (add -v to also drop the database)
   Change ip:    ./deploy.sh 1.2.3.4
+  Update:       ./deploy.sh --pull               (or: ./deploy.sh api)
 EOF
   if [ "$ok" -ne 1 ]; then
     printf '\n  NOTE: the health check did not pass; the url above may not work yet. Check the logs first.\n'
@@ -417,17 +534,9 @@ EOF
 }
 
 # ---- main --------------------------------------------------------------------
-main() {
-  case "${1:-}" in
-    -h|--help)
-      printf 'usage: ./deploy.sh [PUBLIC_IP]\n  PUBLIC_IP: arg > $PUBLIC_IP env > existing .env (non-127.0.0.1) > auto-detect\n'
-      exit 0 ;;
-  esac
-  cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  [ -f docker-compose.yml ] || die "docker-compose.yml not found next to deploy.sh"
-
+full_deploy() {
   ensure_curl
-  pick_public_ip "${1:-}"
+  pick_public_ip "$IP_ARG"
   ensure_docker
   pick_docker_cmd
   ensure_compose
@@ -442,6 +551,52 @@ main() {
   wait_for_health || ok=0
   show_result "$ok"
   [ "$ok" -eq 1 ]
+}
+
+partial_deploy() {
+  ensure_curl
+  load_public_ip_from_env
+  pick_docker_cmd
+  ensure_compose
+  pick_build_jobs
+  say "redeploying: ${TARGETS[*]}   (PUBLIC_IP=$PUBLIC_IP from $ENV_FILE)"
+  redeploy_targets
+  local ok=1
+  wait_for_health || ok=0
+  say "containers"
+  "${DOCKER[@]}" compose ps || true
+  [ "$ok" -eq 1 ] && note "done. https://${PUBLIC_IP}/"
+  [ "$ok" -eq 1 ]
+}
+
+main() {
+  cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  [ -f docker-compose.yml ] || die "docker-compose.yml not found next to deploy.sh"
+  parse_args "$@"
+
+  if [ "$PULL" = 1 ]; then
+    pull_repo
+    if [ ${#TARGETS[@]} -eq 0 ]; then
+      if [ "$OLD_HEAD" = "$NEW_HEAD" ]; then
+        say "nothing changed, nothing to redeploy"
+        exit 0
+      fi
+      local changed
+      changed="$(changed_services "$OLD_HEAD" "$NEW_HEAD")"
+      if [ -z "$changed" ]; then
+        say "the pull changed no service files (docs only?), nothing to redeploy"
+        exit 0
+      fi
+      while IFS= read -r svc; do TARGETS+=("$svc"); done <<< "$changed"
+      note "changed: ${TARGETS[*]}"
+    fi
+  fi
+
+  if [ ${#TARGETS[@]} -gt 0 ]; then
+    partial_deploy
+  else
+    full_deploy
+  fi
 }
 
 main "$@"

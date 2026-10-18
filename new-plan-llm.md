@@ -62,11 +62,12 @@ One quality. Every watcher gets whatever the streamer is sending.
 
 ## processes
 
-One machine. Six services in `docker-compose.yml`; `certs` runs once and exits.
+One machine. Seven services in `docker-compose.yml`; `certs` and `pages` run once and exit.
 
 ```mermaid
 flowchart TB
   certs -.->|cert volume| frontend
+  pages -.->|pages volume| frontend
   browser[browser] -->|https :443| frontend
   frontend -->|/api| api
   frontend -->|/ws| video
@@ -78,7 +79,8 @@ flowchart TB
 
 | container | job |
 |---|---|
-| frontend | built from `frontend/`: node builds the React app (Vite), `caddy:2-alpine` serves `dist/` as a single-page app. `/api/*` → `api:4000`, `/ws` → `video:7880`. https :443 with the volume cert. :80 redirects to https |
+| pages | built from `frontend/`: node builds the React app (Vite); the final image only copies `dist/` into the `pages-data` volume (`publish-pages.sh`: new files first, then stale ones removed) and exits. Re-running it is how the pages redeploy, without touching caddy |
+| frontend | `caddy:2-alpine`, no custom build. serves the `pages-data` volume as a single-page app (`try_files … /index.html`). `/api/*` → `api:4000`, `/ws` → `video:7880`. https :443 with the volume cert. :80 redirects to https. The Caddyfile is a bind mount; `deploy.sh` reloads caddy in place when it changes |
 | api | Rust (axum) in `api/`. bios, sessions, live list, heartbeats |
 | database | postgres. `streamers(name, bio, updated_at)`, `sessions(id, name, token, started_at, ended_at)`. no host port; peek with `docker compose exec database psql -U stream` |
 | redis | `live:<name>` = session id, 90s TTL, kept alive by the page's heartbeat. no host port; peek with `docker compose exec redis redis-cli` |
@@ -232,8 +234,9 @@ Conventions kept from `frontend-conventions.mdc`:
 frontend/
   package.json         dev, build (tsc + vite), preview, typecheck, lint (oxlint), format (oxfmt)
   vite.config.mts      port 3000; /api and /ws proxied to https://<PUBLIC_IP> from ../.env
-  Dockerfile           node:24 build → caddy:2-alpine with dist/ and the Caddyfile
-  Caddyfile            /api, /ws, spa fallback (try_files … /index.html), cache headers
+  Dockerfile           node:24 build → alpine image holding dist/ (the `pages` one-shot)
+  publish-pages.sh     copies dist/ into the pages volume caddy serves
+  Caddyfile            /api, /ws, spa fallback (try_files … /index.html), cache headers. bind-mounted into caddy
   src/main.tsx         QueryClientProvider + RouterProvider
   src/router.tsx       / , /live , /watch/:name , *
   src/app/             HomePage, LivePage, WatchPage, NotFoundPage, globals.css
@@ -242,13 +245,19 @@ frontend/
   src/utils/           cn, since
 ```
 
-Local work: start the stack (`./deploy.sh`), then `cd frontend && npm install && npm run dev`, open `http://localhost:3000`. `localhost` is a secure context, so the camera works over plain http; the dev server proxies `/api` and `/ws` to the running stack and the media goes to `<PUBLIC_IP>:7882` as always. The Docker image builds the same code with `npm ci && npm run build`, so no node is needed on the machine.
+Local work: start the stack (`./deploy.sh`), then `cd frontend && npm install && npm run dev`, open `http://localhost:3000`. `localhost` is a secure context, so the camera works over plain http; the dev server proxies `/api` and `/ws` to the running stack and the media goes to `<PUBLIC_IP>:7882` as always. The `pages` image builds the same code with `npm ci && npm run build`, so no node is needed on the machine.
 
 `video` binds one udp socket, `7882` (udp mux, 4 MB buffers), for every peer. Compose publishes only `7882/udp`. Do not add a second media server. Volumes: `database-data`, `certs-data`, `caddy-data`, `caddy-config`; `down -v` drops all four.
 
 ## deploy script
 
-`deploy.sh` at the repo root. Pick `PUBLIC_IP` (arg > `$PUBLIC_IP` > existing `.env` unless it is `127.0.0.1` > Linux: ipify, `ip route`, `hostname -I`; macOS: en0/en1 > `127.0.0.1` with a warning; warns when `.env` disagrees with what the machine looks like); Linux: install docker + compose plugin if missing, refuse if 80/443 are taken by something else (macOS too, via lsof), refuse under 4 GB free disk, add a 2G swapfile when RAM < 2GB and there is no swap (session only), `ufw allow 80/tcp 443/tcp 7882/udp` if ufw is active; macOS: refuse if Docker Desktop's credential helper hangs; pick `CARGO_BUILD_JOBS` = `$CARGO_BUILD_JOBS` if set, else RAM / 1.5 GB capped at the core count (the `.env` value is overwritten each run); write `.env`; `docker compose build frontend`, then `video`, then `api` (a build failure prints the out-of-memory hint), then `up -d`; poll `https://<PUBLIC_IP>/api/health` with `curl -k` every 3s for up to 120s, accepting `https://127.0.0.1` after 30s (cloud 1:1 nat); print the url; exit non-zero if nothing answered. Rerunnable. Cloud firewalls: open 80/tcp, 443/tcp, 7882/udp by hand.
+`deploy.sh` at the repo root. Three modes:
+
+- `./deploy.sh [PUBLIC_IP]` — full deploy, described below. First time on a machine, or whenever the ip changes.
+- `./deploy.sh frontend|api|video …` — partial. Keeps `PUBLIC_IP` from `.env`, rebuilds only the named images, swaps only their containers (`compose up -d --no-deps`), then waits for `/api/health`. `frontend` rebuilds `pages` and re-runs the copy; caddy is not restarted, so live websockets survive. `api` is a few seconds of 502 on `/api`; streams survive (heartbeats ignore non-4xx failures). `video` ends every live stream and prints a warning first. An ip argument with services is refused: an ip change is a full deploy.
+- `./deploy.sh --pull [services…]` — `git pull --ff-only` first (needs an upstream; refuses otherwise). With no services named, the files changed between the old and new HEAD pick the services: `api/**` → api, `video/**` → video, `Cargo.toml`/`Cargo.lock` → api + video, `frontend/Caddyfile` → caddy reload in place, other `frontend/**` → frontend, `docker-compose.yml` → `compose up -d`. Docs-only pulls redeploy nothing.
+
+Full deploy: pick `PUBLIC_IP` (arg > `$PUBLIC_IP` > existing `.env` unless it is `127.0.0.1` > Linux: ipify, `ip route`, `hostname -I`; macOS: en0/en1 > `127.0.0.1` with a warning; warns when `.env` disagrees with what the machine looks like); Linux: install docker + compose plugin if missing, refuse if 80/443 are taken by something else (macOS too, via lsof), refuse under 4 GB free disk, add a 2G swapfile when RAM < 2GB and there is no swap (session only), `ufw allow 80/tcp 443/tcp 7882/udp` if ufw is active; macOS: refuse if Docker Desktop's credential helper hangs; pick `CARGO_BUILD_JOBS` = `$CARGO_BUILD_JOBS` if set, else RAM / 1.5 GB capped at the core count (the `.env` value is overwritten each run); write `.env`; `docker compose build pages`, then `video`, then `api` (a build failure prints the out-of-memory hint), then `up -d`; poll `https://<PUBLIC_IP>/api/health` with `curl -k` every 3s for up to 120s, accepting `https://127.0.0.1` after 30s (cloud 1:1 nat); print the url; exit non-zero if nothing answered. Rerunnable. Cloud firewalls: open 80/tcp, 443/tcp, 7882/udp by hand.
 
 ## known limits
 
