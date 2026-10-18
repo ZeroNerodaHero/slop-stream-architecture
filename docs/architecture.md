@@ -1,6 +1,6 @@
 # streams
 
-background from before the build. the real layout is in `new-plan-human.md` and `new-plan-llm.md`. the boxes below are the big-picture idea, not the repo.
+background from before the build. the real layout is in `overview.md` and `spec.md`. the boxes below are the big-picture idea, not the repo.
 
 upload once. a server copies it out.
 

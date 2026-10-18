@@ -6,6 +6,8 @@ target
 .git
 .DS_Store
 frontend
+test
+docs
 node_modules
 **/node_modules
 *.md

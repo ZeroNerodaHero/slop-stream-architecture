@@ -32,7 +32,7 @@ it prints a url. open it. click through the warning.
 
 - **home** — who is live
 - **go live** — your camera, a name box, a start button, your bio. you get a watch link to copy
-- **watch** — their camera and their bio. if they are not on yet, it keeps checking
+- **watch** — their camera and their bio, chat on the side. if they are not on yet, it keeps checking
 
 ## on the computer
 
@@ -53,6 +53,7 @@ flowchart LR
 
 - **frontend** — the pages. react, same stack as axiom-frontend. passes api and video setup through
 - **api** — save a bio. go live. stop. a log of starts and stops. only you can stop your own stream
+- **chat** — the text chat. one line per person per second, 500 letters max, last 500 lines kept. see `chat.md`
 - **database** — the bio and the log. not the video
 - **redis** — who is live right now. the video box gets the final say
 - **video** — rust. one upload in, copies it out
@@ -100,6 +101,7 @@ by script, on your mac:
 
 - `./test.sh` — real chrome with a fake camera. go live, watch, stop. 10 seconds
 - `./test.sh https://1.2.3.4` — same thing against the server
+- chat is in there too: two people talk, a reload keeps the lines, 501 letters is refused
 - `./test.sh --all` — also the redeploys, with a stream running through them
 
 ## fake streams

@@ -4,6 +4,7 @@
 #   pages      builds the react pages, copies them into a volume, then exits
 #   frontend   caddy. serves the pages. /api -> api, /ws -> video, http -> https
 #   api        save a bio, go live, heartbeat, start/end log
+#   chat       the text chat. websocket per viewer, last 500 lines per stream in redis
 #   database   the bio and the session log. not the video
 #   redis      who is live
 #   video      rust. one upload in, copies it out. media on udp 7882
@@ -108,6 +109,32 @@ services:
         condition: service_healthy
     # no host port. browsers reach this through the frontend, at /api
 
+  chat:
+    # the text chat. the api binary run as `api chat`, same image, no extra build.
+    # one websocket per viewer at /chat/<name>; lines live in redis streams. see docs/chat.md
+    image: stream-api
+    container_name: chat
+    restart: unless-stopped
+    command: ["chat"]
+    environment:
+      DATABASE_URL: postgres://stream:stream@database:5432/stream
+      REDIS_URL: redis://redis:6379/0
+      PORT: "4100"
+      RUST_LOG: info
+    depends_on:
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    # the image's own check looks at the api port; this one looks at ours
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4100"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    # no host port. browsers reach this through the frontend, at /chat
+
   database:
     image: postgres:17-alpine
     container_name: database
@@ -178,11 +205,15 @@ services:
       DUMMY_NAMES: ${DUMMY_NAMES:-}
       VIDEO_WS_URL: ws://video:7880/ws
       API_URL: http://api:4000
+      # pretend viewers talk in each dummy room. leave empty to turn that off.
+      CHAT_WS_URL: ws://chat:4100
       RUST_LOG: "warn,video=info"
     depends_on:
       video:
         condition: service_started
       api:
+        condition: service_started
+      chat:
         condition: service_started
 
 volumes:

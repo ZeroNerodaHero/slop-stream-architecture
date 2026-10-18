@@ -43,7 +43,8 @@ export default defineConfig(({ mode }) => {
       port: 42069,
       proxy: {
         '/api': { target: backend, changeOrigin: true, secure: false, configure: explain },
-        '/ws': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain }
+        '/ws': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain },
+        '/chat': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain }
       }
     },
     build: {

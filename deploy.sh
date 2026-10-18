@@ -396,8 +396,14 @@ redeploy_service() {   # api | video
     warn "redeploying video ends every live stream right now. watchers reconnect on their own; streamers press start again."
   fi
   build_one "$1"
-  say "swapping the $1 container"
-  "${DOCKER[@]}" compose up -d --no-deps "$1"
+  if [ "$1" = api ]; then
+    # chat is the same image run as `api chat`, so it moves with the api
+    say "swapping the api and chat containers"
+    "${DOCKER[@]}" compose up -d --no-deps api chat
+  else
+    say "swapping the $1 container"
+    "${DOCKER[@]}" compose up -d --no-deps "$1"
+  fi
 }
 
 # the fake streams. video and api read the same password, so they are included:
@@ -455,7 +461,7 @@ usage() {
 usage: ./deploy.sh [--pull] [PUBLIC_IP] [frontend|api|video|dummy ...]
 
   no services               full deploy: machine setup, every image, docker compose up
-  frontend api video dummy  rebuild just these and swap their containers
+  frontend api video dummy  rebuild just these and swap their containers (chat moves with api)
   --pull                    git pull --ff-only first. with no services named, redeploy what the pull changed
   PUBLIC_IP                 use this ip (full deploy only). otherwise: $PUBLIC_IP > .env > auto-detect
 
@@ -472,6 +478,7 @@ parse_args() {   # sets IP_ARG PULL TARGETS
       --pull) PULL=1 ;;
       frontend|api|video|dummy) TARGETS+=("$a") ;;
       pages) TARGETS+=("frontend") ;;
+      chat) TARGETS+=("api") ;;
       *)
         if is_ipv4 "$a"; then IP_ARG="$a"
         else die "don't know what '$a' is. services are: frontend api video dummy. see ./deploy.sh --help"

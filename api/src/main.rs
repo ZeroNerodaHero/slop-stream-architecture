@@ -8,6 +8,10 @@
 //!
 //! go-live hands out a session id plus a random token. Heartbeat and stop
 //! must present them, so a stranger cannot end someone else's stream.
+//!
+//! The same binary run as `api chat` is the text chat server (chat.rs).
+
+mod chat;
 
 use std::collections::HashSet;
 use std::env;
@@ -107,7 +111,7 @@ impl From<JsonRejection> for ApiError {
 type ApiResult<T = Value> = Result<Json<T>, ApiError>;
 
 /// A stream name from the path. Lowercase a-z 0-9 _ -, 1 to 32 chars.
-struct Name(String);
+pub(crate) struct Name(pub(crate) String);
 
 impl<S: Send + Sync> FromRequestParts<S> for Name {
     type Rejection = ApiError;
@@ -139,9 +143,9 @@ struct BioBody {
 /// Proof that you are the one who went live. From the query string, so the
 /// page can also send it with `sendBeacon` when the tab closes.
 #[derive(Deserialize)]
-struct Owner {
-    session: i64,
-    token: i64,
+pub(crate) struct Owner {
+    pub(crate) session: i64,
+    pub(crate) token: i64,
 }
 
 #[derive(Deserialize, Default)]
@@ -193,7 +197,7 @@ async fn redis_live(s: &AppState) -> Result<Vec<String>, redis::RedisError> {
 }
 
 /// Does this session own the live key for the name, and is it still open?
-async fn owns_session(db: &PgPool, name: &str, owner: &Owner) -> Result<bool, sqlx::Error> {
+pub(crate) async fn owns_session(db: &PgPool, name: &str, owner: &Owner) -> Result<bool, sqlx::Error> {
     let open: Option<i64> = sqlx::query_scalar(
         "SELECT id FROM sessions WHERE id = $1 AND token = $2 AND name = $3 AND ended_at IS NULL",
     )
@@ -436,7 +440,7 @@ async fn connect_postgres(url: &str) -> PgPool {
     }
 }
 
-async fn connect_redis(url: &str) -> ConnectionManager {
+pub(crate) async fn connect_redis(url: &str) -> ConnectionManager {
     let client = redis::Client::open(url).expect("bad REDIS_URL");
     let config = ConnectionManagerConfig::new()
         .set_connection_timeout(Some(Duration::from_secs(5)))
@@ -450,7 +454,7 @@ async fn connect_redis(url: &str) -> ConnectionManager {
     }
 }
 
-async fn wait_for_signal() {
+pub(crate) async fn wait_for_signal() {
     use tokio::signal::unix::{signal, SignalKind};
     let mut term = signal(SignalKind::terminate()).expect("sigterm handler");
     let mut int = signal(SignalKind::interrupt()).expect("sigint handler");
@@ -475,6 +479,14 @@ async fn main() {
         .unwrap_or(4000);
 
     let db = connect_postgres(&database_url).await;
+
+    // `api chat` is the text chat, same binary, see chat.rs
+    if env::args().nth(1).as_deref() == Some("chat") {
+        let port = env::var("PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(4100);
+        chat::run(db, &redis_url, port).await.expect("chat");
+        return;
+    }
+
     db.execute(SCHEMA).await.expect("create tables");
     let redis = connect_redis(&redis_url).await;
     let http = reqwest::Client::builder()

@@ -1,6 +1,6 @@
 # test stream — build spec
 
-Source of truth for product decisions is `new-plan-human.md`. If they conflict, follow the human file. This file is the implementable version of that plan, and it describes what is in the repo now.
+Source of truth for product decisions is `overview.md`. If they conflict, follow the human file. This file is the implementable version of that plan, and it describes what is in the repo now. The chat has its own document, `chat.md`.
 
 ## goal
 
@@ -77,6 +77,10 @@ flowchart TB
   browser -->|media udp :7882| video
   dummy -->|ws + media, like a browser| video
   dummy -.->|bio, go-live, heartbeat| api
+  frontend -->|/chat/name| chat
+  chat --> redis
+  chat -.->|is this the streamer| database
+  dummy -.->|pretend viewers| chat
 ```
 
 | container | job |
@@ -84,6 +88,7 @@ flowchart TB
 | pages | built from `frontend/`: node builds the React app (Vite); the final image only copies `dist/` into the `pages-data` volume (`publish-pages.sh`: new files first, then stale ones removed) and exits. Re-running it is how the pages redeploy, without touching caddy |
 | frontend | `caddy:2-alpine`, no custom build. serves the `pages-data` volume as a single-page app (`try_files … /index.html`). `/api/*` → `api:4000`, `/ws` → `video:7880`. https :443 with the volume cert. :80 redirects to https. The Caddyfile is a bind mount; `deploy.sh` reloads caddy in place when it changes |
 | api | Rust (axum) in `api/`. bios, sessions, live list, heartbeats |
+| chat | the `api` binary run as `api chat` (same image, no extra build) on `:4100`. one websocket per viewer at `/chat/<name>`, lines in a redis stream per room (last 500), the database only to confirm the streamer. moves with `./deploy.sh api`. the whole design is in `chat.md` |
 | database | postgres. `streamers(name, bio, updated_at)`, `sessions(id, name, token, started_at, ended_at)`. no host port; peek with `docker compose exec database psql -U stream` |
 | redis | `live:<name>` = session id, 90s TTL, kept alive by the page's heartbeat. no host port; peek with `docker compose exec redis redis-cli` |
 | video | Rust (webrtc-rs) in `video/`. one upload in, packet copies out. all media on udp 7882. Opus + VP8 only. this is ingest and fanout for the test |
@@ -222,6 +227,8 @@ Cargo.toml           workspace: video, api. one Cargo.lock (commit it: the image
 video/               rust sfu. ws 7880 internal, media udp 7882. Dockerfile with ARG CARGO_BUILD_JOBS
 video/src/dummy.rs   `video dummy`, the fake streams. video/Dockerfile.dummy adds ffmpeg + a font
 api/                 rust axum api on 4000. Dockerfile with ARG CARGO_BUILD_JOBS
+api/src/chat.rs      `api chat`, the text chat on 4100. see docs/chat.md
+docs/                overview, spec, chat, architecture. docs/README.md says which is which
 frontend/            react app (vite). see "frontend" above. Dockerfile builds it, Caddyfile serves it
 test.sh, test/       browser tests. see "tests" below
 ```
@@ -250,8 +257,8 @@ frontend/
   src/main.tsx         QueryClientProvider + RouterProvider
   src/router.tsx       / , /live , /watch/:name , *
   src/app/             HomePage, LivePage, WatchPage, NotFoundPage, globals.css
-  src/infra/           api.ts, relay.ts (ws + ice), names.ts, store.ts, atoms/
-  src/shared-components/  Button, StatusLine, PageFrame, VideoFrame
+  src/infra/           api.ts, relay.ts (ws + ice), names.ts, store.ts, atoms/ (publish, watch, chat)
+  src/shared-components/  Button, StatusLine, PageFrame, VideoFrame, ChatPanel, TestBadge
   src/utils/           cn, since
 ```
 
@@ -282,8 +289,9 @@ Full deploy (builds `pages`, `video`, `dummy`, `api`): pick `PUBLIC_IP` (arg > `
 | `test/regress.js` | token-gated stop, watcher auto-recovery after a publisher reload, trailing slash, fast `video` restart, start/stop/start race, heartbeat ownership, oversized offer | local only (restarts containers) |
 | `test/redeploy.js` | `./deploy.sh frontend` and `api` keep a live stream alive; `video` warns and ends it | local only, `--all` |
 | `test/dummy.js` | home lists the fake streams, one plays video and audio, `dummy-` names are refused without the password | local only, `--all`, needs `DUMMY_STREAMS ≥ 1` |
+| `test/chat.js` | two viewers talk in an empty room, a reload keeps the history, 501 chars refused and 500 delivered, the streamer's line is marked on a viewer's screen | anywhere |
 
-Pages keep stable ids and strings for these: `#name #start #stop #status #video #unmute #retry`, and the status words `live`, `watching`, `ended…`.
+Pages keep stable ids and strings for these: `#name #start #stop #status #video #unmute #retry`, the chat's `#chat-nick #chat-join #chat-text #chat-send #chat-lines #chat-count` (lines carry `data-streamer="true"`), and the status words `live`, `watching`, `ended…`.
 
 ## known limits
 

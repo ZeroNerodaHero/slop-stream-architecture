@@ -21,6 +21,7 @@ import {
 } from '@/infra/atoms/watch-atoms';
 import { cleanName, isDummyName } from '@/infra/names';
 import { Button } from '@/shared-components/Button';
+import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { StatusLine } from '@/shared-components/StatusLine';
 import { TestBadge } from '@/shared-components/TestBadge';
@@ -64,28 +65,35 @@ export function WatchPage() {
       }
       titleId="who"
       aside={<Link to="/">home</Link>}
+      wide
     >
-      <VideoFrame id="video" streamAtom={remoteStreamAtom} videoRef={videoRef} muted={muted} onPlaying={markPlaying} onAutoplayBlocked={markAutoplayBlocked} />
-      <StatusLine text={message} tone={tone} />
+      <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start lg:gap-6">
+        <div className="min-w-0">
+          <VideoFrame id="video" streamAtom={remoteStreamAtom} videoRef={videoRef} muted={muted} onPlaying={markPlaying} onAutoplayBlocked={markAutoplayBlocked} />
+          <StatusLine text={message} tone={tone} />
 
-      <div className="my-3 flex flex-wrap items-center gap-3">
-        {showUnmute && (
-          <Button id="unmute" variant="primary" onClick={unmute}>
-            {needsTap ? 'tap to play' : 'unmute'}
-          </Button>
-        )}
-        {canRetry && (
-          <Button id="retry" onClick={retry}>
-            retry
-          </Button>
-        )}
+          <div className="my-3 flex flex-wrap items-center gap-3">
+            {showUnmute && (
+              <Button id="unmute" variant="primary" onClick={unmute}>
+                {needsTap ? 'tap to play' : 'unmute'}
+              </Button>
+            )}
+            {canRetry && (
+              <Button id="retry" onClick={retry}>
+                retry
+              </Button>
+            )}
+          </div>
+
+          {bio && (
+            <p id="bio" className="whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]">
+              {bio}
+            </p>
+          )}
+        </div>
+
+        {name && <ChatPanel name={name} className="mt-4 h-[60vh] max-h-[640px] lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]" />}
       </div>
-
-      {bio && (
-        <p id="bio" className="whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]">
-          {bio}
-        </p>
-      )}
     </PageFrame>
   );
 }

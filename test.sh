@@ -13,6 +13,7 @@
 # What runs:
 #   e2e        go live -> listed on home -> watcher sees frames -> stop -> watcher sees ended
 #   dup        a second person on the same name is refused
+#   chat       two viewers talk, history survives a reload, 501 chars refused, streamer lines marked
 #   regress    token-gated stop, auto-recovery, trailing slash, fast restart, races, bad offers
 #   redeploy   (--all, local only) partial ./deploy.sh runs while a stream is live
 #   dummy      (--all, local only, needs DUMMY_STREAMS >= 1) the fake streams play and dummy- names are gated
@@ -70,6 +71,7 @@ run() {
 
 run e2e
 run dup
+run chat
 if [ "$LOCAL" = 1 ]; then
   run regress
   if [ "$ALL" = 1 ]; then

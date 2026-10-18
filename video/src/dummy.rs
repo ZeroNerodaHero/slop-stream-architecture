@@ -43,8 +43,28 @@ struct Config {
     password: Option<String>,
     video_ws_url: String,
     api_url: Option<String>,
+    /// e.g. ws://chat:4100. None turns the pretend chatter off.
+    chat_ws_url: Option<String>,
     font: String,
 }
+
+const VIEWER_NICKS: [&str; 6] = ["pixelfan", "firstviewer", "lurker_42", "night-owl", "sam", "bitrate_bob"];
+const LINES: [&str; 14] = [
+    "hi chat",
+    "is this live?",
+    "the box is winning",
+    "W stream",
+    "corner hit incoming",
+    "sound on, nice",
+    "how long have you been live",
+    "this is a test message that is a bit longer so the panel has to wrap it onto a second line, which is useful for styling",
+    "lol",
+    "brb",
+    "can you make the box faster",
+    "first time here",
+    "that was close to the corner",
+    "gg",
+];
 
 #[derive(Deserialize)]
 struct Grant {
@@ -94,6 +114,7 @@ pub async fn run() -> anyhow::Result<()> {
         password,
         video_ws_url: std::env::var("VIDEO_WS_URL").unwrap_or_else(|_| "ws://video:7880/ws".into()),
         api_url: std::env::var("API_URL").ok().filter(|u| !u.is_empty()).map(|u| u.trim_end_matches('/').to_owned()),
+        chat_ws_url: std::env::var("CHAT_WS_URL").ok().filter(|u| !u.is_empty()).map(|u| u.trim_end_matches('/').to_owned()),
         font: std::env::var("DUMMY_FONT").unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf".into()),
     };
     log::info!("{} dummy stream(s): {}", cfg.names.len(), cfg.names.join(", "));
@@ -151,8 +172,26 @@ async fn publish_once(i: usize, name: &str, cfg: &Config, http: &reqwest::Client
         owner = Some(res.json().await.context("api go-live reply")?);
     }
 
+    // Chat too, so the panel has something to show: a pretend viewer every few
+    // seconds, and the streamer (marked) now and then.
+    let chatters: Vec<tokio::task::JoinHandle<()>> = match &cfg.chat_ws_url {
+        Some(chat) => vec![
+            tokio::spawn(chatter(format!("{chat}/chat/{name}"), serde_json::json!({ "type": "hello", "nick": VIEWER_NICKS[i % VIEWER_NICKS.len()] }), i, 6 + (i % 4) as u64)),
+            tokio::spawn(chatter(
+                format!("{chat}/chat/{name}"),
+                serde_json::json!({ "type": "hello", "nick": name, "session": owner.as_ref().map(|g| g.session), "token": owner.as_ref().map(|g| g.token) }),
+                i + 7,
+                23,
+            )),
+        ],
+        None => Vec::new(),
+    };
+
     let result = stream(i, name, cfg, http, owner.as_ref()).await;
 
+    for task in chatters {
+        task.abort();
+    }
     if let (Some(api), Some(grant)) = (&cfg.api_url, owner) {
         let _ = http
             .post(format!("{api}/api/streams/{name}/stop?session={}&token={}", grant.session, grant.token))
@@ -243,6 +282,30 @@ async fn stream(i: usize, name: &str, cfg: &Config, http: &reqwest::Client, owne
     let _ = ws.close(None).await;
     let _ = pc.close().await;
     result
+}
+
+/// One pretend chatter: join the room, say a line every `every` seconds, come back
+/// after 5s if the chat server drops us. `seed` picks the lines so rooms differ.
+async fn chatter(url: String, hello: serde_json::Value, seed: usize, every: u64) {
+    let mut n = seed;
+    loop {
+        if let Ok((mut ws, _)) = tokio_tungstenite::connect_async(&url).await {
+            let _ = ws.send(Message::Text(hello.to_string().into())).await;
+            loop {
+                tokio::time::sleep(Duration::from_secs(every)).await;
+                n += 1;
+                // 5 and 14 share no factor, so this walks every line before repeating
+                let line = LINES[(n * 5 + seed) % LINES.len()];
+                let say = serde_json::json!({ "type": "say", "text": line }).to_string();
+                if ws.send(Message::Text(say.into())).await.is_err() {
+                    break;
+                }
+                // drain whatever came in so the socket does not back up
+                while let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(10), ws.next()).await {}
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
 }
 
 async fn forward(socket: UdpSocket, track: Arc<TrackLocalStaticRTP>) {

@@ -27,6 +27,11 @@ http:// {
 		reverse_proxy video:7880
 	}
 
+	# text chat websocket, one per viewer
+	handle /chat/* {
+		reverse_proxy chat:4100
+	}
+
 	# the pages: a single-page app built by vite into /srv.
 	# hashed assets can be cached forever; index.html must always be re-checked
 	# so a deploy never leaves someone running old js against a new api.
