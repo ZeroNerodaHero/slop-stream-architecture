@@ -17,6 +17,22 @@ export default defineConfig(({ mode }) => {
   const backend = (process.env.BACKEND || own.BACKEND || `https://${repo.PUBLIC_IP || '127.0.0.1'}`).replace(/\/$/, '');
   console.log(`  backend: ${backend}   (BACKEND=... to change)`);
 
+  // A dead backend would be a bare 502. Say what is wrong and how to fix it instead.
+  const explain = (proxy: { on: (event: 'error', handler: (err: Error, req: unknown, res: unknown) => void) => void }) => {
+    proxy.on('error', (err, _req, res) => {
+      const message =
+        `backend ${backend} did not answer (${err.message}).\n\n` +
+        `  the server:      BACKEND=https://<server ip> npm run dev   (or put it in frontend/.env)\n` +
+        `  this machine:    ./deploy.sh in the repo root, then npm run dev\n`;
+      console.error(`\n  ${message}`);
+      const r = res as { headersSent?: boolean; writeHead?: (code: number, headers: Record<string, string>) => void; end?: (body: string) => void };
+      if (r && typeof r.writeHead === 'function' && !r.headersSent) {
+        r.writeHead(502, { 'content-type': 'text/plain' });
+        r.end?.(message);
+      }
+    });
+  };
+
   return {
     plugins: [react()],
     resolve: {
@@ -26,8 +42,8 @@ export default defineConfig(({ mode }) => {
       // an odd port on purpose: 3000 is usually taken by something else
       port: 42069,
       proxy: {
-        '/api': { target: backend, changeOrigin: true, secure: false },
-        '/ws': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false }
+        '/api': { target: backend, changeOrigin: true, secure: false, configure: explain },
+        '/ws': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain }
       }
     },
     build: {
