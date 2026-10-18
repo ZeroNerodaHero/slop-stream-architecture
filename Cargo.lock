@@ -3213,11 +3213,14 @@ dependencies = [
  "anyhow",
  "axum",
  "env_logger",
+ "futures-util",
  "log",
+ "reqwest",
  "serde",
  "serde_json",
  "socket2 0.5.10",
  "tokio",
+ "tokio-tungstenite",
  "webrtc",
 ]
 

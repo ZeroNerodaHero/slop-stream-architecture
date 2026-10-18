@@ -19,10 +19,11 @@ import {
   watchNameAtom,
   watchToneAtom
 } from '@/infra/atoms/watch-atoms';
-import { cleanName } from '@/infra/names';
+import { cleanName, isDummyName } from '@/infra/names';
 import { Button } from '@/shared-components/Button';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { StatusLine } from '@/shared-components/StatusLine';
+import { TestBadge } from '@/shared-components/TestBadge';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 
 export function WatchPage() {
@@ -54,7 +55,16 @@ export function WatchPage() {
   }
 
   return (
-    <PageFrame title={name} titleId="who" aside={<Link to="/">home</Link>}>
+    <PageFrame
+      title={
+        <>
+          {name}
+          {isDummyName(name) && <TestBadge />}
+        </>
+      }
+      titleId="who"
+      aside={<Link to="/">home</Link>}
+    >
       <VideoFrame id="video" streamAtom={remoteStreamAtom} videoRef={videoRef} muted={muted} onPlaying={markPlaying} onAutoplayBlocked={markAutoplayBlocked} />
       <StatusLine text={message} tone={tone} />
 

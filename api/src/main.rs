@@ -56,6 +56,9 @@ struct AppState {
     redis: ConnectionManager,
     http: reqwest::Client,
     video_url: String,
+    /// Names starting with this are the fake streams of `video dummy`.
+    dummy_prefix: String,
+    dummy_password: Option<String>,
 }
 
 struct ApiError(StatusCode, String);
@@ -139,6 +142,12 @@ struct BioBody {
 struct Owner {
     session: i64,
     token: i64,
+}
+
+#[derive(Deserialize, Default)]
+struct GoLiveQuery {
+    /// Only needed for a reserved (dummy) name.
+    password: Option<String>,
 }
 
 fn live_key(name: &str) -> String {
@@ -277,7 +286,14 @@ async fn list_streams(State(s): State<AppState>) -> ApiResult {
     Ok(Json(Value::Array(out.collect())))
 }
 
-async fn go_live(State(s): State<AppState>, Name(name): Name) -> ApiResult {
+async fn go_live(State(s): State<AppState>, Name(name): Name, Query(q): Query<GoLiveQuery>) -> ApiResult {
+    if name.starts_with(&s.dummy_prefix) {
+        let allowed = matches!((&s.dummy_password, &q.password), (Some(p), Some(given)) if p == given);
+        if !allowed {
+            return Err(ApiError::new(StatusCode::FORBIDDEN, "reserved name"));
+        }
+    }
+
     let key = live_key(&name);
     let mut r = s.redis.clone();
 
@@ -319,7 +335,9 @@ async fn go_live(State(s): State<AppState>, Name(name): Name) -> ApiResult {
     .await?;
 
     log::info!("{name}: go live, session {id}");
-    Ok(Json(json!({ "url": WS_PATH, "session": id, "token": token })))
+    Ok(Json(
+        json!({ "url": WS_PATH, "session": id, "token": token }),
+    ))
 }
 
 async fn heartbeat(
@@ -469,6 +487,8 @@ async fn main() {
         redis,
         http,
         video_url,
+        dummy_prefix: env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into()),
+        dummy_password: env::var("DUMMY_PASSWORD").ok().filter(|p| !p.trim().is_empty()),
     };
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))

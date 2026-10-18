@@ -1,0 +1,33 @@
+# the fake-stream box: the same `video` binary run as `video dummy`, plus ffmpeg.
+# build context is the repo root (compose: context: ., dockerfile: video/Dockerfile.dummy).
+# the build stage is byte-for-byte the one in video/Dockerfile, so docker reuses its layers.
+
+FROM rust:1-bookworm AS build
+ARG CARGO_BUILD_JOBS=1
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} \
+    CARGO_INCREMENTAL=0
+WORKDIR /src
+
+COPY Cargo.toml Cargo.lock ./
+COPY video/Cargo.toml video/Cargo.toml
+COPY api/Cargo.toml api/Cargo.toml
+
+RUN mkdir -p video/src api/src \
+ && echo 'fn main() {}' > video/src/main.rs \
+ && echo 'fn main() {}' > api/src/main.rs \
+ && cargo build --release --locked -p video
+
+COPY video/src video/src
+RUN touch video/src/main.rs \
+ && cargo build --release --locked -p video
+
+FROM debian:bookworm-slim
+# a font for the name on the picture. ffmpeg itself is a static build, no libs needed.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends fonts-dejavu-core \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd -r -u 10001 -s /usr/sbin/nologin app
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
+COPY --from=build /src/target/release/video /usr/local/bin/video
+USER app
+ENTRYPOINT ["/usr/local/bin/video", "dummy"]

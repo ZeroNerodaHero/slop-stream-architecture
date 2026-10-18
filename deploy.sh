@@ -5,7 +5,7 @@
 #   ./deploy.sh                   everything. first time, or any time
 #   ./deploy.sh 203.0.113.7       everything, with this ip
 #   ./deploy.sh api               rebuild and restart only the api
-#   ./deploy.sh frontend video    only these (frontend, api, video)
+#   ./deploy.sh frontend video    only these (frontend, api, video, dummy)
 #   ./deploy.sh --pull            git pull, then rebuild only what the pull changed
 #   ./deploy.sh --pull api        git pull, then only the api
 #   PUBLIC_IP=10.0.0.5 ./deploy.sh
@@ -365,6 +365,7 @@ compose_up() {
   say "building the images one at a time (first time: several minutes, CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS)"
   build_one pages
   build_one video
+  build_one dummy
   build_one api
   say "${DOCKER[*]} compose up -d"
   "${DOCKER[@]}" compose up -d
@@ -399,12 +400,22 @@ redeploy_service() {   # api | video
   "${DOCKER[@]}" compose up -d --no-deps "$1"
 }
 
+# the fake streams. video and api read the same password, so they are included:
+# compose only recreates them if that env actually changed.
+redeploy_dummy() {
+  build_one dummy
+  say "swapping the dummy container (video and api only if DUMMY_PASSWORD changed)"
+  "${DOCKER[@]}" compose up -d --no-deps dummy video api
+  note "dummy streams: $(env_file_value DUMMY_STREAMS)   (DUMMY_STREAMS in $ENV_FILE)"
+}
+
 redeploy_targets() {
   local t
   for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
     case "$t" in
       frontend) redeploy_frontend ;;
       api|video) redeploy_service "$t" ;;
+      dummy) redeploy_dummy ;;
       caddy) reload_caddy ;;
       compose) say "docker-compose.yml changed, applying it"; "${DOCKER[@]}" compose up -d ;;
     esac
@@ -428,9 +439,9 @@ pull_repo() {   # sets OLD_HEAD NEW_HEAD
 changed_services() {
   git diff --name-only "$1" "$2" | while IFS= read -r f; do
     case "$f" in
-      Cargo.toml|Cargo.lock) printf 'api\nvideo\n' ;;
+      Cargo.toml|Cargo.lock) printf 'api\nvideo\ndummy\n' ;;
       api/*) echo api ;;
-      video/*) echo video ;;
+      video/*) printf 'video\ndummy\n' ;;
       frontend/Caddyfile) echo caddy ;;
       frontend/*) echo frontend ;;
       docker-compose.yml) echo compose ;;
@@ -441,12 +452,14 @@ changed_services() {
 # ---- args --------------------------------------------------------------------
 usage() {
   cat <<'EOF'
-usage: ./deploy.sh [--pull] [PUBLIC_IP] [frontend|api|video ...]
+usage: ./deploy.sh [--pull] [PUBLIC_IP] [frontend|api|video|dummy ...]
 
-  no services         full deploy: machine setup, every image, docker compose up
-  frontend api video  rebuild just these and swap their containers
-  --pull              git pull --ff-only first. with no services named, redeploy what the pull changed
-  PUBLIC_IP           use this ip (full deploy only). otherwise: $PUBLIC_IP > .env > auto-detect
+  no services               full deploy: machine setup, every image, docker compose up
+  frontend api video dummy  rebuild just these and swap their containers
+  --pull                    git pull --ff-only first. with no services named, redeploy what the pull changed
+  PUBLIC_IP                 use this ip (full deploy only). otherwise: $PUBLIC_IP > .env > auto-detect
+
+  dummy = the fake streams. set DUMMY_STREAMS and DUMMY_PASSWORD in .env first.
 EOF
 }
 
@@ -457,11 +470,11 @@ parse_args() {   # sets IP_ARG PULL TARGETS
     case "$a" in
       -h|--help) usage; exit 0 ;;
       --pull) PULL=1 ;;
-      frontend|api|video) TARGETS+=("$a") ;;
+      frontend|api|video|dummy) TARGETS+=("$a") ;;
       pages) TARGETS+=("frontend") ;;
       *)
         if is_ipv4 "$a"; then IP_ARG="$a"
-        else die "don't know what '$a' is. services are: frontend api video. see ./deploy.sh --help"
+        else die "don't know what '$a' is. services are: frontend api video dummy. see ./deploy.sh --help"
         fi ;;
     esac
   done

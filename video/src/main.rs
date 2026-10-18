@@ -8,7 +8,13 @@
 //! publisher leaves. All media rides one UDP port (7882).
 //!
 //! Also on the same port: GET /live (names connected right now) and GET /health.
-//! Env: PUBLIC_IP, WS_PORT (7880), UDP_PORT (7882).
+//! Env: PUBLIC_IP, WS_PORT (7880), UDP_PORT (7882), DUMMY_PASSWORD, DUMMY_PREFIX.
+//!
+//! Names starting with DUMMY_PREFIX ("dummy-") are reserved for the fake streams
+//! of `video dummy` (see dummy.rs): publishing one needs the matching password.
+
+mod dummy;
+mod media;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -24,8 +30,6 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::sync::{watch, Mutex, Notify};
-use webrtc::api::interceptor_registry::{configure_rtcp_reports, configure_twcc_receiver_only};
-use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_OPUS, MIME_TYPE_VP8};
 use webrtc::api::setting_engine::SettingEngine;
 use webrtc::api::APIBuilder;
 use webrtc::ice::mdns::MulticastDnsMode;
@@ -33,21 +37,17 @@ use webrtc::ice::network_type::NetworkType;
 use webrtc::ice::udp_mux::{UDPMuxDefault, UDPMuxParams};
 use webrtc::ice::udp_network::UDPNetwork;
 use webrtc::ice_transport::ice_candidate_type::RTCIceCandidateType;
-use webrtc::interceptor::nack::generator::Generator;
-use webrtc::interceptor::nack::responder::Responder;
-use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
 use webrtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
-use webrtc::rtp_transceiver::rtp_codec::{
-    RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType,
-};
-use webrtc::rtp_transceiver::RTCPFeedback;
+use webrtc::rtp_transceiver::rtp_codec::RTPCodecType;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
+
+use crate::media::media_setup;
 
 /// How long a watcher waits for a publisher that just started to finish setting up.
 const TRACK_WAIT: Duration = Duration::from_secs(8);
@@ -81,6 +81,8 @@ struct App {
     public_ip: String,
     mux: Arc<UDPMuxDefault>,
     shutdown: watch::Receiver<bool>,
+    dummy_prefix: String,
+    dummy_password: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -105,6 +107,9 @@ struct In {
     role: String,
     name: String,
     sdp: String,
+    /// Only needed to publish a reserved (dummy) name.
+    #[serde(default)]
+    password: Option<String>,
 }
 
 #[derive(Serialize, Default)]
@@ -124,6 +129,11 @@ async fn main() -> anyhow::Result<()> {
     )
     .init();
 
+    // `video dummy` is the fake-stream publisher, same binary, see dummy.rs
+    if std::env::args().nth(1).as_deref() == Some("dummy") {
+        return dummy::run().await;
+    }
+
     let public_ip = std::env::var("PUBLIC_IP").unwrap_or_else(|_| "127.0.0.1".into());
     let ws_port = env_port("WS_PORT", 7880);
     let udp_port = env_port("UDP_PORT", 7882);
@@ -134,12 +144,21 @@ async fn main() -> anyhow::Result<()> {
         log::warn!("PUBLIC_IP is 127.0.0.1. set it to the ip people type in the browser");
     }
 
+    let dummy_prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
+    let dummy_password = std::env::var("DUMMY_PASSWORD").ok().filter(|p| !p.trim().is_empty());
+    match &dummy_password {
+        Some(_) => log::info!("names starting with {dummy_prefix:?} need the dummy password"),
+        None => log::info!("names starting with {dummy_prefix:?} are reserved (no DUMMY_PASSWORD set)"),
+    }
+
     let (shutdown_tx, shutdown) = watch::channel(false);
     let app = App {
         hub: Hub::default(),
         public_ip,
         mux,
         shutdown,
+        dummy_prefix,
+        dummy_password,
     };
 
     let router = Router::new()
@@ -223,6 +242,13 @@ async fn handle(app: App, mut socket: WebSocket) {
     if !valid_name(&name) {
         let _ = send(&mut socket, Out::error("bad name. use a-z 0-9 _ - (1 to 32)")).await;
         return;
+    }
+    if incoming.role == "publish" && name.starts_with(&app.dummy_prefix) {
+        let allowed = matches!((&app.dummy_password, &incoming.password), (Some(p), Some(q)) if p == q);
+        if !allowed {
+            let _ = send(&mut socket, Out::error("reserved name")).await;
+            return;
+        }
     }
 
     // Check the offer before touching any room or building a peer.
@@ -421,69 +447,15 @@ async fn negotiate(peer: &RTCPeerConnection, sdp: String) -> anyhow::Result<Stri
     .map_err(|_| anyhow::anyhow!("negotiation timed out"))?
 }
 
-/// Opus and VP8 only. Every browser has both, so a Safari publisher cannot
-/// pick a codec some watcher lacks, and all watchers get the same bytes.
-fn media_setup(role: Role) -> anyhow::Result<(MediaEngine, Registry)> {
-    let mut media = MediaEngine::default();
-    media.register_codec(
-        RTCRtpCodecParameters {
-            capability: RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_OPUS.to_owned(),
-                clock_rate: 48000,
-                channels: 2,
-                sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
-                rtcp_feedback: vec![],
-            },
-            payload_type: 111,
-            ..Default::default()
-        },
-        RTPCodecType::Audio,
-    )?;
-    let feedback = |typ: &str, parameter: &str| RTCPFeedback {
-        typ: typ.to_owned(),
-        parameter: parameter.to_owned(),
-    };
-    media.register_codec(
-        RTCRtpCodecParameters {
-            capability: RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_VP8.to_owned(),
-                clock_rate: 90000,
-                channels: 0,
-                sdp_fmtp_line: String::new(),
-                rtcp_feedback: vec![
-                    feedback("goog-remb", ""),
-                    feedback("ccm", "fir"),
-                    feedback("nack", ""),
-                    feedback("nack", "pli"),
-                ],
-            },
-            payload_type: 96,
-            ..Default::default()
-        },
-        RTPCodecType::Video,
-    )?;
-
-    let mut registry = Registry::new();
-    // Re-send lost packets to watchers from a short history (2^9 packets, ~2s),
-    // and ask the publisher to re-send what we lost.
-    registry.add(Box::new(Responder::builder().with_log2_size(9)));
-    registry.add(Box::new(Generator::builder()));
-    registry = configure_rtcp_reports(registry);
-    // The publisher's browser adapts its upload to our feedback. Watchers'
-    // feedback is not used, so don't ask for it.
-    if role == Role::Publish {
-        registry = configure_twcc_receiver_only(registry, &mut media)?;
-    }
-    Ok((media, registry))
-}
-
 async fn new_peer(
     app: &App,
     role: Role,
     name: &str,
     dead: Arc<Notify>,
 ) -> anyhow::Result<RTCPeerConnection> {
-    let (media, registry) = media_setup(role)?;
+    // The publisher's browser adapts its upload to our transport feedback.
+    // Watchers' feedback is not used, so don't ask for it.
+    let (media, registry) = media_setup(role == Role::Publish)?;
 
     let mut setting = SettingEngine::default();
     // Every peer shares the one UDP socket.

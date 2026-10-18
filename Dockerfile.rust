@@ -1,0 +1,62 @@
+# One build for the three rust programs, so their shared dependencies compile once.
+# compose picks the program with `target: api | video | dummy`.
+# build context is the repo root.
+
+FROM rust:1-bookworm AS build
+# 1 keeps memory low on a small vps. deploy.sh raises it on bigger machines.
+ARG CARGO_BUILD_JOBS=1
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} \
+    CARGO_INCREMENTAL=0
+WORKDIR /src
+
+# manifests first so the dependency build is cached until a Cargo.toml changes
+COPY Cargo.toml Cargo.lock ./
+COPY api/Cargo.toml api/Cargo.toml
+COPY video/Cargo.toml video/Cargo.toml
+COPY dummy/Cargo.toml dummy/Cargo.toml
+
+# dummy mains so cargo can compile every dependency without our code
+RUN mkdir -p api/src video/src dummy/src \
+ && echo 'fn main() {}' > api/src/main.rs \
+ && echo 'fn main() {}' > video/src/main.rs \
+ && echo 'fn main() {}' > dummy/src/main.rs \
+ && cargo build --release --locked
+
+# real source. touch so cargo notices it is newer than the dummy build
+COPY api/src api/src
+COPY video/src video/src
+COPY dummy/src dummy/src
+RUN touch api/src/main.rs video/src/main.rs dummy/src/main.rs \
+ && cargo build --release --locked
+
+# ---- api ---------------------------------------------------------------------
+FROM debian:bookworm-slim AS api
+RUN useradd -r -u 10001 -s /usr/sbin/nologin app
+COPY --from=build /src/target/release/api /usr/local/bin/api
+USER app
+EXPOSE 4000/tcp
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+  CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4000 && printf 'GET /api/health HTTP/1.0\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
+ENTRYPOINT ["/usr/local/bin/api"]
+
+# ---- video -------------------------------------------------------------------
+FROM debian:bookworm-slim AS video
+RUN useradd -r -u 10001 -s /usr/sbin/nologin app
+COPY --from=build /src/target/release/video /usr/local/bin/video
+USER app
+EXPOSE 7880/tcp
+EXPOSE 7882/udp
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
+  CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7880"]
+ENTRYPOINT ["/usr/local/bin/video"]
+
+# ---- dummy -------------------------------------------------------------------
+# ffmpeg draws and encodes the fake streams; the font is for the bouncing name.
+FROM debian:bookworm-slim AS dummy
+RUN apt-get update -qq \
+ && apt-get install -y -qq --no-install-recommends ffmpeg fonts-dejavu-core >/dev/null \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd -r -u 10001 -s /usr/sbin/nologin app
+COPY --from=build /src/target/release/dummy /usr/local/bin/dummy
+USER app
+ENTRYPOINT ["/usr/local/bin/dummy"]

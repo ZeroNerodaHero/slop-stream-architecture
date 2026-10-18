@@ -2,8 +2,10 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 
 import { api, messageOf } from '@/infra/api';
+import { isDummyName } from '@/infra/names';
 import { buttonClassName } from '@/shared-components/Button';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { TestBadge } from '@/shared-components/TestBadge';
 import { since } from '@/utils/since';
 
 const POLL_MS = 3000;
@@ -37,6 +39,7 @@ export function HomePage() {
               <span aria-hidden className="mr-2 inline-block h-3 w-3 rounded-full bg-increase align-middle" />
               {stream.name}
             </Link>
+            {isDummyName(stream.name) && <TestBadge />}
             <span className="ml-3 text-textSecondary">{since(stream.since)}</span>
             {stream.bio && <p className="mt-1 whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]">{stream.bio}</p>}
           </article>
