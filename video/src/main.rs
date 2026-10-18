@@ -15,6 +15,7 @@
 
 mod dummy;
 mod media;
+mod thumbs;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -83,6 +84,8 @@ struct App {
     shutdown: watch::Receiver<bool>,
     dummy_prefix: String,
     dummy_password: Option<String>,
+    /// ffmpeg is here and THUMBS is not off: make a picture of every stream.
+    thumbs: bool,
 }
 
 #[derive(Clone, Default)]
@@ -151,6 +154,13 @@ async fn main() -> anyhow::Result<()> {
         None => log::info!("names starting with {dummy_prefix:?} are reserved (no DUMMY_PASSWORD set)"),
     }
 
+    let thumbs = thumbs::enabled() && thumbs::ffmpeg_present().await;
+    match (thumbs, thumbs::enabled()) {
+        (true, _) => log::info!("thumbnails every {}s at /thumb/<name>.jpg", thumbs::every_secs()),
+        (false, true) => log::warn!("no ffmpeg in this image, so no thumbnails"),
+        (false, false) => log::info!("thumbnails off (THUMBS=0)"),
+    }
+
     let (shutdown_tx, shutdown) = watch::channel(false);
     let app = App {
         hub: Hub::default(),
@@ -159,11 +169,13 @@ async fn main() -> anyhow::Result<()> {
         shutdown,
         dummy_prefix,
         dummy_password,
+        thumbs,
     };
 
     let router = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/live", get(live))
+        .route("/thumb/{file}", get(thumb))
         .route("/ws", get(ws))
         .with_state(app.clone());
 
@@ -215,6 +227,25 @@ fn env_port(key: &str, default: u16) -> u16 {
 
 async fn live(State(app): State<App>) -> Json<Vec<String>> {
     Json(app.hub.live_names().await)
+}
+
+/// `GET /thumb/<name>.jpg`: the latest picture of a live stream, a few seconds old.
+async fn thumb(State(app): State<App>, axum::extract::Path(file): axum::extract::Path<String>) -> axum::response::Response {
+    use axum::http::{header, StatusCode};
+    let Some(name) = file.strip_suffix(".jpg").map(str::to_lowercase) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !valid_name(&name) || !app.hub.live_names().await.contains(&name) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match tokio::fs::read(thumbs::jpeg_path(&name)).await {
+        Ok(bytes) if bytes.len() > 4 => (
+            [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "private, max-age=3")],
+            bytes,
+        )
+            .into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 async fn ws(State(app): State<App>, upgrade: WebSocketUpgrade) -> impl IntoResponse {
@@ -291,22 +322,50 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, exp
 
     let hub = app.hub.clone();
     let room = name.clone();
+    let thumbs_on = app.thumbs;
     peer.on_track(Box::new(move |track, _, _| {
         let hub = hub.clone();
         let room = room.clone();
         tokio::spawn(async move {
             let kind = track.kind();
-            let codec = track.codec().capability;
+            let codec = track.codec();
             let video_ssrc = (kind == RTPCodecType::Video).then(|| track.ssrc());
             let local = Arc::new(TrackLocalStaticRTP::new(
-                codec.clone(),
+                codec.capability.clone(),
                 kind.to_string(),
                 room.clone(),
             ));
             if !hub.add_track(&room, generation, Arc::clone(&local), video_ssrc).await {
                 return;
             }
-            log::info!("publish {room}: {kind} up ({})", codec.mime_type);
+            log::info!("publish {room}: {kind} up ({})", codec.capability.mime_type);
+
+            // The video track also feeds a small ffmpeg that makes the thumbnail.
+            let tap = match (thumbs_on, kind) {
+                (true, RTPCodecType::Video) => match thumbs::ThumbTap::start(&room, codec.payload_type).await {
+                    Ok(tap) => Some(tap),
+                    Err(e) => {
+                        log::warn!("publish {room}: no thumbnail: {e}");
+                        None
+                    }
+                },
+                _ => None,
+            };
+            if tap.is_some() {
+                // ffmpeg can only start on a keyframe, and a browser sends one
+                // only when asked. Ask until the first picture exists, a few times.
+                let hub = hub.clone();
+                let room = room.clone();
+                tokio::spawn(async move {
+                    for attempt in 0..15u64 {
+                        tokio::time::sleep(Duration::from_millis(if attempt == 0 { 400 } else { 2000 })).await;
+                        if tokio::fs::metadata(thumbs::jpeg_path(&room)).await.is_ok() {
+                            break;
+                        }
+                        hub.request_keyframe(&room, true).await;
+                    }
+                });
+            }
 
             // Copy packets to every watcher bound to this track. A failing
             // watcher must not stop the stream for the others. Header
@@ -314,8 +373,12 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, exp
             while let Ok((mut packet, _)) = track.read_rtp().await {
                 packet.header.extension = false;
                 packet.header.extensions.clear();
+                if let Some(tap) = &tap {
+                    tap.feed(&packet);
+                }
                 let _ = local.write_rtp(&packet).await;
             }
+            drop(tap);
             log::info!("publish {room}: {kind} done");
         });
         Box::pin(async {})

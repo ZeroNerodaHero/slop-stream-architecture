@@ -179,6 +179,8 @@ services:
       WS_PORT: "7880"
       UDP_PORT: "7882"
       DUMMY_PASSWORD: ${DUMMY_PASSWORD:-}
+      # a picture of every live stream every few seconds, served at /thumb/<name>.jpg. THUMBS=0 turns it off
+      THUMB_EVERY_SECS: "5"
       # webrtc_ice at error: at warn it logs one line per stray udp packet
       RUST_LOG: "warn,video=info,webrtc_ice=error"
     ports:

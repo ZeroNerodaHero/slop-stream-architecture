@@ -30,7 +30,7 @@ it prints a url. open it. click through the warning.
 
 ## screens
 
-- **home** — who is live
+- **home** — who is live, with a picture of each stream a few seconds old. the video box makes it from the stream itself. no cdn, no bucket
 - **go live** — your camera, a name box, a start button, your bio. you get a watch link to copy
 - **watch** — their camera and their bio, chat on the side. if they are not on yet, it keeps checking
 

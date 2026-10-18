@@ -67,7 +67,9 @@ export const api = {
   stop: (owner: Owner) => request<{ ok: boolean }>('POST', `/api/streams/${owner.name}/stop?${ownerQuery(owner)}`),
   /** Survives page teardown, unlike fetch. */
   stopBeacon: (owner: Owner) => navigator.sendBeacon(`/api/streams/${owner.name}/stop?${ownerQuery(owner)}`),
-  watch: (name: string) => request<WatchGrant>('POST', `/api/streams/${name}/watch`)
+  watch: (name: string) => request<WatchGrant>('POST', `/api/streams/${name}/watch`),
+  /** The picture of a stream, made on the video machine. `bucket` changes every few seconds so the browser re-fetches. */
+  thumbUrl: (name: string, bucket: number) => `/thumb/${encodeURIComponent(name)}.jpg?t=${bucket}`
 };
 
 export function statusOf(err: unknown): number | undefined {

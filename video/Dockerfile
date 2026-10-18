@@ -25,6 +25,8 @@ RUN touch video/src/main.rs \
 
 FROM debian:bookworm-slim
 RUN useradd -r -u 10001 -s /usr/sbin/nologin app
+# ffmpeg makes the thumbnails (one small process per live stream). static build, no libs needed.
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=build /src/target/release/video /usr/local/bin/video
 USER app
 EXPOSE 7880/tcp

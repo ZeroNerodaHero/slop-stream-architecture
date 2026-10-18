@@ -29,7 +29,7 @@ Three pages. One site.
 
 | page | url | what it does |
 |---|---|---|
-| home | `/` | lists streams that are live right now. each row links to watch. a button links to go live |
+| home | `/` | lists streams that are live right now, each with a picture of the stream a few seconds old. each row links to watch. a button links to go live |
 | go live | `/live` | camera preview. a name field. a bio box. start sends the camera. stop ends it |
 | watch | `/watch/:name` | plays that stream and shows that streamer's bio. if nobody is live, says so and retries every 5s |
 
@@ -86,7 +86,7 @@ flowchart TB
 | container | job |
 |---|---|
 | pages | built from `frontend/`: node builds the React app (Vite); the final image only copies `dist/` into the `pages-data` volume (`publish-pages.sh`: new files first, then stale ones removed) and exits. Re-running it is how the pages redeploy, without touching caddy |
-| frontend | `caddy:2-alpine`, no custom build. serves the `pages-data` volume as a single-page app (`try_files … /index.html`). `/api/*` → `api:4000`, `/ws` → `video:7880`. https :443 with the volume cert. :80 redirects to https. The Caddyfile is a bind mount; `deploy.sh` reloads caddy in place when it changes |
+| frontend | `caddy:2-alpine`, no custom build. serves the `pages-data` volume as a single-page app (`try_files … /index.html`). `/api/*` → `api:4000`, `/ws` and `/thumb/*` → `video:7880`, `/chat/*` → `chat:4100`. https :443 with the volume cert. :80 redirects to https. The Caddyfile is a bind mount; `deploy.sh` reloads caddy in place when it changes |
 | api | Rust (axum) in `api/`. bios, sessions, live list, heartbeats |
 | chat | the `api` binary run as `api chat` (same image, no extra build) on `:4100`. one websocket per viewer at `/chat/<name>`, lines in a redis stream per room (last 500), the database only to confirm the streamer. moves with `./deploy.sh api`. the whole design is in `chat.md` |
 | database | postgres. `streamers(name, bio, updated_at)`, `sessions(id, name, token, started_at, ended_at)`. no host port; peek with `docker compose exec database psql -U stream` |
@@ -105,6 +105,8 @@ The frontend never touches video packets. The api never serves HTML. `video` nev
 ```
 
 The server answers `{"sdp":"<answer sdp>"}`. `"error"` instead of `"sdp"` means no: `"someone is already live"`, `"not live"`, `"bad name…"`, `"bad offer"` (over 32 KB, over 4 media lines, or unparseable), `"could not negotiate"`, `"server error"`. The browser has 10s to send its frame and the server 10s to answer. A watcher waits up to 8s for a publisher that is still setting up. When the publisher leaves, watchers get `{"event":"ended"}` and the socket closes. A new watcher gets one keyframe request on connect; further watcher PLI/FIR are forwarded at most once per 1.5s per stream. Header extensions from the publisher are stripped before fan-out. Lost packets are re-sent to watchers from a 512-packet history. ICE gives up on a vanished peer after 15s. On SIGTERM every room ends, every watcher gets `ended`, and the process exits at once.
+
+`video` also serves `GET /thumb/<name>.jpg` (caddy routes `/thumb/*` to it): the latest picture of a live stream, `Cache-Control: private, max-age=3`, 404 for anything not live. It is made on this machine for every publisher, browser or dummy: when a publisher's video track comes up, a small ffmpeg is started beside it (`video/src/thumbs.rs`), fed a copy of the VP8 packets over localhost as plain RTP described by an SDP file in `/tmp`, and writes a 320px jpeg atomically to `/tmp/thumb-<name>.jpg`, the first decoded frame right away and then one every `THUMB_EVERY_SECS` (5). Browsers only send a keyframe when asked, so `video` requests one every 2s until the first picture exists; the first one shows up about 6s after going live. It decodes every frame, roughly 5–10% of a core per 720p stream, so viewers pay nothing (decoding only keyframes would mean asking the publisher for one every few seconds, and every viewer would download those). `THUMBS=0` turns it off; a `video` image without ffmpeg just logs that and serves 404. Nothing is stored anywhere; the file goes with the room.
 
 No token on the socket. Anyone who can open it can publish, except names starting with `DUMMY_PREFIX` (`dummy-`): those are reserved for the fake streams and need `"password": "<DUMMY_PASSWORD>"` in the frame, else `{"error":"reserved name"}`. With no `DUMMY_PASSWORD` set they are refused outright. The api applies the same rule to go-live (`?password=`, 403 otherwise). `video` does not read redis or the database. It exposes `GET /live` (sorted JSON array of names connected right now) and `GET /health` (`ok`).
 
@@ -160,7 +162,7 @@ VIDEO_URL=http://video:7880
 PORT=4000
 ```
 
-The video container receives `PUBLIC_IP`, `WS_PORT=7880`, `UDP_PORT=7882`, `DUMMY_PASSWORD`, `RUST_LOG=warn,video=info,webrtc_ice=error`. The api also gets `DUMMY_PASSWORD`. The dummy container gets `DUMMY_STREAMS`, `DUMMY_PASSWORD`, `DUMMY_NAMES`, `VIDEO_WS_URL=ws://video:7880/ws`, `API_URL=http://api:4000`.
+The video container receives `PUBLIC_IP`, `WS_PORT=7880`, `UDP_PORT=7882`, `DUMMY_PASSWORD`, `THUMB_EVERY_SECS=5` (and optionally `THUMBS=0`), `RUST_LOG=warn,video=info,webrtc_ice=error`. The api also gets `DUMMY_PASSWORD`. The dummy container gets `DUMMY_STREAMS`, `DUMMY_PASSWORD`, `DUMMY_NAMES`, `VIDEO_WS_URL=ws://video:7880/ws`, `API_URL=http://api:4000`.
 
 There is no video api key. The test does not check one.
 
@@ -225,7 +227,8 @@ deploy.sh            one command. picks PUBLIC_IP, installs docker on linux, bui
 .dockerignore        keeps target/, frontend, docs and .env out of the rust images
 Cargo.toml           workspace: video, api. one Cargo.lock (commit it: the images build with --locked)
 video/               rust sfu. ws 7880 internal, media udp 7882. Dockerfile with ARG CARGO_BUILD_JOBS
-video/src/dummy.rs   `video dummy`, the fake streams. video/Dockerfile.dummy adds ffmpeg + a font
+video/src/dummy.rs   `video dummy`, the fake streams. video/Dockerfile.dummy adds a font
+video/src/thumbs.rs  one ffmpeg per live stream making /thumb/<name>.jpg. both video images carry a static ffmpeg
 api/                 rust axum api on 4000. Dockerfile with ARG CARGO_BUILD_JOBS
 api/src/chat.rs      `api chat`, the text chat on 4100. see docs/chat.md
 docs/                overview, spec, chat, architecture. docs/README.md says which is which

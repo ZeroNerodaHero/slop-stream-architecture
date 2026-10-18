@@ -210,6 +210,18 @@ function tap(page, tag) {
       return JSON.stringify(v).slice(0, 100);
     });
 
+    await step(`4b. api: a thumbnail jpeg appears for ${NAME} (<= 15s)`, async () => {
+      const r = await pollUntil(
+        async () => {
+          const res = await api.get(`/thumb/${NAME}.jpg`);
+          return { status: res.status(), type: res.headers()['content-type'], bytes: res.ok() ? (await res.body()).length : 0 };
+        },
+        (r) => r.status === 200 && /image\/jpeg/.test(r.type) && r.bytes > 500,
+        { timeout: 15000, interval: 1000, label: 'thumbnail' }
+      );
+      return `${r.bytes} bytes, ${r.type}`;
+    });
+
     await step(`5. watcher: open /watch/${NAME}, #video.videoWidth > 0 (<= ${T.firstFrame / 1000}s)`, async () => {
       await watcher.goto(`${BASE}/watch/${NAME}`, { waitUntil: 'domcontentloaded', timeout: T.firstFrame });
       const v = await pollPage(watcher, videoState, (s) => s.videoWidth > 0, { timeout: T.firstFrame, label: '#video.videoWidth > 0' });
