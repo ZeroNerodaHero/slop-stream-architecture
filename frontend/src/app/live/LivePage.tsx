@@ -124,7 +124,16 @@ export function LivePage() {
         </div>
 
         {/* the streamer's own chat. once live, `owner` makes its lines marked */}
-        {isValidName(name) && <ChatPanel name={name} owner={owner} className="mt-4 h-[60vh] max-h-[640px] lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]" />}
+        {isValidName(name) ? (
+          <ChatPanel name={name} owner={owner} className="mt-4 h-[60vh] max-h-[640px] lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]" />
+        ) : (
+          <aside
+            id="chat"
+            className="mt-4 flex min-h-[200px] items-center justify-center rounded-xl border border-dashed border-primaryStroke p-6 text-center text-textTertiary lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]"
+          >
+            type your name and the chat opens here. once you are live, your lines are marked.
+          </aside>
+        )}
       </div>
     </PageFrame>
   );

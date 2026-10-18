@@ -369,6 +369,10 @@ compose_up() {
   build_one api
   say "${DOCKER[*]} compose up -d"
   "${DOCKER[@]}" compose up -d
+  # the Caddyfile is a bind mount, so compose never notices it changed. a reload
+  # is graceful and free when nothing changed, so always do it.
+  "${DOCKER[@]}" compose exec -T frontend caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 \
+    || warn "caddy did not reload its Caddyfile; if routes look stale: ${DOCKER[*]} compose restart frontend"
 }
 
 # ---- partial redeploy --------------------------------------------------------
