@@ -1,0 +1,7 @@
+target/
+node_modules/
+frontend/dist/
+.DS_Store
+
+# written by deploy.sh. copy .env.example to start by hand.
+.env

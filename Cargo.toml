@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["video", "api"]
+
+# Smaller binaries, sane build memory on a small VPS.
+[profile.release]
+strip = true
+debug = false

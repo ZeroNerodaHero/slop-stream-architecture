@@ -1,0 +1,146 @@
+# test stream
+#
+#   certs      makes the https cert once, then exits
+#   frontend   react pages (vite build) served by caddy. /api -> api, /ws -> video, http -> https
+#   api        save a bio, go live, heartbeat, start/end log
+#   database   the bio and the session log. not the video
+#   redis      who is live
+#   video      rust. one upload in, copies it out. media on udp 7882
+#
+# start:  ./deploy.sh
+#         (by hand: cp .env.example .env, set PUBLIC_IP, docker compose up -d --build)
+# open:   https://<PUBLIC_IP from the .env file>
+# ports:  80/tcp 443/tcp 7882/udp
+# peek:   docker compose exec database psql -U stream
+#         docker compose exec redis redis-cli
+
+name: stream
+
+services:
+  certs:
+    image: alpine/openssl
+    container_name: certs
+    restart: "no"
+    environment:
+      PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        cd /certs
+        if [ -f cert.pem ] && openssl x509 -in cert.pem -noout -ext subjectAltName,extendedKeyUsage 2>/dev/null | grep -q "IP Address:$$PUBLIC_IP\b" \
+           && openssl x509 -in cert.pem -noout -ext extendedKeyUsage 2>/dev/null | grep -q "Server Authentication"; then
+          echo "cert for $$PUBLIC_IP already there"
+          exit 0
+        fi
+        # 825 days and serverAuth: the most apple devices will accept if you ever trust it by hand
+        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+          -days 825 -subj "/CN=stream $$PUBLIC_IP" \
+          -addext "subjectAltName=IP:$$PUBLIC_IP,IP:127.0.0.1,DNS:localhost" \
+          -addext "extendedKeyUsage=serverAuth" \
+          -keyout key.pem -out cert.pem 2>/dev/null
+        chmod 600 key.pem
+        chmod 644 cert.pem
+        echo "made cert for $$PUBLIC_IP"
+    volumes:
+      - certs-data:/certs
+
+  frontend:
+    # vite builds the react pages inside the image, caddy serves them. no node on the machine.
+    build: ./frontend
+    container_name: frontend
+    restart: unless-stopped
+    environment:
+      # not read by caddy. a change forces a restart so the new cert is loaded.
+      PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - certs-data:/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+      video:
+        condition: service_started
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      args:
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-1}
+    container_name: api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://stream:stream@database:5432/stream
+      REDIS_URL: redis://redis:6379/0
+      VIDEO_URL: http://video:7880
+      PORT: "4000"
+      RUST_LOG: info
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # no host port. browsers reach this through the frontend, at /api
+
+  database:
+    image: postgres:17-alpine
+    container_name: database
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: stream
+      POSTGRES_PASSWORD: stream
+      POSTGRES_DB: stream
+    volumes:
+      - database-data:/var/lib/postgresql/data
+    # no host port. older docker leaks "127.0.0.1" ports to the lan. peek with:
+    #   docker compose exec database psql -U stream
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stream -d stream"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    # no save file. who is live can vanish on restart. the database keeps the bio.
+    command: redis-server --save "" --appendonly no
+    # no host port. peek with: docker compose exec redis redis-cli
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  video:
+    build:
+      context: .
+      dockerfile: video/Dockerfile
+      args:
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-1}
+    container_name: video
+    restart: unless-stopped
+    environment:
+      PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
+      WS_PORT: "7880"
+      UDP_PORT: "7882"
+      # webrtc_ice at error: at warn it logs one line per stray udp packet
+      RUST_LOG: "warn,video=info,webrtc_ice=error"
+    ports:
+      # all the video packets, one port. host port must equal container port.
+      - "7882:7882/udp"
+    # 7880 (the setup websocket) stays inside. browsers reach it through the frontend, at /ws
+
+volumes:
+  database-data:
+  certs-data:
+  caddy-data:
+  caddy-config:

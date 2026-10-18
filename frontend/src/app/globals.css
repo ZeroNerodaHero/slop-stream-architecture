@@ -1,0 +1,26 @@
+@import '@fontsource-variable/geist/index.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Axiom-Frontend token names. Values are rgb triplets so Tailwind can add alpha. */
+:root {
+  color-scheme: dark;
+  --background: 15 17 21;
+  --background-secondary: 24 27 34;
+  --background-tertiary: 32 36 46;
+  --text-primary: 242 243 245;
+  --text-secondary: 154 163 178;
+  --text-tertiary: 110 118 132;
+  --primary-color: 79 139 255;
+  --primary-color-hover: 110 160 255;
+  --primary-stroke: 42 47 58;
+  --secondary-stroke: 58 64 78;
+  --increase: 63 185 80;
+  --decrease: 248 81 73;
+}
+
+body {
+  @apply bg-background font-sans text-[20px] leading-relaxed text-textPrimary antialiased;
+}

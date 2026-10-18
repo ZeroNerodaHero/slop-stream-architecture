@@ -1,0 +1,21 @@
+# rust build output
+target
+**/target
+
+# not part of the rust images
+.git
+.DS_Store
+frontend
+node_modules
+**/node_modules
+*.md
+
+# host config, must not end up inside an image
+.env
+.env.*
+
+# editing these must not invalidate COPY layers
+docker-compose.yml
+**/Dockerfile
+.dockerignore
+deploy.sh

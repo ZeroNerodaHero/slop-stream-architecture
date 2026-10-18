@@ -1,0 +1,43 @@
+{
+	# no hostnames here, so nothing to get certs for. the cert is ours below.
+	auto_https off
+
+	# compose publishes 443/tcp only, so don't advertise http/3
+	servers :443 {
+		protocols h1 h2
+	}
+}
+
+# http://<ip> -> https://<ip>
+http:// {
+	redir https://{host}{uri}
+}
+
+:443 {
+	tls /certs/cert.pem /certs/key.pem
+	log
+
+	# json api. path kept, so /api/x -> api:4000/api/x
+	handle /api/* {
+		reverse_proxy api:4000
+	}
+
+	# video setup websocket. reverse_proxy does the upgrade on its own.
+	handle /ws {
+		reverse_proxy video:7880
+	}
+
+	# the pages: a single-page app built by vite into /srv.
+	# hashed assets can be cached forever; index.html must always be re-checked
+	# so a deploy never leaves someone running old js against a new api.
+	handle {
+		root * /srv
+		@assets path /assets/*
+		@pages not path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		header @pages Cache-Control "no-cache"
+		try_files {path} /index.html
+		encode zstd gzip
+		file_server
+	}
+}
