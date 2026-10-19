@@ -1,6 +1,7 @@
 /**
  * The video server speaks one websocket at /ws. One message each way:
  *   we send   {"role":"publish"|"watch","name":"...","sdp":"<offer>"}
+ *             (a publisher adds the go-live "session" and "token"; video checks them with the api)
  *   we get    {"sdp":"<answer>"}  or  {"error":"..."}
  *   later     {"event":"ended"}  (watchers, when the publisher leaves)
  * The socket stays open for the whole session. Closing it hangs up.
@@ -57,6 +58,9 @@ interface ConnectRelayOptions {
   role: RelayRole;
   name: string;
   pc: RTCPeerConnection;
+  /** The api's go-live grant. Publishers only; without it video answers "not your stream". */
+  session?: number;
+  token?: number;
   url?: string;
   timeoutMs?: number;
   /** Aborting rejects with "cancelled" (the user pressed stop while we were connecting). */
@@ -67,7 +71,7 @@ interface ConnectRelayOptions {
  * Open the socket, send the offer, apply the answer. Resolves with the open socket.
  * Rejects with Error(text) on {"error"}, socket trouble, timeout, or abort.
  */
-export function connectRelay({ role, name, pc, url = '/ws', timeoutMs = 15000, signal }: ConnectRelayOptions): Promise<WebSocket> {
+export function connectRelay({ role, name, pc, session, token, url = '/ws', timeoutMs = 15000, signal }: ConnectRelayOptions): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(relayUrl(url));
     let done = false;
@@ -89,7 +93,8 @@ export function connectRelay({ role, name, pc, url = '/ws', timeoutMs = 15000, s
     }
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ role, name, sdp: pc.localDescription?.sdp ?? '' }));
+      // JSON.stringify drops the undefined ones, so a watcher's frame has no session or token
+      ws.send(JSON.stringify({ role, name, sdp: pc.localDescription?.sdp ?? '', session, token }));
     };
     ws.onerror = () => fail(new Error('socket error'));
     ws.onclose = () => fail(new Error('socket closed'));

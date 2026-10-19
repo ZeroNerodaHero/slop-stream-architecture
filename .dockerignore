@@ -15,6 +15,7 @@ node_modules
 # host config, must not end up inside an image
 .env
 .env.*
+.deployed
 
 # editing these must not invalidate COPY layers
 docker-compose.yml

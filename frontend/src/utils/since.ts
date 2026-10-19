@@ -1,5 +1,5 @@
-/** "just started", "12 min", "3 h". Clock skew clamps to zero. */
-export function since(iso: string | null, now = Date.now()): string {
+/** "just started", "12 min", "3 h". `now` is the caller's clock in ms (a render must not read one). Skew clamps to zero. */
+export function since(iso: string | null, now: number): string {
   if (!iso) return '';
   const mins = Math.max(0, Math.round((now - new Date(iso).getTime()) / 60000));
   if (mins < 1) return 'just started';

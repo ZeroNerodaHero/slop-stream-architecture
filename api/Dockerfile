@@ -22,6 +22,9 @@ RUN touch api/src/main.rs \
 FROM debian:bookworm-slim
 RUN useradd -r -u 10001 -s /usr/sbin/nologin app
 COPY --from=build /src/target/release/api /usr/local/bin/api
+# the commit this was built from, reported by /api/health. set by deploy.sh; "dev" by hand.
+ARG BUILD=dev
+ENV BUILD=${BUILD}
 USER app
 EXPOSE 4000/tcp
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \

@@ -3,7 +3,8 @@
 //! Each stream is a box bouncing around a dark frame with the stream's name on
 //! it, plus a quiet tone. ffmpeg draws and encodes (VP8 + Opus) to RTP on
 //! localhost; we forward those packets into the video server the way a browser
-//! would: same websocket, same offer/answer, plus the dummy password.
+//! would: go-live at the api, then the same websocket and offer/answer with the
+//! session and token it got, plus the dummy password.
 //!
 //! Env: DUMMY_STREAMS (how many, 0 = idle), DUMMY_PASSWORD (must match the
 //! server), DUMMY_NAMES (optional comma list), VIDEO_WS_URL, API_URL, DUMMY_FONT.
@@ -21,6 +22,7 @@ use tokio_tungstenite::tungstenite::Message;
 use webrtc::api::APIBuilder;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::rtp::packet::Packet;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
@@ -98,11 +100,20 @@ pub async fn run() -> anyhow::Result<()> {
     }
 
     let prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
+    // the same name rule as everywhere. it also keeps the drawtext expression
+    // below safe: no quotes, colons or commas can get in
     let mut names: Vec<String> = std::env::var("DUMMY_NAMES")
         .unwrap_or_default()
         .split(',')
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty())
+        .filter(|s| {
+            let ok = crate::valid_name(s);
+            if !ok {
+                log::warn!("DUMMY_NAMES: skipping {s:?}. use a-z 0-9 _ - (1 to 32)");
+            }
+            ok
+        })
         .collect();
     for i in names.len()..count {
         names.push(format!("{prefix}{}{}", WORDS[i % WORDS.len()], if i >= WORDS.len() { (i / WORDS.len()).to_string() } else { String::new() }));
@@ -117,6 +128,12 @@ pub async fn run() -> anyhow::Result<()> {
         chat_ws_url: std::env::var("CHAT_WS_URL").ok().filter(|u| !u.is_empty()).map(|u| u.trim_end_matches('/').to_owned()),
         font: std::env::var("DUMMY_FONT").unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf".into()),
     };
+    if cfg.api_url.is_none() {
+        // video refuses a publish without the api's session and token, so without
+        // the api there is nothing to do
+        log::error!("API_URL is empty. video needs the api's go-live grant for every publish");
+        return wait_for_signal().await;
+    }
     log::info!("{} dummy stream(s): {}", cfg.names.len(), cfg.names.join(", "));
 
     let http = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
@@ -208,7 +225,15 @@ async fn stream(i: usize, name: &str, cfg: &Config, http: &reqwest::Client, owne
         .with_interceptor_registry(registry)
         .build();
     let pc = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await?);
+    // close on every way out, not just the happy one: a dropped peer connection
+    // keeps its ice sockets and the rtcp reader tasks, and the retry loop would
+    // make a new set every 5s for as long as video is down
+    let result = publish_on(&pc, i, name, cfg, http, owner).await;
+    let _ = pc.close().await;
+    result
+}
 
+async fn publish_on(pc: &RTCPeerConnection, i: usize, name: &str, cfg: &Config, http: &reqwest::Client, owner: Option<&Grant>) -> anyhow::Result<()> {
     let video = Arc::new(TrackLocalStaticRTP::new(vp8_capability(), "video".to_owned(), name.to_owned()));
     let audio = Arc::new(TrackLocalStaticRTP::new(opus_capability(), "audio".to_owned(), name.to_owned()));
     for track in [Arc::clone(&video), Arc::clone(&audio)] {
@@ -226,11 +251,18 @@ async fn stream(i: usize, name: &str, cfg: &Config, http: &reqwest::Client, owne
         .ok_or_else(|| anyhow!("no local description"))?
         .sdp;
 
-    // The same handshake a browser does.
+    // The same handshake a browser does: the go-live grant proves the name is ours.
     let (mut ws, _) = tokio_tungstenite::connect_async(&cfg.video_ws_url)
         .await
         .context("connect to video websocket")?;
-    let hello = serde_json::json!({ "role": "publish", "name": name, "sdp": sdp, "password": cfg.password });
+    let hello = serde_json::json!({
+        "role": "publish",
+        "name": name,
+        "sdp": sdp,
+        "session": owner.map(|g| g.session),
+        "token": owner.map(|g| g.token),
+        "password": cfg.password,
+    });
     ws.send(Message::Text(hello.to_string().into())).await?;
     let reply = tokio::time::timeout(Duration::from_secs(15), ws.next())
         .await
@@ -280,17 +312,25 @@ async fn stream(i: usize, name: &str, cfg: &Config, http: &reqwest::Client, owne
     video_task.abort();
     audio_task.abort();
     let _ = ws.close(None).await;
-    let _ = pc.close().await;
     result
 }
 
 /// One pretend chatter: join the room, say a line every `every` seconds, come back
 /// after 5s if the chat server drops us. `seed` picks the lines so rooms differ.
+/// A refused hello (someone signed up as this nick) is said once and the chatter
+/// gives up, instead of reconnecting forever in silence.
 async fn chatter(url: String, hello: serde_json::Value, seed: usize, every: u64) {
     let mut n = seed;
     loop {
         if let Ok((mut ws, _)) = tokio_tungstenite::connect_async(&url).await {
             let _ = ws.send(Message::Text(hello.to_string().into())).await;
+            // the chat answers the hello with the history, or with an error and a close
+            if let Ok(Some(Ok(Message::Text(reply)))) = tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
+                if let Some(error) = serde_json::from_str::<Reply>(&reply).ok().and_then(|r| r.error) {
+                    log::warn!("chat {url} refused {}: {error}. no chatter for this stream", hello["nick"]);
+                    return;
+                }
+            }
             loop {
                 tokio::time::sleep(Duration::from_secs(every)).await;
                 n += 1;

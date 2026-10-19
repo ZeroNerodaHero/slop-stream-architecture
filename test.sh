@@ -7,13 +7,19 @@
 #   ./test.sh --all                also the redeploy test (runs ./deploy.sh api/frontend/video)
 #   HEADED=1 ./test.sh             watch the browsers
 #
-# Needs node and Google Chrome on the machine running the tests (not the server).
+# Needs node and Google Chrome on the machine running the tests. With a url, that is any
+# machine. Without one it is the server itself: regress, redeploy and dummy restart
+# containers through docker compose here, and auth and errors read redis and the database.
 # A fake camera is used, so nothing is recorded and no permission prompt appears.
+# Stream names are fixed (e2etest, r1..r7, rd1, ...): one person at a time per server.
 #
 # What runs:
 #   e2e        go live -> listed on home -> watcher sees frames -> stop -> watcher sees ended
 #   dup        a second person on the same name is refused
 #   chat       two viewers talk, history survives a reload, 501 chars refused, streamer lines marked
+#   auth       sign up, log in, log out, a claimed name is only its owner's, verified chat lines, 429 after 10 tries
+#   preview    /watch/<name> html: title + og tags offline, with a picture, live with the thumbnail; the picture round-trips
+#   errors     /api/health has the monitor fields, a page's error report lands (204, log, debug db), bad ones 400, /admin renders
 #   regress    token-gated stop, auto-recovery, trailing slash, fast restart, races, bad offers
 #   redeploy   (--all, local only) partial ./deploy.sh runs while a stream is live
 #   dummy      (--all, local only, needs DUMMY_STREAMS >= 1) the fake streams play and dummy- names are gated
@@ -30,7 +36,7 @@ ALL=0
 BASE=""
 for a in "$@"; do
   case "$a" in
-    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;   # the header above, up to the first code line
     --all) ALL=1 ;;
     http://*|https://*) BASE="${a%/}" ;;
     *) die "don't know what '$a' is. see ./test.sh --help" ;;
@@ -46,6 +52,9 @@ if [ -z "$BASE" ]; then
   ip="$(sed -n 's/^[[:space:]]*PUBLIC_IP=//p' .env 2>/dev/null | tail -n 1 | tr -d "\"' \t\r")"
   [ -n "$ip" ] || die "no .env yet. run ./deploy.sh first"
   BASE="https://$ip"
+  # the errors suite reads reports back through /api/errors when the local stack has a token.
+  # an inline ` # comment` goes, like compose drops it; the api ignores a token under 16 characters
+  OPS_TOKEN="${OPS_TOKEN:-$(sed -n 's/^[[:space:]]*OPS_TOKEN=//p' .env 2>/dev/null | tail -n 1 | sed 's/[[:space:]]#.*$//' | tr -d "\"' \t\r")}"
 fi
 
 say "target: $BASE"
@@ -66,12 +75,15 @@ fi
 failed=0
 run() {
   say "$1"
-  if BASE_URL="$BASE" node "test/$1.js"; then :; else failed=$((failed + 1)); fi
+  if BASE_URL="$BASE" LOCAL="$LOCAL" OPS_TOKEN="${OPS_TOKEN:-}" node "test/$1.js"; then :; else failed=$((failed + 1)); fi
 }
 
 run e2e
 run dup
 run chat
+run auth
+run preview
+run errors
 if [ "$LOCAL" = 1 ]; then
   run regress
   if [ "$ALL" = 1 ]; then

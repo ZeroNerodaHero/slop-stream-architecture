@@ -5,3 +5,5 @@ frontend/dist/
 
 # written by deploy.sh. copy .env.example to start by hand.
 .env
+# the commit the last deploy.sh run that ended well deployed. --pull diffs from it.
+.deployed

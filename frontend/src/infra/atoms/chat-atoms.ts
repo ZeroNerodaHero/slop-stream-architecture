@@ -8,6 +8,7 @@ import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
 import type { Owner } from '@/infra/api';
+import { forgetMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { relayUrl } from '@/infra/relay';
 import { store } from '@/infra/store';
 
@@ -16,6 +17,8 @@ export interface ChatLine {
   from: string;
   text: string;
   streamer: boolean;
+  /** said by a login: `from` really is that account */
+  verified: boolean;
   at: number;
 }
 
@@ -26,7 +29,7 @@ const KEEP_LINES = 500;
 const RECONNECT_MS = 3000;
 const NICK_RE = /^[a-zA-Z0-9_-]{1,24}$/;
 
-/** Remembered across pages and visits. */
+/** Your name without an account. Remembered across pages and visits (localstorage). */
 export const nickAtom = atomWithStorage<string>('nick', '');
 export const chatPhaseAtom = atom<ChatPhase>('off');
 export const chatLinesAtom = atom<ChatLine[]>([]);
@@ -37,9 +40,11 @@ export const chatNoticeAtom = atom('');
 export const chatAsStreamerAtom = atom(false);
 
 export const nickIsValidAtom = atom((get) => NICK_RE.test(get(nickAtom).trim()));
+/** The name this browser talks as: the login, else the nick. */
+export const chatSpeakerAtom = atom((get) => get(meAtom) || get(nickAtom).trim());
 export const chatCanSendAtom = atom((get) => {
-  const draft = get(chatDraftAtom).trim();
-  return get(chatPhaseAtom) === 'open' && draft.length > 0 && draft.length <= MAX_CHAT_CHARS;
+  const length = chars(get(chatDraftAtom).trim());
+  return get(chatPhaseAtom) === 'open' && length > 0 && length <= MAX_CHAT_CHARS;
 });
 
 interface Session {
@@ -56,12 +61,18 @@ export function isValidNick(nick: string): boolean {
   return NICK_RE.test(nick.trim());
 }
 
+/** Length the way the server counts it: unicode scalars, not utf-16 units (an emoji is one, not two). */
+export function chars(text: string): number {
+  return [...text].length;
+}
+
 export function setNick(raw: string) {
   store.set(nickAtom, raw.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24));
 }
 
 export function setChatDraft(raw: string) {
-  store.set(chatDraftAtom, raw.slice(0, MAX_CHAT_CHARS + 50)); // a little slack so the counter can go red
+  // a little slack so the counter can go red. cut between scalars, never through a surrogate pair
+  store.set(chatDraftAtom, [...raw].slice(0, MAX_CHAT_CHARS + 50).join(''));
 }
 
 /**
@@ -70,6 +81,15 @@ export function setChatDraft(raw: string) {
  */
 export function openChat(name: string, owner: Owner | null = null) {
   if (session && session.name === name && sameOwner(session.owner, owner) && session.ws) return;
+  closeChat(false);
+  session = { name, owner, ws: null, timer: null };
+  connect();
+}
+
+/** The name changed (nick edited, logged in or out): say hello again as the new one. */
+export function reconnectChat() {
+  if (!session) return;
+  const { name, owner } = session;
   closeChat(false);
   session = { name, owner, ws: null, timer: null };
   connect();
@@ -96,7 +116,7 @@ export function closeChat(reset = true) {
 export function sendChat() {
   const text = store.get(chatDraftAtom).trim();
   if (!session?.ws || session.ws.readyState !== WebSocket.OPEN || !text) return;
-  if (text.length > MAX_CHAT_CHARS) {
+  if (chars(text) > MAX_CHAT_CHARS) {
     showNotice('too long');
     return;
   }
@@ -108,7 +128,8 @@ function connect() {
   const current = session;
   if (!current) return;
   const nick = store.get(nickAtom).trim();
-  if (!current.owner && !isValidNick(nick)) {
+  const me = store.get(meAtom) ?? null;
+  if (!current.owner && !me && !isValidNick(nick)) {
     // no nick yet: wait for one, the panel calls openChat again on save
     store.set(chatPhaseAtom, 'off');
     return;
@@ -119,10 +140,11 @@ function connect() {
   current.ws = ws;
 
   ws.onopen = () => {
-    const hello = current.owner ? { type: 'hello', nick, session: current.owner.session, token: current.owner.token } : { type: 'hello', nick };
+    // a login needs no nick: the cookie went with the handshake and the server names us
+    const hello = current.owner ? { type: 'hello', nick, session: current.owner.session, token: current.owner.token } : me ? { type: 'hello' } : { type: 'hello', nick };
     ws.send(JSON.stringify(hello));
     store.set(chatPhaseAtom, 'open');
-    store.set(chatAsStreamerAtom, current.owner !== null);
+    store.set(chatAsStreamerAtom, current.owner !== null || me === current.name);
   };
   ws.onmessage = (e) => {
     let msg: { type?: string; messages?: ChatLine[]; count?: number; error?: string } & Partial<ChatLine>;
@@ -134,7 +156,16 @@ function connect() {
     if (msg.type === 'history' && msg.messages) store.set(chatLinesAtom, msg.messages.slice(-KEEP_LINES));
     else if (msg.type === 'message' && msg.id) appendLine(msg as ChatLine);
     else if (msg.type === 'count' && typeof msg.count === 'number') store.set(chatCountAtom, msg.count);
-    else if (msg.type === 'error' && msg.error) showNotice(msg.error);
+    else if (msg.type === 'error' && msg.error) {
+      // the server refused who we are (bad nick, somebody's name): back to the nick box, no retry loop
+      const refused = /nick|account/.test(msg.error);
+      showNotice(msg.error, refused ? 8000 : 3000);
+      if (refused && session === current) {
+        closeChat(false);
+        // a login is only ever refused when its cookie died (logout-all, passwd): stop being that name
+        if (me) forgetMe();
+      }
+    }
   };
   ws.onclose = () => {
     if (session !== current) return;
@@ -152,10 +183,10 @@ function appendLine(line: ChatLine) {
   store.set(chatLinesAtom, next);
 }
 
-function showNotice(text: string) {
+function showNotice(text: string, ms = 3000) {
   store.set(chatNoticeAtom, text);
   if (notice) clearTimeout(notice);
-  notice = setTimeout(() => store.set(chatNoticeAtom, ''), 3000);
+  notice = setTimeout(() => store.set(chatNoticeAtom, ''), ms);
 }
 
 function sameOwner(a: Owner | null, b: Owner | null): boolean {

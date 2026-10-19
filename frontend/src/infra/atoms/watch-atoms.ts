@@ -8,6 +8,7 @@ import { atom } from 'jotai';
 import { api, messageOf } from '@/infra/api';
 import { isValidName } from '@/infra/names';
 import { connectRelay, parseRelayMessage, waitForIceGathering } from '@/infra/relay';
+import { reportPeerFailure } from '@/infra/report';
 import { store } from '@/infra/store';
 import type { Tone } from '@/shared-components/StatusLine';
 
@@ -16,18 +17,24 @@ export type WatchPhase = 'loading' | 'waiting' | 'connecting' | 'connected' | 'w
 const NOT_LIVE_RETRY_MS = 5000;
 const NO_VIDEO_AFTER_MS = 10000;
 const RETRY_PHASES: readonly WatchPhase[] = ['waiting', 'failed'];
+/** The sound button stays through a blip: the frames come back on their own. */
+const SOUND_PHASES: readonly WatchPhase[] = ['watching', 'reconnecting'];
 
 export const watchNameAtom = atom('');
 export const watchPhaseAtom = atom<WatchPhase>('loading');
 export const watchMessageAtom = atom('loading');
 export const bioAtom = atom('');
+/** The name has an account, so this really is them. */
+export const verifiedAtom = atom(false);
+/** Their picture's upload time (the `?v=` of its url). `null`: none. */
+export const avatarAtom = atom<number | null>(null);
 export const remoteStreamAtom = atom<MediaStream | null>(null);
 export const mutedAtom = atom(true);
 /** Autoplay was refused (low power mode, strict settings). One tap fixes it. */
 export const needsTapAtom = atom(false);
 
 export const canRetryAtom = atom((get) => RETRY_PHASES.includes(get(watchPhaseAtom)));
-export const showUnmuteAtom = atom((get) => get(needsTapAtom) || (get(watchPhaseAtom) === 'watching' && get(mutedAtom)));
+export const showUnmuteAtom = atom((get) => get(needsTapAtom) || (SOUND_PHASES.includes(get(watchPhaseAtom)) && get(mutedAtom)));
 export const watchToneAtom = atom<Tone>((get) => {
   const phase = get(watchPhaseAtom);
   if (phase === 'watching') return 'live';
@@ -38,10 +45,38 @@ let pc: RTCPeerConnection | null = null;
 let ws: WebSocket | null = null;
 let connectTimer: ReturnType<typeof setTimeout> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * Which call of `watch` is the current one. Before the peer exists there is no `pc` to compare
+ * against, so a grant landing after the page was left (or after a newer call) is told apart by this.
+ */
+let attempt = 0;
+/** The <video> has played frames of this attempt: a reconnect goes straight back to `watching`. */
+let played = false;
 
 function setPhase(phase: WatchPhase, message: string) {
   store.set(watchPhaseAtom, phase);
   store.set(watchMessageAtom, message);
+}
+
+/**
+ * A failure ends the attempt: one report, with the peer's stats, and the status stays on it
+ * with the retry button (nothing retries from `failed` on its own). The handles are detached
+ * first so nothing of this attempt fires again: the server dropping the socket after its own
+ * ice timeout would otherwise read as `ended` and start the next attempt, and chrome's ice
+ * going failed after our 10s would report a second time. The peer is closed once its stats
+ * are read (300ms at most), unless a retry or leaving got there first.
+ */
+function fail(message: string, myPc: RTCPeerConnection) {
+  if (pc !== myPc) return;
+  if (connectTimer) clearTimeout(connectTimer);
+  connectTimer = null;
+  if (ws) ws.onmessage = ws.onclose = null;
+  myPc.onconnectionstatechange = null;
+  const reported = reportPeerFailure('watch', store.get(watchNameAtom), message, myPc);
+  setPhase('failed', message);
+  void reported.finally(() => {
+    if (pc === myPc) teardown();
+  });
 }
 
 /** Nobody is live right now. Check again in a bit. */
@@ -53,6 +88,7 @@ function waitForStreamer(message: string) {
 
 export async function watch(name: string): Promise<void> {
   teardown();
+  const mine = ++attempt;
   store.set(watchNameAtom, name);
   if (!isValidName(name)) {
     setPhase('bad-name', 'bad name');
@@ -64,10 +100,14 @@ export async function watch(name: string): Promise<void> {
   try {
     grant = await api.watch(name);
   } catch {
-    waitForStreamer('cannot reach the server. retrying');
+    if (mine === attempt) waitForStreamer('cannot reach the server. retrying');
     return;
   }
+  // left the page, or a newer call took over, while the api was answering
+  if (mine !== attempt) return;
   store.set(bioAtom, grant.bio ?? '');
+  store.set(verifiedAtom, grant.verified === true);
+  store.set(avatarAtom, grant.avatar ?? null);
   if (!grant.live) {
     waitForStreamer('not live yet. checking');
     return;
@@ -89,9 +129,11 @@ export async function watch(name: string): Promise<void> {
     const state = myPc.connectionState;
     if (state === 'connected') {
       if (connectTimer) clearTimeout(connectTimer);
-      if (store.get(watchPhaseAtom) !== 'watching') setPhase('connected', 'connected, waiting for video');
+      // back from a blip: the frames resume on their own, the <video> fires no second `playing`
+      if (played) setPhase('watching', 'watching');
+      else setPhase('connected', 'connected, waiting for video');
     } else if (state === 'disconnected') setPhase('reconnecting', 'reconnecting');
-    else if (state === 'failed') setPhase('failed', 'connection failed. udp blocked?');
+    else if (state === 'failed') fail('connection failed. udp blocked?', myPc);
   };
 
   try {
@@ -102,9 +144,10 @@ export async function watch(name: string): Promise<void> {
     ws = await connectRelay({ role: 'watch', name, pc: myPc, url: grant.url });
   } catch (err) {
     if (pc !== myPc) return; // retry or leaving happened meanwhile
-    teardown();
-    if (messageOf(err) === 'not live') waitForStreamer('not live yet. checking');
-    else setPhase('failed', `failed: ${messageOf(err)}`);
+    if (messageOf(err) === 'not live') {
+      teardown();
+      waitForStreamer('not live yet. checking');
+    } else fail(`failed: ${messageOf(err)}`, myPc);
     return;
   }
 
@@ -114,7 +157,7 @@ export async function watch(name: string): Promise<void> {
   ws.onclose = ended;
 
   connectTimer = setTimeout(() => {
-    if (pc === myPc && myPc.connectionState !== 'connected') setPhase('failed', 'no video. udp blocked?');
+    if (pc === myPc && myPc.connectionState !== 'connected') fail('no video. udp blocked?', myPc);
   }, NO_VIDEO_AFTER_MS);
 }
 
@@ -131,6 +174,7 @@ export function retry() {
 /** The <video> element started playing frames. */
 export function markPlaying() {
   if (!pc) return;
+  played = true;
   store.set(needsTapAtom, false);
   setPhase('watching', 'watching');
 }
@@ -148,6 +192,7 @@ export function teardown() {
   if (connectTimer) clearTimeout(connectTimer);
   if (retryTimer) clearTimeout(retryTimer);
   connectTimer = retryTimer = null;
+  played = false;
   store.set(needsTapAtom, false);
   if (ws) {
     ws.onmessage = ws.onclose = null;
@@ -162,10 +207,14 @@ export function teardown() {
   store.set(remoteStreamAtom, null);
 }
 
-/** Navigated away inside the app. */
+/** Navigated away inside the app. A grant still in flight is dropped when it lands. */
 export function leaveWatchPage() {
+  attempt++;
   teardown();
+  store.set(watchNameAtom, '');
   store.set(mutedAtom, true);
   store.set(bioAtom, '');
+  store.set(verifiedAtom, false);
+  store.set(avatarAtom, null);
   setPhase('loading', 'loading');
 }

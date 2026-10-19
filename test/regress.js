@@ -103,22 +103,50 @@ function recordPcs() {
     return `status "${s}"`;
   });
 
-  // 4. video restart is fast and both pages react at once
-  await step('docker restart video is quick, pages react', async () => {
+  // 4. video restart is fast and both pages react at once. A second, bare watcher socket records
+  //    every frame video sends: the watch page shows the same text whether it got `ended` or the
+  //    socket just dropped, so the SIGTERM promise ("every watcher gets ended") is asserted here.
+  //    Only r4 is ours to assert on: dummies and other people's streams reconnect on their own.
+  //    compose restart gives video 10s to leave on SIGTERM before SIGKILL, so a budget under
+  //    that still proves video exits at once; 6s was wall-clock luck on a busy box.
+  await step('docker restart video is quick, pages react, watchers get ended', async () => {
     const p = await publisher('r4');
     const w = await watcher('/watch/r4');
     await waitStatus(w, /^watching$/);
+    const raw = await (await ctx()).newPage();
+    await raw.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await raw.evaluate(() => new Promise((resolve, reject) => {
+      window.__frames = [];
+      const pc = new RTCPeerConnection();
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.addTransceiver('audio', { direction: 'recvonly' });
+      const ws = new WebSocket(`wss://${location.host}/ws`);
+      ws.onopen = async () => {
+        await pc.setLocalDescription(await pc.createOffer());
+        ws.send(JSON.stringify({ role: 'watch', name: 'r4', sdp: pc.localDescription.sdp }));
+      };
+      ws.onmessage = async (e) => {
+        window.__frames.push(e.data);
+        const msg = JSON.parse(e.data);
+        if (msg.error) reject(new Error(`raw watcher refused: ${msg.error}`));
+        if (msg.sdp) { await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp }); resolve(); }
+      };
+      ws.onerror = () => reject(new Error('raw watcher socket error'));
+      setTimeout(() => reject(new Error('raw watcher got no answer')), 8000);
+    }));
     const t0 = Date.now();
     execSync('docker compose restart video', { cwd: REPO, env: DOCKER_ENV, stdio: 'ignore' });
     const restartMs = Date.now() - t0;
     const ps = await waitStatus(p, /lost|stopped|failed/, 10000);
     const ws = await waitStatus(w, /ended|checking|lost/, 10000);
     await sleep(1500);
+    const frames = await raw.evaluate(() => window.__frames);
     const health = (await api.get('/api/health')).status();
     const list = await (await api.get('/api/streams')).json();
-    if (restartMs > 6000) throw new Error(`restart took ${restartMs} ms`);
-    if (list.length) throw new Error(`stale list ${JSON.stringify(list)}`);
-    return `restart ${restartMs} ms, pub "${ps}", watch "${ws}", health ${health}`;
+    if (restartMs > 9000) throw new Error(`restart took ${restartMs} ms (10s means video ignored SIGTERM)`);
+    if (list.some((s) => s.name === 'r4')) throw new Error(`r4 still listed ${JSON.stringify(list)}`);
+    if (!frames.some((f) => /"ended"/.test(f))) throw new Error(`no ended frame on the raw watcher socket, got ${JSON.stringify(frames.map((f) => f.slice(0, 40)))}`);
+    return `restart ${restartMs} ms, pub "${ps}", watch "${ws}", raw socket got ended, health ${health}`;
   });
 
   // 5. start, stop fast, start again
@@ -172,6 +200,77 @@ function recordPcs() {
     await p.click('#stop');
     if (!/bad offer/.test(reply)) throw new Error(`reply ${reply}`);
     return `reply ${reply}, live ${JSON.stringify(live)}, then r7 went live fine`;
+  });
+
+  // 8. a publish frame needs the go-live session and token: video asks the api. A valid offer
+  //    without them, or with a made-up pair, is refused and the name stays free.
+  await step('publish without the go-live grant -> not your stream', async () => {
+    const page = await (await ctx()).newPage();
+    await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    const replies = await page.evaluate(async () => {
+      const pc = new RTCPeerConnection();
+      pc.addTransceiver('video', { direction: 'sendonly' });
+      await pc.setLocalDescription(await pc.createOffer());
+      const sdp = pc.localDescription.sdp;
+      const ask = (extra) => new Promise((resolve) => {
+        const ws = new WebSocket(`wss://${location.host}/ws`);
+        ws.onopen = () => ws.send(JSON.stringify({ role: 'publish', name: 'r8', sdp, ...extra }));
+        ws.onmessage = (e) => resolve(e.data);
+        ws.onerror = () => resolve('error');
+        setTimeout(() => resolve('timeout'), 8000);
+      });
+      return { none: await ask({}), wrong: await ask({ session: 1, token: 2 }) };
+    });
+    const live = await (await api.get('/api/streams')).json();
+    const p = await publisher('r8');
+    await p.click('#stop');
+    if (!/not your stream/.test(replies.none) || !/not your stream/.test(replies.wrong)) throw new Error(`replies ${JSON.stringify(replies)}`);
+    if (live.some((s) => s.name === 'r8')) throw new Error(`r8 listed after refused publishes: ${JSON.stringify(live)}`);
+    return `no grant ${replies.none}, wrong grant ${replies.wrong}, then r8 went live fine`;
+  });
+
+  // 9. a go-live whose publisher has not reached video yet still owns the name
+  await step('second go-live inside the connect window -> 409, owner keeps it', async () => {
+    const first = await api.post('/api/streams/r9/go-live');
+    const grant = await first.json();
+    const second = await api.post('/api/streams/r9/go-live');
+    const secondBody = await second.json().catch(() => null);
+    const beat = await api.post(`/api/streams/r9/heartbeat?session=${grant.session}&token=${grant.token}`);
+    // errors keep the { error } shape even when the query string is missing
+    const noQuery = await api.post('/api/streams/r9/stop');
+    const noQueryBody = await noQuery.json().catch(() => null);
+    const stop = await api.post(`/api/streams/r9/stop?session=${grant.session}&token=${grant.token}`);
+    const again = await api.post('/api/streams/r9/go-live');
+    const againGrant = await again.json().catch(() => ({}));
+    await api.post(`/api/streams/r9/stop?session=${againGrant.session}&token=${againGrant.token}`);
+    if (first.status() !== 200 || second.status() !== 409 || beat.status() !== 200 || stop.status() !== 200 || again.status() !== 200)
+      throw new Error(`first ${first.status()}, second ${second.status()} ${JSON.stringify(secondBody)}, heartbeat ${beat.status()}, stop ${stop.status()}, again ${again.status()}`);
+    if (noQuery.status() !== 400 || typeof (noQueryBody && noQueryBody.error) !== 'string')
+      throw new Error(`stop without query: ${noQuery.status()} ${JSON.stringify(noQueryBody)}`);
+    return `second ${second.status()} "${secondBody && secondBody.error}", heartbeat ${beat.status()}, after stop ${again.status()}, no-query stop ${noQuery.status()} {error}`;
+  });
+
+  // 10. without video the api refuses to hand out names, and lists from redis
+  await step('video down: go-live 503, list and watch fall back to redis', async () => {
+    const grant = await (await api.post('/api/streams/r10/go-live')).json();
+    execSync('docker compose stop video', { cwd: REPO, env: DOCKER_ENV, stdio: 'ignore' });
+    try {
+      const denied = await api.post('/api/streams/r10-other/go-live');
+      const deniedBody = await denied.json().catch(() => null);
+      const list = await (await api.get('/api/streams')).json();
+      const watch = await (await api.post('/api/streams/r10/watch')).json();
+      if (denied.status() !== 503 || !list.some((s) => s.name === 'r10') || watch.live !== true)
+        throw new Error(`go-live ${denied.status()} ${JSON.stringify(deniedBody)}, list ${JSON.stringify(list)}, watch.live ${watch.live}`);
+      return `go-live ${denied.status()} "${deniedBody && deniedBody.error}", r10 listed from redis, watch.live true`;
+    } finally {
+      execSync('docker compose start video', { cwd: REPO, env: DOCKER_ENV, stdio: 'ignore' });
+      for (let i = 0; i < 30; i++) {
+        const health = await (await api.get('/api/health')).json().catch(() => ({}));
+        if (health.video === true) break;
+        await sleep(1000);
+      }
+      await api.post(`/api/streams/r10/stop?session=${grant.session}&token=${grant.token}`);
+    }
   });
 
   await browser.close();

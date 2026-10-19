@@ -29,5 +29,9 @@ RUN apt-get update \
  && useradd -r -u 10001 -s /usr/sbin/nologin app
 COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=build /src/target/release/video /usr/local/bin/video
+# the commit this was built from, same as the video image. compose passes it; unused here, but
+# docker warns about a build arg nobody declares.
+ARG BUILD=dev
+ENV BUILD=${BUILD}
 USER app
 ENTRYPOINT ["/usr/local/bin/video", "dummy"]

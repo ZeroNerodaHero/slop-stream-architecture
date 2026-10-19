@@ -166,13 +166,11 @@ function tap(page, tag) {
     api = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true, timeout: 5000 });
 
     await step('0. preflight: GET /api/streams reachable, name not already live', async () => {
-      let list = await getStreams();
-      if (listsName(list, NAME)) {               // stale key from an aborted run: clear it and re-check
-        await api.post(`/api/streams/${NAME}/stop`).catch(() => {});
-        await sleep(500);
-        list = await getStreams();
-        if (listsName(list, NAME)) throw new Error(`${NAME} is already live and could not be cleared: ${JSON.stringify(list)}`);
-      }
+      const list = await getStreams();
+      // stop needs the session's own token, so nothing here can clear a stale key: a key
+      // left by an aborted run expires on its own within 90s. the names are fixed, so two
+      // people running the suites against one server at once collide here on purpose.
+      if (listsName(list, NAME)) throw new Error(`${NAME} is already live (another run, or an aborted one: wait 90s): ${JSON.stringify(list)}`);
       return `streams=${JSON.stringify(list).slice(0, 80)}`;
     });
 
@@ -205,6 +203,13 @@ function tap(page, tag) {
       return `status="${v}"`;
     });
 
+    // home is opened now, before the first thumbnail exists (~6s after go-live), so its first
+    // <img> load 404s: step 4c checks the card recovers on a later bucket instead of staying black.
+    await step('3b. watcher: open home (/) before the first thumbnail exists, card appears', async () => {
+      await watcher.goto(`${BASE}/`, { waitUntil: 'domcontentloaded', timeout: T.pageReady });
+      await pollPage(watcher, (n) => !!document.querySelector(`img[data-thumb="${n}"]`), (ok) => ok, { timeout: T.listed, label: `home card for ${NAME}` }, NAME);
+    });
+
     await step(`4. api: GET /api/streams lists ${NAME}`, async () => {
       const v = await pollUntil(getStreams, (l) => listsName(l, NAME), { timeout: T.listed, label: `/api/streams lists ${NAME}` });
       return JSON.stringify(v).slice(0, 100);
@@ -220,6 +225,13 @@ function tap(page, tag) {
         { timeout: 15000, interval: 1000, label: 'thumbnail' }
       );
       return `${r.bytes} bytes, ${r.type}`;
+    });
+
+    await step(`4c. home (open since 3b): img[data-thumb=${NAME}] loads once the thumbnail exists (<= 15s)`, async () => {
+      const v = await pollPage(watcher,
+        (n) => { const i = document.querySelector(`img[data-thumb="${n}"]`); return i ? { naturalWidth: i.naturalWidth, src: i.getAttribute('src') } : { missing: 'img' }; },
+        (s) => s.naturalWidth > 0, { timeout: 15000, interval: 500, label: 'home thumbnail naturalWidth > 0' }, NAME);
+      return `${v.naturalWidth}px wide, ${v.src}`;
     });
 
     await step(`5. watcher: open /watch/${NAME}, #video.videoWidth > 0 (<= ${T.firstFrame / 1000}s)`, async () => {
@@ -247,6 +259,10 @@ function tap(page, tag) {
       await publisher.click('#stop');
       const v = await pollPage(watcher, statusText, (t) => ENDED_RE.test(t || ''), { timeout: T.ended, label: `watcher #status ${ENDED_RE}` });
       return `status="${v}"`;
+    });
+
+    await step('8b. watcher: #retry is offered after ended', async () => {
+      await watcher.locator('#retry').waitFor({ state: 'visible', timeout: 5000 });
     });
 
     await step(`9. api: GET /api/streams no longer lists ${NAME}`, async () => {

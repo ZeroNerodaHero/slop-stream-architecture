@@ -35,6 +35,11 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    define: {
+      // the commit the pages were built from. deploy.sh sets BUILD; `npm run dev` is "dev".
+      // every error report (src/infra/report.ts) carries it.
+      __BUILD__: JSON.stringify(process.env.BUILD || 'dev')
+    },
     resolve: {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) }
     },
@@ -50,7 +55,9 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: 'dist',
-      sourcemap: false
+      // maps next to the assets (served like the rest of /assets, the source is public anyway),
+      // without a sourceMappingURL comment. a minified stack in an error report maps back by hand.
+      sourcemap: 'hidden'
     }
   };
 });

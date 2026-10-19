@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 
+import { UserBar } from '@/shared-components/UserBar';
 import { cn } from '@/utils/cn';
 
 interface PageFrameProps {
@@ -18,7 +19,10 @@ export function PageFrame({ title, titleId, aside, wide = false, children }: Pag
         <h1 id={titleId} className="min-w-0 text-[28px] font-semibold [overflow-wrap:anywhere]">
           {title}
         </h1>
-        {aside}
+        <div className="flex flex-wrap items-center gap-4">
+          <UserBar />
+          {aside}
+        </div>
       </header>
       {children}
     </main>

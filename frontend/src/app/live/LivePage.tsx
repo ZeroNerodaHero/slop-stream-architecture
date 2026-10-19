@@ -2,19 +2,26 @@ import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 
+import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
+  avatarStatusAtom,
   bioDraftAtom,
   bioStatusAtom,
   cameraAtom,
   canStartAtom,
+  chatRoomAtom,
+  commitStreamName,
   copyWatchUrl,
+  enterLivePage,
   goLive,
   isPublishingAtom,
   leaveLivePage,
-  loadBio,
+  myAvatarAtom,
   ownerAtom,
   publishMessageAtom,
   publishToneAtom,
+  removeAvatar,
+  saveAvatar,
   saveBio,
   setStreamName,
   startCamera,
@@ -23,8 +30,8 @@ import {
   streamNameAtom,
   watchUrlAtom
 } from '@/infra/atoms/publish-atoms';
-import { isValidName } from '@/infra/names';
 import { store } from '@/infra/store';
+import { Avatar } from '@/shared-components/Avatar';
 import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -36,16 +43,22 @@ export function LivePage() {
   const message = useAtomValue(publishMessageAtom);
   const tone = useAtomValue(publishToneAtom);
   const name = useAtomValue(streamNameAtom);
+  const chatRoom = useAtomValue(chatRoomAtom);
   const canStart = useAtomValue(canStartAtom);
   const publishing = useAtomValue(isPublishingAtom);
   const watchUrl = useAtomValue(watchUrlAtom);
   const bioDraft = useAtomValue(bioDraftAtom);
   const bioStatus = useAtomValue(bioStatusAtom);
+  const avatar = useAtomValue(myAvatarAtom);
+  const avatarStatus = useAtomValue(avatarStatusAtom);
   const owner = useAtomValue(ownerAtom);
+  const me = useAtomValue(meAtom);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
-  // Mount only: open the camera, end the stream when the tab or the page goes away.
+  // Mount only: open the camera, fill the name box, end the stream when the tab or the page goes away.
   useEffect(() => {
     void startCamera();
+    void enterLivePage();
     addEventListener('pagehide', stopOnLeave);
     addEventListener('beforeunload', stopOnLeave);
     return () => {
@@ -63,12 +76,19 @@ export function LivePage() {
           <StatusLine text={message} tone={tone} />
 
           <div className="my-3 flex flex-wrap items-center gap-3">
+            <label htmlFor="name" className="sr-only">
+              your name
+            </label>
             <input
               id="name"
               value={name}
               onChange={(e) => setStreamName(e.target.value)}
-              onBlur={() => void loadBio()}
-              disabled={publishing}
+              onBlur={() => void commitStreamName()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur();
+              }}
+              disabled={publishing || !!me}
+              title={me ? 'you stream as your account' : undefined}
               placeholder="your name"
               autoComplete="off"
               autoCapitalize="off"
@@ -120,12 +140,41 @@ export function LivePage() {
                 {bioStatus}
               </span>
             </div>
+
+            {/* the picture: on the watch page next to your name, and in the preview card of a shared link */}
+            <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-primaryStroke pt-4">
+              <Avatar name={name} version={avatar} className="mr-0 h-16 w-16" />
+              <span className="text-textSecondary">your picture</span>
+              <input
+                ref={fileRef}
+                id="avatar-file"
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (file) void saveAvatar(file);
+                }}
+              />
+              <Button id="avatar-pick" onClick={() => fileRef.current?.click()}>
+                {avatar === null ? 'choose picture' : 'change picture'}
+              </Button>
+              {avatar !== null && (
+                <Button id="avatar-remove" onClick={() => void removeAvatar()}>
+                  remove
+                </Button>
+              )}
+              <span id="avatarstatus" className="text-textSecondary" aria-live="polite">
+                {avatarStatus}
+              </span>
+            </div>
           </section>
         </div>
 
-        {/* the streamer's own chat. once live, `owner` makes its lines marked */}
-        {isValidName(name) ? (
-          <ChatPanel name={name} owner={owner} className="mt-4 h-[60vh] max-h-[640px] lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]" />
+        {/* the streamer's own chat, in the room of the settled name. once live, `owner` makes its lines marked */}
+        {chatRoom ? (
+          <ChatPanel name={chatRoom} owner={owner} className="mt-4 h-[60vh] max-h-[640px] lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]" />
         ) : (
           <aside
             id="chat"

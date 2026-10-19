@@ -75,6 +75,32 @@ async function say(page, text) {
     return 'button disabled at 501, 500 delivered';
   });
 
+  await step('a ninth socket from one ip in a room is refused', async () => {
+    // a and b hold two of this ip's eight already; raw sockets take the other six, the next one is told no
+    const outcome = await a.evaluate(async ({ room, tag }) => {
+      const open = [];
+      const seen = [];
+      for (let i = 0; i < 7; i++) {
+        const ws = new WebSocket(`wss://${location.host}/chat/${room}`);
+        open.push(ws);
+        const first = await new Promise((resolve) => {
+          ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', nick: `tab-${tag}-${i}` }));
+          ws.onmessage = (e) => resolve(JSON.parse(e.data));
+          ws.onerror = () => resolve({ type: 'error', error: 'socket error' });
+          ws.onclose = () => resolve({ type: 'error', error: 'closed' });
+          setTimeout(() => resolve({ type: 'timeout' }), 8000);
+        });
+        seen.push(first.type === 'history' ? 'in' : first.error || first.type);
+      }
+      for (const ws of open) ws.close();
+      return seen;
+    }, { room: ROOM, tag: Date.now().toString(36).slice(-6) });
+    const expected = [...Array(6).fill('in'), 'too many tabs'];
+    if (JSON.stringify(outcome) !== JSON.stringify(expected)) throw new Error(`got ${JSON.stringify(outcome)}`);
+    await a.waitForFunction(() => /^2 here/.test(document.querySelector('#chat-count').textContent), null, { timeout: 10000 });
+    return 'six more joined, the ninth got "too many tabs", count back to 2';
+  });
+
   await step('the streamer\'s lines are marked', async () => {
     const s = await fresh();
     await s.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });

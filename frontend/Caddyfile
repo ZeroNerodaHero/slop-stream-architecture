@@ -37,6 +37,30 @@ http:// {
 		reverse_proxy video:7880
 	}
 
+	# the one page the api serves: the same index.html, with a <title> and og:* tags
+	# for that name so a shared link gets a preview card, and the profile filled in
+	# before react boots. api/src/profile.rs. everything else is the spa below.
+	handle /watch/* {
+		encode zstd gzip
+		reverse_proxy api:4000
+	}
+
+	# the api is down (./deploy.sh api, a crash): a shared watch link would be a bare
+	# 502. serve the plain index.html from the volume instead, so the spa boots and
+	# keeps checking on its own. that one fetch has no preview tags; a bot that
+	# unfurls right then gets the generic card. every other route keeps its error.
+	handle_errors {
+		handle /watch/* {
+			@down expression `{err.status_code} in [502, 503, 504]`
+			handle @down {
+				root * /srv
+				header Cache-Control "no-cache"
+				rewrite * /index.html
+				file_server
+			}
+		}
+	}
+
 	# the pages: a single-page app built by vite into /srv.
 	# hashed assets can be cached forever; index.html must always be re-checked
 	# so a deploy never leaves someone running old js against a new api.

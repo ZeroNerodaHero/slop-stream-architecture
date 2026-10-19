@@ -2,7 +2,9 @@
 resolver = "2"
 members = ["video", "api"]
 
-# Smaller binaries, sane build memory on a small VPS.
+# Smaller binaries. strip runs after the link, so it saves image size, not build
+# memory (that is CARGO_BUILD_JOBS, in deploy.sh). debug = false is already the
+# release default; spelled out so nobody wonders.
 [profile.release]
 strip = true
 debug = false

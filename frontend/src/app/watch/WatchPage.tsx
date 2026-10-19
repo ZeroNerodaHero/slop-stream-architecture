@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import {
+  avatarAtom,
   bioAtom,
   canRetryAtom,
   leaveWatchPage,
@@ -14,12 +15,14 @@ import {
   remoteStreamAtom,
   retry,
   showUnmuteAtom,
+  verifiedAtom,
   watch,
   watchMessageAtom,
   watchNameAtom,
   watchToneAtom
 } from '@/infra/atoms/watch-atoms';
 import { cleanName, isDummyName } from '@/infra/names';
+import { Avatar } from '@/shared-components/Avatar';
 import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -38,11 +41,19 @@ export function WatchPage() {
   const showUnmute = useAtomValue(showUnmuteAtom);
   const needsTap = useAtomValue(needsTapAtom);
   const muted = useAtomValue(mutedAtom);
+  const verified = useAtomValue(verifiedAtom);
+  const avatar = useAtomValue(avatarAtom);
 
   // Mount only: start watching the name in the url, stop when the page goes away.
+  // The tab is named after them (the api already did so in the html it served).
   useEffect(() => {
-    void watch(cleanName(params.name));
-    return leaveWatchPage;
+    const name = cleanName(params.name);
+    document.title = name ? `${name} · streams` : 'streams';
+    void watch(name);
+    return () => {
+      document.title = 'streams';
+      leaveWatchPage();
+    };
   }, []);
 
   // Inside the click, so the browser allows sound.
@@ -59,7 +70,13 @@ export function WatchPage() {
     <PageFrame
       title={
         <>
+          <Avatar name={name} version={avatar} />
           {name}
+          {verified && (
+            <span className="ml-2 text-increase" title="has an account: this really is them">
+              ✓
+            </span>
+          )}
           {isDummyName(name) && <TestBadge />}
         </>
       }

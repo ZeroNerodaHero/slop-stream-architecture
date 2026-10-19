@@ -8,6 +8,29 @@
   </head>
   <body>
     <div id="root"></div>
+    <!--
+      the profile card the api puts inside #root when it serves /watch/<name>
+      (api/src/profile.rs), so the page shows the name, picture, status and bio
+      before react boots. react replaces it when it renders. a <template> draws
+      nothing, so the pages caddy serves straight from this file are unaffected.
+      {{...}} are the api's placeholders. the markup mirrors PageFrame + WatchPage;
+      tailwind scans this file, so the classes here exist in the css.
+    -->
+    <template id="watch-shell">
+      <main class="mx-auto max-w-[1360px] px-5 pb-16 pt-6">
+        <header class="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <h1 class="min-w-0 text-[28px] font-semibold [overflow-wrap:anywhere]">{{avatar}}{{name}}{{verified}}</h1>
+          <a href="/">home</a>
+        </header>
+        <div class="lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start lg:gap-6">
+          <div class="min-w-0">
+            <div class="aspect-video w-full rounded-xl bg-black"></div>
+            <p class="my-3 text-2xl font-semibold {{tone}}">{{status}}</p>
+            <p class="whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]">{{bio}}</p>
+          </div>
+        </div>
+      </main>
+    </template>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

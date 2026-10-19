@@ -1,0 +1,39 @@
+# the monitor box. a different droplet from the ones it watches: a dead box cannot
+# say so itself. uptime kuma polls every droplet, keeps the history, and tells you.
+# see docs/debugging.md, "the monitor droplet".
+#
+# on the smallest droplet there is:
+#   curl -fsSL https://get.docker.com | sudo sh
+#   git clone <repo> && cd slop-stream-architecture/monitor
+#   docker compose up -d
+#
+# then reach it over tailscale, not the public ip (nothing here is published to the
+# internet):
+#   curl -fsSL https://tailscale.com/install.sh | sh
+#   sudo tailscale up
+#   sudo tailscale serve --bg 3001          # https://<this box>.<tailnet>.ts.net, real cert
+#                                           # (needs "HTTPS certificates" enabled on the tailnet, admin console > DNS)
+#
+# in its ui, per droplet (prod, dev, ...):
+#   <env> api     HTTP(s) - Json Query   https://<ip>/api/health            json query `postgres and video` (jsonata), expected value `true`. `video` alone is fine too
+#   <env> media   HTTP(s)                https://<ip>/thumb/dummy-mango.jpg  200 only while a dummy publishes and ffmpeg decodes it (DUMMY_STREAMS >= 1 there)
+#   <env> tls     TCP Port               <ip>:443                            caddy answers. no certificate-expiry alert: kuma skips it with "ignore tls errors" on, which the self-signed cert forces
+#   <env> ping    Ping                   <ip>
+# "ignore tls/ssl errors" on for the https ones (self-signed). 20s interval, 3 retries.
+# a discord or telegram notification on down and on up. one status page per env.
+
+name: monitor
+
+services:
+  kuma:
+    image: louislam/uptime-kuma:1
+    container_name: kuma
+    restart: unless-stopped
+    ports:
+      # loopback only. tailscale serve forwards to it; the internet never sees it.
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - kuma-data:/app/data
+
+volumes:
+  kuma-data:

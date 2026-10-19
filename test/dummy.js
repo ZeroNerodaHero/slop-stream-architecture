@@ -20,11 +20,15 @@ const stats = (page) => page.evaluate(async () => { const out = {}; for (const p
   await home.screenshot({ path: require('os').tmpdir() + '/stream-e2e-dummy-home.png' });
   console.log('home cards:', await home.locator('#list article').count());
 
+  // whichever dummy- name is live: with DUMMY_STREAMS=1 that is only the first default, dummy-mango
+  const live = await (await api.get('/api/streams')).json();
+  const dummy = live.find((s) => /^dummy-/.test(s.name));
+  if (!dummy) { console.log(`FAIL  no dummy- stream in /api/streams (DUMMY_STREAMS >= 1 and default names?): ${JSON.stringify(live)}`); await browser.close(); await api.dispose(); process.exit(1); }
   const w = await ctx.newPage();
-  await w.goto(`${BASE}/watch/dummy-pixel`, { waitUntil: 'domcontentloaded' });
+  await w.goto(`${BASE}/watch/${dummy.name}`, { waitUntil: 'domcontentloaded' });
   await w.waitForFunction(() => /^watching$/i.test(document.querySelector('#status').textContent.trim()), null, { timeout: 20000 });
   const a = await stats(w); await sleep(2000); const b = await stats(w);
-  console.log('watch dummy-pixel:', JSON.stringify(a), '->', JSON.stringify(b));
+  console.log(`watch ${dummy.name}:`, JSON.stringify(a), '->', JSON.stringify(b));
   await w.screenshot({ path: require('os').tmpdir() + '/stream-e2e-dummy-watch.png' });
 
   // password gate

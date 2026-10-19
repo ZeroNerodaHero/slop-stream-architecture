@@ -2,25 +2,38 @@
 #
 #   certs      makes the https cert once, then exits
 #   pages      builds the react pages, copies them into a volume, then exits
-#   frontend   caddy. serves the pages. /api -> api, /ws -> video, http -> https
-#   api        save a bio, go live, heartbeat, start/end log
+#   frontend   caddy. serves the pages. /api and /watch -> api, /ws and /thumb -> video, /chat -> chat, http -> https
+#   api        save a bio and a picture, go live, heartbeat, start/end log, the /watch page. also /api/health and /api/errors
 #   chat       the text chat. websocket per viewer, last 500 lines per stream in redis
-#   database   the bio and the session log. not the video
+#   database   the bio and the session log. not the video. plus a second database, debug, for the pages' error reports
 #   redis      who is live
 #   video      rust. one upload in, copies it out. media on udp 7882
 #   dummy      fake streams for styling: bouncing boxes. DUMMY_STREAMS in .env says how many
 #
 # start:  ./deploy.sh                 everything, first time or any time
 #         ./deploy.sh api             only the api (also: frontend, video, dummy)
-#         ./deploy.sh --pull          git pull, then rebuild what changed
-#         (by hand: cp .env.example .env, set PUBLIC_IP, docker compose up -d --build)
+#         ./deploy.sh --pull          git pull, then rebuild what changed since the last deploy that ended well
+#         (by hand: cp .env.example .env, set PUBLIC_IP, BUILD=$(git rev-parse --short HEAD) docker compose up -d --build)
+#         the images carry BUILD, so a full deploy (or `up -d --build`) restarts video whenever
+#         HEAD moved since the last one: every live stream ends. deploy.sh warns first.
 # open:   https://<PUBLIC_IP from the .env file>
 # ports:  80/tcp 443/tcp 7882/udp
 # dummies: in .env set DUMMY_STREAMS=3 and DUMMY_PASSWORD=anyword, then ./deploy.sh dummy
 # peek:   docker compose exec database psql -U stream
+#         docker compose exec database psql -U stream -d debug      (the pages' error reports)
 #         docker compose exec redis redis-cli
+# health: https://<PUBLIC_IP>/api/health      errors: https://<PUBLIC_IP>/admin (ADMIN_NAMES in .env)
 
 name: stream
+
+# every long-running container logs through this: 3 files of 10 MB each, then the
+# oldest goes. docker's default json-file has no cap, and caddy writes a line per
+# request (home polls every 3s per open tab), so a lab left alone fills its disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
 
 services:
   certs:
@@ -54,7 +67,14 @@ services:
   pages:
     # builds the react pages (vite) and copies them into the volume caddy serves.
     # runs once per deploy, then exits. redeploying pages never restarts caddy.
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        # the commit, from deploy.sh. the pages send it with every error report
+        BUILD: ${BUILD:-dev}
+    # image names spelled out: compose would derive them from `name:` above, and
+    # chat below names the api image by hand, so they must not move with the project name
+    image: stream-pages
     container_name: pages
     restart: "no"
     volumes:
@@ -64,6 +84,7 @@ services:
     image: caddy:2-alpine
     container_name: frontend
     restart: unless-stopped
+    logging: *default-logging
     environment:
       # not read by caddy. a change forces a restart so the new cert is loaded.
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
@@ -92,22 +113,38 @@ services:
       dockerfile: api/Dockerfile
       args:
         CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-1}
+        BUILD: ${BUILD:-dev}
+    image: stream-api
     container_name: api
     restart: unless-stopped
+    logging: *default-logging
     environment:
       DATABASE_URL: postgres://stream:stream@database:5432/stream
+      # the pages' error reports. a second database in the same postgres, made by the api
+      # when missing. the api runs fine without it. see docs/debugging.md
+      DEBUG_DATABASE_URL: postgres://stream:stream@database:5432/debug
       REDIS_URL: redis://redis:6379/0
       VIDEO_URL: http://video:7880
       PORT: "4000"
       # names starting with dummy- need this password to go live (the dummy box has it)
       DUMMY_PASSWORD: ${DUMMY_PASSWORD:-}
+      # what this box is called in /api/health and in stored errors. deploy.sh writes the
+      # hostname into .env when it is empty; still empty (by hand) and the api says "unnamed"
+      ENV_NAME: ${ENV_NAME:-}
+      # who may read /api/errors: these accounts (the /admin page), or a bearer token (a machine)
+      ADMIN_NAMES: ${ADMIN_NAMES:-}
+      OPS_TOKEN: ${OPS_TOKEN:-}
+      # the built pages. /watch/<name> is served from here with that name's preview tags
+      PAGES_DIR: /srv
       RUST_LOG: info
+    volumes:
+      - pages-data:/srv:ro
     depends_on:
       database:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # no host port. browsers reach this through the frontend, at /api
+    # no host port. browsers reach this through the frontend, at /api and /watch
 
   chat:
     # the text chat. the api binary run as `api chat`, same image, no extra build.
@@ -115,6 +152,7 @@ services:
     image: stream-api
     container_name: chat
     restart: unless-stopped
+    logging: *default-logging
     command: ["chat"]
     environment:
       DATABASE_URL: postgres://stream:stream@database:5432/stream
@@ -122,8 +160,10 @@ services:
       PORT: "4100"
       RUST_LOG: info
     depends_on:
+      # healthy, not started: the api creates the tables (accounts included) on its
+      # way up, and the chat reads them from its first socket on
       api:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
     # the image's own check looks at the api port; this one looks at ours
@@ -139,6 +179,7 @@ services:
     image: postgres:17-alpine
     container_name: database
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: stream
       POSTGRES_PASSWORD: stream
@@ -157,7 +198,9 @@ services:
     image: redis:7-alpine
     container_name: redis
     restart: unless-stopped
-    # no save file. who is live can vanish on restart. the database keeps the bio.
+    logging: *default-logging
+    # no save file. a restart loses who is live, every room's chat history and the
+    # login/signup counters. the database keeps the bio and the accounts.
     command: redis-server --save "" --appendonly no
     # no host port. peek with: docker compose exec redis redis-cli
     healthcheck:
@@ -172,12 +215,22 @@ services:
       dockerfile: video/Dockerfile
       args:
         CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-1}
+        BUILD: ${BUILD:-dev}
+    image: stream-video
     container_name: video
     restart: unless-stopped
+    logging: *default-logging
+    # processes + threads, together. every live stream costs one ffmpeg (a few
+    # threads) for its thumbnail, and anyone can publish; this stops a flood from
+    # starving the box instead of the stream. room for 25 or so streams. no cpu or
+    # memory limit on purpose: small vms vary, and a limit that kills video ends
+    # every stream at once.
+    pids_limit: 256
     environment:
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
       WS_PORT: "7880"
       UDP_PORT: "7882"
+      API_URL: http://api:4000
       DUMMY_PASSWORD: ${DUMMY_PASSWORD:-}
       # a picture of every live stream every few seconds, served at /thumb/<name>.jpg. THUMBS=0 turns it off
       THUMB_EVERY_SECS: "5"
@@ -198,8 +251,13 @@ services:
       dockerfile: video/Dockerfile.dummy
       args:
         CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-1}
+        BUILD: ${BUILD:-dev}
+    image: stream-dummy
     container_name: dummy
     restart: unless-stopped
+    logging: *default-logging
+    # one ffmpeg per fake stream, like video above. raise it before DUMMY_STREAMS goes past ~20
+    pids_limit: 256
     environment:
       DUMMY_STREAMS: ${DUMMY_STREAMS:-0}
       DUMMY_PASSWORD: ${DUMMY_PASSWORD:-}

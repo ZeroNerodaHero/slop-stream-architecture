@@ -22,7 +22,7 @@ it prints a url. open it. click through the warning.
 
 ## update
 
-- `./deploy.sh --pull` — pull, rebuild only what changed
+- `./deploy.sh --pull` — pull, rebuild only what changed. new settings land in `.env` with defaults
 - `./deploy.sh api` — only the api. streams stay up
 - `./deploy.sh frontend` — only the pages. streams stay up
 - `./deploy.sh video` — ends every stream. it warns first
@@ -31,8 +31,9 @@ it prints a url. open it. click through the warning.
 ## screens
 
 - **home** — who is live, with a picture of each stream a few seconds old. the video box makes it from the stream itself. no cdn, no bucket
-- **go live** — your camera, a name box, a start button, your bio. you get a watch link to copy
+- **go live** — your camera, a name box, a start button, your bio and your picture. you get a watch link to copy. paste it in a chat and it unfurls into a card: your name, live or not, your bio, the picture (or the stream itself while live)
 - **watch** — their camera and their bio, chat on the side. if they are not on yet, it keeps checking
+- **log in / sign up** — a name and a password. optional, see below
 
 ## on the computer
 
@@ -52,22 +53,28 @@ flowchart LR
 ```
 
 - **frontend** — the pages. react, same stack as axiom-frontend. passes api and video setup through
-- **api** — save a bio. go live. stop. a log of starts and stops. only you can stop your own stream
+- **api** — save a bio and a picture. go live. stop. a log of starts and stops. only you can stop your own stream. also the html of the watch page, so links get previews
 - **chat** — the text chat. one line per person per second, 500 letters max, last 500 lines kept. see `chat.md`
-- **database** — the bio and the log. not the video
+- **database** — the bio, the picture and the log. not the video
 - **redis** — who is live right now. the video box gets the final say
 - **video** — rust. one upload in, copies it out
 - **certs** — makes the https cert for your ip, then quits
 - **pages** — builds the react pages, hands them to frontend, then quits
-- **dummy** — fake streams for styling. off unless you turn it on
-- **dummy** — fake streams for styling. bouncing boxes with names on them. off by default
+- **dummy** — fake streams for styling. bouncing boxes with names on them. off unless you turn it on, see below
 
 all on one computer for this test.
 
+## accounts
+
+nobody has to. the name box in the header is you: it is your chat name and your go-live default. it lives in your browser.
+
+sign up and the name is yours: nobody else can go live as it, change its bio, or chat as it. a `✓` next to a name means that. the password is hashed on the server (argon2id) and never stored. see `accounts.md`.
+
+no email, so no reset. on the server: `./deploy.sh passwd <name>` prints a new one.
+
 ## this test skips
 
-- accounts
-- passwords
+- email, password reset, 2fa, oauth
 - a few video sizes
 - a cdn
 - more than one streamer in a room
@@ -80,7 +87,7 @@ a warning you click through is enough.
 
 ## fake streams
 
-for styling without a camera. in `.env`:
+for styling and debugging without a camera. in `.env`:
 
 ```
 DUMMY_STREAMS=3
@@ -90,6 +97,7 @@ DUMMY_PASSWORD=anyword
 then `./deploy.sh dummy`. home fills with `dummy-mango`, `dummy-pixel`, `dummy-disco`.
 each is a coloured box bouncing around with its name and a clock. a quiet tone for sound.
 your own names: `DUMMY_NAMES=alice,bob,carol`.
+set it back to 0 and run it again to turn them off.
 the password is what lets the dummy box use `dummy-` names. nobody else can.
 each fake stream costs about a tenth of a core.
 
@@ -99,26 +107,11 @@ by hand: open the url, go live, open the watch link on your phone.
 
 by script, on your mac:
 
-- `./test.sh` — real chrome with a fake camera. go live, watch, stop. 10 seconds
+- `./test.sh` — real chrome with a fake camera. go live, watch, stop, chat, accounts, previews, error reports. a few minutes
 - `./test.sh https://1.2.3.4` — same thing against the server
 - chat is in there too: two people talk, a reload keeps the lines, 501 letters is refused
-- `./test.sh --all` — also the redeploys, with a stream running through them
-
-## fake streams
-
-for styling and debugging. a coloured box bounces around with the stream's name on it.
-
-in `.env`:
-
-```
-DUMMY_STREAMS=3
-DUMMY_PASSWORD=anyword
-```
-
-then `./deploy.sh dummy`. home shows dummy-mango, dummy-pixel, dummy-disco.
-set it back to 0 and run it again to turn them off.
-only the dummy box knows the password, so nobody else can post a dummy- name.
-each one costs about a tenth of a core.
+- `./test.sh --all` — also the redeploys, with a stream running through them, and the fake streams
+- the stream names are fixed, so one person at a time per server
 
 ## working on the pages
 

@@ -28,9 +28,14 @@ RUN useradd -r -u 10001 -s /usr/sbin/nologin app
 # ffmpeg makes the thumbnails (one small process per live stream). static build, no libs needed.
 COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
 COPY --from=build /src/target/release/video /usr/local/bin/video
+# the commit this was built from, reported by /health. set by deploy.sh; "dev" by hand.
+ARG BUILD=dev
+ENV BUILD=${BUILD}
 USER app
 EXPOSE 7880/tcp
 EXPOSE 7882/udp
+# an actual GET /health, not just a tcp connect: a wedged process still accepts connections
+# (the kernel's backlog does), it just never answers. no curl in this image, so bash does it.
 HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
-  CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7880"]
+  CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7880 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q ' 200 ' <&3"]
 ENTRYPOINT ["/usr/local/bin/video"]

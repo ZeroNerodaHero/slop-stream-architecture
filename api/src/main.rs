@@ -3,28 +3,47 @@
 //!
 //! When the video server answers, it is the truth for "live right now": the
 //! list and the watch page come from it, and a redis key with no connected
-//! publisher behind it is treated as stale. When it does not answer, redis is
-//! used alone (list and watch), and go-live refuses rather than guess.
+//! publisher behind it is treated as stale once its session is older than a
+//! short grace (a fresh go-live has not reached video yet). When it does not
+//! answer, redis is used alone (list and watch), and go-live refuses rather
+//! than guess.
 //!
 //! go-live hands out a session id plus a random token. Heartbeat and stop
-//! must present them, so a stranger cannot end someone else's stream.
+//! must present them, so a stranger cannot end someone else's stream. A row
+//! whose tab vanished without stop is ended by a sweeper once its key lapsed.
 //!
-//! The same binary run as `api chat` is the text chat server (chat.rs).
+//! Nobody has to log in. A name with an account (auth.rs) is the one thing a
+//! login is for: only its owner can go live, save its bio or chat as it.
+//!
+//! The same binary run as `api chat` is the text chat server (chat.rs), and
+//! `api passwd <name>` resets a password.
+//!
+//! One route is html, not json: `GET /watch/<name>` (profile.rs), so a shared
+//! watch link gets a preview card with the name, picture, bio and live status.
+//!
+//! /api/health says how this box is doing (postgres, redis, video, uptimes,
+//! build). The pages post their own failures to /api/errors (debug.rs).
 
+mod auth;
 mod chat;
+mod debug;
+mod profile;
 
 use std::collections::HashSet;
 use std::env;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use axum::extract::rejection::JsonRejection;
-use axum::extract::{FromRequestParts, Path, Query, State};
+use auth::Me;
+use axum::extract::rejection::{JsonRejection, QueryRejection};
+use axum::extract::{FromRef, FromRequestParts, Path, Query, State};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
+use rand::rngs::OsRng;
+use rand::RngCore;
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{AsyncCommands, ExistenceCheck, SetExpiry, SetOptions};
 use serde::Deserialize;
@@ -35,6 +54,14 @@ use tokio::time::sleep;
 
 /// A live key dies this long after the last heartbeat. The page beats every 15s.
 const LIVE_TTL_SECS: i64 = 90;
+/// A key whose publisher video does not list yet is still theirs this long after
+/// go-live: the page needs a moment to reach video. Older than this, it is a tab
+/// that died without stop and the name is free again.
+const GO_LIVE_GRACE_SECS: i64 = 20;
+/// An open session row with no live key behind it is ended by the sweeper once it
+/// is this old: longer than the key's ttl, so a merely slow heartbeat is never hit.
+const ZOMBIE_AFTER_SECS: i64 = 180;
+const SWEEP_EVERY: Duration = Duration::from_secs(60);
 const WS_PATH: &str = "/ws";
 
 const SCHEMA: &str = "
@@ -51,25 +78,57 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS
     token bigint NOT NULL DEFAULT (floor(random() * 9007199254740991))::bigint;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS verified boolean NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS sessions_name_started_idx ON sessions (name, started_at DESC);
+ALTER TABLE streamers ADD COLUMN IF NOT EXISTS password_hash text;
+ALTER TABLE streamers ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
+CREATE TABLE IF NOT EXISTS logins (
+    token_hash bytea PRIMARY KEY,
+    name text NOT NULL REFERENCES streamers(name) ON DELETE CASCADE,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    last_seen timestamptz NOT NULL DEFAULT now(),
+    expires_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS logins_name_idx ON logins (name);
+ALTER TABLE streamers ADD COLUMN IF NOT EXISTS avatar bytea;
+ALTER TABLE streamers ADD COLUMN IF NOT EXISTS avatar_at timestamptz;
 ";
 
 #[derive(Clone)]
-struct AppState {
-    db: PgPool,
-    redis: ConnectionManager,
+pub(crate) struct AppState {
+    pub(crate) db: PgPool,
+    /// The pages' error reports. None when DEBUG_DATABASE_URL is empty. See debug.rs.
+    pub(crate) debug: Option<PgPool>,
+    pub(crate) redis: ConnectionManager,
     http: reqwest::Client,
     video_url: String,
     /// Names starting with this are the fake streams of `video dummy`.
-    dummy_prefix: String,
+    pub(crate) dummy_prefix: String,
     dummy_password: Option<String>,
+    /// ENV_NAME: what this box is called in /api/health and in every stored error. "unnamed" when unset.
+    pub(crate) env_name: String,
+    /// BUILD: the commit the image was built from.
+    build: String,
+    started: Instant,
+    /// Logins that may read /api/errors, and the bearer token a machine may use instead.
+    pub(crate) admin_names: Vec<String>,
+    pub(crate) ops_token: Option<String>,
 }
 
-struct ApiError(StatusCode, String);
+impl FromRef<AppState> for PgPool {
+    fn from_ref(s: &AppState) -> PgPool {
+        s.db.clone()
+    }
+}
+
+pub(crate) struct ApiError(StatusCode, String);
 
 impl ApiError {
-    fn new(status: StatusCode, message: impl Into<String>) -> Self {
+    pub(crate) fn new(status: StatusCode, message: impl Into<String>) -> Self {
         Self(status, message.into())
+    }
+    pub(crate) fn bad_name() -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "bad name. use a-z 0-9 _ - (1 to 32)")
     }
     fn already_live() -> Self {
         Self::new(StatusCode::CONFLICT, "someone is already live")
@@ -108,9 +167,25 @@ impl From<JsonRejection> for ApiError {
     }
 }
 
-type ApiResult<T = Value> = Result<Json<T>, ApiError>;
+/// A missing or malformed query string is a 400 in the same `{error}` shape as
+/// everything else, not axum's plain-text page.
+impl From<QueryRejection> for ApiError {
+    fn from(_: QueryRejection) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "bad query string")
+    }
+}
 
-/// A stream name from the path. Lowercase a-z 0-9 _ -, 1 to 32 chars.
+pub(crate) type ApiResult<T = Value> = Result<Json<T>, ApiError>;
+
+/// Lowercase a-z 0-9 _ -, 1 to 32 chars. The same rule as video and the pages.
+pub(crate) fn valid_name(name: &str) -> bool {
+    (1..=32).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+/// A stream name from the path.
 pub(crate) struct Name(pub(crate) String);
 
 impl<S: Send + Sync> FromRequestParts<S> for Name {
@@ -121,15 +196,8 @@ impl<S: Send + Sync> FromRequestParts<S> for Name {
             .await
             .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "bad name"))?;
         let name = raw.trim().to_lowercase();
-        let valid = (1..=32).contains(&name.len())
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
-        if !valid {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "bad name. use a-z 0-9 _ - (1 to 32)",
-            ));
+        if !valid_name(&name) {
+            return Err(ApiError::bad_name());
         }
         Ok(Name(name))
     }
@@ -164,14 +232,6 @@ fn nx_ex() -> SetOptions {
         .with_expiration(SetExpiry::EX(LIVE_TTL_SECS as u64))
 }
 
-async fn load_bio(db: &PgPool, name: &str) -> Result<String, sqlx::Error> {
-    let bio: Option<String> = sqlx::query_scalar("SELECT bio FROM streamers WHERE name = $1")
-        .bind(name)
-        .fetch_optional(db)
-        .await?;
-    Ok(bio.unwrap_or_default())
-}
-
 /// Names the video server says are connected right now. None if it cannot be reached.
 async fn video_live(s: &AppState) -> Option<HashSet<String>> {
     let res = s
@@ -185,6 +245,26 @@ async fn video_live(s: &AppState) -> Option<HashSet<String>> {
     Some(names.into_iter().collect())
 }
 
+/// Is this name live right now: the video server's word when it answers, else redis.
+pub(crate) async fn is_live(s: &AppState, name: &str) -> Result<bool, ApiError> {
+    Ok(match video_live(s).await {
+        Some(connected) => connected.contains(name),
+        None => {
+            let mut r = s.redis.clone();
+            r.exists(live_key(name)).await?
+        }
+    })
+}
+
+/// Does the video server have a picture of this stream yet (about 6s after going live).
+pub(crate) async fn thumb_exists(s: &AppState, name: &str) -> bool {
+    s.http
+        .head(format!("{}/thumb/{name}.jpg", s.video_url))
+        .send()
+        .await
+        .is_ok_and(|res| res.status().is_success())
+}
+
 /// Names with a live key in redis.
 async fn redis_live(s: &AppState) -> Result<Vec<String>, redis::RedisError> {
     let mut r = s.redis.clone();
@@ -194,6 +274,73 @@ async fn redis_live(s: &AppState) -> Result<Vec<String>, redis::RedisError> {
         names.insert(key?.trim_start_matches("live:").to_string());
     }
     Ok(names.into_iter().collect())
+}
+
+/// The session ids the live keys hold right now.
+async fn held_sessions(s: &AppState) -> Result<Vec<i64>, redis::RedisError> {
+    let mut r = s.redis.clone();
+    let mut keys = Vec::new();
+    {
+        let mut iter: redis::AsyncIter<String> = r.scan_match("live:*").await?;
+        while let Some(key) = iter.next_item().await {
+            keys.push(key?);
+        }
+    }
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let values: Vec<Option<i64>> = r.mget(&keys).await?;
+    Ok(values.into_iter().flatten().collect())
+}
+
+/// Nothing ends the row of a tab that vanished without stop: its key lapses, the
+/// row stays open for good. Once a minute, end every open row that is older than
+/// a key could survive without heartbeats and that no live key names any more.
+/// A row whose name's key still holds its id is a stream whose heartbeat is coming.
+async fn sweep_sessions(s: AppState) {
+    let mut tick = tokio::time::interval(SWEEP_EVERY);
+    loop {
+        tick.tick().await;
+        match sweep_once(&s).await {
+            Ok(0) => {}
+            Ok(n) => log::debug!("sweep: ended {n} open sessions nobody holds"),
+            Err(e) => log::warn!("sweep: {e}"),
+        }
+    }
+}
+
+async fn sweep_once(s: &AppState) -> anyhow::Result<u64> {
+    let held = held_sessions(s).await?;
+    let done = sqlx::query(
+        "UPDATE sessions SET ended_at = now()
+         WHERE ended_at IS NULL AND started_at < now() - make_interval(secs => $1) AND id <> ALL($2)",
+    )
+    .bind(ZOMBIE_AFTER_SECS as f64)
+    .bind(&held)
+    .execute(&s.db)
+    .await?;
+    Ok(done.rows_affected())
+}
+
+/// 53 random bits from the os. The page keeps the token as a js number, which is
+/// exact up to 2^53, and sends it back in the heartbeat and stop query strings.
+fn new_session_token() -> i64 {
+    (OsRng.next_u64() >> 11) as i64
+}
+
+/// Deletes the key only while it still holds the value we read, so a key that
+/// changed hands between our GET and this call is left alone.
+const DEL_IF_HELD_BY: &str = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0";
+
+/// Was the name's open session started by its own account. False with no open session.
+async fn session_verified(db: &PgPool, name: &str) -> Result<bool, sqlx::Error> {
+    let verified: Option<bool> = sqlx::query_scalar(
+        "SELECT verified FROM sessions WHERE name = $1 AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1",
+    )
+    .bind(name)
+    .fetch_optional(db)
+    .await?;
+    Ok(verified.unwrap_or(false))
 }
 
 /// Does this session own the live key for the name, and is it still open?
@@ -209,26 +356,69 @@ pub(crate) async fn owns_session(db: &PgPool, name: &str, owner: &Owner) -> Resu
     Ok(open.is_some())
 }
 
-async fn health(State(s): State<AppState>) -> ApiResult {
-    let down = |what: &str| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, format!("{what} down"));
-    sqlx::query("SELECT 1")
-        .execute(&s.db)
-        .await
-        .map_err(|_| down("postgres"))?;
-    let mut r = s.redis.clone();
-    redis::cmd("PING")
-        .query_async::<String>(&mut r)
-        .await
-        .map_err(|_| down("redis"))?;
-    Ok(Json(json!({ "ok": true })))
+/// What video's own GET /health says. Every field best-effort: during a deploy
+/// the api can be new while video still answers the old plain `ok`.
+#[derive(Deserialize, Default)]
+struct VideoHealth {
+    up_secs: Option<u64>,
+    live: Option<usize>,
+    build: Option<String>,
+}
+
+/// Some when video answered 2xx, whatever the body was.
+async fn video_health(s: &AppState) -> Option<VideoHealth> {
+    let res = s.http.get(format!("{}/health", s.video_url)).send().await.ok()?.error_for_status().ok()?;
+    Some(res.json().await.unwrap_or_default())
+}
+
+/// The optional dependencies (debug db, video) get this long in /api/health, so a
+/// sick one cannot push the answer past docker's 3s healthcheck.
+const OPTIONAL_PROBE: Duration = Duration::from_millis(1500);
+
+/// 200 when postgres and redis answer, 503 otherwise. The rest of the body is for
+/// a monitor: video reachable, rooms live, uptimes (they go backwards after a
+/// restart), the build, reports the limits dropped. See docs/debugging.md.
+async fn health(State(s): State<AppState>) -> Response {
+    // all at once: the answer takes as long as the slowest probe, not the sum
+    let (postgres, redis, debug_db, video, errors_dropped) = tokio::join!(
+        async { sqlx::query("SELECT 1").execute(&s.db).await.is_ok() },
+        async { redis::cmd("PING").query_async::<String>(&mut s.redis.clone()).await.is_ok() },
+        async {
+            match &s.debug {
+                Some(db) => tokio::time::timeout(OPTIONAL_PROBE, sqlx::query("SELECT 1").execute(db)).await.is_ok_and(|r| r.is_ok()),
+                None => false,
+            }
+        },
+        async { tokio::time::timeout(OPTIONAL_PROBE, video_health(&s)).await.ok().flatten() },
+        debug::dropped(&s),
+    );
+    let ok = postgres && redis;
+    let body = json!({
+        "ok": ok,
+        "env": s.env_name,
+        "build": s.build,
+        "up_secs": s.started.elapsed().as_secs(),
+        "postgres": postgres,
+        "redis": redis,
+        "debug_db": debug_db,
+        "video": video.is_some(),
+        "video_up_secs": video.as_ref().and_then(|v| v.up_secs),
+        "video_build": video.as_ref().and_then(|v| v.build.clone()),
+        "live": video.as_ref().and_then(|v| v.live),
+        "errors_dropped": errors_dropped,
+    });
+    let status = if ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    (status, Json(body)).into_response()
 }
 
 async fn put_streamer(
     State(s): State<AppState>,
     Name(name): Name,
+    Me(me): Me,
     body: Result<Json<BioBody>, JsonRejection>,
 ) -> ApiResult {
     let Json(body) = body?;
+    auth::may_act_as(&s.db, &name, me.as_deref()).await?;
     let bio = body.bio.trim().chars().take(500).collect::<String>();
     let bio: String = sqlx::query_scalar(
         "INSERT INTO streamers (name, bio) VALUES ($1, $2)
@@ -243,8 +433,8 @@ async fn put_streamer(
 }
 
 async fn get_streamer(State(s): State<AppState>, Name(name): Name) -> ApiResult {
-    let bio = load_bio(&s.db, &name).await?;
-    Ok(Json(json!({ "name": name, "bio": bio })))
+    let p = profile::load_profile(&s.db, &name).await?;
+    Ok(Json(json!({ "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified })))
 }
 
 async fn list_sessions(State(s): State<AppState>, Name(name): Name) -> ApiResult {
@@ -261,6 +451,9 @@ async fn list_sessions(State(s): State<AppState>, Name(name): Name) -> ApiResult
     Ok(Json(Value::Array(out.collect())))
 }
 
+/// name, bio, since, verified, avatar version
+type StreamRow = (String, String, Option<DateTime<Utc>>, bool, Option<i64>);
+
 async fn list_streams(State(s): State<AppState>) -> ApiResult {
     let names: Vec<String> = match video_live(&s).await {
         Some(connected) => connected.into_iter().collect(),
@@ -270,12 +463,15 @@ async fn list_streams(State(s): State<AppState>) -> ApiResult {
         return Ok(Json(json!([])));
     }
 
-    let rows: Vec<(String, String, Option<DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT n.name, COALESCE(st.bio, '') AS bio, s.started_at
+    // verified is the session's, not the name's: an account that signs up while a
+    // stranger streams anonymously under its name must not put a ✓ on that stream
+    let rows: Vec<StreamRow> = sqlx::query_as(
+        "SELECT n.name, COALESCE(st.bio, '') AS bio, s.started_at, COALESCE(s.verified, false) AS verified,
+                (EXTRACT(EPOCH FROM st.avatar_at))::bigint AS avatar
          FROM unnest($1::text[]) AS n(name)
          LEFT JOIN streamers st ON st.name = n.name
          LEFT JOIN LATERAL (
-             SELECT started_at FROM sessions
+             SELECT started_at, verified FROM sessions
              WHERE name = n.name AND ended_at IS NULL
              ORDER BY started_at DESC LIMIT 1
          ) s ON true
@@ -284,42 +480,68 @@ async fn list_streams(State(s): State<AppState>) -> ApiResult {
     .bind(&names)
     .fetch_all(&s.db)
     .await?;
-    let out = rows
-        .into_iter()
-        .map(|(name, bio, since)| json!({ "name": name, "bio": bio, "since": since }));
+    let out = rows.into_iter().map(|(name, bio, since, verified, avatar)| {
+        json!({ "name": name, "bio": bio, "since": since, "verified": verified, "avatar": avatar })
+    });
     Ok(Json(Value::Array(out.collect())))
 }
 
-async fn go_live(State(s): State<AppState>, Name(name): Name, Query(q): Query<GoLiveQuery>) -> ApiResult {
+async fn go_live(
+    State(s): State<AppState>,
+    Name(name): Name,
+    Me(me): Me,
+    q: Result<Query<GoLiveQuery>, QueryRejection>,
+) -> ApiResult {
+    let Query(q) = q?;
     if name.starts_with(&s.dummy_prefix) {
         let allowed = matches!((&s.dummy_password, &q.password), (Some(p), Some(given)) if p == given);
         if !allowed {
             return Err(ApiError::new(StatusCode::FORBIDDEN, "reserved name"));
         }
+    } else {
+        auth::may_act_as(&s.db, &name, me.as_deref()).await?;
     }
 
     let key = live_key(&name);
     let mut r = s.redis.clone();
 
-    let connected = video_live(&s).await;
-    if connected.as_ref().is_some_and(|set| set.contains(&name)) {
+    // Without video's word a key alone cannot tell a live stream from a dead tab,
+    // so no go-live at all rather than a guess.
+    let Some(connected) = video_live(&s).await else {
+        return Err(ApiError::video_down());
+    };
+    if connected.contains(&name) {
         return Err(ApiError::already_live());
     }
-    if r.exists::<_, bool>(&key).await? {
-        // The key is there but nobody is connected under that name. A crashed
-        // tab left it. Let the name go live again instead of waiting for the ttl.
-        if connected.is_none() {
-            return Err(ApiError::video_down());
+    if let Some(holder) = r.get::<_, Option<i64>>(&key).await? {
+        // A key with nobody connected under the name is either a tab that died
+        // without stop, or a go-live from seconds ago whose publisher is still on
+        // its way to video. The holder's row tells them apart: young and open, the
+        // name is theirs; older than the grace, or already ended, the key is stale
+        // and the name goes live again instead of waiting for the ttl.
+        let young: Option<bool> = sqlx::query_scalar(
+            "SELECT started_at > now() - make_interval(secs => $2) FROM sessions WHERE id = $1 AND ended_at IS NULL",
+        )
+        .bind(holder)
+        .bind(GO_LIVE_GRACE_SECS as f64)
+        .fetch_optional(&s.db)
+        .await?;
+        if young == Some(true) {
+            return Err(ApiError::already_live());
         }
-        log::info!("{name}: clearing stale live key");
-        let _: () = r.del(&key).await?;
+        log::info!("{name}: clearing stale live key of session {holder}");
+        let _: i64 = redis::cmd("EVAL").arg(DEL_IF_HELD_BY).arg(1).arg(&key).arg(holder).query_async(&mut r).await?;
     }
 
-    let (id, token): (i64, i64) =
-        sqlx::query_as("INSERT INTO sessions (name) VALUES ($1) RETURNING id, token")
-            .bind(&name)
-            .fetch_one(&s.db)
-            .await?;
+    // the ✓: this session was started by the name's own account, not just by someone
+    let verified = me.as_deref() == Some(name.as_str());
+    let token = new_session_token();
+    let id: i64 = sqlx::query_scalar("INSERT INTO sessions (name, token, verified) VALUES ($1, $2, $3) RETURNING id")
+        .bind(&name)
+        .bind(token)
+        .bind(verified)
+        .fetch_one(&s.db)
+        .await?;
 
     let claimed: Option<String> = r.set_options(&key, id, nx_ex()).await?;
     if claimed.is_none() {
@@ -347,8 +569,9 @@ async fn go_live(State(s): State<AppState>, Name(name): Name, Query(q): Query<Go
 async fn heartbeat(
     State(s): State<AppState>,
     Name(name): Name,
-    Query(owner): Query<Owner>,
+    owner: Result<Query<Owner>, QueryRejection>,
 ) -> ApiResult {
+    let Query(owner) = owner?;
     // Session ids are guessable. The token is not. Check both every time.
     if !owns_session(&s.db, &name, &owner).await? {
         return Err(ApiError::not_yours());
@@ -377,8 +600,9 @@ async fn heartbeat(
 async fn stop(
     State(s): State<AppState>,
     Name(name): Name,
-    Query(owner): Query<Owner>,
+    owner: Result<Query<Owner>, QueryRejection>,
 ) -> ApiResult {
+    let Query(owner) = owner?;
     let done = sqlx::query(
         "UPDATE sessions SET ended_at = now()
          WHERE id = $1 AND token = $2 AND name = $3 AND ended_at IS NULL",
@@ -402,19 +626,18 @@ async fn stop(
 }
 
 async fn watch(State(s): State<AppState>, Name(name): Name) -> ApiResult {
-    let live = match video_live(&s).await {
-        Some(connected) => connected.contains(&name),
-        None => {
-            let mut r = s.redis.clone();
-            r.exists(live_key(&name)).await?
-        }
-    };
-    let bio = load_bio(&s.db, &name).await?;
-    Ok(Json(json!({ "url": WS_PATH, "bio": bio, "live": live })))
+    let live = is_live(&s, &name).await?;
+    let p = profile::load_profile(&s.db, &name).await?;
+    // the ✓ belongs to the live session (started by the account), not to the name
+    let verified = live && session_verified(&s.db, &name).await?;
+    Ok(Json(json!({ "url": WS_PATH, "bio": p.bio, "live": live, "verified": verified, "avatar": p.avatar })))
 }
 
 fn router(state: AppState) -> Router {
     Router::new()
+        .merge(auth::routes())
+        .merge(profile::routes())
+        .merge(debug::routes())
         .route("/api/health", get(health))
         .route("/api/streams", get(list_streams))
         .route("/api/streamers/{name}", get(get_streamer).put(put_streamer))
@@ -488,27 +711,108 @@ async fn main() {
     }
 
     db.execute(SCHEMA).await.expect("create tables");
+
+    // `api passwd <name>`: a new random password, printed once. see auth.rs
+    if env::args().nth(1).as_deref() == Some("passwd") {
+        let name = env::args().nth(2).unwrap_or_default();
+        if let Err(e) = auth::passwd(&db, &name).await {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let redis = connect_redis(&redis_url).await;
     let http = reqwest::Client::builder()
         .timeout(Duration::from_millis(1500))
         .build()
         .expect("http client");
 
+    // the pages' error reports. see debug.rs and docs/debugging.md
+    let debug_url = env::var("DEBUG_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://stream:stream@database:5432/debug".into());
+    let debug = debug::connect(&db, &debug_url).await;
+    if let Some(pool) = &debug {
+        debug::housekeeping(db.clone(), pool.clone(), debug_url.clone());
+    }
+    // only names with an account: a free name would make whoever signs up as it first the admin
+    let admin_names: Vec<String> = env::var("ADMIN_NAMES")
+        .unwrap_or_default()
+        .split(',')
+        .map(|n| n.trim().to_lowercase())
+        .filter(|n| valid_name(n))
+        .collect();
+    let admin_names = debug::admins_with_accounts(&db, admin_names).await.expect("read streamers");
+    let ops_token = env::var("OPS_TOKEN").ok().map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
+    let ops_token = match ops_token {
+        Some(t) if t.len() < 16 => {
+            log::warn!("OPS_TOKEN is shorter than 16 characters, ignoring it. openssl rand -hex 32 makes a good one");
+            None
+        }
+        other => other,
+    };
+    match (&admin_names[..], &ops_token) {
+        ([], None) => log::info!("no ADMIN_NAMES and no OPS_TOKEN: GET /api/errors is off"),
+        _ => log::info!("GET /api/errors: admins {admin_names:?}{}", if ops_token.is_some() { ", and OPS_TOKEN" } else { "" }),
+    }
+    // "unnamed", not a guess like "prod": a box nobody labelled must not look like the real one in the error table
+    let env_name = env::var("ENV_NAME").ok().map(|e| e.trim().to_owned()).filter(|e| !e.is_empty()).unwrap_or_else(|| "unnamed".into());
+    if env_name == "unnamed" {
+        log::warn!("no ENV_NAME: this box reports as \"unnamed\" in /api/health and every stored error. set ENV_NAME in .env");
+    }
+    let build = env::var("BUILD").ok().filter(|b| !b.trim().is_empty()).unwrap_or_else(|| "dev".into());
+    log::info!("env {env_name}, build {build}");
+
     let state = AppState {
         db,
+        debug,
         redis,
         http,
         video_url,
         dummy_prefix: env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into()),
         dummy_password: env::var("DUMMY_PASSWORD").ok().filter(|p| !p.trim().is_empty()),
+        env_name,
+        build,
+        started: Instant::now(),
+        admin_names,
+        ops_token,
     };
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await
         .expect("bind");
     log::info!("api on 0.0.0.0:{port}");
+    tokio::spawn(sweep_sessions(state.clone()));
     axum::serve(listener, router(state))
         .with_graceful_shutdown(wait_for_signal())
         .await
         .expect("server");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names() {
+        assert!(valid_name("a"));
+        assert!(valid_name("billy_01-x"));
+        assert!(valid_name(&"a".repeat(32)));
+        assert!(!valid_name(""));
+        assert!(!valid_name(&"a".repeat(33)));
+        assert!(!valid_name("Billy"));
+        assert!(!valid_name("bil ly"));
+        assert!(!valid_name("bïlly"));
+        assert!(!valid_name("a.b"));
+        assert!(!valid_name("../x"));
+    }
+
+    #[test]
+    fn session_token_is_a_safe_js_integer() {
+        let tokens: Vec<i64> = (0..1000).map(|_| new_session_token()).collect();
+        assert!(tokens.iter().all(|t| (0..1i64 << 53).contains(t)));
+        // 1000 draws from 2^53 values: a repeat means the generator is broken
+        let distinct: HashSet<i64> = tokens.iter().copied().collect();
+        assert_eq!(distinct.len(), tokens.len());
+    }
 }

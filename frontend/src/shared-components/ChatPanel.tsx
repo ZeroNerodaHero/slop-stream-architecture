@@ -2,6 +2,7 @@ import { useAtomValue } from 'jotai';
 import { type KeyboardEvent, useEffect, useRef } from 'react';
 
 import type { Owner } from '@/infra/api';
+import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
   MAX_CHAT_CHARS,
   chatAsStreamerAtom,
@@ -11,6 +12,8 @@ import {
   chatLinesAtom,
   chatNoticeAtom,
   chatPhaseAtom,
+  chatSpeakerAtom,
+  chars,
   closeChat,
   nickAtom,
   nickIsValidAtom,
@@ -40,8 +43,9 @@ function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
 
 /**
  * The chat next to the video. Lines newest at the bottom, a nick box until you
- * have one, a text box with a 500 countdown. Joins on mount, leaves on unmount;
- * a change of `owner` (going live, stopping) reconnects through `openChat`.
+ * have one (or a login), a text box with a 500 countdown. Joins on mount, leaves
+ * on unmount; a change of `owner` (going live, stopping) or of the login
+ * reconnects through `openChat`.
  */
 export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -54,13 +58,16 @@ export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
   const nickOk = useAtomValue(nickIsValidAtom);
   const canSend = useAtomValue(chatCanSendAtom);
   const asStreamer = useAtomValue(chatAsStreamerAtom);
+  const speaker = useAtomValue(chatSpeakerAtom);
+  const me = useAtomValue(meAtom);
 
-  // The owner prop is the one input that changes while mounted (going live). It
-  // is a stable-ish object, so this effect is the wrapper for `openChat`.
+  // The inputs that change while mounted: the owner (going live) and the login.
+  // Nothing opens until /api/me has answered, so the first hello is the right one.
   useEffect(() => {
+    if (me === undefined) return;
     openChat(name, owner);
     return () => closeChat();
-  }, [name, owner?.session, owner?.token]);
+  }, [name, owner?.session, owner?.token, me]);
 
   // Keep the newest line in view. Imperative DOM at the data source, not a render effect.
   useEffect(() => {
@@ -72,9 +79,9 @@ export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
     return store.sub(chatLinesAtom, scroll);
   }, []);
 
-  const over = draft.trim().length - MAX_CHAT_CHARS;
-  // the nick box stays until "join" actually opened the socket
-  const needsNick = !owner && phase === 'off';
+  const left = MAX_CHAT_CHARS - chars(draft.trim());
+  // the nick box stays until "join" actually opened the socket. a login never needs one.
+  const needsNick = !owner && !me && phase === 'off';
 
   return (
     <aside id="chat" className={cn('flex min-h-[320px] flex-col rounded-xl border border-primaryStroke bg-backgroundSecondary', className)}>
@@ -85,11 +92,16 @@ export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
         </span>
       </header>
 
-      <div ref={listRef} id="chat-lines" className="min-h-0 flex-1 overflow-y-auto px-4 py-2 text-base leading-snug">
+      <div ref={listRef} id="chat-lines" role="log" aria-live="polite" className="min-h-0 flex-1 overflow-y-auto px-4 py-2 text-base leading-snug">
         {lines.length === 0 && <p className="text-textTertiary">nothing yet. say something.</p>}
         {lines.map((line) => (
-          <p key={line.id} data-streamer={line.streamer || undefined} className="my-1 [overflow-wrap:anywhere]">
+          <p key={line.id} data-streamer={line.streamer || undefined} data-verified={line.verified || undefined} className="my-1 [overflow-wrap:anywhere]">
             <span className={cn('font-semibold', line.streamer ? 'text-increase' : 'text-primaryBlue')}>{line.from}</span>
+            {line.verified && (
+              <span className="ml-0.5 text-increase" title="logged in as this name">
+                ✓
+              </span>
+            )}
             {line.streamer && <span className="ml-1 rounded bg-increase/15 px-1 text-xs uppercase text-increase">streamer</span>}
             <span className="text-textSecondary">: </span>
             <span className="whitespace-pre-wrap">{line.text}</span>
@@ -99,7 +111,10 @@ export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
 
       <footer className="border-t border-primaryStroke p-3">
         {needsNick ? (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <label htmlFor="chat-nick" className="sr-only">
+              your nick
+            </label>
             <input
               id="chat-nick"
               value={nick}
@@ -115,16 +130,25 @@ export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
             <Button id="chat-join" variant="primary" className="px-4 py-2 text-base" disabled={!nickOk} onClick={() => openChat(name, owner)}>
               join
             </Button>
+            {/* "that name has an account": the refusal that sent you back here */}
+            {notice && (
+              <span id="chat-notice" className="w-full text-sm text-decrease" aria-live="polite">
+                {notice}
+              </span>
+            )}
           </div>
         ) : (
           <>
+            <label htmlFor="chat-text" className="sr-only">
+              your message
+            </label>
             <textarea
               id="chat-text"
               value={draft}
               onChange={(e) => setChatDraft(e.target.value)}
               onKeyDown={onKey}
               rows={2}
-              placeholder={asStreamer ? `say something as ${name}` : `say something as ${nick}`}
+              placeholder={`say something as ${asStreamer ? name : speaker}`}
               className="w-full resize-none rounded-lg border border-primaryStroke bg-background px-3 py-2 text-base"
             />
             <div className="mt-2 flex items-center justify-between gap-2 text-sm">
@@ -132,8 +156,8 @@ export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
                 {notice}
               </span>
               <span className="flex items-center gap-3">
-                <span id="chat-left" className={cn('text-textTertiary', over > 0 && 'font-semibold text-decrease')}>
-                  {MAX_CHAT_CHARS - draft.trim().length}
+                <span id="chat-left" className={cn('text-textTertiary', left < 0 && 'font-semibold text-decrease')}>
+                  {left}
                 </span>
                 <Button id="chat-send" variant="primary" className="px-4 py-2 text-base" disabled={!canSend} onClick={sendChat}>
                   send

@@ -5,6 +5,9 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY index.html vite.config.mts tsconfig.json tailwind.config.ts postcss.config.mjs ./
 COPY src ./src
+# the commit, from deploy.sh. vite bakes it in as __BUILD__; every error report carries it.
+ARG BUILD=dev
+ENV BUILD=${BUILD}
 RUN npm run build
 
 # stage 2: a tiny image whose only job is to copy the built pages into the volume

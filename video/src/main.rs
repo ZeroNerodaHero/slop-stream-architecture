@@ -1,24 +1,30 @@
 //! One camera in. Copies the packets out to whoever is watching.
 //!
 //! Websocket on :7880/ws. The browser sends one text frame:
-//!   {"role":"publish","name":"billy","sdp":"<offer sdp>"}
+//!   {"role":"publish","name":"billy","sdp":"<offer sdp>","session":1,"token":2}
 //!   {"role":"watch",  "name":"billy","sdp":"<offer sdp>"}
 //! We answer {"sdp":"<answer sdp>"} or {"error":"..."} and keep the socket
 //! open. Closing it hangs up. Watchers also get {"event":"ended"} when the
 //! publisher leaves. All media rides one UDP port (7882).
 //!
-//! Also on the same port: GET /live (names connected right now) and GET /health.
-//! Env: PUBLIC_IP, WS_PORT (7880), UDP_PORT (7882), DUMMY_PASSWORD, DUMMY_PREFIX.
+//! A publisher's session and token are what the api's go-live handed out; we
+//! ask the api (its heartbeat route) whether that session is open for that
+//! name, so a stranger who skips the api cannot publish under a claimed name.
+//!
+//! Also on the same port: GET /live (names connected right now) and GET /health
+//! ({ok, up_secs, build, live}; the api folds it into /api/health).
+//! Env: PUBLIC_IP, WS_PORT (7880), UDP_PORT (7882), API_URL (http://api:4000),
+//! DUMMY_PASSWORD, DUMMY_PREFIX, BUILD.
 //!
 //! Names starting with DUMMY_PREFIX ("dummy-") are reserved for the fake streams
-//! of `video dummy` (see dummy.rs): publishing one needs the matching password.
+//! of `video dummy` (see dummy.rs): publishing one needs the matching password too.
 
 mod dummy;
 mod media;
 mod thumbs;
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
@@ -54,8 +60,15 @@ use crate::media::media_setup;
 const TRACK_WAIT: Duration = Duration::from_secs(8);
 /// Forwarded keyframe requests are rate limited to one per this gap, per stream.
 const KEYFRAME_GAP: Duration = Duration::from_millis(1500);
+/// Even a forced request (a joining watcher, the thumbnail) waits this long after
+/// the last one: a burst of joins then shares one keyframe instead of one each.
+const FORCED_KEYFRAME_GAP: Duration = Duration::from_millis(300);
 /// The browser has this long to send its one message, and we have this long to answer.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// The api gets this long to say whether a publisher's session is real.
+const API_TIMEOUT: Duration = Duration::from_millis(1500);
+/// After SIGTERM, how long the open sockets get to send their `ended` before we exit.
+const SHUTDOWN_FLUSH: Duration = Duration::from_secs(2);
 /// Biggest offer we accept. A real one is 5-15 KB.
 const MAX_SDP_BYTES: usize = 32 * 1024;
 const MAX_MEDIA_LINES: usize = 4;
@@ -84,8 +97,14 @@ struct App {
     shutdown: watch::Receiver<bool>,
     dummy_prefix: String,
     dummy_password: Option<String>,
+    /// Where the api is, to check a publisher's session and token.
+    api_url: String,
+    http: reqwest::Client,
     /// ffmpeg is here and THUMBS is not off: make a picture of every stream.
     thumbs: bool,
+    /// For /health: how long this process has run, and the commit it was built from.
+    started: Instant,
+    build: String,
 }
 
 #[derive(Clone, Default)]
@@ -110,7 +129,12 @@ struct In {
     role: String,
     name: String,
     sdp: String,
-    /// Only needed to publish a reserved (dummy) name.
+    /// A publisher's go-live grant from the api. Watchers send neither.
+    #[serde(default)]
+    session: Option<i64>,
+    #[serde(default)]
+    token: Option<i64>,
+    /// Also needed to publish a reserved (dummy) name.
     #[serde(default)]
     password: Option<String>,
 }
@@ -141,11 +165,24 @@ async fn main() -> anyhow::Result<()> {
     let ws_port = env_port("WS_PORT", 7880);
     let udp_port = env_port("UDP_PORT", 7882);
 
+    // Anything but an ipv4 address makes every negotiation fail later with a
+    // vague "could not negotiate" while /health still says ok. Refuse now.
+    if public_ip.parse::<Ipv4Addr>().is_err() {
+        anyhow::bail!("PUBLIC_IP={public_ip:?} is not an ipv4 address");
+    }
     let mux = UDPMuxDefault::new(UDPMuxParams::new(media_socket(udp_port)?));
     log::info!("media on udp {udp_port}, advertising {public_ip}");
     if public_ip == "127.0.0.1" {
         log::warn!("PUBLIC_IP is 127.0.0.1. set it to the ip people type in the browser");
     }
+
+    let api_url = std::env::var("API_URL")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| "http://api:4000".into())
+        .trim_end_matches('/')
+        .to_owned();
+    log::info!("publishers' sessions are checked with the api at {api_url}");
 
     let dummy_prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
     let dummy_password = std::env::var("DUMMY_PASSWORD").ok().filter(|p| !p.trim().is_empty());
@@ -169,11 +206,16 @@ async fn main() -> anyhow::Result<()> {
         shutdown,
         dummy_prefix,
         dummy_password,
+        api_url,
+        http: reqwest::Client::builder().timeout(API_TIMEOUT).build()?,
         thumbs,
+        started: Instant::now(),
+        // empty counts as unset, like the api: `BUILD=` in a shell is "dev", not ""
+        build: std::env::var("BUILD").ok().filter(|b| !b.trim().is_empty()).unwrap_or_else(|| "dev".into()),
     };
 
     let router = Router::new()
-        .route("/health", get(|| async { "ok" }))
+        .route("/health", get(health))
         .route("/live", get(live))
         .route("/thumb/{file}", get(thumb))
         .route("/ws", get(ws))
@@ -186,14 +228,21 @@ async fn main() -> anyhow::Result<()> {
     // On SIGTERM every room ends, every socket closes, and we exit right away
     // instead of being killed 10s later with viewers mid-frame.
     let hub = app.hub.clone();
+    let stop = shutdown_tx.clone();
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             wait_for_signal().await;
             log::info!("shutting down");
             hub.end_all().await;
-            let _ = shutdown_tx.send(true);
+            let _ = stop.send(true);
         })
         .await?;
+    // axum stops tracking a connection once it is upgraded to a websocket, so
+    // serve returns while the publish/watch tasks are still sending `ended`.
+    // Each of them holds a receiver of the shutdown channel; wait until the
+    // last one is dropped, but never longer than this.
+    drop(app);
+    let _ = tokio::time::timeout(SHUTDOWN_FLUSH, shutdown_tx.closed()).await;
     Ok(())
 }
 
@@ -208,11 +257,27 @@ async fn wait_for_signal() {
 }
 
 /// The one UDP socket every peer shares, with big buffers so a keyframe burst
-/// to many watchers does not drop packets.
+/// to many watchers does not drop packets. Asking is not getting: linux caps a
+/// plain SO_SNDBUF/SO_RCVBUF at net.core.wmem_max/rmem_max (208 KB by default)
+/// without an error, so read back what the kernel gave and say so once.
 fn media_socket(port: u16) -> anyhow::Result<tokio::net::UdpSocket> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     let _ = socket.set_send_buffer_size(UDP_BUFFER_BYTES);
     let _ = socket.set_recv_buffer_size(UDP_BUFFER_BYTES);
+    // linux reports double the size it granted; a value under what we asked
+    // for means it was capped
+    let send = socket.send_buffer_size().unwrap_or(0);
+    let recv = socket.recv_buffer_size().unwrap_or(0);
+    if send < UDP_BUFFER_BYTES || recv < UDP_BUFFER_BYTES {
+        log::warn!(
+            "udp buffers: send {} KB, recv {} KB. asked for {} MB; the kernel capped it (raise net.core.wmem_max and net.core.rmem_max on the host)",
+            send / 1024,
+            recv / 1024,
+            UDP_BUFFER_BYTES >> 20
+        );
+    } else {
+        log::info!("udp buffers: send {} KB, recv {} KB", send / 1024, recv / 1024);
+    }
     socket.set_nonblocking(true)?;
     socket.bind(&SocketAddr::from(([0, 0, 0, 0], port)).into())?;
     Ok(tokio::net::UdpSocket::from_std(socket.into())?)
@@ -227,6 +292,16 @@ fn env_port(key: &str, default: u16) -> u16 {
 
 async fn live(State(app): State<App>) -> Json<Vec<String>> {
     Json(app.hub.live_names().await)
+}
+
+/// `up_secs` going backwards between two looks means this process restarted.
+async fn health(State(app): State<App>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "ok": true,
+        "up_secs": app.started.elapsed().as_secs(),
+        "build": app.build,
+        "live": app.hub.live_names().await.len(),
+    }))
 }
 
 /// `GET /thumb/<name>.jpg`: the latest picture of a live stream, a few seconds old.
@@ -282,10 +357,11 @@ async fn handle(app: App, mut socket: WebSocket) {
         }
     }
 
-    // Check the offer before touching any room or building a peer.
+    // Check the offer before touching any room or building a peer. Every m=
+    // section costs a transceiver and an interceptor chain, recvonly or not.
     let media_lines = count_sending_media_lines(&incoming.sdp);
     if incoming.sdp.len() > MAX_SDP_BYTES
-        || media_lines > MAX_MEDIA_LINES
+        || incoming.sdp.lines().filter(|l| l.starts_with("m=")).count() > MAX_MEDIA_LINES
         || RTCSessionDescription::offer(incoming.sdp.clone()).is_err()
     {
         let _ = send(&mut socket, Out::error("bad offer")).await;
@@ -293,10 +369,39 @@ async fn handle(app: App, mut socket: WebSocket) {
     }
 
     match incoming.role.as_str() {
-        "publish" => publish(app, socket, name, incoming.sdp, media_lines).await,
+        "publish" => {
+            // Last, because it costs a round trip to the api.
+            if let Err(e) = owns_stream(&app, &name, incoming.session, incoming.token).await {
+                let _ = send(&mut socket, Out::error(e)).await;
+                return;
+            }
+            publish(app, socket, name, incoming.sdp, media_lines).await
+        }
         "watch" => watch_stream(app, socket, name, incoming.sdp).await,
         _ => {
             let _ = send(&mut socket, Out::error("role must be publish or watch")).await;
+        }
+    }
+}
+
+/// Is this the session the api's go-live handed out for that name, still open?
+/// The api's heartbeat route answers exactly that (200 / 403) and refreshes the
+/// live key on the way, which does no harm. Err carries the reply for the browser.
+async fn owns_stream(app: &App, name: &str, session: Option<i64>, token: Option<i64>) -> Result<(), &'static str> {
+    let (Some(session), Some(token)) = (session, token) else {
+        return Err("not your stream");
+    };
+    let url = format!("{}/api/streams/{name}/heartbeat?session={session}&token={token}", app.api_url);
+    match app.http.post(url).send().await {
+        Ok(res) if res.status().is_success() => Ok(()),
+        Ok(res) if res.status().is_client_error() => Err("not your stream"),
+        Ok(res) => {
+            log::warn!("publish {name}: api answered {} to the session check", res.status());
+            Err("api unreachable")
+        }
+        Err(e) => {
+            log::warn!("publish {name}: api unreachable for the session check: {e}");
+            Err("api unreachable")
         }
     }
 }
@@ -335,31 +440,31 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, exp
                 kind.to_string(),
                 room.clone(),
             ));
-            if !hub.add_track(&room, generation, Arc::clone(&local), video_ssrc).await {
+            let Some(first_video) = hub.add_track(&room, generation, Arc::clone(&local), video_ssrc).await else {
                 return;
-            }
+            };
             log::info!("publish {room}: {kind} up ({})", codec.capability.mime_type);
 
-            // The video track also feeds a small ffmpeg that makes the thumbnail.
-            let tap = match (thumbs_on, kind) {
-                (true, RTPCodecType::Video) => match thumbs::ThumbTap::start(&room, codec.payload_type).await {
-                    Ok(tap) => Some(tap),
-                    Err(e) => {
-                        log::warn!("publish {room}: no thumbnail: {e}");
-                        None
-                    }
-                },
-                _ => None,
-            };
-            if tap.is_some() {
+            // The stream's video track also feeds a small ffmpeg that makes the
+            // thumbnail. A second video track (an offer can carry one) shares
+            // neither the picture nor the keyframe requests.
+            let mut tap = None;
+            if thumbs_on && first_video {
+                match thumbs::ThumbTap::start(&room, codec.payload_type).await {
+                    Ok(started) => tap = Some(started),
+                    Err(e) => log::warn!("publish {room}: no thumbnail: {e}"),
+                }
+            }
+            if let Some(tap) = &tap {
                 // ffmpeg can only start on a keyframe, and a browser sends one
                 // only when asked. Ask until the first picture exists, a few times.
                 let hub = hub.clone();
                 let room = room.clone();
+                let ffmpeg_dead = tap.dead_flag();
                 tokio::spawn(async move {
                     for attempt in 0..15u64 {
                         tokio::time::sleep(Duration::from_millis(if attempt == 0 { 400 } else { 2000 })).await;
-                        if tokio::fs::metadata(thumbs::jpeg_path(&room)).await.is_ok() {
+                        if ffmpeg_dead.load(Ordering::Relaxed) || tokio::fs::metadata(thumbs::jpeg_path(&room)).await.is_ok() {
                             break;
                         }
                         hub.request_keyframe(&room, true).await;
@@ -373,7 +478,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, exp
             while let Ok((mut packet, _)) = track.read_rtp().await {
                 packet.header.extension = false;
                 packet.header.extensions.clear();
-                if let Some(tap) = &tap {
+                if let Some(tap) = &mut tap {
                     tap.feed(&packet);
                 }
                 let _ = local.write_rtp(&packet).await;
@@ -595,24 +700,25 @@ impl Hub {
         }
     }
 
-    /// Add a publisher track. False if that publisher's room is gone already.
+    /// Add a publisher track. None if that publisher's room is gone already;
+    /// otherwise whether this is the room's first video track, the one keyframe
+    /// requests go to and the thumbnail is made from.
     async fn add_track(
         &self,
         name: &str,
         generation: u64,
         track: Arc<TrackLocalStaticRTP>,
         video_ssrc: Option<u32>,
-    ) -> bool {
+    ) -> Option<bool> {
         let mut rooms = self.rooms.lock().await;
-        let Some(room) = rooms.get_mut(name).filter(|r| r.generation == generation) else {
-            return false;
-        };
+        let room = rooms.get_mut(name).filter(|r| r.generation == generation)?;
         room.tracks.push(track);
-        if video_ssrc.is_some() {
+        let first_video = video_ssrc.is_some() && room.video_ssrc.is_none();
+        if first_video {
             room.video_ssrc = video_ssrc;
         }
         room.tracks_changed.notify_waiters();
-        true
+        Some(first_video)
     }
 
     /// The live room's tracks, a receiver that changes when the stream ends,
@@ -655,10 +761,8 @@ impl Hub {
             let mut rooms = self.rooms.lock().await;
             let Some(room) = rooms.get_mut(name) else { return };
             let now = Instant::now();
-            let recently = room
-                .last_keyframe
-                .is_some_and(|t| now.duration_since(t) < KEYFRAME_GAP);
-            if recently && !force {
+            let gap = if force { FORCED_KEYFRAME_GAP } else { KEYFRAME_GAP };
+            if room.last_keyframe.is_some_and(|t| now.duration_since(t) < gap) {
                 return;
             }
             match (&room.publisher, room.video_ssrc) {
@@ -748,7 +852,7 @@ impl Out {
     }
 }
 
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     (1..=32).contains(&name.len())
         && name
             .bytes()

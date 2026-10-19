@@ -1,6 +1,6 @@
 # chat
 
-text chat next to a stream. short lines, newest at the bottom, the last 500 kept per stream. no accounts, no database.
+text chat next to a stream. short lines, newest at the bottom, the last 500 kept per stream. nothing kept beyond that.
 
 ```mermaid
 flowchart LR
@@ -18,13 +18,13 @@ flowchart LR
 
 **not kafka.** kafka is a durable, replicated log for many independent consumers, replay from days ago, and throughput that needs partitions across machines. this chat needs none of that: one small memory per room, no replay beyond 500 lines, a few thousand messages a minute at most. kafka would add a cluster, a jvm, a schema, and nothing a viewer could notice. the same goes for nats jetstream or rabbitmq here. if this ever needs more than one chat machine, redis streams already carry the messages between them. if it ever needs messages kept forever, that is a database table written from the same `XADD` path, not a different transport.
 
-**not the database.** postgres can hold chat, but then every message is a write plus a `LISTEN/NOTIFY` or a poll, and the "last 500" trim is a job. the owner does not want chat kept, so there is nothing for a database to do. the database is only asked one question: is this socket really the streamer (session id + token, the same proof the heartbeat uses).
+**not the database.** postgres can hold chat, but then every message is a write plus a `LISTEN/NOTIFY` or a poll, and the "last 500" trim is a job. the owner does not want chat kept, so there is nothing for a database to do. the database is only asked two questions at hello: is this socket really the streamer (session id + token, the same proof the heartbeat uses), and who does its login cookie say it is (`accounts.md`). when it cannot answer, the socket is a plain viewer, and an anonymous nick is refused (`chat is busy, try again`) rather than let through unchecked.
 
 ## the service
 
-`chat` is its own container, the `api` binary run as `api chat` (same image, no extra build), listening on `:4100`. caddy forwards `/chat/*` to it. it reads redis and the database, nothing else. it keeps no state that matters: if it restarts, browsers reconnect and reload history from redis.
+`chat` is its own container, the `api` binary run as `api chat` (same image, no extra build), listening on `:4100`. caddy forwards `/chat/*` to it. it reads redis and the database, nothing else. it keeps no state that matters: if it restarts, browsers reconnect and reload history from redis. on sigterm every socket gets a close frame (1001) and up to 2s to leave before the process ends; the panel reconnects in 3s.
 
-one task per room with at least one viewer runs `XREAD BLOCK 5000 STREAMS chat:<name> <last id>` and pushes every new entry to that room's sockets. the task ends when the last viewer leaves. sending a message is `XADD`, nothing else; the sender sees its own line come back through the stream like everyone else, so order is the same on every screen.
+one task per room with at least one viewer runs `XREAD BLOCK 5000 STREAMS chat:<name> <last id>` and pushes every new entry to that room's sockets. the first viewer's join takes the start id (`XREVRANGE … COUNT 1`) before it loads history, so a line between the two is in both and dropped by id, never in neither. the task keeps retrying redis while the room has viewers, and ends when the last one leaves. sending a message is `XADD`, nothing else; the sender sees its own line come back through the stream like everyone else, so order is the same on every screen.
 
 ## protocol
 
@@ -34,29 +34,34 @@ client → server
 
 ```json
 {"type":"hello","nick":"bob"}
+{"type":"hello"}
 {"type":"hello","nick":"ignored","session":12,"token":987654}
 {"type":"say","text":"hi"}
 ```
 
-the first frame must be `hello`, within 10s. `session` + `token` are the streamer's own grant from go-live; when they check out, the socket speaks as the stream's name and its lines are marked `streamer`. anyone else picks a nick.
+the first frame must be `hello`, within 10s. `session` + `token` are the streamer's own grant from go-live; when they check out, the socket speaks as the stream's name and its lines are marked `streamer`. a login needs no nick: the browser sends the login cookie with the handshake and the server names the socket after the account (`verified`); if the account is the room's name, that is the streamer too. anyone else picks a nick, as long as it is not somebody's account name.
 
 server → client
 
 ```json
-{"type":"history","messages":[{"id":"1729...-0","from":"bob","text":"hi","streamer":false,"at":1729000000000}]}
-{"type":"message","id":"1729...-1","from":"billy","text":"yo","streamer":true,"at":1729000000500}
+{"type":"history","messages":[{"id":"1729...-0","from":"bob","text":"hi","streamer":false,"verified":false,"at":1729000000000}]}
+{"type":"message","id":"1729...-1","from":"billy","text":"yo","streamer":true,"verified":true,"at":1729000000500}
 {"type":"count","count":12}
 {"type":"error","error":"too long"}
+{"type":"error","error":"that name has an account. log in as it, or pick another"}
+{"type":"error","error":"too many tabs"}
+{"type":"error","error":"missed 12 lines"}
 ```
 
-`history` comes once, right after `hello`, with up to 200 lines oldest first. `count` is how many sockets this chat machine has in the room; it changes on join and leave.
+`history` comes once, right after `hello`, with up to 200 lines oldest first. `count` is how many sockets this chat machine has in the room; it changes on join and leave. the errors: `say hello first`, `bad nick…`, `that name has an account…`, `chat is busy, try again` and `too many tabs` close the socket; `too long`, `slow down`, `chat is down, try again` and `missed N lines` (this socket fell behind the room; the lines are gone for it) do not.
 
 ## rules
 
-- text: 1 to 500 characters after trimming. longer is `too long`, empty is dropped. control characters other than newline are stripped.
-- nick: 1 to 24 characters, letters digits `_ -`, case kept. anyone can use any nick; only the `streamer` mark means anything.
-- rate: 5 lines at once, then 1 per second per socket. over that is `slow down` and the line is dropped.
+- text: 1 to 500 characters after cleaning. longer is `too long`, empty is dropped. cleaning: trim; control characters other than newline are stripped; so are the invisible format characters (soft hyphen, zero-width space, bidi marks, embeddings, overrides and isolates, word joiner, byte order mark; not the zero-width joiners, emoji and some scripts need them); at most two newlines between visible characters; a run of combining marks is cut at four.
+- nick: 1 to 24 characters, letters digits `_ -`, case kept. any nick that is not a claimed name (lowercased) is free; the socket is closed otherwise and the panel goes back to the nick box. the `streamer` and `verified` marks are the only things that mean anything.
+- rate: 5 lines at once, then 1 per second per socket. over that is `slow down` and the line is dropped. one ip may hold 8 sockets in a room; the ninth gets `too many tabs` and is closed, so tabs do not multiply the rate or the count.
 - frame size: 8 kb. a bigger frame closes the socket.
+- liveness: the server pings every 30s; a socket that sent nothing (pong, text, anything) for 90s is dropped and leaves the count.
 - history: 200 lines sent on join, 500 kept in redis, a room's key expires 7 days after its last line.
 - the stream does not have to be live. people can talk in an empty room while they wait.
 
