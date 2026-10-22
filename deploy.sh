@@ -8,6 +8,9 @@
 #   ./deploy.sh frontend video    only these (frontend, api, video, dummy)
 #   ./deploy.sh --pull            git pull, then rebuild only what the pull changed
 #   ./deploy.sh --pull api        git pull, then only the api
+#   ./deploy.sh --prune-deploy    first give the disk back what the builds took (docker's build
+#                                 cache, untagged images), then deploy as asked. for the small box
+#                                 that says "only 2664MB free". goes with --pull and services
 #   ./deploy.sh passwd billy      a new password for an account (there is no email reset)
 #   PUBLIC_IP=10.0.0.5 ./deploy.sh
 #
@@ -296,20 +299,44 @@ check_ports() {
   done
 }
 
+free_mb_here() { df -Pm . 2>/dev/null | awk 'NR==2 {print $4}' || echo 0; }
+
 check_disk() {
   local free_mb need=4000 total
-  free_mb="$(df -Pm . 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)"
+  free_mb="$(free_mb_here)"
   # ensure_swap is about to dd a swapfile, most likely out of this same disk
   total="$(mem_mb)"
   if [ "$OS" = linux ] && [ ! -e "$SWAP_FILE" ] && [ "${total:-0}" -lt "$MIN_RAM_MB" ] && [ "$(swap_mb)" -eq 0 ]; then
     need=$(( need + SWAP_SIZE_MB ))
   fi
   if [ "${free_mb:-0}" -lt "$need" ]; then
-    die "only ${free_mb}MB free here (${need}MB is the floor). the rust images need about 6-8GB to build. grow the disk first."
+    if [ "${PRUNE:-0}" = 1 ]; then
+      die "only ${free_mb}MB free here (${need}MB is the floor), even after the prune. the rust images need about 6-8GB to build. grow the disk, or look at what else is on it: docker system df -v; du -sh /var/lib/docker/containers/*/*-json.log"
+    fi
+    die "only ${free_mb}MB free here (${need}MB is the floor). the rust images need about 6-8GB to build.
+  try:  ./deploy.sh --prune-deploy ${ORIGINAL_ARGS[*]:-}   (drops docker's build cache and untagged images first, usually several GB)
+  or grow the disk."
   fi
   if [ "${free_mb:-0}" -lt 10000 ]; then
     warn "${free_mb}MB free is tight. the rust builds use about 6-8GB while compiling."
   fi
+}
+
+# ---- 3b. prune (--prune-deploy) ------------------------------------------------
+# give the disk back what the builds took, then deploy as asked. the build cache is the
+# big one: buildkit keeps every cargo target dir it ever made, and a box that compiled
+# a few times holds 10GB+ of them. untagged images are the small one. nothing that
+# holds data goes: no volumes, no containers, no tagged images, not the swapfile (the
+# build needs it on a small box). the build cache belongs to docker, not to this
+# project, so every project's goes; each one comes back on its next build.
+prune_for_deploy() {
+  local before after
+  before="$(free_mb_here)"
+  say "giving the disk back what the builds took (--prune-deploy). ${before}MB free now"
+  note "build cache:      $("${DOCKER[@]}" builder prune -af 2>&1 | tail -n 1 || echo "could not prune it")"
+  note "untagged images:  $("${DOCKER[@]}" image prune -f 2>&1 | tail -n 1 || echo "could not prune them")"
+  after="$(free_mb_here)"
+  note "${after}MB free, $(( after - before ))MB back. the next build of every project compiles from scratch"
 }
 
 # ---- 4. swap -----------------------------------------------------------------
@@ -514,7 +541,7 @@ compose_up() {
 prune_images() {
   local out
   out="$("${DOCKER[@]}" image prune -f 2>/dev/null | tail -n 1 || true)"
-  note "untagged images from earlier builds removed (${out:-nothing to remove}). the build cache stays; drop it by hand with:  ${DOCKER[*]} builder prune"
+  note "untagged images from earlier builds removed (${out:-nothing to remove}). the build cache stays; ./deploy.sh --prune-deploy drops it first next time"
 }
 
 # ---- did the swap take? --------------------------------------------------------
@@ -728,34 +755,54 @@ passwd_account() {
 }
 
 # ---- args --------------------------------------------------------------------
+# bold on a terminal, plain when piped (./deploy.sh --help | less). the escape codes
+# take no width, so the columns below are lined up by their visible text.
 usage() {
-  cat <<'EOF'
-usage: ./deploy.sh [--pull] [PUBLIC_IP] [frontend|api|video|dummy ...]
+  local B="" N=""
+  if [ -t 1 ]; then
+    B="$(tput bold 2>/dev/null || printf '\033[1m')"
+    N="$(tput sgr0 2>/dev/null || printf '\033[0m')"
+  fi
+  cat <<EOF
+${B}usage:${N} ./deploy.sh [--pull] [--prune-deploy] [PUBLIC_IP] [frontend|api|video|dummy ...]
        ./deploy.sh passwd <name>
 
-  no services               full deploy: machine setup, every image, docker compose up
-  frontend api video dummy  rebuild just these and swap their containers (chat moves with api),
+${B}what to deploy${N}
+  ${B}(nothing named)${N}           full deploy: machine setup, every image, docker compose up
+  ${B}frontend api video dummy${N}  rebuild just these and swap their containers (chat moves with api),
                             then check them: running and healthy, or exit non-zero
-  --pull                    git pull --ff-only first. with no services named, redeploy what changed
+  ${B}PUBLIC_IP${N}                 use this ip (full deploy only). otherwise: \$PUBLIC_IP > .env > auto-detect
+
+${B}flags${N}
+  ${B}--pull${N}                    git pull --ff-only first. with no services named, redeploy what changed
                             since the last run that ended well (.deployed), so a --pull that
                             failed halfway is retried whole by the next one
-  PUBLIC_IP                 use this ip (full deploy only). otherwise: $PUBLIC_IP > .env > auto-detect
-  passwd <name>             print a new random password for that account. the only reset there is
+  ${B}--prune-deploy${N}            first give the disk back what the builds took, then deploy as asked:
+                            docker's build cache (every project's on this machine; each comes
+                            back on its next build) and untagged images. for the box that says
+                            "only 2664MB free". volumes, containers and the swapfile stay
 
+${B}other${N}
+  ${B}passwd <name>${N}             print a new random password for that account. the only reset there is
+  ${B}-h, --help${N}                this
+
+${B}notes${N}
   dummy = the fake streams. set DUMMY_STREAMS and DUMMY_PASSWORD in .env first.
   new knobs from .env.example are appended to .env with their defaults on every run
   (also a --pull that finds nothing to redeploy). passwd touches nothing.
+  a full deploy restarts video when HEAD moved since the last one: every live stream ends.
 EOF
 }
 
-parse_args() {   # sets IP_ARG PULL TARGETS PASSWD_NAME
-  IP_ARG=""; PULL=0; TARGETS=(); PASSWD_NAME=""
+parse_args() {   # sets IP_ARG PULL PRUNE TARGETS PASSWD_NAME
+  IP_ARG=""; PULL=0; PRUNE=0; TARGETS=(); PASSWD_NAME=""
   local a want_name=0
   for a in "$@"; do
     if [ "$want_name" = 1 ]; then PASSWD_NAME="$a"; want_name=0; continue; fi
     case "$a" in
       -h|--help) usage; exit 0 ;;
       --pull) PULL=1 ;;
+      --prune-deploy) PRUNE=1 ;;
       passwd) want_name=1 ;;
       frontend|api|video|dummy) TARGETS+=("$a") ;;
       pages) TARGETS+=("frontend") ;;
@@ -767,7 +814,7 @@ parse_args() {   # sets IP_ARG PULL TARGETS PASSWD_NAME
     esac
   done
   if [ "$want_name" = 1 ]; then die "usage: ./deploy.sh passwd <name>"; fi
-  if [ -n "$PASSWD_NAME" ] && { [ "$PULL" = 1 ] || [ -n "$IP_ARG" ] || [ ${#TARGETS[@]} -gt 0 ]; }; then
+  if [ -n "$PASSWD_NAME" ] && { [ "$PULL" = 1 ] || [ "$PRUNE" = 1 ] || [ -n "$IP_ARG" ] || [ ${#TARGETS[@]} -gt 0 ]; }; then
     die "passwd goes alone: ./deploy.sh passwd $PASSWD_NAME"
   fi
   if [ -n "$IP_ARG" ] && [ ${#TARGETS[@]} -gt 0 ]; then
@@ -851,6 +898,7 @@ full_deploy() {
   pick_docker_cmd
   ensure_compose
   check_ports
+  [ "$PRUNE" = 0 ] || prune_for_deploy   # before the disk check, so a full box can pass it
   check_disk
   ensure_swap
   pick_build_jobs
@@ -870,6 +918,7 @@ partial_deploy() {
   load_public_ip_from_env
   pick_docker_cmd
   ensure_compose
+  [ "$PRUNE" = 0 ] || prune_for_deploy
   check_disk     # the same multi-GB builds as a full run, and swap is gone after a reboot
   ensure_swap
   pick_build_jobs
@@ -918,6 +967,8 @@ main() {
       if [ "$OLD_HEAD" = "$NEW_HEAD" ]; then
         say "nothing changed since the last deploy, nothing to redeploy"
         refresh_env
+        # nothing to build, but the prune was asked for: still give the disk back
+        [ "$PRUNE" = 0 ] || { pick_docker_cmd; prune_for_deploy; }
         exit 0
       fi
       local changed svc
@@ -927,6 +978,7 @@ main() {
         refresh_env
         # the new head runs the same containers the old one did, so it is as deployed
         if [ -f "$DEPLOYED_FILE" ] && [ "$(tr -d '[:space:]' < "$DEPLOYED_FILE")" = "$OLD_HEAD" ]; then record_deployed; fi
+        [ "$PRUNE" = 0 ] || { pick_docker_cmd; prune_for_deploy; }
         exit 0
       fi
       # deploy order, not alphabetical: pages and images first, compose last, so its
