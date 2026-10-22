@@ -21,6 +21,8 @@
 #   preview    /watch/<name> html: title + og tags offline, with a picture, live with the thumbnail; the picture round-trips
 #   errors     /api/health has the monitor fields, a page's error report lands (204, log, debug db), bad ones 400, /admin renders
 #   regress    token-gated stop, auto-recovery, trailing slash, fast restart, races, bad offers
+#   monitor    (local only) `api monitor` watches this stack and a dead address: up with the right build,
+#              down with a reason, the page shows both, a restart keeps its memory. runs monitor/docker-compose.yml
 #   redeploy   (--all, local only) partial ./deploy.sh runs while a stream is live
 #   dummy      (--all, local only, needs DUMMY_STREAMS >= 1) the fake streams play and dummy- names are gated
 #
@@ -86,6 +88,7 @@ run preview
 run errors
 if [ "$LOCAL" = 1 ]; then
   run regress
+  run monitor
   if [ "$ALL" = 1 ]; then
     run redeploy
     dummies="$(sed -n 's/^[[:space:]]*DUMMY_STREAMS=//p' .env 2>/dev/null | tail -n 1 | tr -d "\"' \t\r")"
@@ -96,7 +99,7 @@ if [ "$LOCAL" = 1 ]; then
     fi
   fi
 else
-  say "regress and redeploy restart containers, so they only run against the local stack"
+  say "regress, monitor and redeploy touch docker here, so they only run against the local stack"
 fi
 
 printf '\n'

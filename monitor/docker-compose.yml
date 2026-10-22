@@ -1,39 +1,65 @@
-# the monitor box. a different droplet from the ones it watches: a dead box cannot
-# say so itself. uptime kuma polls every droplet, keeps the history, and tells you.
-# see docs/debugging.md, "the monitor droplet".
+# the monitor box. a different box from the ones it watches: a dead box cannot say so
+# itself. our own code, the api binary run as `api monitor` (api/src/monitor.rs): one
+# container, one json file for its memory, one page built into the binary. no database,
+# no redis, nothing pulled from anyone. see docs/debugging.md, "the monitor box".
 #
-# on the smallest droplet there is:
+#   monitor   asks every box's /api/health every 15s, pulls its /api/errors every minute,
+#             remembers up/down, restarts and new builds, posts down/up to a webhook,
+#             serves the page on this box's loopback :3002
+#
+# on a box of its own. it builds the rust image, so 2 GB of ram, or 1 GB plus swap:
 #   curl -fsSL https://get.docker.com | sudo sh
 #   git clone <repo> && cd slop-stream-architecture/monitor
-#   docker compose up -d
+#   cp .env.example .env                 # TARGETS, OPS_TOKENS, ALERT_WEBHOOK
+#   BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
+# update:  git pull && BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
+#          (the memory is in the volume; a rebuild keeps the history)
 #
-# then reach it over tailscale, not the public ip (nothing here is published to the
-# internet):
-#   curl -fsSL https://tailscale.com/install.sh | sh
-#   sudo tailscale up
-#   sudo tailscale serve --bg 3001          # https://<this box>.<tailnet>.ts.net, real cert
-#                                           # (needs "HTTPS certificates" enabled on the tailnet, admin console > DNS)
-#
-# in its ui, per droplet (prod, dev, ...):
-#   <env> api     HTTP(s) - Json Query   https://<ip>/api/health            json query `postgres and video` (jsonata), expected value `true`. `video` alone is fine too
-#   <env> media   HTTP(s)                https://<ip>/thumb/dummy-mango.jpg  200 only while a dummy publishes and ffmpeg decodes it (DUMMY_STREAMS >= 1 there)
-#   <env> tls     TCP Port               <ip>:443                            caddy answers. no certificate-expiry alert: kuma skips it with "ignore tls errors" on, which the self-signed cert forces
-#   <env> ping    Ping                   <ip>
-# "ignore tls/ssl errors" on for the https ones (self-signed). 20s interval, 3 retries.
-# a discord or telegram notification on down and on up. one status page per env.
+# the page is on loopback only: nothing here is published to the internet. from your laptop:
+#   ssh -L 3002:127.0.0.1:3002 root@<monitor ip>      then open http://localhost:3002
+# peek:  docker compose logs -f monitor       every down and up is a warn line there too
+#        docker compose exec monitor cat /data/monitor.json
 
 name: monitor
 
 services:
-  kuma:
-    image: louislam/uptime-kuma:1
-    container_name: kuma
+  monitor:
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
+      args:
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-1}
+        BUILD: ${BUILD:-dev}
+    image: stream-api
+    container_name: monitor
     restart: unless-stopped
+    command: ["monitor"]
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    environment:
+      TARGETS: ${TARGETS:-}
+      OPS_TOKENS: ${OPS_TOKENS:-}
+      ALERT_WEBHOOK: ${ALERT_WEBHOOK:-}
+      CHECK_EVERY_SECS: ${CHECK_EVERY_SECS:-15}
+      ERRORS_EVERY_SECS: ${ERRORS_EVERY_SECS:-60}
+      DOWN_AFTER: ${DOWN_AFTER:-3}
+      PORT: "3002"
+      DATA_DIR: /data
+      RUST_LOG: info
     ports:
-      # loopback only. tailscale serve forwards to it; the internet never sees it.
-      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:${MONITOR_PORT:-3002}:3002"
     volumes:
-      - kuma-data:/app/data
+      - monitor-data:/data
+    # the image's own check looks at the api port; this one looks at ours
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3002"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
 
 volumes:
-  kuma-data:
+  monitor-data:

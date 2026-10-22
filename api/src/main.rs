@@ -15,7 +15,8 @@
 //! Nobody has to log in. A name with an account (auth.rs) is the one thing a
 //! login is for: only its owner can go live, save its bio or chat as it.
 //!
-//! The same binary run as `api chat` is the text chat server (chat.rs), and
+//! The same binary run as `api chat` is the text chat server (chat.rs),
+//! `api monitor` watches the other boxes from a box of its own (monitor.rs), and
 //! `api passwd <name>` resets a password.
 //!
 //! One route is html, not json: `GET /watch/<name>` (profile.rs), so a shared
@@ -27,6 +28,7 @@
 mod auth;
 mod chat;
 mod debug;
+mod monitor;
 mod profile;
 
 use std::collections::HashSet;
@@ -691,6 +693,12 @@ pub(crate) async fn wait_for_signal() {
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    // `api monitor` runs on a box of its own, with no postgres and no redis: before either is touched
+    if env::args().nth(1).as_deref() == Some("monitor") {
+        monitor::run().await.expect("monitor");
+        return;
+    }
 
     let database_url = env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://stream:stream@database:5432/stream".into());

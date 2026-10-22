@@ -2,11 +2,11 @@
 
 how you find out something broke, and what. three layers, each cheap.
 
-- **is the box up** — a monitor on a different machine polls every droplet and tells you. uptime kuma, no code.
-- **what broke for a person** — the pages report their own failures to `/api/errors`. the api keeps them in a separate `debug` database. `/admin` shows them.
+- **is the box up** — a monitor on a different machine polls every box and tells you. our own code: `api monitor`, one container, one json file, one page.
+- **what broke for a person** — the pages report their own failures to `/api/errors`. the api keeps them in a separate `debug` database. `/admin` shows them, and so does the monitor, for every box at once.
 - **what is the box doing** — digitalocean's own graphs for cpu, ram, disk and, the one that matters for video, outbound bandwidth.
 
-built: the health answer, the error reports, the debug database, `/admin`, the monitor's compose file. not built: the monitor droplet itself (you make it, ten minutes), the watcher bot, the one-pane `api monitor`, grafana. see the end.
+built: the health answer, the error reports, the debug database, `/admin`, the monitor (`api monitor`, its page, its compose file, `./status.sh` for a look from a shell). not built: the monitor box itself (you make it, ten minutes), the watcher bot, grafana. see the end.
 
 ## the shape
 
@@ -23,18 +23,21 @@ flowchart LR
     dapi --> ddb[(stream db)]
     dapi --> ddbg[(debug db)]
   end
-  subgraph mon["monitor droplet · tailscale only"]
-    kuma["uptime kuma<br/>polls · history · alerts"]
+  subgraph mon["monitor box · loopback only"]
+    monitor["api monitor<br/>polls · remembers · alerts · one page"]
+    file[("monitor.json")]
   end
-  kuma -->|"GET /api/health every 20s<br/>GET /thumb/dummy-mango.jpg"| papi
-  kuma -->|"same"| dapi
-  kuma -->|"discord webhook"| you[you]
+  monitor --> file
+  monitor -->|"GET /api/health every 15s<br/>GET /api/errors every minute"| papi
+  monitor -->|"same"| dapi
+  monitor -->|"webhook on down and up"| you[you]
+  you -->|"ssh -L 3002 · http://localhost:3002"| monitor
   you -->|"https://prod-ip/admin · login cookie"| papi
 ```
 
 ## four rules
 
-1. **the monitor is somewhere else, and it pulls.** a dead droplet cannot post "i am dead".
+1. **the monitor is somewhere else, and it pulls.** a dead droplet cannot post "i am dead". and it is our code, built from this repo like everything else: one more `api` subcommand, not a product nobody here has read.
 2. **the browser reports to its own origin.** never to the monitor. the droplets have self-signed certs, and a browser silently refuses a cross-origin call to a second self-signed box you never clicked through. same origin also means `sendBeacon` with no cors, the same trick `stop` uses when a tab closes.
 3. **debug plumbing can never hurt the app.** its own database, a lazy pool, every failure logged and swallowed, body capped, rate limited. the api starts and serves with the debug database gone.
 4. **everything carries `env` and `build`.** which droplet, which commit. without those the error table is noise after the second deploy.
@@ -134,23 +137,33 @@ CREATE INDEX IF NOT EXISTS client_errors_at_idx ON client_errors (at DESC);
 
 in the pages, for a name in `ADMIN_NAMES`. the droplet's own `/api/health` at the top (env, build, video, live, uptimes, and "N dropped this window" when the rate limit is refusing reports), then the last errors, newest first, filter by kind and page, click a row for the stack and the extras. refreshes every 10s; after a 401, 404 or 503 it stops polling (nothing will change until someone edits `.env`), and when a refresh fails it keeps the last list with `as of <time>` on it. anyone else sees "log in as an admin".
 
-## the monitor droplet
+## the monitor box
 
-the smallest droplet there is. `monitor/docker-compose.yml` runs uptime kuma, one container, one volume. then, in its ui, per droplet:
+the smallest box that can build the rust image: 2 GB, or 1 GB plus swap. `monitor/docker-compose.yml` runs the api binary as `api monitor` (`api/src/monitor.rs`): one container, one volume, nothing pulled from anyone but debian and rust.
 
-| monitor | type | checks |
+```
+git clone <repo> && cd slop-stream-architecture/monitor
+cp .env.example .env            # TARGETS=prod=https://1.2.3.4,dev=https://5.6.7.8   OPS_TOKENS=prod=…,dev=…   ALERT_WEBHOOK=…
+BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
+ssh -L 3002:127.0.0.1:3002 root@<monitor ip>      # from your laptop. then http://localhost:3002
+```
+
+per box in `TARGETS`:
+
+| every | asks | keeps |
 |---|---|---|
-| `prod · api` | http json-query on `/api/health` | json query `postgres and video`, expected value `true`. the query is jsonata, so `=` not `==` (`==` is a parse error and the monitor never goes up); `video` alone does as well, since the status is already 503 without postgres |
-| `prod · media` | http on `/thumb/dummy-mango.jpg` | 200. needs `DUMMY_STREAMS ≥ 1` on that box |
-| `prod · tls` | tcp 443 | caddy answers at all. no certificate-expiry alert: kuma skips it while "ignore tls errors" is on, and the self-signed cert forces that on. the domain under "later" brings it back |
-| `prod · ping` | ping | the box itself |
+| 15s (`CHECK_EVERY_SECS`) | `GET /api/health`, 5s to answer. the self-signed cert is not checked: an ip has no name to check against | up or down and since when; the last answer (build, env, live, video, postgres, redis, debug db, both uptimes); the latency; an hourly tally for the 24h and 7d percentages |
+| 60s (`ERRORS_EVERY_SECS`) | `GET /api/errors?limit=50` with that box's token (`OPS_TOKENS=prod=…,dev=…`, or one `OPS_TOKEN` for all) | the newest 100 reports, with stack and extras. a box without a token says so on the page instead |
 
-"ignore tls errors" on, because self-signed. 20s interval, 3 retries before "down". a discord or telegram webhook on down and on up. one status page per environment: that is the "frontend to check on the droplets".
+- **down** is `DOWN_AFTER` (3) failed rounds in a row, dated from the first miss, so one lost packet is not a page. a miss while up shows as "1 missed check: <why>" on the page and nowhere else. **up** again comes with the downtime. both go to the log, the page's event list, and `ALERT_WEBHOOK` when set, as json `{"content": …, "text": …}`: a discord webhook reads the first, slack and most others the second. that webhook is the one thing a monitor cannot keep in-house; leave it empty and the page and the log are the alert.
+- the reason is the api's own words when it answered (`503: postgres down`), caddy's code when the api behind it is gone (`502: caddy answers, the api behind it does not`), or the connect error (`tcp connect error: Connection refused`, `no answer in 5s`).
+- `up_secs` going backwards is an event too, "api restarted (had been up 3h 12m)", same for video. a new `build` is "api build d668007 → 5ba44d7". so a deploy reads as two lines and a crash loop as a column of restarts, with no docker access to the box.
+- its memory is one file, `/data/monitor.json` in the volume, rewritten after every round as a temp file and a rename. a restart or a rebuild keeps everything; a name removed from `TARGETS` is forgotten, a renamed one starts over. `docker compose exec monitor cat /data/monitor.json` is the whole database.
+- the page (`api/src/monitor.html`, built into the binary; no node, no vite, no caddy on this box) polls `GET /api/monitor` every 10s: one card per box with the pill, the 24-hour bar, the health grid (greyed while down, showing the last answer), the events, the error table, a row opening on click. plain html and js, every string through `textContent`: the reports come from strangers' browsers.
+- loopback only, so no login of its own: `ssh -L` is the door. `GET /health` on it answers `{ ok, up_secs, targets, build }` for whoever watches the watcher. `./status.sh https://<ip>` is the same questions asked once from a shell, no box needed.
+- what it is not: proof from outside that video packets flow (the watcher bot, below), graphs of cpu and bandwidth (the host's own, below), or anything about the box it runs on.
 
-- reach it over **tailscale**, not a public ip. `tailscale up` on the monitor, `tailscale serve --bg 3001` (needs "HTTPS certificates" enabled on the tailnet, admin console → DNS), and kuma has a real https cert on your tailnet that nobody else can reach. no basic auth, no second self-signed warning. put the droplets on the tailnet too and the `OPS_TOKEN` pulls ride the private network later.
-- install **digitalocean's monitoring agent** on every droplet (`curl -sSL https://repos.insights.digitalocean.com/install.sh | sudo bash`). free cpu, ram, disk and bandwidth graphs in the console, and alert policies on them. outbound mbit/s is the number that kills a video box, and nothing in the stack measures it yet.
-
-what kuma does not do: show the error table across droplets. its status page links to each droplet's `/admin`.
+install **digitalocean's monitoring agent** on every droplet (`curl -sSL https://repos.insights.digitalocean.com/install.sh | sudo bash`). free cpu, ram, disk and bandwidth graphs in the console, and alert policies on them. outbound mbit/s is the number that kills a video box, and nothing in the stack measures it yet.
 
 ## dev vs prod
 
@@ -170,10 +183,10 @@ from then on `./deploy.sh --pull` is the normal update again, and it rebuilds on
 
 ## later, not now
 
-- **watcher bot**: a headless webrtc client that subscribes to a dummy from the monitor box and counts frames. the only check that proves udp from outside. small, in rust, same crate.
-- **`api monitor`**: the api binary run on the monitor box with `TARGETS=prod=https://…,dev=https://…`. pulls `/api/health` every 15s and `/api/errors?since=` every minute from each into its own postgres, serves one page, posts to a webhook. ~300 lines; replaces kuma when one pane matters more than kuma's graphs. do not start there.
+- **the media check**: `GET /thumb/dummy-mango.jpg` is 200 only while a dummy publishes *and* ffmpeg decodes it, the whole media path on that box end to end, refreshed every 5s. one more request in `probe`, with the name per box in `.env`. it still does not prove udp from outside; that is the bot.
+- **watcher bot**: a headless webrtc client that subscribes to a dummy from the monitor box and counts frames. the only check that proves udp from outside. small, in rust, same crate, run by `api monitor`.
 - **grafana + prometheus + loki**: when there is a second video box and you want egress per box and every container's logs searchable in one place. `/metrics` on video and chat is item 5 in `kubernetes.md`.
-- **a domain**: a $10 domain and let's encrypt remove the self-signed warning everywhere, make the pages free to call a second origin, make the monitor reachable without tailscale, and let kuma's certificate-expiry alert work ("ignore tls errors" goes off). the cheapest fix for the most things in this list.
+- **a domain**: a $10 domain and let's encrypt remove the self-signed warning everywhere, make the pages free to call a second origin, and let the monitor check certificates and sit behind caddy with a login instead of `ssh -L`. the cheapest fix for the most things in this list.
 
 ## code
 
@@ -183,5 +196,8 @@ from then on `./deploy.sh --pull` is the normal update again, and it rebuilds on
 - `frontend/src/infra/report.ts` — `report()`, the window hooks, the peer snapshot.
 - `frontend/src/main.tsx`, `router.tsx`, `app/CrashPage.tsx`, `app/admin/AdminPage.tsx`, the two atoms files, `infra/api.ts`.
 - `docker-compose.yml`, `deploy.sh`, the four dockerfiles (`api/`, `video/`, `video/Dockerfile.dummy`, `frontend/`), `.env.example` — `BUILD`, `ENV_NAME`, `ADMIN_NAMES`, `OPS_TOKEN`, `DEBUG_DATABASE_URL`.
-- `monitor/docker-compose.yml` — the monitor box.
+- `api/src/monitor.rs` — `api monitor`: the rounds, the events, the file, the webhook, `GET /api/monitor`. `api/src/monitor.html` — its page. `api/Cargo.toml` gives reqwest a tls stack for it (rustls with ring, which the tree already had).
+- `monitor/docker-compose.yml`, `monitor/.env.example` — the monitor box.
+- `status.sh` — the shell view of one box: containers, cpu and network, `/api/health`, who is live, the error lines of every container, the error reports. `./status.sh https://<ip>` for a box elsewhere.
 - `test/errors.js` — a report lands, a bad body is 400, the route hides without an admin, health has the new fields, a thrown error in the page shows up in the api log, `/admin` renders. a step it cannot check off-box (no `OPS_TOKEN`) is `SKIP`, not `PASS`; locally it deletes the rows it inserted afterwards.
+- `test/monitor.js` — local only: runs the monitor's compose file as a throwaway project on the stack's network, watching this stack and a dead address. up with the stack's own build, down with a reason after `DOWN_AFTER` rounds, error reports pulled when there is a token (`SKIP` otherwise), the page shows both, a restart keeps the events. removes everything it made.
