@@ -35,6 +35,7 @@ import { Avatar } from '@/shared-components/Avatar';
 import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { panelClassName } from '@/shared-components/Panel';
 import { StatusLine } from '@/shared-components/StatusLine';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 
@@ -94,7 +95,7 @@ export function LivePage() {
               autoCapitalize="off"
               spellCheck={false}
               maxLength={32}
-              className="w-full max-w-[320px] rounded-xl border border-primaryStroke bg-backgroundSecondary px-4 py-3 text-textPrimary disabled:opacity-60"
+              className="w-full max-w-[320px] border border-primaryStroke bg-backgroundSecondary px-4 py-3 text-textPrimary disabled:opacity-60"
             />
             {!publishing && (
               <Button id="start" variant="primary" disabled={!canStart} onClick={() => void goLive()}>
@@ -120,7 +121,7 @@ export function LivePage() {
             </p>
           )}
 
-          <section className="my-3 rounded-xl border border-primaryStroke bg-backgroundSecondary px-5 py-4">
+          <section className={panelClassName('my-5 px-5 py-4')}>
             <label htmlFor="bio" className="text-textSecondary">
               your bio
             </label>
@@ -130,7 +131,7 @@ export function LivePage() {
               onChange={(e) => store.set(bioDraftAtom, e.target.value)}
               placeholder="who are you. what is this stream."
               maxLength={500}
-              className="mt-2 min-h-[90px] w-full resize-y rounded-xl border border-primaryStroke bg-background px-4 py-3 text-textPrimary"
+              className="mt-2 min-h-[90px] w-full resize-y border border-primaryStroke bg-background px-4 py-3 text-textPrimary"
             />
             <div className="mt-3 flex flex-wrap items-center gap-3">
               <Button id="savebio" onClick={() => void saveBio()}>
@@ -178,7 +179,7 @@ export function LivePage() {
         ) : (
           <aside
             id="chat"
-            className="mt-4 flex min-h-[200px] items-center justify-center rounded-xl border border-dashed border-primaryStroke p-6 text-center text-textTertiary lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]"
+            className="mt-4 flex min-h-[200px] items-center justify-center border border-dashed border-secondaryStroke p-6 text-center text-textTertiary lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]"
           >
             type your name and the chat opens here. once you are live, your lines are marked.
           </aside>

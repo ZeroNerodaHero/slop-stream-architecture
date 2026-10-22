@@ -9,16 +9,19 @@ import {
   leaveWatchPage,
   markAutoplayBlocked,
   markPlaying,
-  markUnmuted,
   mutedAtom,
   needsTapAtom,
+  pipAtom,
   remoteStreamAtom,
   retry,
   showUnmuteAtom,
+  togglePip,
+  unmuteVideo,
   verifiedAtom,
   watch,
   watchMessageAtom,
   watchNameAtom,
+  watchPhaseAtom,
   watchToneAtom
 } from '@/infra/atoms/watch-atoms';
 import { cleanName, isDummyName } from '@/infra/names';
@@ -43,8 +46,11 @@ export function WatchPage() {
   const muted = useAtomValue(mutedAtom);
   const verified = useAtomValue(verifiedAtom);
   const avatar = useAtomValue(avatarAtom);
+  const pip = useAtomValue(pipAtom);
+  const phase = useAtomValue(watchPhaseAtom);
 
-  // Mount only: start watching the name in the url, stop when the page goes away.
+  // Mount only: start watching the name in the url (or take back the stream picture in picture
+  // kept alive), and on the way out stop, unless picture in picture keeps it going in the corner.
   // The tab is named after them (the api already did so in the html it served).
   useEffect(() => {
     const name = cleanName(params.name);
@@ -55,16 +61,6 @@ export function WatchPage() {
       leaveWatchPage();
     };
   }, []);
-
-  // Inside the click, so the browser allows sound.
-  function unmute() {
-    const el = videoRef.current;
-    markUnmuted();
-    if (el) {
-      el.muted = false;
-      el.play().catch(() => undefined);
-    }
-  }
 
   return (
     <PageFrame
@@ -91,7 +87,7 @@ export function WatchPage() {
 
           <div className="my-3 flex flex-wrap items-center gap-3">
             {showUnmute && (
-              <Button id="unmute" variant="primary" onClick={unmute}>
+              <Button id="unmute" variant="primary" onClick={() => unmuteVideo(videoRef.current)}>
                 {needsTap ? 'tap to play' : 'unmute'}
               </Button>
             )}
@@ -100,6 +96,12 @@ export function WatchPage() {
                 retry
               </Button>
             )}
+            {phase !== 'bad-name' && (
+              <Button id="pip" aria-pressed={pip} onClick={togglePip} className={pip ? 'border-primaryBlue text-primaryBlue' : undefined}>
+                picture in picture{pip ? ': on' : ''}
+              </Button>
+            )}
+            {pip && <span className="text-base text-textSecondary">keeps playing in a corner while you look around the site</span>}
           </div>
 
           {bio && (

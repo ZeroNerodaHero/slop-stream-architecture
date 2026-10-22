@@ -38,7 +38,7 @@ const JPEG_MAGIC: [u8; 3] = [0xFF, 0xD8, 0xFF];
 
 /// The markup the api itself emits into the card. The classes are tailwind's, generated
 /// because the same strings appear in the pages (`Avatar.tsx`, `WatchPage.tsx`).
-const AVATAR_IMG_CLASS: &str = "mr-3 inline-block h-10 w-10 rounded-full object-cover align-middle";
+const AVATAR_IMG_CLASS: &str = "mr-3 inline-block h-10 w-10 border border-primaryStroke object-cover align-middle";
 const VERIFIED_HTML: &str = r#"<span class="ml-2 text-increase" title="has an account: this really is them">✓</span>"#;
 const TEMPLATE_OPEN: &str = r#"<template id="watch-shell">"#;
 const TEMPLATE_CLOSE: &str = "</template>";

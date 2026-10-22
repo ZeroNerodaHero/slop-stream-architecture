@@ -29,7 +29,7 @@ Five pages. One site.
 
 | page | url | what it does |
 |---|---|---|
-| home | `/` | lists streams that are live right now, each with a picture of the stream a few seconds old. each row links to watch. a button links to go live |
+| home | `/` | one card per stream that is live right now, as many across as fit (one on a phone, four at full width): the picture of the stream a few seconds old with one chip on it (`just started`, `live for 12 min`, `live for 3 hr`, `live for 2 days`; plain `live` when the api has no start time), then the streamer's picture or first letter, the name, the bio cut at two lines. the whole card links to watch. a button links to go live |
 | go live | `/live` | camera preview. a name field. a bio box and a picture. start sends the camera. stop ends it |
 | watch | `/watch/:name` | plays that stream and shows that streamer's picture and bio. if nobody is live, says so and retries every 5s. the one page whose html comes from the api, so a shared link gets a preview card (see "the watch document") |
 | log in, sign up | `/login`, `/signup` | name + password. optional: see "accounts" below. `?next=/path` is where you land after |
@@ -240,7 +240,7 @@ Pages, served by `frontend`:
 | log in, sign up | `/login`, `/signup` |
 | admin | `/admin` — this box's `/api/health` and the last error reports, for a login in `ADMIN_NAMES` |
 
-Home poll interval: 3s. No websockets required for the stream list. The video websocket is only for the camera. `loading` until the first answer; when the api stops answering, `api is down: …` alone (the last list is not kept on screen). Each card's thumbnail re-fetches on a 5s bucket of the poll's own clock; a 404 (the first picture takes ~6s) only hides it until a later bucket loads.
+Home poll interval: 3s. No websockets required for the stream list. The video websocket is only for the camera. Three grey placeholder cards (`#loading`) until the first answer; when the api stops answering, `api is down: …` alone (the last list is not kept on screen). The cards live in `#list article` and each thumbnail is `img[data-thumb=<name>]`; the tests key on those. Each card's thumbnail re-fetches on a 5s bucket of the poll's own clock; a 404 (the first picture takes ~6s) only hides it until a later bucket loads.
 
 ## client behavior
 
@@ -263,6 +263,7 @@ Watch:
 - leaving the page mid-request drops that attempt when the grant lands; a newer `watch` call always wins over an older one
 - show the picture next to the name and the bio under the video. the tab is titled `<name> · streams`
 - after 10s without a connection: "no video. udp blocked?"; `/watch/<name>/` with a trailing slash works too
+- **picture in picture** (`#pip`, a toggle): with it on, leaving the page does not end the stream. It keeps playing in a corner of every other page (`#pip-player`: the video, the name as a link back, the status word, `×`), with the sound setting it had. Coming back to its page takes the same connection over (no second `/api/streams/:name/watch`); opening another stream's page ends the first and the corner follows the new one, still on. `×` ends it and turns it off; so does a page load. The player is only the watch session seen from outside the page: the same atoms, the peer connection and socket kept as module handles, so nothing is copied or reconnected. A stream that is not live yet can wait in the corner too ("not live yet. checking")
 
 Use the browser `RTCPeerConnection` directly, no iceServers. One `<video>` element, autoplay, playsinline, muted on the streamer's own preview so they do not hear themselves. The watcher offer has one recvonly video transceiver and one recvonly audio transceiver.
 
@@ -294,6 +295,8 @@ test.sh, test/       browser tests. see "tests" below
 
 Same stack and conventions as Axiom-Frontend, scaled down: Vite 8 + React 19 + TypeScript (strict) + Tailwind 3 with the same token names (`background`, `textPrimary`, `primaryBlue`, `primaryStroke`, `increase`, `decrease`…) fed by css variables, Jotai 2 atoms, React Router 7, TanStack Query for the home poll, `clsx` + `tailwind-merge`, Geist, oxlint + oxfmt (`printWidth` 169, single quotes, no trailing commas).
 
+The look: hard edges. The tailwind theme has no border radius at all (`borderRadius: { none }`, so a `rounded-xl` typed out of habit produces no css), every box is a 1px stroke on the secondary background with a solid offset shadow (`shadow-hard`; `shadow-hard-blue` on hover and focus for boxes that are links, `shadow-hard-lg` for the corner player), buttons move onto their shadow when pressed, inputs turn their border blue on focus instead of a ring, avatars and the live dots are squares, page titles carry a 4px blue bar on the left and the header a rule underneath. `panelClassName()` in `shared-components/Panel.tsx` is the one place the box look lives. The api's pre-react watch card (`api/src/profile.rs`, `index.html`'s template) and the monitor's page (`api/src/monitor.html`) follow the same rules by hand.
+
 Conventions kept from `frontend-conventions.mdc`:
 
 - Session state lives in atoms (`src/infra/atoms/publish-atoms.ts`, `watch-atoms.ts`); the peer connection, socket and timers are module handles because nothing renders from them.
@@ -311,10 +314,10 @@ frontend/
   Caddyfile            /api, /ws, /watch/* → api (the watch document; plain index.html when the api is down), spa fallback (try_files … /index.html), cache headers. bind-mounted into caddy
   index.html           the shell, plus <template id="watch-shell">: the profile card the api fills in for /watch/<name>
   src/main.tsx         QueryClientProvider + RouterProvider
-  src/router.tsx       / , /live , /watch/:name , /login , /signup , /admin , *   (CrashPage as the error boundary)
+  src/router.tsx       / , /live , /watch/:name , /login , /signup , /admin , *   (CrashPage as the error boundary; a Shell renders every page plus MiniPlayer; the watch route is keyed on the name)
   src/app/             HomePage, LivePage, WatchPage, AuthPage, AdminPage, CrashPage, NotFoundPage, globals.css
   src/infra/           api.ts, relay.ts (ws + ice), report.ts (the pages' own failures → /api/errors), names.ts, store.ts, atoms/ (publish, watch, chat, auth)
-  src/shared-components/  Button, StatusLine, PageFrame, UserBar, VideoFrame, ChatPanel, TestBadge, Avatar
+  src/shared-components/  Button, Panel (the box look), StatusLine, PageFrame, UserBar, VideoFrame, ChatPanel, TestBadge, Avatar, MiniPlayer (picture in picture)
   src/utils/           cn, since
 ```
 
@@ -347,6 +350,7 @@ Full deploy (builds `pages`, `video`, `dummy`, `api`): pick `PUBLIC_IP` (arg > `
 |---|---|---|
 | `test/e2e.js` | go live → listed on home → watcher decodes frames (`getStats`) → stop → watcher sees ended → unlisted | anywhere |
 | `test/dup.js` | second publisher on a live name is refused, first keeps going | anywhere |
+| `test/pip.js` | picture in picture: on, home keeps the stream playing in the corner with sound; back on its page the same connection is taken over (one `/watch` call in total); another stream's card replaces it with the toggle still on; `×` ends it and nothing polls the api afterwards; a page load starts clean | anywhere |
 | `test/regress.js` | token-gated stop, watcher auto-recovery after a publisher reload, trailing slash, fast `video` restart (under 9s, since compose gives it 10s before SIGKILL; a bare watcher socket must get the `ended` frame; only its own `r4` is asserted gone, dummies reconnect on their own), start/stop/start race, heartbeat ownership, oversized offer, publish without the go-live grant refused | local only (restarts containers) |
 | `test/redeploy.js` | `./deploy.sh frontend` and `api` keep a live stream alive; `video` warns and ends it | local only, `--all` |
 | `test/dummy.js` | home lists the fake streams, one plays video and audio, `dummy-` names are refused without the password | local only, `--all`, needs `DUMMY_STREAMS ≥ 1` |
@@ -355,7 +359,7 @@ Full deploy (builds `pages`, `video`, `dummy`, `api`): pick `PUBLIC_IP` (arg > `
 | `test/auth.js` | sign up (400, 201, 409, `dummy-` 403), a claimed name's go-live and bio are 403 for anyone else, log out (the cookie is cleared) / wrong password / right one, change password, `/api/password` and `/api/logout-all` are 401 for nobody and `logout-all` ends another device's login, a password typed decomposed logs in composed (nfkc, 200 raw chars), 15 wrong tries at once are 10 × 401 + 5 × 429 and then 429, the login form, `?next=/\evil.com` lands on `/`, chat as a login is `verified` and needs no nick, an anonymous claimed nick is refused (uppercase too), log out from the header; locally also `api passwd` (and the login it ends) | anywhere |
 | `test/errors.js` | `/api/health` has the monitor fields, a text/plain report is 204 and shows up (the api log locally, `/api/errors` with `OPS_TOKEN`, and the `debug` database locally), garbage and `{}` are 400, the list is 401/404 for a stranger, a throw inside a page is reported with its page, `/admin` renders the health card and a notice for a stranger. off-box without `OPS_TOKEN` the two readback steps are `SKIP`, not `PASS`; locally it deletes the rows it inserted afterwards | anywhere |
 
-Pages keep stable ids and strings for these: `#name #start #stop #status #video #unmute #retry`, the chat's `#chat-nick #chat-join #chat-text #chat-send #chat-lines #chat-count #chat-notice` (lines carry `data-streamer="true"` and `data-verified="true"`), the header's `#username #me #logout #login-link`, the form's `#auth-name #auth-password #auth-submit #auth-error`, and the status words `live`, `watching`, `ended…`.
+Pages keep stable ids and strings for these: `#name #start #stop #status #video #unmute #retry #pip`, the corner player's `#pip-player #pip-video #pip-status #pip-close #pip-unmute`, the chat's `#chat-nick #chat-join #chat-text #chat-send #chat-lines #chat-count #chat-notice` (lines carry `data-streamer="true"` and `data-verified="true"`), the header's `#username #me #logout #login-link`, the form's `#auth-name #auth-password #auth-submit #auth-error`, and the status words `live`, `watching`, `ended…`.
 
 ## known limits
 

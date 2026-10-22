@@ -32,6 +32,12 @@ export const remoteStreamAtom = atom<MediaStream | null>(null);
 export const mutedAtom = atom(true);
 /** Autoplay was refused (low power mode, strict settings). One tap fixes it. */
 export const needsTapAtom = atom(false);
+/**
+ * Picture in picture: leaving the watch page keeps the stream alive and the MiniPlayer shows
+ * it in a corner of every other page. Off, leaving ends it. Stays on when another stream
+ * replaces this one; off again on close, on a page load, and when the stream is ended by hand.
+ */
+export const pipAtom = atom(false);
 
 export const canRetryAtom = atom((get) => RETRY_PHASES.includes(get(watchPhaseAtom)));
 export const showUnmuteAtom = atom((get) => get(needsTapAtom) || (SOUND_PHASES.includes(get(watchPhaseAtom)) && get(mutedAtom)));
@@ -87,6 +93,9 @@ function waitForStreamer(message: string) {
 }
 
 export async function watch(name: string): Promise<void> {
+  // back on the page of the stream picture in picture kept alive: nothing to start, the page's
+  // <video> binds to the same MediaStream. (a stream that is still being waited for counts too.)
+  if (store.get(pipAtom) && name === store.get(watchNameAtom) && (pc || retryTimer)) return;
   teardown();
   const mine = ++attempt;
   store.set(watchNameAtom, name);
@@ -188,6 +197,19 @@ export function markUnmuted() {
   store.set(needsTapAtom, false);
 }
 
+/** Inside the click, so the browser allows sound. The page's <video> and the MiniPlayer's both use it. */
+export function unmuteVideo(el: HTMLVideoElement | null) {
+  markUnmuted();
+  if (el) {
+    el.muted = false;
+    el.play().catch(() => undefined);
+  }
+}
+
+export function togglePip() {
+  store.set(pipAtom, !store.get(pipAtom));
+}
+
 export function teardown() {
   if (connectTimer) clearTimeout(connectTimer);
   if (retryTimer) clearTimeout(retryTimer);
@@ -207,10 +229,20 @@ export function teardown() {
   store.set(remoteStreamAtom, null);
 }
 
-/** Navigated away inside the app. A grant still in flight is dropped when it lands. */
+/**
+ * Navigated away inside the app. With picture in picture on, the stream stays up and moves to
+ * the MiniPlayer (a grant in flight lands as usual); otherwise everything ends.
+ */
 export function leaveWatchPage() {
+  if (store.get(pipAtom) && store.get(watchNameAtom) && store.get(watchPhaseAtom) !== 'bad-name') return;
+  endWatch();
+}
+
+/** Everything off and forgotten: leaving without picture in picture, or closing the MiniPlayer. A grant still in flight is dropped when it lands. */
+export function endWatch() {
   attempt++;
   teardown();
+  store.set(pipAtom, false);
   store.set(watchNameAtom, '');
   store.set(mutedAtom, true);
   store.set(bioAtom, '');

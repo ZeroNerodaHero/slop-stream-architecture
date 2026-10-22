@@ -19,21 +19,21 @@
   body { margin: 0; background: var(--bg); color: var(--t1); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
   header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; margin-bottom: 20px; }
-  header h1 { font-size: 20px; margin: 0; font-weight: 600; }
+  header h1 { font-size: 20px; margin: 0; font-weight: 600; border-left: 4px solid var(--blue); padding-left: 10px; line-height: 1.1; }
   a { color: var(--blue); text-decoration: none; } a:hover { text-decoration: underline; }
   .muted { color: var(--t2); } .dim { color: var(--t3); } .note { color: var(--warn); }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
   .yes { color: var(--up); } .no { color: var(--down); }
-  .target { background: var(--bg2); border: 1px solid var(--stroke); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .target { background: var(--bg2); border: 1px solid var(--stroke); box-shadow: 6px 6px 0 0 var(--stroke); padding: 16px; margin-bottom: 24px; }
   .top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
   .name { font-size: 18px; font-weight: 600; }
-  .pill { padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: rgb(15 17 21); }
+  .pill { padding: 2px 10px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: rgb(15 17 21); }
   .pill.up { background: var(--up); } .pill.down { background: var(--down); } .pill.unknown { background: var(--t3); }
   .bar { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; margin: 12px 0 4px; }
-  .bar i { display: block; height: 8px; border-radius: 2px; background: var(--bg3); }
+  .bar i { display: block; height: 8px; background: var(--bg3); }
   .bar i.ok { background: var(--up); } .bar i.some { background: var(--warn); } .bar i.bad { background: var(--down); }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px 12px; margin-top: 12px; }
-  .grid div { background: var(--bg3); border-radius: 6px; padding: 6px 10px; }
+  .grid div { background: var(--bg3); border: 1px solid var(--stroke); padding: 6px 10px; }
   .grid b { display: block; font-size: 11px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; }
   .down .grid { opacity: .55; }
   h3 { font-size: 12px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; margin: 18px 0 6px; }
@@ -44,7 +44,7 @@
   table { width: 100%; border-collapse: collapse; }
   td { padding: 4px 8px 4px 0; border-top: 1px solid var(--stroke); vertical-align: top; }
   tr.err { cursor: pointer; } tr.err:hover td { background: var(--bg3); }
-  pre { white-space: pre-wrap; word-break: break-word; margin: 4px 0 8px; padding: 8px; background: var(--bg); border-radius: 6px; color: var(--t2); }
+  pre { white-space: pre-wrap; word-break: break-word; margin: 4px 0 8px; padding: 8px; background: var(--bg); border: 1px solid var(--stroke); color: var(--t2); }
   .empty { color: var(--t3); padding: 6px 0; }
 </style>
 </head>

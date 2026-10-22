@@ -67,7 +67,7 @@ function HealthCard({ health, error }: { health: Health | undefined; error: unkn
       </p>
     );
   return (
-    <section id="admin-health" className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-primaryStroke bg-backgroundSecondary px-5 py-4">
+    <section id="admin-health" className="flex flex-wrap items-center gap-x-5 gap-y-2 border border-primaryStroke bg-backgroundSecondary px-5 py-4 shadow-hard">
       <span className="text-xl font-semibold">{health.env}</span>
       <span className="font-mono text-textSecondary" title="the commit the api was built from">
         {health.build}
@@ -105,9 +105,7 @@ function Row({ e, now }: { e: ClientError; now: number }) {
         <span className="w-[72px] shrink-0 text-sm text-textTertiary" title={when.toLocaleString()}>
           {ago(e.at, now)}
         </span>
-        <span
-          className={cn('rounded-md border px-2 py-0.5 text-xs font-medium uppercase tracking-wide', KIND_TONE[e.kind] ?? 'border-secondaryStroke text-textSecondary')}
-        >
+        <span className={cn('border px-2 py-0.5 text-xs font-medium uppercase tracking-wide', KIND_TONE[e.kind] ?? 'border-secondaryStroke text-textSecondary')}>
           {e.kind}
         </span>
         <span className="font-mono text-sm text-textSecondary">{e.page}</span>
@@ -132,7 +130,9 @@ function Row({ e, now }: { e: ClientError; now: number }) {
             </dl>
           )}
           {e.stack && (
-            <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap rounded-lg bg-backgroundTertiary p-3 font-mono text-xs text-textSecondary">{e.stack}</pre>
+            <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap border border-primaryStroke bg-backgroundTertiary p-3 font-mono text-xs text-textSecondary">
+              {e.stack}
+            </pre>
           )}
           {e.ua && <p className="text-textTertiary [overflow-wrap:anywhere]">{e.ua}</p>}
         </div>
@@ -186,7 +186,7 @@ export function AdminPage() {
               type="button"
               onClick={() => setKind(k)}
               className={cn(
-                'rounded-lg border px-3 py-1 text-sm',
+                'border px-3 py-1 text-sm',
                 k === kind ? 'border-primaryBlue text-primaryBlue' : 'border-primaryStroke text-textSecondary hover:text-textPrimary'
               )}
             >
@@ -201,7 +201,7 @@ export function AdminPage() {
           placeholder="page contains…"
           autoComplete="off"
           spellCheck={false}
-          className="w-[200px] rounded-lg border border-primaryStroke bg-backgroundSecondary px-3 py-1.5 text-sm text-textPrimary"
+          className="w-[200px] border border-primaryStroke bg-backgroundSecondary px-3 py-1.5 text-sm text-textPrimary"
         />
         <span className="text-sm text-textTertiary">
           {[errors.data && `${rows.length} of the last ${errors.data.length}`, polling ? `refreshes every ${POLL_MS / 1000}s` : 'reload to ask again', 'kept 14 days']
@@ -221,7 +221,7 @@ export function AdminPage() {
         </p>
       ) : null}
       {rows.length > 0 && (
-        <ul id="admin-errors" className="rounded-xl border border-primaryStroke bg-backgroundSecondary px-4">
+        <ul id="admin-errors" className="border border-primaryStroke bg-backgroundSecondary px-4 shadow-hard">
           {rows.map((e) => (
             <Row key={e.id} e={e} now={errors.dataUpdatedAt} />
           ))}

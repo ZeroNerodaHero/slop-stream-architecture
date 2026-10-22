@@ -39,6 +39,14 @@ export function VideoFrame({ id, streamAtom, videoRef, muted = true, onPlaying, 
   }, []);
 
   return (
-    <video id={id} ref={videoRef} autoPlay playsInline muted={muted} onPlaying={onPlaying} className={cn('block aspect-video w-full rounded-xl bg-black', className)} />
+    <video
+      id={id}
+      ref={videoRef}
+      autoPlay
+      playsInline
+      muted={muted}
+      onPlaying={onPlaying}
+      className={cn('block aspect-video w-full border border-primaryStroke bg-black', className)}
+    />
   );
 }

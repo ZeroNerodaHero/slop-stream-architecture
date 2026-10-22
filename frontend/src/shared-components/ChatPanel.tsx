@@ -1,5 +1,5 @@
 import { useAtomValue } from 'jotai';
-import { type KeyboardEvent, useEffect, useRef } from 'react';
+import { type KeyboardEvent, type UIEvent, useEffect, useLayoutEffect, useRef } from 'react';
 
 import type { Owner } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
@@ -22,9 +22,12 @@ import {
   setChatDraft,
   setNick
 } from '@/infra/atoms/chat-atoms';
-import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
+import { panelClassName } from '@/shared-components/Panel';
 import { cn } from '@/utils/cn';
+
+/** Within this many px of the newest line counts as "at the bottom", so a one-line gap after a font swap does not unstick the view. */
+const STUCK_PX = 40;
 
 interface ChatPanelProps {
   name: string;
@@ -49,6 +52,9 @@ function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
  */
 export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
+  // true while the view sits at the newest line. someone who scrolled up to read is left there.
+  const stuck = useRef(true);
+  const shown = useRef(0);
   const lines = useAtomValue(chatLinesAtom);
   const count = useAtomValue(chatCountAtom);
   const phase = useAtomValue(chatPhaseAtom);
@@ -69,22 +75,29 @@ export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
     return () => closeChat();
   }, [name, owner?.session, owner?.token, me]);
 
-  // Keep the newest line in view. Imperative DOM at the data source, not a render effect.
-  useEffect(() => {
-    const scroll = () => {
-      const el = listRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
-    };
-    scroll();
-    return store.sub(chatLinesAtom, scroll);
-  }, []);
+  // Keep the newest line in view. A layout effect, not a store subscription: the store fires
+  // before react has put the new lines in the dom, so measuring there sees the old height
+  // (and on the history, the empty list). Here the lines are in, and nothing has painted yet.
+  // The first history always lands at the bottom; after that only while the view is stuck there.
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (el && (stuck.current || shown.current === 0)) el.scrollTop = el.scrollHeight;
+    shown.current = lines.length;
+  }, [lines]);
+
+  function onScroll(e: UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight <= STUCK_PX;
+  }
 
   const left = MAX_CHAT_CHARS - chars(draft.trim());
   // the nick box stays until "join" actually opened the socket. a login never needs one.
   const needsNick = !owner && !me && phase === 'off';
+  // the name the server echoes our own lines under: the stream's when we are the streamer, else the login or nick
+  const myName = asStreamer ? name : speaker;
 
   return (
-    <aside id="chat" className={cn('flex min-h-[320px] flex-col rounded-xl border border-primaryStroke bg-backgroundSecondary', className)}>
+    <aside id="chat" className={panelClassName(cn('flex min-h-[320px] flex-col', className))}>
       <header className="flex items-center justify-between border-b border-primaryStroke px-4 py-2 text-base">
         <span className="font-semibold">chat</span>
         <span id="chat-count" className="text-textSecondary">
@@ -92,21 +105,31 @@ export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
         </span>
       </header>
 
-      <div ref={listRef} id="chat-lines" role="log" aria-live="polite" className="min-h-0 flex-1 overflow-y-auto px-4 py-2 text-base leading-snug">
+      <div ref={listRef} onScroll={onScroll} id="chat-lines" role="log" aria-live="polite" className="min-h-0 flex-1 overflow-y-auto px-4 py-2 text-base leading-snug">
         {lines.length === 0 && <p className="text-textTertiary">nothing yet. say something.</p>}
-        {lines.map((line) => (
-          <p key={line.id} data-streamer={line.streamer || undefined} data-verified={line.verified || undefined} className="my-1 [overflow-wrap:anywhere]">
-            <span className={cn('font-semibold', line.streamer ? 'text-increase' : 'text-primaryBlue')}>{line.from}</span>
-            {line.verified && (
-              <span className="ml-0.5 text-increase" title="logged in as this name">
-                ✓
-              </span>
-            )}
-            {line.streamer && <span className="ml-1 rounded bg-increase/15 px-1 text-xs uppercase text-increase">streamer</span>}
-            <span className="text-textSecondary">: </span>
-            <span className="whitespace-pre-wrap">{line.text}</span>
-          </p>
-        ))}
+        {lines.map((line) => {
+          const mine = line.from === myName;
+          return (
+            <p
+              key={line.id}
+              data-streamer={line.streamer || undefined}
+              data-verified={line.verified || undefined}
+              data-mine={mine || undefined}
+              className="my-1 [overflow-wrap:anywhere]"
+            >
+              <span className={cn('font-semibold', line.streamer ? 'text-increase' : 'text-primaryBlue')}>{line.from}</span>
+              {line.verified && (
+                <span className="ml-0.5 text-increase" title="logged in as this name">
+                  ✓
+                </span>
+              )}
+              {line.streamer && <span className="ml-1 bg-increase/15 px-1 text-xs uppercase text-increase">streamer</span>}
+              {mine && <span className="ml-1 bg-primaryBlue/15 px-1 text-xs uppercase text-primaryBlue">you</span>}
+              <span className="text-textSecondary">: </span>
+              <span className="whitespace-pre-wrap">{line.text}</span>
+            </p>
+          );
+        })}
       </div>
 
       <footer className="border-t border-primaryStroke p-3">
@@ -125,7 +148,7 @@ export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
               placeholder="pick a nick"
               maxLength={24}
               autoComplete="off"
-              className="min-w-0 flex-1 rounded-lg border border-primaryStroke bg-background px-3 py-2 text-base"
+              className="min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base"
             />
             <Button id="chat-join" variant="primary" className="px-4 py-2 text-base" disabled={!nickOk} onClick={() => openChat(name, owner)}>
               join
@@ -149,7 +172,7 @@ export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
               onKeyDown={onKey}
               rows={2}
               placeholder={`say something as ${asStreamer ? name : speaker}`}
-              className="w-full resize-none rounded-lg border border-primaryStroke bg-background px-3 py-2 text-base"
+              className="w-full resize-none border border-primaryStroke bg-background px-3 py-2 text-base"
             />
             <div className="mt-2 flex items-center justify-between gap-2 text-sm">
               <span id="chat-notice" className="text-decrease" aria-live="polite">

@@ -15,8 +15,8 @@ interface PageFrameProps {
 export function PageFrame({ title, titleId, aside, wide = false, children }: PageFrameProps) {
   return (
     <main className={cn('mx-auto px-5 pb-16 pt-6', wide ? 'max-w-[1360px]' : 'max-w-[960px]')}>
-      <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
-        <h1 id={titleId} className="min-w-0 text-[28px] font-semibold [overflow-wrap:anywhere]">
+      <header className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-primaryStroke pb-4">
+        <h1 id={titleId} className="min-w-0 border-l-4 border-primaryBlue pl-3 text-[28px] font-semibold leading-tight [overflow-wrap:anywhere]">
           {title}
         </h1>
         <div className="flex flex-wrap items-center gap-4">

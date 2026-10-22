@@ -20,6 +20,7 @@
 #   auth       sign up, log in, log out, a claimed name is only its owner's, verified chat lines, 429 after 10 tries
 #   preview    /watch/<name> html: title + og tags offline, with a picture, live with the thumbnail; the picture round-trips
 #   errors     /api/health has the monitor fields, a page's error report lands (204, log, debug db), bad ones 400, /admin renders
+#   pip        picture in picture: the stream follows you to other pages, coming back takes it over, another stream replaces it, × ends it
 #   regress    token-gated stop, auto-recovery, trailing slash, fast restart, races, bad offers
 #   monitor    (local only) `api monitor` watches this stack and a dead address: up with the right build,
 #              down with a reason, the page shows both, a restart keeps its memory. runs monitor/docker-compose.yml
@@ -86,6 +87,7 @@ run chat
 run auth
 run preview
 run errors
+run pip
 if [ "$LOCAL" = 1 ]; then
   run regress
   run monitor

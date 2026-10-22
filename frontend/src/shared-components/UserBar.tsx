@@ -63,7 +63,7 @@ export function UserBar() {
           autoComplete="off"
           autoCapitalize="off"
           spellCheck={false}
-          className="w-[150px] rounded-lg border border-primaryStroke bg-backgroundSecondary px-3 py-1.5 text-base text-textPrimary"
+          className="w-[150px] border border-primaryStroke bg-backgroundSecondary px-3 py-1.5 text-base text-textPrimary"
         />
       </label>
       <Link id="login-link" to={`/login?next=${encodeURIComponent(pathname)}`} className="text-textSecondary">

@@ -10,7 +10,7 @@ interface AuthPageProps {
   mode: 'login' | 'signup';
 }
 
-const INPUT = 'w-full rounded-xl border border-primaryStroke bg-backgroundSecondary px-4 py-3 text-textPrimary';
+const INPUT = 'w-full border border-primaryStroke bg-backgroundSecondary px-4 py-3 text-textPrimary';
 
 /**
  * Where to go after. Only a path on this site, so the `next` param cannot send you

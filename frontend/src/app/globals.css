@@ -24,3 +24,14 @@
 body {
   @apply bg-background font-sans text-[20px] leading-relaxed text-textPrimary antialiased;
 }
+
+@layer base {
+  /* a focused box turns its border blue. no browser ring: it would be the one round thing left */
+  input,
+  textarea {
+    @apply focus:border-primaryBlue focus:outline-none;
+  }
+  ::selection {
+    @apply bg-primaryBlue text-background;
+  }
+}
