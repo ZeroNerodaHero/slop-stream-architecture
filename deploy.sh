@@ -11,6 +11,9 @@
 #   ./deploy.sh --prune-deploy    first give the disk back what the builds took (docker's build
 #                                 cache, untagged images), then deploy as asked. for the small box
 #                                 that says "only 2664MB free". goes with --pull and services
+#   ./deploy.sh --images TAG      no build on this machine: start the images ./ship.sh built on a
+#                                 laptop and sent here (--to) or pushed to a registry (IMAGES= in
+#                                 .env). goes with --pull and services. a 1 GB box can run this
 #   ./deploy.sh passwd billy      a new password for an account (there is no email reset)
 #   PUBLIC_IP=10.0.0.5 ./deploy.sh
 #
@@ -107,6 +110,23 @@ env_file_value() {
   [ -f "$ENV_FILE" ] || return 0
   sed -n "s/^[[:space:]]*$1=//p" "$ENV_FILE" | tail -n 1 | tr -d "\"' \t\r"
 }
+
+# KEY=VALUE into .env: the existing line replaced in place, else appended. nothing else moves.
+set_env_key() {
+  local key="$1" value="$2" tmp; tmp="$(mktemp)"
+  [ -f "$ENV_FILE" ] || : > "$ENV_FILE"
+  awk -v k="$key" -v v="$value" '
+    $0 ~ "^[[:space:]]*" k "=" { if (!seen) { print k "=" v; seen = 1 }; next }
+    { print }
+    END { if (!seen) print k "=" v }
+  ' "$ENV_FILE" > "$tmp"
+  cat "$tmp" > "$ENV_FILE"
+  rm -f "$tmp"
+}
+
+# the compose image name of a service, the way docker-compose.yml spells it:
+# ${IMAGES:-}stream-<service>:${TAG:-latest}. local builds: stream-video:latest.
+image_name() { printf '%sstream-%s:%s' "${IMAGES:-}" "$1" "${TAG:-latest}"; }
 
 lan_ip() {   # linux: the address the default route leaves from, else nothing
   [ "$OS" = linux ] && have ip || return 0
@@ -304,6 +324,11 @@ free_mb_here() { df -Pm . 2>/dev/null | awk 'NR==2 {print $4}' || echo 0; }
 check_disk() {
   local free_mb need=4000 total
   free_mb="$(free_mb_here)"
+  if [ "${IMAGES_MODE:-0}" = 1 ]; then
+    # no build here: the four images are ~800 MB to pull, and docker wants room to unpack them
+    [ "${free_mb:-0}" -ge 1500 ] || die "only ${free_mb}MB free here; pulling the images needs about 1.5 GB. try: ./deploy.sh --prune-deploy ${ORIGINAL_ARGS[*]:-}"
+    return 0
+  fi
   # ensure_swap is about to dd a swapfile, most likely out of this same disk
   total="$(mem_mb)"
   if [ "$OS" = linux ] && [ ! -e "$SWAP_FILE" ] && [ "${total:-0}" -lt "$MIN_RAM_MB" ] && [ "$(swap_mb)" -eq 0 ]; then
@@ -330,11 +355,19 @@ check_disk() {
 # build needs it on a small box). the build cache belongs to docker, not to this
 # project, so every project's goes; each one comes back on its next build.
 prune_for_deploy() {
-  local before after
+  local before after old
   before="$(free_mb_here)"
   say "giving the disk back what the builds took (--prune-deploy). ${before}MB free now"
   note "build cache:      $("${DOCKER[@]}" builder prune -af 2>&1 | tail -n 1 || echo "could not prune it")"
   note "untagged images:  $("${DOCKER[@]}" image prune -f 2>&1 | tail -n 1 || echo "could not prune them")"
+  # our own images from earlier ships or builds (stream-x:<old tag>) that no container runs
+  old="$(comm -23 <("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^([^/]+/)*stream-[a-z]+:' | sort -u) \
+                 <("${DOCKER[@]}" ps -a --format '{{.Image}}' 2>/dev/null | sort -u) || true)"
+  if [ -n "$old" ]; then
+    # shellcheck disable=SC2086
+    "${DOCKER[@]}" rmi $old >/dev/null 2>&1 || true
+    note "old stream images: $(echo "$old" | wc -l | tr -d ' ') removed ($(echo "$old" | tr '\n' ' '))"
+  fi
   after="$(free_mb_here)"
   note "${after}MB free, $(( after - before ))MB back. the next build of every project compiles from scratch"
 }
@@ -342,6 +375,7 @@ prune_for_deploy() {
 # ---- 4. swap -----------------------------------------------------------------
 ensure_swap() {
   [ "$OS" = linux ] || return 0
+  [ "${IMAGES_MODE:-0}" = 0 ] || return 0   # swap is for the rust build; nothing is built here
   local total swap
   total="$(mem_mb)"
   swap="$(swap_mb)"
@@ -500,15 +534,40 @@ pick_build_jobs() {
 }
 
 # ---- 7. build + start --------------------------------------------------------
+# with --images this is a pull instead: the one place every path gets an image from,
+# so the full deploy and the partial ones work the same either way.
 build_one() {
+  if [ "${IMAGES_MODE:-0}" = 1 ]; then
+    if [ -z "$IMAGES" ]; then
+      # no registry: ./ship.sh --to put the image into docker here. it is there, or it is not.
+      "${DOCKER[@]}" image inspect "$(image_name "$1")" >/dev/null 2>&1 && return 0
+      die "$(image_name "$1") is not on this machine. on the laptop:  ./ship.sh --to <this box> $1   (it prints the tag; this run asked for $TAG)
+  have:  $("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep "^stream-$1:" | tr '\n' ' ' || true)"
+    fi
+    "${DOCKER[@]}" compose pull "$1" && return 0
+    die "pulling $(image_name "$1") failed.
+  'not found' / 'manifest unknown': nothing is pushed under tag $TAG yet. the github action builds it after a push to main
+      (a few minutes: github.com/<you>/<repo>/actions), or ./ship.sh on the laptop pushes it. is the tag the commit you mean?
+  'denied' / 'unauthorized': the package is private. make it public (github.com → your profile → Packages → stream-$1 →
+      Package settings → Change visibility), or log this machine in:  gh auth token | ${DOCKER[*]} login ghcr.io -u <you> --password-stdin   (token with read:packages)"
+  fi
   # BUILD on the command line as well as exported: `sudo docker` resets the
   # environment, and compose would then bake "dev" while this script prints the sha.
   "${DOCKER[@]}" compose build --build-arg BUILD="${BUILD:-dev}" "$1" && return 0
   die "building $1 failed. 'signal: 9, SIGKILL' in the output means out of memory: add RAM or swap, or set CARGO_BUILD_JOBS=1."
 }
 
+# `up -d` builds a service whose image is missing. in images mode a miss must fail
+# loudly (wrong TAG), not quietly start a 30-minute compile.
+UP_FLAGS=()
+
 compose_up() {
-  say "building the images one at a time (first time: several minutes, CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS, BUILD=$BUILD)"
+  if [ "${IMAGES_MODE:-0}" = 1 ]; then
+    if [ -n "$IMAGES" ]; then say "pulling the images (IMAGES=$IMAGES TAG=$TAG). nothing is built here"
+    else say "using the images ./ship.sh sent here (tag $TAG). nothing is built, nothing is pulled"; fi
+  else
+    say "building the images one at a time (first time: several minutes, CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS, BUILD=$BUILD)"
+  fi
   build_one pages
   build_one video
   build_one dummy
@@ -519,14 +578,14 @@ compose_up() {
   cid="$("${DOCKER[@]}" compose ps -q --status running video 2>/dev/null || true)"
   if [ -n "$cid" ]; then
     running="$("${DOCKER[@]}" inspect -f '{{.Image}}' "$cid" 2>/dev/null || true)"
-    built="$("${DOCKER[@]}" image inspect -f '{{.Id}}' stream-video 2>/dev/null || true)"
+    built="$("${DOCKER[@]}" image inspect -f '{{.Id}}' "$(image_name video)" 2>/dev/null || true)"
     if [ -n "$built" ] && [ "$running" != "$built" ]; then
       warn "redeploying video ends every live stream right now. watchers reconnect on their own; streamers press start again."
       note "why: the image carries BUILD, so a new commit (or -dirty) is a new video image, and up -d swaps the container."
     fi
   fi
-  say "${DOCKER[*]} compose up -d"
-  "${DOCKER[@]}" compose up -d
+  say "${DOCKER[*]} compose up -d ${UP_FLAGS[*]:-}"
+  "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"}
   # the Caddyfile is a bind mount, so compose never notices it changed. a reload
   # is graceful and free when nothing changed, so always do it.
   "${DOCKER[@]}" compose exec -T frontend caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 \
@@ -608,7 +667,7 @@ swap_failed() {   # service, what happened. prints its log, exits non-zero
 redeploy_frontend() {
   build_one pages
   say "publishing the new pages (caddy keeps running)"
-  "${DOCKER[@]}" compose up -d --no-deps pages
+  "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} pages
   # the one-shot's exit code is the only word on whether the copy worked (a full
   # disk, say). `compose wait` would hand it over, but is too new for some installs.
   local code; code="$(wait_one_shot pages)"
@@ -632,10 +691,10 @@ redeploy_service() {   # api | video
   if [ "$1" = api ]; then
     # chat is the same image run as `api chat`, so it moves with the api
     say "swapping the api and chat containers"
-    "${DOCKER[@]}" compose up -d --no-deps api chat
+    "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} api chat
   else
     say "swapping the $1 container"
-    "${DOCKER[@]}" compose up -d --no-deps "$1"
+    "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} "$1"
   fi
 }
 
@@ -644,7 +703,7 @@ redeploy_service() {   # api | video
 redeploy_dummy() {
   build_one dummy
   say "swapping the dummy container (video and api only if DUMMY_PASSWORD changed)"
-  "${DOCKER[@]}" compose up -d --no-deps dummy video api
+  "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} dummy video api
   note "dummy streams: $(env_file_value DUMMY_STREAMS)   (DUMMY_STREAMS in $ENV_FILE)"
 }
 
@@ -656,7 +715,7 @@ redeploy_targets() {
       api|video) redeploy_service "$t" ;;
       dummy) redeploy_dummy ;;
       caddy) reload_caddy ;;
-      compose) say "docker-compose.yml changed, applying it"; "${DOCKER[@]}" compose up -d ;;
+      compose) say "docker-compose.yml changed, applying it"; "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} ;;
     esac
   done
 }
@@ -764,7 +823,7 @@ usage() {
     N="$(tput sgr0 2>/dev/null || printf '\033[0m')"
   fi
   cat <<EOF
-${B}usage:${N} ./deploy.sh [--pull] [--prune-deploy] [PUBLIC_IP] [frontend|api|video|dummy ...]
+${B}usage:${N} ./deploy.sh [--pull] [--prune-deploy] [--images TAG] [PUBLIC_IP] [frontend|api|video|dummy ...]
        ./deploy.sh passwd <name>
 
 ${B}what to deploy${N}
@@ -781,6 +840,12 @@ ${B}flags${N}
                             docker's build cache (every project's on this machine; each comes
                             back on its next build) and untagged images. for the box that says
                             "only 2664MB free". volumes, containers and the swapfile stay
+  ${B}--images TAG${N}              build nothing here: start the images ./ship.sh built on a laptop, TAG
+                            being the commit it prints. sent here with ./ship.sh --to <this box>
+                            they are already in docker; pushed to a registry they are pulled
+                            (IMAGES=ghcr.io/<you>/ in .env or the environment). TAG and IMAGES
+                            are written to .env so a plain compose keeps using them. no 4 GB
+                            floor, no swapfile: a 1 GB box runs the stack, it just could not build it
 
 ${B}other${N}
   ${B}passwd <name>${N}             print a new random password for that account. the only reset there is
@@ -794,15 +859,25 @@ ${B}notes${N}
 EOF
 }
 
-parse_args() {   # sets IP_ARG PULL PRUNE TARGETS PASSWD_NAME
-  IP_ARG=""; PULL=0; PRUNE=0; TARGETS=(); PASSWD_NAME=""
-  local a want_name=0
+parse_args() {   # sets IP_ARG PULL PRUNE IMAGES_MODE TAG TARGETS PASSWD_NAME
+  IP_ARG=""; PULL=0; PRUNE=0; IMAGES_MODE=0; TAG="${TAG:-}"; TARGETS=(); PASSWD_NAME=""
+  local a want_name=0 want_tag=0
   for a in "$@"; do
     if [ "$want_name" = 1 ]; then PASSWD_NAME="$a"; want_name=0; continue; fi
+    # the word after --images is the tag, unless it is clearly something else (a service, a flag, an ip)
+    if [ "$want_tag" = 1 ]; then
+      want_tag=0
+      case "$a" in
+        -*|frontend|api|video|dummy|pages|chat|passwd) ;;
+        *) if ! is_ipv4 "$a" && [[ "$a" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then TAG="$a"; continue; fi ;;
+      esac
+    fi
     case "$a" in
       -h|--help) usage; exit 0 ;;
       --pull) PULL=1 ;;
       --prune-deploy) PRUNE=1 ;;
+      --images) IMAGES_MODE=1; want_tag=1 ;;
+      --images=*) IMAGES_MODE=1; TAG="${a#--images=}" ;;
       passwd) want_name=1 ;;
       frontend|api|video|dummy) TARGETS+=("$a") ;;
       pages) TARGETS+=("frontend") ;;
@@ -814,7 +889,7 @@ parse_args() {   # sets IP_ARG PULL PRUNE TARGETS PASSWD_NAME
     esac
   done
   if [ "$want_name" = 1 ]; then die "usage: ./deploy.sh passwd <name>"; fi
-  if [ -n "$PASSWD_NAME" ] && { [ "$PULL" = 1 ] || [ "$PRUNE" = 1 ] || [ -n "$IP_ARG" ] || [ ${#TARGETS[@]} -gt 0 ]; }; then
+  if [ -n "$PASSWD_NAME" ] && { [ "$PULL" = 1 ] || [ "$PRUNE" = 1 ] || [ "$IMAGES_MODE" = 1 ] || [ -n "$IP_ARG" ] || [ ${#TARGETS[@]} -gt 0 ]; }; then
     die "passwd goes alone: ./deploy.sh passwd $PASSWD_NAME"
   fi
   if [ -n "$IP_ARG" ] && [ ${#TARGETS[@]} -gt 0 ]; then
@@ -826,6 +901,31 @@ load_public_ip_from_env() {
   PUBLIC_IP="${PUBLIC_IP:-$(env_file_value PUBLIC_IP)}"
   is_ipv4 "${PUBLIC_IP:-}" || die "no PUBLIC_IP in $ENV_FILE. run a full deploy first: ./deploy.sh"
   export PUBLIC_IP
+}
+
+# --images: where the images come from, and which. IMAGES from the environment, else
+# .env: a registry prefix (a missing trailing / is added) to pull from, or empty when
+# `./ship.sh --to` already put them into docker here. TAG from the command line, else
+# the environment, else .env; it has to be known: `latest` is nothing ship.sh --to
+# makes, and a guess would start the wrong images. both are exported so compose
+# resolves ${IMAGES:-}stream-x:${TAG:-latest} to those names, and written to .env so
+# a `docker compose up -d` by hand later starts the same images and not a build.
+setup_images_mode() {
+  IMAGES="${IMAGES:-$(env_file_value IMAGES)}"
+  [ -z "$IMAGES" ] || IMAGES="${IMAGES%/}/"
+  # no tag named: the commit this checkout is at, which is what ./ship.sh and the github
+  # action tag their images with. after --pull that is the commit just pulled.
+  if [ -z "$TAG" ]; then
+    TAG="$(git rev-parse --short HEAD 2>/dev/null || true)"
+    [ -n "$TAG" ] && note "no tag given: using this checkout's commit, $TAG"
+  fi
+  [ -n "$TAG" ] || die "--images needs the tag ./ship.sh printed:  ./deploy.sh --images <tag>   (what is here: $("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep '^stream-' | tr '\n' ' ' || true))"
+  export IMAGES TAG
+  UP_FLAGS=(--no-build)
+  set_env_key IMAGES "$IMAGES"
+  set_env_key TAG "$TAG"
+  if [ -n "$IMAGES" ]; then say "images from $IMAGES, tag $TAG   (written to $ENV_FILE; empty IMAGES and TAG there go back to building here)"
+  else say "images sent here by ./ship.sh, tag $TAG   (TAG written to $ENV_FILE; empty there goes back to building here)"; fi
 }
 
 # ---- 8. health ---------------------------------------------------------------
@@ -905,6 +1005,7 @@ full_deploy() {
   open_firewall
   write_env
   pick_env_name
+  [ "$IMAGES_MODE" = 0 ] || setup_images_mode   # after write_env, which rewrites .env
   compose_up
   local ok=1
   wait_for_health || ok=0
@@ -923,7 +1024,8 @@ partial_deploy() {
   ensure_swap
   pick_build_jobs
   refresh_env
-  say "redeploying: ${TARGETS[*]}   (PUBLIC_IP=$PUBLIC_IP from $ENV_FILE, BUILD=$BUILD)"
+  [ "$IMAGES_MODE" = 0 ] || setup_images_mode
+  say "redeploying: ${TARGETS[*]}   (PUBLIC_IP=$PUBLIC_IP from $ENV_FILE, $([ "$IMAGES_MODE" = 1 ] && echo "images $IMAGES tag $TAG" || echo "BUILD=$BUILD"))"
   redeploy_targets
   local -a swapped=(); read -r -a swapped <<< "$(swapped_containers)" || true
   [ ${#swapped[@]} -eq 0 ] || check_swapped "${swapped[@]}"   # exits non-zero when one is not up
@@ -963,7 +1065,8 @@ main() {
   if [ "$PULL" = 1 ]; then
     pull_repo
     reexec_if_updated
-    if [ ${#TARGETS[@]} -eq 0 ]; then
+    # with --images, "what changed in the repo" is not the question: the new TAG is. pull it all.
+    if [ ${#TARGETS[@]} -eq 0 ] && [ "$IMAGES_MODE" = 0 ]; then
       if [ "$OLD_HEAD" = "$NEW_HEAD" ]; then
         say "nothing changed since the last deploy, nothing to redeploy"
         refresh_env

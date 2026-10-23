@@ -13,6 +13,8 @@
 # start:  ./deploy.sh                 everything, first time or any time
 #         ./deploy.sh api             only the api (also: frontend, video, dummy)
 #         ./deploy.sh --pull          git pull, then rebuild what changed since the last deploy that ended well
+#         ./deploy.sh --images TAG    no build here: pull the images ./ship.sh pushed from a laptop
+#                                     (IMAGES=ghcr.io/<you>/ and TAG in .env name them; empty = built here)
 #         (by hand: cp .env.example .env, set PUBLIC_IP, BUILD=$(git rev-parse --short HEAD) docker compose up -d --build)
 #         the images carry BUILD, so a full deploy (or `up -d --build`) restarts video whenever
 #         HEAD moved since the last one: every live stream ends. deploy.sh warns first.
@@ -74,7 +76,7 @@ services:
         BUILD: ${BUILD:-dev}
     # image names spelled out: compose would derive them from `name:` above, and
     # chat below names the api image by hand, so they must not move with the project name
-    image: stream-pages
+    image: ${IMAGES:-}stream-pages:${TAG:-latest}
     container_name: pages
     restart: "no"
     volumes:
@@ -114,7 +116,7 @@ services:
       args:
         CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-1}
         BUILD: ${BUILD:-dev}
-    image: stream-api
+    image: ${IMAGES:-}stream-api:${TAG:-latest}
     container_name: api
     restart: unless-stopped
     logging: *default-logging
@@ -149,7 +151,7 @@ services:
   chat:
     # the text chat. the api binary run as `api chat`, same image, no extra build.
     # one websocket per viewer at /chat/<name>; lines live in redis streams. see docs/chat.md
-    image: stream-api
+    image: ${IMAGES:-}stream-api:${TAG:-latest}
     container_name: chat
     restart: unless-stopped
     logging: *default-logging
@@ -216,7 +218,7 @@ services:
       args:
         CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-1}
         BUILD: ${BUILD:-dev}
-    image: stream-video
+    image: ${IMAGES:-}stream-video:${TAG:-latest}
     container_name: video
     restart: unless-stopped
     logging: *default-logging
@@ -252,7 +254,7 @@ services:
       args:
         CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-1}
         BUILD: ${BUILD:-dev}
-    image: stream-dummy
+    image: ${IMAGES:-}stream-dummy:${TAG:-latest}
     container_name: dummy
     restart: unless-stopped
     logging: *default-logging

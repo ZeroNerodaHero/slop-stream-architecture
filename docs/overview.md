@@ -27,6 +27,30 @@ it prints a url. open it. click through the warning.
 - `./deploy.sh frontend` — only the pages. streams stay up
 - `./deploy.sh video` — ends every stream. it warns first
 - `./deploy.sh` — everything again
+- `./deploy.sh --prune-deploy` — the disk is full of old builds: drop them first, then deploy
+
+## don't build on the box
+
+a small box takes an hour to compile the rust and needs 4 GB of ram and 8 GB of disk to do it. three ways out, cheapest first:
+
+**github builds it, for free.** every push to `main` runs `.github/workflows/images.yml`: the four images, built natively on github's x86 machines, pushed to `ghcr.io/<you>/stream-<x>:<commit>`. a public repo pays nothing for the minutes or the packages. then on the box:
+
+```
+./deploy.sh --pull --images        # pulls the repo, then the images for that very commit. builds nothing. a 1 GB box is enough
+```
+
+once: `IMAGES=ghcr.io/<you>/` in the box's `.env` (or on that command line the first time), and the four packages made public on github after the first run (your profile › Packages › stream-x › Package settings › Change visibility). the action takes a few minutes after the push; `./deploy.sh --pull --images` before it finishes says so.
+
+**your laptop builds it, ssh carries it.** no registry, no account:
+
+```
+./ship.sh --to gcloud:test-machine        # on the laptop: builds for the box, sends the images straight into its docker, prints a tag
+./deploy.sh --pull --images <that tag>    # on the box: starts them. builds nothing, pulls nothing
+```
+
+`--to billy@1.2.3.4` for a box that is not on gcloud. an arm laptop builds the box's amd64 images under emulation: minutes, not an hour.
+
+**your laptop builds it, a registry carries it.** `./ship.sh` with no `--to` pushes to `ghcr.io/<you>/` like the action does; for several boxes when github is not building. needs a `docker login` once.
 
 ## screens
 
