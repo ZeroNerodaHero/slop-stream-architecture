@@ -84,10 +84,19 @@ async function drag(p, sel, dx, dy) {
     await w.goto(`${BASE}/watch/${A}`, { waitUntil: 'domcontentloaded' });
     await waitStatus(w, /^watching$/);
     await w.click('#unmute');
-    expect((await w.textContent('#unmute')).trim() === 'mute', `the button reads "${await w.textContent('#unmute')}" with the sound on`);
+    const label = await w.getAttribute('#unmute', 'aria-label');
+    expect(label === 'mute', `the speaker button is named "${label}" with the sound on`);
+    expect((await w.$('#unmute svg')) !== null, 'the speaker button has no icon');
     await w.click('#volume'); // the middle of the dial
     const v = await frames(w, '#video');
     expect(!v.muted && Math.abs(v.volume - 0.5) < 0.05, `after the dial: ${JSON.stringify(v)}`);
+    // mute drops the dial to 0 and crosses the speaker; unmute brings the level back
+    await w.click('#unmute');
+    const off = { dial: await w.inputValue('#volume'), label: await w.getAttribute('#unmute', 'aria-label'), muted: (await frames(w, '#video')).muted };
+    expect(off.dial === '0' && off.label === 'unmute' && off.muted, `muted: ${JSON.stringify(off)}`);
+    await w.click('#unmute');
+    const back = await frames(w, '#video');
+    expect(!back.muted && Math.abs(back.volume - 0.5) < 0.05 && Math.abs(Number(await w.inputValue('#volume')) - 0.5) < 0.05, `back on: ${JSON.stringify(back)}`);
     const onVideo = await w.$$eval('#unmute, #volume, #pip', (els) => {
       const f = document.querySelector('#video').getBoundingClientRect();
       return els.every((el) => {

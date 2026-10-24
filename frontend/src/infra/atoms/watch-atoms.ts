@@ -31,11 +31,13 @@ export const avatarAtom = atom<number | null>(null);
 export const remoteStreamAtom = atom<MediaStream | null>(null);
 export const mutedAtom = atom(true);
 /**
- * The dial, 0..1, on whichever <video> is playing (the page's, the MiniPlayer's). Apart from
- * `muted`, like a tv: the dial stays where it was while the sound is off, and is kept across
- * streams for the visit.
+ * The level the sound plays at, and comes back at after a mute: always above zero (zero on the
+ * dial is a mute, see `setVolume`). On whichever <video> is playing, the page's or the
+ * MiniPlayer's, and kept across streams for the visit.
  */
 export const volumeAtom = atom(1);
+/** What the dial shows: 0 while muted, the level otherwise. So the mute button drops it to 0 and unmute brings it back. */
+export const dialAtom = atom((get) => (get(mutedAtom) ? 0 : get(volumeAtom)));
 /** Autoplay was refused (low power mode, strict settings). One tap fixes it. */
 export const needsTapAtom = atom(false);
 /**
@@ -220,12 +222,29 @@ export function muteVideo(el: HTMLVideoElement | null) {
   if (el) el.muted = true;
 }
 
-/** The dial moved. Up from silence while muted is an unmute too: nobody turns a dial up to hear nothing. */
+/**
+ * The dial moved. Zero is a mute, the level kept for the way back; anything above it is the
+ * level, with the sound on (up from zero while muted is an unmute: nobody turns a dial up to
+ * hear nothing).
+ */
 export function setVolume(el: HTMLVideoElement | null, volume: number) {
-  const v = Math.min(1, Math.max(0, volume));
-  store.set(volumeAtom, v);
-  if (el) el.volume = v;
-  if (v > 0 && store.get(mutedAtom)) unmuteVideo(el);
+  const level = Math.min(1, Math.max(0, volume));
+  if (level === 0) {
+    muteVideo(el);
+    return;
+  }
+  store.set(volumeAtom, level);
+  if (el) el.volume = level;
+  if (store.get(mutedAtom)) unmuteVideo(el);
+}
+
+/**
+ * The dial let go, `from` being where it was when it was taken. A drag that ended on zero went
+ * through every level on the way down and the last hair above zero is what `volumeAtom` holds;
+ * `from` is what unmute should bring back.
+ */
+export function settleDial(from: number) {
+  if (store.get(mutedAtom) && from > 0) store.set(volumeAtom, from);
 }
 
 /** From here on, leaving the watch page keeps the stream in the corner. The only way back off is the MiniPlayer's ×. */

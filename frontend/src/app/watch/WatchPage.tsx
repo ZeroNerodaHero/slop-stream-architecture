@@ -7,6 +7,7 @@ import {
   bioAtom,
   canHearAtom,
   canRetryAtom,
+  dialAtom,
   leaveWatchPage,
   markAutoplayBlocked,
   markPlaying,
@@ -16,6 +17,7 @@ import {
   remoteStreamAtom,
   retry,
   setVolume,
+  settleDial,
   startPip,
   unmuteVideo,
   verifiedAtom,
@@ -40,9 +42,12 @@ import { cn } from '@/utils/cn';
 const CHIP = 'flex h-8 items-center border border-white/10 bg-black/70 text-sm font-semibold text-textPrimary backdrop-blur-sm transition-colors duration-150';
 /** A chip that is itself the button: blue stroke and blue glyph on hover, like every button on the site, over solid black. */
 const CHIP_BUTTON = cn(CHIP, 'hover:border-primaryBlue hover:bg-black/90 hover:text-primaryBlue');
-/** The name of an icon-only control, above it, while the pointer or keyboard focus is on it (`group/pip` is the control). */
+/**
+ * The name of an icon-only control, above it, while the pointer or keyboard focus is on it
+ * (`group/control relative` is the control; it adds `left-0` or `right-0` for which way the name hangs).
+ */
 const TIP =
-  'pointer-events-none absolute bottom-full right-0 mb-2 whitespace-nowrap border border-white/10 bg-black/90 px-2 py-1 text-xs font-semibold text-textPrimary opacity-0 transition-opacity duration-150 group-hover/pip:opacity-100 group-focus-visible/pip:opacity-100';
+  'pointer-events-none absolute bottom-full mb-2 whitespace-nowrap border border-white/10 bg-black/90 px-2 py-1 text-xs font-semibold text-textPrimary opacity-0 transition-opacity duration-150 group-hover/control:opacity-100 group-focus-visible/control:opacity-100';
 /**
  * The dial. A flat 4px track with a square thumb (the theme has no round shapes); the part up
  * to the thumb is filled through an inline gradient, since no browser draws that on its own.
@@ -64,6 +69,16 @@ function PipIcon() {
   );
 }
 
+/** A speaker. Crossed out while muted; angular sound waves (no arcs in this theme) when the sound is on. */
+function SpeakerIcon({ muted }: { muted: boolean }) {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinejoin="miter">
+      <path d="M3 9h4l5-4v14l-5-4H3z" fill="currentColor" />
+      {muted ? <path d="M16 9l6 6M22 9l-6 6" /> : <path d="M16 9l2 3-2 3M19 6l3 6-3 6" />}
+    </svg>
+  );
+}
+
 export function WatchPage() {
   const params = useParams<{ name: string }>();
   const navigate = useNavigate();
@@ -77,6 +92,9 @@ export function WatchPage() {
   const needsTap = useAtomValue(needsTapAtom);
   const muted = useAtomValue(mutedAtom);
   const volume = useAtomValue(volumeAtom);
+  const dial = useAtomValue(dialAtom);
+  /** Where the dial was when it was taken hold of (pointer or key), for `settleDial` when it is let go. */
+  const grabbed = useRef(dial);
   const verified = useAtomValue(verifiedAtom);
   const avatar = useAtomValue(avatarAtom);
   const phase = useAtomValue(watchPhaseAtom);
@@ -160,10 +178,14 @@ export function WatchPage() {
                     <button
                       id="unmute"
                       type="button"
-                      className="h-full px-3 transition-colors duration-150 hover:text-primaryBlue"
+                      aria-label={muted ? 'unmute' : 'mute'}
+                      className="group/control relative flex h-full w-8 items-center justify-center transition-colors duration-150 hover:text-primaryBlue"
                       onClick={() => (muted ? unmuteVideo : muteVideo)(videoRef.current)}
                     >
-                      {muted ? 'unmute' : 'mute'}
+                      <SpeakerIcon muted={muted} />
+                      <span role="tooltip" className={cn(TIP, 'left-0')}>
+                        {muted ? 'unmute' : 'mute'}
+                      </span>
                     </button>
                     <input
                       id="volume"
@@ -171,14 +193,18 @@ export function WatchPage() {
                       min={0}
                       max={1}
                       step={0.01}
-                      value={volume}
+                      value={dial}
                       aria-label="volume"
-                      title={`volume ${Math.round(volume * 100)}%`}
+                      title={`volume ${Math.round(dial * 100)}%`}
                       onChange={(e) => setVolume(videoRef.current, e.target.valueAsNumber)}
-                      className={DIAL}
-                      style={{
-                        background: `linear-gradient(to right, rgb(var(${muted ? '--text-tertiary' : '--text-primary'})) ${volume * 100}%, rgb(255 255 255 / 0.3) ${volume * 100}%)`
+                      onPointerDown={() => (grabbed.current = dial)}
+                      onPointerUp={() => settleDial(grabbed.current)}
+                      onKeyDown={(e) => {
+                        if (!e.repeat) grabbed.current = dial;
                       }}
+                      onKeyUp={() => settleDial(grabbed.current)}
+                      className={DIAL}
+                      style={{ background: `linear-gradient(to right, rgb(var(--text-primary)) ${dial * 100}%, rgb(255 255 255 / 0.3) ${dial * 100}%)` }}
                     />
                   </div>
                 )}
@@ -187,10 +213,10 @@ export function WatchPage() {
                   type="button"
                   aria-label="picture in picture"
                   onClick={toCorner}
-                  className={cn(CHIP_BUTTON, 'group/pip relative ml-auto w-8 justify-center')}
+                  className={cn(CHIP_BUTTON, 'group/control relative ml-auto w-8 justify-center')}
                 >
                   <PipIcon />
-                  <span role="tooltip" className={TIP}>
+                  <span role="tooltip" className={cn(TIP, 'right-0')}>
                     picture in picture
                   </span>
                 </button>
