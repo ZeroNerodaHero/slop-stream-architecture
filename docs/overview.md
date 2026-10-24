@@ -76,13 +76,13 @@ flowchart LR
 - **video** — rust. one upload in, copies it out
 - **certs** — makes the https cert for your ip, then quits
 - **pages** — builds the react pages, hands them to frontend, then quits
-- **dummy** — fake streams for styling. bouncing boxes with names on them. off unless you turn it on, see below
+- **dummy** — fake streams for styling. gifs bouncing around with names on them. off unless you turn it on, see below
 
 all on one computer for this test.
 
 ## accounts
 
-nobody has to. the name box in the header is you: it is your chat name and your go-live default. it lives in your browser.
+nobody has to. the name box in the panel at the bottom left is you: it is your chat name and your go-live default. it lives in your browser.
 
 sign up and the name is yours: nobody else can go live as it, change its bio, or chat as it. a `✓` next to a name means that. the password is hashed on the server (argon2id) and never stored. see `accounts.md`.
 
@@ -111,7 +111,7 @@ DUMMY_PASSWORD=anyword
 ```
 
 then `./deploy.sh dummy`. home fills with `dummy-mango`, `dummy-pixel`, `dummy-disco`.
-each is a coloured box bouncing around with its name and a clock. a quiet tone for sound.
+each is three gifs from `video/gifs` bouncing around like the dvd logo, dealt out at random so no two streams match, with its name on top and a clock. a quiet tone for sound. drop more `.gif` files in that folder and `./deploy.sh dummy` to use them.
 your own names: `DUMMY_NAMES=alice,bob,carol`.
 set it back to 0 and run it again to turn them off.
 the password is what lets the dummy box use `dummy-` names. nobody else can.

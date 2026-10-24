@@ -1,4 +1,4 @@
-# the fake-stream box: the same `video` binary run as `video dummy`, plus ffmpeg.
+# the fake streams: the same `video` binary run as `video dummy`, plus ffmpeg, a font and the gifs.
 # build context is the repo root (compose: context: ., dockerfile: video/Dockerfile.dummy).
 # the build stage is byte-for-byte the one in video/Dockerfile, so docker reuses its layers.
 
@@ -21,6 +21,20 @@ COPY video/src video/src
 RUN touch video/src/main.rs \
  && cargo build --release --locked -p video
 
+# the gifs that bounce around the fake streams (video/gifs), shrunk once here to the size and
+# rate they are shown at: 144 tall, 15 fps, a palette of their own. the originals are up to
+# 640px at 50 fps, and decoding three of those per stream cost more than encoding the stream.
+# only the small ones go into the image (3 MB, not 24).
+FROM debian:bookworm-slim AS gifs
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
+COPY video/gifs /in
+RUN mkdir -p /out && cd /in && for f in *.gif; do \
+      [ -e "$f" ] || continue; \
+      ffmpeg -hide_banner -loglevel error -i "$f" \
+        -vf "fps=15,scale=-2:144:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
+        -loop 0 "/out/$f" || exit 1; \
+    done
+
 FROM debian:bookworm-slim
 # a font for the name on the picture. ffmpeg itself is a static build, no libs needed.
 RUN apt-get update \
@@ -28,6 +42,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -r -u 10001 -s /usr/sbin/nologin app
 COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
+COPY --from=gifs /out /usr/share/dummy-gifs
 COPY --from=build /src/target/release/video /usr/local/bin/video
 # the commit this was built from, same as the video image. compose passes it; unused here, but
 # docker warns about a build arg nobody declares.

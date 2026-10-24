@@ -51,7 +51,6 @@ export const pipAtom = atom(false);
 export const canRetryAtom = atom((get) => RETRY_PHASES.includes(get(watchPhaseAtom)));
 /** Frames are playing (a blip included), so there is sound to mute, unmute and turn up or down. */
 export const canHearAtom = atom((get) => SOUND_PHASES.includes(get(watchPhaseAtom)));
-export const showUnmuteAtom = atom((get) => get(needsTapAtom) || (get(canHearAtom) && get(mutedAtom)));
 export const watchToneAtom = atom<Tone>((get) => {
   const phase = get(watchPhaseAtom);
   if (phase === 'watching') return 'live';

@@ -167,7 +167,7 @@ const body = async (res) => {
   const fresh = async () => (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();
   const ROOM = 'authroom' + RUN;
 
-  await step('the login page: header shows me, go live has my name locked in', async () => {
+  await step('the login page: the user panel shows me, go live has my name locked in', async () => {
     const p = await fresh();
     await p.goto(`${BASE}/login?next=/live`, { waitUntil: 'domcontentloaded' });
     await p.fill('#auth-name', NAME);
@@ -238,7 +238,7 @@ const body = async (res) => {
     return `${NAME.toUpperCase()} refused`;
   });
 
-  await step('log out from the header: the name box is free again', async () => {
+  await step('log out from the user panel: the name box is free again', async () => {
     const p = await fresh();
     await p.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
     await p.fill('#auth-name', NAME);
@@ -250,7 +250,7 @@ const body = async (res) => {
     const me = await body(await anon.get('/api/me'));
     expect(me.name === null, 'anon context should still be nobody');
     await p.close();
-    return 'header shows the name box';
+    return 'the panel shows the name box';
   });
 
   if (LOCAL) {

@@ -217,7 +217,7 @@ flowchart LR
   subgraph images["images"]
     apiimg["stream-api<br/>api/Dockerfile"]
     videoimg["video/Dockerfile<br/>+ static ffmpeg"]
-    dummyimg["video/Dockerfile.dummy<br/>same build stage + ffmpeg + a font"]
+    dummyimg["video/Dockerfile.dummy<br/>same build stage + ffmpeg + a font + the gifs"]
     pagesimg["frontend/Dockerfile<br/>node build → alpine holding dist/"]
     caddyimg["caddy:2-alpine"]
     pgimg["postgres:17-alpine"]
@@ -282,9 +282,10 @@ video/                   → containers video, dummy
   src/main.rs              ws :7880 · /ws /live /thumb /health. udp 7882 mux. Hub → rooms → tracks
   src/media.rs             opus + vp8 only, nack, twcc for the publisher
   src/thumbs.rs            one ffmpeg per publisher → /tmp/thumb-<name>.jpg
-  src/dummy.rs             `video dummy`: ffmpeg bouncing boxes published through /ws
+  src/dummy.rs             `video dummy`: ffmpeg bouncing gifs published through /ws
+  gifs/                    the gifs it bounces. shrunk at image build time
   Dockerfile               + static ffmpeg
-  Dockerfile.dummy         + static ffmpeg + a font, entrypoint `video dummy`
+  Dockerfile.dummy         + static ffmpeg + a font + the gifs, entrypoint `video dummy`
 
 frontend/                → containers pages (build), frontend (caddy)
   Caddyfile                /api /ws /chat /thumb, spa fallback, cache headers
@@ -296,7 +297,7 @@ frontend/                → containers pages (build), frontend (caddy)
   src/infra/report.ts      the pages' own failures → POST /api/errors (sendBeacon)
   src/infra/relay.ts       the /ws one-frame protocol + RTCPeerConnection
   src/infra/atoms/         publish, watch, chat, auth session state (jotai)
-  src/shared-components/   Avatar  Button  ChatPanel  PageFrame  StatusLine  TestBadge  UserBar  VideoFrame
+  src/shared-components/   Avatar  Button  ChatPanel  GeneratedAvatar  PageFrame  StatusLine  TestBadge  UserPanel  VideoFrame
 
 monitor/                 docker-compose.yml for the monitor droplet: uptime kuma polling every box. docs/debugging.md
 docs/                    overview, spec, chat, architecture, accounts, kubernetes, debugging, this file

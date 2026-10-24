@@ -1,14 +1,18 @@
 //! `video dummy`: fake streams for styling and debugging.
 //!
-//! Each stream is a box bouncing around a dark frame with the stream's name on
-//! it, plus a quiet tone. ffmpeg draws and encodes (VP8 + Opus) to RTP on
-//! localhost; we forward those packets into the video server the way a browser
-//! would: go-live at the api, then the same websocket and offer/answer with the
-//! session and token it got, plus the dummy password.
+//! Each stream is a few gifs bouncing around a dark frame like the old dvd logo,
+//! the stream's name on top, a clock at the bottom, plus a quiet tone. ffmpeg
+//! draws and encodes (VP8 + Opus) to RTP on localhost; we forward those packets
+//! into the video server the way a browser would: go-live at the api, then the
+//! same websocket and offer/answer with the session and token it got, plus the
+//! dummy password.
 //!
 //! Env: DUMMY_STREAMS (how many, 0 = idle), DUMMY_PASSWORD (must match the
-//! server), DUMMY_NAMES (optional comma list), VIDEO_WS_URL, API_URL, DUMMY_FONT.
+//! server), DUMMY_NAMES (optional comma list), VIDEO_WS_URL, API_URL, DUMMY_FONT,
+//! DUMMY_GIFS (a folder of .gif files; none there and a coloured box bounces instead).
 
+use std::hash::{BuildHasher, Hasher};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,6 +43,18 @@ const COLORS: [&str; 8] = [
 const HEARTBEAT: Duration = Duration::from_secs(15);
 const RETRY: Duration = Duration::from_secs(5);
 
+/// How many gifs bounce around one stream. The frame is 480×270 and they are 90 to 120 tall.
+const GIFS_PER_STREAM: usize = 3;
+/// Where a stream's gifs start, in turn: top left, bottom right, top right, bottom left.
+/// `(from the right, from the bottom)`.
+const CORNERS: [(bool, bool); 4] = [(false, false), (true, true), (true, false), (false, true)];
+/// Heights the gifs are shown at, in turn. Even, so the chroma of the yuv420 frame lines up.
+const HEIGHTS: [u32; 3] = [120, 90, 104];
+/// drawtext's `%{pts}` as `HH:MM:SS` (the time of day of `pts` seconds past the epoch). The
+/// colons inside `%{}` are escaped once for drawtext and, the `\\\:` ones, once more for the
+/// filter option parser that runs first.
+const CLOCK: &str = r"%{pts\:gmtime\:0\:%H\\\:%M\\\:%S}";
+
 #[derive(Clone)]
 struct Config {
     names: Vec<String>,
@@ -48,13 +64,23 @@ struct Config {
     /// e.g. ws://chat:4100. None turns the pretend chatter off.
     chat_ws_url: Option<String>,
     font: String,
+    /// The deck: every gif in DUMMY_GIFS, shuffled once at start. Stream `i` is dealt the
+    /// `GIFS_PER_STREAM` after stream `i-1`'s, round and round. Empty: a box bounces instead.
+    gifs: Vec<PathBuf>,
+}
+
+/// One thing bouncing around a stream's frame.
+enum Sprite<'a> {
+    Gif(&'a Path),
+    /// No gifs on this machine: the coloured box the dummy always had.
+    Box(&'static str),
 }
 
 const VIEWER_NICKS: [&str; 6] = ["pixelfan", "firstviewer", "lurker_42", "night-owl", "sam", "bitrate_bob"];
 const LINES: [&str; 14] = [
     "hi chat",
     "is this live?",
-    "the box is winning",
+    "the gifs are winning",
     "W stream",
     "corner hit incoming",
     "sound on, nice",
@@ -62,7 +88,7 @@ const LINES: [&str; 14] = [
     "this is a test message that is a bit longer so the panel has to wrap it onto a second line, which is useful for styling",
     "lol",
     "brb",
-    "can you make the box faster",
+    "can you make the gifs faster",
     "first time here",
     "that was close to the corner",
     "gg",
@@ -127,6 +153,7 @@ pub async fn run() -> anyhow::Result<()> {
         api_url: std::env::var("API_URL").ok().filter(|u| !u.is_empty()).map(|u| u.trim_end_matches('/').to_owned()),
         chat_ws_url: std::env::var("CHAT_WS_URL").ok().filter(|u| !u.is_empty()).map(|u| u.trim_end_matches('/').to_owned()),
         font: std::env::var("DUMMY_FONT").unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf".into()),
+        gifs: load_gifs(&std::env::var("DUMMY_GIFS").unwrap_or_else(|_| "/usr/share/dummy-gifs".into())),
     };
     if cfg.api_url.is_none() {
         // video refuses a publish without the api's session and token, so without
@@ -135,6 +162,16 @@ pub async fn run() -> anyhow::Result<()> {
         return wait_for_signal().await;
     }
     log::info!("{} dummy stream(s): {}", cfg.names.len(), cfg.names.join(", "));
+    for (i, name) in cfg.names.iter().enumerate() {
+        let hand: Vec<String> = sprites(&cfg, i)
+            .iter()
+            .map(|s| match s {
+                Sprite::Gif(path) => path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+                Sprite::Box(color) => format!("a {color} box"),
+            })
+            .collect();
+        log::info!("{name}: {}", hand.join(", "));
+    }
 
     let http = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
     for (i, name) in cfg.names.iter().cloned().enumerate() {
@@ -171,7 +208,7 @@ async fn publish_once(i: usize, name: &str, cfg: &Config, http: &reqwest::Client
     // The api part: a bio so the cards have text, and a session so home shows "since".
     let mut owner: Option<Grant> = None;
     if let Some(api) = &cfg.api_url {
-        let bio = format!("fake stream {} for styling and debugging. a box bounces. not a real person.", i + 1);
+        let bio = format!("fake stream {} for styling and debugging. gifs bounce around. not a real person.", i + 1);
         let _ = http
             .put(format!("{api}/api/streamers/{name}"))
             .json(&serde_json::json!({ "bio": bio }))
@@ -281,7 +318,7 @@ async fn publish_on(pc: &RTCPeerConnection, i: usize, name: &str, cfg: &Config, 
     // ffmpeg → rtp on localhost → the two tracks
     let video_socket = UdpSocket::bind("127.0.0.1:0").await?;
     let audio_socket = UdpSocket::bind("127.0.0.1:0").await?;
-    let mut ffmpeg = spawn_ffmpeg(name, i, video_socket.local_addr()?.port(), audio_socket.local_addr()?.port(), &cfg.font)?;
+    let mut ffmpeg = spawn_ffmpeg(name, i, video_socket.local_addr()?.port(), audio_socket.local_addr()?.port(), cfg)?;
     let video_task = tokio::spawn(forward(video_socket, video));
     let audio_task = tokio::spawn(forward(audio_socket, audio));
     log::info!("{name}: live");
@@ -358,32 +395,112 @@ async fn forward(socket: UdpSocket, track: Arc<TrackLocalStaticRTP>) {
     }
 }
 
-/// A dark frame, one coloured box bouncing like the old dvd logo, the name in the
-/// corner, a running clock at the bottom. Speed and colour differ per stream so
-/// you can tell them apart at a glance. Audio is a quiet tone, pitch per stream.
-/// Small and 15 fps on purpose: each stream costs a slice of a core to encode.
-fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, font: &str) -> anyhow::Result<Child> {
-    let color = COLORS[i % COLORS.len()];
-    let speed_x = 60 + (i % 4) * 25;
-    let speed_y = 40 + (i % 3) * 20;
-    // One lavfi graph with both outputs and ONE `-re`. Two separate `-re` lavfi
-    // inputs make ffmpeg spin at a full core each; this way a stream costs ~25%.
-    let graph = format!(
-        "color=c=0x0f1115:s=480x270:r=15,\
-         drawbox=x='abs(mod(t*{speed_x}\\,2*(iw-110))-(iw-110))':y='abs(mod(t*{speed_y}\\,2*(ih-60))-(ih-60))':w=110:h=60:color={color}@1:t=fill,\
-         drawtext=fontfile={font}:text='{name}':fontcolor=white:fontsize=28:x=16:y=14,\
-         drawtext=fontfile={font}:text='%{{pts\\:hms}}':fontcolor=0x9aa3b2:fontsize=22:x=16:y=h-36[out0];\
-         sine=frequency={freq}:sample_rate=48000,volume=0.15[out1]",
+/// Every `.gif` in `dir`, shuffled, so each start deals the names different gifs. Empty when
+/// the folder is missing or holds none; a warning says so, and the streams get a box.
+fn load_gifs(dir: &str) -> Vec<PathBuf> {
+    let mut gifs: Vec<PathBuf> = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("gif")))
+            .collect(),
+        Err(e) => {
+            log::warn!("DUMMY_GIFS={dir}: {e}. a coloured box bounces instead of gifs");
+            return Vec::new();
+        }
+    };
+    if gifs.is_empty() {
+        log::warn!("no .gif files in DUMMY_GIFS={dir}. a coloured box bounces instead");
+        return gifs;
+    }
+    gifs.sort();
+    shuffle(&mut gifs);
+    log::info!("{} gif(s) in {dir}", gifs.len());
+    gifs
+}
+
+/// Fisher-Yates on xorshift64*, seeded from the process's random hasher: no crate for one shuffle.
+fn shuffle<T>(items: &mut [T]) {
+    let mut state = std::collections::hash_map::RandomState::new().build_hasher().finish() | 1;
+    for i in (1..items.len()).rev() {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        let roll = state.wrapping_mul(0x2545_F491_4F6C_DD1D);
+        items.swap(i, (roll % (i as u64 + 1)) as usize);
+    }
+}
+
+/// Stream `i`'s hand: the next few gifs of the deck after stream `i-1`'s (fewer when the deck is
+/// short; one gif is still one), or the box when there are none.
+fn sprites(cfg: &Config, i: usize) -> Vec<Sprite<'_>> {
+    let deck = cfg.gifs.len();
+    if deck == 0 {
+        return vec![Sprite::Box(COLORS[i % COLORS.len()])];
+    }
+    (0..GIFS_PER_STREAM.min(deck)).map(|j| Sprite::Gif(&cfg.gifs[(i * GIFS_PER_STREAM + j) % deck])).collect()
+}
+
+/// The dvd logo's path along one axis, for the overlay filter, where `t` is the time in seconds:
+/// a triangle wave over `span` (`W-w` or `H-h`, how far the sprite can go) at `speed` pixels a
+/// second. It starts at the far end, or at zero (half a period in) when `from_far` is false.
+fn bounce(speed: usize, from_far: bool, span: &str) -> String {
+    let phase = if from_far { String::new() } else { format!("+({span})") };
+    format!("abs(mod(t*{speed}{phase}\\,2*({span}))-({span}))")
+}
+
+/// A dark frame, a few gifs bouncing around it like the old dvd logo, the name on top, a running
+/// clock at the bottom. Each gif starts in its own corner at its own speed and height, and the
+/// deal differs per stream, so you can tell them apart at a glance. Audio is a quiet tone, pitch
+/// per stream. Small and 15 fps on purpose: each stream costs a slice of a core to encode.
+///
+/// The gifs are inputs of their own, looped forever, and `overlay` moves them: its `x`/`y` are
+/// evaluated per frame with `t` the time. (`drawbox`, which the box used to be, evaluates once,
+/// and its `t` is the thickness: it never moved.) The image shrank the gifs to the size and rate
+/// they are shown at, see Dockerfile.dummy; the originals cost more to decode than the stream
+/// costs to encode.
+fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, cfg: &Config) -> anyhow::Result<Child> {
+    // The frame and the tone in one lavfi graph with ONE `-re`. Two separate `-re` lavfi
+    // inputs make ffmpeg spin at a full core each. The gif inputs have no `-re`: the overlay
+    // takes their frames as the paced frame needs them.
+    let base = format!(
+        "color=c=0x0f1115:s=480x270:r=15[out0];sine=frequency={freq}:sample_rate=48000,volume=0.15[out1]",
         freq = 220 + 55 * (i % 8)
     );
+    let sprites = sprites(cfg, i);
 
-    // `-threads 1` must come AFTER the input to reach the encoder. Before it, it only
-    // limits the lavfi source, and libvpx spins one thread per core instead.
+    let mut graph = String::new();
+    let mut last = "[0:v]".to_owned();
+    for (j, sprite) in sprites.iter().enumerate() {
+        match sprite {
+            Sprite::Gif(_) => graph.push_str(&format!("[{}:v]scale=-2:{}[s{j}];", j + 1, HEIGHTS[(i + j) % HEIGHTS.len()])),
+            Sprite::Box(color) => graph.push_str(&format!("color=c={color}:s=110x60:r=15[s{j}];")),
+        }
+        let (from_right, from_bottom) = CORNERS[(i + j) % CORNERS.len()];
+        let x = bounce(50 + 15 * ((i + 2 * j) % 5), from_right, "W-w");
+        let y = bounce(35 + 12 * ((2 * i + 3 * j) % 5), from_bottom, "H-h");
+        graph.push_str(&format!("{last}[s{j}]overlay=x='{x}':y='{y}'[v{j}];"));
+        last = format!("[v{j}]");
+    }
+    // the name and the clock last, on top of the gifs, each on a dark box so they stay readable
+    graph.push_str(&format!(
+        "{last}drawtext=fontfile={font}:text='{name}':fontcolor=white:fontsize=28:x=16:y=14:box=1:boxcolor=black@0.55:boxborderw=8,\
+         drawtext=fontfile={font}:text='{CLOCK}':fontcolor=0x9aa3b2:fontsize=22:x=16:y=h-36:box=1:boxcolor=black@0.55:boxborderw=6[vout]",
+        font = cfg.font
+    ));
+
     let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-hide_banner", "-loglevel", "warning", "-nostdin"])
-        .args(["-re", "-f", "lavfi", "-i", &graph])
-        .args(["-filter_threads", "1", "-threads", "1"])
-        .args(["-map", "0:0", "-c:v", "libvpx", "-b:v", "500k", "-deadline", "realtime", "-cpu-used", "8"])
+    cmd.args(["-hide_banner", "-loglevel", "warning", "-nostdin"]).args(["-re", "-f", "lavfi", "-i", &base]);
+    for sprite in &sprites {
+        if let Sprite::Gif(path) = sprite {
+            cmd.args(["-stream_loop", "-1", "-i"]).arg(path);
+        }
+    }
+    // `-threads 1` must come AFTER the inputs to reach the encoder. Before them, it only
+    // limits the lavfi source, and libvpx spins one thread per core instead. Without
+    // `-filter_complex_threads 1` every scale and overlay gets a pool of one thread per core.
+    cmd.args(["-filter_threads", "1", "-filter_complex_threads", "1", "-threads", "1"])
+        .args(["-filter_complex", &graph])
+        .args(["-map", "[vout]", "-c:v", "libvpx", "-b:v", "500k", "-deadline", "realtime", "-cpu-used", "8"])
         .args(["-g", "30", "-keyint_min", "15", "-pix_fmt", "yuv420p"])
         .args(["-f", "rtp", &format!("rtp://127.0.0.1:{video_port}?pkt_size=1200")])
         .args(["-map", "0:1", "-c:a", "libopus", "-b:a", "48k", "-ar", "48000", "-ac", "2"])

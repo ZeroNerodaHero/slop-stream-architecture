@@ -8,7 +8,7 @@
 #   database   the bio and the session log. not the video. plus a second database, debug, for the pages' error reports
 #   redis      who is live
 #   video      rust. one upload in, copies it out. media on udp 7882
-#   dummy      fake streams for styling: bouncing boxes. DUMMY_STREAMS in .env says how many
+#   dummy      fake streams for styling: gifs bouncing around. DUMMY_STREAMS in .env says how many
 #
 # start:  ./deploy.sh                 everything, first time or any time
 #         ./deploy.sh api             only the api (also: frontend, video, dummy)
@@ -244,9 +244,9 @@ services:
     # 7880 (the setup websocket) stays inside. browsers reach it through the frontend, at /ws
 
   dummy:
-    # fake streams for styling and debugging. each one is a coloured box bouncing
-    # around with the stream's name on it, plus a quiet tone. same binary as video,
-    # run as `video dummy`, with ffmpeg drawing the picture.
+    # fake streams for styling and debugging. each one is a few gifs (video/gifs, dealt
+    # out at random) bouncing around, the stream's name on top, a clock, plus a quiet
+    # tone. same binary as video, run as `video dummy`, with ffmpeg drawing the picture.
     # DUMMY_STREAMS=0 means it sits idle. change .env, then: ./deploy.sh dummy
     build:
       context: .
@@ -258,8 +258,9 @@ services:
     container_name: dummy
     restart: unless-stopped
     logging: *default-logging
-    # one ffmpeg per fake stream, like video above. raise it before DUMMY_STREAMS goes past ~20
-    pids_limit: 256
+    # one ffmpeg per fake stream, like video above: ~30 threads each on a many-core box
+    # (the lavfi source's pool grows with the cores). raise it before DUMMY_STREAMS goes past ~15
+    pids_limit: 512
     environment:
       DUMMY_STREAMS: ${DUMMY_STREAMS:-0}
       DUMMY_PASSWORD: ${DUMMY_PASSWORD:-}

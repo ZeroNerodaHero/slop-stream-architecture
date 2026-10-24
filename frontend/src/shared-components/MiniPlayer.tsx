@@ -3,6 +3,7 @@ import { type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEv
 import { Link, useLocation } from 'react-router-dom';
 
 import {
+  canHearAtom,
   endWatch,
   markAutoplayBlocked,
   markPlaying,
@@ -10,7 +11,6 @@ import {
   needsTapAtom,
   pipAtom,
   remoteStreamAtom,
-  showUnmuteAtom,
   unmuteVideo,
   volumeAtom,
   watchMessageAtom,
@@ -19,7 +19,9 @@ import {
 } from '@/infra/atoms/watch-atoms';
 import { cleanName } from '@/infra/names';
 import { Button } from '@/shared-components/Button';
+import { ChatPanel } from '@/shared-components/ChatPanel';
 import { panelClassName } from '@/shared-components/Panel';
+import { ChatIcon, IconButton, SoundControl, revealClassName } from '@/shared-components/VideoControls';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
 
@@ -28,6 +30,12 @@ function isWatchPageOf(pathname: string, name: string): boolean {
   const m = /^\/watch\/([^/]+)\/?$/.exec(pathname);
   return m !== null && cleanName(m[1]) === name;
 }
+
+/** The pages with a chat of their own. The chat atoms hold one room, so the player's chat stays closed there. */
+const hasOwnChat = (pathname: string) => /^\/(watch\/|live\/?$)/.test(pathname);
+
+/** The parts of the player you take hold of to move it: no text selection, no page scroll on touch, no long-press menu. */
+const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
 
 /**
  * Where the player is and how wide. The height follows: a 16:9 video over a one-line footer.
@@ -113,8 +121,9 @@ function fitted(box: Box, rect: DOMRect): Box {
  * its own watch page (there the page's <video> plays; a second one here would be a second
  * sound). Same session, same MediaStream atom, same status words. Rendered once, by the
  * router's shell, so it survives every route change, and so does where you put it: drag it
- * from anywhere, pull a corner to resize it. Clicking it goes back to the page; dropping it
- * does not.
+ * by the video or the footer, pull a corner to resize it. Clicking it goes back to the page;
+ * dropping it does not. On hover it has the sound control, and its chat button opens the
+ * stream's chat under it (except on a page that has a chat of its own).
  */
 export function MiniPlayer() {
   const pip = useAtomValue(pipAtom);
@@ -123,7 +132,7 @@ export function MiniPlayer() {
   const tone = useAtomValue(watchToneAtom);
   const muted = useAtomValue(mutedAtom);
   const volume = useAtomValue(volumeAtom);
-  const showUnmute = useAtomValue(showUnmuteAtom);
+  const canHear = useAtomValue(canHearAtom);
   const needsTap = useAtomValue(needsTapAtom);
   const { pathname } = useLocation();
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -133,11 +142,15 @@ export function MiniPlayer() {
   /** The last press was a drag, so the click the browser fires after it is swallowed. */
   const dragged = useRef(false);
   const [box, setBox] = useState<Box | null>(null);
+  /** The chat button is on. The chat itself waits while a page with its own chat is up, and is back after it. */
+  const [chatOpen, setChatOpen] = useState(false);
   const visible = pip && name !== '' && !isWatchPageOf(pathname, name);
+  const pageHasChat = hasOwnChat(pathname);
+  const showChat = chatOpen && !pageHasChat;
 
-  // A moved box is pulled back on screen when the window shrinks, and when the player shows
-  // again after the watch page hid it (the window may have changed meanwhile). The default
-  // corner is css and needs none of this.
+  // A moved box is pulled back on screen when the window shrinks, when the player shows again
+  // after the watch page hid it (the window may have changed meanwhile), and when the chat
+  // opens under it. The default corner is css and needs none of this.
   useLayoutEffect(() => {
     if (!visible) return;
     const fit = () => {
@@ -153,12 +166,12 @@ export function MiniPlayer() {
     fit();
     window.addEventListener('resize', fit);
     return () => window.removeEventListener('resize', fit);
-  }, [visible]);
+  }, [visible, showChat]);
 
   useEffect(() => () => stop.current?.(), []);
 
   /**
-   * A press anywhere on the player (a move) or on a corner (a resize). The pointer is followed
+   * A press on the video or the footer (a move) or on a corner (a resize). The pointer is followed
    * through window listeners, so leaving the box before the slop loses nothing, and captured
    * once it is a drag, so leaving the window loses nothing either. Not captured before that: a
    * captured pointer's click lands on the capturing element, which would take the click away
@@ -212,14 +225,11 @@ export function MiniPlayer() {
       id="pip-player"
       aria-label={`${name}, picture in picture`}
       style={box ? { left: box.x, top: box.y, width: box.w } : undefined}
-      onPointerDown={(e) => press(e, 'move')}
       onClickCapture={swallowClickAfterDrag}
       onDragStart={(e) => e.preventDefault()}
-      className={panelClassName(
-        cn('group fixed z-50 touch-none select-none shadow-hard-lg [-webkit-touch-callout:none]', !box && 'bottom-6 right-6 w-[min(320px,calc(100vw-3rem))]')
-      )}
+      className={panelClassName(cn('group fixed z-50 shadow-hard-lg', !box && 'bottom-6 right-6 w-[min(320px,calc(100vw-3rem))]'))}
     >
-      <div className="relative">
+      <div className={cn('relative', GRIP)} onPointerDown={(e) => press(e, 'move')}>
         <Link to={to} aria-label={`back to ${name}`} className="block">
           <VideoFrame
             id="pip-video"
@@ -232,23 +242,43 @@ export function MiniPlayer() {
             className="border-0 border-b"
           />
         </Link>
-        <button
-          id="pip-close"
-          type="button"
-          onClick={endWatch}
-          aria-label="stop watching"
-          title="stop watching"
-          className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center border border-white/10 bg-black/70 text-lg leading-none text-textPrimary backdrop-blur-sm hover:border-primaryBlue hover:bg-black/90"
-        >
-          ×
-        </button>
-        {showUnmute && (
-          <Button id="pip-unmute" variant="primary" className="absolute bottom-2 right-2 px-3 py-1.5 text-sm" onClick={() => unmuteVideo(videoRef.current)}>
-            {needsTap ? 'tap to play' : 'unmute'}
+        {needsTap && (
+          <Button
+            id="pip-tap-to-play"
+            variant="primary"
+            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 px-3 py-1.5 text-sm"
+            onClick={() => unmuteVideo(videoRef.current)}
+          >
+            tap to play
           </Button>
         )}
+        {/* top right, 5% of the way down: the chat (lit while it is open), and × */}
+        <div className="absolute right-3 top-[max(8px,5%)] flex gap-2">
+          <IconButton
+            id="pip-chat"
+            label={pageHasChat ? 'this page has its own chat' : showChat ? 'close the chat' : 'chat'}
+            active={showChat}
+            disabled={pageHasChat}
+            tipAt="below-right"
+            onClick={() => setChatOpen((open) => !open)}
+          >
+            <ChatIcon />
+          </IconButton>
+          <IconButton id="pip-close" label="stop watching" tipAt="below-right" onClick={endWatch} className="text-lg leading-none">
+            ×
+          </IconButton>
+        </div>
+        {canHear && (
+          <div className={cn('absolute inset-x-0 bottom-0 flex p-2', revealClassName(muted))}>
+            <SoundControl videoRef={videoRef} buttonId="pip-unmute" dialId="pip-volume" dialClassName="w-20" />
+          </div>
+        )}
       </div>
-      <div className="flex cursor-move items-center justify-between gap-3 px-3 py-2 text-sm" title="drag to move, pull a corner to resize">
+      <div
+        className={cn('flex cursor-move items-center justify-between gap-3 px-3 py-2 text-sm', GRIP)}
+        title="drag to move, pull a corner to resize"
+        onPointerDown={(e) => press(e, 'move')}
+      >
         <Link to={to} className="min-w-0 cursor-pointer truncate font-semibold">
           {name}
         </Link>
@@ -256,6 +286,7 @@ export function MiniPlayer() {
           {message}
         </span>
       </div>
+      {showChat && <ChatPanel name={name} embedded className="h-72 border-t border-primaryStroke" />}
       {CORNERS.map((c) => (
         <div
           key={c.id}

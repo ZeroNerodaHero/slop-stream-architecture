@@ -8,12 +8,14 @@ import { HomePage } from '@/app/home/HomePage';
 import { LivePage } from '@/app/live/LivePage';
 import { WatchPage } from '@/app/watch/WatchPage';
 import { MiniPlayer } from '@/shared-components/MiniPlayer';
+import { UserPanel } from '@/shared-components/UserPanel';
 
-/** Every page, plus the one thing that lives outside pages: the picture in picture player. */
+/** Every page, plus the two things that live outside pages: who you are (bottom left) and the picture in picture player (bottom right). */
 function Shell() {
   return (
     <>
       <Outlet />
+      <UserPanel />
       <MiniPlayer />
     </>
   );

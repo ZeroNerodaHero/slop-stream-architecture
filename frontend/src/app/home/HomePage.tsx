@@ -123,21 +123,9 @@ export function HomePage() {
   // under an error the last good list is stale: the line says why there is none
   const list = streams.error ? undefined : streams.data;
 
+  // no title row: the cards are the page. "go live" is in the corner panel (UserPanel), and once more in the empty state.
   return (
-    <PageFrame
-      title={
-        <>
-          live now
-          {list && list.length > 0 && <span className="ml-3 font-normal text-textTertiary">{list.length}</span>}
-        </>
-      }
-      aside={
-        <Link to="/live" className={buttonClassName('primary')}>
-          go live
-        </Link>
-      }
-      wide
-    >
+    <PageFrame wide>
       {streams.error && (
         <p className="border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
           api is down: {messageOf(streams.error)}

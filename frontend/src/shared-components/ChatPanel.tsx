@@ -33,6 +33,8 @@ interface ChatPanelProps {
   name: string;
   /** The streamer's own grant. With it, our lines are marked. */
   owner?: Owner | null;
+  /** Inside another box (the corner player): no stroke, shadow or minimum height of its own. */
+  embedded?: boolean;
   className?: string;
 }
 
@@ -48,9 +50,10 @@ function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
  * The chat next to the video. Lines newest at the bottom, a nick box until you
  * have one (or a login), a text box with a 500 countdown. Joins on mount, leaves
  * on unmount; a change of `owner` (going live, stopping) or of the login
- * reconnects through `openChat`.
+ * reconnects through `openChat`. One at a time: the chat atoms hold one room, and
+ * the ids here are the ones the tests key on.
  */
-export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
+export function ChatPanel({ name, owner = null, embedded = false, className }: ChatPanelProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   // true while the view sits at the newest line. someone who scrolled up to read is left there.
   const stuck = useRef(true);
@@ -97,7 +100,7 @@ export function ChatPanel({ name, owner = null, className }: ChatPanelProps) {
   const myName = asStreamer ? name : speaker;
 
   return (
-    <aside id="chat" className={panelClassName(cn('flex min-h-[320px] flex-col', className))}>
+    <aside id="chat" className={embedded ? cn('flex flex-col', className) : panelClassName(cn('flex min-h-[320px] flex-col', className))}>
       <header className="flex items-center justify-between border-b border-primaryStroke px-4 py-2 text-base">
         <span className="font-semibold">chat</span>
         <span id="chat-count" className="text-textSecondary">

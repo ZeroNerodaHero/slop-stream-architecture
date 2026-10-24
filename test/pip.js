@@ -1,6 +1,7 @@
 // Picture in picture: the button is a home click that keeps the stream, which then plays in a
 // corner of every other page (#pip-player); the player drags anywhere and resizes from a
-// corner, and stays where it was put; coming back takes the same stream over without a second
+// corner, and stays where it was put; it has the sound chip on hover and a chat button that
+// opens the stream's chat under it; coming back takes the same stream over without a second
 // /watch call; opening another stream's page replaces it and the player follows that one; the
 // player's × ends it. Two publishers with fake cameras and one watcher.
 // Run through ./test.sh, or: BASE_URL=https://<ip> node pip.js
@@ -123,9 +124,43 @@ async function drag(p, sel, dx, dy) {
     box = await rect(w, '#pip-player');
     const view = await w.evaluate(() => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight }));
     expect(near(box.right, view.w - 24) && near(box.bottom, view.h - 24), `not in the corner: ${at(box)} in ${view.w}×${view.h}`);
-    const tap = await w.$('#pip-unmute');
     const flow = await framesFlow(w, '#pip-video');
-    return `${at(box)} · ${flow}${tap ? ` · the player offers "${(await tap.textContent()).trim()}"` : ''}`;
+    return `${at(box)} · ${flow}`;
+  });
+
+  await step('hover the player: its sound chip is on the video; the dial to the middle sets the corner level', async () => {
+    await w.hover('#pip-status');
+    await w.waitForSelector('#pip-volume', { timeout: 5000 });
+    const onVideo = await w.$$eval('#pip-unmute, #pip-volume', (els) => {
+      const f = document.querySelector('#pip-video').getBoundingClientRect();
+      return els.every((el) => {
+        const r = el.getBoundingClientRect();
+        return r.left >= f.left && r.right <= f.right && r.top >= f.top && r.bottom <= f.bottom;
+      });
+    });
+    expect(onVideo, 'a sound control is outside the corner video');
+    await w.click('#pip-volume');
+    const v = await frames(w, '#pip-video');
+    expect(!v.muted && Math.abs(v.volume - 0.5) < 0.05, `after the dial: ${JSON.stringify(v)}`);
+    expect((await w.getAttribute('#pip-unmute', 'aria-label')) === 'mute', 'the speaker is not named "mute" with the sound on');
+    return `${Math.round(v.volume * 100)}%`;
+  });
+
+  await step(`the chat button: lit, ${A}'s chat opens under the player and joins; off again on the second click`, async () => {
+    const before = await rect(w, '#pip-player');
+    await w.click('#pip-chat');
+    await w.waitForSelector('#pip-player #chat', { timeout: 5000 });
+    expect((await w.getAttribute('#pip-chat', 'aria-pressed')) === 'true', 'the chat button is not pressed');
+    const open = await rect(w, '#pip-player');
+    expect(open.height > before.height + 200 && near(open.bottom, before.bottom), `the player did not grow upward: ${at(before)} -> ${at(open)}`);
+    await w.fill('#chat-nick', 'pipviewer');
+    await w.click('#chat-join');
+    await w.waitForFunction(() => /live/.test(document.querySelector('#pip-player #chat-count')?.textContent || ''), null, { timeout: 10000 });
+    const count = (await w.textContent('#pip-player #chat-count')).trim();
+    await w.click('#pip-chat');
+    await w.waitForSelector('#pip-player #chat', { state: 'detached', timeout: 5000 });
+    expect((await w.getAttribute('#pip-chat', 'aria-pressed')) === null, 'the chat button is still pressed');
+    return `"${count}", then closed`;
   });
 
   await step('drag the player by its video: it follows, and the drop is not a click back to the page', async () => {

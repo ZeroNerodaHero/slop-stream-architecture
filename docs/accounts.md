@@ -18,13 +18,13 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  anon[no account] --> box[the name box in the header. lives in your browser]
+  anon[no account] --> box[the name box in the bottom left panel. lives in your browser]
   box --> chat[your chat nick]
   box --> live[your go-live default]
   acct[account] --> yours[the name is yours. nobody else can use it]
 ```
 
-- **without an account** you are the name in the header. it is in localstorage. any name nobody owns is free: go live as it, chat as it, save its bio.
+- **without an account** you are the name in the bottom left panel. it is in localstorage. any name nobody owns is free: go live as it, chat as it, save its bio.
 - **with an account** the name is claimed. only your login can go live as it, change its bio, or talk as it in chat. an anonymous nick equal to a claimed name is refused. a `✓` next to a name on home, on watch and in chat means a login is behind it.
 - a name someone used without an account (a `streamers` row with no hash) is claimed by the first signup. the bio stays.
 
@@ -124,7 +124,7 @@ changed:
 ## pages
 
 - `/login`, `/signup`: name, password, one button, a show toggle instead of a repeat box. `?next=` says where to land. the inputs carry `autocomplete="username"`, `"current-password"`, `"new-password"`, which is what makes password managers offer to save; they do more for the breach story than any code here.
-- the header on every page: the name box + `log in`, or your name + `✓` + `log out`.
+- the panel pinned to the bottom left of every page, discord style: a picture made from the name (a coloured square with the first letter; no uploads yet), then the name box + `log in`, or your name + `✓` + `log out`, and the `go live` button (not on `/live` itself).
 - go live: a login has the name box filled and locked.
 - chat: a login has no nick box; its lines show `✓`.
 - atoms: `meAtom` (`/api/me` once per page load; `undefined` until it answers; a failed ask is nobody for now and asked again on the next page, never remembered as "nobody"), actions `login`, `signup`, `logout`, `forgetMe` (the cookie died elsewhere: back to nobody). fetch sends the cookie on its own. nothing about the login is ever in localstorage.
@@ -134,7 +134,7 @@ changed:
 - `api/src/auth.rs`: hash, verify, token, cookie, the `Me` extractor (cookie → name), `may_act_as` (the one rule), rate limits, the six routes, `api passwd`.
 - `api/src/main.rs`: schema, the two guards, `verified` on the lists, the `passwd` dispatch.
 - `api/src/chat.rs`: `Me` on the handshake, claimed nicks refused, `verified` on lines.
-- `frontend`: `AuthPage`, `UserBar` (in `PageFrame`), `auth-atoms.ts`, the go-live seed, the chat changes, the `✓`s.
+- `frontend`: `AuthPage`, `UserPanel` (mounted once by the router's `Shell`), `auth-atoms.ts`, the go-live seed, the chat changes, the `✓`s.
 - `test/auth.js`: sixteen steps, see `spec.md`.
 - `video/src/main.rs`: `owns_stream`, the one call to the api's heartbeat that makes the socket honour the gate. the api decides; video checks that it did. (no signing: one http round trip on the same box is simpler than a second secret.)
 
