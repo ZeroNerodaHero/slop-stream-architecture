@@ -36,8 +36,13 @@ import { TestBadge } from '@/shared-components/TestBadge';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
 
-/** A control over the video: the same dark glass as the corner player's × and the cards' live chip. */
-const CHIP = 'border border-white/10 bg-black/70 text-sm font-semibold text-textPrimary backdrop-blur-sm transition-colors hover:border-primaryBlue';
+/** A control over the video: the same dark glass as the corner player's × and the cards' live chip, 32px tall. */
+const CHIP = 'flex h-8 items-center border border-white/10 bg-black/70 text-sm font-semibold text-textPrimary backdrop-blur-sm transition-colors duration-150';
+/** A chip that is itself the button: blue stroke and blue glyph on hover, like every button on the site, over solid black. */
+const CHIP_BUTTON = cn(CHIP, 'hover:border-primaryBlue hover:bg-black/90 hover:text-primaryBlue');
+/** The name of an icon-only control, above it, while the pointer or keyboard focus is on it (`group/pip` is the control). */
+const TIP =
+  'pointer-events-none absolute bottom-full right-0 mb-2 whitespace-nowrap border border-white/10 bg-black/90 px-2 py-1 text-xs font-semibold text-textPrimary opacity-0 transition-opacity duration-150 group-hover/pip:opacity-100 group-focus-visible/pip:opacity-100';
 /**
  * The dial. A flat 4px track with a square thumb (the theme has no round shapes); the part up
  * to the thumb is filled through an inline gradient, since no browser draws that on its own.
@@ -48,6 +53,16 @@ const DIAL = cn(
   '[&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-none [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-textPrimary',
   '[&:focus-visible::-webkit-slider-thumb]:bg-primaryBlue [&:focus-visible::-moz-range-thumb]:bg-primaryBlue'
 );
+
+/** The usual picture in picture glyph: a screen with a small picture in its bottom right corner. Square, like the rest. */
+function PipIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2}>
+      <path d="M3 5h18v14H3z" />
+      <path d="M11 11h8v6h-8z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
 
 export function WatchPage() {
   const params = useParams<{ name: string }>();
@@ -133,13 +148,21 @@ export function WatchPage() {
             {phase !== 'bad-name' && (
               <div
                 className={cn(
-                  'absolute inset-x-0 bottom-0 flex items-center gap-3 p-3 transition-opacity duration-150',
-                  !muted && 'opacity-0 group-hover:opacity-100 [&:has(:focus-visible)]:opacity-100 [@media(hover:none)]:opacity-100'
+                  'absolute inset-x-0 bottom-0 flex items-center gap-3 p-3 transition-[opacity,transform] duration-200',
+                  // hidden: faded and 4px low, and it waits 300ms before going (a pointer that strays off the
+                  // video for a moment does not make the controls blink). shown: at once.
+                  !muted &&
+                    'translate-y-1 opacity-0 delay-300 group-hover:translate-y-0 group-hover:opacity-100 group-hover:delay-0 [&:has(:focus-visible)]:translate-y-0 [&:has(:focus-visible)]:opacity-100 [&:has(:focus-visible)]:delay-0 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:opacity-100'
                 )}
               >
                 {canHear && (
-                  <div className={cn(CHIP, 'flex items-center gap-3 pr-3')}>
-                    <button id="unmute" type="button" className="px-3 py-1.5 hover:text-primaryBlue" onClick={() => (muted ? unmuteVideo : muteVideo)(videoRef.current)}>
+                  <div className={cn(CHIP, 'gap-3 pr-3 hover:border-white/30')}>
+                    <button
+                      id="unmute"
+                      type="button"
+                      className="h-full px-3 transition-colors duration-150 hover:text-primaryBlue"
+                      onClick={() => (muted ? unmuteVideo : muteVideo)(videoRef.current)}
+                    >
                       {muted ? 'unmute' : 'mute'}
                     </button>
                     <input
@@ -162,11 +185,14 @@ export function WatchPage() {
                 <button
                   id="pip"
                   type="button"
-                  title="keeps playing in a corner while you look around the site"
+                  aria-label="picture in picture"
                   onClick={toCorner}
-                  className={cn(CHIP, 'ml-auto px-3 py-1.5')}
+                  className={cn(CHIP_BUTTON, 'group/pip relative ml-auto w-8 justify-center')}
                 >
-                  picture in picture
+                  <PipIcon />
+                  <span role="tooltip" className={TIP}>
+                    picture in picture
+                  </span>
                 </button>
               </div>
             )}
