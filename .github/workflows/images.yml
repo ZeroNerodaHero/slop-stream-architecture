@@ -8,9 +8,10 @@
 # built natively on 4 cores. the dependency layers are cached between runs (type=gha), so a
 # source change is a few minutes; a Cargo.lock change rebuilds them once.
 #
-# the GITHUB_TOKEN pushes the packages; no personal token anywhere. the first push creates
-# each package private: make the four public once (github › your profile › Packages › stream-x ›
-# Package settings › Change visibility) so the box pulls without a login.
+# the GITHUB_TOKEN pushes the packages; no personal token anywhere. packages a workflow
+# creates take the repo's visibility, so from a public repo they are public from the first
+# push and the box pulls without a login. (a push from a laptop with ./ship.sh makes them
+# private instead; then: github › your profile › Packages › stream-x › Package settings › Change visibility.)
 name: images
 
 on:

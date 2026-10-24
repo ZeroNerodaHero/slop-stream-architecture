@@ -162,5 +162,5 @@ case "$MODE" in
   push)
     note "on the box:  ./deploy.sh --pull --images $TAG"
     note "first time there: IMAGES=$IMAGES goes in its .env (deploy.sh writes it when given on the command line:  IMAGES=$IMAGES ./deploy.sh --images $TAG)"
-    note "a 'denied' on the pull means the packages are still private: github › your profile › Packages › each stream-x › Package settings › Change visibility › public" ;;
+    note "a 'denied' on the pull means a package a laptop push created is private (the action's are public by themselves): github › your profile › Packages › stream-x › Package settings › Change visibility › public" ;;
 esac

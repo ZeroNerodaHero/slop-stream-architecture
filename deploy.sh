@@ -11,9 +11,10 @@
 #   ./deploy.sh --prune-deploy    first give the disk back what the builds took (docker's build
 #                                 cache, untagged images), then deploy as asked. for the small box
 #                                 that says "only 2664MB free". goes with --pull and services
-#   ./deploy.sh --images TAG      no build on this machine: start the images ./ship.sh built on a
-#                                 laptop and sent here (--to) or pushed to a registry (IMAGES= in
-#                                 .env). goes with --pull and services. a 1 GB box can run this
+#   ./deploy.sh --images [TAG]    no build on this machine: the images the github action pushed (every
+#                                 push to main) or ./ship.sh made, at that commit. IMAGES= in .env names
+#                                 the registry; sent with ./ship.sh --to they are already here. a box that
+#                                 once did this keeps doing it on a plain ./deploy.sh; --build builds again
 #   ./deploy.sh passwd billy      a new password for an account (there is no email reset)
 #   PUBLIC_IP=10.0.0.5 ./deploy.sh
 #
@@ -823,14 +824,27 @@ usage() {
     N="$(tput sgr0 2>/dev/null || printf '\033[0m')"
   fi
   cat <<EOF
-${B}usage:${N} ./deploy.sh [--pull] [--prune-deploy] [--images TAG] [PUBLIC_IP] [frontend|api|video|dummy ...]
+${B}usage:${N} ./deploy.sh [--pull] [--prune-deploy] [--images [TAG] | --build] [PUBLIC_IP] [frontend|api|video|dummy ...]
        ./deploy.sh passwd <name>
 
 ${B}what to deploy${N}
   ${B}(nothing named)${N}           full deploy: machine setup, every image, docker compose up
-  ${B}frontend api video dummy${N}  rebuild just these and swap their containers (chat moves with api),
+  ${B}frontend api video dummy${N}  just these: new image, swap their containers (chat moves with api),
                             then check them: running and healthy, or exit non-zero
   ${B}PUBLIC_IP${N}                 use this ip (full deploy only). otherwise: \$PUBLIC_IP > .env > auto-detect
+
+${B}where the images come from${N}
+  a box that builds its own compiles the rust here: an hour on a small machine, 4 GB of ram, 8 GB of
+  disk. a box that gets them from elsewhere (the github action on every push to main, or ./ship.sh
+  from a laptop) pulls or finds them and builds nothing. which one this box is lives in .env: IMAGES
+  (a registry) or TAG (a shipped tag) set means "from elsewhere", and a plain ./deploy.sh then means
+  --images. empty means it builds, as it always has.
+  ${B}--images [TAG]${N}            from elsewhere, TAG being the commit (what the action and ./ship.sh tag with;
+                            default: the commit this checkout is at, so after --pull the one just pulled).
+                            IMAGES=ghcr.io/<you>/ in .env or the environment names the registry; sent here
+                            by ./ship.sh --to, no IMAGES is needed. no 4 GB floor, no swapfile: 1 GB runs it
+  ${B}--build${N}                   build here, on a box that has been getting images from elsewhere. clears
+                            IMAGES and TAG in .env: from now on it builds its own
 
 ${B}flags${N}
   ${B}--pull${N}                    git pull --ff-only first. with no services named, redeploy what changed
@@ -840,12 +854,6 @@ ${B}flags${N}
                             docker's build cache (every project's on this machine; each comes
                             back on its next build) and untagged images. for the box that says
                             "only 2664MB free". volumes, containers and the swapfile stay
-  ${B}--images TAG${N}              build nothing here: start the images ./ship.sh built on a laptop, TAG
-                            being the commit it prints. sent here with ./ship.sh --to <this box>
-                            they are already in docker; pushed to a registry they are pulled
-                            (IMAGES=ghcr.io/<you>/ in .env or the environment). TAG and IMAGES
-                            are written to .env so a plain compose keeps using them. no 4 GB
-                            floor, no swapfile: a 1 GB box runs the stack, it just could not build it
 
 ${B}other${N}
   ${B}passwd <name>${N}             print a new random password for that account. the only reset there is
@@ -859,8 +867,8 @@ ${B}notes${N}
 EOF
 }
 
-parse_args() {   # sets IP_ARG PULL PRUNE IMAGES_MODE TAG TARGETS PASSWD_NAME
-  IP_ARG=""; PULL=0; PRUNE=0; IMAGES_MODE=0; TAG="${TAG:-}"; TARGETS=(); PASSWD_NAME=""
+parse_args() {   # sets IP_ARG PULL PRUNE IMAGES_MODE BUILD_MODE TAG TARGETS PASSWD_NAME
+  IP_ARG=""; PULL=0; PRUNE=0; IMAGES_MODE=0; BUILD_MODE=0; TAG="${TAG:-}"; TARGETS=(); PASSWD_NAME=""
   local a want_name=0 want_tag=0
   for a in "$@"; do
     if [ "$want_name" = 1 ]; then PASSWD_NAME="$a"; want_name=0; continue; fi
@@ -878,6 +886,7 @@ parse_args() {   # sets IP_ARG PULL PRUNE IMAGES_MODE TAG TARGETS PASSWD_NAME
       --prune-deploy) PRUNE=1 ;;
       --images) IMAGES_MODE=1; want_tag=1 ;;
       --images=*) IMAGES_MODE=1; TAG="${a#--images=}" ;;
+      --build) BUILD_MODE=1 ;;
       passwd) want_name=1 ;;
       frontend|api|video|dummy) TARGETS+=("$a") ;;
       pages) TARGETS+=("frontend") ;;
@@ -889,9 +898,10 @@ parse_args() {   # sets IP_ARG PULL PRUNE IMAGES_MODE TAG TARGETS PASSWD_NAME
     esac
   done
   if [ "$want_name" = 1 ]; then die "usage: ./deploy.sh passwd <name>"; fi
-  if [ -n "$PASSWD_NAME" ] && { [ "$PULL" = 1 ] || [ "$PRUNE" = 1 ] || [ "$IMAGES_MODE" = 1 ] || [ -n "$IP_ARG" ] || [ ${#TARGETS[@]} -gt 0 ]; }; then
+  if [ -n "$PASSWD_NAME" ] && { [ "$PULL" = 1 ] || [ "$PRUNE" = 1 ] || [ "$IMAGES_MODE" = 1 ] || [ "$BUILD_MODE" = 1 ] || [ -n "$IP_ARG" ] || [ ${#TARGETS[@]} -gt 0 ]; }; then
     die "passwd goes alone: ./deploy.sh passwd $PASSWD_NAME"
   fi
+  if [ "$IMAGES_MODE" = 1 ] && [ "$BUILD_MODE" = 1 ]; then die "--images and --build: pick one"; fi
   if [ -n "$IP_ARG" ] && [ ${#TARGETS[@]} -gt 0 ]; then
     die "changing the ip touches the cert, caddy and video. run a full deploy: ./deploy.sh $IP_ARG"
   fi
@@ -903,29 +913,57 @@ load_public_ip_from_env() {
   export PUBLIC_IP
 }
 
-# --images: where the images come from, and which. IMAGES from the environment, else
-# .env: a registry prefix (a missing trailing / is added) to pull from, or empty when
+# which way this run gets its images. --images and --build say so outright. with neither,
+# a box whose .env names a registry (IMAGES) or a shipped tag (TAG) got its images from
+# elsewhere last time and does again: a forgotten flag must not start an hour of compiling.
+# a box with neither builds, as it always has.
+decide_mode() {
+  [ "$IMAGES_MODE" = 0 ] && [ "$BUILD_MODE" = 0 ] || return 0
+  if [ -n "$(env_file_value IMAGES)$(env_file_value TAG)" ]; then
+    IMAGES_MODE=1
+    IMPLIED_IMAGES=1
+  fi
+}
+IMPLIED_IMAGES=0
+
+# where the images come from, and which. IMAGES from the environment, else .env: a
+# registry prefix (a missing trailing / is added) to pull from, or empty when
 # `./ship.sh --to` already put them into docker here. TAG from the command line, else
-# the environment, else .env; it has to be known: `latest` is nothing ship.sh --to
-# makes, and a guess would start the wrong images. both are exported so compose
-# resolves ${IMAGES:-}stream-x:${TAG:-latest} to those names, and written to .env so
-# a `docker compose up -d` by hand later starts the same images and not a build.
+# the environment, else the commit this checkout is at: what ./ship.sh and the github
+# action tag with, and after --pull the commit just pulled. the TAG in .env is only the
+# record of the last run, never a default (it would redeploy the old images after a pull).
+# both are exported so compose resolves ${IMAGES:-}stream-x:${TAG:-latest} to those
+# names, and written to .env so a `docker compose up -d` by hand later starts the same
+# images and not a build.
 setup_images_mode() {
   IMAGES="${IMAGES:-$(env_file_value IMAGES)}"
   [ -z "$IMAGES" ] || IMAGES="${IMAGES%/}/"
-  # no tag named: the commit this checkout is at, which is what ./ship.sh and the github
-  # action tag their images with. after --pull that is the commit just pulled.
   if [ -z "$TAG" ]; then
     TAG="$(git rev-parse --short HEAD 2>/dev/null || true)"
-    [ -n "$TAG" ] && note "no tag given: using this checkout's commit, $TAG"
+    [ -n "$TAG" ] && note "no tag given: this checkout's commit, $TAG"
   fi
   [ -n "$TAG" ] || die "--images needs the tag ./ship.sh printed:  ./deploy.sh --images <tag>   (what is here: $("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep '^stream-' | tr '\n' ' ' || true))"
+  [ "$IMPLIED_IMAGES" = 0 ] || note "this box runs images from elsewhere ($ENV_FILE names ${IMAGES:-a shipped tag}), so no build here. ./deploy.sh --build builds here instead"
   export IMAGES TAG
   UP_FLAGS=(--no-build)
   set_env_key IMAGES "$IMAGES"
   set_env_key TAG "$TAG"
   if [ -n "$IMAGES" ]; then say "images from $IMAGES, tag $TAG   (written to $ENV_FILE; empty IMAGES and TAG there go back to building here)"
   else say "images sent here by ./ship.sh, tag $TAG   (TAG written to $ENV_FILE; empty there goes back to building here)"; fi
+}
+
+# a build here after an --images deploy: the images are made on this machine again, so
+# .env stops naming a registry and a tag (compose would otherwise put the registry's
+# name on a local build). a stray IMAGES or TAG in the shell is ignored the same way.
+leave_images_mode() {
+  local had_i had_t
+  had_i="$(env_file_value IMAGES)"; had_t="$(env_file_value TAG)"
+  if [ -n "$had_i$had_t" ]; then
+    note "this machine ran ${had_i:-images sent here} at tag ${had_t:-?}; --build makes this a box that builds its own again, so IMAGES and TAG in $ENV_FILE are cleared"
+    set_env_key IMAGES ""
+    set_env_key TAG ""
+  fi
+  export IMAGES="" TAG=""
 }
 
 # ---- 8. health ---------------------------------------------------------------
@@ -1005,7 +1043,7 @@ full_deploy() {
   open_firewall
   write_env
   pick_env_name
-  [ "$IMAGES_MODE" = 0 ] || setup_images_mode   # after write_env, which rewrites .env
+  if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else leave_images_mode; fi   # after write_env, which rewrites .env
   compose_up
   local ok=1
   wait_for_health || ok=0
@@ -1024,7 +1062,7 @@ partial_deploy() {
   ensure_swap
   pick_build_jobs
   refresh_env
-  [ "$IMAGES_MODE" = 0 ] || setup_images_mode
+  if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else leave_images_mode; fi
   say "redeploying: ${TARGETS[*]}   (PUBLIC_IP=$PUBLIC_IP from $ENV_FILE, $([ "$IMAGES_MODE" = 1 ] && echo "images $IMAGES tag $TAG" || echo "BUILD=$BUILD"))"
   redeploy_targets
   local -a swapped=(); read -r -a swapped <<< "$(swapped_containers)" || true
@@ -1056,6 +1094,7 @@ main() {
   [ -f docker-compose.yml ] || die "docker-compose.yml not found next to deploy.sh"
   ORIGINAL_ARGS=("$@")
   parse_args "$@"
+  decide_mode
 
   if [ -n "$PASSWD_NAME" ]; then
     passwd_account "$PASSWD_NAME"
