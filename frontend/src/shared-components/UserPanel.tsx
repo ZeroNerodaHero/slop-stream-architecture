@@ -16,11 +16,11 @@ const ACTION = 'shrink-0 text-sm text-textSecondary underline-offset-2 hover:tex
 /**
  * Who you are, pinned to the bottom left corner of every page the way discord does it: a
  * picture, your name in bold, a small line under it saying how you are here, and the actions
- * on the right. Logged in: your account name, a ✓ and a log out. Not logged in: a name box
- * (localstorage, used in chat and as the go-live default) that reads as plain text until you
- * point at it, and a link to log in. Nobody has to. "go live" is here too, on every page but
- * its own. The picture is made from the name (GeneratedAvatar) for now; the ids are the ones
- * the tests key on.
+ * on the right. Logged in: your account name, a ✓, and log out under it. Not logged in: a
+ * name box (localstorage, used in chat and as the go-live default) that reads as plain text
+ * until you point at it, with sign up and log in under it. Nobody has to. "go live" is the one
+ * thing on the right, on every page but its own. The picture is made from the name
+ * (GeneratedAvatar) for now; the ids are the ones the tests key on.
  */
 export function UserPanel() {
   const me = useAtomValue(meAtom);
@@ -35,6 +35,7 @@ export function UserPanel() {
   }, []);
 
   if (me === undefined) return null;
+  const next = encodeURIComponent(pathname);
   const onLivePage = pathname.replace(/\/$/, '') === '/live';
   const goLive = !onLivePage && (
     <Link id="go-live" to="/live" className={buttonClassName('primary', 'px-3 py-1.5 text-sm')}>
@@ -61,16 +62,17 @@ export function UserPanel() {
               <span id="me" className="truncate font-semibold">
                 {me}
               </span>
-              <span className="shrink-0 text-increase" title="logged in">
+              <span className="shrink-0 text-increase" title="logged in: this name is yours">
                 ✓
               </span>
             </span>
-            <span className="block text-sm leading-tight text-textSecondary">logged in</span>
+            <span className="block text-sm leading-tight">
+              <button id="logout" type="button" onClick={() => void logout()} className={ACTION}>
+                log out
+              </button>
+            </span>
           </span>
           {goLive}
-          <button id="logout" type="button" onClick={() => void logout()} className={ACTION}>
-            log out
-          </button>
         </>
       ) : (
         <>
@@ -109,12 +111,20 @@ export function UserPanel() {
                 ✎
               </span>
             </span>
-            <span className="block text-sm leading-tight text-textSecondary">no account</span>
+            {/* the way to make the name yours, right under it */}
+            <span className="block text-sm leading-tight text-textSecondary">
+              <Link id="signup-link" to={`/signup?next=${next}`} className={ACTION}>
+                sign up
+              </Link>
+              <span aria-hidden className="mx-1.5 text-textTertiary">
+                ·
+              </span>
+              <Link id="login-link" to={`/login?next=${next}`} className={ACTION}>
+                log in
+              </Link>
+            </span>
           </span>
           {goLive}
-          <Link id="login-link" to={`/login?next=${encodeURIComponent(pathname)}`} className={ACTION}>
-            log in
-          </Link>
         </>
       )}
     </aside>

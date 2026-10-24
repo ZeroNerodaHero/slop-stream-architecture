@@ -124,7 +124,7 @@ changed:
 ## pages
 
 - `/login`, `/signup`: name, password, one button, a show toggle instead of a repeat box. `?next=` says where to land. the inputs carry `autocomplete="username"`, `"current-password"`, `"new-password"`, which is what makes password managers offer to save; they do more for the breach story than any code here.
-- the panel pinned to the bottom left of every page, discord style: a picture made from the name (a coloured square with the first letter; no uploads yet), then the name box + `log in`, or your name + `✓` + `log out`, and the `go live` button (not on `/live` itself).
+- the panel pinned to the bottom left of every page, discord style: a picture made from the name (a coloured square with the first letter; no uploads yet), then the name box with `sign up · log in` under it, or your name + `✓` with `log out` under it, and the `go live` button on the right (not on `/live` itself).
 - go live: a login has the name box filled and locked.
 - chat: a login has no nick box; its lines show `✓`.
 - atoms: `meAtom` (`/api/me` once per page load; `undefined` until it answers; a failed ask is nobody for now and asked again on the next page, never remembered as "nobody"), actions `login`, `signup`, `logout`, `forgetMe` (the cookie died elsewhere: back to nobody). fetch sends the cookie on its own. nothing about the login is ever in localstorage.
