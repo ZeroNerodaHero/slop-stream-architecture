@@ -181,6 +181,8 @@ export function MiniPlayer() {
     const el = root.current;
     if (e.button !== 0 || stop.current || !el) return;
     dragged.current = false;
+    // the volume dial sits on the video and drags on its own: a press on it is not a grip on the player
+    if ((e.target as Element).closest('input')) return;
     const g: Gesture = { kind, sx, sy, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, rect: el.getBoundingClientRect(), moved: false };
     const move = (ev: PointerEvent) => {
       if (ev.pointerId !== g.pointerId) return;
@@ -195,8 +197,13 @@ export function MiniPlayer() {
     };
     const end = (ev: PointerEvent) => {
       if (ev.pointerId !== g.pointerId) return;
-      dragged.current = g.moved;
       stop.current?.();
+      if (!g.moved) return;
+      // the click a mouse release makes comes in this same task, so it is swallowed; a finger that
+      // moved makes none, and a cancelled drag none either. Disarmed right after, so no stale arm
+      // eats the next tap on the chat under the player or an enter on a focused ×.
+      dragged.current = true;
+      setTimeout(() => (dragged.current = false), 0);
     };
     stop.current = () => {
       stop.current = null;

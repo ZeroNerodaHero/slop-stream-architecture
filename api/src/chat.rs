@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio::sync::{broadcast, watch, Mutex};
 
-use crate::auth::{client_ip, is_claimed, Me};
+use crate::auth::{client_ip, is_claimed, whoami};
 use crate::{owns_session, Name, Owner};
 
 const HISTORY_LINES: usize = 200;
@@ -50,6 +50,12 @@ const PING_EVERY: Duration = Duration::from_secs(30);
 const IDLE_LIMIT: Duration = Duration::from_secs(90);
 /// After SIGTERM: how long `run` waits for the sockets to say goodbye.
 const DRAIN_LIMIT: Duration = Duration::from_secs(2);
+/// A frame that cannot be written in this long is a peer that stopped reading (a frozen
+/// tab, a suspended laptop): dropped, like one that stopped answering pings. Otherwise
+/// the handler would sit in the write for as long as the kernel keeps the socket.
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+/// The history is up to 200 lines in one frame: a slow link gets longer for that one.
+const HISTORY_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 struct ChatState {
@@ -59,6 +65,8 @@ struct ChatState {
     rooms: Arc<Mutex<HashMap<String, Room>>>,
     /// Flips to true on SIGTERM. Every socket then sends a close frame and leaves.
     shutdown: watch::Receiver<bool>,
+    /// Nicks starting with this are the fake streams' names: nobody's to wear.
+    dummy_prefix: String,
 }
 
 impl FromRef<ChatState> for PgPool {
@@ -95,14 +103,17 @@ struct Line {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum In {
-    Hello {
-        nick: Option<String>,
-        session: Option<i64>,
-        token: Option<i64>,
-    },
-    Say {
-        text: String,
-    },
+    Hello(Hello),
+    Say { text: String },
+}
+
+/// The first frame: a nick for a viewer, the go-live grant for the streamer. Kept for the
+/// socket's life, since a socket admitted with the database down is identified later.
+#[derive(Deserialize)]
+struct Hello {
+    nick: Option<String>,
+    session: Option<i64>,
+    token: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -124,6 +135,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         client,
         rooms: Arc::new(Mutex::new(HashMap::new())),
         shutdown,
+        dummy_prefix: std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into()),
     };
     let rooms = state.rooms.clone();
 
@@ -151,66 +163,107 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The browser sends the login cookie with the websocket handshake, so `Me` works here too.
-async fn ws(State(s): State<ChatState>, Name(name): Name, Me(me): Me, headers: HeaderMap, upgrade: WebSocketUpgrade) -> impl IntoResponse {
+/// The browser sends the login cookie with the websocket handshake; `handle` reads it from
+/// the headers when it needs it. Not through the `Me` extractor: that turns a database
+/// error into a 500 before the upgrade, and reading a room needs no database at all.
+async fn ws(State(s): State<ChatState>, Name(name): Name, headers: HeaderMap, upgrade: WebSocketUpgrade) -> impl IntoResponse {
     let ip = client_ip(&headers);
     upgrade
         .max_message_size(MAX_FRAME_BYTES)
         .max_frame_size(MAX_FRAME_BYTES)
-        .on_upgrade(move |socket| handle(s, name, ip, me, socket))
+        .on_upgrade(move |socket| handle(s, name, ip, headers, socket))
 }
 
-async fn handle(s: ChatState, name: String, ip: String, me: Option<String>, mut socket: WebSocket) {
-    // 1. hello: who is talking
-    let first = match tokio::time::timeout(HELLO_TIMEOUT, socket.recv()).await {
-        Ok(Some(Ok(Message::Text(text)))) => text.to_string(),
-        _ => return,
+/// Who a socket speaks as, once the database has said.
+struct Who {
+    from: String,
+    /// The one who went live (session + token), or the account the room is named after.
+    streamer: bool,
+    /// Said by a login, so `from` really is that account.
+    verified: bool,
+}
+
+enum Unknown {
+    /// A hello that can never do: said once, and the socket is closed.
+    Refused(&'static str),
+    /// The database did not answer. A viewer for now, asked again when it wants to speak.
+    Busy,
+}
+
+/// The hello and the cookie against the database. Every question in here is about
+/// speaking: whose line it would be and what marks it carries. Reading needs none of
+/// them, so a database that does not answer is `Busy`, not a refusal: the socket gets the
+/// room and its lines, and is asked again on its first `say` (docs/chat.md: a socket the
+/// database cannot vouch for is a plain viewer). What would be a lie is refused outright:
+/// a claimed name on an anonymous nick, a reserved one, a nick that is not one.
+async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello) -> Result<Who, Unknown> {
+    // (no cookie is `Ok(None)` without a query, so an error here is a cookie that could not be read)
+    let me = match whoami(&s.db, headers).await {
+        Ok(me) => me,
+        Err(e) => {
+            log::warn!("{room}: cannot read the login: {e}");
+            return Err(Unknown::Busy);
+        }
     };
-    let Ok(In::Hello { nick, session, token }) = serde_json::from_str::<In>(&first) else {
-        let _ = send(&mut socket, &Out::Error { error: "say hello first" }).await;
-        return;
-    };
-    let owns = match (session, token) {
-        (Some(session), Some(token)) => owns_session(&s.db, &name, &Owner { session, token }).await.unwrap_or_else(|e| {
-            // database down: this socket talks as a viewer, not as the streamer
-            log::warn!("{name}: cannot check the streamer's session: {e}");
-            false
-        }),
+    let owns = match (hello.session, hello.token) {
+        (Some(session), Some(token)) => match owns_session(&s.db, room, &Owner { session, token }).await {
+            Ok(owns) => owns,
+            Err(e) => {
+                log::warn!("{room}: cannot check the streamer's session: {e}");
+                return Err(Unknown::Busy);
+            }
+        },
         _ => false,
     };
-    // the one who went live, or the account the room is named after
-    let streamer = owns || me.as_deref() == Some(name.as_str());
+    let streamer = owns || me.as_deref() == Some(room);
     let from = if streamer {
-        name.clone()
+        room.to_owned()
     } else if let Some(me) = me.clone() {
         me
     } else {
-        match nick.as_deref().map(clean_nick).filter(|n| valid_nick(n)) {
-            Some(nick) => {
-                match is_claimed(&s.db, &nick.to_lowercase()).await {
-                    Ok(false) => {}
-                    Ok(true) => {
-                        let _ = send(&mut socket, &Out::Error { error: "that name has an account. log in as it, or pick another" }).await;
-                        return;
-                    }
-                    Err(e) => {
-                        // fail closed: with the database down a claimed name must not be borrowable
-                        log::warn!("{name}: cannot check whether {nick} is claimed: {e}");
-                        let _ = send(&mut socket, &Out::Error { error: "chat is busy, try again" }).await;
-                        return;
-                    }
-                }
-                nick
-            }
-            None => {
-                let _ = send(&mut socket, &Out::Error { error: "bad nick. 1 to 24 letters, digits, _ -" }).await;
-                return;
+        let Some(nick) = hello.nick.as_deref().map(clean_nick).filter(|n| valid_nick(n)) else {
+            return Err(Unknown::Refused("bad nick. 1 to 24 letters, digits, _ -"));
+        };
+        let lower = nick.to_lowercase();
+        // the fake streams' names are nobody's: they can never be claimed, so the check
+        // below would hand them to anyone, badge and all
+        if lower.starts_with(&s.dummy_prefix) {
+            return Err(Unknown::Refused("that nick belongs to the fake streams. pick another"));
+        }
+        match is_claimed(&s.db, &lower).await {
+            Ok(false) => nick,
+            Ok(true) => return Err(Unknown::Refused("that name has an account. log in as it, or pick another")),
+            Err(e) => {
+                // fail closed: with the database down a claimed name must not be borrowable
+                log::warn!("{room}: cannot check whether {nick} is claimed: {e}");
+                return Err(Unknown::Busy);
             }
         }
     };
     // the login behind this socket is the name it speaks as. not just "logged in": the
     // one who went live speaks as the room while logged in as somebody else, or as nobody
     let verified = me.as_deref() == Some(from.as_str());
+    Ok(Who { from, streamer, verified })
+}
+
+async fn handle(s: ChatState, name: String, ip: String, headers: HeaderMap, mut socket: WebSocket) {
+    // 1. hello: who is talking
+    let first = match tokio::time::timeout(HELLO_TIMEOUT, socket.recv()).await {
+        Ok(Some(Ok(Message::Text(text)))) => text.to_string(),
+        _ => return,
+    };
+    let Ok(In::Hello(hello)) = serde_json::from_str::<In>(&first) else {
+        let _ = send(&mut socket, &Out::Error { error: "say hello first" }).await;
+        return;
+    };
+    let mut who = match identify(&s, &name, &headers, &hello).await {
+        Ok(who) => Some(who),
+        Err(Unknown::Refused(why)) => {
+            let _ = send(&mut socket, &Out::Error { error: why }).await;
+            return;
+        }
+        Err(Unknown::Busy) => None,
+    };
 
     // 2. subscribe first, then load history, so nothing can fall between the two.
     //    Lines the history already covers are dropped from the live feed by id.
@@ -220,11 +273,17 @@ async fn handle(s: ChatState, name: String, ip: String, me: Option<String>, mut 
     };
     let history = history(&s, &name).await.unwrap_or_default();
     let mut last_seen = history.last().map(|l| id_parts(&l.id)).unwrap_or((0, 0));
-    if send(&mut socket, &Out::History { messages: &history }).await.is_err() {
+    // the one frame that can be big: 200 lines, so a slow link gets longer than for one line
+    if send_within(&mut socket, &Out::History { messages: &history }, HISTORY_TIMEOUT).await.is_err() {
         s.leave(&name, &ip).await;
         return;
     }
-    log::info!("{name}: {from} joined{}", if streamer { " (streamer)" } else { "" });
+    let shown = |who: &Option<Who>| match who {
+        Some(w) if w.streamer => format!("{} (streamer)", w.from),
+        Some(w) => w.from.clone(),
+        None => "somebody (database down, reading only)".to_owned(),
+    };
+    log::info!("{name}: {} joined", shown(&who));
 
     // 3. the loop: lines from the room out, lines from the viewer in, a ping now
     //    and then so a peer that vanished without a close frame is found out
@@ -258,13 +317,14 @@ async fn handle(s: ChatState, name: String, ip: String, me: Option<String>, mut 
             },
             _ = ping.tick() => {
                 if last_heard.elapsed() > IDLE_LIMIT {
-                    log::info!("{name}: {from} went silent, dropping");
+                    log::info!("{name}: {} went silent, dropping", shown(&who));
                     break;
                 }
-                if socket.send(Message::Ping(Bytes::new())).await.is_err() { break; }
+                if !matches!(tokio::time::timeout(SEND_TIMEOUT, socket.send(Message::Ping(Bytes::new()))).await, Ok(Ok(()))) { break; }
             }
             _ = shutdown.changed() => {
-                let _ = socket.send(Message::Close(Some(CloseFrame { code: 1001, reason: "chat restarting".into() }))).await;
+                let goodbye = Message::Close(Some(CloseFrame { code: 1001, reason: "chat restarting".into() }));
+                let _ = tokio::time::timeout(SEND_TIMEOUT, socket.send(goodbye)).await;
                 break;
             }
             incoming = socket.recv() => {
@@ -289,27 +349,54 @@ async fn handle(s: ChatState, name: String, ip: String, me: Option<String>, mut 
                     let _ = send(&mut socket, &Out::Error { error: "slow down" }).await;
                     continue;
                 }
+                // paid here, before the database is asked below: a `say` the database cannot
+                // vouch for yet costs its token like any other dropped line, so a socket
+                // admitted read-only cannot turn every frame into a query
                 bucket -= 1.0;
+                // admitted while the database was down: whose line this would be is asked now
+                if who.is_none() {
+                    match identify(&s, &name, &headers, &hello).await {
+                        Ok(w) => {
+                            who = Some(w);
+                            log::info!("{name}: the reader is {}", shown(&who));
+                        }
+                        Err(Unknown::Refused(why)) => {
+                            let _ = send(&mut socket, &Out::Error { error: why }).await;
+                            break;
+                        }
+                        Err(Unknown::Busy) => {
+                            let _ = send(&mut socket, &Out::Error { error: "chat is busy, try again" }).await;
+                            continue;
+                        }
+                    }
+                }
+                let Some(w) = who.as_ref() else { continue };
                 let mut r = s.redis.clone();
                 let fields = [
-                    ("from", from.as_str()),
+                    ("from", w.from.as_str()),
                     ("text", text.as_str()),
-                    ("streamer", if streamer { "1" } else { "0" }),
-                    ("v", if verified { "1" } else { "0" }),
+                    ("streamer", if w.streamer { "1" } else { "0" }),
+                    ("v", if w.verified { "1" } else { "0" }),
                 ];
-                let added: Result<Option<String>, _> = r.xadd_maxlen(&key, StreamMaxlen::Approx(KEEP_LINES), "*", &fields).await;
+                // the line and the room's ttl in one atomic round trip: a room whose first
+                // line landed but whose expire did not would otherwise live forever
+                let added: Result<(Option<String>, bool), _> = redis::pipe()
+                    .atomic()
+                    .xadd_maxlen(&key, StreamMaxlen::Approx(KEEP_LINES), "*", &fields)
+                    .expire(&key, ROOM_TTL_SECS)
+                    .query_async(&mut r)
+                    .await;
                 if let Err(e) = added {
                     log::warn!("{name}: xadd: {e}");
                     let _ = send(&mut socket, &Out::Error { error: "chat is down, try again" }).await;
                     continue;
                 }
-                let _: Result<bool, _> = r.expire(&key, ROOM_TTL_SECS).await;
             }
         }
     }
 
     s.leave(&name, &ip).await;
-    log::info!("{name}: {from} left");
+    log::info!("{name}: {} left", shown(&who));
 }
 
 impl ChatState {
@@ -525,8 +612,15 @@ fn is_combining(c: char) -> bool {
 }
 
 async fn send(socket: &mut WebSocket, out: &Out<'_>) -> Result<(), axum::Error> {
+    send_within(socket, out, SEND_TIMEOUT).await
+}
+
+async fn send_within(socket: &mut WebSocket, out: &Out<'_>, budget: Duration) -> Result<(), axum::Error> {
     let text = serde_json::to_string(out).unwrap_or_default();
-    socket.send(Message::Text(text.into())).await
+    match tokio::time::timeout(budget, socket.send(Message::Text(text.into()))).await {
+        Ok(sent) => sent,
+        Err(_) => Err(axum::Error::new("the peer stopped reading")),
+    }
 }
 
 #[cfg(test)]

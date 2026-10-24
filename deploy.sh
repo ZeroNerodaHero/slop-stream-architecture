@@ -3,9 +3,10 @@
 # deploy.sh — bring the stream lab up on this machine, or redeploy part of it.
 #
 #   ./deploy.sh                   everything. first time, or any time. the images come from the
-#                                 registry (ghcr.io/<you>/, from the git remote) at this commit:
+#                                 registry (ghcr.io/<you>/, from the git remote), named after the
+#                                 last commit that touched what they are built from (./image-paths):
 #                                 what the github action pushed. nothing is compiled here
-#   ./deploy.sh --pull            git pull, then the images for the commit just pulled
+#   ./deploy.sh --pull            git pull, then the images for the tree just pulled
 #   ./deploy.sh api               only the api (also: frontend, video, dummy): get its image, swap it
 #   ./deploy.sh --images TAG      a tag of your choosing, e.g. the one ./ship.sh --to printed
 #   ./deploy.sh --build           compile the images here instead (a laptop with uncommitted changes,
@@ -23,9 +24,9 @@
 # gets the pages image and the three rust images (api, video, dummy), starts
 # everything, waits for /api/health. Exits non-zero if the health check fails.
 # With --build the images are compiled here one at a time (several minutes, a
-# 2G swapfile is added on small boxes). The images carry BUILD (the commit), so
-# a full deploy restarts video whenever the commit moved since the last one:
-# every live stream ends, and the script says so before `up`. macOS (Docker
+# 2G swapfile is added on small boxes). The images carry BUILD (the commit they
+# are named after), so a full deploy restarts video whenever that moved since the
+# last one: every live stream ends, and the script says so before `up`. macOS (Docker
 # Desktop): same, minus install / swap / ufw; PUBLIC_IP comes from en0/en1.
 #
 # Partial run: keeps PUBLIC_IP from .env, gets (or builds) the named services'
@@ -128,6 +129,8 @@ set_env_key() {
 # the compose image name of a service, the way docker-compose.yml spells it:
 # ${IMAGES:-}stream-<service>:${TAG:-latest}. local builds: stream-video:latest.
 image_name() { printf '%sstream-%s:%s' "${IMAGES:-}" "$1" "${TAG:-latest}"; }
+# the names the four images have this run, one per line: what a prune must keep
+target_images() { local s; for s in pages api video dummy; do image_name "$s"; printf '\n'; done; }
 
 lan_ip() {   # linux: the address the default route leaves from, else nothing
   [ "$OS" = linux ] && have ip || return 0
@@ -361,9 +364,11 @@ prune_for_deploy() {
   say "giving the disk back what the builds took (--prune-deploy). ${before}MB free now"
   note "build cache:      $("${DOCKER[@]}" builder prune -af 2>&1 | tail -n 1 || echo "could not prune it")"
   note "untagged images:  $("${DOCKER[@]}" image prune -f 2>&1 | tail -n 1 || echo "could not prune them")"
-  # our own images from earlier ships or builds (stream-x:<old tag>) that no container runs
+  # our own images from earlier ships or builds (stream-x:<old tag>) that no container
+  # runs. not the four this run is about to start: nothing runs them yet, and the ones
+  # ./ship.sh --to just sent exist nowhere else
   old="$(comm -23 <("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^([^/]+/)*stream-[a-z]+:' | sort -u) \
-                 <("${DOCKER[@]}" ps -a --format '{{.Image}}' 2>/dev/null | sort -u) || true)"
+                 <({ "${DOCKER[@]}" ps -a --format '{{.Image}}' 2>/dev/null; target_images; } | sort -u) || true)"
   if [ -n "$old" ]; then
     # shellcheck disable=SC2086
     "${DOCKER[@]}" rmi $old >/dev/null 2>&1 || true
@@ -383,6 +388,7 @@ ensure_swap() {
   if [ "${total:-0}" -ge "$MIN_RAM_MB" ] || [ "${swap:-0}" -gt 0 ]; then return 0; fi
   say "${total:-?}MB RAM and no swap. adding a ${SWAP_SIZE_MB}MB swapfile so the rust build doesn't get killed"
   if ! can_root; then warn "no root/sudo; skipping swap. The build may run out of memory."; return 0; fi
+  local made=0
   if [ ! -e "$SWAP_FILE" ]; then
     # dd, not fallocate: btrfs and old xfs refuse fallocated swapfiles
     as_root touch "$SWAP_FILE"
@@ -390,13 +396,23 @@ ensure_swap() {
     as_root dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$SWAP_SIZE_MB" status=none
     as_root chmod 600 "$SWAP_FILE"
     as_root mkswap "$SWAP_FILE" >/dev/null
+    made=1
   fi
   if as_root swapon "$SWAP_FILE" 2>/dev/null; then
     note "swap is on for this session only (not in /etc/fstab; gone after reboot)."
     note "remove it now with:  sudo swapoff $SWAP_FILE && sudo rm $SWAP_FILE"
   else
-    warn "swapon $SWAP_FILE failed (container/VPS without swap support?). Continuing without swap."
-    as_root rm -f "$SWAP_FILE"
+    # what this run made goes. a file that was already here goes only when it is not a
+    # swapfile at all (a dd cut short by a ctrl-c or a full disk: no signature), else the
+    # next run would find it, fail the same way and build without swap for good; a real
+    # one is somebody's (swapped off by hand, in fstab for the next boot) and stays
+    # (the signature sits in the last 10 bytes of the first page, whatever the page size)
+    if [ "$made" = 1 ] || [ "$(as_root dd if="$SWAP_FILE" bs=1 skip=$(( $(getconf PAGESIZE 2>/dev/null || echo 4096) - 10 )) count=10 2>/dev/null)" != SWAPSPACE2 ]; then
+      warn "swapon $SWAP_FILE failed (container/VPS without swap support?); removed it. Continuing without swap."
+      as_root rm -f "$SWAP_FILE"
+    else
+      warn "swapon $SWAP_FILE failed, and it is a swapfile that was already here (swapped off by hand?): left alone. Continuing without swap."
+    fi
   fi
 }
 
@@ -550,6 +566,7 @@ build_one() {
     die "pulling $(image_name "$1") failed.
   'not found' / 'manifest unknown': nothing is pushed under tag $TAG yet. the github action builds it after a push to main
       (a few minutes: github.com/<you>/<repo>/actions), or ./ship.sh on the laptop pushes it. is the tag the commit you mean?
+      (the tag is the last commit that touched api/ video/ frontend/ Cargo.* .dockerignore or the workflow, not HEAD)
       images sent with ./ship.sh --to are named by the tag it printed:  ./deploy.sh --images <that tag>
   'denied' / 'unauthorized': the package is private. make it public (github.com → your profile → Packages → stream-$1 →
       Package settings → Change visibility), or log this machine in:  gh auth token | ${DOCKER[*]} login ghcr.io -u <you> --password-stdin   (token with read:packages)
@@ -704,10 +721,36 @@ redeploy_service() {   # api | video
 
 # the fake streams. video and api read the same password, so they are included:
 # compose only recreates them if that env actually changed.
+# one value from a running container's environment. empty when it is not running.
+# would an `up` swap this service for its image alone: the image its container runs (by
+# id: a re-sent -dirty tag has the same name and other bits) is not the one wanted. false
+# with no container (an up just starts it) and when the wanted image is not here yet.
+image_moved() {   # service (its container_name is the service name)
+  local running wanted
+  running="$("${DOCKER[@]}" inspect -f '{{.Image}}' "$1" 2>/dev/null || true)"
+  [ -n "$running" ] || return 1
+  wanted="$("${DOCKER[@]}" image inspect -f '{{.Id}}' "$(image_name "$1")" 2>/dev/null || true)"
+  [ -n "$wanted" ] && [ "$running" != "$wanted" ]
+}
+
+# the fake streams. video and api read the same password, so they go in the `up` and
+# compose recreates them if it changed: compose's own comparison, which reads .env the
+# way the containers were given it. in images mode only while the image they run is the
+# one wanted: once the images moved, the `up` would swap them for that as well, video
+# with every live stream and no warning; then a changed password is a ./deploy.sh api video.
 redeploy_dummy() {
   build_one dummy
-  say "swapping the dummy container (video and api only if DUMMY_PASSWORD changed)"
-  "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} dummy video api
+  local -a also=() moved=()
+  local svc
+  for svc in video api; do
+    if [ "${IMAGES_MODE:-0}" = 1 ] && image_moved "$svc"; then moved+=("$svc"); else also+=("$svc"); fi
+  done
+  say "swapping the dummy container$([ ${#also[@]} -eq 0 ] || echo " (${also[*]} too, recreated only if DUMMY_PASSWORD changed; video ends every live stream then)")"
+  "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} dummy ${also[@]+"${also[@]}"}
+  if [ ${#moved[@]} -gt 0 ]; then
+    warn "the images moved since ${moved[*]} started, so they were left alone.
+  a changed DUMMY_PASSWORD reaches them with:  ./deploy.sh ${moved[*]}   (video ends every live stream)"
+  fi
   note "dummy streams: $(env_file_value DUMMY_STREAMS)   (DUMMY_STREAMS in $ENV_FILE)"
 }
 
@@ -783,7 +826,9 @@ record_deployed() {
 # and the new one may know about services this one does not, so hand over to it.
 reexec_if_updated() {
   [ -z "${DEPLOY_REEXEC:-}" ] || return 0
-  git diff --name-only "$OLD_HEAD" "$NEW_HEAD" | grep -qx deploy.sh || return 0
+  # asked of git directly, not through `| grep -q`: under pipefail a grep that quits
+  # early on a long list makes git exit 141, and `|| return 0` would then skip this
+  [ -n "$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD" -- deploy.sh)" ] || return 0
   say "deploy.sh itself changed in the pull, continuing with the new one"
   DEPLOY_REEXEC=1 DEPLOY_PULLED_FROM="$OLD_HEAD" exec bash ./deploy.sh ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
 }
@@ -838,10 +883,11 @@ ${B}what to deploy${N}
 
 ${B}where the images come from${N}
   by default nothing is compiled here. the four images come from the registry the git remote implies
-  (github.com/<you>/… → ghcr.io/<you>/; IMAGES= in .env or the environment to say otherwise), at the
-  tag of the commit this checkout is at: what the github action pushes on every push to main, and
-  what ./ship.sh tags with. an image already here under that name (./ship.sh --to sent it) is used as
-  is. no 4 GB floor, no swapfile: a 1 GB box runs it.
+  (github.com/<you>/… → ghcr.io/<you>/; IMAGES= in .env or the environment to say otherwise), tagged
+  with the last commit that touched what they are built from (./image-paths: api/ video/ frontend/
+  Cargo.* …; docs and this script do not count): what the github action pushes, and what ./ship.sh
+  tags with. an image already here under that name (./ship.sh --to sent it) is used as is. no 4 GB
+  floor, no swapfile: a 1 GB box runs it.
   ${B}--images [TAG]${N}            the default, with a tag of your choosing (the one ./ship.sh --to printed, say)
   ${B}--build${N}                   compile the images here instead: an hour on a small machine, 4 GB of ram,
                             8 GB of disk. for a laptop with uncommitted changes, or a box with no registry
@@ -863,7 +909,8 @@ ${B}notes${N}
   dummy = the fake streams. set DUMMY_STREAMS and DUMMY_PASSWORD in .env first.
   new knobs from .env.example are appended to .env with their defaults on every run
   (also a --pull that finds nothing to redeploy). passwd touches nothing.
-  a full deploy restarts video when HEAD moved since the last one: every live stream ends.
+  a full deploy restarts video when the images moved since the last one (a commit that
+  touched api/ video/ frontend/ Cargo.*; docs and this script do not count): every live stream ends.
 EOF
 }
 
@@ -930,15 +977,49 @@ registry_from_remote() {
   printf 'ghcr.io/%s/' "$owner"
 }
 
+# what the four images are built from: the pathspecs in ./image-paths, the one list
+# deploy.sh, ship.sh and the action share. a commit that touches none of them has no
+# images of its own (the action does not build it), so the box must not ask for its tag.
+IMAGE_PATHSPECS=()
+load_image_paths() {
+  [ ${#IMAGE_PATHSPECS[@]} -eq 0 ] || return 0
+  local p
+  # comments and blanks out, a stray CR or trailing blank off: either would make a
+  # pathspec that matches nothing, silently
+  while IFS= read -r p; do IMAGE_PATHSPECS+=("$p"); done < <(tr -d '\r' < image-paths 2>/dev/null | sed -E 's/[[:space:]]+$//' | grep -Ev '^[[:space:]]*(#|$)' || true)
+}
+
+# the commit the images are named after: the last one that touched image-paths, which is
+# the rule the action and ship.sh tag with, so a docs-only or deploy.sh-only commit runs
+# the images of the one before it, and nothing is recreated for it. always 7 characters,
+# on every side, whatever the repo's size (git's default abbreviation grows with it).
+# empty when this is not a git checkout. (a shallow clone would answer with its boundary
+# commit, docs or not: resolve_images refuses one before asking.)
+image_commit() {
+  load_image_paths
+  [ ${#IMAGE_PATHSPECS[@]} -gt 0 ] || return 0
+  git log -1 --format=%h --abbrev=7 -- "${IMAGE_PATHSPECS[@]}" 2>/dev/null || true
+}
+
+# uncommitted edits or new files in what the images are built from: the images for the
+# commit are not this tree's. BUILD says -dirty then, and images mode warns.
+images_dirty() {
+  load_image_paths
+  [ ${#IMAGE_PATHSPECS[@]} -gt 0 ] && [ -n "$(git status --porcelain -- "${IMAGE_PATHSPECS[@]}" 2>/dev/null)" ]
+}
+
+is_shallow() { [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = true ]; }
+
 # where the images come from, and which. IMAGES: the environment, else .env, else the
 # registry the git remote implies (a missing trailing / is added). TAG: the command
-# line, else the environment, else the commit this checkout is at, which is what the
-# action and ./ship.sh tag with (after --pull: the commit just pulled). the TAG in .env
-# is only the record of the last run, never a default: after a pull it would name the
-# old images. both are exported so compose resolves ${IMAGES:-}stream-x:${TAG:-latest}
-# to those names, and written to .env so a `docker compose up -d` by hand later starts
-# the same images and not a build.
-setup_images_mode() {
+# line, else the environment, else image_commit above (after --pull: of the tree just
+# pulled). the TAG in .env is only the record of the last run, never a default: after a
+# pull it would name the old images. both are exported so compose resolves
+# ${IMAGES:-}stream-x:${TAG:-latest} to those names. resolved before the prune, which
+# must know these names to keep them; setup_images_mode then writes them to .env so a
+# `docker compose up -d` by hand later starts the same images and not a build.
+resolve_images() {
+  [ -z "${IMAGES_RESOLVED:-}" ] || return 0
   IMAGES="${IMAGES:-$(env_file_value IMAGES)}"
   if [ -z "$IMAGES" ]; then
     IMAGES="$(registry_from_remote || true)"
@@ -946,8 +1027,12 @@ setup_images_mode() {
   fi
   IMAGES="${IMAGES%/}/"
   if [ -z "$TAG" ]; then
-    TAG="$(git rev-parse --short HEAD 2>/dev/null || true)"
+    # a shallow clone shows its boundary commit as having touched everything, so the
+    # answer would be wrong whenever that commit is a docs one. the whole history, once.
+    ! is_shallow || die "this is a shallow checkout, so the commit the images are named after cannot be found. once:  git fetch --unshallow"
+    TAG="$(image_commit)"
     [ -n "$TAG" ] || die "cannot tell which images: not a git checkout. name them:  ./deploy.sh --images <tag>"
+    ! images_dirty || warn "api/ video/ frontend/ or Cargo.* have uncommitted edits: the images for $TAG are the commit's, not this tree's. ./deploy.sh --build compiles this tree"
   fi
   # the images are built for the cloud box, linux/amd64. another machine (an arm laptop)
   # pulls that variant anyway and runs it under emulation: slower, but it runs.
@@ -959,6 +1044,11 @@ setup_images_mode() {
   esac
   export IMAGES TAG
   UP_FLAGS=(--no-build)
+  IMAGES_RESOLVED=1
+}
+
+setup_images_mode() {
+  resolve_images
   set_env_key IMAGES "$IMAGES"
   set_env_key TAG "$TAG"
   say "images: ${IMAGES}stream-<x>:$TAG   (nothing is built here; ./deploy.sh --build would. written to $ENV_FILE for a compose by hand)"
@@ -1041,6 +1131,7 @@ full_deploy() {
   pick_docker_cmd
   ensure_compose
   check_ports
+  [ "$IMAGES_MODE" = 0 ] || resolve_images   # the prune keeps this run's images, so it needs their names first
   [ "$PRUNE" = 0 ] || prune_for_deploy   # before the disk check, so a full box can pass it
   check_disk
   ensure_swap
@@ -1062,6 +1153,7 @@ partial_deploy() {
   load_public_ip_from_env
   pick_docker_cmd
   ensure_compose
+  [ "$IMAGES_MODE" = 0 ] || resolve_images
   [ "$PRUNE" = 0 ] || prune_for_deploy
   check_disk     # the same multi-GB builds as a full run, and swap is gone after a reboot
   ensure_swap
@@ -1081,14 +1173,15 @@ partial_deploy() {
   [ "$ok" -eq 1 ]
 }
 
-# the commit the images are built from, baked in as BUILD (see docs/debugging.md).
-# -dirty when what the images are built from (api/ video/ frontend/ Cargo.toml
-# Cargo.lock) has edits or new files; docs, tests and this script do not count.
-# "dev" when this is not a git checkout.
+# the commit the images are built from, baked in as BUILD (see docs/debugging.md): the
+# same commit the images are named after (image_commit), so /api/health says the tag.
+# -dirty when what the images are built from has edits or new files; docs, tests and
+# this script do not count. "dev" when this is not a git checkout.
 pick_build() {
   if [ -n "${BUILD:-}" ]; then export BUILD; return 0; fi
-  BUILD="$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
-  if [ "$BUILD" != dev ] && [ -n "$(git status --porcelain -- api video frontend Cargo.toml Cargo.lock 2>/dev/null)" ]; then
+  BUILD="$(image_commit)"
+  BUILD="${BUILD:-dev}"
+  if [ "$BUILD" != dev ] && images_dirty; then
     BUILD="$BUILD-dirty"
   fi
   export BUILD

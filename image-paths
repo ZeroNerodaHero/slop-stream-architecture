@@ -1,0 +1,18 @@
+# what the four images (pages, api, video, dummy) are built from, as git pathspecs.
+#
+# the images are named after the last commit that touched one of these: deploy.sh
+# (`image_commit`) asks the registry for that tag, ship.sh builds and tags with it,
+# and .github/workflows/images.yml builds and pushes it (its `paths:` filter is the
+# same list, written out by hand: a workflow filter cannot read a file). a commit that
+# touches none of these (docs, deploy.sh, docker-compose.yml) has no images of its own
+# and runs the ones before it, so nothing is recreated for it.
+#
+# one pathspec per line. `#` starts a comment. the caddyfile is bind-mounted, in no image.
+api
+video
+frontend
+:(exclude)frontend/Caddyfile
+Cargo.toml
+Cargo.lock
+.dockerignore
+.github/workflows/images.yml

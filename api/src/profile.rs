@@ -19,7 +19,8 @@
 use std::env;
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::rejection::{BytesRejection, FailedToBufferBody, QueryRejection};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
@@ -27,8 +28,8 @@ use axum::{Json, Router};
 use serde_json::json;
 use sqlx::PgPool;
 
-use crate::auth::{self, Me};
-use crate::{is_live, thumb_exists, valid_name, ApiError, ApiResult, AppState, Name};
+use crate::auth::Me;
+use crate::{is_live, may_write, thumb_exists, valid_name, ApiError, ApiResult, AppState, Name, PasswordQuery};
 
 /// The browser sends 256x256 at quality 0.85, a few tens of kb. This is the ceiling.
 const MAX_AVATAR_BYTES: usize = 256 * 1024;
@@ -86,11 +87,28 @@ async fn get_avatar(State(s): State<AppState>, Name(name): Name) -> Result<Respo
     Ok(([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, AVATAR_CACHE)], bytes).into_response())
 }
 
-/// The body is the jpeg itself, not a form. The page resizes before sending.
-async fn put_avatar(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Bytes) -> ApiResult {
-    auth::may_act_as(&s.db, &name, me.as_deref()).await?;
+fn too_big() -> ApiError {
+    ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "picture too big. 256 kb at most")
+}
+
+/// The body is the jpeg itself, not a form. The page resizes before sending. The route's
+/// body limit stops reading at the ceiling, so an oversized upload costs nothing past it.
+async fn put_avatar(
+    State(s): State<AppState>,
+    Name(name): Name,
+    Me(me): Me,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult {
+    let Query(q) = q?;
+    let body = match body {
+        Ok(body) => body,
+        Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_))) => return Err(too_big()),
+        Err(_) => return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad body")),
+    };
+    may_write(&s, &name, me.as_deref(), q.password.as_deref()).await?;
     if body.len() > MAX_AVATAR_BYTES {
-        return Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "picture too big. 256 kb at most"));
+        return Err(too_big());
     }
     if !body.starts_with(&JPEG_MAGIC) {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "not a jpeg"));
@@ -108,8 +126,14 @@ async fn put_avatar(State(s): State<AppState>, Name(name): Name, Me(me): Me, bod
     Ok(Json(json!({ "name": name, "avatar": version })))
 }
 
-async fn delete_avatar(State(s): State<AppState>, Name(name): Name, Me(me): Me) -> Result<StatusCode, ApiError> {
-    auth::may_act_as(&s.db, &name, me.as_deref()).await?;
+async fn delete_avatar(
+    State(s): State<AppState>,
+    Name(name): Name,
+    Me(me): Me,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
+) -> Result<StatusCode, ApiError> {
+    let Query(q) = q?;
+    may_write(&s, &name, me.as_deref(), q.password.as_deref()).await?;
     sqlx::query("UPDATE streamers SET avatar = NULL, avatar_at = NULL, updated_at = now() WHERE name = $1")
         .bind(&name)
         .execute(&s.db)
@@ -288,6 +312,8 @@ async fn watch_nobody() -> Response {
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/streamers/{name}/avatar", get(get_avatar).put(put_avatar).delete(delete_avatar))
+        // the picture's ceiling is the read limit too: past it the body is dropped, not buffered
+        .layer(DefaultBodyLimit::max(MAX_AVATAR_BYTES))
         .route("/watch/", get(watch_nobody))
         .route("/watch/{*rest}", get(watch_page))
 }

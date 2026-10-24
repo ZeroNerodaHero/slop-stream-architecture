@@ -307,7 +307,7 @@ docs/                    overview, spec, chat, architecture, accounts, kubernete
 
 ```mermaid
 flowchart LR
-  ip["pick PUBLIC_IP<br/>arg › env › .env › detect"] --> env["write .env<br/>+ CARGO_BUILD_JOBS from ram<br/>+ ENV_NAME = hostname when empty"] --> build["build pages, video, dummy, api<br/>one at a time · BUILD = git sha"] --> up["compose up -d<br/>video restarts when HEAD moved"] --> wait["poll https://ip/api/health<br/>up to 120s"]
+  ip["pick PUBLIC_IP<br/>arg › env › .env › detect"] --> env["write .env<br/>+ CARGO_BUILD_JOBS from ram<br/>+ ENV_NAME = hostname when empty"] --> build["get pages, video, dummy, api<br/>one at a time · tag = BUILD = last commit touching image-paths"] --> up["compose up -d<br/>video restarts when the images moved"] --> wait["poll https://ip/api/health<br/>up to 120s"]
 ```
 
 ```mermaid

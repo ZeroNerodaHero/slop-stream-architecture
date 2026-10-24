@@ -11,6 +11,7 @@
 
 use std::time::Duration;
 
+use axum::extract::rejection::QueryRejection;
 use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::routing::post;
@@ -413,7 +414,7 @@ async fn is_admin(s: &AppState, headers: &HeaderMap) -> Result<bool, ApiError> {
     Ok(me.is_some_and(|m| s.admin_names.contains(&m)))
 }
 
-async fn list_errors(State(s): State<AppState>, headers: HeaderMap, Query(q): Query<ListQuery>) -> ApiResult<Vec<ErrorRow>> {
+async fn list_errors(State(s): State<AppState>, headers: HeaderMap, q: Result<Query<ListQuery>, QueryRejection>) -> ApiResult<Vec<ErrorRow>> {
     // nobody is an admin here, so for everyone the route does not exist
     if s.admin_names.is_empty() && s.ops_token.is_none() {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such route"));
@@ -421,6 +422,8 @@ async fn list_errors(State(s): State<AppState>, headers: HeaderMap, Query(q): Qu
     if !is_admin(&s, &headers).await? {
         return Err(ApiError::new(StatusCode::UNAUTHORIZED, "admins only"));
     }
+    // the query only after the gate: a stranger's `?limit=abc` must get the same 404 or 401, not a 400
+    let Query(q) = q?;
     let Some(db) = &s.debug else {
         return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "no debug database"));
     };

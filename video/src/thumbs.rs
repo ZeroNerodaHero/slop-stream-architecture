@@ -29,12 +29,31 @@ pub struct ThumbTap {
     /// Set once ffmpeg is found dead, so the keyframe loop stops asking for it.
     dead: Arc<AtomicBool>,
     checked: Instant,
+    /// The sequence number last fed. The peer has srtp replay protection off, so a packet
+    /// the publisher re-sent after all (a nack answered when the first had arrived) comes
+    /// through twice back to back, and to ffmpeg's vp8 depacketizer a repeat is a break.
+    last_seq: Option<u16>,
     sdp: PathBuf,
     jpeg: PathBuf,
 }
 
+/// Where the files go. One directory for all of them, so a start can sweep what a crash left.
+const DIR: &str = "/tmp";
+const PREFIX: &str = "thumb-";
+
+/// How long ffmpeg waits for packets before giving up on the stream. Its default is 10s,
+/// which a publisher on wifi can outlast while ice still holds the peer (ice gives up 20s
+/// after the last packet: 5s to disconnected, 15 more to failed): the picture would then
+/// be gone for the rest of the stream. 0 is never. The room's end kills ffmpeg anyway.
+const LISTEN_TIMEOUT_SECS: &str = "0";
+/// How long ffmpeg holds a packet back for an earlier one that has not come, in
+/// microseconds. Its default is 100ms, and a packet the sfu got back by nack arrives
+/// 100-300ms late and is fed in arrival order: to ffmpeg that was a lost packet, and its
+/// vp8 depacketizer then drops every frame until the next keyframe.
+const MAX_DELAY_MICROS: &str = "500000";
+
 pub fn jpeg_path(name: &str) -> PathBuf {
-    PathBuf::from(format!("/tmp/thumb-{name}.jpg"))
+    PathBuf::from(format!("{DIR}/{PREFIX}{name}.jpg"))
 }
 
 pub fn every_secs() -> u64 {
@@ -43,6 +62,44 @@ pub fn every_secs() -> u64 {
         .and_then(|v| v.parse().ok())
         .filter(|s| *s > 0)
         .unwrap_or(5)
+}
+
+/// A picture older than this is past due: ffmpeg is waiting for a keyframe (a lost frame
+/// breaks its vp8 depacketizer until one comes, and a browser sends one only when asked),
+/// so the keyframe minder asks.
+pub fn due_after() -> Duration {
+    Duration::from_secs(every_secs() * 2)
+}
+
+/// Older than this, a picture is not "a few seconds old" any more and /thumb says 404
+/// instead: ffmpeg died, or the publisher's video stopped while its connection held.
+pub fn stale_after() -> Duration {
+    Duration::from_secs(every_secs() * 6)
+}
+
+/// How old the stream's picture is. None: there is none (not made yet, taken down, or a
+/// clock that stepped so far that the file is from the future).
+pub async fn picture_age(name: &str) -> Option<Duration> {
+    let modified = tokio::fs::metadata(jpeg_path(name)).await.ok()?.modified().ok()?;
+    modified.elapsed().ok()
+}
+
+/// The files of a run that did not get to clean up (an oom kill, `docker kill`). Every
+/// room's files go with the room; at start there are no rooms, so anything here is stale,
+/// and would otherwise be served as live the moment that name went live again.
+pub async fn sweep_stale() {
+    let Ok(mut entries) = tokio::fs::read_dir(DIR).await else { return };
+    let mut swept = 0;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let is_ours = name.to_str().is_some_and(|n| n.starts_with(PREFIX) && (n.ends_with(".jpg") || n.ends_with(".sdp") || n.ends_with(".jpg.tmp")));
+        if is_ours && tokio::fs::remove_file(entry.path()).await.is_ok() {
+            swept += 1;
+        }
+    }
+    if swept > 0 {
+        log::info!("thumbs: removed {swept} files left by an earlier run");
+    }
 }
 
 pub fn enabled() -> bool {
@@ -77,7 +134,7 @@ impl ThumbTap {
             }
             port
         };
-        let sdp = PathBuf::from(format!("/tmp/thumb-{name}.sdp"));
+        let sdp = PathBuf::from(format!("{DIR}/{PREFIX}{name}.sdp"));
         let jpeg = jpeg_path(name);
         let _ = tokio::fs::remove_file(&jpeg).await;
         tokio::fs::write(
@@ -97,7 +154,11 @@ impl ThumbTap {
         cmd.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1"])
             // the default is to study the stream for 5s before the first frame comes out
             .args(["-analyzeduration", "1500000", "-probesize", "1000000"])
-            .args(["-protocol_whitelist", "file,udp,rtp", "-i"])
+            // `c=IN IP4 127.0.0.1` in the sdp does not make ffmpeg bind loopback: without
+            // `-localaddr` the rtp and rtcp sockets listen on every interface, the compose
+            // network included, and any container on it could feed this stream's picture
+            .args(["-protocol_whitelist", "file,udp,rtp", "-localaddr", "127.0.0.1"])
+            .args(["-listen_timeout", LISTEN_TIMEOUT_SECS, "-max_delay", MAX_DELAY_MICROS, "-i"])
             .arg(&sdp)
             // `-threads 1` before the input only reaches the decoder. the mjpeg
             // encoder would otherwise frame-thread (one thread per core) and hold
@@ -124,20 +185,22 @@ impl ThumbTap {
             ffmpeg,
             dead: Arc::new(AtomicBool::new(false)),
             checked: Instant::now(),
+            last_seq: None,
             sdp,
             jpeg,
         })
     }
 
-    /// True once ffmpeg has been found dead. Shared so another task can watch it.
+    /// True once ffmpeg has been found dead, or the tap is gone with its room. Shared so
+    /// the keyframe minder knows when to stop.
     pub fn dead_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.dead)
     }
 
     /// A copy of one packet for ffmpeg. Fire and forget; a lost one is a lost frame.
     /// Once a second, also notice an ffmpeg that died (a bind that lost, a decode
-    /// abort, the oom killer): say so once and stop feeding it, else the 404s on
-    /// /thumb would have no explanation anywhere.
+    /// abort, the oom killer): say so once, stop feeding it, and take its last
+    /// picture down, so /thumb says 404 rather than serve a frozen frame as live.
     pub fn feed(&mut self, packet: &webrtc::rtp::packet::Packet) {
         if self.dead.load(Ordering::Relaxed) {
             return;
@@ -147,9 +210,16 @@ impl ThumbTap {
             if let Ok(Some(status)) = self.ffmpeg.try_wait() {
                 log::warn!("thumb {}: ffmpeg exited ({status}). no more pictures for this stream", self.name);
                 self.dead.store(true, Ordering::Relaxed);
+                let _ = std::fs::remove_file(&self.jpeg);
+                let _ = std::fs::remove_file(self.jpeg.with_extension("jpg.tmp"));
                 return;
             }
         }
+        let seq = packet.header.sequence_number;
+        if self.last_seq == Some(seq) {
+            return;
+        }
+        self.last_seq = Some(seq);
         if let Ok(bytes) = packet.marshal() {
             let _ = self.socket.try_send(&bytes);
         }
@@ -158,8 +228,11 @@ impl ThumbTap {
 
 impl Drop for ThumbTap {
     fn drop(&mut self) {
-        // kill_on_drop stops ffmpeg; the files go too, including the half-written
-        // one `-atomic_writing` renames from if the kill lands mid-picture
+        // ffmpeg first (kill_on_drop would too, but only after the fields below, and a
+        // picture renamed in between would outlive this); then the files, including the
+        // half-written one `-atomic_writing` renames from if the kill lands mid-picture
+        let _ = self.ffmpeg.start_kill();
+        self.dead.store(true, Ordering::Relaxed);
         let _ = std::fs::remove_file(&self.sdp);
         let _ = std::fs::remove_file(&self.jpeg);
         let _ = std::fs::remove_file(self.jpeg.with_extension("jpg.tmp"));

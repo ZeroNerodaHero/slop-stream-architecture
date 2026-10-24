@@ -30,7 +30,10 @@ services:
       args:
         CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-1}
         BUILD: ${BUILD:-dev}
-    image: stream-api
+    # stream-api:latest when built here (the monitor box). test.sh runs this beside a
+    # stack and sets MONITOR_IMAGE to the image that stack's api was started from, the
+    # registry's name and tag or a local build, so the monitor under test is that checkout's
+    image: ${MONITOR_IMAGE:-stream-api:latest}
     container_name: monitor
     restart: unless-stopped
     command: ["monitor"]

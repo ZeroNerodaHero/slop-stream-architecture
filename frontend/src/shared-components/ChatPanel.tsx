@@ -38,9 +38,9 @@ interface ChatPanelProps {
   className?: string;
 }
 
-/** Enter sends, shift+enter is a new line. */
+/** Enter sends, shift+enter is a new line. The enter that picks an ime candidate is neither (safari says it with keyCode 229). */
 function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
     e.preventDefault();
     sendChat();
   }

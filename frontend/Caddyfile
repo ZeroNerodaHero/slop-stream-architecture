@@ -59,17 +59,31 @@ http:// {
 				file_server
 			}
 		}
+		# a missing asset (a tab on an old build asking for a chunk the new publish removed):
+		# a 404 that is not kept, so the next publish or a rollback is asked again
+		handle /assets/* {
+			header Cache-Control "no-store"
+			respond "{err.status_code} {err.status_text}"
+		}
 	}
 
 	# the pages: a single-page app built by vite into /srv.
-	# hashed assets can be cached forever; index.html must always be re-checked
-	# so a deploy never leaves someone running old js against a new api.
+	# hashed assets can be cached forever, but only the ones that are there: a miss is a
+	# 404 (above), not the spa with this header on it. with the catch-all's fallback a tab
+	# on an old build asking for a removed chunk would cache index.html, immutable, a year.
+	handle /assets/* {
+		root * /srv
+		@hit file
+		header @hit Cache-Control "public, max-age=31536000, immutable"
+		encode zstd gzip
+		file_server
+	}
+
+	# everything else is index.html, which must always be re-checked so a deploy never
+	# leaves someone running old js against a new api.
 	handle {
 		root * /srv
-		@assets path /assets/*
-		@pages not path /assets/*
-		header @assets Cache-Control "public, max-age=31536000, immutable"
-		header @pages Cache-Control "no-cache"
+		header Cache-Control "no-cache"
 		try_files {path} /index.html
 		encode zstd gzip
 		file_server

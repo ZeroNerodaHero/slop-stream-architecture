@@ -87,6 +87,8 @@ export interface ClientError {
 interface RequestOptions {
   /** `false`: a 5xx from this call is not reported to /api/errors. For the call that reads them. */
   report?: boolean;
+  /** Give up after this long with no answer. For a call whose caller must move on (the watch grant: its retry loop). */
+  timeoutMs?: number;
 }
 
 /**
@@ -102,7 +104,8 @@ async function request<T>(method: string, path: string, body?: unknown, options:
   const res = await fetch(path, {
     method,
     headers: body === undefined ? {} : { 'content-type': raw ? body.type : 'application/json' },
-    body: body === undefined ? undefined : raw ? body : JSON.stringify(body)
+    body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
+    signal: options.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs)
   });
   const text = await res.text();
   let data: unknown = null;
@@ -143,7 +146,8 @@ export const api = {
   stop: (owner: Owner) => request<{ ok: boolean }>('POST', `/api/streams/${owner.name}/stop?${ownerQuery(owner)}`),
   /** Survives page teardown, unlike fetch. */
   stopBeacon: (owner: Owner) => navigator.sendBeacon(`/api/streams/${owner.name}/stop?${ownerQuery(owner)}`),
-  watch: (name: string) => request<WatchGrant>('POST', `/api/streams/${name}/watch`),
+  /** Bounded: the watch page keeps a grant in flight as "under way", so one must always land or fail. */
+  watch: (name: string) => request<WatchGrant>('POST', `/api/streams/${name}/watch`, undefined, { timeoutMs: 15000 }),
   /** The picture of a stream, made on the video machine. `bucket` changes every few seconds so the browser re-fetches. */
   thumbUrl: (name: string, bucket: number) => `/thumb/${encodeURIComponent(name)}.jpg?t=${bucket}`,
   /** The body is wanted on a 503 too (it says which part is down), so not through `request`. */

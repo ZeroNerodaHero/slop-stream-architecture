@@ -20,7 +20,7 @@ git clone <repo> && cd slop-stream-architecture
 
 it prints a url. open it. click through the warning.
 
-nothing is compiled on the server. every push to `main` makes github build the four images (`.github/workflows/images.yml`, free for a public repo) and push them to `ghcr.io/<you>/stream-<x>:<commit>`; `./deploy.sh` works out the registry from the git remote and pulls the images for the commit the server is at. a 1 GB box is enough. the action takes a few minutes after a push; a deploy before it finishes says so and does nothing.
+nothing is compiled on the server. every push to `main` makes github build the four images (`.github/workflows/images.yml`, free for a public repo) and push them to `ghcr.io/<you>/stream-<x>:<commit>`; `./deploy.sh` works out the registry from the git remote and pulls the images for the last commit that changed them (a docs-only commit has none of its own and runs the ones before it). a 1 GB box is enough. the action takes a few minutes after a push; a deploy before it finishes says so and does nothing.
 
 ## update
 

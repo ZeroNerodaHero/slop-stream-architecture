@@ -1,7 +1,12 @@
-# builds the four images on github's machines on every push to main and pushes them to
-# ghcr.io/<owner>/stream-<x>:<short commit> and :latest. the box then runs
+# builds the four images on github's machines on every push to main that touches what
+# they are built from (`paths` below: the list in ./image-paths, written out by hand
+# because a filter cannot read a file) and pushes them to ghcr.io/<owner>/stream-<x>:<tag>
+# and :latest. the tag is the last commit that touched ./image-paths (not the push head:
+# a push can end on a docs commit), 7 characters; deploy.sh and ship.sh name the images by
+# the same rule, so a docs-only commit runs the images of the one before it and nothing
+# is recreated for it. the box then runs
 #   ./deploy.sh --pull --images
-# and pulls the images for the commit it just pulled, building nothing. see docs/spec.md, "deploy script".
+# and pulls those, building nothing. see docs/spec.md, "deploy script".
 #
 # free: actions minutes are unlimited for a public repo, and public packages cost nothing.
 # the runners are x86-64, so no emulation: the same dockerfiles ./deploy.sh and ./ship.sh use,
@@ -21,10 +26,12 @@ on:
       - api/**
       - video/**
       - frontend/**
+      - '!frontend/Caddyfile'
       - Cargo.toml
       - Cargo.lock
       - .dockerignore
       - .github/workflows/images.yml
+      - image-paths   # the list this filter copies: a change to it always builds, so the two cannot drift unnoticed
   workflow_dispatch:
 
 permissions:
@@ -51,12 +58,20 @@ jobs:
             context: .
             file: video/Dockerfile.dummy
     steps:
+      # the whole history: the tag is found by walking back to the last commit that touched
+      # the image paths, and a shallow checkout might not see it
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # the same tag ./ship.sh would use: the short commit. owner lowercased, ghcr wants that
+      # the tag: the last commit that touched what the images are built from, 7 characters,
+      # the same rule and the same list (./image-paths) as deploy.sh and ship.sh. owner lowercased, ghcr wants that
       - id: meta
         run: |
-          echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          mapfile -t paths < <(tr -d '\r' < image-paths | sed -E 's/[[:space:]]+$//' | grep -Ev '^[[:space:]]*(#|$)')
+          # an empty list would make `git log -1 --` plain HEAD, a tag deploy.sh never asks for
+          [ "${#paths[@]}" -gt 0 ] || { echo "image-paths is empty"; exit 1; }
+          echo "tag=$(git log -1 --format=%h --abbrev=7 -- "${paths[@]}")" >> "$GITHUB_OUTPUT"
           echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3

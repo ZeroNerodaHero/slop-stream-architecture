@@ -99,13 +99,29 @@ function fail(message: string, myPc: RTCPeerConnection) {
 function waitForStreamer(message: string) {
   setPhase('waiting', message);
   if (retryTimer) clearTimeout(retryTimer);
-  retryTimer = setTimeout(() => void watch(store.get(watchNameAtom)), NOT_LIVE_RETRY_MS);
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    void start(store.get(watchNameAtom));
+  }, NOT_LIVE_RETRY_MS);
 }
 
+/** Phases from which arriving on the page starts over even with picture in picture on: nothing is under way. */
+const RESTART_PHASES: readonly WatchPhase[] = ['failed', 'bad-name'];
+
+/**
+ * The watch page mounted for `name`. Back on the page of the stream picture in picture kept
+ * alive, there is nothing to start: the page's <video> binds to the same MediaStream. That is
+ * read off the phase, not off the handles: a grant in flight (`loading`) or a wait for the
+ * streamer (`waiting`) has no peer and, between the timer firing and the grant landing, no
+ * timer either, yet is under way all the same.
+ */
 export async function watch(name: string): Promise<void> {
-  // back on the page of the stream picture in picture kept alive: nothing to start, the page's
-  // <video> binds to the same MediaStream. (a stream that is still being waited for counts too.)
-  if (store.get(pipAtom) && name === store.get(watchNameAtom) && (pc || retryTimer)) return;
+  if (store.get(pipAtom) && name === store.get(watchNameAtom) && !RESTART_PHASES.includes(store.get(watchPhaseAtom))) return;
+  await start(name);
+}
+
+/** One attempt at `name`, whatever was going on before. The timer and the retry button come here directly. */
+async function start(name: string): Promise<void> {
   teardown();
   const mine = ++attempt;
   store.set(watchNameAtom, name);
@@ -186,8 +202,9 @@ function ended() {
   waitForStreamer('ended. checking for a restart');
 }
 
+/** The button: an explicit start-over, never the "back on the page of a kept stream" case `watch` keeps. */
 export function retry() {
-  void watch(store.get(watchNameAtom));
+  void start(store.get(watchNameAtom));
 }
 
 /** The <video> element started playing frames. */

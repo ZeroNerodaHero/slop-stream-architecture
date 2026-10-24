@@ -10,7 +10,8 @@
 //!
 //! go-live hands out a session id plus a random token. Heartbeat and stop
 //! must present them, so a stranger cannot end someone else's stream. A row
-//! whose tab vanished without stop is ended by a sweeper once its key lapsed.
+//! whose tab vanished without stop is ended by a sweeper once its key lapsed and
+//! video does not have the name connected.
 //!
 //! Nobody has to log in. A name with an account (auth.rs) is the one thing a
 //! login is for: only its owner can go live, save its bio or chat as it.
@@ -218,10 +219,25 @@ pub(crate) struct Owner {
     pub(crate) token: i64,
 }
 
+/// `?password=`: only needed to write a reserved (dummy) name. Everyone else sends nothing.
 #[derive(Deserialize, Default)]
-struct GoLiveQuery {
-    /// Only needed for a reserved (dummy) name.
-    password: Option<String>,
+pub(crate) struct PasswordQuery {
+    pub(crate) password: Option<String>,
+}
+
+/// May whoever is behind `me` write `name`: go live as it, save its bio, set its picture.
+/// A reserved name belongs to the dummy box and wants its password, nothing else opens it
+/// (it can never be claimed, so `may_act_as` alone would hand it to anyone). Any other name
+/// follows `auth::may_act_as`: free for anyone, claimed only for its own login.
+pub(crate) async fn may_write(s: &AppState, name: &str, me: Option<&str>, password: Option<&str>) -> Result<(), ApiError> {
+    if name.starts_with(&s.dummy_prefix) {
+        let allowed = matches!((&s.dummy_password, password), (Some(p), Some(given)) if p == given);
+        if !allowed {
+            return Err(ApiError::new(StatusCode::FORBIDDEN, "reserved name"));
+        }
+        return Ok(());
+    }
+    auth::may_act_as(&s.db, name, me).await
 }
 
 fn live_key(name: &str) -> String {
@@ -300,7 +316,12 @@ async fn held_sessions(s: &AppState) -> Result<Vec<i64>, redis::RedisError> {
 /// a key could survive without heartbeats and that no live key names any more.
 /// A row whose name's key still holds its id is a stream whose heartbeat is coming.
 async fn sweep_sessions(s: AppState) {
-    let mut tick = tokio::time::interval(SWEEP_EVERY);
+    // Not at boot. The keys only come from heartbeats, so after an api outage longer than the
+    // ttl, or a redis restart, every live stream is keyless until its page's next beat (15s)
+    // takes its key back; a sweep right then would end them all. A full period in, they have.
+    let start = tokio::time::Instant::now() + SWEEP_EVERY;
+    let mut tick = tokio::time::interval_at(start, SWEEP_EVERY);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay); // a woken box sweeps once, not n times
     loop {
         tick.tick().await;
         match sweep_once(&s).await {
@@ -311,14 +332,26 @@ async fn sweep_sessions(s: AppState) {
     }
 }
 
+/// Ends open rows old enough that no honest heartbeat could still be coming, that no live
+/// key names, and whose name video does not have connected: a key can lapse under a stream
+/// that is really on (the api was down past the ttl, redis restarted), and video's word is
+/// what tells that from a dead tab. Without it nothing is ended: a zombie row ended a minute
+/// late costs nothing, a live stream ended costs the stream.
 async fn sweep_once(s: &AppState) -> anyhow::Result<u64> {
+    let Some(connected) = video_live(s).await else {
+        log::info!("sweep: video unreachable, nothing ended");
+        return Ok(0);
+    };
+    let connected: Vec<String> = connected.into_iter().collect();
     let held = held_sessions(s).await?;
     let done = sqlx::query(
         "UPDATE sessions SET ended_at = now()
-         WHERE ended_at IS NULL AND started_at < now() - make_interval(secs => $1) AND id <> ALL($2)",
+         WHERE ended_at IS NULL AND started_at < now() - make_interval(secs => $1)
+           AND id <> ALL($2) AND name <> ALL($3)",
     )
     .bind(ZOMBIE_AFTER_SECS as f64)
     .bind(&held)
+    .bind(&connected)
     .execute(&s.db)
     .await?;
     Ok(done.rows_affected())
@@ -417,10 +450,12 @@ async fn put_streamer(
     State(s): State<AppState>,
     Name(name): Name,
     Me(me): Me,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
     body: Result<Json<BioBody>, JsonRejection>,
 ) -> ApiResult {
+    let Query(q) = q?;
     let Json(body) = body?;
-    auth::may_act_as(&s.db, &name, me.as_deref()).await?;
+    may_write(&s, &name, me.as_deref(), q.password.as_deref()).await?;
     let bio = body.bio.trim().chars().take(500).collect::<String>();
     let bio: String = sqlx::query_scalar(
         "INSERT INTO streamers (name, bio) VALUES ($1, $2)
@@ -492,17 +527,10 @@ async fn go_live(
     State(s): State<AppState>,
     Name(name): Name,
     Me(me): Me,
-    q: Result<Query<GoLiveQuery>, QueryRejection>,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
 ) -> ApiResult {
     let Query(q) = q?;
-    if name.starts_with(&s.dummy_prefix) {
-        let allowed = matches!((&s.dummy_password, &q.password), (Some(p), Some(given)) if p == given);
-        if !allowed {
-            return Err(ApiError::new(StatusCode::FORBIDDEN, "reserved name"));
-        }
-    } else {
-        auth::may_act_as(&s.db, &name, me.as_deref()).await?;
-    }
+    may_write(&s, &name, me.as_deref(), q.password.as_deref()).await?;
 
     let key = live_key(&name);
     let mut r = s.redis.clone();
@@ -618,11 +646,11 @@ async fn stop(
         return Err(ApiError::not_yours());
     }
 
+    // only while this session still holds it, in one step: a go-live that took the name
+    // between a read here and the delete would lose its fresh key to this one's stop
     let key = live_key(&name);
     let mut r = s.redis.clone();
-    if r.get::<_, Option<i64>>(&key).await? == Some(owner.session) {
-        let _: () = r.del(&key).await?;
-    }
+    let _: i64 = redis::cmd("EVAL").arg(DEL_IF_HELD_BY).arg(1).arg(&key).arg(owner.session).query_async(&mut r).await?;
     log::info!("{name}: stop, session {}", owner.session);
     Ok(Json(json!({ "ok": true })))
 }

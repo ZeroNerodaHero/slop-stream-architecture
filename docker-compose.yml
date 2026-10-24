@@ -16,8 +16,9 @@
 #         ./deploy.sh --images TAG    no build here: pull the images ./ship.sh pushed from a laptop
 #                                     (IMAGES=ghcr.io/<you>/ and TAG in .env name them; empty = built here)
 #         (by hand: cp .env.example .env, set PUBLIC_IP, BUILD=$(git rev-parse --short HEAD) docker compose up -d --build)
-#         the images carry BUILD, so a full deploy (or `up -d --build`) restarts video whenever
-#         HEAD moved since the last one: every live stream ends. deploy.sh warns first.
+#         the images carry BUILD and are named after the last commit that touched what they are
+#         built from (./image-paths), so a full deploy (or `up -d --build`) restarts video whenever
+#         that moved since the last one: every live stream ends. deploy.sh warns first.
 # open:   https://<PUBLIC_IP from the .env file>
 # ports:  80/tcp 443/tcp 7882/udp
 # dummies: in .env set DUMMY_STREAMS=3 and DUMMY_PASSWORD=anyword, then ./deploy.sh dummy

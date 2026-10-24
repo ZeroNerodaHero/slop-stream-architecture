@@ -1,3 +1,4 @@
+import { RiLoginBoxLine, RiLogoutBoxRLine, RiUserAddLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
@@ -11,7 +12,9 @@ import { cn } from '@/utils/cn';
 
 /** The name line in both states: the same box, so logging in or out does not move anything. */
 const NAME_LINE = '-mx-1 block border border-transparent px-1 py-0.5 leading-tight';
-const ACTION = 'shrink-0 text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline';
+/** The small links under the name: a remix icon and a word. */
+const ACTION = 'inline-flex shrink-0 items-center gap-1 text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline';
+const ICON = 14;
 
 /**
  * Who you are, pinned to the bottom left corner of every page the way discord does it: a
@@ -68,6 +71,7 @@ export function UserPanel() {
             </span>
             <span className="block text-sm leading-tight">
               <button id="logout" type="button" onClick={() => void logout()} className={ACTION}>
+                <RiLogoutBoxRLine aria-hidden size={ICON} />
                 log out
               </button>
             </span>
@@ -114,12 +118,14 @@ export function UserPanel() {
             {/* the way to make the name yours, right under it */}
             <span className="block text-sm leading-tight text-textSecondary">
               <Link id="signup-link" to={`/signup?next=${next}`} className={ACTION}>
+                <RiUserAddLine aria-hidden size={ICON} />
                 sign up
               </Link>
               <span aria-hidden className="mx-1.5 text-textTertiary">
                 ·
               </span>
               <Link id="login-link" to={`/login?next=${next}`} className={ACTION}>
+                <RiLoginBoxLine aria-hidden size={ICON} />
                 log in
               </Link>
             </span>

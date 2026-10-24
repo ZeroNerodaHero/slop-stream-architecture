@@ -209,8 +209,10 @@ async fn publish_once(i: usize, name: &str, cfg: &Config, http: &reqwest::Client
     let mut owner: Option<Grant> = None;
     if let Some(api) = &cfg.api_url {
         let bio = format!("fake stream {} for styling and debugging. gifs bounce around. not a real person.", i + 1);
+        // a reserved name's bio wants the password like its go-live: nobody else may write it
         let _ = http
             .put(format!("{api}/api/streamers/{name}"))
+            .query(&[("password", cfg.password.as_deref().unwrap_or(""))])
             .json(&serde_json::json!({ "bio": bio }))
             .send()
             .await;
@@ -502,9 +504,12 @@ fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, cfg: &Co
         .args(["-filter_complex", &graph])
         .args(["-map", "[vout]", "-c:v", "libvpx", "-b:v", "500k", "-deadline", "realtime", "-cpu-used", "8"])
         .args(["-g", "30", "-keyint_min", "15", "-pix_fmt", "yuv420p"])
-        .args(["-f", "rtp", &format!("rtp://127.0.0.1:{video_port}?pkt_size=1200")])
+        // no rtcp: the muxer would send sender reports to port+1, and the two sockets below
+        // are whatever the kernel handed out, so port+1 can be the other one (or another
+        // stream's); a report read as rtp is a garbage packet rewritten into a track
+        .args(["-f", "rtp", "-rtpflags", "skip_rtcp", &format!("rtp://127.0.0.1:{video_port}?pkt_size=1200")])
         .args(["-map", "0:1", "-c:a", "libopus", "-b:a", "48k", "-ar", "48000", "-ac", "2"])
-        .args(["-f", "rtp", &format!("rtp://127.0.0.1:{audio_port}?pkt_size=1200")])
+        .args(["-f", "rtp", "-rtpflags", "skip_rtcp", &format!("rtp://127.0.0.1:{audio_port}?pkt_size=1200")])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())

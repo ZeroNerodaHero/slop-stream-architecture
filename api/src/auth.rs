@@ -74,25 +74,33 @@ fn decoy_hash() -> &'static str {
 static HASHING: Semaphore = Semaphore::const_new(HASH_SLOTS);
 
 /// Hashing blocks a thread for tens of milliseconds. Never on the async runtime,
-/// and never more than HASH_SLOTS at a time.
+/// and never more than HASH_SLOTS at a time. The slot travels into the blocking job
+/// and is freed when the hash is done: a request future dropped mid-wait cannot stop
+/// the job, so freeing the slot with the future would let the next one start a fifth.
 async fn hash_blocking(password: String) -> Result<String, ApiError> {
-    let _slot = HASHING.acquire().await.ok();
-    tokio::task::spawn_blocking(move || hash_password(&password))
-        .await
-        .ok()
-        .flatten()
-        .ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not hash"))
+    let slot = HASHING.acquire().await.ok();
+    tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        hash_password(&password)
+    })
+    .await
+    .ok()
+    .flatten()
+    .ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not hash"))
 }
 
 /// `None` is a name with no account: the decoy is checked instead, so the answer
 /// takes as long as a wrong password, and is false.
 async fn verify_blocking(password: String, hash: Option<String>) -> bool {
-    let _slot = HASHING.acquire().await.ok();
-    tokio::task::spawn_blocking(move || match hash {
-        Some(hash) => verify_password(&password, &hash),
-        None => {
-            let _ = verify_password(&password, decoy_hash());
-            false
+    let slot = HASHING.acquire().await.ok();
+    tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        match hash {
+            Some(hash) => verify_password(&password, &hash),
+            None => {
+                let _ = verify_password(&password, decoy_hash());
+                false
+            }
         }
     })
     .await
@@ -130,7 +138,7 @@ fn token_hash(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
 
-fn cookie_token(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn cookie_token(headers: &HeaderMap) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -424,18 +432,18 @@ async fn change_password(
     }
     let _: () = s.redis.clone().del(&key).await?;
     let hash = hash_blocking(new).await?;
-    sqlx::query("UPDATE streamers SET password_hash = $2 WHERE name = $1")
-        .bind(&name)
-        .bind(&hash)
-        .execute(&s.db)
-        .await?;
-    // every other login is out. this one stays.
+    // every other login is out, this one stays: in the one statement with the new hash,
+    // so a failure between the two cannot leave the password changed and the others in
     let keep = cookie_token(&headers).map(|t| token_hash(&t)).unwrap_or_default();
-    sqlx::query("DELETE FROM logins WHERE name = $1 AND token_hash <> $2")
-        .bind(&name)
-        .bind(&keep)
-        .execute(&s.db)
-        .await?;
+    sqlx::query(
+        "WITH changed AS (UPDATE streamers SET password_hash = $2 WHERE name = $1)
+         DELETE FROM logins WHERE name = $1 AND token_hash <> $3",
+    )
+    .bind(&name)
+    .bind(&hash)
+    .bind(&keep)
+    .execute(&s.db)
+    .await?;
     log::info!("{name}: password changed");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -457,6 +465,9 @@ pub(crate) fn routes() -> Router<AppState> {
 pub(crate) async fn passwd(db: &PgPool, name: &str) -> anyhow::Result<()> {
     let name = name.trim().to_lowercase();
     anyhow::ensure!(valid_name(&name), "bad name. use a-z 0-9 _ - (1 to 32)");
+    // the same rule as signup: a reserved name stays with the dummy box, an account on it would claim it
+    let prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
+    anyhow::ensure!(!name.starts_with(&prefix), "reserved name: {prefix}* belongs to the fake streams");
     let password = random_password();
     let hash = hash_password(&password).ok_or_else(|| anyhow::anyhow!("could not hash"))?;
     sqlx::query(

@@ -103,6 +103,7 @@ export function closeChat(reset = true) {
     session.ws.close();
   }
   session = null;
+  inFlight.length = 0;
   if (reset) {
     store.set(chatLinesAtom, []);
     store.set(chatCountAtom, 0);
@@ -121,8 +122,16 @@ export function sendChat() {
     return;
   }
   session.ws.send(JSON.stringify({ type: 'say', text }));
+  inFlight.push(text);
   store.set(chatDraftAtom, '');
 }
+
+/**
+ * Lines sent and not seen back from the room yet, oldest first. The server handles a socket's
+ * frames in order, so a drop (`slow down`, chat busy or down) is of the oldest, and goes back
+ * into the box; a line that comes back through the room is off the list.
+ */
+const inFlight: string[] = [];
 
 function connect() {
   const current = session;
@@ -154,12 +163,20 @@ function connect() {
       return;
     }
     if (msg.type === 'history' && msg.messages) store.set(chatLinesAtom, msg.messages.slice(-KEEP_LINES));
-    else if (msg.type === 'message' && msg.id) appendLine(msg as ChatLine);
-    else if (msg.type === 'count' && typeof msg.count === 'number') store.set(chatCountAtom, msg.count);
+    else if (msg.type === 'message' && msg.id) {
+      const sent = inFlight.indexOf(msg.text ?? '');
+      if (sent >= 0) inFlight.splice(sent, 1);
+      appendLine(msg as ChatLine);
+    } else if (msg.type === 'count' && typeof msg.count === 'number') store.set(chatCountAtom, msg.count);
     else if (msg.type === 'error' && msg.error) {
       // the server refused who we are (bad nick, somebody's name): back to the nick box, no retry loop
       const refused = /nick|account/.test(msg.error);
       showNotice(msg.error, refused ? 8000 : 3000);
+      // the oldest line out was not taken: back into the box, unless something new is being typed
+      if (/slow down|chat is (busy|down)/.test(msg.error)) {
+        const lost = inFlight.shift();
+        if (lost && !store.get(chatDraftAtom)) store.set(chatDraftAtom, lost);
+      }
       if (refused && session === current) {
         closeChat(false);
         // a login is only ever refused when its cookie died (logout-all, passwd): stop being that name

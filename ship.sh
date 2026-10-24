@@ -16,6 +16,10 @@
 # box takes an hour), with the same Dockerfiles ./deploy.sh uses. The dependency layers are cached
 # here, so a source change rebuilds only that crate.
 #
+# The tag is the commit the images are named after everywhere: the last one that touched
+# what they are built from (./image-paths; -dirty with uncommitted edits there), the rule
+# deploy.sh and the github action use too, so a box at the same tree finds them by itself.
+#
 # After --to, on the box:   ./deploy.sh --images <the tag this prints>     (the images are there; nothing is pulled)
 # After a push, on the box:  ./deploy.sh --pull                              (the registry comes from the git remote)
 #                            login here, once:  gh auth refresh -s write:packages,read:packages
@@ -57,9 +61,14 @@ have docker || die "docker is not installed"
 docker buildx version >/dev/null 2>&1 || die "docker buildx is missing (docker desktop has it; on linux: apt install docker-buildx-plugin)"
 have git || die "git is not installed"
 
-# the same BUILD rule as deploy.sh: the commit, -dirty when what the images are built from has edits
-BUILD="$(git rev-parse --short HEAD 2>/dev/null || echo dev)"
-if [ "$BUILD" != dev ] && [ -n "$(git status --porcelain -- api video frontend Cargo.toml Cargo.lock 2>/dev/null)" ]; then
+# the same BUILD rule as deploy.sh and the action: the last commit that touched what the
+# images are built from (./image-paths, 7 characters), -dirty when that has uncommitted edits
+PATHSPECS=()
+while IFS= read -r p; do PATHSPECS+=("$p"); done < <(tr -d '\r' < image-paths 2>/dev/null | sed -E 's/[[:space:]]+$//' | grep -Ev '^[[:space:]]*(#|$)' || true)
+[ ${#PATHSPECS[@]} -gt 0 ] || die "image-paths is missing or empty next to ship.sh"
+BUILD="$(git log -1 --format=%h --abbrev=7 -- "${PATHSPECS[@]}" 2>/dev/null || true)"
+BUILD="${BUILD:-dev}"
+if [ "$BUILD" != dev ] && [ -n "$(git status --porcelain -- "${PATHSPECS[@]}" 2>/dev/null)" ]; then
   BUILD="$BUILD-dirty"
 fi
 
@@ -164,6 +173,10 @@ case "$MODE" in
     note "on the box:  cd slop-stream-architecture && ./deploy.sh --images $TAG"
     note "(it finds them here under that tag and pulls nothing. --pull first if the compose file or caddyfile changed too)" ;;
   push)
-    note "on the box:  ./deploy.sh --pull     (its commit is this one once pulled, so no tag to type; the registry comes from the git remote)"
+    if [[ "$TAG" == *-dirty ]]; then
+      note "on the box:  ./deploy.sh --images $TAG     (uncommitted edits went into these, so the box cannot work the tag out; commit, and --pull finds them by itself)"
+    else
+      note "on the box:  ./deploy.sh --pull     (once it has this commit it names the images the same way, so no tag to type; the registry comes from the git remote)"
+    fi
     note "a 'denied' on the pull means a package a laptop push created is private (the action's are public by themselves): github › your profile › Packages › stream-x › Package settings › Change visibility › public" ;;
 esac

@@ -114,9 +114,9 @@ changed:
 | | route | now |
 |---|---|---|
 | POST | `/api/streams/:name/go-live` | 403 `that name has an account. log in as it` when claimed and the cookie is not its owner. free names: like before. the dummy `?password=` path is untouched |
-| PUT | `/api/streamers/:name` | the same 403 |
+| PUT | `/api/streamers/:name` | the same 403, and the same `reserved name` 403 as go-live for a `dummy-` name without `?password=` (the picture's PUT and DELETE too: a reserved name is never claimed, so without the gate it would be anyone's) |
 | GET | `/api/streams`, POST `.../watch` | carry `verified` |
-| ws | `/chat/:name` | the cookie names you; `hello` needs no nick then. an anonymous nick that is a claimed name gets `that name has an account. log in as it, or pick another` and the socket closes. lines carry `verified` |
+| ws | `/chat/:name` | the cookie names you; `hello` needs no nick then. an anonymous nick that is a claimed name gets `that name has an account. log in as it, or pick another` and the socket closes; a `dummy-` nick `that nick belongs to the fake streams. pick another`, the same way. lines carry `verified` |
 | ws | `/ws` (video) | a publish frame carries the go-live `session` and `token`; video asks the api (`heartbeat`) that they are open for that name, else `not your stream`. so skipping go-live skips nothing |
 
 `stop` and `heartbeat` still take the session token: that is what an anonymous streamer has.

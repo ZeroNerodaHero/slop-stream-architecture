@@ -92,7 +92,9 @@ export function commitStreamName(): Promise<void> {
  * the name in the header (and can still type another).
  */
 export async function enterLivePage(): Promise<void> {
+  const generation = liveGeneration;
   await loadMe();
+  if (generation !== liveGeneration) return; // left before the answer: nothing to fill in
   const me = store.get(meAtom);
   if (me) setStreamName(me);
   else if (!store.get(streamNameAtom)) setStreamName(store.get(nickAtom));
@@ -271,17 +273,25 @@ export function leaveLivePage() {
 export async function loadProfile(): Promise<void> {
   const name = store.get(streamNameAtom);
   if (!isValidName(name)) return;
-  if (profileName && profileName !== name) {
-    if (store.get(bioDraftAtom) === loadedBio) store.set(bioDraftAtom, '');
-    store.set(bioStatusAtom, '');
-    store.set(myAvatarAtom, null);
+  if (profileName !== name) {
+    if (profileName) {
+      // trimmed, as it was saved or loaded; the box may hold a trailing newline on top
+      if (store.get(bioDraftAtom).trim() === loadedBio) store.set(bioDraftAtom, '');
+      store.set(bioStatusAtom, '');
+      store.set(myAvatarAtom, null);
+    }
+    // the same name again keeps what was loaded for it: a second commit (focus, blur) must not
+    // forget the saved bio, or the next name change would take it for typed text and keep it
+    profileName = name;
+    loadedBio = '';
   }
-  profileName = name;
-  loadedBio = '';
+  const generation = liveGeneration;
   try {
     const me = await api.streamer(name);
-    if (store.get(streamNameAtom) !== name) return; // the box moved on while the api was answering
-    if (!store.get(bioDraftAtom)) store.set(bioDraftAtom, (loadedBio = me.bio ?? ''));
+    // the box moved on, or the page was left, while the api was answering
+    if (store.get(streamNameAtom) !== name || generation !== liveGeneration) return;
+    loadedBio = me.bio ?? '';
+    if (!store.get(bioDraftAtom)) store.set(bioDraftAtom, loadedBio);
     store.set(myAvatarAtom, me.avatar ?? null);
   } catch {
     // nothing saved yet
@@ -341,8 +351,10 @@ export async function saveBio(): Promise<void> {
     return;
   }
   try {
-    await api.saveBio(name, store.get(bioDraftAtom).trim());
+    const saved = await api.saveBio(name, store.get(bioDraftAtom).trim());
     store.set(bioStatusAtom, 'saved');
+    // saved is as good as loaded: it belongs to this name now and goes with it on a name change
+    if (name === profileName) loadedBio = saved.bio;
   } catch (err) {
     store.set(bioStatusAtom, `not saved: ${messageOf(err)}`);
   }

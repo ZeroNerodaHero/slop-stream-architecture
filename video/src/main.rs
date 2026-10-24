@@ -192,6 +192,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let thumbs = thumbs::enabled() && thumbs::ffmpeg_present().await;
+    thumbs::sweep_stale().await;
     match (thumbs, thumbs::enabled()) {
         (true, _) => log::info!("thumbnails every {}s at /thumb/<name>.jpg", thumbs::every_secs()),
         (false, true) => log::warn!("no ffmpeg in this image, so no thumbnails"),
@@ -311,6 +312,11 @@ async fn thumb(State(app): State<App>, axum::extract::Path(file): axum::extract:
         return StatusCode::NOT_FOUND.into_response();
     };
     if !valid_name(&name) || !app.hub.live_names().await.contains(&name) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    // a picture ffmpeg has not replaced in a while is not a picture of the stream now:
+    // the video stopped coming while the connection held, or ffmpeg is gone. 404, like none
+    if thumbs::picture_age(&name).await.is_none_or(|age| age > thumbs::stale_after()) {
         return StatusCode::NOT_FOUND.into_response();
     }
     match tokio::fs::read(thumbs::jpeg_path(&name)).await {
@@ -456,16 +462,46 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, exp
                 }
             }
             if let Some(tap) = &tap {
-                // ffmpeg can only start on a keyframe, and a browser sends one
-                // only when asked. Ask until the first picture exists, a few times.
+                // ffmpeg can only start on a keyframe, and only a keyframe gets it going
+                // again after a lost frame (its vp8 depacketizer drops every frame until
+                // one); a browser sends one only when asked. So ask, every 2s, whenever
+                // the picture is missing or past due, for as long as ffmpeg lives: at the
+                // start, and after a loss nobody else noticed. (The sfu gets a lost packet
+                // back by nack and forwards a whole stream, so no watcher asks; ffmpeg,
+                // fed in arrival order, saw a gap.) Quiet while the pictures come.
                 let hub = hub.clone();
                 let room = room.clone();
-                let ffmpeg_dead = tap.dead_flag();
+                let ffmpeg_gone = tap.dead_flag();
                 tokio::spawn(async move {
-                    for attempt in 0..15u64 {
-                        tokio::time::sleep(Duration::from_millis(if attempt == 0 { 400 } else { 2000 })).await;
-                        if ffmpeg_dead.load(Ordering::Relaxed) || tokio::fs::metadata(thumbs::jpeg_path(&room)).await.is_ok() {
+                    let mut wait = Duration::from_millis(400);
+                    let mut due_since: Option<Instant> = None;
+                    let mut told = false;
+                    loop {
+                        tokio::time::sleep(wait).await;
+                        wait = Duration::from_millis(2000);
+                        if ffmpeg_gone.load(Ordering::Relaxed) {
                             break;
+                        }
+                        let due = thumbs::picture_age(&room).await.is_none_or(|age| age > thumbs::due_after());
+                        if !due {
+                            due_since = None;
+                            if told {
+                                log::info!("thumb {room}: pictures again");
+                                told = false;
+                            }
+                            continue;
+                        }
+                        // keyframes asked for and no picture for as long as /thumb has been
+                        // saying 404: ffmpeg is wedged or the video stopped. Said once (its
+                        // own log is at `error` only), and the asking slows down: every 2s
+                        // of keyframes for the rest of a stream would cost every watcher
+                        let stuck = due_since.get_or_insert_with(Instant::now).elapsed() > thumbs::stale_after();
+                        if stuck && !told {
+                            log::warn!("thumb {room}: no new picture for {}s with keyframes asked for. ffmpeg stuck, or the video stopped", thumbs::stale_after().as_secs());
+                            told = true;
+                        }
+                        if stuck {
+                            wait = Duration::from_secs(10);
                         }
                         hub.request_keyframe(&room, true).await;
                     }
