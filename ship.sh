@@ -16,11 +16,12 @@
 # box takes an hour), with the same Dockerfiles ./deploy.sh uses. The dependency layers are cached
 # here, so a source change rebuilds only that crate.
 #
-# After --to, on the box:   ./deploy.sh --pull --images <the tag this prints>
-# After a push, once:        IMAGES=ghcr.io/<you>/ in the box's .env (or on the command line), and the
-#                            packages made public on github (profile › Packages › stream-x › settings).
+# After --to, on the box:   ./deploy.sh --images <the tag this prints>     (the images are there; nothing is pulled)
+# After a push, on the box:  ./deploy.sh --pull                              (the registry comes from the git remote)
 #                            login here, once:  gh auth refresh -s write:packages,read:packages
 #                                               gh auth token | docker login ghcr.io -u <you> --password-stdin
+#                            a package a laptop push creates is private until made public once on github
+#                            (the action's are public by themselves)
 #
 set -euo pipefail
 
@@ -71,16 +72,19 @@ remote() {
   esac
 }
 
-IMAGES=""
+# the registry name the images go by, the same one deploy.sh derives: ghcr.io/<owner>/ from
+# the git remote, lowercased (ghcr wants that). sent images carry it too, so the box finds
+# them under the name compose looks for, with nothing to configure.
+if [ -z "${IMAGES:-}" ] && [ "$MODE" != local ]; then
+  owner="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https://github\.com/|git@github\.com:)([^/]+)/.*$#\2#' | tr '[:upper:]' '[:lower:]')"
+  [ -n "$owner" ] && [ "$owner" != "$(git remote get-url origin 2>/dev/null | tr '[:upper:]' '[:lower:]')" ] || die "cannot tell the registry from the git remote. set it:  IMAGES=ghcr.io/<you>/ ./ship.sh"
+  IMAGES="ghcr.io/$owner/"
+fi
+IMAGES="${IMAGES:-}"
+[ -z "$IMAGES" ] || IMAGES="${IMAGES%/}/"
+
 case "$MODE" in
   push)
-    # where to. ghcr.io/<owner>/ from the git remote, lowercased (ghcr wants that)
-    if [ -z "${IMAGES:-}" ]; then
-      owner="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https://github\.com/|git@github\.com:)([^/]+)/.*$#\2#' | tr '[:upper:]' '[:lower:]')"
-      [ -n "$owner" ] && [ "$owner" != "$(git remote get-url origin 2>/dev/null | tr '[:upper:]' '[:lower:]')" ] || die "cannot tell the registry from the git remote. set it:  IMAGES=ghcr.io/<you>/ ./ship.sh"
-      IMAGES="ghcr.io/$owner/"
-    fi
-    IMAGES="${IMAGES%/}/"
     PLATFORM="${PLATFORM:-linux/amd64}"
     TAG="$BUILD"
     OUT=(--push)
@@ -114,7 +118,7 @@ JOBS="$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 2)"
 
 case "$MODE" in
   push)  say "building ${TARGETS[*]} for $PLATFORM as ${IMAGES}stream-<x>:$TAG and :latest, pushing" ;;
-  send)  say "building ${TARGETS[*]} for $PLATFORM as stream-<x>:$TAG, then sending them to $TO" ;;
+  send)  say "building ${TARGETS[*]} for $PLATFORM as ${IMAGES}stream-<x>:$TAG, then sending them to $TO" ;;
   local) say "building ${TARGETS[*]} for $PLATFORM as stream-<x>:$TAG (kept here)" ;;
 esac
 note "BUILD=$BUILD, CARGO_BUILD_JOBS=$JOBS. the first rust build under emulation takes a while; the next one reuses the dependency layers"
@@ -144,7 +148,7 @@ done
 if [ "$MODE" = send ]; then
   # one stream: the images as a tar, gzipped, straight into docker on the box. layers the
   # images share (debian, ffmpeg) go once. nothing lands on disk at either end.
-  names=(); for t in "${TARGETS[@]}"; do names+=("stream-$t:$TAG"); done
+  names=(); for t in "${TARGETS[@]}"; do names+=("${IMAGES}stream-$t:$TAG"); done
   say "sending ${names[*]} to $TO"
   t0=$(date +%s)
   docker save --platform "$PLATFORM" "${names[@]}" | gzip -1 \
@@ -157,10 +161,9 @@ say "done: ${TARGETS[*]} as $TAG"
 case "$MODE" in
   local) note "run them here with:  TAG=local docker compose up -d --no-build" ;;
   send)
-    note "on the box:  cd slop-stream-architecture && ./deploy.sh --pull --images $TAG"
-    note "(--pull for the compose file and caddyfile that go with these images; --images $TAG starts what was just sent, builds nothing)" ;;
+    note "on the box:  cd slop-stream-architecture && ./deploy.sh --images $TAG"
+    note "(it finds them here under that tag and pulls nothing. --pull first if the compose file or caddyfile changed too)" ;;
   push)
-    note "on the box:  ./deploy.sh --pull --images $TAG"
-    note "first time there: IMAGES=$IMAGES goes in its .env (deploy.sh writes it when given on the command line:  IMAGES=$IMAGES ./deploy.sh --images $TAG)"
+    note "on the box:  ./deploy.sh --pull     (its commit is this one once pulled, so no tag to type; the registry comes from the git remote)"
     note "a 'denied' on the pull means a package a laptop push created is private (the action's are public by themselves): github › your profile › Packages › stream-x › Package settings › Change visibility › public" ;;
 esac

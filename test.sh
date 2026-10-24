@@ -20,7 +20,7 @@
 #   auth       sign up, log in, log out, a claimed name is only its owner's, verified chat lines, 429 after 10 tries
 #   preview    /watch/<name> html: title + og tags offline, with a picture, live with the thumbnail; the picture round-trips
 #   errors     /api/health has the monitor fields, a page's error report lands (204, log, debug db), bad ones 400, /admin renders
-#   pip        picture in picture: the stream follows you to other pages, coming back takes it over, another stream replaces it, × ends it
+#   pip        picture in picture: the button goes home with the stream in a corner, the player moves and resizes, coming back takes it over, another stream replaces it, × ends it
 #   regress    token-gated stop, auto-recovery, trailing slash, fast restart, races, bad offers
 #   monitor    (local only) `api monitor` watches this stack and a dead address: up with the right build,
 #              down with a reason, the page shows both, a restart keeps its memory. runs monitor/docker-compose.yml
@@ -64,7 +64,7 @@ say "target: $BASE"
 if ! curl -ks -o /dev/null --max-time 5 "$BASE/api/health"; then
   if [ "$LOCAL" = 1 ]; then
     say "stack is down, starting it"
-    ./deploy.sh >/dev/null
+    ./deploy.sh --build >/dev/null   # the tests are about this checkout, so its own build, not the registry's images
   else
     die "$BASE/api/health does not answer"
   fi

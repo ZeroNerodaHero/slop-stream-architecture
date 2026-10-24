@@ -20,38 +20,29 @@ git clone <repo> && cd slop-stream-architecture
 
 it prints a url. open it. click through the warning.
 
+nothing is compiled on the server. every push to `main` makes github build the four images (`.github/workflows/images.yml`, free for a public repo) and push them to `ghcr.io/<you>/stream-<x>:<commit>`; `./deploy.sh` works out the registry from the git remote and pulls the images for the commit the server is at. a 1 GB box is enough. the action takes a few minutes after a push; a deploy before it finishes says so and does nothing.
+
 ## update
 
-- `./deploy.sh --pull` — pull, rebuild only what changed. new settings land in `.env` with defaults
+- `./deploy.sh --pull` — pull the repo, then the images for that commit. new settings land in `.env` with defaults
 - `./deploy.sh api` — only the api. streams stay up
 - `./deploy.sh frontend` — only the pages. streams stay up
 - `./deploy.sh video` — ends every stream. it warns first
 - `./deploy.sh` — everything again
-- `./deploy.sh --prune-deploy` — the disk is full of old builds: drop them first, then deploy
+- `./deploy.sh --prune-deploy` — the disk is full of old builds and images: drop them first, then deploy
 
-## don't build on the box
+## building yourself
 
-a small box takes an hour to compile the rust and needs 4 GB of ram and 8 GB of disk to do it. three ways out, cheapest first:
+`./deploy.sh --build` compiles the images on the machine it runs on instead of pulling them: an hour and 4 GB of ram on a small box, a few minutes on a laptop. for a laptop with changes that are not pushed yet, or a box whose git remote is not on github (then `IMAGES=<registry>/<owner>/` in `.env` is the other way).
 
-**github builds it, for free.** every push to `main` runs `.github/workflows/images.yml`: the four images, built natively on github's x86 machines, pushed to `ghcr.io/<you>/stream-<x>:<commit>`. a public repo pays nothing for the minutes or the packages. then on the box:
-
-```
-IMAGES=ghcr.io/<you>/ ./deploy.sh --pull --images    # once: pulls the repo, then the images for that very commit. builds nothing. a 1 GB box is enough
-./deploy.sh --pull                                   # every time after: the box remembers it gets images from there
-```
-
-`.env` remembers `IMAGES`, and from then on a plain `./deploy.sh` means `--images`; `./deploy.sh --build` is how such a box goes back to compiling its own. the packages come out public on their own, because the repo is. the action takes a few minutes after the push; a deploy before it finishes says so.
-
-**your laptop builds it, ssh carries it.** no registry, no account:
+to try unpushed changes on the box without compiling there:
 
 ```
-./ship.sh --to gcloud:test-machine        # on the laptop: builds for the box, sends the images straight into its docker, prints a tag
-./deploy.sh --images <that tag>           # on the box: starts them. builds nothing, pulls nothing (the box remembers this too)
+./ship.sh --to gcloud:test-machine        # on the laptop: builds for the box, sends the images straight into its docker over ssh, prints a tag
+./deploy.sh --images <that tag>           # on the box: finds them there, starts them, pulls nothing
 ```
 
-`--to billy@1.2.3.4` for a box that is not on gcloud. an arm laptop builds the box's amd64 images under emulation: minutes, not an hour.
-
-**your laptop builds it, a registry carries it.** `./ship.sh` with no `--to` pushes to `ghcr.io/<you>/` like the action does; for several boxes when github is not building. needs a `docker login` once.
+`--to billy@1.2.3.4` for a box that is not on gcloud. an arm laptop builds the box's amd64 images under emulation: minutes, not an hour. `./ship.sh` with no `--to` pushes to the registry like the action does (needs a `docker login` once).
 
 ## screens
 
@@ -147,7 +138,7 @@ the camera works there too.
 which backend it talks to:
 
 - `BACKEND=https://192.81.135.162 npm run dev` — the server. no docker needed on your mac
-- plain `npm run dev` — the docker stack on your mac (`./deploy.sh` first)
+- plain `npm run dev` — the docker stack on your mac (`./deploy.sh --build` first: your own build, not the registry's images)
 
 put `BACKEND=...` in `frontend/.env` to make it stick.
 no password needed. the backend talks to any pages that speak its api.

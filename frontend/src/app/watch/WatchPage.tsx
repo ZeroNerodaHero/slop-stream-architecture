@@ -1,6 +1,6 @@
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import {
   avatarAtom,
@@ -11,11 +11,10 @@ import {
   markPlaying,
   mutedAtom,
   needsTapAtom,
-  pipAtom,
   remoteStreamAtom,
   retry,
   showUnmuteAtom,
-  togglePip,
+  startPip,
   unmuteVideo,
   verifiedAtom,
   watch,
@@ -35,6 +34,7 @@ import { VideoFrame } from '@/shared-components/VideoFrame';
 
 export function WatchPage() {
   const params = useParams<{ name: string }>();
+  const navigate = useNavigate();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const name = useAtomValue(watchNameAtom);
   const message = useAtomValue(watchMessageAtom);
@@ -46,7 +46,6 @@ export function WatchPage() {
   const muted = useAtomValue(mutedAtom);
   const verified = useAtomValue(verifiedAtom);
   const avatar = useAtomValue(avatarAtom);
-  const pip = useAtomValue(pipAtom);
   const phase = useAtomValue(watchPhaseAtom);
 
   // Mount only: start watching the name in the url (or take back the stream picture in picture
@@ -61,6 +60,13 @@ export function WatchPage() {
       leaveWatchPage();
     };
   }, []);
+
+  // The picture in picture button is a home click that keeps the stream: on, then away, and
+  // the MiniPlayer has it in the corner by the time the home page shows.
+  const toCorner = () => {
+    startPip();
+    navigate('/');
+  };
 
   return (
     <PageFrame
@@ -97,11 +103,10 @@ export function WatchPage() {
               </Button>
             )}
             {phase !== 'bad-name' && (
-              <Button id="pip" aria-pressed={pip} onClick={togglePip} className={pip ? 'border-primaryBlue text-primaryBlue' : undefined}>
-                picture in picture{pip ? ': on' : ''}
+              <Button id="pip" title="keeps playing in a corner while you look around the site" onClick={toCorner}>
+                picture in picture
               </Button>
             )}
-            {pip && <span className="text-base text-textSecondary">keeps playing in a corner while you look around the site</span>}
           </div>
 
           {bio && (

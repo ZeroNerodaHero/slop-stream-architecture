@@ -19,7 +19,7 @@ async function frames(page) {
 }
 function deploy(target) {
   const t0 = Date.now();
-  const out = execSync(`./deploy.sh ${target} 2>&1`, { cwd: REPO, env: ENV, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const out = execSync(`./deploy.sh --build ${target} 2>&1`, { cwd: REPO, env: ENV, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   return { ms: Date.now() - t0, out };
 }
 

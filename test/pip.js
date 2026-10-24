@@ -1,5 +1,6 @@
-// Picture in picture: with it on, leaving the watch page keeps the stream playing in a corner
-// of every other page (#pip-player); coming back takes the same stream over without a second
+// Picture in picture: the button is a home click that keeps the stream, which then plays in a
+// corner of every other page (#pip-player); the player drags anywhere and resizes from a
+// corner, and stays where it was put; coming back takes the same stream over without a second
 // /watch call; opening another stream's page replaces it and the player follows that one; the
 // player's × ends it. Two publishers with fake cameras and one watcher.
 // Run through ./test.sh, or: BASE_URL=https://<ip> node pip.js
@@ -36,6 +37,21 @@ async function framesFlow(p, sel) {
   expect(b.w > 0 && b.frames > a.frames, `${sel}: ${JSON.stringify(a)} -> ${JSON.stringify(b)}`);
   return `${b.w}px wide, ${b.frames - a.frames} frames in 1.5s${b.muted ? ', muted' : ', sound on'}`;
 }
+const rect = (p, sel) => p.$eval(sel, (el) => el.getBoundingClientRect().toJSON());
+const near = (a, b) => Math.abs(a - b) <= 1.5;
+const at = (r) => `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}×${Math.round(r.height)}`;
+// press in the middle of an element and pull it by (dx, dy)
+async function drag(p, sel, dx, dy) {
+  const r = await rect(p, sel);
+  const x = r.left + r.width / 2;
+  const y = r.top + r.height / 2;
+  await p.mouse.move(x, y);
+  await p.mouse.down();
+  await p.mouse.move(x + dx / 2, y + dy / 2, { steps: 5 });
+  await p.mouse.move(x + dx, y + dy, { steps: 5 });
+  await p.mouse.up();
+  await sleep(100);
+}
 
 (async () => {
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
@@ -67,29 +83,50 @@ async function framesFlow(p, sel) {
     await w.goto(`${BASE}/watch/${A}`, { waitUntil: 'domcontentloaded' });
     await waitStatus(w, /^watching$/);
     await w.click('#unmute');
-    const pressed = await w.getAttribute('#pip', 'aria-pressed');
-    expect(pressed === 'false', `#pip aria-pressed ${pressed} before the click`);
+    expect((await w.$('#pip')) !== null, 'no #pip button');
+    expect((await w.$('#pip-player')) === null, 'the corner player showed on the stream\'s own page');
     return await framesFlow(w, '#video');
   });
 
-  await step('turn it on: the button says so', async () => {
+  let box;
+  await step('picture in picture: a home click that keeps the stream. it plays in the bottom right corner, with its name and status', async () => {
     await w.click('#pip');
-    expect((await w.getAttribute('#pip', 'aria-pressed')) === 'true', 'aria-pressed is not true');
-    expect(/on/.test(await w.textContent('#pip')), `button reads "${await w.textContent('#pip')}"`);
-    expect((await w.$('#pip-player')) === null, 'the corner player showed on the stream\'s own page');
-    return `"${(await w.textContent('#pip')).trim()}"`;
-  });
-
-  await step('go home: the stream keeps playing in the corner, with its name and status', async () => {
-    await w.click('header a[href="/"]');
+    await w.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
     await w.waitForSelector('#pip-player', { timeout: 10000 });
     await w.waitForSelector('#list article', { timeout: 10000 });
     await w.waitForFunction(() => /^watching$/i.test(document.querySelector('#pip-status')?.textContent || ''), null, { timeout: 10000 });
     const name = (await w.textContent('#pip-player a.font-semibold')).trim();
     expect(name === A, `player names "${name}"`);
+    box = await rect(w, '#pip-player');
+    const view = await w.evaluate(() => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight }));
+    expect(near(box.right, view.w - 24) && near(box.bottom, view.h - 24), `not in the corner: ${at(box)} in ${view.w}×${view.h}`);
     const tap = await w.$('#pip-unmute');
     const flow = await framesFlow(w, '#pip-video');
-    return `${flow}${tap ? ` · the player offers "${(await tap.textContent()).trim()}"` : ''}`;
+    return `${at(box)} · ${flow}${tap ? ` · the player offers "${(await tap.textContent()).trim()}"` : ''}`;
+  });
+
+  await step('drag the player by its video: it follows, and the drop is not a click back to the page', async () => {
+    await drag(w, '#pip-video', -300, -200);
+    const b = await rect(w, '#pip-player');
+    expect(near(b.left, box.left - 300) && near(b.top, box.top - 200), `${at(box)} -> ${at(b)}`);
+    expect(near(b.width, box.width), `the width changed: ${box.width} -> ${b.width}`);
+    expect(new URL(w.url()).pathname === '/', `went to ${new URL(w.url()).pathname}`);
+    await drag(w, '#pip-status', -5000, -5000);
+    const edge = await rect(w, '#pip-player');
+    expect(near(edge.left, 0) && near(edge.top, 0), `pulled off the screen: ${at(edge)}`);
+    box = edge;
+    return `${at(b)}, then stopped at the edge: ${at(edge)}`;
+  });
+
+  await step('pull the bottom right corner: wider, still 16:9, the top left corner stays put, the frames keep coming', async () => {
+    await drag(w, '#pip-resize-se', 240, 40);
+    const b = await rect(w, '#pip-player');
+    expect(near(b.width, box.width + 240), `width ${box.width} -> ${b.width}`);
+    expect(near(b.left, box.left) && near(b.top, box.top), `the top left moved: ${at(box)} -> ${at(b)}`);
+    const v = await rect(w, '#pip-video');
+    expect(Math.abs((v.width * 9) / 16 - v.height) <= 2, `video ${v.width}×${v.height} is not 16:9`);
+    box = b;
+    return `${at(b)} · ${await framesFlow(w, '#pip-video')}`;
   });
 
   await step('click the player: back on the page, the same stream is taken over (no second /watch call)', async () => {
@@ -98,22 +135,22 @@ async function framesFlow(p, sel) {
     await w.waitForURL(`**/watch/${A}`, { timeout: 10000 });
     await waitStatus(w, /^watching$/, 10000);
     expect((await w.$('#pip-player')) === null, 'the corner player is still there on the stream\'s own page');
-    expect((await w.getAttribute('#pip', 'aria-pressed')) === 'true', 'picture in picture turned itself off');
     await framesFlow(w, '#video');
     expect(watchCalls[A] === before, `/watch was called again (${before} -> ${watchCalls[A]})`);
     return `${watchCalls[A]} watch call in total for ${A}`;
   });
 
-  await step(`home, then ${B}'s card: the new stream replaces the old one, picture in picture stays on`, async () => {
+  await step(`home (the player is back where it was left), then ${B}'s card: the new stream replaces the old one, still in the corner`, async () => {
     await w.click('header a[href="/"]');
     await w.waitForSelector('#pip-player', { timeout: 10000 });
+    const b = await rect(w, '#pip-player');
+    expect(near(b.left, box.left) && near(b.top, box.top) && near(b.width, box.width), `the player moved: ${at(box)} -> ${at(b)}`);
     await w.click(`#list a[aria-label="watch ${B}"]`);
     await w.waitForURL(`**/watch/${B}`, { timeout: 10000 });
     await waitStatus(w, /^watching$/);
     expect((await w.$('#pip-player')) === null, `the corner player is still there on ${B}'s own page`);
-    expect((await w.getAttribute('#pip', 'aria-pressed')) === 'true', 'picture in picture turned itself off on the switch');
     expect(watchCalls[B] === 1, `${watchCalls[B]} watch calls for ${B}`);
-    return await framesFlow(w, '#video');
+    return `${at(b)} · ${await framesFlow(w, '#video')}`;
   });
 
   await step(`home again: the corner now shows ${B}`, async () => {
@@ -134,11 +171,15 @@ async function framesFlow(p, sel) {
     return 'no calls in 6s';
   });
 
-  await step(`back to /watch/${A} after the close: a fresh start, button off`, async () => {
+  await step(`back to /watch/${A} after the close: a fresh start, picture in picture off, so a plain home click ends it`, async () => {
     await w.goto(`${BASE}/watch/${A}`, { waitUntil: 'domcontentloaded' });
     await waitStatus(w, /^watching$/);
-    expect((await w.getAttribute('#pip', 'aria-pressed')) === 'false', 'picture in picture is on after a page load');
-    return await status(w);
+    const word = await status(w);
+    await w.click('header a[href="/"]');
+    await w.waitForSelector('#list article', { timeout: 10000 });
+    await sleep(500);
+    expect((await w.$('#pip-player')) === null, 'the corner player showed after a page load turned picture in picture off');
+    return `${word}, then home with no corner player`;
   });
 
   for (const p of pubs) await p.click('#stop').catch(() => undefined);

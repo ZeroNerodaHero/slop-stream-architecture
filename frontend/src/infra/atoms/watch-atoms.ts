@@ -33,9 +33,10 @@ export const mutedAtom = atom(true);
 /** Autoplay was refused (low power mode, strict settings). One tap fixes it. */
 export const needsTapAtom = atom(false);
 /**
- * Picture in picture: leaving the watch page keeps the stream alive and the MiniPlayer shows
- * it in a corner of every other page. Off, leaving ends it. Stays on when another stream
- * replaces this one; off again on close, on a page load, and when the stream is ended by hand.
+ * Picture in picture: the watch page's button turns it on and goes home; from then on leaving
+ * the watch page keeps the stream alive and the MiniPlayer shows it in a corner of every other
+ * page. Off, leaving ends it. Stays on when another stream replaces this one; off again on
+ * close, on a page load, and when the stream is ended by hand.
  */
 export const pipAtom = atom(false);
 
@@ -206,8 +207,9 @@ export function unmuteVideo(el: HTMLVideoElement | null) {
   }
 }
 
-export function togglePip() {
-  store.set(pipAtom, !store.get(pipAtom));
+/** From here on, leaving the watch page keeps the stream in the corner. The only way back off is the MiniPlayer's ×. */
+export function startPip() {
+  store.set(pipAtom, true);
 }
 
 export function teardown() {

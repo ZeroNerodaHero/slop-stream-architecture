@@ -2,38 +2,38 @@
 #
 # deploy.sh — bring the stream lab up on this machine, or redeploy part of it.
 #
-#   ./deploy.sh                   everything. first time, or any time
+#   ./deploy.sh                   everything. first time, or any time. the images come from the
+#                                 registry (ghcr.io/<you>/, from the git remote) at this commit:
+#                                 what the github action pushed. nothing is compiled here
+#   ./deploy.sh --pull            git pull, then the images for the commit just pulled
+#   ./deploy.sh api               only the api (also: frontend, video, dummy): get its image, swap it
+#   ./deploy.sh --images TAG      a tag of your choosing, e.g. the one ./ship.sh --to printed
+#   ./deploy.sh --build           compile the images here instead (a laptop with uncommitted changes,
+#                                 a box without a registry). goes with --pull and services
+#   ./deploy.sh --prune-deploy    first give the disk back what builds took (docker's build cache,
+#                                 untagged images, old stream images), then deploy as asked. for the
+#                                 small box that says "only 2664MB free"
 #   ./deploy.sh 203.0.113.7       everything, with this ip
-#   ./deploy.sh api               rebuild and restart only the api
-#   ./deploy.sh frontend video    only these (frontend, api, video, dummy)
-#   ./deploy.sh --pull            git pull, then rebuild only what the pull changed
-#   ./deploy.sh --pull api        git pull, then only the api
-#   ./deploy.sh --prune-deploy    first give the disk back what the builds took (docker's build
-#                                 cache, untagged images), then deploy as asked. for the small box
-#                                 that says "only 2664MB free". goes with --pull and services
-#   ./deploy.sh --images [TAG]    no build on this machine: the images the github action pushed (every
-#                                 push to main) or ./ship.sh made, at that commit. IMAGES= in .env names
-#                                 the registry; sent with ./ship.sh --to they are already here. a box that
-#                                 once did this keeps doing it on a plain ./deploy.sh; --build builds again
 #   ./deploy.sh passwd billy      a new password for an account (there is no email reset)
 #   PUBLIC_IP=10.0.0.5 ./deploy.sh
 #
 # Full run, Linux (Ubuntu 22.04/24.04, Debian 12): installs docker if missing,
-# refuses if 80/443 are taken, adds a 2G swapfile on small boxes, opens ufw
-# ports, writes .env (PUBLIC_IP, CARGO_BUILD_JOBS, and ENV_NAME = this machine's
-# hostname unless you set one), builds the pages and the three rust images (api,
-# video, dummy) one at a time, starts everything, waits for /api/health. Exits
-# non-zero if the health check fails. The images carry BUILD (the commit), so a
-# full deploy restarts video whenever HEAD moved since the last one: every live
-# stream ends, and the script says so before `up`. macOS (Docker Desktop): same,
-# minus install / swap / ufw; PUBLIC_IP comes from en0/en1 (no ipify lookup).
+# refuses if 80/443 are taken, opens ufw ports, writes .env (PUBLIC_IP,
+# CARGO_BUILD_JOBS, and ENV_NAME = this machine's hostname unless you set one),
+# gets the pages image and the three rust images (api, video, dummy), starts
+# everything, waits for /api/health. Exits non-zero if the health check fails.
+# With --build the images are compiled here one at a time (several minutes, a
+# 2G swapfile is added on small boxes). The images carry BUILD (the commit), so
+# a full deploy restarts video whenever the commit moved since the last one:
+# every live stream ends, and the script says so before `up`. macOS (Docker
+# Desktop): same, minus install / swap / ufw; PUBLIC_IP comes from en0/en1.
 #
-# Partial run: keeps PUBLIC_IP from .env, rebuilds the named services, swaps
-# only their containers. frontend = the pages; caddy keeps running, so live
-# streams survive. api = a few seconds of 502, streams survive. video = every
-# live stream ends (the script says so first). Afterwards the swapped containers
-# are checked: running, healthy where the image has a check, or the script exits
-# non-zero (no rollback).
+# Partial run: keeps PUBLIC_IP from .env, gets (or builds) the named services'
+# images, swaps only their containers. frontend = the pages; caddy keeps
+# running, so live streams survive. api = a few seconds of 502, streams
+# survive. video = every live stream ends (the script says so first).
+# Afterwards the swapped containers are checked: running, healthy where the
+# image has a check, or the script exits non-zero (no rollback).
 #
 # Every run that ends well writes the commit it deployed to .deployed (gitignored).
 # --pull diffs from there, not from HEAD, so a --pull that died in a build is
@@ -539,18 +539,22 @@ pick_build_jobs() {
 # so the full deploy and the partial ones work the same either way.
 build_one() {
   if [ "${IMAGES_MODE:-0}" = 1 ]; then
-    if [ -z "$IMAGES" ]; then
-      # no registry: ./ship.sh --to put the image into docker here. it is there, or it is not.
-      "${DOCKER[@]}" image inspect "$(image_name "$1")" >/dev/null 2>&1 && return 0
-      die "$(image_name "$1") is not on this machine. on the laptop:  ./ship.sh --to <this box> $1   (it prints the tag; this run asked for $TAG)
-  have:  $("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep "^stream-$1:" | tr '\n' ' ' || true)"
+    # already here under that exact name and tag (./ship.sh --to sent it, or an earlier
+    # run pulled it): a tag is a commit, so there is nothing newer to fetch.
+    if "${DOCKER[@]}" image inspect "$(image_name "$1")" >/dev/null 2>&1; then
+      note "$(image_name "$1") is here already"
+      return 0
     fi
-    "${DOCKER[@]}" compose pull "$1" && return 0
+    # a subshell, so the platform override is only on this pull, not on the `up` that follows
+    ( [ -z "${PULL_PLATFORM:-}" ] || export DOCKER_DEFAULT_PLATFORM="$PULL_PLATFORM"; "${DOCKER[@]}" compose pull "$1" ) && return 0
     die "pulling $(image_name "$1") failed.
   'not found' / 'manifest unknown': nothing is pushed under tag $TAG yet. the github action builds it after a push to main
       (a few minutes: github.com/<you>/<repo>/actions), or ./ship.sh on the laptop pushes it. is the tag the commit you mean?
+      images sent with ./ship.sh --to are named by the tag it printed:  ./deploy.sh --images <that tag>
   'denied' / 'unauthorized': the package is private. make it public (github.com → your profile → Packages → stream-$1 →
-      Package settings → Change visibility), or log this machine in:  gh auth token | ${DOCKER[*]} login ghcr.io -u <you> --password-stdin   (token with read:packages)"
+      Package settings → Change visibility), or log this machine in:  gh auth token | ${DOCKER[*]} login ghcr.io -u <you> --password-stdin   (token with read:packages)
+  have here:  $("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E "^([^/]+/)*stream-$1:" | tr '\n' ' ' || true)
+  or compile here instead:  ./deploy.sh --build ${ORIGINAL_ARGS[*]:-}"
   fi
   # BUILD on the command line as well as exported: `sudo docker` resets the
   # environment, and compose would then bake "dev" while this script prints the sha.
@@ -564,8 +568,7 @@ UP_FLAGS=()
 
 compose_up() {
   if [ "${IMAGES_MODE:-0}" = 1 ]; then
-    if [ -n "$IMAGES" ]; then say "pulling the images (IMAGES=$IMAGES TAG=$TAG). nothing is built here"
-    else say "using the images ./ship.sh sent here (tag $TAG). nothing is built, nothing is pulled"; fi
+    say "getting the images (${IMAGES}stream-<x>:$TAG). nothing is built here"
   else
     say "building the images one at a time (first time: several minutes, CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS, BUILD=$BUILD)"
   fi
@@ -824,27 +827,24 @@ usage() {
     N="$(tput sgr0 2>/dev/null || printf '\033[0m')"
   fi
   cat <<EOF
-${B}usage:${N} ./deploy.sh [--pull] [--prune-deploy] [--images [TAG] | --build] [PUBLIC_IP] [frontend|api|video|dummy ...]
+${B}usage:${N} ./deploy.sh [--pull] [--prune-deploy] [--build | --images [TAG]] [PUBLIC_IP] [frontend|api|video|dummy ...]
        ./deploy.sh passwd <name>
 
 ${B}what to deploy${N}
   ${B}(nothing named)${N}           full deploy: machine setup, every image, docker compose up
-  ${B}frontend api video dummy${N}  just these: new image, swap their containers (chat moves with api),
-                            then check them: running and healthy, or exit non-zero
+  ${B}frontend api video dummy${N}  just these: get (or build) their image, swap their containers (chat moves
+                            with api), then check them: running and healthy, or exit non-zero
   ${B}PUBLIC_IP${N}                 use this ip (full deploy only). otherwise: \$PUBLIC_IP > .env > auto-detect
 
 ${B}where the images come from${N}
-  a box that builds its own compiles the rust here: an hour on a small machine, 4 GB of ram, 8 GB of
-  disk. a box that gets them from elsewhere (the github action on every push to main, or ./ship.sh
-  from a laptop) pulls or finds them and builds nothing. which one this box is lives in .env: IMAGES
-  (a registry) or TAG (a shipped tag) set means "from elsewhere", and a plain ./deploy.sh then means
-  --images. empty means it builds, as it always has.
-  ${B}--images [TAG]${N}            from elsewhere, TAG being the commit (what the action and ./ship.sh tag with;
-                            default: the commit this checkout is at, so after --pull the one just pulled).
-                            IMAGES=ghcr.io/<you>/ in .env or the environment names the registry; sent here
-                            by ./ship.sh --to, no IMAGES is needed. no 4 GB floor, no swapfile: 1 GB runs it
-  ${B}--build${N}                   build here, on a box that has been getting images from elsewhere. clears
-                            IMAGES and TAG in .env: from now on it builds its own
+  by default nothing is compiled here. the four images come from the registry the git remote implies
+  (github.com/<you>/… → ghcr.io/<you>/; IMAGES= in .env or the environment to say otherwise), at the
+  tag of the commit this checkout is at: what the github action pushes on every push to main, and
+  what ./ship.sh tags with. an image already here under that name (./ship.sh --to sent it) is used as
+  is. no 4 GB floor, no swapfile: a 1 GB box runs it.
+  ${B}--images [TAG]${N}            the default, with a tag of your choosing (the one ./ship.sh --to printed, say)
+  ${B}--build${N}                   compile the images here instead: an hour on a small machine, 4 GB of ram,
+                            8 GB of disk. for a laptop with uncommitted changes, or a box with no registry
 
 ${B}flags${N}
   ${B}--pull${N}                    git pull --ff-only first. with no services named, redeploy what changed
@@ -913,56 +913,61 @@ load_public_ip_from_env() {
   export PUBLIC_IP
 }
 
-# which way this run gets its images. --images and --build say so outright. with neither,
-# a box whose .env names a registry (IMAGES) or a shipped tag (TAG) got its images from
-# elsewhere last time and does again: a forgotten flag must not start an hour of compiling.
-# a box with neither builds, as it always has.
+# images are the default; --build is the option. the box gets the four images built
+# elsewhere (the github action on every push to main, or ./ship.sh from a laptop) and
+# compiles nothing. --build compiles them here, the old way.
 decide_mode() {
-  [ "$IMAGES_MODE" = 0 ] && [ "$BUILD_MODE" = 0 ] || return 0
-  if [ -n "$(env_file_value IMAGES)$(env_file_value TAG)" ]; then
-    IMAGES_MODE=1
-    IMPLIED_IMAGES=1
-  fi
+  [ "$BUILD_MODE" = 1 ] || IMAGES_MODE=1
 }
-IMPLIED_IMAGES=0
 
-# where the images come from, and which. IMAGES from the environment, else .env: a
-# registry prefix (a missing trailing / is added) to pull from, or empty when
-# `./ship.sh --to` already put them into docker here. TAG from the command line, else
-# the environment, else the commit this checkout is at: what ./ship.sh and the github
-# action tag with, and after --pull the commit just pulled. the TAG in .env is only the
-# record of the last run, never a default (it would redeploy the old images after a pull).
-# both are exported so compose resolves ${IMAGES:-}stream-x:${TAG:-latest} to those
-# names, and written to .env so a `docker compose up -d` by hand later starts the same
-# images and not a build.
+# the registry the images live in, from the git remote: github.com/<owner>/… means
+# ghcr.io/<owner>/ (lowercased, ghcr wants that). ship.sh derives the same one.
+registry_from_remote() {
+  local url owner
+  url="$(git remote get-url origin 2>/dev/null || true)"
+  owner="$(printf '%s' "$url" | sed -E 's#^(https://github\.com/|git@github\.com:)([^/]+)/.*$#\2#' | tr '[:upper:]' '[:lower:]')"
+  [ -n "$owner" ] && [ "$owner" != "$(printf '%s' "$url" | tr '[:upper:]' '[:lower:]')" ] || return 1
+  printf 'ghcr.io/%s/' "$owner"
+}
+
+# where the images come from, and which. IMAGES: the environment, else .env, else the
+# registry the git remote implies (a missing trailing / is added). TAG: the command
+# line, else the environment, else the commit this checkout is at, which is what the
+# action and ./ship.sh tag with (after --pull: the commit just pulled). the TAG in .env
+# is only the record of the last run, never a default: after a pull it would name the
+# old images. both are exported so compose resolves ${IMAGES:-}stream-x:${TAG:-latest}
+# to those names, and written to .env so a `docker compose up -d` by hand later starts
+# the same images and not a build.
 setup_images_mode() {
   IMAGES="${IMAGES:-$(env_file_value IMAGES)}"
-  [ -z "$IMAGES" ] || IMAGES="${IMAGES%/}/"
+  if [ -z "$IMAGES" ]; then
+    IMAGES="$(registry_from_remote || true)"
+    [ -n "$IMAGES" ] || die "cannot tell where the images live: the git remote is not on github. put IMAGES=<registry>/<owner>/ in $ENV_FILE, or build here:  ./deploy.sh --build ${ORIGINAL_ARGS[*]:-}"
+  fi
+  IMAGES="${IMAGES%/}/"
   if [ -z "$TAG" ]; then
     TAG="$(git rev-parse --short HEAD 2>/dev/null || true)"
-    [ -n "$TAG" ] && note "no tag given: this checkout's commit, $TAG"
+    [ -n "$TAG" ] || die "cannot tell which images: not a git checkout. name them:  ./deploy.sh --images <tag>"
   fi
-  [ -n "$TAG" ] || die "--images needs the tag ./ship.sh printed:  ./deploy.sh --images <tag>   (what is here: $("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep '^stream-' | tr '\n' ' ' || true))"
-  [ "$IMPLIED_IMAGES" = 0 ] || note "this box runs images from elsewhere ($ENV_FILE names ${IMAGES:-a shipped tag}), so no build here. ./deploy.sh --build builds here instead"
+  # the images are built for the cloud box, linux/amd64. another machine (an arm laptop)
+  # pulls that variant anyway and runs it under emulation: slower, but it runs.
+  PULL_PLATFORM=""
+  case "$(uname -m)" in
+    x86_64|amd64) ;;
+    *) PULL_PLATFORM=linux/amd64
+       note "this machine is $(uname -m); the images are linux/amd64 and will run under emulation. ./deploy.sh --build makes native ones" ;;
+  esac
   export IMAGES TAG
   UP_FLAGS=(--no-build)
   set_env_key IMAGES "$IMAGES"
   set_env_key TAG "$TAG"
-  if [ -n "$IMAGES" ]; then say "images from $IMAGES, tag $TAG   (written to $ENV_FILE; empty IMAGES and TAG there go back to building here)"
-  else say "images sent here by ./ship.sh, tag $TAG   (TAG written to $ENV_FILE; empty there goes back to building here)"; fi
+  say "images: ${IMAGES}stream-<x>:$TAG   (nothing is built here; ./deploy.sh --build would. written to $ENV_FILE for a compose by hand)"
 }
 
-# a build here after an --images deploy: the images are made on this machine again, so
-# .env stops naming a registry and a tag (compose would otherwise put the registry's
-# name on a local build). a stray IMAGES or TAG in the shell is ignored the same way.
-leave_images_mode() {
-  local had_i had_t
-  had_i="$(env_file_value IMAGES)"; had_t="$(env_file_value TAG)"
-  if [ -n "$had_i$had_t" ]; then
-    note "this machine ran ${had_i:-images sent here} at tag ${had_t:-?}; --build makes this a box that builds its own again, so IMAGES and TAG in $ENV_FILE are cleared"
-    set_env_key IMAGES ""
-    set_env_key TAG ""
-  fi
+# --build: the images are made on this machine, as stream-<x>:latest, whatever .env
+# names (compose would otherwise put the registry's name on a local build). a stray
+# IMAGES or TAG in the shell is ignored the same way. .env is left as it is.
+setup_build_mode() {
   export IMAGES="" TAG=""
 }
 
@@ -1043,7 +1048,7 @@ full_deploy() {
   open_firewall
   write_env
   pick_env_name
-  if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else leave_images_mode; fi   # after write_env, which rewrites .env
+  if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else setup_build_mode; fi   # after write_env, which rewrites .env
   compose_up
   local ok=1
   wait_for_health || ok=0
@@ -1062,8 +1067,8 @@ partial_deploy() {
   ensure_swap
   pick_build_jobs
   refresh_env
-  if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else leave_images_mode; fi
-  say "redeploying: ${TARGETS[*]}   (PUBLIC_IP=$PUBLIC_IP from $ENV_FILE, $([ "$IMAGES_MODE" = 1 ] && echo "images $IMAGES tag $TAG" || echo "BUILD=$BUILD"))"
+  if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else setup_build_mode; fi
+  say "redeploying: ${TARGETS[*]}   (PUBLIC_IP=$PUBLIC_IP from $ENV_FILE, $([ "$IMAGES_MODE" = 1 ] && echo "images $IMAGES tag $TAG" || echo "building, BUILD=$BUILD"))"
   redeploy_targets
   local -a swapped=(); read -r -a swapped <<< "$(swapped_containers)" || true
   [ ${#swapped[@]} -eq 0 ] || check_swapped "${swapped[@]}"   # exits non-zero when one is not up
