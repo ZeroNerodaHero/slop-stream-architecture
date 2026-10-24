@@ -30,6 +30,12 @@ export const verifiedAtom = atom(false);
 export const avatarAtom = atom<number | null>(null);
 export const remoteStreamAtom = atom<MediaStream | null>(null);
 export const mutedAtom = atom(true);
+/**
+ * The dial, 0..1, on whichever <video> is playing (the page's, the MiniPlayer's). Apart from
+ * `muted`, like a tv: the dial stays where it was while the sound is off, and is kept across
+ * streams for the visit.
+ */
+export const volumeAtom = atom(1);
 /** Autoplay was refused (low power mode, strict settings). One tap fixes it. */
 export const needsTapAtom = atom(false);
 /**
@@ -41,7 +47,9 @@ export const needsTapAtom = atom(false);
 export const pipAtom = atom(false);
 
 export const canRetryAtom = atom((get) => RETRY_PHASES.includes(get(watchPhaseAtom)));
-export const showUnmuteAtom = atom((get) => get(needsTapAtom) || (SOUND_PHASES.includes(get(watchPhaseAtom)) && get(mutedAtom)));
+/** Frames are playing (a blip included), so there is sound to mute, unmute and turn up or down. */
+export const canHearAtom = atom((get) => SOUND_PHASES.includes(get(watchPhaseAtom)));
+export const showUnmuteAtom = atom((get) => get(needsTapAtom) || (get(canHearAtom) && get(mutedAtom)));
 export const watchToneAtom = atom<Tone>((get) => {
   const phase = get(watchPhaseAtom);
   if (phase === 'watching') return 'live';
@@ -205,6 +213,19 @@ export function unmuteVideo(el: HTMLVideoElement | null) {
     el.muted = false;
     el.play().catch(() => undefined);
   }
+}
+
+export function muteVideo(el: HTMLVideoElement | null) {
+  store.set(mutedAtom, true);
+  if (el) el.muted = true;
+}
+
+/** The dial moved. Up from silence while muted is an unmute too: nobody turns a dial up to hear nothing. */
+export function setVolume(el: HTMLVideoElement | null, volume: number) {
+  const v = Math.min(1, Math.max(0, volume));
+  store.set(volumeAtom, v);
+  if (el) el.volume = v;
+  if (v > 0 && store.get(mutedAtom)) unmuteVideo(el);
 }
 
 /** From here on, leaving the watch page keeps the stream in the corner. The only way back off is the MiniPlayer's ×. */

@@ -12,6 +12,7 @@ import {
   remoteStreamAtom,
   showUnmuteAtom,
   unmuteVideo,
+  volumeAtom,
   watchMessageAtom,
   watchNameAtom,
   watchToneAtom
@@ -121,6 +122,7 @@ export function MiniPlayer() {
   const message = useAtomValue(watchMessageAtom);
   const tone = useAtomValue(watchToneAtom);
   const muted = useAtomValue(mutedAtom);
+  const volume = useAtomValue(volumeAtom);
   const showUnmute = useAtomValue(showUnmuteAtom);
   const needsTap = useAtomValue(needsTapAtom);
   const { pathname } = useLocation();
@@ -224,6 +226,7 @@ export function MiniPlayer() {
             streamAtom={remoteStreamAtom}
             videoRef={videoRef}
             muted={muted}
+            volume={volume}
             onPlaying={markPlaying}
             onAutoplayBlocked={markAutoplayBlocked}
             className="border-0 border-b"

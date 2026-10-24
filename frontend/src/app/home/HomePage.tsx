@@ -7,7 +7,6 @@ import { isDummyName } from '@/infra/names';
 import { Avatar } from '@/shared-components/Avatar';
 import { buttonClassName } from '@/shared-components/Button';
 import { PageFrame } from '@/shared-components/PageFrame';
-import { panelClassName } from '@/shared-components/Panel';
 import { TestBadge } from '@/shared-components/TestBadge';
 import { cn } from '@/utils/cn';
 import { since } from '@/utils/since';
@@ -16,8 +15,14 @@ const POLL_MS = 3000;
 /** Thumbnails change every 5s on the publisher side; re-fetch on that rhythm. */
 const THUMB_BUCKET_MS = 5000;
 
-/** One card per column, as many columns as fit: 1 on a phone, 2 on a tablet, 4 at full width. The gap leaves room for the shadows. */
+/** One card per column, as many columns as fit: 1 on a phone, 2 on a tablet, 4 at full width. */
 const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-6';
+/**
+ * A card is the panel look without its offset shadow: in a grid, the offsets read as a second
+ * box behind every stream. The stroke goes blue on hover and keyboard focus instead.
+ */
+const CARD = 'border border-primaryStroke bg-backgroundSecondary';
+const CARD_LINK = cn(CARD, 'group transition-[border-color] duration-150 hover:border-primaryBlue focus-within:border-primaryBlue');
 
 /**
  * The latest picture of a stream, filling the box it is in, or a quiet black box until there
@@ -55,7 +60,7 @@ function Face({ stream }: { stream: LiveStream }) {
 function Card({ stream, now, bucket }: { stream: LiveStream; now: number; bucket: number }) {
   const age = since(stream.since, now);
   return (
-    <article className={panelClassName('group', true)}>
+    <article className={CARD_LINK}>
       <Link to={`/watch/${encodeURIComponent(stream.name)}`} aria-label={`watch ${stream.name}`} className="block outline-none">
         {/* one chip, top right: "live for 52 hr". the fake streams draw their name top-left and a clock bottom-left */}
         <div className="relative aspect-video overflow-hidden border-b border-primaryStroke bg-black">
@@ -94,7 +99,7 @@ function Skeleton() {
   return (
     <div id="loading" className={GRID} aria-busy="true" aria-label="loading">
       {[0, 1, 2].map((i) => (
-        <div key={i} className={panelClassName('animate-pulse')}>
+        <div key={i} className={cn(CARD, 'animate-pulse')}>
           <div className="aspect-video border-b border-primaryStroke bg-backgroundTertiary" />
           <div className="flex items-start gap-3 p-4">
             <span className="h-11 w-11 shrink-0 bg-backgroundTertiary" />

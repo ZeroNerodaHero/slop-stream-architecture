@@ -29,13 +29,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const status = (p) => p.textContent('#status').then((t) => t.trim());
 const waitStatus = (p, re, timeout = 20000) => p.waitForFunction((src) => new RegExp(src, 'i').test(document.querySelector('#status')?.textContent || ''), re.source, { timeout });
 // frames decoded into a <video>, so "playing" means pictures, not just a src
-const frames = (p, sel) => p.$eval(sel, (v) => ({ w: v.videoWidth, frames: v.getVideoPlaybackQuality().totalVideoFrames, paused: v.paused, muted: v.muted }));
+const frames = (p, sel) =>
+  p.$eval(sel, (v) => ({ w: v.videoWidth, frames: v.getVideoPlaybackQuality().totalVideoFrames, paused: v.paused, muted: v.muted, volume: v.volume }));
 async function framesFlow(p, sel) {
   const a = await frames(p, sel);
   await sleep(1500);
   const b = await frames(p, sel);
   expect(b.w > 0 && b.frames > a.frames, `${sel}: ${JSON.stringify(a)} -> ${JSON.stringify(b)}`);
-  return `${b.w}px wide, ${b.frames - a.frames} frames in 1.5s${b.muted ? ', muted' : ', sound on'}`;
+  return `${b.w}px wide, ${b.frames - a.frames} frames in 1.5s${b.muted ? ', muted' : `, sound on at ${Math.round(b.volume * 100)}%`}`;
 }
 const rect = (p, sel) => p.$eval(sel, (el) => el.getBoundingClientRect().toJSON());
 const near = (a, b) => Math.abs(a - b) <= 1.5;
@@ -79,11 +80,22 @@ async function drag(p, sel, dx, dy) {
     if (m && r.method() === 'POST') watchCalls[m[1]] = (watchCalls[m[1]] || 0) + 1;
   });
 
-  await step(`watcher: /watch/${A} plays; sound on; the picture in picture button is there`, async () => {
+  await step(`watcher: /watch/${A} plays; unmute, the dial to the middle; the controls are on the video`, async () => {
     await w.goto(`${BASE}/watch/${A}`, { waitUntil: 'domcontentloaded' });
     await waitStatus(w, /^watching$/);
     await w.click('#unmute');
-    expect((await w.$('#pip')) !== null, 'no #pip button');
+    expect((await w.textContent('#unmute')).trim() === 'mute', `the button reads "${await w.textContent('#unmute')}" with the sound on`);
+    await w.click('#volume'); // the middle of the dial
+    const v = await frames(w, '#video');
+    expect(!v.muted && Math.abs(v.volume - 0.5) < 0.05, `after the dial: ${JSON.stringify(v)}`);
+    const onVideo = await w.$$eval('#unmute, #volume, #pip', (els) => {
+      const f = document.querySelector('#video').getBoundingClientRect();
+      return els.every((el) => {
+        const r = el.getBoundingClientRect();
+        return r.left >= f.left && r.right <= f.right && r.top >= f.top && r.bottom <= f.bottom;
+      });
+    });
+    expect(onVideo, 'a control is outside the video frame');
     expect((await w.$('#pip-player')) === null, 'the corner player showed on the stream\'s own page');
     return await framesFlow(w, '#video');
   });
@@ -97,6 +109,8 @@ async function drag(p, sel, dx, dy) {
     await w.waitForFunction(() => /^watching$/i.test(document.querySelector('#pip-status')?.textContent || ''), null, { timeout: 10000 });
     const name = (await w.textContent('#pip-player a.font-semibold')).trim();
     expect(name === A, `player names "${name}"`);
+    const v = await frames(w, '#pip-video');
+    expect(!v.muted && Math.abs(v.volume - 0.5) < 0.05, `the corner does not play at the page's level: ${JSON.stringify(v)}`);
     box = await rect(w, '#pip-player');
     const view = await w.evaluate(() => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight }));
     expect(near(box.right, view.w - 24) && near(box.bottom, view.h - 24), `not in the corner: ${at(box)} in ${view.w}×${view.h}`);

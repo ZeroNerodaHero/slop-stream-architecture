@@ -10,6 +10,8 @@ interface VideoFrameProps {
   streamAtom: Atom<MediaStream | null>;
   videoRef: RefObject<HTMLVideoElement | null>;
   muted?: boolean;
+  /** 0..1. A property of the element only (no attribute), so it is set by hand as it changes. Left alone when absent. */
+  volume?: number;
   onPlaying?: () => void;
   onAutoplayBlocked?: () => void;
   className?: string;
@@ -20,7 +22,11 @@ interface VideoFrameProps {
  * effect, the way imperative DOM updates are wired at the data source, instead of an effect
  * that reacts to the stream value.
  */
-export function VideoFrame({ id, streamAtom, videoRef, muted = true, onPlaying, onAutoplayBlocked, className }: VideoFrameProps) {
+export function VideoFrame({ id, streamAtom, videoRef, muted = true, volume, onPlaying, onAutoplayBlocked, className }: VideoFrameProps) {
+  useEffect(() => {
+    if (volume !== undefined && videoRef.current) videoRef.current.volume = volume;
+  }, [volume]);
+
   useEffect(() => {
     const apply = () => {
       const el = videoRef.current;
