@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 
 import { type ClientError, type Health, api, messageOf, statusOf } from '@/infra/api';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -174,7 +173,7 @@ export function AdminPage() {
   const rows = (errors.data ?? []).filter((e) => !pageFilter || e.page.includes(pageFilter));
 
   return (
-    <PageFrame title="admin" aside={<Link to="/">home</Link>} wide>
+    <PageFrame title="admin" wide>
       <HealthCard health={health.data} error={health.error} />
 
       <div className="mb-3 mt-6 flex flex-wrap items-center gap-3">

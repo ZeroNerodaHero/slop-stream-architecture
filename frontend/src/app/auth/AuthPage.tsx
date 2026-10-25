@@ -57,7 +57,7 @@ export function AuthPage({ mode }: AuthPageProps) {
   }
 
   return (
-    <PageFrame title={signingUp ? 'sign up' : 'log in'} aside={<Link to="/">home</Link>}>
+    <PageFrame title={signingUp ? 'sign up' : 'log in'}>
       {me ? (
         <p className="text-textSecondary">
           you are logged in as <span className="font-semibold text-textPrimary">{me}</span>.{' '}

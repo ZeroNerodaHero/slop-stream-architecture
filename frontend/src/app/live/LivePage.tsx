@@ -1,6 +1,5 @@
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
 
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
@@ -17,6 +16,8 @@ import {
   goLive,
   isPublishingAtom,
   leaveLivePage,
+  publishPhaseAtom,
+  publishStatsAtom,
   myAvatarAtom,
   ownerAtom,
   publishMessageAtom,
@@ -46,6 +47,7 @@ import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { panelClassName } from '@/shared-components/Panel';
 import { StatusLine } from '@/shared-components/StatusLine';
+import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { StreamTile } from '@/shared-components/StreamTile';
 import { IconButton, revealClassName } from '@/shared-components/VideoControls';
 import { VideoFrame } from '@/shared-components/VideoFrame';
@@ -59,6 +61,8 @@ export function LivePage() {
   const chatRoom = useAtomValue(chatRoomAtom);
   const canStart = useAtomValue(canStartAtom);
   const publishing = useAtomValue(isPublishingAtom);
+  const phase = useAtomValue(publishPhaseAtom);
+  const stats = useAtomValue(publishStatsAtom);
   const watchUrl = useAtomValue(watchUrlAtom);
   const bioDraft = useAtomValue(bioDraftAtom);
   const bioStatus = useAtomValue(bioStatusAtom);
@@ -86,7 +90,7 @@ export function LivePage() {
   }, []);
 
   return (
-    <PageFrame title="go live" aside={<Link to="/">home</Link>} wide>
+    <PageFrame title="go live" wide>
       {/* the same arrangement as the watch page, for the same layout setting: the preview, the
           chat, the bio box. left or right is a column at lg+; a window takes the chat out. */}
       <div
@@ -99,6 +103,11 @@ export function LivePage() {
         <div className={cn('min-w-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-1')}>
           <div className="group relative">
             <VideoFrame id="preview" streamAtom={cameraAtom} videoRef={previewRef} muted />
+            {(phase === 'live' || phase === 'reconnecting') && (
+              <div className="absolute right-3 top-3 z-20">
+                <StreamStatsButton id="live-stats" role="publish" stats={stats} tipAt="below-right" panel="down" />
+              </div>
+            )}
             {chatSide === 'modal' && (
               <div className={cn('absolute inset-x-0 bottom-0 flex p-3', revealClassName(false))}>
                 <ChatOpenButton className="ml-auto" />

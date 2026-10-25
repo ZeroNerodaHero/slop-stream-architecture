@@ -13,6 +13,7 @@ import { record } from '@/infra/atoms/inspector-atoms';
 import { cleanName, isValidName } from '@/infra/names';
 import { connectRelay, SCREEN_SLOTS, type SlotInfo, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
+import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
 import type { Tone } from '@/shared-components/StatusLine';
 
@@ -44,6 +45,8 @@ export const screenStreamAtom = (slot: number) => screenStreamAtoms[slot] ?? spa
 /** Phones have no screen capture; there the button is not shown at all. */
 export const screenShareSupported = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 export const publishPhaseAtom = atom<PublishPhase>('camera-off');
+/** The upload, sampled from the peer once a second while a publish is up. Null once it stops. */
+export const publishStatsAtom = atom<StreamStats | null>(null);
 export const publishMessageAtom = atom('camera off');
 /** Always clean: lowercase, trimmed. Set through `setStreamName`. */
 export const streamNameAtom = atom('');
@@ -83,6 +86,7 @@ export const publishToneAtom = atom<Tone>((get) => {
 });
 
 let pc: RTCPeerConnection | null = null;
+let stopStats: (() => void) | null = null;
 let ws: WebSocket | null = null;
 let abort: AbortController | null = null;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -94,6 +98,34 @@ let liveGeneration = 0;
 /** The name whose bio and picture are in the boxes, and the bio as it was loaded for it. */
 let profileName = '';
 let loadedBio = '';
+
+function labelOfPublishTrack(trackId: string): string | undefined {
+  for (const screen of store.get(screensAtom)) {
+    if (store.get(screenStreamAtom(screen.slot))?.getVideoTracks()[0]?.id === trackId) return screen.label;
+  }
+  return undefined;
+}
+
+function startPublishStats() {
+  stopPublishStats();
+  stopStats = startSampler({
+    role: 'publish',
+    pc: () => pc,
+    videoTrackId: () => store.get(cameraAtom)?.getVideoTracks()[0]?.id,
+    audioMuted: () => {
+      const track = store.get(cameraAtom)?.getAudioTracks()[0];
+      return !!track && (track.muted || !track.enabled);
+    },
+    capBps: () => (store.get(screensAtom).length > 0 ? CAMERA_SHARING_BITRATE : VIDEO_MAX_BITRATE),
+    labelOf: labelOfPublishTrack,
+    write: (stats) => store.set(publishStatsAtom, stats)
+  });
+}
+
+function stopPublishStats() {
+  stopStats?.();
+  stopStats = null;
+}
 
 function setPhase(phase: PublishPhase, message: string) {
   store.set(publishPhaseAtom, phase);
@@ -216,6 +248,7 @@ export async function goLive(): Promise<void> {
   ws.onclose = () => stopLive('connection lost', 'failed');
   heartbeat = setInterval(sendHeartbeat, HEARTBEAT_MS);
   setPhase('connecting', 'connecting');
+  startPublishStats();
 }
 
 function sendHeartbeat() {
@@ -335,6 +368,7 @@ async function capBitrate(sender: RTCRtpSender | null, maxBitrate: number) {
  * not ours (the api said no, the name is taken).
  */
 export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', { report = phase === 'failed' }: { report?: boolean } = {}) {
+  stopPublishStats();
   if (report) void reportPeerFailure('publish', store.get(streamNameAtom), message, pc);
   if (heartbeat) {
     clearInterval(heartbeat);

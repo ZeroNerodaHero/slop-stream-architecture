@@ -16,11 +16,13 @@ import {
   unmuteVideo,
   volumeAtom,
   watchMessageAtom,
+  watchStatsAtom,
   watchNameAtom,
   watchToneAtom
 } from '@/infra/atoms/watch-atoms';
 import { cleanName } from '@/infra/names';
 import { Button } from '@/shared-components/Button';
+import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { ChatIcon, IconButton, SoundControl, revealClassName } from '@/shared-components/VideoControls';
 import { VideoFrame } from '@/shared-components/VideoFrame';
@@ -159,6 +161,7 @@ export function MiniPlayer() {
   const tone = useAtomValue(watchToneAtom);
   const muted = useAtomValue(mutedAtom);
   const volume = useAtomValue(volumeAtom);
+  const stats = useAtomValue(watchStatsAtom);
   const canHear = useAtomValue(canHearAtom);
   const needsTap = useAtomValue(needsTapAtom);
   const pipChat = useAtomValue(pipChatPlaceAtom);
@@ -220,8 +223,8 @@ export function MiniPlayer() {
     const el = root.current;
     if (e.button !== 0 || stop.current || !el) return;
     dragged.current = false;
-    // the volume dial sits on the video and drags on its own: a press on it is not a grip on the player
-    if ((e.target as Element).closest('input')) return;
+    // the volume dial and the stats panel sit on the video and handle their own presses: not a grip
+    if ((e.target as Element).closest('input, [data-video-stats]')) return;
     const g: Gesture = {
       kind,
       sx,
@@ -340,8 +343,9 @@ export function MiniPlayer() {
             </IconButton>
           </div>
           {canHear && (
-            <div className={cn('absolute inset-x-0 bottom-0 flex p-2', revealClassName(muted))}>
+            <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-2 p-2', revealClassName(muted))}>
               <SoundControl videoRef={videoRef} buttonId="pip-unmute" dialId="pip-volume" dialClassName="w-20" />
+              <StreamStatsButton id="pip-stats" role="watch" stats={stats} tipAt="above-left" panel="up" playback={{ muted, level: volume }} />
             </div>
           )}
         </div>

@@ -11,6 +11,7 @@ import { eventsPhaseAtom, onEvents, unwatchPresence, watchPresence } from '@/inf
 import { isValidName } from '@/infra/names';
 import { connectRelay, type RelayReply, SCREEN_SLOTS, type SlotInfo, slotsOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
+import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
 import type { Tone } from '@/shared-components/StatusLine';
 
@@ -61,6 +62,8 @@ const slotStreamAtoms = Array.from({ length: VIDEO_SLOTS }, () => atom<MediaStre
 const spareStreamAtom = atom<MediaStream | null>(null);
 export const slotStreamAtom = (slot: number) => slotStreamAtoms[slot] ?? spareStreamAtom;
 export const mutedAtom = atom(true);
+/** The arriving picture, sampled from the peer once a second while a watch is up. Null with no peer. */
+export const watchStatsAtom = atom<StreamStats | null>(null);
 
 function primaryOf(slots: SlotInfo[], chosen: number | null): number {
   if (chosen !== null && slots.some((s) => s.slot === chosen)) return chosen;
@@ -99,6 +102,7 @@ export const watchToneAtom = atom<Tone>((get) => {
 });
 
 let pc: RTCPeerConnection | null = null;
+let stopStats: (() => void) | null = null;
 let ws: WebSocket | null = null;
 let connectTimer: ReturnType<typeof setTimeout> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -112,6 +116,32 @@ let played = false;
 /** The attempt's tracks by video slot, and the stream the main <video> plays (see `remoteStreamAtom`). */
 let videoTracks: (MediaStreamTrack | undefined)[] = [];
 let primary: MediaStream | null = null;
+
+/** The big picture's track, named the way the tiles are, so a shared screen is not just "video". */
+function labelOfWatchTrack(trackId: string): string | undefined {
+  for (const slot of store.get(slotsAtom)) {
+    if (store.get(slotStreamAtom(slot.slot))?.getVideoTracks()[0]?.id === trackId) return slotLabel(slot);
+  }
+  return undefined;
+}
+
+function startWatchStats() {
+  stopWatchStats();
+  stopStats = startSampler({
+    role: 'watch',
+    pc: () => pc,
+    videoTrackId: () => primary?.getVideoTracks()[0]?.id,
+    audioMuted: () => primary?.getAudioTracks()[0]?.muted ?? false,
+    capBps: () => null,
+    labelOf: labelOfWatchTrack,
+    write: (stats) => store.set(watchStatsAtom, stats)
+  });
+}
+
+function stopWatchStats() {
+  stopStats?.();
+  stopStats = null;
+}
 
 function setPhase(phase: WatchPhase, message: string) {
   store.set(watchPhaseAtom, phase);
@@ -304,6 +334,7 @@ async function start(name: string): Promise<void> {
   }
 
   ws.onclose = ended;
+  if (pc === myPc) startWatchStats();
 
   connectTimer = setTimeout(() => {
     if (pc === myPc && myPc.connectionState !== 'connected') fail('no video. udp blocked?', myPc);
@@ -399,6 +430,7 @@ export function startPip() {
 }
 
 export function teardown() {
+  stopWatchStats();
   if (connectTimer) clearTimeout(connectTimer);
   if (retryTimer) clearTimeout(retryTimer);
   connectTimer = retryTimer = null;

@@ -1,6 +1,6 @@
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 
 import {
   avatarAtom,
@@ -23,6 +23,7 @@ import {
   verifiedAtom,
   volumeAtom,
   watch,
+  watchStatsAtom,
   watchMessageAtom,
   watchNameAtom,
   watchPhaseAtom,
@@ -37,6 +38,7 @@ import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { StatusLine } from '@/shared-components/StatusLine';
+import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { StreamTile } from '@/shared-components/StreamTile';
 import { TestBadge } from '@/shared-components/TestBadge';
 import { IconButton, PipIcon, SoundControl, revealClassName } from '@/shared-components/VideoControls';
@@ -56,6 +58,7 @@ export function WatchPage() {
   const needsTap = useAtomValue(needsTapAtom);
   const muted = useAtomValue(mutedAtom);
   const volume = useAtomValue(volumeAtom);
+  const stats = useAtomValue(watchStatsAtom);
   const verified = useAtomValue(verifiedAtom);
   const avatar = useAtomValue(avatarAtom);
   const phase = useAtomValue(watchPhaseAtom);
@@ -112,7 +115,6 @@ export function WatchPage() {
         </>
       }
       titleId="who"
-      aside={<Link to="/">home</Link>}
       wide
     >
       {/* the video column, the chat, the bio, in that order. left or right is a grid at lg+ (the
@@ -154,6 +156,7 @@ export function WatchPage() {
             {phase !== 'bad-name' && (
               <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted))}>
                 {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
+                {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} tipAt="above-left" panel="up" playback={{ muted, level: volume }} />}
                 <ChatOpenButton className="ml-auto" />
                 <IconButton id="pip" label="picture in picture" onClick={toCorner} className={cn(chatSide !== 'modal' && 'ml-auto')}>
                   <PipIcon />

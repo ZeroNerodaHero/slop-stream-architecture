@@ -1,5 +1,5 @@
 import { useAtomValue } from 'jotai';
-import { type ButtonHTMLAttributes, type RefObject, useRef } from 'react';
+import { type ButtonHTMLAttributes, type ReactNode, type RefObject, useRef } from 'react';
 
 import { dialAtom, muteVideo, mutedAtom, setVolume, settleDial, unmuteVideo } from '@/infra/atoms/watch-atoms';
 import { cn } from '@/utils/cn';
@@ -24,18 +24,30 @@ const TIP_AT = {
   'below-right': 'right-0 top-full mt-2'
 } as const;
 
+export type TipAt = keyof typeof TIP_AT;
+
+/** The hover name of an icon-only control. `group/control relative` is the control it hangs off. */
+export function ControlTip({ at, children }: { at: TipAt; children: ReactNode }) {
+  return (
+    <span role="tooltip" className={cn(TIP, TIP_AT[at])}>
+      {children}
+    </span>
+  );
+}
+
 /**
  * The reveal of a controls bar. Hidden: faded and 4px low, and it waits 300ms before going (a
  * pointer that strays off the video for a moment does not make the controls blink); it comes
  * up at once on hover of the `group` around the video, while a control in it has keyboard
- * focus (not the focus a mouse click leaves behind, or it would stick), and on a screen with
- * no hover at all. `shown`: always up, no transition games.
+ * focus (not the focus a mouse click leaves behind, or it would stick), while one is expanded
+ * (an open stats panel must not fade out from under the pointer), and on a screen with no
+ * hover at all. `shown`: always up, no transition games.
  */
 export function revealClassName(shown: boolean): string {
   return cn(
     'transition-[opacity,transform] duration-200',
     !shown &&
-      'translate-y-1 opacity-0 delay-300 group-hover:translate-y-0 group-hover:opacity-100 group-hover:delay-0 [&:has(:focus-visible)]:translate-y-0 [&:has(:focus-visible)]:opacity-100 [&:has(:focus-visible)]:delay-0 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:opacity-100'
+      'translate-y-1 opacity-0 delay-300 group-hover:translate-y-0 group-hover:opacity-100 group-hover:delay-0 [&:has(:focus-visible)]:translate-y-0 [&:has(:focus-visible)]:opacity-100 [&:has(:focus-visible)]:delay-0 [&:has([aria-expanded=true])]:translate-y-0 [&:has([aria-expanded=true])]:opacity-100 [&:has([aria-expanded=true])]:delay-0 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:opacity-100'
   );
 }
 
