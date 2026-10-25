@@ -20,6 +20,7 @@ flowchart LR
     video["video<br/>rust webrtc · ws :7880 · media udp :7882<br/>one upload in, copies out, thumbnails"]
     database[("database<br/>postgres · streamers, sessions<br/>+ a second database, debug · client_errors")]
     redis[("redis<br/>live:name locks · seen:name sets · events stream · chat:name streams")]
+    s3[("s3<br/>seaweedfs · bucket stream<br/>S3_ENDPOINT=off uses this")]
     dummy["dummy<br/>the video binary run as video dummy<br/>fake streams, off by default"]
     certs["certs<br/>self-signed cert for PUBLIC_IP<br/>runs once, exits"]
     pages["pages<br/>vite build → volume<br/>runs once, exits"]
@@ -36,6 +37,7 @@ flowchart LR
 
   api --> database
   api --> redis
+  api --> s3
   api -.->|"GET /live · who is really connected<br/>GET /health · up_secs, live, build"| video
   streamer -.->|"POST /api/errors · when a page breaks"| frontend
   chat --> redis

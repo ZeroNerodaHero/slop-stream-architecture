@@ -1,8 +1,10 @@
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
 
+import { api } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
+  addStreamThumb,
   avatarStatusAtom,
   bioDraftAtom,
   bioStatusAtom,
@@ -23,6 +25,7 @@ import {
   publishMessageAtom,
   publishToneAtom,
   removeAvatar,
+  removeStreamThumb,
   saveAvatar,
   saveBio,
   screenShareSupported,
@@ -35,10 +38,13 @@ import {
   stopOnLeave,
   stopScreen,
   streamNameAtom,
-  watchUrlAtom
+  streamThumbsAtom,
+  thumbStatusAtom,
+  watchUrlAtom,
+  liveViewersAtom,
 } from '@/infra/atoms/publish-atoms';
-import { chatSideAtom } from '@/infra/atoms/settings-atoms';
-import { ChatOpenButton, ChatSlot } from '@/shared-components/ChatSlot';
+import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
+import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
 import { SCREEN_SLOTS } from '@/infra/relay';
 import { store } from '@/infra/store';
 import { Avatar } from '@/shared-components/Avatar';
@@ -47,6 +53,7 @@ import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { panelClassName } from '@/shared-components/Panel';
 import { StatusLine } from '@/shared-components/StatusLine';
+import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { StreamTile } from '@/shared-components/StreamTile';
 import { IconButton, revealClassName } from '@/shared-components/VideoControls';
@@ -68,13 +75,17 @@ export function LivePage() {
   const bioStatus = useAtomValue(bioStatusAtom);
   const avatar = useAtomValue(myAvatarAtom);
   const avatarStatus = useAtomValue(avatarStatusAtom);
+  const thumbs = useAtomValue(streamThumbsAtom);
+  const thumbStatus = useAtomValue(thumbStatusAtom);
   const owner = useAtomValue(ownerAtom);
+  const viewers = useAtomValue(liveViewersAtom);
   const me = useAtomValue(meAtom);
   const chatSide = useAtomValue(chatSideAtom);
-  const column = chatSide === 'left' || chatSide === 'right';
+  const chatOpen = useAtomValue(chatModalOpenAtom);
   const screens = useAtomValue(screensAtom);
   const canShare = useAtomValue(canShareScreenAtom);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const thumbFileRef = useRef<HTMLInputElement | null>(null);
 
   // Mount only: open the camera, fill the name box, end the stream when the tab or the page goes away.
   useEffect(() => {
@@ -92,14 +103,9 @@ export function LivePage() {
   return (
     <PageFrame title="go live" wide>
       {/* the same arrangement as the watch page, for the same layout setting: the preview, the
-          chat, the bio box. left or right is a column at lg+; a window takes the chat out. */}
-      <div
-        className={cn(
-          column && 'lg:grid lg:grid-rows-[auto_1fr] lg:items-start lg:gap-x-6',
-          chatSide === 'right' && 'lg:grid-cols-[minmax(0,1fr)_360px]',
-          chatSide === 'left' && 'lg:grid-cols-[360px_minmax(0,1fr)]'
-        )}
-      >
+          chat, the bio box. left or right is a column at lg+ that eases shut when the chat
+          closes; a window takes the chat out. */}
+      <div className={chatLayoutClass(chatSide, chatOpen)}>
         <div className={cn('min-w-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-1')}>
           <div className="group relative">
             <VideoFrame id="preview" streamAtom={cameraAtom} videoRef={previewRef} muted />
@@ -108,11 +114,10 @@ export function LivePage() {
                 <StreamStatsButton id="live-stats" role="publish" stats={stats} tipAt="below-right" panel="down" />
               </div>
             )}
-            {chatSide === 'modal' && (
-              <div className={cn('absolute inset-x-0 bottom-0 flex p-3', revealClassName(false))}>
-                <ChatOpenButton className="ml-auto" />
-              </div>
-            )}
+            {/* while the chat is closed the button stays up, so it can be opened again off the preview */}
+            <div className={cn('absolute inset-x-0 bottom-0 flex p-3', revealClassName(!chatOpen))}>
+              <ChatOpenButton className="ml-auto" />
+            </div>
           </div>
           {/* the screens being shared, each with its stop. the browser's own "stop sharing" bar works too */}
           {screens.length > 0 && (
@@ -138,7 +143,10 @@ export function LivePage() {
               ))}
             </div>
           )}
-          <StatusLine text={message} tone={tone} />
+          <div className="flex flex-wrap items-baseline gap-x-4">
+            <StatusLine text={message} tone={tone} />
+            <ViewerCount id="viewers" count={viewers} className="text-lg text-textSecondary" />
+          </div>
 
           <div className="my-3 flex flex-wrap items-center gap-3">
             <label htmlFor="name" className="sr-only">
@@ -260,6 +268,46 @@ export function LivePage() {
               <span id="avatarstatus" className="text-textSecondary" aria-live="polite">
                 {avatarStatus}
               </span>
+            </div>
+
+            {/* pictures for the card on home. none, and that card shows the camera */}
+            <div className="mt-4 border-t border-primaryStroke pt-4">
+              <p className="text-textSecondary">thumbnails</p>
+              <p className="mt-1 text-sm text-textSecondary">
+                pictures on your card on home. a few of them take turns. with none, home shows the camera.
+              </p>
+              {thumbs.length > 0 && (
+                <ul className="mt-3 flex list-none flex-wrap gap-3 p-0">
+                  {thumbs.map((id) => (
+                    <li key={id} className="w-36">
+                      <img src={api.streamThumbUrl(name, id)} alt="" className="aspect-video w-full border border-primaryStroke object-cover" />
+                      <Button id={`thumb-remove-${id}`} className="mt-2 w-full px-3 py-2 text-sm" onClick={() => void removeStreamThumb(id)}>
+                        remove
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <input
+                  ref={thumbFileRef}
+                  id="thumb-file"
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (file) void addStreamThumb(file);
+                  }}
+                />
+                <Button id="thumb-add" disabled={thumbs.length >= 6 || thumbStatus === 'saving'} onClick={() => thumbFileRef.current?.click()}>
+                  add a thumbnail
+                </Button>
+                <span id="thumbstatus" className="text-textSecondary" aria-live="polite">
+                  {thumbStatus}
+                </span>
+              </div>
             </div>
           </section>
         </div>

@@ -647,7 +647,7 @@ wait_one_shot() {
 
 # wait_for_health proves the api answers, and it answers 200 with video down. so a
 # partial run looks at the containers it swapped: running, no restart since we first
-# looked, and healthy where the image has a check (api, video, chat, database, redis;
+# looked, and healthy where the image has a check (api, video, chat, database, redis, s3;
 # dummy and caddy have none, so 5s of running is what there is to see). 60s each,
 # then exit non-zero. no rollback: the old image lost its tag to the new build, so
 # the way back is a fix and another deploy.
@@ -777,7 +777,7 @@ swapped_containers() {
       video) out="$out video" ;;
       dummy) out="$out dummy video api" ;;   # video and api only move when DUMMY_PASSWORD changed; checking is free
       caddy) out="$out frontend" ;;
-      compose) out="$out frontend api chat database redis video dummy" ;;
+      compose) out="$out frontend api chat database redis video dummy s3" ;;
     esac
   done
   printf '%s\n' $out | awk 'NF && !seen[$0]++' | tr '\n' ' '

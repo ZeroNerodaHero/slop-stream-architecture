@@ -24,8 +24,8 @@
 //! One route is html, not json: `GET /watch/<name>` (profile.rs), so a shared
 //! watch link gets a preview card with the name, picture, bio and live status.
 //!
-//! /api/health says how this box is doing (postgres, redis, video, uptimes,
-//! build). The pages post their own failures to /api/errors (debug.rs).
+//! /api/health says how this box is doing (postgres, redis, video, the s3 bucket,
+//! uptimes, build). The pages post their own failures to /api/errors (debug.rs).
 
 mod auth;
 mod chat;
@@ -35,6 +35,7 @@ mod groups;
 mod monitor;
 mod presence;
 mod profile;
+mod s3;
 mod socket;
 
 use std::collections::HashSet;
@@ -119,6 +120,12 @@ CREATE INDEX IF NOT EXISTS memberships_group_idx ON memberships (group_name);
 INSERT INTO groups (name, badge, color, about)
     VALUES ('bot', 'BOT', '#5865f2', 'automatic. the fake streams'' pretend chatters, and any chat socket that says it is one. nobody joins it.')
     ON CONFLICT (name) DO NOTHING;
+CREATE TABLE IF NOT EXISTS stream_thumbs (
+    name text NOT NULL,
+    id bigint NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (name, id)
+);
 ";
 
 #[derive(Clone)]
@@ -140,6 +147,8 @@ pub(crate) struct AppState {
     /// Logins that may read /api/errors, and the bearer token a machine may use instead.
     pub(crate) admin_names: Vec<String>,
     pub(crate) ops_token: Option<String>,
+    /// The bucket. The container when S3_ENDPOINT is off, otherwise the url it names. See s3.rs.
+    s3: s3::Store,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -437,16 +446,16 @@ async fn video_health(s: &AppState) -> Option<VideoHealth> {
     Some(res.json().await.unwrap_or_default())
 }
 
-/// The optional dependencies (debug db, video) get this long in /api/health, so a
-/// sick one cannot push the answer past docker's 3s healthcheck.
-const OPTIONAL_PROBE: Duration = Duration::from_millis(1500);
+/// The optional dependencies (debug db, video, the bucket) get this long in /api/health,
+/// so a sick one cannot push the answer past docker's 3s healthcheck.
+pub(crate) const OPTIONAL_PROBE: Duration = Duration::from_millis(1500);
 
 /// 200 when postgres and redis answer, 503 otherwise. The rest of the body is for
 /// a monitor: video reachable, rooms live, uptimes (they go backwards after a
 /// restart), the build, reports the limits dropped. See docs/debugging.md.
 async fn health(State(s): State<AppState>) -> Response {
     // all at once: the answer takes as long as the slowest probe, not the sum
-    let (postgres, redis, debug_db, video, errors_dropped) = tokio::join!(
+    let (postgres, redis, debug_db, video, errors_dropped, s3_ok) = tokio::join!(
         async { sqlx::query("SELECT 1").execute(&s.db).await.is_ok() },
         async { redis::cmd("PING").query_async::<String>(&mut s.redis.clone()).await.is_ok() },
         async {
@@ -457,6 +466,7 @@ async fn health(State(s): State<AppState>) -> Response {
         },
         async { tokio::time::timeout(OPTIONAL_PROBE, video_health(&s)).await.ok().flatten() },
         debug::dropped(&s),
+        async { tokio::time::timeout(OPTIONAL_PROBE, s3::ready(&s.s3)).await.unwrap_or(false) },
     );
     let ok = postgres && redis;
     let body = json!({
@@ -471,6 +481,9 @@ async fn health(State(s): State<AppState>) -> Response {
         "video_up_secs": video.as_ref().and_then(|v| v.up_secs),
         "video_build": video.as_ref().and_then(|v| v.build.clone()),
         "live": video.as_ref().and_then(|v| v.live),
+        "s3": s3_ok,
+        "s3_bucket": s.s3.bucket,
+        "s3_endpoint": s.s3.endpoint,
         "errors_dropped": errors_dropped,
     });
     let status = if ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
@@ -503,7 +516,8 @@ async fn put_streamer(
 async fn get_streamer(State(s): State<AppState>, Name(name): Name) -> ApiResult {
     let p = profile::load_profile(&s.db, &name).await?;
     let presence = presence::presence(&s, &name).await?;
-    Ok(Json(json!({ "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified, "presence": presence })))
+    let thumbs = profile::thumb_ids(&s.db, std::slice::from_ref(&name)).await?.remove(&name).unwrap_or_default();
+    Ok(Json(json!({ "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified, "presence": presence, "thumbs": thumbs })))
 }
 
 async fn list_sessions(State(s): State<AppState>, Name(name): Name) -> ApiResult {
@@ -549,8 +563,11 @@ async fn list_streams(State(s): State<AppState>) -> ApiResult {
     .bind(&names)
     .fetch_all(&s.db)
     .await?;
+    // oldest first. empty means the card shows the camera, which is what a stream with none has always done
+    let thumbs = profile::thumb_ids(&s.db, &names).await?;
     let out = rows.into_iter().map(|(name, bio, since, verified, avatar)| {
-        json!({ "name": name, "bio": bio, "since": since, "verified": verified, "avatar": avatar })
+        let pictures = thumbs.get(&name).cloned().unwrap_or_default();
+        json!({ "name": name, "bio": bio, "since": since, "verified": verified, "avatar": avatar, "thumbs": pictures })
     });
     Ok(Json(Value::Array(out.collect())))
 }
@@ -849,6 +866,13 @@ async fn main() {
     let build = env::var("BUILD").ok().filter(|b| !b.trim().is_empty()).unwrap_or_else(|| "dev".into());
     log::info!("env {env_name}, build {build}");
 
+    // off: the seaweedfs container, and this waits until its bucket answers. a url is checked once.
+    let s3 = s3::from_env().unwrap_or_else(|e| {
+        log::error!("{e}");
+        std::process::exit(1);
+    });
+    s3::ensure(&s3).await;
+
     let state = AppState {
         db,
         debug,
@@ -862,6 +886,7 @@ async fn main() {
         started: Instant::now(),
         admin_names,
         ops_token,
+        s3,
     };
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))

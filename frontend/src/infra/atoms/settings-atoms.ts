@@ -46,11 +46,14 @@ export const chatSideAtom = atom((get) => {
 
 export function setChatSide(side: ChatSide) {
   store.set(storedChatSideAtom, side);
-  // picking the window shows it, so the page behind follows at once
-  if (side === 'modal') store.set(chatModalOpenAtom, true);
+  // picking a place shows the chat there, so the page behind follows at once
+  store.set(chatModalOpenAtom, true);
 }
 
-/** The window is up. Not kept: a new visit starts with it open, and closing it lasts the visit. */
+/**
+ * The chat is showing, in whichever place the layout setting says. Not kept: a new visit starts
+ * with it open, and closing it lasts the visit. A column slides shut; a window fades shut.
+ */
 export const chatModalOpenAtom = atom(true);
 
 export function setChatModalOpen(open: boolean) {

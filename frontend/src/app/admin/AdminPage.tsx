@@ -75,6 +75,11 @@ function HealthCard({ health, error }: { health: Health | undefined; error: unkn
       <Flag on={health.redis} label="redis" />
       <Flag on={health.debug_db} label="debug db" />
       <Flag on={health.video} label="video" />
+      {typeof health.s3 === 'boolean' && (
+        <span title={health.s3_endpoint ? `${health.s3_endpoint} · ${health.s3_bucket ?? ''}` : undefined}>
+          <Flag on={health.s3} label="s3" />
+        </span>
+      )}
       <span className="text-textSecondary">
         live <span className="font-semibold text-textPrimary">{health.live ?? '—'}</span>
       </span>

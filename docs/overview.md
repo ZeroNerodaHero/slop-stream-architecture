@@ -64,6 +64,7 @@ flowchart LR
   frontend -->|video setup| video
   api --> database
   api --> redis
+  api --> s3
   api -.->|who is really on| video
   browser -->|video packets| video
 ```
@@ -73,6 +74,7 @@ flowchart LR
 - **chat** — the text chat. one line per person per second, 500 letters max, last 500 lines kept. see `chat.md`. also the events socket, one per browser on every page: who is here, and the pushes (`live`, `ended`, the word next to a name). see `status.md`
 - **database** — the bio, the picture, the presence choice and the log. not the video
 - **redis** — who is live right now, who is here right now, and the stream of facts the pushes come from. the video box gets the final say on live
+- **s3** — a bucket on this computer (seaweedfs). profile pictures and stream thumbnails go here. `S3_ENDPOINT=off` in `.env` uses it. set that to a url, plus a key and a secret, to use a real bucket instead
 - **video** — rust. one upload in, copies it out
 - **certs** — makes the https cert for your ip, then quits
 - **pages** — builds the react pages, hands them to frontend, then quits

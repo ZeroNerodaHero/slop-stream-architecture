@@ -8,6 +8,7 @@ import { Avatar } from '@/shared-components/Avatar';
 import { buttonClassName } from '@/shared-components/Button';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { TestBadge } from '@/shared-components/TestBadge';
+import { ViewerCount } from '@/shared-components/ViewerCount';
 import { cn } from '@/utils/cn';
 import { since } from '@/utils/since';
 
@@ -25,16 +26,18 @@ const CARD = 'border border-primaryStroke bg-backgroundSecondary';
 const CARD_LINK = cn(CARD, 'group transition-[border-color] duration-150 hover:border-primaryBlue focus-within:border-primaryBlue');
 
 /**
- * The latest picture of a stream, filling the box it is in, or a quiet black box until there
- * is one. A 404 (the first picture takes ~6s, home lists the stream within 3s) only hides the
- * img: the next bucket is a new src on the same element, which loads again and shows it.
- * Unmounting it would end that.
+ * The picture on the card. The streamer's own, taking turns every bucket, when they have
+ * put some. Otherwise the camera, a few seconds old. A 404 (the first camera frame takes
+ * ~6s, home lists the stream within 3s) only hides the img: the next bucket is a new src
+ * on the same element, which loads again and shows it. Unmounting it would end that.
  */
-function Thumb({ name, bucket }: { name: string; bucket: number }) {
+function Thumb({ name, bucket, thumbs }: { name: string; bucket: number; thumbs: number[] }) {
   const [missing, setMissing] = useState(false);
+  const custom = thumbs.length > 0 ? thumbs[bucket % thumbs.length] : undefined;
+  const src = custom !== undefined ? api.streamThumbUrl(name, custom) : api.thumbUrl(name, bucket);
   return (
     <img
-      src={api.thumbUrl(name, bucket)}
+      src={src}
       alt=""
       data-thumb={name}
       className={cn('absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-105', missing && 'opacity-0')}
@@ -64,11 +67,16 @@ function Card({ stream, now, bucket }: { stream: LiveStream; now: number; bucket
       <Link to={`/watch/${encodeURIComponent(stream.name)}`} aria-label={`watch ${stream.name}`} className="block outline-none">
         {/* one chip, top right: "live for 52 hr". the fake streams draw their name top-left and a clock bottom-left */}
         <div className="relative aspect-video overflow-hidden border-b border-primaryStroke bg-black">
-          <Thumb name={stream.name} bucket={bucket} />
+          <Thumb name={stream.name} bucket={bucket} thumbs={stream.thumbs ?? []} />
           <span className="absolute right-3 top-3 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
             <span aria-hidden className="h-2 w-2 animate-pulse bg-increase" />
             {age || 'live'}
           </span>
+          {stream.viewers !== null && (
+            <span className="absolute bottom-3 right-3 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold text-white backdrop-blur-sm">
+              <ViewerCount count={stream.viewers} />
+            </span>
+          )}
         </div>
         <div className="flex items-start gap-3 p-4">
           <Face stream={stream} />

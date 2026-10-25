@@ -21,9 +21,9 @@ import { cn } from '@/utils/cn';
 
 /** The places the stream's chat can sit. The card's picture is the page. */
 const CHAT_SIDE_OPTIONS: readonly { side: ChatSide; label: string; detail: string }[] = [
-  { side: 'left', label: 'left of the stream', detail: 'a column on the left of the video' },
-  { side: 'right', label: 'right of the stream', detail: 'a column on the right, the usual way' },
-  { side: 'modal', label: 'in a window', detail: 'the video full width, the chat in a window you can close' }
+  { side: 'left', label: 'left of the stream', detail: 'a column on the left of the video. the chat button slides it shut' },
+  { side: 'right', label: 'right of the stream', detail: 'a column on the right, the usual way. the chat button slides it shut' },
+  { side: 'modal', label: 'in a window', detail: 'the video full width, the chat in a window you can move and close' }
 ];
 
 /** The three places the corner player's chat can open. The card's picture is the player. */
@@ -138,7 +138,9 @@ export function SettingsTab() {
             />
           ))}
         </div>
-        <p className="mt-4 text-sm text-textTertiary">kept in this browser. the page behind follows as you pick. on a narrow screen a column sits under the video.</p>
+        <p className="mt-4 text-sm text-textTertiary">
+          kept in this browser. the page behind follows as you pick. on a narrow screen a column sits under the video. the chat button on the video closes it and opens it again.
+        </p>
       </fieldset>
 
       <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">

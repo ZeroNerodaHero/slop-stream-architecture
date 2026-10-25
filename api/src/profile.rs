@@ -1,10 +1,17 @@
 //! The profile picture, and the one html route: the watch document.
 //!
 //! The picture is a small jpeg the browser makes from whatever file was picked
-//! (256x256, see the live page) and is kept as bytes in the streamers row. Its
-//! url carries the upload time as `?v=`, so it is cached for a day and still
-//! changes the moment a new one is saved. Only the name's owner may change it,
-//! the same rule as the bio.
+//! (256x256, see the live page) and is stored in the bucket at `avatars/<name>.jpg`.
+//! The streamers row only keeps when it was saved. That time is the `?v=` of the
+//! url, so it is cached for a day and still changes the moment a new one is saved.
+//! A picture saved before the bucket (bytes still in the row) is served from there
+//! and copied up on that read. Only the name's owner may change it, the same rule
+//! as the bio.
+//!
+//! Thumbnails are the pictures on that name's card on home: up to six, each a
+//! 640x360 jpeg the browser made, at `thumbs/<name>/<id>.jpg`. The row is written
+//! first and dropped again if the bucket does not take the bytes. None means home
+//! shows the camera, the way it always has.
 //!
 //! `GET /watch/<name>` exists for link previews. iMessage, Discord, Slack and X
 //! make them with a bot that fetches the url once, reads `<title>` and the
@@ -16,6 +23,7 @@
 //! in and put inside `#root`, so the page shows the name, picture, status and
 //! bio before react boots. React replaces the card when it renders.
 
+use std::collections::HashMap;
 use std::env;
 
 use axum::body::Bytes;
@@ -25,15 +33,21 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use rand::rngs::OsRng;
+use rand::RngCore;
 use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::Me;
 use crate::presence::{self, Presence};
+use crate::s3;
 use crate::{is_live, may_write, thumb_exists, valid_name, ApiError, ApiResult, AppState, Name, PasswordQuery};
 
 /// The browser sends 256x256 at quality 0.85, a few tens of kb. This is the ceiling.
+/// A thumbnail is 640x360 and shares it: the same body limit covers both routes.
 const MAX_AVATAR_BYTES: usize = 256 * 1024;
+/// How many pictures one name may put on its home card.
+const MAX_THUMBS: i64 = 6;
 /// The url changes with every upload (`?v=`), so a day is safe.
 const AVATAR_CACHE: &str = "public, max-age=86400";
 const JPEG_MAGIC: [u8; 3] = [0xFF, 0xD8, 0xFF];
@@ -77,15 +91,67 @@ pub(crate) async fn load_profile(db: &PgPool, name: &str) -> Result<Profile, sql
 
 // ---- the picture ---------------------------------------------------------------------
 
+fn avatar_key(name: &str) -> String {
+    format!("avatars/{name}.jpg")
+}
+
+fn jpeg(bytes: Vec<u8>) -> Response {
+    ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, AVATAR_CACHE)], bytes).into_response()
+}
+
+fn no_picture() -> ApiError {
+    ApiError::new(StatusCode::NOT_FOUND, "no picture")
+}
+
+fn picture_failed(name: &str, what: &str, err: String) -> ApiError {
+    log::error!("s3 avatar {name}: {err}");
+    ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, what)
+}
+
 async fn get_avatar(State(s): State<AppState>, Name(name): Name) -> Result<Response, ApiError> {
-    let bytes: Option<Option<Vec<u8>>> = sqlx::query_scalar("SELECT avatar FROM streamers WHERE name = $1")
-        .bind(&name)
-        .fetch_optional(&s.db)
-        .await?;
-    let Some(bytes) = bytes.flatten() else {
-        return Err(ApiError::new(StatusCode::NOT_FOUND, "no picture"));
+    // avatar_at set, or bytes still in the row from before the bucket: there is a picture.
+    let row: Option<Option<Vec<u8>>> = sqlx::query_scalar(
+        "SELECT avatar FROM streamers WHERE name = $1 AND (avatar IS NOT NULL OR avatar_at IS NOT NULL)",
+    )
+    .bind(&name)
+    .fetch_optional(&s.db)
+    .await?;
+    let Some(legacy) = row else {
+        return Err(no_picture());
     };
-    Ok(([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, AVATAR_CACHE)], bytes).into_response())
+    match s3::get(&s.s3, &avatar_key(&name)).await {
+        Ok(Some(bytes)) => Ok(jpeg(bytes)),
+        Ok(None) => match legacy {
+            Some(bytes) => {
+                lift_legacy(&s, &name, &bytes).await;
+                Ok(jpeg(bytes))
+            }
+            None => Err(no_picture()),
+        },
+        Err(e) => match legacy {
+            Some(bytes) => {
+                log::warn!("s3 avatar {name}: {e}. serving the copy still in postgres");
+                Ok(jpeg(bytes))
+            }
+            None => Err(picture_failed(&name, "could not load the picture", e)),
+        },
+    }
+}
+
+/// A picture from before the bucket. Copy it up and drop the postgres bytes. A miss
+/// here still serves the row: the next read tries again.
+async fn lift_legacy(s: &AppState, name: &str, bytes: &[u8]) {
+    if let Err(e) = s3::put(&s.s3, &avatar_key(name), bytes, "image/jpeg").await {
+        log::warn!("s3: could not move {name}'s picture out of postgres: {e}");
+        return;
+    }
+    if let Err(e) = sqlx::query("UPDATE streamers SET avatar = NULL WHERE name = $1 AND avatar IS NOT NULL")
+        .bind(name)
+        .execute(&s.db)
+        .await
+    {
+        log::warn!("postgres: moved {name}'s picture but could not clear the old bytes: {e}");
+    }
 }
 
 fn too_big() -> ApiError {
@@ -114,13 +180,17 @@ async fn put_avatar(
     if !body.starts_with(&JPEG_MAGIC) {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "not a jpeg"));
     }
+    // the bucket first. a failed save leaves the old version number, so a cached url
+    // does not start pointing at a picture that never landed.
+    if let Err(e) = s3::put(&s.s3, &avatar_key(&name), &body, "image/jpeg").await {
+        return Err(picture_failed(&name, "could not save the picture", e));
+    }
     let version: i64 = sqlx::query_scalar(
-        "INSERT INTO streamers (name, avatar, avatar_at) VALUES ($1, $2, now())
-         ON CONFLICT (name) DO UPDATE SET avatar = EXCLUDED.avatar, avatar_at = now(), updated_at = now()
+        "INSERT INTO streamers (name, avatar_at) VALUES ($1, now())
+         ON CONFLICT (name) DO UPDATE SET avatar = NULL, avatar_at = now(), updated_at = now()
          RETURNING (EXTRACT(EPOCH FROM avatar_at))::bigint",
     )
     .bind(&name)
-    .bind(body.as_ref())
     .fetch_one(&s.db)
     .await?;
     log::info!("{name}: new picture, {} bytes", body.len());
@@ -135,8 +205,175 @@ async fn delete_avatar(
 ) -> Result<StatusCode, ApiError> {
     let Query(q) = q?;
     may_write(&s, &name, me.as_deref(), q.password.as_deref()).await?;
+    if let Err(e) = s3::delete(&s.s3, &avatar_key(&name)).await {
+        return Err(picture_failed(&name, "could not remove the picture", e));
+    }
     sqlx::query("UPDATE streamers SET avatar = NULL, avatar_at = NULL, updated_at = now() WHERE name = $1")
         .bind(&name)
+        .execute(&s.db)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---- thumbnails --------------------------------------------------------------------------
+
+fn thumb_key(name: &str, id: i64) -> String {
+    format!("thumbs/{name}/{id}.jpg")
+}
+
+/// A name from a path that also carries an id. `Name` only fits a path with the one segment.
+fn checked_name(raw: &str) -> Result<String, ApiError> {
+    let name = raw.trim().to_lowercase();
+    if !valid_name(&name) {
+        return Err(ApiError::bad_name());
+    }
+    Ok(name)
+}
+
+fn thumb_failed(name: &str, what: &str, err: String) -> ApiError {
+    log::error!("s3 thumb {name}: {err}");
+    ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, what)
+}
+
+fn no_thumbnail() -> ApiError {
+    ApiError::new(StatusCode::NOT_FOUND, "no thumbnail")
+}
+
+fn too_many_thumbs() -> ApiError {
+    ApiError::new(StatusCode::CONFLICT, "6 pictures at most. remove one first")
+}
+
+/// 53 bits, so the id survives a js number. Never 0.
+fn new_thumb_id() -> i64 {
+    ((OsRng.next_u64() >> 11) as i64).max(1)
+}
+
+fn unique_id(err: &sqlx::Error) -> bool {
+    err.as_database_error().and_then(|e| e.code()).is_some_and(|code| code == "23505")
+}
+
+/// Ids for these names, oldest first. A name with none is absent.
+pub(crate) async fn thumb_ids(db: &PgPool, names: &[String]) -> Result<HashMap<String, Vec<i64>>, sqlx::Error> {
+    let mut out: HashMap<String, Vec<i64>> = HashMap::new();
+    if names.is_empty() {
+        return Ok(out);
+    }
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT name, id FROM stream_thumbs WHERE name = ANY($1::text[]) ORDER BY created_at, id",
+    )
+    .bind(names)
+    .fetch_all(db)
+    .await?;
+    for (name, id) in rows {
+        out.entry(name).or_default().push(id);
+    }
+    Ok(out)
+}
+
+async fn list_thumbs(State(s): State<AppState>, Name(name): Name) -> ApiResult {
+    let thumbs = thumb_ids(&s.db, std::slice::from_ref(&name)).await?.remove(&name).unwrap_or_default();
+    Ok(Json(json!({ "thumbs": thumbs })))
+}
+
+async fn get_thumb(State(s): State<AppState>, Path((raw, id)): Path<(String, i64)>) -> Result<Response, ApiError> {
+    let name = checked_name(&raw)?;
+    if id <= 0 {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
+    }
+    match s3::get(&s.s3, &thumb_key(&name, id)).await {
+        Ok(Some(bytes)) => Ok(jpeg(bytes)),
+        Ok(None) => Err(no_thumbnail()),
+        Err(e) => Err(thumb_failed(&name, "could not load the picture", e)),
+    }
+}
+
+/// The row first, then the bytes. A bucket miss drops the row, so home never lists a
+/// picture that is not there. A failed save of a later one does not touch the rest.
+async fn put_thumb(
+    State(s): State<AppState>,
+    Name(name): Name,
+    Me(me): Me,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult {
+    let Query(q) = q?;
+    let body = match body {
+        Ok(body) => body,
+        Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_))) => return Err(too_big()),
+        Err(_) => return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad body")),
+    };
+    may_write(&s, &name, me.as_deref(), q.password.as_deref()).await?;
+    if body.len() > MAX_AVATAR_BYTES {
+        return Err(too_big());
+    }
+    if !body.starts_with(&JPEG_MAGIC) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "not a jpeg"));
+    }
+    for _ in 0..2 {
+        let id = new_thumb_id();
+        let inserted: Option<i64> = match sqlx::query_scalar(
+            "INSERT INTO stream_thumbs (name, id)
+             SELECT $1, $2
+             WHERE (SELECT count(*) FROM stream_thumbs WHERE name = $1) < $3
+             RETURNING id",
+        )
+        .bind(&name)
+        .bind(id)
+        .bind(MAX_THUMBS)
+        .fetch_optional(&s.db)
+        .await
+        {
+            Ok(row) => row,
+            Err(e) if unique_id(&e) => continue,
+            Err(e) => return Err(e.into()),
+        };
+        let Some(id) = inserted else {
+            return Err(too_many_thumbs());
+        };
+        if let Err(e) = s3::put(&s.s3, &thumb_key(&name, id), &body, "image/jpeg").await {
+            if let Err(drop) = sqlx::query("DELETE FROM stream_thumbs WHERE name = $1 AND id = $2")
+                .bind(&name)
+                .bind(id)
+                .execute(&s.db)
+                .await
+            {
+                log::warn!("postgres: {name}'s thumbnail {id} did not reach the bucket, and the row stayed: {drop}");
+            }
+            return Err(thumb_failed(&name, "could not save the picture", e));
+        }
+        log::info!("{name}: thumbnail {id}, {} bytes", body.len());
+        return Ok(Json(json!({ "id": id })));
+    }
+    Err(ApiError::new(StatusCode::CONFLICT, "try again"))
+}
+
+async fn delete_thumb(
+    State(s): State<AppState>,
+    Path((raw, id)): Path<(String, i64)>,
+    Me(me): Me,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
+) -> Result<StatusCode, ApiError> {
+    let Query(q) = q?;
+    let name = checked_name(&raw)?;
+    if id <= 0 {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
+    }
+    may_write(&s, &name, me.as_deref(), q.password.as_deref()).await?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stream_thumbs WHERE name = $1 AND id = $2)")
+        .bind(&name)
+        .bind(id)
+        .fetch_one(&s.db)
+        .await?;
+    if !exists {
+        return Err(no_thumbnail());
+    }
+    // the object first. a miss there leaves the row, so the next try removes it
+    if let Err(e) = s3::delete(&s.s3, &thumb_key(&name, id)).await {
+        return Err(thumb_failed(&name, "could not remove the picture", e));
+    }
+    sqlx::query("DELETE FROM stream_thumbs WHERE name = $1 AND id = $2")
+        .bind(&name)
+        .bind(id)
         .execute(&s.db)
         .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -339,6 +576,8 @@ async fn watch_nobody() -> Response {
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/streamers/{name}/avatar", get(get_avatar).put(put_avatar).delete(delete_avatar))
+        .route("/api/streamers/{name}/thumbs", get(list_thumbs).put(put_thumb))
+        .route("/api/streamers/{name}/thumbs/{id}", get(get_thumb).delete(delete_thumb))
         // the picture's ceiling is the read limit too: past it the body is dropped, not buffered
         .layer(DefaultBodyLimit::max(MAX_AVATAR_BYTES))
         .route("/watch/", get(watch_nobody))
@@ -362,6 +601,11 @@ mod tests {
   </body>
 </html>
 "#;
+
+    #[test]
+    fn thumb_key_is_under_the_name() {
+        assert_eq!(thumb_key("bob", 7), "thumbs/bob/7.jpg");
+    }
 
     fn profile(bio: &str, avatar: Option<i64>, verified: bool) -> Profile {
         Profile { name: "bob".into(), bio: bio.into(), avatar, verified }

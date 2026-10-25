@@ -56,11 +56,13 @@ flowchart LR
 ```json
 { "ok": true, "env": "prod", "build": "d668007", "up_secs": 8123,
   "postgres": true, "redis": true, "debug_db": true, "errors_dropped": 0,
-  "video": true, "video_up_secs": 8120, "video_build": "d668007", "live": 3 }
+  "video": true, "video_up_secs": 8120, "video_build": "d668007", "live": 3,
+  "s3": true, "s3_bucket": "stream", "s3_endpoint": "http://s3:8333" }
 ```
 
 - 200 when postgres and redis answer, 503 otherwise, like before. `deploy.sh` and the image healthchecks still key on the status.
-- the probes run concurrently, and the optional ones (debug database, video) are capped at 1.5s each, so the answer fits inside the image healthcheck's 3s timeout.
+- the probes run concurrently, and the optional ones (debug database, video, the bucket) are capped at 1.5s each, so the answer fits inside the image healthcheck's 3s timeout.
+- `s3` is whether a `HEAD` of the bucket answered 2xx inside 1.5s. `s3_endpoint` is `http://s3:8333` while `S3_ENDPOINT` is `off`, otherwise the url in `.env`; `s3_bucket` is the bucket name. not part of `ok`: a bucket the api cannot reach does not 503 the site. the container's login is not in this answer.
 - `video` is whether `video`'s `GET /health` answered 2xx inside 1.5s (an old video build that still says `ok` counts); `live` is its room count; `video_up_secs` how long it has run; `video_build` its commit, `null` on a build older than this. all `null` when it did not answer. the api already degrades without video, so that is not a 503.
 - `errors_dropped`: how many reports the rate limit refused in the current 10-minute window. a number that climbs is a page in a loop somewhere.
 - `up_secs` resets when a process restarts. a monitor that sees it go backwards knows "api restarted at 03:12" with no docker access. same for `video_up_secs`.

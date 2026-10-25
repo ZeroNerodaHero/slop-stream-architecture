@@ -7,6 +7,7 @@
 #   chat       the text chat. websocket per viewer, last 500 lines per stream in redis
 #   database   the bio and the session log. not the video. plus a second database, debug, for the pages' error reports
 #   redis      who is live
+#   s3         a seaweedfs bucket on this machine. S3_ENDPOINT=off (the default) uses it; a url uses that bucket instead
 #   video      rust. one upload in, copies it out. media on udp 7882
 #   dummy      fake streams for styling: gifs bouncing around. DUMMY_STREAMS in .env says how many
 #
@@ -137,6 +138,14 @@ services:
       # who may read /api/errors: these accounts (the /admin page), or a bearer token (a machine)
       ADMIN_NAMES: ${ADMIN_NAMES:-}
       OPS_TOKEN: ${OPS_TOKEN:-}
+      # off (the default): the s3 container below. a url: that bucket, with the key and secret.
+      # the container's own login is not these two; it is the literals on the s3 service.
+      S3_ENDPOINT: ${S3_ENDPOINT:-off}
+      S3_BUCKET: ${S3_BUCKET:-stream}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+      S3_PATH_STYLE: ${S3_PATH_STYLE:-}
       # the built pages. /watch/<name> is served from here with that name's preview tags
       PAGES_DIR: /srv
       RUST_LOG: info
@@ -146,6 +155,8 @@ services:
       database:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      s3:
         condition: service_healthy
     # no host port. browsers reach this through the frontend, at /api and /watch
 
@@ -222,6 +233,31 @@ services:
       timeout: 3s
       retries: 10
 
+  s3:
+    # minio's images are not public any more. seaweedfs `weed mini` is one process: s3 on
+    # :8333, and it creates S3_BUCKET itself. login is stream / stream-s3, the same literals
+    # api/src/s3.rs signs with when S3_ENDPOINT is off. path-style.
+    image: chrislusf/seaweedfs:4.48
+    container_name: s3
+    restart: unless-stopped
+    logging: *default-logging
+    entrypoint: ["weed"]
+    command: ["mini", "-dir=/data"]
+    environment:
+      AWS_ACCESS_KEY_ID: stream
+      AWS_SECRET_ACCESS_KEY: stream-s3
+      S3_BUCKET: ${S3_BUCKET:-stream}
+    volumes:
+      - s3-data:/data
+    # a 403 is the server up and asking for the signature. no answer is down.
+    # no host port. the bucket name is S3_BUCKET.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -S -O /dev/null http://127.0.0.1:8333/ 2>&1 | grep -q HTTP/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   video:
     build:
       context: .
@@ -292,6 +328,7 @@ services:
 
 volumes:
   database-data:
+  s3-data:
   certs-data:
   pages-data:
   caddy-data:

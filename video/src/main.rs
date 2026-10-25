@@ -23,8 +23,17 @@
 //! ask the api (its heartbeat route) whether that session is open for that
 //! name, so a stranger who skips the api cannot publish under a claimed name.
 //!
-//! Also on the same port: GET /live (names connected right now) and GET /health
-//! ({ok, up_secs, build, live}; the api folds it into /api/health).
+//! Watchers and the publisher also get {"event":"viewers","viewers":3}: how many
+//! different addresses are receiving the stream right now, sent at most once a second
+//! and only when it moved. A watcher counts once its ICE and DTLS are done, by the
+//! address its media really goes to (the selected candidate pair), so a view is a
+//! peer taking real packets, not a request. One address holds at most
+//! MAX_WATCHERS_PER_IP_ROOM peers in a room and MAX_WATCHERS_PER_IP in all; past
+//! that it gets {"error":"too many watchers from your address"}. docs/viewers.md.
+//!
+//! Also on the same port: GET /live (names connected right now), GET /viewers
+//! ({name: viewers} for every live room) and GET /health
+//! ({ok, up_secs, build, live, viewers}; the api folds it into /api/health).
 //! Env: PUBLIC_IP, WS_PORT (7880), UDP_PORT (7882), API_URL (http://api:4000),
 //! DUMMY_PASSWORD, DUMMY_PREFIX, BUILD.
 //!
@@ -37,12 +46,13 @@ mod thumbs;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -87,6 +97,13 @@ const MAX_MEDIA_LINES: usize = 6;
 const MAX_KIND_BYTES: usize = 16;
 const MAX_LABEL_BYTES: usize = 64;
 const UDP_BUFFER_BYTES: usize = 4 << 20;
+/// Watcher peers one address may hold in one room, and across every room. Tabs and
+/// households share an address; past this it is someone pulling copies on purpose,
+/// and every copy is ~2.5 Mbps of our egress.
+const MAX_WATCHERS_PER_IP_ROOM: usize = 4;
+const MAX_WATCHERS_PER_IP: usize = 16;
+/// How often a socket is told the count, at most. Only sent when it moved.
+const VIEWERS_TICK: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Role {
@@ -124,6 +141,8 @@ struct App {
 #[derive(Clone, Default)]
 struct Hub {
     rooms: Arc<Mutex<HashMap<String, Room>>>,
+    /// Ids for watcher peers, to take them out of the count again.
+    next_viewer: Arc<AtomicU64>,
 }
 
 struct Room {
@@ -136,6 +155,10 @@ struct Room {
     /// What the publisher says is live in which video slot. Watchers get every change.
     slots_tx: watch::Sender<Vec<SlotInfo>>,
     publisher: Option<Weak<RTCPeerConnection>>,
+    /// Connected watcher peers and the address each one's media goes to.
+    viewers: HashMap<u64, IpAddr>,
+    /// How many different addresses are in `viewers`: the number people see.
+    viewers_tx: watch::Sender<usize>,
 }
 
 /// One m= section of the publisher's offer and the track its packets are copied into.
@@ -189,6 +212,8 @@ struct Out {
     event: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     slots: Option<Vec<SlotInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    viewers: Option<usize>,
 }
 
 #[tokio::main]
@@ -260,6 +285,7 @@ async fn main() -> anyhow::Result<()> {
     let router = Router::new()
         .route("/health", get(health))
         .route("/live", get(live))
+        .route("/viewers", get(viewers))
         .route("/thumb/{file}", get(thumb))
         .route("/ws", get(ws))
         .with_state(app.clone());
@@ -344,7 +370,14 @@ async fn health(State(app): State<App>) -> Json<serde_json::Value> {
         "up_secs": app.started.elapsed().as_secs(),
         "build": app.build,
         "live": app.hub.live_names().await.len(),
+        "viewers": app.hub.viewer_counts().await.values().sum::<usize>(),
     }))
+}
+
+/// `{name: viewers}` for every live room: the names are /live's, the numbers what the
+/// rooms' sockets are told.
+async fn viewers(State(app): State<App>) -> Json<HashMap<String, usize>> {
+    Json(app.hub.viewer_counts().await)
 }
 
 /// `GET /thumb/<name>.jpg`: the latest picture of a live stream, a few seconds old.
@@ -371,14 +404,23 @@ async fn thumb(State(app): State<App>, axum::extract::Path(file): axum::extract:
     }
 }
 
-async fn ws(State(app): State<App>, upgrade: WebSocketUpgrade) -> impl IntoResponse {
+async fn ws(State(app): State<App>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> impl IntoResponse {
+    let forwarded = forwarded_ip(&headers);
     upgrade
         .max_message_size(2 * MAX_SDP_BYTES)
         .max_frame_size(2 * MAX_SDP_BYTES)
-        .on_upgrade(move |socket| handle(app, socket))
+        .on_upgrade(move |socket| handle(app, socket, forwarded))
 }
 
-async fn handle(app: App, mut socket: WebSocket) {
+/// The browser's address as caddy saw it. 7880 is only reachable inside the compose
+/// network, and caddy replaces whatever X-Forwarded-For a browser sent with the real
+/// one, so the last entry is caddy's word. The fallback when ICE does not say.
+fn forwarded_ip(headers: &HeaderMap) -> Option<IpAddr> {
+    let value = headers.get("x-forwarded-for")?.to_str().ok()?;
+    value.rsplit(',').next()?.trim().parse().ok()
+}
+
+async fn handle(app: App, mut socket: WebSocket, forwarded: Option<IpAddr>) {
     let text = match tokio::time::timeout(HANDSHAKE_TIMEOUT, socket.recv()).await {
         Ok(Some(Ok(Message::Text(text)))) => text.to_string(),
         _ => return,
@@ -436,7 +478,7 @@ async fn handle(app: App, mut socket: WebSocket) {
                 let _ = send(&mut socket, Out::error("bad offer")).await;
                 return;
             }
-            watch_stream(app, socket, name, incoming.sdp, wants).await
+            watch_stream(app, socket, name, incoming.sdp, wants, forwarded).await
         }
         _ => {
             let _ = send(&mut socket, Out::error("role must be publish or watch")).await;
@@ -478,7 +520,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
     log::info!("publish {name}: start, {count} slot(s)");
 
     let dead = Arc::new(Notify::new());
-    let peer = match new_peer(&app, Role::Publish, &name, dead.clone()).await {
+    let peer = match new_peer(&app, Role::Publish, &name, dead.clone(), Arc::new(Notify::new())).await {
         Ok(peer) => Arc::new(peer),
         Err(e) => {
             log::error!("publish {name}: peer setup: {e}");
@@ -595,10 +637,20 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
 
     if send(&mut socket, Out::sdp(answer)).await.is_ok() {
         let mut shutdown = app.shutdown.clone();
+        let viewers = app.hub.viewers_rx(&name).await;
+        let mut told = None;
+        let mut tick = tokio::time::interval(VIEWERS_TICK);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // The socket stays open for the stream. The publisher's later frames say
         // what is live in which slot; anything else on it is ignored.
         loop {
             tokio::select! {
+                _ = tick.tick() => {
+                    if tell_viewers(&mut socket, viewers.as_ref(), &mut told).await.is_err() {
+                        log::info!("publish {name}: socket closed");
+                        break;
+                    }
+                }
                 msg = socket.recv() => match msg {
                     Some(Ok(Message::Text(text))) => {
                         if let Err(e) = app.hub.set_slots(&name, generation, &text).await {
@@ -649,14 +701,15 @@ async fn end_session(app: &App, name: &str, grant: (Option<i64>, Option<i64>)) {
 /// `wants`: how many (audio, video) sections the watcher's offer can receive on. The
 /// room's slots are bound to them in order, as many as fit: a watcher that asks for one
 /// video gets the camera.
-async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String, wants: (usize, usize)) {
+async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String, wants: (usize, usize), forwarded: Option<IpAddr>) {
     let Some((tracks, mut generation, my_generation, mut slots)) = app.hub.tracks(&name, wants).await else {
         let _ = send(&mut socket, Out::error("not live")).await;
         return;
     };
 
     let dead = Arc::new(Notify::new());
-    let peer = match new_peer(&app, Role::Watch, &name, dead.clone()).await {
+    let connected = Arc::new(Notify::new());
+    let peer = match new_peer(&app, Role::Watch, &name, dead.clone(), connected.clone()).await {
         Ok(peer) => Arc::new(peer),
         Err(e) => {
             log::error!("watch {name}: peer setup: {e}");
@@ -706,6 +759,7 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
             return;
         }
     };
+    let mut counted: Option<u64> = None;
 
     if send(&mut socket, Out::sdp(answer)).await.is_ok() {
         log::info!("watch {name}: joined");
@@ -713,8 +767,35 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
         // What is live in which slot: now, and again on every change.
         let current = slots.borrow_and_update().clone();
         let _ = send(&mut socket, Out::slots(current)).await;
+        let viewers = app.hub.viewers_rx(&name).await;
+        let mut told = None;
+        let mut tick = tokio::time::interval(VIEWERS_TICK);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
+                // Counted once the media path is up, by the address it goes to.
+                _ = connected.notified(), if counted.is_none() => {
+                    let Some(ip) = media_ip(&peer).await.or(forwarded) else {
+                        log::warn!("watch {name}: connected, but no address to count it by");
+                        continue;
+                    };
+                    let id = app.hub.next_viewer.fetch_add(1, Ordering::Relaxed);
+                    match app.hub.add_viewer(&name, my_generation, id, ip).await {
+                        Ok(()) => counted = Some(id),
+                        Err(e) => {
+                            log::info!("watch {name}: refused {ip}: {e}");
+                            let _ = send(&mut socket, Out::error(e)).await;
+                            let _ = socket.send(Message::Close(None)).await;
+                            break;
+                        }
+                    }
+                }
+                // not before it is counted itself, or the first word it hears is a 0
+                _ = tick.tick(), if counted.is_some() => {
+                    if tell_viewers(&mut socket, viewers.as_ref(), &mut told).await.is_err() {
+                        break;
+                    }
+                }
                 _ = wait_until_socket_closes(&mut socket) => {
                     log::info!("watch {name}: left");
                     break;
@@ -750,7 +831,29 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
         }
     }
 
+    if let Some(id) = counted {
+        app.hub.remove_viewer(&name, id).await;
+    }
     let _ = peer.close().await;
+}
+
+/// Where this peer's media really goes: the remote side of the selected candidate
+/// pair. Browsers hide their host candidates behind mdns names, but the pair that won
+/// is the address the packets came from (peer reflexive), which is what we count.
+async fn media_ip(peer: &RTCPeerConnection) -> Option<IpAddr> {
+    let pair = peer.dtls_transport().ice_transport().get_selected_candidate_pair().await?;
+    pair.remote.address.parse().ok()
+}
+
+/// Send the room's count if it moved since the last one this socket was told.
+async fn tell_viewers(socket: &mut WebSocket, viewers: Option<&watch::Receiver<usize>>, told: &mut Option<usize>) -> anyhow::Result<()> {
+    let Some(viewers) = viewers else { return Ok(()) };
+    let now = *viewers.borrow();
+    if *told != Some(now) {
+        send(socket, Out::viewers(now)).await?;
+        *told = Some(now);
+    }
+    Ok(())
 }
 
 /// Take the browser's offer, reply with our answer. Candidates are gathered
@@ -778,6 +881,7 @@ async fn new_peer(
     role: Role,
     name: &str,
     dead: Arc<Notify>,
+    connected: Arc<Notify>,
 ) -> anyhow::Result<RTCPeerConnection> {
     // The publisher's browser adapts its upload to our transport feedback.
     // Watchers' feedback is not used, so don't ask for it.
@@ -818,6 +922,9 @@ async fn new_peer(
     let asked_keyframe = Arc::new(AtomicBool::new(false));
     peer.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
         log::info!("{tag}: peer {state}");
+        if state == RTCPeerConnectionState::Connected {
+            connected.notify_one();
+        }
         match state {
             RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => dead.notify_one(),
             // A new watcher needs a keyframe on every picture right now, not
@@ -977,6 +1084,38 @@ impl Hub {
         }
     }
 
+    /// Count a connected watcher, unless its address already holds its share.
+    async fn add_viewer(&self, name: &str, generation: u64, id: u64, ip: IpAddr) -> Result<(), &'static str> {
+        let mut rooms = self.rooms.lock().await;
+        let everywhere = rooms.values().flat_map(|r| r.viewers.values()).filter(|v| **v == ip).count();
+        let room = rooms.get_mut(name).filter(|r| r.generation == generation).ok_or("not live")?;
+        let here = room.viewers.values().filter(|v| **v == ip).count();
+        if here >= MAX_WATCHERS_PER_IP_ROOM || everywhere >= MAX_WATCHERS_PER_IP {
+            return Err("too many watchers from your address");
+        }
+        room.viewers.insert(id, ip);
+        room.recount();
+        Ok(())
+    }
+
+    /// A counted watcher left. A room that has moved on (a new publisher) never had it.
+    async fn remove_viewer(&self, name: &str, id: u64) {
+        if let Some(room) = self.rooms.lock().await.get_mut(name) {
+            if room.viewers.remove(&id).is_some() {
+                room.recount();
+            }
+        }
+    }
+
+    async fn viewers_rx(&self, name: &str) -> Option<watch::Receiver<usize>> {
+        self.rooms.lock().await.get(name).map(|r| r.viewers_tx.subscribe())
+    }
+
+    async fn viewer_counts(&self) -> HashMap<String, usize> {
+        let rooms = self.rooms.lock().await;
+        rooms.iter().map(|(name, room)| (name.clone(), *room.viewers_tx.borrow())).collect()
+    }
+
     async fn live_names(&self) -> Vec<String> {
         let rooms = self.rooms.lock().await;
         let mut names: Vec<String> = rooms.keys().cloned().collect();
@@ -1011,13 +1150,22 @@ impl Room {
             .any(|s| s.kind == RTPCodecType::Video)
             .then(|| SlotInfo { slot: 0, kind: "camera".to_owned(), label: None });
         let (slots_tx, _) = watch::channel(camera.into_iter().collect());
+        let (viewers_tx, _) = watch::channel(0);
         Self {
             generation: 0,
             generation_tx,
             slots,
             slots_tx,
             publisher: None,
+            viewers: HashMap::new(),
+            viewers_tx,
         }
+    }
+
+    /// Different addresses, not peers: five tabs on one wifi are one viewer.
+    fn recount(&mut self) {
+        let unique: std::collections::HashSet<&IpAddr> = self.viewers.values().collect();
+        self.viewers_tx.send_replace(unique.len());
     }
 
     fn bump(&mut self) {
@@ -1044,6 +1192,14 @@ impl Out {
     fn event(event: &str) -> Self {
         Self {
             event: Some(event.to_owned()),
+            ..Default::default()
+        }
+    }
+
+    fn viewers(count: usize) -> Self {
+        Self {
+            event: Some("viewers".to_owned()),
+            viewers: Some(count),
             ..Default::default()
         }
     }

@@ -11,7 +11,7 @@ import { loadMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { cleanName, isValidName } from '@/infra/names';
-import { connectRelay, SCREEN_SLOTS, type SlotInfo, waitForIceGathering } from '@/infra/relay';
+import { connectRelay, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
@@ -56,15 +56,24 @@ export const streamNameAtom = atom('');
  */
 export const chatRoomAtom = atom('');
 export const ownerAtom = atom<Owner | null>(null);
+/** How many are watching my stream, as video tells me. `null` while not live. */
+export const liveViewersAtom = atom<number | null>(null);
 export const bioDraftAtom = atom('');
 export const bioStatusAtom = atom('');
 /** The upload time of my picture (the `?v=` of its url). `null`: none. */
 export const myAvatarAtom = atom<number | null>(null);
 export const avatarStatusAtom = atom('');
+/** Pictures on this name's home card, oldest first. Empty: home shows the camera. */
+export const streamThumbsAtom = atom<number[]>([]);
+export const thumbStatusAtom = atom('');
 
 /** The picture the page sends: this big, as a jpeg of this quality. A few tens of kb. */
 const AVATAR_PX = 256;
 const AVATAR_QUALITY = 0.85;
+const THUMB_W = 640;
+const THUMB_H = 360;
+const THUMB_QUALITY = 0.8;
+const MAX_THUMBS = 6;
 
 export const hasMicAtom = atom((get) => (get(cameraAtom)?.getAudioTracks().length ?? 0) > 0);
 export const isPublishingAtom = atom((get) => BUSY_PHASES.includes(get(publishPhaseAtom)));
@@ -235,7 +244,11 @@ export async function goLive(): Promise<void> {
       return;
     }
     store.set(ownerAtom, owner);
-    ws = await connectRelay({ role: 'publish', name, pc: myPc, session: owner.session, token: owner.token, url: grant.url, signal: myAbort.signal });
+    ws = await connectRelay({ role: 'publish', name, pc: myPc, session: owner.session, token: owner.token, url: grant.url, signal: myAbort.signal,
+      onMessage: (msg) => {
+        if (msg.event === 'viewers') store.set(liveViewersAtom, viewersOf(msg));
+      },
+    });
   } catch (err) {
     if (gone()) return;
     const taken = statusOf(err) === 409 || messageOf(err) === 'someone is already live';
@@ -399,6 +412,7 @@ export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', {
   store.set(screensAtom, []);
   cameraSender = null;
   screenSenders = [];
+  store.set(liveViewersAtom, null);
   const owner = store.get(ownerAtom);
   if (owner) {
     api.stop(owner).catch(() => undefined);
@@ -431,12 +445,15 @@ export function leaveLivePage() {
   store.set(bioStatusAtom, '');
   store.set(myAvatarAtom, null);
   store.set(avatarStatusAtom, '');
+  store.set(streamThumbsAtom, []);
+  store.set(thumbStatusAtom, '');
 }
 
 /**
- * The bio and picture saved under the name in the box. A bio being typed is left alone.
- * Another name than last time starts clean: the old name's saved bio and picture go, so
- * they cannot be saved under the new one. Text the person typed is theirs and stays.
+ * The bio, picture and thumbnails saved under the name in the box. A bio being typed is left
+ * alone. Another name than last time starts clean: the old name's saved bio, picture and
+ * thumbnails go, so they cannot be saved under the new one. Text the person typed is theirs
+ * and stays.
  */
 export async function loadProfile(): Promise<void> {
   const name = store.get(streamNameAtom);
@@ -447,6 +464,8 @@ export async function loadProfile(): Promise<void> {
       if (store.get(bioDraftAtom).trim() === loadedBio) store.set(bioDraftAtom, '');
       store.set(bioStatusAtom, '');
       store.set(myAvatarAtom, null);
+      store.set(streamThumbsAtom, []);
+      store.set(thumbStatusAtom, '');
     }
     // the same name again keeps what was loaded for it: a second commit (focus, blur) must not
     // forget the saved bio, or the next name change would take it for typed text and keep it
@@ -461,6 +480,7 @@ export async function loadProfile(): Promise<void> {
     loadedBio = me.bio ?? '';
     if (!store.get(bioDraftAtom)) store.set(bioDraftAtom, loadedBio);
     store.set(myAvatarAtom, me.avatar ?? null);
+    store.set(streamThumbsAtom, me.thumbs ?? []);
   } catch {
     // nothing saved yet
   }
@@ -501,6 +521,80 @@ export async function squareJpeg(file: File): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('could not make a jpeg'))), 'image/jpeg', AVATAR_QUALITY);
   });
+}
+
+/**
+ * Any picture file to a 16:9 jpeg, in the browser, before it goes anywhere: the middle
+ * of it, scaled to 640x360. So the api never has to decode an image.
+ */
+export async function wideJpeg(file: File): Promise<Blob> {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const target = 16 / 9;
+    const ratio = bitmap.width / bitmap.height;
+    let sx = 0;
+    let sy = 0;
+    let sw = bitmap.width;
+    let sh = bitmap.height;
+    if (ratio > target) {
+      sw = bitmap.height * target;
+      sx = (bitmap.width - sw) / 2;
+    } else {
+      sh = bitmap.width / target;
+      sy = (bitmap.height - sh) / 2;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = THUMB_W;
+    canvas.height = THUMB_H;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('no canvas');
+    ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, THUMB_W, THUMB_H);
+    return await new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('could not make a jpeg'))), 'image/jpeg', THUMB_QUALITY);
+    });
+  } finally {
+    bitmap.close();
+  }
+}
+
+export async function addStreamThumb(file: File): Promise<void> {
+  const name = store.get(streamNameAtom);
+  if (!isValidName(name)) {
+    store.set(thumbStatusAtom, 'type a name first');
+    return;
+  }
+  if (store.get(thumbStatusAtom) === 'saving') return;
+  if (store.get(streamThumbsAtom).length >= MAX_THUMBS) {
+    store.set(thumbStatusAtom, '6 pictures at most. remove one first');
+    return;
+  }
+  store.set(thumbStatusAtom, 'saving');
+  try {
+    const saved = await api.saveStreamThumb(name, await wideJpeg(file));
+    if (store.get(streamNameAtom) !== name) return;
+    store.set(streamThumbsAtom, [...store.get(streamThumbsAtom), saved.id]);
+    store.set(thumbStatusAtom, 'saved');
+  } catch (err) {
+    if (store.get(streamNameAtom) !== name) return;
+    store.set(thumbStatusAtom, `not saved: ${messageOf(err)}`);
+  }
+}
+
+export async function removeStreamThumb(id: number): Promise<void> {
+  const name = store.get(streamNameAtom);
+  if (!isValidName(name)) return;
+  try {
+    await api.deleteStreamThumb(name, id);
+    if (store.get(streamNameAtom) !== name) return;
+    store.set(
+      streamThumbsAtom,
+      store.get(streamThumbsAtom).filter((thumb) => thumb !== id)
+    );
+    store.set(thumbStatusAtom, 'removed');
+  } catch (err) {
+    if (store.get(streamNameAtom) !== name) return;
+    store.set(thumbStatusAtom, `not removed: ${messageOf(err)}`);
+  }
 }
 
 export async function saveAvatar(file: File): Promise<void> {

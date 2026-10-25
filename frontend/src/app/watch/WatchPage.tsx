@@ -27,17 +27,19 @@ import {
   watchMessageAtom,
   watchNameAtom,
   watchPhaseAtom,
-  watchToneAtom
+  watchToneAtom,
+  watchViewersAtom,
 } from '@/infra/atoms/watch-atoms';
 import { PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
-import { chatSideAtom } from '@/infra/atoms/settings-atoms';
-import { ChatOpenButton, ChatSlot } from '@/shared-components/ChatSlot';
+import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
+import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
 import { cleanName, isDummyName } from '@/infra/names';
 import { Avatar } from '@/shared-components/Avatar';
 import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { StatusLine } from '@/shared-components/StatusLine';
+import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { StreamTile } from '@/shared-components/StreamTile';
 import { TestBadge } from '@/shared-components/TestBadge';
@@ -64,9 +66,11 @@ export function WatchPage() {
   const phase = useAtomValue(watchPhaseAtom);
   const presence = useAtomValue(presenceOfAtom(name));
   const tiles = useAtomValue(tilesAtom);
-  // the layout setting: a column on the left, a column on the right, or a window over the page
+  const viewers = useAtomValue(watchViewersAtom);
+  // the layout setting: a column on the left, a column on the right, or a window over the page.
+  // closed, a column slides out to that side and the video takes the row
   const chatSide = useAtomValue(chatSideAtom);
-  const column = chatSide === 'left' || chatSide === 'right';
+  const chatOpen = useAtomValue(chatModalOpenAtom);
 
   // Mount only: start watching the name in the url (or take back the stream picture in picture
   // kept alive), and on the way out stop, unless picture in picture keeps it going in the corner.
@@ -118,16 +122,11 @@ export function WatchPage() {
       wide
     >
       {/* the video column, the chat, the bio, in that order. left or right is a grid at lg+ (the
-          chat across both rows, the bio under the video); on a narrow screen the column sits
-          under the picture. a window takes the chat out of the grid. the panel itself stays
-          mounted either way: ChatSlot is one dialog, and a remount would be a reconnect. */}
-      <div
-        className={cn(
-          column && 'lg:grid lg:grid-rows-[auto_1fr] lg:items-start lg:gap-x-6',
-          chatSide === 'right' && 'lg:grid-cols-[minmax(0,1fr)_360px]',
-          chatSide === 'left' && 'lg:grid-cols-[360px_minmax(0,1fr)]'
-        )}
-      >
+          chat across both rows, the bio under the video) whose column eases shut when the chat
+          closes; on a narrow screen the column sits under the picture. a window takes the chat
+          out of the grid. the panel itself stays mounted either way: ChatSlot is one dialog, and
+          a remount would be a reconnect. */}
+      <div className={chatLayoutClass(chatSide, chatOpen)}>
         <div className={cn('min-w-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-1')}>
           {/* the controls sit on the video, along its bottom edge. they stay up while the sound is off
               (a silent stream should show why) and otherwise come up on hover, while a control has
@@ -153,12 +152,13 @@ export function WatchPage() {
                 tap to play
               </Button>
             )}
+            {/* while the chat is closed the bar stays up, so the button that brings it back is on the picture */}
             {phase !== 'bad-name' && (
-              <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted))}>
+              <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || !chatOpen))}>
                 {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
                 {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} tipAt="above-left" panel="up" playback={{ muted, level: volume }} />}
                 <ChatOpenButton className="ml-auto" />
-                <IconButton id="pip" label="picture in picture" onClick={toCorner} className={cn(chatSide !== 'modal' && 'ml-auto')}>
+                <IconButton id="pip" label="picture in picture" onClick={toCorner}>
                   <PipIcon />
                 </IconButton>
               </div>
@@ -173,7 +173,10 @@ export function WatchPage() {
               ))}
             </div>
           )}
-          <StatusLine text={message} tone={tone} />
+          <div className="flex flex-wrap items-baseline gap-x-4">
+            <StatusLine text={message} tone={tone} />
+            <ViewerCount id="viewers" count={viewers} className="text-lg text-textSecondary" />
+          </div>
 
           {canRetry && (
             <div className="my-3">

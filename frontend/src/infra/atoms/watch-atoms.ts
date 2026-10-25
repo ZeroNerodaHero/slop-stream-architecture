@@ -9,7 +9,7 @@ import { api, messageOf } from '@/infra/api';
 import { presenceChanged } from '@/infra/atoms/presence-atoms';
 import { eventsPhaseAtom, onEvents, unwatchPresence, watchPresence } from '@/infra/events';
 import { isValidName } from '@/infra/names';
-import { connectRelay, type RelayReply, SCREEN_SLOTS, type SlotInfo, slotsOf, waitForIceGathering } from '@/infra/relay';
+import { connectRelay, type RelayReply, SCREEN_SLOTS, type SlotInfo, slotsOf, viewersOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
@@ -47,6 +47,8 @@ export const avatarAtom = atom<number | null>(null);
 export const remoteStreamAtom = atom<MediaStream | null>(null);
 /** The video slots the streamer says are live, as video tells us. Empty until it has. */
 export const slotsAtom = atom<SlotInfo[]>([]);
+/** How many are watching, as video tells this peer. `null` until it has, and after it ends. */
+export const watchViewersAtom = atom<number | null>(null);
 /** The slot the watcher clicked to see big, if any. `null`: the rule below. */
 export const chosenSlotAtom = atom<number | null>(null);
 /** Which slot is big: the one chosen while it is live, else the first screen, else the camera. */
@@ -305,7 +307,9 @@ async function start(name: string): Promise<void> {
   // the frames after the answer, this attempt's only: `ended`, and what is live in which slot
   const onMessage = (msg: RelayReply) => {
     if (pc !== myPc) return;
-    if (msg.event === 'ended') ended();
+    if (msg.error) fail(msg.error, myPc);
+    else if (msg.event === 'ended') ended();
+    else if (msg.event === 'viewers') store.set(watchViewersAtom, viewersOf(msg));
     else if (msg.event === 'slots') {
       const slots = slotsOf(msg);
       if (slots) {
@@ -452,6 +456,7 @@ export function teardown() {
   for (const streamAtom of slotStreamAtoms) store.set(streamAtom, null);
   store.set(slotsAtom, []);
   store.set(chosenSlotAtom, null);
+  store.set(watchViewersAtom, null);
 }
 
 /**

@@ -8,6 +8,7 @@
  *                      whenever what it shows changes: its video slots that are live, see `SlotInfo`
  *   a watcher gets     {"event":"slots","slots":[...]}  right after the answer and on every change
  *                      {"event":"ended"}  when the publisher leaves
+ *   both get           {"event":"viewers","viewers":3}  how many addresses are receiving it, on change, at most 1/s
  *
  * A publisher's offer carries every video section it may ever send on: the camera and
  * SCREEN_SLOTS empty ones for screens, filled and emptied later with `replaceTrack`, which
@@ -39,6 +40,13 @@ export interface RelayReply {
   error?: string;
   event?: string;
   slots?: SlotInfo[];
+  /** With `event: 'viewers'`: different addresses receiving the stream right now. docs/viewers.md */
+  viewers?: number;
+}
+
+/** The count of a `viewers` event, or null when the frame has none that makes sense. */
+export function viewersOf(msg: RelayReply): number | null {
+  return typeof msg.viewers === 'number' && Number.isInteger(msg.viewers) && msg.viewers >= 0 ? msg.viewers : null;
 }
 
 /** The slots of a `slots` event, kept to the well-formed entries. `null` when the message has none. */

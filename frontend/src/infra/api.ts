@@ -20,6 +20,10 @@ export interface LiveStream {
   verified: boolean;
   /** When the picture was saved (unix seconds), the `?v=` of its url. `null`: no picture. */
   avatar: number | null;
+  /** Pictures on the home card, oldest first. Empty or missing: the card shows the camera. */
+  thumbs?: number[];
+  /** Different addresses receiving the stream, from video. `null`: video did not answer, nobody knows. */
+  viewers: number | null;
 }
 
 export interface Streamer {
@@ -27,6 +31,8 @@ export interface Streamer {
   bio: string;
   verified: boolean;
   avatar: number | null;
+  /** Pictures on the home card, oldest first. Empty when they have put none. */
+  thumbs?: number[];
   /** The word next to the name: `offline` `online` `dnd` `streaming`. See docs/status.md. */
   presence: Presence;
 }
@@ -94,6 +100,10 @@ export interface Health {
   video_up_secs: number | null;
   video_build: string | null;
   live: number | null;
+  /** The bucket answered. Absent on an api older than the s3 container. */
+  s3?: boolean;
+  s3_bucket?: string;
+  s3_endpoint?: string;
   /** Reports POST /api/errors dropped in the current rate limit window (10 min). */
   errors_dropped: number;
 }
@@ -181,6 +191,11 @@ export const api = {
   /** The jpeg itself as the body. The page has already made it 256x256. */
   saveAvatar: (name: string, jpeg: Blob) => request<{ name: string; avatar: number }>('PUT', `/api/streamers/${name}/avatar`, jpeg),
   deleteAvatar: (name: string) => request<null>('DELETE', `/api/streamers/${name}/avatar`),
+  /** The jpeg itself as the body. The page has already made it 640x360. */
+  saveStreamThumb: (name: string, jpeg: Blob) => request<{ id: number }>('PUT', `/api/streamers/${name}/thumbs`, jpeg),
+  deleteStreamThumb: (name: string, id: number) => request<null>('DELETE', `/api/streamers/${name}/thumbs/${id}`),
+  /** One picture on the home card. The id is the url, so it can be cached. */
+  streamThumbUrl: (name: string, id: number) => `/api/streamers/${encodeURIComponent(name)}/thumbs/${id}`,
   /** The presence choice, through the bio's gate. The answer also arrives on the events socket, to every tab and device. */
   setPresence: (name: string, status: PresenceChoice) => request<{ status: PresenceChoice; presence: Presence }>('PUT', `/api/streamers/${name}/presence`, { status }),
   /** `version` is the upload time the api hands out, so a new picture is a new url and the old one can be cached. */
