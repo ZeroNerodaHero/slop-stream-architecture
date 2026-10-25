@@ -1,9 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useAtomValue } from 'jotai';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { api, messageOf, type LiveStream } from '@/infra/api';
 import { isDummyName } from '@/infra/names';
+import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { Avatar } from '@/shared-components/Avatar';
 import { buttonClassName } from '@/shared-components/Button';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -13,8 +15,14 @@ import { cn } from '@/utils/cn';
 import { since } from '@/utils/since';
 
 const POLL_MS = 3000;
-/** Thumbnails change every 5s on the publisher side; re-fetch on that rhythm. */
-const THUMB_BUCKET_MS = 5000;
+/** A pause, not a pass across the grid. Under this, hovering a card sends nothing. */
+const HOVER_DWELL_MS = 300;
+/** Crossing from the picture to the name must not hang the preview up. */
+const HOVER_GRACE_MS = 400;
+/** The newest streams, played live at the top. There is no viewer count to rank by. */
+const FEATURED = 2;
+/** How many times to ask again for a camera frame that is not written yet (~6s after go-live). */
+const STILL_TRIES = 8;
 
 /** One card per column, as many columns as fit: 1 on a phone, 2 on a tablet, 4 at full width. */
 const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-6';
@@ -25,24 +33,113 @@ const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-6';
 const CARD = 'border border-primaryStroke bg-backgroundSecondary';
 const CARD_LINK = cn(CARD, 'group transition-[border-color] duration-150 hover:border-primaryBlue focus-within:border-primaryBlue');
 
+/** One per page load, so a refresh can land on a different picture and a sitting page never does. */
+const pagePick = Math.floor(Math.random() * 0x7fffffff);
+
+type Still = { kind: 'custom'; id: number } | { kind: 'camera'; token: number; tries: number };
+
+const stills = new Map<string, Still>();
+
+function pickIndex(name: string, length: number): number {
+  let n = pagePick;
+  for (let i = 0; i < name.length; i++) n = (n + name.charCodeAt(i)) >>> 0;
+  return n % length;
+}
+
+/** The one picture this name shows until the document is loaded again. */
+function stillSrc(name: string, thumbs: readonly number[]): string {
+  let still = stills.get(name);
+  if (!still) {
+    const id = thumbs.length > 0 ? thumbs[pickIndex(name, thumbs.length)] : undefined;
+    still = id !== undefined ? { kind: 'custom', id } : { kind: 'camera', token: pagePick, tries: 0 };
+    stills.set(name, still);
+  }
+  return still.kind === 'custom' ? api.streamThumbUrl(name, still.id) : api.thumbUrl(name, still.token);
+}
+
 /**
- * The picture on the card. The streamer's own, taking turns every bucket, when they have
- * put some. Otherwise the camera, a few seconds old. A 404 (the first camera frame takes
- * ~6s, home lists the stream within 3s) only hides the img: the next bucket is a new src
- * on the same element, which loads again and shows it. Unmounting it would end that.
+ * The picture was not there. A custom one that 404s falls back to one camera frame.
+ * A camera frame that is not written yet gets a new url a few times, then stops.
  */
-function Thumb({ name, bucket, thumbs }: { name: string; bucket: number; thumbs: number[] }) {
+function stillMissed(name: string): string | null {
+  const still = stills.get(name);
+  if (!still) return null;
+  if (still.kind === 'custom') {
+    const camera: Still = { kind: 'camera', token: pagePick, tries: 0 };
+    stills.set(name, camera);
+    return api.thumbUrl(name, camera.token);
+  }
+  if (still.tries >= STILL_TRIES) return null;
+  still.tries += 1;
+  still.token += 1;
+  return api.thumbUrl(name, still.token);
+}
+
+/**
+ * One picture for the whole visit. The streamer's own when they put some, else one frame
+ * of the camera. A 404 on that first frame (it takes ~6s, home lists the stream within 3s)
+ * asks again, and then the url stays: the next bucket used to swap the picture under you.
+ */
+function Thumb({ name, thumbs, hidden }: { name: string; thumbs: number[]; hidden: boolean }) {
+  const [src, setSrc] = useState(() => stillSrc(name, thumbs));
   const [missing, setMissing] = useState(false);
-  const custom = thumbs.length > 0 ? thumbs[bucket % thumbs.length] : undefined;
-  const src = custom !== undefined ? api.streamThumbUrl(name, custom) : api.thumbUrl(name, bucket);
+  const wait = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (wait.current !== null) clearTimeout(wait.current);
+    },
+    []
+  );
+
   return (
     <img
       src={src}
       alt=""
       data-thumb={name}
-      className={cn('absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-105', missing && 'opacity-0')}
-      onError={() => setMissing(true)}
+      className={cn('absolute inset-0 h-full w-full object-cover', (hidden || missing) && 'opacity-0')}
+      onError={() => {
+        if (wait.current !== null) return;
+        const next = stillMissed(name);
+        if (!next) {
+          setMissing(true);
+          return;
+        }
+        wait.current = window.setTimeout(() => {
+          wait.current = null;
+          setMissing(false);
+          setSrc(next);
+        }, 2000);
+      }}
       onLoad={() => setMissing(false)}
+    />
+  );
+}
+
+/** The camera, once its track has arrived. `cover` is the featured cards: no still underneath. */
+function PreviewVideo({ name, cover }: { name: string; cover: boolean }) {
+  const stream = useAtomValue(previewStreamsAtom)[name] ?? null;
+  const ref = useRef<HTMLVideoElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    setPlaying(false);
+    const el = ref.current;
+    if (!el || el.srcObject === stream) return;
+    el.srcObject = stream;
+    if (stream) void el.play().catch(() => undefined);
+  }, [stream]);
+
+  return (
+    <video
+      ref={ref}
+      data-preview={name}
+      autoPlay
+      playsInline
+      muted
+      aria-hidden
+      onPlaying={() => setPlaying(true)}
+      className={cn('absolute inset-0 h-full w-full object-cover', !cover && !playing && 'opacity-0')}
     />
   );
 }
@@ -60,20 +157,49 @@ function Face({ stream }: { stream: LiveStream }) {
   );
 }
 
-function Card({ stream, now, bucket }: { stream: LiveStream; now: number; bucket: number }) {
+function Card({
+  stream,
+  now,
+  featured,
+  playing,
+  onEnter,
+  onLeave
+}: {
+  stream: LiveStream;
+  now: number;
+  featured: boolean;
+  playing: boolean;
+  /** A mouse or keyboard arrival. Touch is passed through and ignored: a tap is the click. */
+  onEnter: (pointer: string) => void;
+  onLeave: () => void;
+}) {
   const age = since(stream.since, now);
   return (
-    <article className={CARD_LINK}>
-      <Link to={`/watch/${encodeURIComponent(stream.name)}`} aria-label={`watch ${stream.name}`} className="block outline-none">
+    <article
+      className={CARD_LINK}
+      data-featured={featured ? stream.name : undefined}
+      onPointerEnter={(event) => onEnter(event.pointerType)}
+      onPointerLeave={onLeave}
+    >
+      <Link
+        to={`/watch/${encodeURIComponent(stream.name)}`}
+        aria-label={`watch ${stream.name}`}
+        className="block outline-none"
+        onFocus={() => onEnter('keyboard')}
+        onBlur={onLeave}
+      >
         {/* one chip, top right: "live for 52 hr". the fake streams draw their name top-left and a clock bottom-left */}
         <div className="relative aspect-video overflow-hidden border-b border-primaryStroke bg-black">
-          <Thumb name={stream.name} bucket={bucket} thumbs={stream.thumbs ?? []} />
-          <span className="absolute right-3 top-3 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
+          <div className="absolute inset-0 transition-transform duration-300 ease-out group-hover:scale-105">
+            <Thumb name={stream.name} thumbs={stream.thumbs ?? []} hidden={featured} />
+            {playing && <PreviewVideo name={stream.name} cover={featured} />}
+          </div>
+          <span className="absolute right-3 top-3 z-10 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
             <span aria-hidden className="h-2 w-2 animate-pulse bg-increase" />
             {age || 'live'}
           </span>
           {stream.viewers !== null && (
-            <span className="absolute bottom-3 right-3 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold text-white backdrop-blur-sm">
+            <span className="absolute bottom-3 right-3 z-10 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold text-white backdrop-blur-sm">
               <ViewerCount count={stream.viewers} />
             </span>
           )}
@@ -123,13 +249,59 @@ function Skeleton() {
 }
 
 export function HomePage() {
-  // the poll is also the page's clock: `since` and the thumbnail bucket move with each answer (every
-  // 3s), so the render never reads the time itself. no retries on focus, the poll is the schedule.
+  // the poll is also the page's clock: `since` moves with each answer (every 3s), so the render
+  // never reads the time itself. the picture does not: one still per visit. no retries on focus.
   const streams = useQuery({ queryKey: ['streams'], queryFn: api.streams, refetchInterval: POLL_MS, refetchOnWindowFocus: false });
   const now = streams.dataUpdatedAt;
-  const bucket = Math.floor(now / THUMB_BUCKET_MS);
-  // under an error the last good list is stale: the line says why there is none
   const list = streams.error ? undefined : streams.data;
+  const featured = list?.slice(0, FEATURED) ?? [];
+  const rest = list?.slice(FEATURED) ?? [];
+  const namesKey = (list ?? []).map((stream) => stream.name).join(',');
+  const [hover, setHover] = useState<string | null>(null);
+  const dwell = useRef<number | null>(null);
+  const grace = useRef<number | null>(null);
+
+  useEffect(() => {
+    const liveNames = namesKey ? namesKey.split(',') : [];
+    if (hover && !liveNames.includes(hover)) setHover(null);
+    const names = liveNames.slice(0, FEATURED);
+    if (hover && liveNames.includes(hover) && !names.includes(hover)) names.push(hover);
+    setHomePreviews(names);
+  }, [namesKey, hover]);
+
+  useEffect(
+    () => () => {
+      if (dwell.current !== null) clearTimeout(dwell.current);
+      if (grace.current !== null) clearTimeout(grace.current);
+      setHomePreviews([]);
+    },
+    []
+  );
+
+  function enter(name: string, pointer: string) {
+    if (pointer === 'touch') return;
+    if (grace.current !== null) {
+      clearTimeout(grace.current);
+      grace.current = null;
+    }
+    if (dwell.current !== null) clearTimeout(dwell.current);
+    dwell.current = window.setTimeout(() => {
+      dwell.current = null;
+      setHover(name);
+    }, HOVER_DWELL_MS);
+  }
+
+  function leave(name: string) {
+    if (dwell.current !== null) {
+      clearTimeout(dwell.current);
+      dwell.current = null;
+    }
+    if (grace.current !== null) clearTimeout(grace.current);
+    grace.current = window.setTimeout(() => {
+      grace.current = null;
+      setHover((current) => (current === name ? null : current));
+    }, HOVER_GRACE_MS);
+  }
 
   // no title row: the cards are the page. "go live" is in the corner panel (UserPanel), and once more in the empty state.
   return (
@@ -148,10 +320,37 @@ export function HomePage() {
           </Link>
         </div>
       )}
-      <div id="list" className={cn(GRID, !list?.length && 'hidden')}>
-        {list?.map((stream) => (
-          <Card key={stream.name} stream={stream} now={now} bucket={bucket} />
-        ))}
+      <div id="list" className={cn(!list?.length && 'hidden')}>
+        {featured.length > 0 && (
+          <div id="featured" className={cn('grid grid-cols-1 gap-6 lg:grid-cols-2', rest.length > 0 && 'mb-6')}>
+            {featured.map((stream) => (
+              <Card
+                key={stream.name}
+                stream={stream}
+                now={now}
+                featured
+                playing
+                onEnter={() => undefined}
+                onLeave={() => undefined}
+              />
+            ))}
+          </div>
+        )}
+        {rest.length > 0 && (
+          <div className={GRID}>
+            {rest.map((stream) => (
+              <Card
+                key={stream.name}
+                stream={stream}
+                now={now}
+                featured={false}
+                playing={hover === stream.name}
+                onEnter={(pointer) => enter(stream.name, pointer)}
+                onLeave={() => leave(stream.name)}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </PageFrame>
   );

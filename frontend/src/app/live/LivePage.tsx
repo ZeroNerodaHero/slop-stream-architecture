@@ -274,7 +274,7 @@ export function LivePage() {
             <div className="mt-4 border-t border-primaryStroke pt-4">
               <p className="text-textSecondary">thumbnails</p>
               <p className="mt-1 text-sm text-textSecondary">
-                pictures on your card on home. a few of them take turns. with none, home shows the camera.
+                one picture on your card on home, until that page is refreshed. with none, home shows one frame of the camera.
               </p>
               {thumbs.length > 0 && (
                 <ul className="mt-3 flex list-none flex-wrap gap-3 p-0">
