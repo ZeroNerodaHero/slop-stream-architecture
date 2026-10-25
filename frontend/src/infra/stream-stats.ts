@@ -153,7 +153,7 @@ function percent(part: number, whole: number): number {
   return Math.min(100, Math.max(0, (part / whole) * 100));
 }
 
-function push(values: number[], value: number): void {
+function push<T>(values: T[], value: T): void {
   values.push(value);
   if (values.length > HIST) values.shift();
 }
@@ -253,17 +253,11 @@ interface BuiltVideo {
   frameDelta: number | null;
 }
 
-function videoOf(
-  stat: Stat,
-  id: string,
-  all: Map<string, Stat>,
-  prev: Map<string, Counters>,
-  dt: number,
-  direction: 'in' | 'out',
-  remotes: Stat[]
-): BuiltVideo | null {
-  const width = num(stat.frameWidth) ?? 0;
-  const height = num(stat.frameHeight) ?? 0;
+function videoOf(stat: Stat, id: string, all: Map<string, Stat>, prev: Map<string, Counters>, dt: number, direction: 'in' | 'out', remotes: Stat[]): BuiltVideo | null {
+  const mediaId = str(stat.mediaSourceId);
+  const media = mediaId ? all.get(mediaId) : undefined;
+  const width = num(stat.frameWidth) ?? num(media?.width) ?? 0;
+  const height = num(stat.frameHeight) ?? num(media?.height) ?? 0;
   if (width <= 0 || height <= 0) return null;
   const old = prev.get(id);
   const bytes = perSec(delta(num(direction === 'in' ? stat.bytesReceived : stat.bytesSent), old?.bytes), dt);
@@ -272,7 +266,7 @@ function videoOf(
   const reportedFps = num(stat.framesPerSecond);
   const fps = reportedFps !== undefined ? reportedFps : frames !== null && dt <= STALL_DT_MAX ? frames / dt : 0;
   const lost = delta(num(stat.packetsLost), old?.packetsLost);
-  const received = delta(num(stat.packetsReceived), old?.packetsReceived);
+  const received = delta(num(stat.packetsReceived), old?.packets);
   let lossPct: number | null = lost !== null && received !== null ? percent(lost, lost + received) : null;
   let remoteLoss: number | null = null;
   let jitterMs = num(stat.jitter);
@@ -328,7 +322,15 @@ function audioLevel(stat: Stat, all: Map<string, Stat>, prev: Map<string, Counte
   return Math.sqrt(dEnergy / dDuration);
 }
 
-function audioOf(stat: Stat, all: Map<string, Stat>, prev: Map<string, Counters>, dt: number, direction: 'in' | 'out', muted: boolean, remotes: Stat[]): AudioLine | null {
+function audioOf(
+  stat: Stat,
+  all: Map<string, Stat>,
+  prev: Map<string, Counters>,
+  dt: number,
+  direction: 'in' | 'out',
+  muted: boolean,
+  remotes: Stat[]
+): AudioLine | null {
   const id = str(stat.id) ?? '';
   const old = prev.get(id);
   const bytes = perSec(delta(num(direction === 'in' ? stat.bytesReceived : stat.bytesSent), old?.bytes), dt);
@@ -336,7 +338,7 @@ function audioOf(stat: Stat, all: Map<string, Stat>, prev: Map<string, Counters>
   const level = audioLevel(stat, all, prev);
   if (bytes === null && packets === 0 && level === null) return null;
   const lost = delta(num(stat.packetsLost), old?.packetsLost);
-  const received = delta(num(stat.packetsReceived), old?.packetsReceived);
+  const received = delta(num(stat.packetsReceived), old?.packets);
   const concealed = delta(num(stat.concealedSamples), old?.concealed);
   const samples = delta(num(stat.totalSamplesReceived), old?.samples);
   let concealmentPct: number | null = null;
@@ -426,7 +428,9 @@ function nextStats(m: Memory, report: RTCStatsReport, source: SamplerSource): St
     m.stall = 0;
     m.freezes = [];
   }
-  const primary = videos.find((v) => want && v.trackId === want) ?? videos.reduce<BuiltVideo | undefined>((best, v) => (!best || v.line.bitrate > best.line.bitrate ? v : best), undefined);
+  const primary =
+    videos.find((v) => want && v.trackId === want) ??
+    videos.reduce<BuiltVideo | undefined>((best, v) => (!best || v.line.bitrate > best.line.bitrate ? v : best), undefined);
 
   m.at = now;
   m.counters = counters;

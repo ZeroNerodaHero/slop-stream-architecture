@@ -248,7 +248,7 @@ export async function goLive(): Promise<void> {
   ws.onclose = () => stopLive('connection lost', 'failed');
   heartbeat = setInterval(sendHeartbeat, HEARTBEAT_MS);
   setPhase('connecting', 'connecting');
-  startPublishStats();
+  if (!gone()) startPublishStats();
 }
 
 function sendHeartbeat() {

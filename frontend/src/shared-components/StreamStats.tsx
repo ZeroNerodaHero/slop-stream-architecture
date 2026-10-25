@@ -192,7 +192,12 @@ export function StreamStatsButton({ id, role, stats, tipAt, panel, playback }: S
         )}
       </button>
       {open && (
-        <div id={`${id}-panel`} role="region" aria-label="stream stats" className={cn('absolute z-20 w-60 border border-white/10 bg-black/90 p-3 text-xs text-white backdrop-blur-sm', PANEL_AT[panel])}>
+        <div
+          id={`${id}-panel`}
+          role="region"
+          aria-label="stream stats"
+          className={cn('absolute z-20 w-60 border border-white/10 bg-black/90 p-3 text-xs text-white backdrop-blur-sm', PANEL_AT[panel])}
+        >
           {stats ? (
             <>
               <p className={cn('font-semibold', wordColor(stats.word))}>{stats.word}</p>
