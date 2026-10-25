@@ -85,7 +85,7 @@ export function ChatSlot({ children }: { children: ReactNode }) {
         modal
           ? 'm-auto hidden h-[min(720px,calc(100dvh-3rem))] w-[min(420px,calc(100vw-3rem))] max-w-none flex-col overflow-hidden border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary shadow-hard-lg backdrop:bg-black/60 open:flex'
           : cn(
-              'static m-0 mt-4 flex h-[min(50vh,560px)] w-full min-w-0 max-w-none flex-col border-0 bg-transparent p-0 shadow-none',
+              'static m-0 mt-4 flex h-[min(50vh,560px)] w-full min-w-0 max-w-none flex-col border-0 bg-transparent p-0 text-textPrimary shadow-none',
               '[&:not([open])]:flex lg:row-span-2 lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]',
               side === 'left' && 'lg:col-start-1 lg:row-start-1'
             )
