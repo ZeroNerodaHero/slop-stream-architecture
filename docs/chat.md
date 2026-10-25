@@ -70,7 +70,7 @@ server → client
 
 ## the panel
 
-on the watch page the chat sits to the right of the video on wide screens, under it on phones. on the go-live page the streamer sees the same panel and speaks as themselves. the panel: the lines, a nick box (remembered in the browser), a text box with a `500` countdown, a send button. the streamer's lines get a mark; a line wears its speaker's group badges after the name. the viewer count sits in the panel header, next to a robot button: `hide bots` takes the bots' lines off the screen and then reads `N hidden`. that choice is this browser's (localstorage, the settings tab has it too), so it holds from room to room.
+on the watch page the chat sits to the right of the video on wide screens, under it on phones. on the go-live page the streamer sees the same panel and speaks as themselves. on the corner player it opens under the picture, or in a column to the picture's left or right: a setting of this browser, and the settings tab shows a picture of each. the panel: the lines, a nick box (remembered in the browser), a text box with a `500` countdown, a send button. the streamer's lines get a mark; a line wears its speaker's group badges after the name. the viewer count sits in the panel header, next to a robot button: `hide bots` takes the bots' lines off the screen and then reads `N hidden`. that choice is this browser's (localstorage, the settings tab has it too), so it holds from room to room.
 
 ## later, not now
 

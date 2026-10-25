@@ -1,8 +1,9 @@
 /**
- * The preferences this browser keeps (localstorage, like the nick): where the chat sits,
- * whether the bots' lines show, and the theme. Not part of the account: a laptop and a phone
- * can each have their own. Same shape as the other atom modules: atoms for what renders,
- * action functions to change it. The modal that edits them is user-modal-atoms.ts.
+ * The preferences this browser keeps (localstorage, like the nick): where the chat sits on a
+ * page, where it sits on the corner player, whether the bots' lines show, and the theme. Not
+ * part of the account: a laptop and a phone can each have their own. Same shape as the other
+ * atom modules: atoms for what renders, action functions to change it. The modal that edits
+ * them is user-modal-atoms.ts.
  */
 
 import { atom } from 'jotai';
@@ -26,10 +27,15 @@ import {
 
 // ---- layout -------------------------------------------------------------------------------
 
-/** Where the chat sits next to a stream: at its right (the default), or under it. */
-export type ChatSide = 'right' | 'below';
+/**
+ * Where the chat sits on the watch page and the go live page: a column on the left, a column
+ * on the right (the default), or in a window over the page. `below` used to be a choice; a
+ * browser that still has it stored reads as `right`. The corner player's chat is the setting
+ * below this one.
+ */
+export type ChatSide = 'left' | 'right' | 'modal';
 
-export const CHAT_SIDES: readonly ChatSide[] = ['right', 'below'];
+export const CHAT_SIDES: readonly ChatSide[] = ['left', 'right', 'modal'];
 
 const storedChatSideAtom = atomWithStorage<string>('settings.chatSide', 'right', undefined, { getOnInit: true });
 /** Read: always one of CHAT_SIDES, whatever localstorage holds. */
@@ -40,6 +46,35 @@ export const chatSideAtom = atom((get) => {
 
 export function setChatSide(side: ChatSide) {
   store.set(storedChatSideAtom, side);
+  // picking the window shows it, so the page behind follows at once
+  if (side === 'modal') store.set(chatModalOpenAtom, true);
+}
+
+/** The window is up. Not kept: a new visit starts with it open, and closing it lasts the visit. */
+export const chatModalOpenAtom = atom(true);
+
+export function setChatModalOpen(open: boolean) {
+  store.set(chatModalOpenAtom, open);
+}
+
+/**
+ * Where the corner player's chat opens: under the picture (the default), or in a column on
+ * its left or its right. The watch page's chat side is the setting above; this one is only
+ * the picture in picture player.
+ */
+export type PipChatPlace = 'bottom' | 'left' | 'right';
+
+export const PIP_CHAT_PLACES: readonly PipChatPlace[] = ['bottom', 'left', 'right'];
+
+const storedPipChatPlaceAtom = atomWithStorage<string>('settings.pipChatPlace', 'bottom', undefined, { getOnInit: true });
+/** Read: always one of PIP_CHAT_PLACES, whatever localstorage holds. */
+export const pipChatPlaceAtom = atom((get) => {
+  const place = get(storedPipChatPlaceAtom);
+  return (PIP_CHAT_PLACES as readonly string[]).includes(place) ? (place as PipChatPlace) : 'bottom';
+});
+
+export function setPipChatPlace(place: PipChatPlace) {
+  store.set(storedPipChatPlaceAtom, place);
 }
 
 // ---- debugging -------------------------------------------------------------------------------

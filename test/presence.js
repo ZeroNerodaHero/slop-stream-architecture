@@ -131,7 +131,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await a.waitForSelector('#user-modal', { state: 'detached', timeout: 5000 });
   });
 
-  await step(`go live as ${NAME}: streaming on both, the watcher plays, exactly one more \`watch\` call`, async () => {
+  await step(`go live as ${NAME}: streaming on both, the watcher plays, a \`watch\` call or two (the push, then video catching up)`, async () => {
     const calls = watchCalls;
     await a.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
     await a.waitForSelector('#name', { timeout: 15000 });
@@ -143,7 +143,10 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await shownIs(a, '#my-presence', 'streaming', 5000);
     await shownIs(w, '#presence', 'streaming', 10000);
     await w.waitForFunction(() => /^watching$/.test(document.querySelector('#status')?.textContent?.trim() || ''), null, { timeout: 20000 });
-    expect(watchCalls === calls + 1, `watch was asked ${watchCalls - calls} times for the start (one is the grant)`);
+    // the push lands before video has the publisher, so the first grant can say not live and the quick retry asks once more
+    const asked = watchCalls - calls;
+    expect(asked >= 1 && asked <= 3, `watch was asked ${asked} times for the start (want 1 to 3)`);
+    return `${asked} watch call(s)`;
   });
 
   await step('stop: the watcher sees ended and the word goes back to do not disturb', async () => {
@@ -246,7 +249,9 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
 
   await step('local: the seen set has a ttl in (0, 90], and comes back within 35s after a DEL', async () => {
     if (!LOCAL) return { skip: 'redis is on the box' };
-    const p = await ctxB.newPage();
+    // its own browser: the watcher's context shares a worker (and a nick) with any page in it, and must stay nobody
+    const ctxC = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p = await ctxC.newPage();
     await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await p.waitForSelector('#username', { timeout: 15000 });
     await p.fill('#username', NAME);
@@ -257,7 +262,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     compose(`exec -T redis redis-cli del seen:${NAME}`);
     expect((await presenceOf(NAME)) === 'offline', 'still online right after DEL');
     await presenceIs(NAME, 'online', 35000);
-    await p.close();
+    await ctxC.close();
     await presenceIs(NAME, 'offline', 5000);
     return `ttl ${ttl}, back after the refresh`;
   });

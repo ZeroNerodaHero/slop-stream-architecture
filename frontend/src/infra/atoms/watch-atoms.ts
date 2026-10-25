@@ -139,32 +139,45 @@ function fail(message: string, myPc: RTCPeerConnection) {
   });
 }
 
+/**
+ * `live` was pushed for the name on screen this recently. The api says live at go-live, a beat
+ * before video has the publisher, so a grant that says not live right after is video catching
+ * up: the retry is quick for the api's own grace, then back to the pushed cadence.
+ */
+let toldLiveAt = 0;
+const TOLD_LIVE_RETRY_MS = 2000;
+const TOLD_LIVE_WINDOW_MS = 20_000;
+
 /** Nobody is live right now. Check again in a bit: soon when the poll is all there is, rarely when `live` will be pushed. */
 function waitForStreamer(message: string) {
   setPhase('waiting', message);
   if (retryTimer) clearTimeout(retryTimer);
-  retryTimer = setTimeout(
-    () => {
-      retryTimer = null;
-      void start(store.get(watchNameAtom));
-    },
-    store.get(eventsPhaseAtom) === 'open' ? LINKED_RETRY_MS : NOT_LIVE_RETRY_MS
-  );
+  const toldLive = Date.now() - toldLiveAt < TOLD_LIVE_WINDOW_MS;
+  const wait = toldLive ? TOLD_LIVE_RETRY_MS : store.get(eventsPhaseAtom) === 'open' ? LINKED_RETRY_MS : NOT_LIVE_RETRY_MS;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    void start(store.get(watchNameAtom));
+  }, wait);
 }
 
 /** A pushed `live` for the name on screen: start now, not at the retry. Only from `waiting`; anything else is under way, or over by hand. */
 export function streamerLive(name: string) {
-  if (name !== store.get(watchNameAtom) || store.get(watchPhaseAtom) !== 'waiting') return;
+  if (name !== store.get(watchNameAtom)) return;
+  toldLiveAt = Date.now();
+  if (store.get(watchPhaseAtom) !== 'waiting') return;
   void start(name);
 }
 
-// the pushes: `live` starts a waiting page now. the socket opening for the first time while the
-// page already waits (the grant beat it) slows the retry to the pushed cadence; coming back after
-// a gap it re-asks `watch` (a `live` published in the gap was missed)
+// the pushes: `live` starts a waiting page now; `ended` ends the quick retry (the video socket is
+// what ends the stream). the socket opening for the first time while the page already waits (the
+// grant beat it) slows the retry to the pushed cadence; coming back after a gap it re-asks `watch`
+// (a `live` published in the gap was missed)
 let linkWasOpen = false;
 onEvents((event) => {
   if (event.type === 'live') streamerLive(event.name);
-  else if (event.type === 'link' && event.phase === 'open') {
+  else if (event.type === 'ended') {
+    if (event.name === store.get(watchNameAtom)) toldLiveAt = 0;
+  } else if (event.type === 'link' && event.phase === 'open') {
     if (store.get(watchPhaseAtom) === 'waiting') {
       if (linkWasOpen) void start(store.get(watchNameAtom));
       else waitForStreamer(store.get(watchMessageAtom));
@@ -193,7 +206,10 @@ async function start(name: string): Promise<void> {
   teardown();
   const mine = ++attempt;
   const before = store.get(watchNameAtom);
-  if (before && before !== name) unwatchPresence(before);
+  if (before && before !== name) {
+    unwatchPresence(before);
+    toldLiveAt = 0;
+  }
   store.set(watchNameAtom, name);
   if (!isValidName(name)) {
     setPhase('bad-name', 'bad name');
@@ -215,7 +231,9 @@ async function start(name: string): Promise<void> {
   store.set(bioAtom, grant.bio ?? '');
   store.set(verifiedAtom, grant.verified === true);
   store.set(avatarAtom, grant.avatar ?? null);
-  if (grant.presence) presenceChanged(name, grant.presence);
+  // the word beside the name: the socket's while it is open (it is told on `watch` and on every
+  // change, and a grant answered a beat behind a push must not undo the push); the grant's otherwise
+  if (grant.presence && store.get(eventsPhaseAtom) !== 'open') presenceChanged(name, grant.presence);
   if (!grant.live) {
     waitForStreamer('not live yet. checking');
     return;

@@ -72,7 +72,7 @@ flowchart LR
 
 | loop | after | what is kept behind it | phase in `status.md` |
 |---|---|---|---|
-| watch, not live | `live` arrives pushed and the page starts; `ended` only acted on with no peer (the video socket is authoritative for a peer); `presence` beside the name | the 5s retry runs every 60s while the link is open and watching this name, 5s when the link is down. on every reconnect the page re-fetches `watch` | 3 |
+| watch, not live | `live` arrives pushed and the page starts; `ended` only ends the quick retry (the video socket is authoritative for a peer); `presence` beside the name | the 5s retry runs every 60s while the link is open and watching this name, 5s when the link is down, and 2s for the 20s after a pushed `live` (the api says live a beat before video has the publisher). on every reconnect the page re-fetches `watch` | 3 |
 | the panel's square | `me`: `offline` `online` `dnd` `streaming`, grey until the first frame | nothing to keep: there was nothing before | 3 |
 | my other tabs, my phone | the worker's one socket; `me` to every socket of the name | — | 3 |
 | home | a `watch` of `*` (or a `streams` frame): `live` adds a card, `ended` removes one, `since` is in `live`; bio, picture and `✓` for a new card from one `GET /api/streamers/:name` or carried in the frame. a full refetch on reconnect | the 3s poll at 60s. and a 1s timer for the clock the poll used to be: `since` and the thumbnail bucket (`HomePage.tsx:118`) | 7, later |

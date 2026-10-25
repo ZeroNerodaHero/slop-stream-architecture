@@ -30,6 +30,7 @@ import {
 } from '@/infra/atoms/watch-atoms';
 import { PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
 import { chatSideAtom } from '@/infra/atoms/settings-atoms';
+import { ChatOpenButton, ChatSlot } from '@/shared-components/ChatSlot';
 import { cleanName, isDummyName } from '@/infra/names';
 import { Avatar } from '@/shared-components/Avatar';
 import { Button } from '@/shared-components/Button';
@@ -60,8 +61,9 @@ export function WatchPage() {
   const phase = useAtomValue(watchPhaseAtom);
   const presence = useAtomValue(presenceOfAtom(name));
   const tiles = useAtomValue(tilesAtom);
-  // the layout setting: the chat in a column at the right of the video, or under it
-  const sideBySide = useAtomValue(chatSideAtom) === 'right';
+  // the layout setting: a column on the left, a column on the right, or a window over the page
+  const chatSide = useAtomValue(chatSideAtom);
+  const column = chatSide === 'left' || chatSide === 'right';
 
   // Mount only: start watching the name in the url (or take back the stream picture in picture
   // kept alive), and on the way out stop, unless picture in picture keeps it going in the corner.
@@ -113,13 +115,18 @@ export function WatchPage() {
       aside={<Link to="/">home</Link>}
       wide
     >
-      {/* the video column, the chat, the bio: three children in that order whatever the setting,
-          so a change of it moves the chat with css and never remounts it (a remount is a
-          reconnect: history again, the count blipping for the whole room). side by side at lg+:
-          a grid, the chat in the right column across both rows, the bio under the video. below:
-          everything stacked, the chat right under the picture, the bio last. */}
-      <div className={cn(sideBySide && 'lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-[auto_1fr] lg:items-start lg:gap-x-6')}>
-        <div className="min-w-0">
+      {/* the video column, the chat, the bio, in that order. left or right is a grid at lg+ (the
+          chat across both rows, the bio under the video); on a narrow screen the column sits
+          under the picture. a window takes the chat out of the grid. the panel itself stays
+          mounted either way: ChatSlot is one dialog, and a remount would be a reconnect. */}
+      <div
+        className={cn(
+          column && 'lg:grid lg:grid-rows-[auto_1fr] lg:items-start lg:gap-x-6',
+          chatSide === 'right' && 'lg:grid-cols-[minmax(0,1fr)_360px]',
+          chatSide === 'left' && 'lg:grid-cols-[360px_minmax(0,1fr)]'
+        )}
+      >
+        <div className={cn('min-w-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-1')}>
           {/* the controls sit on the video, along its bottom edge. they stay up while the sound is off
               (a silent stream should show why) and otherwise come up on hover, while a control has
               keyboard focus (not the focus a mouse click leaves behind, or they would stick), and on a
@@ -147,7 +154,8 @@ export function WatchPage() {
             {phase !== 'bad-name' && (
               <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted))}>
                 {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
-                <IconButton id="pip" label="picture in picture" onClick={toCorner} className="ml-auto">
+                <ChatOpenButton className="ml-auto" />
+                <IconButton id="pip" label="picture in picture" onClick={toCorner} className={cn(chatSide !== 'modal' && 'ml-auto')}>
                   <PipIcon />
                 </IconButton>
               </div>
@@ -174,14 +182,20 @@ export function WatchPage() {
         </div>
 
         {name && (
-          <ChatPanel
-            name={name}
-            className={cn('mt-4', sideBySide ? 'h-[60vh] max-h-[640px] lg:row-span-2 lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]' : 'h-[min(50vh,560px)]')}
-          />
+          <ChatSlot>
+            <ChatPanel name={name} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0 shadow-none')} />
+          </ChatSlot>
         )}
 
         {bio && (
-          <p id="bio" className={cn('mt-4 whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]', sideBySide && 'lg:col-start-1 lg:mt-0')}>
+          <p
+            id="bio"
+            className={cn(
+              'mt-4 whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]',
+              chatSide === 'right' && 'lg:col-start-1 lg:mt-0',
+              chatSide === 'left' && 'lg:col-start-2 lg:row-start-2 lg:mt-0'
+            )}
+          >
             {bio}
           </p>
         )}

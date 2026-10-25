@@ -37,6 +37,7 @@ import {
   watchUrlAtom
 } from '@/infra/atoms/publish-atoms';
 import { chatSideAtom } from '@/infra/atoms/settings-atoms';
+import { ChatOpenButton, ChatSlot } from '@/shared-components/ChatSlot';
 import { SCREEN_SLOTS } from '@/infra/relay';
 import { store } from '@/infra/store';
 import { Avatar } from '@/shared-components/Avatar';
@@ -46,7 +47,7 @@ import { PageFrame } from '@/shared-components/PageFrame';
 import { panelClassName } from '@/shared-components/Panel';
 import { StatusLine } from '@/shared-components/StatusLine';
 import { StreamTile } from '@/shared-components/StreamTile';
-import { IconButton } from '@/shared-components/VideoControls';
+import { IconButton, revealClassName } from '@/shared-components/VideoControls';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
 
@@ -65,7 +66,8 @@ export function LivePage() {
   const avatarStatus = useAtomValue(avatarStatusAtom);
   const owner = useAtomValue(ownerAtom);
   const me = useAtomValue(meAtom);
-  const sideBySide = useAtomValue(chatSideAtom) === 'right';
+  const chatSide = useAtomValue(chatSideAtom);
+  const column = chatSide === 'left' || chatSide === 'right';
   const screens = useAtomValue(screensAtom);
   const canShare = useAtomValue(canShareScreenAtom);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -85,12 +87,24 @@ export function LivePage() {
 
   return (
     <PageFrame title="go live" aside={<Link to="/">home</Link>} wide>
-      {/* the same three-children arrangement as the watch page, for the same layout setting:
-          the preview column, the chat, the bio box. side by side at lg+ the chat takes the right
-          column across both rows and the bio box sits under the preview; below, all stacked. */}
-      <div className={cn(sideBySide && 'lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-[auto_1fr] lg:items-start lg:gap-x-6')}>
-        <div className="min-w-0">
-          <VideoFrame id="preview" streamAtom={cameraAtom} videoRef={previewRef} muted />
+      {/* the same arrangement as the watch page, for the same layout setting: the preview, the
+          chat, the bio box. left or right is a column at lg+; a window takes the chat out. */}
+      <div
+        className={cn(
+          column && 'lg:grid lg:grid-rows-[auto_1fr] lg:items-start lg:gap-x-6',
+          chatSide === 'right' && 'lg:grid-cols-[minmax(0,1fr)_360px]',
+          chatSide === 'left' && 'lg:grid-cols-[360px_minmax(0,1fr)]'
+        )}
+      >
+        <div className={cn('min-w-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-1')}>
+          <div className="group relative">
+            <VideoFrame id="preview" streamAtom={cameraAtom} videoRef={previewRef} muted />
+            {chatSide === 'modal' && (
+              <div className={cn('absolute inset-x-0 bottom-0 flex p-3', revealClassName(false))}>
+                <ChatOpenButton className="ml-auto" />
+              </div>
+            )}
+          </div>
           {/* the screens being shared, each with its stop. the browser's own "stop sharing" bar works too */}
           {screens.length > 0 && (
             <div id="screens" className="mt-2 flex gap-2 overflow-x-auto">
@@ -175,25 +189,20 @@ export function LivePage() {
         </div>
 
         {/* the streamer's own chat, in the room of the settled name. once live, `owner` makes its lines marked */}
-        {chatRoom ? (
-          <ChatPanel
-            name={chatRoom}
-            owner={owner}
-            className={cn('mt-4', sideBySide ? 'h-[60vh] max-h-[640px] lg:row-span-2 lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]' : 'h-[min(50vh,560px)]')}
-          />
-        ) : (
-          <aside
-            id="chat"
-            className={cn(
-              'mt-4 flex min-h-[200px] items-center justify-center border border-dashed border-secondaryStroke p-6 text-center text-textTertiary',
-              sideBySide && 'lg:row-span-2 lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]'
-            )}
-          >
-            type your name and the chat opens here. once you are live, your lines are marked.
-          </aside>
-        )}
+        <ChatSlot>
+          {chatRoom ? (
+            <ChatPanel name={chatRoom} owner={owner} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0 shadow-none')} />
+          ) : (
+            <aside
+              id="chat"
+              className="flex h-full min-h-[200px] flex-1 items-center justify-center border border-dashed border-secondaryStroke p-6 text-center text-textTertiary"
+            >
+              type your name and the chat opens here. once you are live, your lines are marked.
+            </aside>
+          )}
+        </ChatSlot>
 
-        <div className={cn('min-w-0', sideBySide && 'lg:col-start-1')}>
+        <div className={cn('min-w-0', chatSide === 'right' && 'lg:col-start-1', chatSide === 'left' && 'lg:col-start-2 lg:row-start-2')}>
           <section className={panelClassName('my-5 px-5 py-4')}>
             <label htmlFor="bio" className="text-textSecondary">
               your bio
