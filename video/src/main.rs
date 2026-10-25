@@ -1,4 +1,4 @@
-//! One camera in. Copies the packets out to whoever is watching.
+//! One person in. Copies the packets out to whoever is watching.
 //!
 //! Websocket on :7880/ws. The browser sends one text frame:
 //!   {"role":"publish","name":"billy","sdp":"<offer sdp>","session":1,"token":2}
@@ -6,6 +6,18 @@
 //! We answer {"sdp":"<answer sdp>"} or {"error":"..."} and keep the socket
 //! open. Closing it hangs up. Watchers also get {"event":"ended"} when the
 //! publisher leaves. All media rides one UDP port (7882).
+//!
+//! A publisher's offer can carry several video sections: the camera and some
+//! screens. Every audio/video section it sends on is a slot of the room, made
+//! when the room is claimed, so a watcher binds to all of them at once and a
+//! section that only starts sending later (a screen shared mid-stream) reaches
+//! them without anyone renegotiating; its packets are routed to the slot by mid.
+//! The publisher says what is live where with later frames on its socket,
+//!   {"slots":[{"slot":0,"kind":"camera"},{"slot":1,"kind":"screen","label":"screen"}]}
+//! (`slot` counts its video sections from 0), and watchers get each change as
+//!   {"event":"slots","slots":[...]}
+//! right after their answer and whenever it changes. Until the publisher says,
+//! the first video slot is the camera.
 //!
 //! A publisher's session and token are what the api's go-live handed out; we
 //! ask the api (its heartbeat route) whether that session is open for that
@@ -54,11 +66,9 @@ use webrtc::rtp_transceiver::rtp_codec::RTPCodecType;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
 
-use crate::media::media_setup;
+use crate::media::{media_setup, opus_capability, vp8_capability};
 
-/// How long a watcher waits for a publisher that just started to finish setting up.
-const TRACK_WAIT: Duration = Duration::from_secs(8);
-/// Forwarded keyframe requests are rate limited to one per this gap, per stream.
+/// Forwarded keyframe requests are rate limited to one per this gap, per slot.
 const KEYFRAME_GAP: Duration = Duration::from_millis(1500);
 /// Even a forced request (a joining watcher, the thumbnail) waits this long after
 /// the last one: a burst of joins then shares one keyframe instead of one each.
@@ -69,9 +79,13 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const API_TIMEOUT: Duration = Duration::from_millis(1500);
 /// After SIGTERM, how long the open sockets get to send their `ended` before we exit.
 const SHUTDOWN_FLUSH: Duration = Duration::from_secs(2);
-/// Biggest offer we accept. A real one is 5-15 KB.
-const MAX_SDP_BYTES: usize = 32 * 1024;
-const MAX_MEDIA_LINES: usize = 4;
+/// Biggest offer we accept. A real one is 5-20 KB (chrome: about 4.5 KB per video section).
+const MAX_SDP_BYTES: usize = 48 * 1024;
+/// Audio, the camera, three screens, and one to spare. Each costs a transceiver per peer.
+const MAX_MEDIA_LINES: usize = 6;
+/// A slots frame: how long its `kind` and `label` strings may be.
+const MAX_KIND_BYTES: usize = 16;
+const MAX_LABEL_BYTES: usize = 64;
 const UDP_BUFFER_BYTES: usize = 4 << 20;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -116,12 +130,38 @@ struct Room {
     /// Bumps every time a publisher starts or stops. Watchers leave when it changes.
     generation: u64,
     generation_tx: watch::Sender<u64>,
-    expected_tracks: usize,
-    tracks: Vec<Arc<TrackLocalStaticRTP>>,
-    tracks_changed: Arc<Notify>,
+    /// One per audio/video section the publisher's offer sends on, in offer order.
+    /// All made at claim, so watchers bind to every one before any packet has come.
+    slots: Vec<Slot>,
+    /// What the publisher says is live in which video slot. Watchers get every change.
+    slots_tx: watch::Sender<Vec<SlotInfo>>,
     publisher: Option<Weak<RTCPeerConnection>>,
-    video_ssrc: Option<u32>,
+}
+
+/// One m= section of the publisher's offer and the track its packets are copied into.
+struct Slot {
+    mid: String,
+    kind: RTPCodecType,
+    track: Arc<TrackLocalStaticRTP>,
+    /// The publisher's ssrc for it, known once its first packet came. Keyframe requests go there.
+    ssrc: Option<u32>,
     last_keyframe: Option<Instant>,
+}
+
+/// What a publisher says is live in one of its video slots, for the watchers' layout.
+/// `slot` counts the video sections of its offer from 0: the camera, then the screens.
+#[derive(Clone, Serialize, Deserialize)]
+struct SlotInfo {
+    slot: usize,
+    kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+}
+
+/// A publisher's later frame: the video slots live right now. Absent means not live.
+#[derive(Deserialize)]
+struct SlotsFrame {
+    slots: Vec<SlotInfo>,
 }
 
 #[derive(Deserialize)]
@@ -147,6 +187,8 @@ struct Out {
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     event: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slots: Option<Vec<SlotInfo>>,
 }
 
 #[tokio::main]
@@ -365,7 +407,6 @@ async fn handle(app: App, mut socket: WebSocket) {
 
     // Check the offer before touching any room or building a peer. Every m=
     // section costs a transceiver and an interceptor chain, recvonly or not.
-    let media_lines = count_sending_media_lines(&incoming.sdp);
     if incoming.sdp.len() > MAX_SDP_BYTES
         || incoming.sdp.lines().filter(|l| l.starts_with("m=")).count() > MAX_MEDIA_LINES
         || RTCSessionDescription::offer(incoming.sdp.clone()).is_err()
@@ -376,14 +417,27 @@ async fn handle(app: App, mut socket: WebSocket) {
 
     match incoming.role.as_str() {
         "publish" => {
+            // The sections it sends on are the room's slots. Nothing to send, or a
+            // section without a mid (nothing could route its packets), is no publish.
+            let Some(slots) = offer_slots(&incoming.sdp).filter(|slots| !slots.is_empty()) else {
+                let _ = send(&mut socket, Out::error("bad offer")).await;
+                return;
+            };
             // Last, because it costs a round trip to the api.
             if let Err(e) = owns_stream(&app, &name, incoming.session, incoming.token).await {
                 let _ = send(&mut socket, Out::error(e)).await;
                 return;
             }
-            publish(app, socket, name, incoming.sdp, media_lines).await
+            publish(app, socket, name, incoming.sdp, slots, (incoming.session, incoming.token)).await
         }
-        "watch" => watch_stream(app, socket, name, incoming.sdp).await,
+        "watch" => {
+            let wants = offered_receivers(&incoming.sdp);
+            if wants == (0, 0) {
+                let _ = send(&mut socket, Out::error("bad offer")).await;
+                return;
+            }
+            watch_stream(app, socket, name, incoming.sdp, wants).await
+        }
         _ => {
             let _ = send(&mut socket, Out::error("role must be publish or watch")).await;
         }
@@ -412,12 +466,16 @@ async fn owns_stream(app: &App, name: &str, session: Option<i64>, token: Option<
     }
 }
 
-async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, expected: usize) {
-    let Some(generation) = app.hub.claim(&name, expected.max(1)).await else {
+/// `grant` is the go-live session and token the publish frame carried (checked by `owns_stream`):
+/// when the publisher leaves, the api's own `stop` is called with them, so a crashed tab stops
+/// being `streaming` within seconds instead of the sweeper's minutes. See docs/status.md.
+async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slots: Vec<(String, RTPCodecType)>, grant: (Option<i64>, Option<i64>)) {
+    let count = slots.len();
+    let Some(generation) = app.hub.claim(&name, slots).await else {
         let _ = send(&mut socket, Out::error("someone is already live")).await;
         return;
     };
-    log::info!("publish {name}: start, {expected} track(s)");
+    log::info!("publish {name}: start, {count} slot(s)");
 
     let dead = Arc::new(Notify::new());
     let peer = match new_peer(&app, Role::Publish, &name, dead.clone()).await {
@@ -434,28 +492,27 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, exp
     let hub = app.hub.clone();
     let room = name.clone();
     let thumbs_on = app.thumbs;
-    peer.on_track(Box::new(move |track, _, _| {
+    peer.on_track(Box::new(move |track, _, transceiver| {
         let hub = hub.clone();
         let room = room.clone();
         tokio::spawn(async move {
             let kind = track.kind();
             let codec = track.codec();
-            let video_ssrc = (kind == RTPCodecType::Video).then(|| track.ssrc());
-            let local = Arc::new(TrackLocalStaticRTP::new(
-                codec.capability.clone(),
-                kind.to_string(),
-                room.clone(),
-            ));
-            let Some(first_video) = hub.add_track(&room, generation, Arc::clone(&local), video_ssrc).await else {
+            // The slot is the m= section these packets belong to. Its outgoing track
+            // has existed since the room was claimed, so watchers who joined before
+            // this first packet (a screen shared mid-stream) are bound to it already.
+            let mid = transceiver.mid().map(|m| m.to_string()).unwrap_or_default();
+            let Some((local, slot, camera)) = hub.bind(&room, generation, &mid, track.ssrc()).await else {
+                log::info!("publish {room}: {kind} packets on mid {mid:?} with no slot for them");
                 return;
             };
-            log::info!("publish {room}: {kind} up ({})", codec.capability.mime_type);
+            log::info!("publish {room}: slot {slot} up ({kind}, mid {mid}, {})", codec.capability.mime_type);
 
-            // The stream's video track also feeds a small ffmpeg that makes the
-            // thumbnail. A second video track (an offer can carry one) shares
-            // neither the picture nor the keyframe requests.
+            // The camera slot, the first video one, also feeds a small ffmpeg that
+            // makes the thumbnail. The other video slots, the screens, share
+            // neither the picture nor its keyframe requests.
             let mut tap = None;
-            if thumbs_on && first_video {
+            if thumbs_on && camera {
                 match thumbs::ThumbTap::start(&room, codec.payload_type).await {
                     Ok(started) => tap = Some(started),
                     Err(e) => log::warn!("publish {room}: no thumbnail: {e}"),
@@ -503,7 +560,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, exp
                         if stuck {
                             wait = Duration::from_secs(10);
                         }
-                        hub.request_keyframe(&room, true).await;
+                        hub.request_keyframe(&room, slot, true).await;
                     }
                 });
             }
@@ -520,7 +577,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, exp
                 let _ = local.write_rtp(&packet).await;
             }
             drop(tap);
-            log::info!("publish {room}: {kind} done");
+            log::info!("publish {room}: slot {slot} done ({kind})");
         });
         Box::pin(async {})
     }));
@@ -538,23 +595,62 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, exp
 
     if send(&mut socket, Out::sdp(answer)).await.is_ok() {
         let mut shutdown = app.shutdown.clone();
-        tokio::select! {
-            _ = wait_until_socket_closes(&mut socket) => log::info!("publish {name}: socket closed"),
-            _ = dead.notified() => log::info!("publish {name}: peer gone"),
-            _ = async { let _ = shutdown.wait_for(|s| *s).await; } => {
-                let _ = send(&mut socket, Out::event("ended")).await;
+        // The socket stays open for the stream. The publisher's later frames say
+        // what is live in which slot; anything else on it is ignored.
+        loop {
+            tokio::select! {
+                msg = socket.recv() => match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Err(e) = app.hub.set_slots(&name, generation, &text).await {
+                            log::info!("publish {name}: a frame was ignored: {e}");
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                        log::info!("publish {name}: socket closed");
+                        break;
+                    }
+                    _ => {}
+                },
+                _ = dead.notified() => {
+                    log::info!("publish {name}: peer gone");
+                    break;
+                }
+                _ = async { let _ = shutdown.wait_for(|s| *s).await; } => {
+                    let _ = send(&mut socket, Out::event("ended")).await;
+                    break;
+                }
             }
         }
     }
 
     let _ = peer.close().await;
     app.hub.clear(&name).await;
+    end_session(&app, &name, grant).await;
     log::info!("publish {name}: ended");
 }
 
-async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String) {
-    let Some((tracks, mut generation, my_generation)) = app.hub.wait_for_tracks(&name).await
-    else {
+/// The publisher is gone: tell the api with the grant it gave, through its own `stop` route,
+/// so the row ends, the key goes and the watchers are told now. Awaited, not spawned: the
+/// socket and peer are already closed, nothing waits on this task, and on SIGTERM an awaited
+/// call finishes inside the flush while a detached one would race the exit and lose. A page
+/// that sent its own stop first gets this one a 403, which is the expected outcome, not an
+/// error; the sweeper stays the backstop when the api does not answer.
+async fn end_session(app: &App, name: &str, grant: (Option<i64>, Option<i64>)) {
+    let (Some(session), Some(token)) = grant else { return };
+    let url = format!("{}/api/streams/{name}/stop?session={session}&token={token}", app.api_url);
+    match app.http.post(url).send().await {
+        Ok(res) if res.status().is_success() => log::info!("publish {name}: told the api to stop session {session}"),
+        Ok(res) if res.status().is_client_error() => {} // already stopped by the page, or not theirs any more
+        Ok(res) => log::warn!("publish {name}: api answered {} to stop", res.status()),
+        Err(e) => log::warn!("publish {name}: api unreachable for stop: {e}"),
+    }
+}
+
+/// `wants`: how many (audio, video) sections the watcher's offer can receive on. The
+/// room's slots are bound to them in order, as many as fit: a watcher that asks for one
+/// video gets the camera.
+async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String, wants: (usize, usize)) {
+    let Some((tracks, mut generation, my_generation, mut slots)) = app.hub.tracks(&name, wants).await else {
         let _ = send(&mut socket, Out::error("not live")).await;
         return;
     };
@@ -569,7 +665,7 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
         }
     };
 
-    for track in tracks {
+    for (slot, track) in tracks {
         let sender = match peer
             .add_track(track as Arc<dyn TrackLocal + Send + Sync>)
             .await
@@ -583,8 +679,8 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
             }
         };
 
-        // Watchers ask for keyframes when they lose the picture. Pass that on
-        // to the publisher, rate limited, instead of dropping it.
+        // Watchers ask for keyframes when they lose a picture. Pass that on to
+        // the publisher, for that slot, rate limited, instead of dropping it.
         let hub = app.hub.clone();
         let room = name.clone();
         tokio::spawn(async move {
@@ -595,7 +691,7 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
                         || any.downcast_ref::<FullIntraRequest>().is_some()
                 });
                 if wants_keyframe {
-                    hub.request_keyframe(&room, false).await;
+                    hub.request_keyframe(&room, slot, false).await;
                 }
             }
         });
@@ -614,17 +710,43 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
     if send(&mut socket, Out::sdp(answer)).await.is_ok() {
         log::info!("watch {name}: joined");
         let mut shutdown = app.shutdown.clone();
-        tokio::select! {
-            _ = wait_until_socket_closes(&mut socket) => log::info!("watch {name}: left"),
-            _ = async { let _ = generation.wait_for(|g| *g != my_generation).await; } => {
-                log::info!("watch {name}: stream ended");
-                let _ = send(&mut socket, Out::event("ended")).await;
-                let _ = socket.send(Message::Close(None)).await;
+        // What is live in which slot: now, and again on every change.
+        let current = slots.borrow_and_update().clone();
+        let _ = send(&mut socket, Out::slots(current)).await;
+        loop {
+            tokio::select! {
+                _ = wait_until_socket_closes(&mut socket) => {
+                    log::info!("watch {name}: left");
+                    break;
+                }
+                _ = async { let _ = generation.wait_for(|g| *g != my_generation).await; } => {
+                    log::info!("watch {name}: stream ended");
+                    let _ = send(&mut socket, Out::event("ended")).await;
+                    let _ = socket.send(Message::Close(None)).await;
+                    break;
+                }
+                _ = async { let _ = shutdown.wait_for(|s| *s).await; } => {
+                    let _ = send(&mut socket, Out::event("ended")).await;
+                    break;
+                }
+                _ = dead.notified() => {
+                    log::info!("watch {name}: peer gone");
+                    break;
+                }
+                changed = slots.changed() => {
+                    if changed.is_err() {
+                        // the room went, and its sender with it: the stream ended
+                        log::info!("watch {name}: stream ended");
+                        let _ = send(&mut socket, Out::event("ended")).await;
+                        let _ = socket.send(Message::Close(None)).await;
+                        break;
+                    }
+                    let current = slots.borrow_and_update().clone();
+                    if send(&mut socket, Out::slots(current)).await.is_err() {
+                        break;
+                    }
+                }
             }
-            _ = async { let _ = shutdown.wait_for(|s| *s).await; } => {
-                let _ = send(&mut socket, Out::event("ended")).await;
-            }
-            _ = dead.notified() => log::info!("watch {name}: peer gone"),
         }
     }
 
@@ -698,14 +820,15 @@ async fn new_peer(
         log::info!("{tag}: peer {state}");
         match state {
             RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => dead.notify_one(),
-            // A new watcher needs a keyframe right now, not whenever the next
-            // one happens to come. Once per watcher, ignoring the rate limit.
+            // A new watcher needs a keyframe on every picture right now, not
+            // whenever the next one happens to come. Once per watcher, ignoring
+            // the rate limit.
             RTCPeerConnectionState::Connected
                 if is_watcher && !asked_keyframe.swap(true, Ordering::SeqCst) =>
             {
                 let hub = hub.clone();
                 let room = room.clone();
-                tokio::spawn(async move { hub.request_keyframe(&room, true).await });
+                tokio::spawn(async move { hub.request_keyframes(&room).await });
             }
             _ => {}
         }
@@ -716,14 +839,14 @@ async fn new_peer(
 }
 
 impl Hub {
-    /// Take the name. Returns the new generation, or None if someone has it.
-    async fn claim(&self, name: &str, expected_tracks: usize) -> Option<u64> {
+    /// Take the name, with a slot per section of the offer. Returns the new
+    /// generation, or None if someone has it.
+    async fn claim(&self, name: &str, slots: Vec<(String, RTPCodecType)>) -> Option<u64> {
         let mut rooms = self.rooms.lock().await;
         if rooms.contains_key(name) {
             return None;
         }
-        let mut room = Room::new();
-        room.expected_tracks = expected_tracks;
+        let mut room = Room::new(name, slots);
         room.bump();
         let generation = room.generation;
         rooms.insert(name.to_owned(), room);
@@ -736,86 +859,106 @@ impl Hub {
         }
     }
 
-    /// Add a publisher track. None if that publisher's room is gone already;
-    /// otherwise whether this is the room's first video track, the one keyframe
-    /// requests go to and the thumbnail is made from.
-    async fn add_track(
-        &self,
-        name: &str,
-        generation: u64,
-        track: Arc<TrackLocalStaticRTP>,
-        video_ssrc: Option<u32>,
-    ) -> Option<bool> {
+    /// The publisher's packets for `mid` have started. The slot's track to copy them
+    /// into, the slot's index, and whether it is the camera (the first video slot,
+    /// the one the thumbnail is made from). None if that publisher's room is gone,
+    /// or its offer had no such section.
+    async fn bind(&self, name: &str, generation: u64, mid: &str, ssrc: u32) -> Option<(Arc<TrackLocalStaticRTP>, usize, bool)> {
         let mut rooms = self.rooms.lock().await;
         let room = rooms.get_mut(name).filter(|r| r.generation == generation)?;
-        room.tracks.push(track);
-        let first_video = video_ssrc.is_some() && room.video_ssrc.is_none();
-        if first_video {
-            room.video_ssrc = video_ssrc;
-        }
-        room.tracks_changed.notify_waiters();
-        Some(first_video)
+        let camera = room.slots.iter().position(|s| s.kind == RTPCodecType::Video);
+        let index = room.slots.iter().position(|s| s.mid == mid)?;
+        let slot = &mut room.slots[index];
+        slot.ssrc = Some(ssrc);
+        Some((Arc::clone(&slot.track), index, camera == Some(index)))
     }
 
-    /// The live room's tracks, a receiver that changes when the stream ends,
-    /// and the generation those tracks belong to. Waits a little if the
-    /// publisher is still setting up. None when nobody is live.
-    async fn wait_for_tracks(
+    /// The live room's tracks for a watcher that can receive on `wants` (audio, video)
+    /// sections, with their slot indexes: the slots in order, as many of each kind as
+    /// fit. Also a receiver that changes when the stream ends, the generation those
+    /// tracks belong to, and the slots the publisher says are live. None when nobody
+    /// is live. The tracks exist from the claim on, so there is nothing to wait for.
+    #[allow(clippy::type_complexity)]
+    async fn tracks(
         &self,
         name: &str,
-    ) -> Option<(Vec<Arc<TrackLocalStaticRTP>>, watch::Receiver<u64>, u64)> {
-        let started = Instant::now();
-        loop {
-            let (expected, tracks, changed, receiver, generation) = {
-                let rooms = self.rooms.lock().await;
-                let room = rooms.get(name)?;
-                (
-                    room.expected_tracks,
-                    room.tracks.clone(),
-                    room.tracks_changed.clone(),
-                    room.generation_tx.subscribe(),
-                    room.generation,
-                )
-            };
-            if tracks.len() >= expected {
-                return Some((tracks, receiver, generation));
-            }
-            if started.elapsed() > TRACK_WAIT {
-                return (!tracks.is_empty()).then_some((tracks, receiver, generation));
-            }
-            let wakeup = changed.notified();
-            tokio::pin!(wakeup);
-            tokio::select! {
-                _ = &mut wakeup => {}
-                _ = tokio::time::sleep(Duration::from_millis(200)) => {}
-            }
-        }
+        wants: (usize, usize),
+    ) -> Option<(Vec<(usize, Arc<TrackLocalStaticRTP>)>, watch::Receiver<u64>, u64, watch::Receiver<Vec<SlotInfo>>)> {
+        let rooms = self.rooms.lock().await;
+        let room = rooms.get(name)?;
+        let (mut audio, mut video) = wants;
+        let tracks = room
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| {
+                let left = match slot.kind {
+                    RTPCodecType::Audio => &mut audio,
+                    _ => &mut video,
+                };
+                let fits = *left > 0;
+                *left = left.saturating_sub(1);
+                fits
+            })
+            .map(|(index, slot)| (index, Arc::clone(&slot.track)))
+            .collect();
+        Some((tracks, room.generation_tx.subscribe(), room.generation, room.slots_tx.subscribe()))
     }
 
-    async fn request_keyframe(&self, name: &str, force: bool) {
+    /// A publisher's later frame, checked against its offer: at most one entry per
+    /// video slot, each naming one, strings kept short. Watchers get it as it is.
+    async fn set_slots(&self, name: &str, generation: u64, text: &str) -> Result<(), &'static str> {
+        let frame: SlotsFrame = serde_json::from_str(text).map_err(|_| "not a slots frame")?;
+        let mut rooms = self.rooms.lock().await;
+        let room = rooms.get_mut(name).filter(|r| r.generation == generation).ok_or("room gone")?;
+        let videos = room.slots.iter().filter(|s| s.kind == RTPCodecType::Video).count();
+        let mut named = vec![false; videos];
+        for info in &frame.slots {
+            let Some(seen) = named.get_mut(info.slot) else {
+                return Err("no such video slot");
+            };
+            if std::mem::replace(seen, true) {
+                return Err("a slot named twice");
+            }
+            if info.kind.len() > MAX_KIND_BYTES || info.label.as_ref().is_some_and(|l| l.len() > MAX_LABEL_BYTES) {
+                return Err("kind or label too long");
+            }
+        }
+        room.slots_tx.send_replace(frame.slots);
+        Ok(())
+    }
+
+    /// Ask the publisher for a keyframe on one slot: a watcher lost that picture, or
+    /// the thumbnail needs one. Rate limited per slot; nothing for audio, or for a
+    /// slot that has not sent anything yet.
+    async fn request_keyframe(&self, name: &str, slot: usize, force: bool) {
         let (peer, ssrc) = {
             let mut rooms = self.rooms.lock().await;
             let Some(room) = rooms.get_mut(name) else { return };
+            let Some(peer) = room.publisher.as_ref().and_then(Weak::upgrade) else { return };
+            let Some(slot) = room.slots.get_mut(slot) else { return };
+            let Some(ssrc) = slot.ssrc.filter(|_| slot.kind == RTPCodecType::Video) else { return };
             let now = Instant::now();
             let gap = if force { FORCED_KEYFRAME_GAP } else { KEYFRAME_GAP };
-            if room.last_keyframe.is_some_and(|t| now.duration_since(t) < gap) {
+            if slot.last_keyframe.is_some_and(|t| now.duration_since(t) < gap) {
                 return;
             }
-            match (&room.publisher, room.video_ssrc) {
-                (Some(peer), Some(ssrc)) => {
-                    room.last_keyframe = Some(now);
-                    (peer.upgrade(), ssrc)
-                }
-                _ => return,
-            }
+            slot.last_keyframe = Some(now);
+            (peer, ssrc)
         };
-        if let Some(peer) = peer {
-            let _ = peer
-                .write_rtcp(&[Box::new(PictureLossIndication {
-                    sender_ssrc: 0,
-                    media_ssrc: ssrc,
-                })])
-                .await;
+        let _ = peer
+            .write_rtcp(&[Box::new(PictureLossIndication {
+                sender_ssrc: 0,
+                media_ssrc: ssrc,
+            })])
+            .await;
+    }
+
+    /// A keyframe on every picture, for a watcher that just joined.
+    async fn request_keyframes(&self, name: &str) {
+        let count = self.rooms.lock().await.get(name).map_or(0, |room| room.slots.len());
+        for slot in 0..count {
+            self.request_keyframe(name, slot, true).await;
         }
     }
 
@@ -824,7 +967,6 @@ impl Hub {
         let mut rooms = self.rooms.lock().await;
         if let Some(mut room) = rooms.remove(name) {
             room.bump();
-            room.tracks_changed.notify_waiters();
         }
     }
 
@@ -832,7 +974,6 @@ impl Hub {
         let mut rooms = self.rooms.lock().await;
         for (_, mut room) in rooms.drain() {
             room.bump();
-            room.tracks_changed.notify_waiters();
         }
     }
 
@@ -845,17 +986,37 @@ impl Hub {
 }
 
 impl Room {
-    fn new() -> Self {
+    /// A room for `name` with a slot per offered section. The tracks' ids tell the
+    /// slots apart on the watcher's side (`audio-0`, `video-1`, …: kind and mid);
+    /// their stream id is the room, so a watcher gets them as one MediaStream.
+    fn new(name: &str, slots: Vec<(String, RTPCodecType)>) -> Self {
         let (generation_tx, _) = watch::channel(0);
+        let slots: Vec<Slot> = slots
+            .into_iter()
+            .map(|(mid, kind)| {
+                let capability = if kind == RTPCodecType::Audio { opus_capability() } else { vp8_capability() };
+                Slot {
+                    track: Arc::new(TrackLocalStaticRTP::new(capability, format!("{kind}-{mid}"), name.to_owned())),
+                    mid,
+                    kind,
+                    ssrc: None,
+                    last_keyframe: None,
+                }
+            })
+            .collect();
+        // until the publisher says otherwise, its first video section is the camera
+        // (a browser that never says, or the dummy, has exactly that)
+        let camera = slots
+            .iter()
+            .any(|s| s.kind == RTPCodecType::Video)
+            .then(|| SlotInfo { slot: 0, kind: "camera".to_owned(), label: None });
+        let (slots_tx, _) = watch::channel(camera.into_iter().collect());
         Self {
             generation: 0,
             generation_tx,
-            expected_tracks: 1,
-            tracks: Vec::new(),
-            tracks_changed: Arc::new(Notify::new()),
+            slots,
+            slots_tx,
             publisher: None,
-            video_ssrc: None,
-            last_keyframe: None,
         }
     }
 
@@ -886,6 +1047,14 @@ impl Out {
             ..Default::default()
         }
     }
+
+    fn slots(slots: Vec<SlotInfo>) -> Self {
+        Self {
+            event: Some("slots".to_owned()),
+            slots: Some(slots),
+            ..Default::default()
+        }
+    }
 }
 
 pub(crate) fn valid_name(name: &str) -> bool {
@@ -895,21 +1064,64 @@ pub(crate) fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
-/// How many tracks the publisher is actually sending: audio/video m= sections
-/// that are not recvonly or inactive.
-fn count_sending_media_lines(sdp: &str) -> usize {
-    let mut count = 0;
-    let mut sending = false;
+/// One m= section of an offer, as far as the room cares: what it carries, its mid,
+/// and which way it goes (no direction line means both ways).
+struct MediaSection {
+    kind: Option<RTPCodecType>,
+    mid: Option<String>,
+    sends: bool,
+    receives: bool,
+}
+
+fn media_sections(sdp: &str) -> Vec<MediaSection> {
+    let mut sections: Vec<MediaSection> = Vec::new();
     for line in sdp.lines() {
         let line = line.trim_end();
-        if line.starts_with("m=") {
-            count += sending as usize;
-            sending = line.starts_with("m=audio") || line.starts_with("m=video");
-        } else if line == "a=recvonly" || line == "a=inactive" {
-            sending = false;
+        if let Some(rest) = line.strip_prefix("m=") {
+            let kind = match rest.split(' ').next() {
+                Some("audio") => Some(RTPCodecType::Audio),
+                Some("video") => Some(RTPCodecType::Video),
+                _ => None,
+            };
+            sections.push(MediaSection { kind, mid: None, sends: true, receives: true });
+        } else if let Some(section) = sections.last_mut() {
+            if let Some(mid) = line.strip_prefix("a=mid:") {
+                section.mid = Some(mid.trim().to_owned());
+            } else if line == "a=sendonly" {
+                section.receives = false;
+            } else if line == "a=recvonly" {
+                section.sends = false;
+            } else if line == "a=inactive" {
+                section.sends = false;
+                section.receives = false;
+            }
         }
     }
-    count + sending as usize
+    sections
+}
+
+/// The room's slots in a publisher's offer: every audio/video section it sends on,
+/// in order, with its mid. None if one of them has no mid: every browser and
+/// webrtc-rs bundle, so every section has one, and without it the packets that
+/// come later could not be told apart.
+fn offer_slots(sdp: &str) -> Option<Vec<(String, RTPCodecType)>> {
+    media_sections(sdp)
+        .into_iter()
+        .filter(|section| section.sends && section.kind.is_some())
+        .map(|section| Some((section.mid?, section.kind?)))
+        .collect()
+}
+
+/// How many (audio, video) sections a watcher's offer can receive on.
+fn offered_receivers(sdp: &str) -> (usize, usize) {
+    media_sections(sdp)
+        .into_iter()
+        .filter(|section| section.receives)
+        .fold((0, 0), |(audio, video), section| match section.kind {
+            Some(RTPCodecType::Audio) => (audio + 1, video),
+            Some(RTPCodecType::Video) => (audio, video + 1),
+            _ => (audio, video),
+        })
 }
 
 async fn send(socket: &mut WebSocket, msg: Out) -> anyhow::Result<()> {

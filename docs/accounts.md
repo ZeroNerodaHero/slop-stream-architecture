@@ -118,6 +118,8 @@ changed:
 | GET | `/api/streams`, POST `.../watch` | carry `verified` |
 | ws | `/chat/:name` | the cookie names you; `hello` needs no nick then. an anonymous nick that is a claimed name gets `that name has an account. log in as it, or pick another` and the socket closes; a `dummy-` nick `that nick belongs to the fake streams. pick another`, the same way. lines carry `verified` |
 | ws | `/ws` (video) | a publish frame carries the go-live `session` and `token`; video asks the api (`heartbeat`) that they are open for that name, else `not your stream`. so skipping go-live skips nothing |
+| ws | `/events` (the gateway, `status.md`) | the cookie names the browser; `hello` needs no nick then. a guest's hello carries the nick, lowercased to a name; a claimed one gets `that name has an account. log in as it, or pick another` and the socket closes, like the chat's. only the name's own sockets are ever told its choice (`appear offline`); everyone else gets the derived word |
+| PUT | `/api/streamers/:name/presence` | the bio's gate: a free name is anyone's, a claimed name its login's |
 
 `stop` and `heartbeat` still take the session token: that is what an anonymous streamer has.
 
@@ -126,7 +128,7 @@ changed:
 - `/login`, `/signup`: name, password, one button, a show toggle instead of a repeat box. `?next=` says where to land. the inputs carry `autocomplete="username"`, `"current-password"`, `"new-password"`, which is what makes password managers offer to save; they do more for the breach story than any code here.
 - the panel pinned to the bottom left of every page, discord style: a picture made from the name (a coloured square with the first letter; no uploads yet), then the name box with `sign up · log in` under it, or your name + `✓` with `log out` under it, and the `go live` button on the right (not on `/live` itself).
 - go live: a login has the name box filled and locked.
-- chat: a login has no nick box; its lines show `✓`.
+- chat: a login has no nick box; its lines show `✓`, and the badges of its groups (`groups.md`).
 - atoms: `meAtom` (`/api/me` once per page load; `undefined` until it answers; a failed ask is nobody for now and asked again on the next page, never remembered as "nobody"), actions `login`, `signup`, `logout`, `forgetMe` (the cookie died elsewhere: back to nobody). fetch sends the cookie on its own. nothing about the login is ever in localstorage.
 
 ## code

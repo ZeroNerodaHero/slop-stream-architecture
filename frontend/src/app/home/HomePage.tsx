@@ -65,7 +65,7 @@ function Card({ stream, now, bucket }: { stream: LiveStream; now: number; bucket
         {/* one chip, top right: "live for 52 hr". the fake streams draw their name top-left and a clock bottom-left */}
         <div className="relative aspect-video overflow-hidden border-b border-primaryStroke bg-black">
           <Thumb name={stream.name} bucket={bucket} />
-          <span className="absolute right-3 top-3 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold uppercase tracking-wide backdrop-blur-sm">
+          <span className="absolute right-3 top-3 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
             <span aria-hidden className="h-2 w-2 animate-pulse bg-increase" />
             {age || 'live'}
           </span>

@@ -6,7 +6,9 @@
 //! socket in the room; sending is just XADD, so everyone sees the same order.
 //! The database is asked two things: is this socket really the streamer, and
 //! who does its login cookie say it is (auth.rs). A login names you; without
-//! one you pick a nick, as long as nobody owns that name.
+//! one you pick a nick, as long as nobody owns that name. A login's groups
+//! (groups.rs) ride on its lines as badges; a hello that says `bot: true` wears
+//! the `bot` badge, whoever it is, so the panel can hide those lines.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -28,32 +30,21 @@ use sqlx::PgPool;
 use tokio::sync::{broadcast, watch, Mutex};
 
 use crate::auth::{client_ip, is_claimed, whoami};
-use crate::{owns_session, Name, Owner};
+use crate::groups::{badges_of, Badge, BOT_GROUP};
+use crate::socket::{first_text, id_parts, send, send_within, DRAIN_LIMIT, IDLE_LIMIT, MAX_FRAME_BYTES, PING_EVERY, READ_BLOCK_MS, SEND_TIMEOUT};
+use crate::{events, owns_session, Name, Owner};
 
 const HISTORY_LINES: usize = 200;
 const KEEP_LINES: usize = 500;
 const MAX_TEXT_CHARS: usize = 500;
 const MAX_NICK_CHARS: usize = 24;
-const MAX_FRAME_BYTES: usize = 8 * 1024;
 const ROOM_TTL_SECS: i64 = 7 * 24 * 3600;
-const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
-const READ_BLOCK_MS: usize = 5000;
 /// Token bucket per socket: this many lines at once, then one per second.
 const RATE_BURST: f64 = 5.0;
 const RATE_PER_SEC: f64 = 1.0;
 /// Sockets one ip may hold in one room. The rate limit and the count are per
 /// socket; this keeps "open fifty tabs" from being fifty of each.
 const MAX_SOCKETS_PER_IP: usize = 8;
-/// A ping this often. A socket that sent nothing back (pong, text, anything)
-/// for IDLE_LIMIT is a vanished peer and is dropped, so it stops being counted.
-const PING_EVERY: Duration = Duration::from_secs(30);
-const IDLE_LIMIT: Duration = Duration::from_secs(90);
-/// After SIGTERM: how long `run` waits for the sockets to say goodbye.
-const DRAIN_LIMIT: Duration = Duration::from_secs(2);
-/// A frame that cannot be written in this long is a peer that stopped reading (a frozen
-/// tab, a suspended laptop): dropped, like one that stopped answering pings. Otherwise
-/// the handler would sit in the write for as long as the kernel keeps the socket.
-const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// The history is up to 200 lines in one frame: a slow link gets longer for that one.
 const HISTORY_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -96,6 +87,8 @@ struct Line {
     streamer: bool,
     /// said by a login, so `from` really is that account
     verified: bool,
+    /// the speaker's groups as badges, `bot` first when it is one. empty for most lines
+    groups: Vec<Badge>,
     /// unix ms, from the stream id
     at: u64,
 }
@@ -114,6 +107,9 @@ struct Hello {
     nick: Option<String>,
     session: Option<i64>,
     token: Option<i64>,
+    /// "I am a program": the fake streams' chatters say so. Anyone may; it only ever
+    /// costs the speaker (its lines can be hidden), so there is nothing to check.
+    bot: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -129,20 +125,26 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
     let client = redis::Client::open(redis_url)?;
     let redis = crate::connect_redis(redis_url).await;
     let (stop, shutdown) = watch::channel(false);
+    let dummy_prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
     let state = ChatState {
-        db,
-        redis,
-        client,
+        db: db.clone(),
+        redis: redis.clone(),
+        client: client.clone(),
         rooms: Arc::new(Mutex::new(HashMap::new())),
-        shutdown,
-        dummy_prefix: std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into()),
+        shutdown: shutdown.clone(),
+        dummy_prefix: dummy_prefix.clone(),
     };
     let rooms = state.rooms.clone();
+    // the gateway: /events (one socket per browser, presence and pushes) and /online, on the
+    // same listener, drained the same way. see docs/status.md and events.rs
+    let gateway = events::Gateway::new(db, redis, client, shutdown, dummy_prefix);
+    let sockets = gateway.registry();
 
     let router = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/chat/{name}", get(ws))
-        .with_state(state);
+        .with_state(state)
+        .merge(events::routes(gateway));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     log::info!("chat on {addr}");
@@ -157,7 +159,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
     // ...and give them a moment to send the close frame and leave their rooms,
     // instead of being cut mid-send when the runtime goes
     let deadline = Instant::now() + DRAIN_LIMIT;
-    while !rooms.lock().await.is_empty() && Instant::now() < deadline {
+    while (!rooms.lock().await.is_empty() || !sockets.is_empty().await) && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(())
@@ -181,6 +183,15 @@ struct Who {
     streamer: bool,
     /// Said by a login, so `from` really is that account.
     verified: bool,
+    /// The account's groups (only when `verified`: the badges belong to the name on the
+    /// line, not to whoever holds the socket), plus `bot` when the hello said so.
+    groups: Vec<Badge>,
+}
+
+impl Who {
+    fn is_bot(&self) -> bool {
+        self.groups.iter().any(|g| g.name == BOT_GROUP)
+    }
 }
 
 enum Unknown {
@@ -243,15 +254,26 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
     // the login behind this socket is the name it speaks as. not just "logged in": the
     // one who went live speaks as the room while logged in as somebody else, or as nobody
     let verified = me.as_deref() == Some(from.as_str());
-    Ok(Who { from, streamer, verified })
+    // the badges: the account's groups when the line is really the account's, and `bot`
+    // when asked for. read once, here; a group joined mid-chat shows after a reconnect
+    let bot = hello.bot == Some(true);
+    let groups = if verified || bot {
+        match badges_of(&s.db, if verified { &from } else { "" }, bot).await {
+            Ok(groups) => groups,
+            Err(e) => {
+                log::warn!("{room}: cannot read the groups of {from}: {e}");
+                return Err(Unknown::Busy);
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    Ok(Who { from, streamer, verified, groups })
 }
 
 async fn handle(s: ChatState, name: String, ip: String, headers: HeaderMap, mut socket: WebSocket) {
     // 1. hello: who is talking
-    let first = match tokio::time::timeout(HELLO_TIMEOUT, socket.recv()).await {
-        Ok(Some(Ok(Message::Text(text)))) => text.to_string(),
-        _ => return,
-    };
+    let Some(first) = first_text(&mut socket).await else { return };
     let Ok(In::Hello(hello)) = serde_json::from_str::<In>(&first) else {
         let _ = send(&mut socket, &Out::Error { error: "say hello first" }).await;
         return;
@@ -279,8 +301,7 @@ async fn handle(s: ChatState, name: String, ip: String, headers: HeaderMap, mut 
         return;
     }
     let shown = |who: &Option<Who>| match who {
-        Some(w) if w.streamer => format!("{} (streamer)", w.from),
-        Some(w) => w.from.clone(),
+        Some(w) => format!("{}{}{}", w.from, if w.streamer { " (streamer)" } else { "" }, if w.is_bot() { " (bot)" } else { "" }),
         None => "somebody (database down, reading only)".to_owned(),
     };
     log::info!("{name}: {} joined", shown(&who));
@@ -372,12 +393,17 @@ async fn handle(s: ChatState, name: String, ip: String, headers: HeaderMap, mut 
                 }
                 let Some(w) = who.as_ref() else { continue };
                 let mut r = s.redis.clone();
-                let fields = [
+                // the badges as json, and no field at all for the common case of none
+                let groups = if w.groups.is_empty() { String::new() } else { serde_json::to_string(&w.groups).unwrap_or_default() };
+                let mut fields = vec![
                     ("from", w.from.as_str()),
                     ("text", text.as_str()),
                     ("streamer", if w.streamer { "1" } else { "0" }),
                     ("v", if w.verified { "1" } else { "0" }),
                 ];
+                if !groups.is_empty() {
+                    fields.push(("g", groups.as_str()));
+                }
                 // the line and the room's ttl in one atomic round trip: a room whose first
                 // line landed but whose expire did not would otherwise live forever
                 let added: Result<(Option<String>, bool), _> = redis::pipe()
@@ -464,9 +490,7 @@ async fn last_id<C: AsyncCommands>(r: &mut C, key: &str) -> Option<String> {
 /// default 500ms response timeout would cut every block short.
 async fn reader(client: redis::Client, name: String, start: Option<String>, tx: broadcast::Sender<Event>) {
     let key = room_key(&name);
-    let config = redis::AsyncConnectionConfig::new()
-        .set_connection_timeout(Some(Duration::from_secs(5)))
-        .set_response_timeout(Some(Duration::from_millis(READ_BLOCK_MS as u64 + 2000)));
+    let config = crate::socket::blocking_config(READ_BLOCK_MS);
     // Keep trying while the room has viewers. Giving up on the first failure
     // would leave a room that gets history but never a live line.
     let mut con = loop {
@@ -529,6 +553,8 @@ fn line_from(entry: StreamId) -> Option<Line> {
     let text: String = entry.get("text")?;
     let streamer: String = entry.get("streamer").unwrap_or_else(|| "0".to_owned());
     let verified: String = entry.get("v").unwrap_or_else(|| "0".to_owned());
+    // no `g` field, or one this build cannot read, is a line with no badges
+    let groups: Vec<Badge> = entry.get::<String>("g").and_then(|g| serde_json::from_str(&g).ok()).unwrap_or_default();
     Some(Line {
         at: id_parts(&entry.id).0,
         id: entry.id,
@@ -536,19 +562,12 @@ fn line_from(entry: StreamId) -> Option<Line> {
         text,
         streamer: streamer == "1",
         verified: verified == "1",
+        groups,
     })
 }
 
 fn room_key(name: &str) -> String {
     format!("chat:{name}")
-}
-
-/// "1729000000000-3" -> (1729000000000, 3). Orders the same way redis does.
-fn id_parts(id: &str) -> (u64, u64) {
-    let mut parts = id.splitn(2, '-');
-    let ms = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    let seq = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    (ms, seq)
 }
 
 fn clean_nick(raw: &str) -> String {
@@ -567,7 +586,8 @@ const MAX_COMBINING: usize = 4;
 /// overrides, word joiner, byte order mark); cap a run of combining marks.
 /// No unicode tables in this binary, so the sets are the explicit code points
 /// that make a line lie about its direction, pad it invisibly, or climb the screen.
-fn clean_text(raw: &str) -> String {
+/// groups.rs cleans a badge and a group's description the same way.
+pub(crate) fn clean_text(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut newlines = 0; // since the last visible character
     let mut marks = 0; // combining marks in a row
@@ -609,18 +629,6 @@ fn is_invisible(c: char) -> bool {
 /// The combining diacritical mark blocks.
 fn is_combining(c: char) -> bool {
     matches!(c, '\u{0300}'..='\u{036F}' | '\u{1AB0}'..='\u{1AFF}' | '\u{1DC0}'..='\u{1DFF}' | '\u{20D0}'..='\u{20FF}' | '\u{FE20}'..='\u{FE2F}')
-}
-
-async fn send(socket: &mut WebSocket, out: &Out<'_>) -> Result<(), axum::Error> {
-    send_within(socket, out, SEND_TIMEOUT).await
-}
-
-async fn send_within(socket: &mut WebSocket, out: &Out<'_>, budget: Duration) -> Result<(), axum::Error> {
-    let text = serde_json::to_string(out).unwrap_or_default();
-    match tokio::time::timeout(budget, socket.send(Message::Text(text.into()))).await {
-        Ok(sent) => sent,
-        Err(_) => Err(axum::Error::new("the peer stopped reading")),
-    }
 }
 
 #[cfg(test)]

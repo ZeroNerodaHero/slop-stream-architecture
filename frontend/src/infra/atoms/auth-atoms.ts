@@ -72,6 +72,45 @@ export async function logout(): Promise<void> {
   store.set(meAtom, null);
 }
 
+/** Every device, this one too. The cookie is dead everywhere, so the next ask is a real one. */
+export async function logoutAll(): Promise<void> {
+  try {
+    await api.logoutAll();
+  } catch {
+    // as above
+  }
+  forgetMe();
+}
+
 export function clearAuthError() {
   store.set(authErrorAtom, '');
+}
+
+// ---- the password, from the security tab ------------------------------------------------------
+
+export const passwordBusyAtom = atom(false);
+/** What the last try did: `changed. every other login is out`, or `not changed: <why>`. */
+export const passwordStatusAtom = atom('');
+
+/**
+ * `POST /api/password`. A 204: this login stays, every other one is out, and `me` is untouched.
+ * Its own status, not `authErrorAtom`: the login form and this can be on screen together.
+ */
+export async function changePassword(old: string, next: string): Promise<boolean> {
+  store.set(passwordBusyAtom, true);
+  store.set(passwordStatusAtom, '');
+  try {
+    await api.changePassword(old, next);
+    store.set(passwordStatusAtom, 'changed. every other login of this account is out');
+    return true;
+  } catch (err) {
+    store.set(passwordStatusAtom, `not changed: ${messageOf(err)}`);
+    return false;
+  } finally {
+    store.set(passwordBusyAtom, false);
+  }
+}
+
+export function clearPasswordStatus() {
+  store.set(passwordStatusAtom, '');
 }

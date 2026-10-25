@@ -6,8 +6,10 @@
 import { atom } from 'jotai';
 
 import { api, messageOf } from '@/infra/api';
+import { presenceChanged } from '@/infra/atoms/presence-atoms';
+import { eventsPhaseAtom, onEvents, unwatchPresence, watchPresence } from '@/infra/events';
 import { isValidName } from '@/infra/names';
-import { connectRelay, parseRelayMessage, waitForIceGathering } from '@/infra/relay';
+import { connectRelay, type RelayReply, SCREEN_SLOTS, type SlotInfo, slotsOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
 import { store } from '@/infra/store';
 import type { Tone } from '@/shared-components/StatusLine';
@@ -15,10 +17,18 @@ import type { Tone } from '@/shared-components/StatusLine';
 export type WatchPhase = 'loading' | 'waiting' | 'connecting' | 'connected' | 'watching' | 'reconnecting' | 'failed' | 'bad-name';
 
 const NOT_LIVE_RETRY_MS = 5000;
+/**
+ * The retry while the events socket is open and watching this name: `live` arrives pushed, so
+ * the poll is only the fallback behind it (docs/transition.md: slowed, never removed. an api that
+ * was unreachable is only ever recovered by a pull).
+ */
+const LINKED_RETRY_MS = 60_000;
 const NO_VIDEO_AFTER_MS = 10000;
 const RETRY_PHASES: readonly WatchPhase[] = ['waiting', 'failed'];
 /** The sound button stays through a blip: the frames come back on their own. */
 const SOUND_PHASES: readonly WatchPhase[] = ['watching', 'reconnecting'];
+/** The video sections asked for: the camera and the screens, the same count the publisher offers. */
+const VIDEO_SLOTS = 1 + SCREEN_SLOTS;
 
 export const watchNameAtom = atom('');
 export const watchPhaseAtom = atom<WatchPhase>('loading');
@@ -28,8 +38,39 @@ export const bioAtom = atom('');
 export const verifiedAtom = atom(false);
 /** Their picture's upload time (the `?v=` of its url). `null`: none. */
 export const avatarAtom = atom<number | null>(null);
+/**
+ * The main <video>'s stream: the sound and the big picture. One MediaStream for the attempt
+ * whose video track is swapped as the big slot changes, so the element never rebinds and the
+ * sound never skips.
+ */
 export const remoteStreamAtom = atom<MediaStream | null>(null);
+/** The video slots the streamer says are live, as video tells us. Empty until it has. */
+export const slotsAtom = atom<SlotInfo[]>([]);
+/** The slot the watcher clicked to see big, if any. `null`: the rule below. */
+export const chosenSlotAtom = atom<number | null>(null);
+/** Which slot is big: the one chosen while it is live, else the first screen, else the camera. */
+export const primarySlotAtom = atom((get) => primaryOf(get(slotsAtom), get(chosenSlotAtom)));
+/** The other live slots, the small tiles under the video. */
+export const tilesAtom = atom((get) => {
+  const primary = get(primarySlotAtom);
+  return get(slotsAtom).filter((s) => s.slot !== primary);
+});
+/** Each slot's own stream, picture only, for its tile. Bound imperatively (`VideoFrame`). */
+const slotStreamAtoms = Array.from({ length: VIDEO_SLOTS }, () => atom<MediaStream | null>(null));
+/** For a slot there is no section for (never, every slot number is checked against VIDEO_SLOTS first): an atom that stays empty. */
+const spareStreamAtom = atom<MediaStream | null>(null);
+export const slotStreamAtom = (slot: number) => slotStreamAtoms[slot] ?? spareStreamAtom;
 export const mutedAtom = atom(true);
+
+function primaryOf(slots: SlotInfo[], chosen: number | null): number {
+  if (chosen !== null && slots.some((s) => s.slot === chosen)) return chosen;
+  return slots.find((s) => s.kind === 'screen')?.slot ?? 0;
+}
+
+/** What a tile says: the streamer's label, else the kind, and the camera is "camera". */
+export function slotLabel(slot: SlotInfo): string {
+  return slot.label || slot.kind;
+}
 /**
  * The level the sound plays at, and comes back at after a mute: always above zero (zero on the
  * dial is a mute, see `setVolume`). On whichever <video> is playing, the page's or the
@@ -68,6 +109,9 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let attempt = 0;
 /** The <video> has played frames of this attempt: a reconnect goes straight back to `watching`. */
 let played = false;
+/** The attempt's tracks by video slot, and the stream the main <video> plays (see `remoteStreamAtom`). */
+let videoTracks: (MediaStreamTrack | undefined)[] = [];
+let primary: MediaStream | null = null;
 
 function setPhase(phase: WatchPhase, message: string) {
   store.set(watchPhaseAtom, phase);
@@ -95,15 +139,39 @@ function fail(message: string, myPc: RTCPeerConnection) {
   });
 }
 
-/** Nobody is live right now. Check again in a bit. */
+/** Nobody is live right now. Check again in a bit: soon when the poll is all there is, rarely when `live` will be pushed. */
 function waitForStreamer(message: string) {
   setPhase('waiting', message);
   if (retryTimer) clearTimeout(retryTimer);
-  retryTimer = setTimeout(() => {
-    retryTimer = null;
-    void start(store.get(watchNameAtom));
-  }, NOT_LIVE_RETRY_MS);
+  retryTimer = setTimeout(
+    () => {
+      retryTimer = null;
+      void start(store.get(watchNameAtom));
+    },
+    store.get(eventsPhaseAtom) === 'open' ? LINKED_RETRY_MS : NOT_LIVE_RETRY_MS
+  );
 }
+
+/** A pushed `live` for the name on screen: start now, not at the retry. Only from `waiting`; anything else is under way, or over by hand. */
+export function streamerLive(name: string) {
+  if (name !== store.get(watchNameAtom) || store.get(watchPhaseAtom) !== 'waiting') return;
+  void start(name);
+}
+
+// the pushes: `live` starts a waiting page now. the socket opening for the first time while the
+// page already waits (the grant beat it) slows the retry to the pushed cadence; coming back after
+// a gap it re-asks `watch` (a `live` published in the gap was missed)
+let linkWasOpen = false;
+onEvents((event) => {
+  if (event.type === 'live') streamerLive(event.name);
+  else if (event.type === 'link' && event.phase === 'open') {
+    if (store.get(watchPhaseAtom) === 'waiting') {
+      if (linkWasOpen) void start(store.get(watchNameAtom));
+      else waitForStreamer(store.get(watchMessageAtom));
+    }
+    linkWasOpen = true;
+  }
+});
 
 /** Phases from which arriving on the page starts over even with picture in picture on: nothing is under way. */
 const RESTART_PHASES: readonly WatchPhase[] = ['failed', 'bad-name'];
@@ -124,11 +192,15 @@ export async function watch(name: string): Promise<void> {
 async function start(name: string): Promise<void> {
   teardown();
   const mine = ++attempt;
+  const before = store.get(watchNameAtom);
+  if (before && before !== name) unwatchPresence(before);
   store.set(watchNameAtom, name);
   if (!isValidName(name)) {
     setPhase('bad-name', 'bad name');
     return;
   }
+  // their word beside the name, and `live` when it comes, from the events socket (docs/status.md)
+  watchPresence(name);
   setPhase('loading', 'loading');
 
   let grant;
@@ -143,6 +215,7 @@ async function start(name: string): Promise<void> {
   store.set(bioAtom, grant.bio ?? '');
   store.set(verifiedAtom, grant.verified === true);
   store.set(avatarAtom, grant.avatar ?? null);
+  if (grant.presence) presenceChanged(name, grant.presence);
   if (!grant.live) {
     waitForStreamer('not live yet. checking');
     return;
@@ -150,14 +223,24 @@ async function start(name: string): Promise<void> {
 
   const myPc = new RTCPeerConnection();
   pc = myPc;
-  myPc.addTransceiver('video', { direction: 'recvonly' });
+  // One section per video slot the publisher may fill, in its order: video binds its slots
+  // to them in order, so the i-th one here is video slot i there (0 the camera). A slot with
+  // nothing in it yet is a track that stays quiet until the streamer shares a screen.
+  const videoTransceivers = Array.from({ length: VIDEO_SLOTS }, () => myPc.addTransceiver('video', { direction: 'recvonly' }));
   myPc.addTransceiver('audio', { direction: 'recvonly' });
 
-  let remote: MediaStream | null = null;
+  const main = new MediaStream();
+  primary = main;
   myPc.ontrack = (e) => {
-    if (e.streams[0]) remote = e.streams[0];
-    else (remote = remote ?? new MediaStream()).addTrack(e.track);
-    if (store.get(remoteStreamAtom) !== remote) store.set(remoteStreamAtom, remote);
+    if (e.track.kind === 'audio') main.addTrack(e.track);
+    else {
+      const slot = videoTransceivers.indexOf(e.transceiver);
+      if (slot < 0) return;
+      videoTracks[slot] = e.track;
+      store.set(slotStreamAtom(slot), new MediaStream([e.track]));
+    }
+    showPrimary();
+    if (store.get(remoteStreamAtom) !== main) store.set(remoteStreamAtom, main);
   };
   myPc.onconnectionstatechange = () => {
     if (pc !== myPc) return;
@@ -171,12 +254,28 @@ async function start(name: string): Promise<void> {
     else if (state === 'failed') fail('connection failed. udp blocked?', myPc);
   };
 
+  // the frames after the answer, this attempt's only: `ended`, and what is live in which slot
+  const onMessage = (msg: RelayReply) => {
+    if (pc !== myPc) return;
+    if (msg.event === 'ended') ended();
+    else if (msg.event === 'slots') {
+      const slots = slotsOf(msg);
+      if (slots) {
+        store.set(
+          slotsAtom,
+          slots.filter((s) => s.slot < VIDEO_SLOTS)
+        );
+        showPrimary();
+      }
+    }
+  };
+
   try {
     await myPc.setLocalDescription(await myPc.createOffer());
     await waitForIceGathering(myPc, 1000);
     if (pc !== myPc) return;
     setPhase('connecting', 'connecting');
-    ws = await connectRelay({ role: 'watch', name, pc: myPc, url: grant.url });
+    ws = await connectRelay({ role: 'watch', name, pc: myPc, url: grant.url, onMessage });
   } catch (err) {
     if (pc !== myPc) return; // retry or leaving happened meanwhile
     if (messageOf(err) === 'not live') {
@@ -186,9 +285,6 @@ async function start(name: string): Promise<void> {
     return;
   }
 
-  ws.onmessage = (e) => {
-    if (parseRelayMessage(e.data)?.event === 'ended') ended();
-  };
   ws.onclose = ended;
 
   connectTimer = setTimeout(() => {
@@ -200,6 +296,22 @@ async function start(name: string): Promise<void> {
 function ended() {
   teardown();
   waitForStreamer('ended. checking for a restart');
+}
+
+/** A tile clicked: that slot goes big, for as long as it is live. */
+export function pickSlot(slot: number) {
+  store.set(chosenSlotAtom, slot);
+  showPrimary();
+}
+
+/** The main stream's picture is the primary slot's track, whichever that is now. */
+function showPrimary() {
+  if (!primary) return;
+  const want = videoTracks[store.get(primarySlotAtom)];
+  for (const track of primary.getVideoTracks()) {
+    if (track !== want) primary.removeTrack(track);
+  }
+  if (want && !primary.getVideoTracks().includes(want)) primary.addTrack(want);
 }
 
 /** The button: an explicit start-over, never the "back on the page of a kept stream" case `watch` keeps. */
@@ -284,7 +396,12 @@ export function teardown() {
     pc.close();
     pc = null;
   }
+  videoTracks = [];
+  primary = null;
   store.set(remoteStreamAtom, null);
+  for (const streamAtom of slotStreamAtoms) store.set(streamAtom, null);
+  store.set(slotsAtom, []);
+  store.set(chosenSlotAtom, null);
 }
 
 /**
@@ -300,6 +417,8 @@ export function leaveWatchPage() {
 export function endWatch() {
   attempt++;
   teardown();
+  const name = store.get(watchNameAtom);
+  if (name) unwatchPresence(name);
   store.set(pipAtom, false);
   store.set(watchNameAtom, '');
   store.set(mutedAtom, true);

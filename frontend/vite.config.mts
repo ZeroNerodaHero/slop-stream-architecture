@@ -50,7 +50,8 @@ export default defineConfig(({ mode }) => {
         '/api': { target: backend, changeOrigin: true, secure: false, configure: explain },
         '/thumb': { target: backend, changeOrigin: true, secure: false, configure: explain },
         '/ws': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain },
-        '/chat': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain }
+        '/chat': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain },
+        '/events': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain }
       }
     },
     build: {

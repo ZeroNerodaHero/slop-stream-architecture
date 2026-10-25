@@ -29,6 +29,7 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::auth::Me;
+use crate::presence::{self, Presence};
 use crate::{is_live, may_write, thumb_exists, valid_name, ApiError, ApiResult, AppState, Name, PasswordQuery};
 
 /// The browser sends 256x256 at quality 0.85, a few tens of kb. This is the ceiling.
@@ -185,10 +186,19 @@ enum Card {
     None,
 }
 
-fn head_tags(p: &Profile, live: bool, card: &Card, origin: &str) -> String {
+/// The title keeps `live|offline`: it is about the stream, and previews are cached for hours.
+/// The description with no bio says the presence word too: a watcher deciding whether to wait.
+fn head_tags(p: &Profile, presence: Presence, card: &Card, origin: &str) -> String {
+    let live = presence == Presence::Streaming;
     let title = format!("{} · {}", p.name, if live { "live" } else { "offline" });
     let about = if p.bio.is_empty() {
-        if live { "live now" } else { "not live right now" }.to_owned()
+        match presence {
+            Presence::Streaming => "live now",
+            Presence::Online => "online, not live",
+            Presence::Dnd => "do not disturb, not live",
+            Presence::Offline => "not live right now",
+        }
+        .to_owned()
     } else {
         one_line(&p.bio, 200)
     };
@@ -224,7 +234,7 @@ fn head_tags(p: &Profile, live: bool, card: &Card, origin: &str) -> String {
 
 /// The `<template id="watch-shell">` of index.html with the placeholders filled in.
 /// None if the pages have no such template (an older build): the head alone still works.
-fn card_html(shell: &str, p: &Profile, live: bool) -> Option<String> {
+fn card_html(shell: &str, p: &Profile, presence: Presence) -> Option<String> {
     let start = shell.find(TEMPLATE_OPEN)? + TEMPLATE_OPEN.len();
     let end = start + shell[start..].find(TEMPLATE_CLOSE)?;
     let avatar = p
@@ -236,14 +246,24 @@ fn card_html(shell: &str, p: &Profile, live: bool) -> Option<String> {
             .replace("{{avatar}}", &avatar)
             .replace("{{name}}", &escape(&p.name))
             .replace("{{verified}}", if p.verified { VERIFIED_HTML } else { "" })
-            .replace("{{status}}", if live { "live" } else { "offline" })
-            .replace("{{tone}}", if live { "text-increase" } else { "text-textSecondary" })
+            .replace("{{status}}", presence.shown())
+            .replace("{{tone}}", presence_tone(presence))
             .replace("{{bio}}", &escape(&p.bio)),
     )
 }
 
+/// The same colours the pages give the four words (`presence-atoms.ts`).
+fn presence_tone(presence: Presence) -> &'static str {
+    match presence {
+        Presence::Streaming => "text-primaryBlue",
+        Presence::Online => "text-increase",
+        Presence::Dnd => "text-decrease",
+        Presence::Offline => "text-textSecondary",
+    }
+}
+
 /// index.html with its head replaced for this name and the card inside `#root`.
-fn render(shell: &str, p: &Profile, live: bool, card: &Card, origin: &str) -> String {
+fn render(shell: &str, p: &Profile, presence: Presence, card: &Card, origin: &str) -> String {
     let mut html = shell.to_owned();
     // one title: ours, not the "streams" of every other page
     if let (Some(a), Some(b)) = (html.find("<title>"), html.find("</title>")) {
@@ -253,9 +273,9 @@ fn render(shell: &str, p: &Profile, live: bool, card: &Card, origin: &str) -> St
     }
     // after everything else in the head, so <meta charset> stays in the first bytes
     if let Some(at) = html.find("</head>") {
-        html.insert_str(at, &head_tags(p, live, card, origin));
+        html.insert_str(at, &head_tags(p, presence, card, origin));
     }
-    if let Some(filled) = card_html(shell, p, live) {
+    if let Some(filled) = card_html(shell, p, presence) {
         html = html.replacen(EMPTY_ROOT, &format!(r#"<div id="root">{filled}</div>"#), 1);
     }
     html
@@ -298,7 +318,14 @@ async fn watch_page(State(s): State<AppState>, headers: HeaderMap, Path(rest): P
     } else {
         profile.avatar.map_or(Card::None, Card::Picture)
     };
-    page(StatusCode::OK, render(&shell, &profile, live, &card, &origin(&headers)))
+    // the word beside the name: live is known; here and the choice come from redis and the row.
+    // a redis that does not answer leaves the two words the page always had
+    let presence = match presence::presence_with(&mut s.redis.clone(), &s.db, &name, live).await {
+        Ok(presence) => presence,
+        Err(_) if live => Presence::Streaming,
+        Err(_) => Presence::Offline,
+    };
+    page(StatusCode::OK, render(&shell, &profile, presence, &card, &origin(&headers)))
 }
 
 /// `/watch/` with nothing after it: the spa's own not-found page.
@@ -342,14 +369,14 @@ mod tests {
 
     #[test]
     fn live_with_thumbnail() {
-        let html = render(SHELL, &profile("hi <all>", None, true), true, &Card::Thumbnail, "https://1.2.3.4");
+        let html = render(SHELL, &profile("hi <all>", None, true), Presence::Streaming, &Card::Thumbnail, "https://1.2.3.4");
         assert_eq!(html.matches("<title>").count(), 1);
         assert!(html.contains("<title>bob · live</title>"));
         assert!(html.contains(r#"og:image" content="https://1.2.3.4/thumb/bob.jpg""#));
         assert!(html.contains(r#"twitter:card" content="summary_large_image""#));
         assert!(html.contains(r#"og:description" content="hi &lt;all&gt;""#));
         assert!(html.contains(r#"<div id="root"><h1>bob<span class="ml-2 text-increase""#));
-        assert!(html.contains(r#"<p class="text-increase">live</p>"#));
+        assert!(html.contains(r#"<p class="text-primaryBlue">streaming</p>"#));
         assert!(html.contains("<p>hi &lt;all&gt;</p>"));
         // the head came after the charset, before </head>, and the script is still there
         assert!(html.find("<meta charset").unwrap() < html.find("og:title").unwrap());
@@ -359,7 +386,7 @@ mod tests {
 
     #[test]
     fn offline_with_picture() {
-        let html = render(SHELL, &profile("", Some(1700000000), false), false, &Card::Picture(1700000000), "https://x");
+        let html = render(SHELL, &profile("", Some(1700000000), false), Presence::Offline, &Card::Picture(1700000000), "https://x");
         assert!(html.contains("<title>bob · offline</title>"));
         assert!(html.contains(r#"og:description" content="not live right now""#));
         assert!(html.contains(r#"og:image" content="https://x/api/streamers/bob/avatar?v=1700000000""#));
@@ -373,15 +400,27 @@ mod tests {
 
     #[test]
     fn offline_without_anything() {
-        let html = render(SHELL, &profile("", None, false), false, &Card::None, "https://x");
+        let html = render(SHELL, &profile("", None, false), Presence::Offline, &Card::None, "https://x");
         assert!(!html.contains("og:image"));
         assert!(html.contains(r#"<div id="root"><h1>bob</h1>"#));
     }
 
     #[test]
+    fn online_but_not_live() {
+        let html = render(SHELL, &profile("", None, false), Presence::Online, &Card::None, "https://x");
+        // the title is about the stream; the description and the card say they are around
+        assert!(html.contains("<title>bob · offline</title>"));
+        assert!(html.contains(r#"og:description" content="online, not live""#));
+        assert!(html.contains(r#"<p class="text-increase">online</p>"#));
+        let dnd = render(SHELL, &profile("", None, false), Presence::Dnd, &Card::None, "https://x");
+        assert!(dnd.contains(r#"og:description" content="do not disturb, not live""#));
+        assert!(dnd.contains(r#"<p class="text-decrease">do not disturb</p>"#));
+    }
+
+    #[test]
     fn no_template_still_gets_a_head() {
         let shell = SHELL.replace(r#"<template id="watch-shell">"#, "<template>");
-        let html = render(&shell, &profile("", None, false), true, &Card::None, "https://x");
+        let html = render(&shell, &profile("", None, false), Presence::Streaming, &Card::None, "https://x");
         assert!(html.contains("<title>bob · live</title>"));
         assert!(html.contains(EMPTY_ROOT));
     }

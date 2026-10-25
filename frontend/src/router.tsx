@@ -7,16 +7,24 @@ import { AuthPage } from '@/app/auth/AuthPage';
 import { HomePage } from '@/app/home/HomePage';
 import { LivePage } from '@/app/live/LivePage';
 import { WatchPage } from '@/app/watch/WatchPage';
+import { Inspector } from '@/shared-components/Inspector';
 import { MiniPlayer } from '@/shared-components/MiniPlayer';
+import { UserModal } from '@/shared-components/UserModal';
 import { UserPanel } from '@/shared-components/UserPanel';
 
-/** Every page, plus the two things that live outside pages: who you are (bottom left) and the picture in picture player (bottom right). */
+/**
+ * Every page, plus the things that live outside pages: who you are (bottom left), the picture
+ * in picture player (bottom right), and the user modal the panel opens (profile, security,
+ * settings, appearance).
+ */
 function Shell() {
   return (
     <>
       <Outlet />
       <UserPanel />
       <MiniPlayer />
+      <UserModal />
+      <Inspector />
     </>
   );
 }

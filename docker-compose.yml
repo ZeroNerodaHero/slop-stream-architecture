@@ -169,14 +169,24 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # the image's own check looks at the api port; this one looks at ours
+    # the image's own check looks at the api port; this one looks at ours, and asks for a real
+    # answer: a wedged process still accepts connections (the kernel's backlog does), it just
+    # never answers. GET /health is "ok" from the same listener /chat and /events hang off
     healthcheck:
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4100"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4100 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
       interval: 15s
       timeout: 3s
       start_period: 5s
       retries: 3
-    # no host port. browsers reach this through the frontend, at /chat
+    # one /events socket per browser, open on every page (docs/status.md), on top of the chat's
+    # per room: a file descriptor each. docker's default soft limit is 1024 on recent daemons,
+    # and a rust process does not raise its own the way go does: a thousand browsers, then
+    # accept fails. see docs/transition.md
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    # no host port. browsers reach this through the frontend, at /chat and /events
 
   database:
     image: postgres:17-alpine

@@ -8,6 +8,7 @@ import {
   bioDraftAtom,
   bioStatusAtom,
   cameraAtom,
+  canShareScreenAtom,
   canStartAtom,
   chatRoomAtom,
   commitStreamName,
@@ -23,13 +24,20 @@ import {
   removeAvatar,
   saveAvatar,
   saveBio,
+  screenShareSupported,
+  screensAtom,
+  screenStreamAtom,
   setStreamName,
+  shareScreen,
   startCamera,
   stopLive,
   stopOnLeave,
+  stopScreen,
   streamNameAtom,
   watchUrlAtom
 } from '@/infra/atoms/publish-atoms';
+import { chatSideAtom } from '@/infra/atoms/settings-atoms';
+import { SCREEN_SLOTS } from '@/infra/relay';
 import { store } from '@/infra/store';
 import { Avatar } from '@/shared-components/Avatar';
 import { Button } from '@/shared-components/Button';
@@ -37,7 +45,10 @@ import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { panelClassName } from '@/shared-components/Panel';
 import { StatusLine } from '@/shared-components/StatusLine';
+import { StreamTile } from '@/shared-components/StreamTile';
+import { IconButton } from '@/shared-components/VideoControls';
 import { VideoFrame } from '@/shared-components/VideoFrame';
+import { cn } from '@/utils/cn';
 
 export function LivePage() {
   const previewRef = useRef<HTMLVideoElement | null>(null);
@@ -54,6 +65,9 @@ export function LivePage() {
   const avatarStatus = useAtomValue(avatarStatusAtom);
   const owner = useAtomValue(ownerAtom);
   const me = useAtomValue(meAtom);
+  const sideBySide = useAtomValue(chatSideAtom) === 'right';
+  const screens = useAtomValue(screensAtom);
+  const canShare = useAtomValue(canShareScreenAtom);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   // Mount only: open the camera, fill the name box, end the stream when the tab or the page goes away.
@@ -71,9 +85,36 @@ export function LivePage() {
 
   return (
     <PageFrame title="go live" aside={<Link to="/">home</Link>} wide>
-      <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start lg:gap-6">
+      {/* the same three-children arrangement as the watch page, for the same layout setting:
+          the preview column, the chat, the bio box. side by side at lg+ the chat takes the right
+          column across both rows and the bio box sits under the preview; below, all stacked. */}
+      <div className={cn(sideBySide && 'lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-[auto_1fr] lg:items-start lg:gap-x-6')}>
         <div className="min-w-0">
           <VideoFrame id="preview" streamAtom={cameraAtom} videoRef={previewRef} muted />
+          {/* the screens being shared, each with its stop. the browser's own "stop sharing" bar works too */}
+          {screens.length > 0 && (
+            <div id="screens" className="mt-2 flex gap-2 overflow-x-auto">
+              {screens.map((screen) => (
+                <StreamTile
+                  key={screen.slot}
+                  id={`screen-${screen.slot}`}
+                  streamAtom={screenStreamAtom(screen.slot)}
+                  label={screen.label}
+                  corner={
+                    <IconButton
+                      id={`stop-screen-${screen.slot}`}
+                      label="stop sharing"
+                      tipAt="below-right"
+                      onClick={() => stopScreen(screen.slot)}
+                      className="text-lg leading-none"
+                    >
+                      ×
+                    </IconButton>
+                  }
+                />
+              ))}
+            </div>
+          )}
           <StatusLine text={message} tone={tone} />
 
           <div className="my-3 flex flex-wrap items-center gap-3">
@@ -107,6 +148,17 @@ export function LivePage() {
                 stop
               </Button>
             )}
+            {/* one screen (or window, or tab) per press, up to SCREEN_SLOTS at once. not on phones: no screen capture there */}
+            {publishing && screenShareSupported && (
+              <Button
+                id="share-screen"
+                disabled={!canShare}
+                title={screens.length >= SCREEN_SLOTS ? `${SCREEN_SLOTS} screens at most` : undefined}
+                onClick={() => void shareScreen()}
+              >
+                share screen
+              </Button>
+            )}
           </div>
 
           {watchUrl && (
@@ -120,7 +172,28 @@ export function LivePage() {
               </Button>
             </p>
           )}
+        </div>
 
+        {/* the streamer's own chat, in the room of the settled name. once live, `owner` makes its lines marked */}
+        {chatRoom ? (
+          <ChatPanel
+            name={chatRoom}
+            owner={owner}
+            className={cn('mt-4', sideBySide ? 'h-[60vh] max-h-[640px] lg:row-span-2 lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]' : 'h-[min(50vh,560px)]')}
+          />
+        ) : (
+          <aside
+            id="chat"
+            className={cn(
+              'mt-4 flex min-h-[200px] items-center justify-center border border-dashed border-secondaryStroke p-6 text-center text-textTertiary',
+              sideBySide && 'lg:row-span-2 lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]'
+            )}
+          >
+            type your name and the chat opens here. once you are live, your lines are marked.
+          </aside>
+        )}
+
+        <div className={cn('min-w-0', sideBySide && 'lg:col-start-1')}>
           <section className={panelClassName('my-5 px-5 py-4')}>
             <label htmlFor="bio" className="text-textSecondary">
               your bio
@@ -172,18 +245,6 @@ export function LivePage() {
             </div>
           </section>
         </div>
-
-        {/* the streamer's own chat, in the room of the settled name. once live, `owner` makes its lines marked */}
-        {chatRoom ? (
-          <ChatPanel name={chatRoom} owner={owner} className="mt-4 h-[60vh] max-h-[640px] lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]" />
-        ) : (
-          <aside
-            id="chat"
-            className="mt-4 flex min-h-[200px] items-center justify-center border border-dashed border-secondaryStroke p-6 text-center text-textTertiary lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px]"
-          >
-            type your name and the chat opens here. once you are live, your lines are marked.
-          </aside>
-        )}
       </div>
     </PageFrame>
   );

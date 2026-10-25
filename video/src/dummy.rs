@@ -229,13 +229,14 @@ async fn publish_once(i: usize, name: &str, cfg: &Config, http: &reqwest::Client
     }
 
     // Chat too, so the panel has something to show: a pretend viewer every few
-    // seconds, and the streamer (marked) now and then.
+    // seconds, and the streamer (marked) now and then. Both say `bot: true`, so their
+    // lines wear the BOT badge and the panel's "hide bots" can take them off the screen.
     let chatters: Vec<tokio::task::JoinHandle<()>> = match &cfg.chat_ws_url {
         Some(chat) => vec![
-            tokio::spawn(chatter(format!("{chat}/chat/{name}"), serde_json::json!({ "type": "hello", "nick": VIEWER_NICKS[i % VIEWER_NICKS.len()] }), i, 6 + (i % 4) as u64)),
+            tokio::spawn(chatter(format!("{chat}/chat/{name}"), serde_json::json!({ "type": "hello", "nick": VIEWER_NICKS[i % VIEWER_NICKS.len()], "bot": true }), i, 6 + (i % 4) as u64)),
             tokio::spawn(chatter(
                 format!("{chat}/chat/{name}"),
-                serde_json::json!({ "type": "hello", "nick": name, "session": owner.as_ref().map(|g| g.session), "token": owner.as_ref().map(|g| g.token) }),
+                serde_json::json!({ "type": "hello", "nick": name, "session": owner.as_ref().map(|g| g.session), "token": owner.as_ref().map(|g| g.token), "bot": true }),
                 i + 7,
                 23,
             )),

@@ -102,22 +102,26 @@ function recordPeerConnections() {
   }
 }
 
-// Runs in the watcher page: find the inbound video RTP stats on whichever PC has them.
+// Runs in the watcher page: find the inbound video RTP stats on whichever PC has them. The
+// watcher asks for several video sections (the camera and the screen slots); the one with
+// the most frames is the camera here, the others sit idle (padding gives them a stats entry).
 async function inboundVideoStats() {
   const pcs = [];
   if (window.pc && typeof window.pc.getStats === 'function') pcs.push(window.pc);
   for (const pc of window.__pcs || []) if (!pcs.includes(pc)) pcs.push(pc);
   for (const pc of pcs) {
     const report = await pc.getStats();
+    let best = null;
     for (const s of report.values()) {
-      if (s.type === 'inbound-rtp' && (s.kind || s.mediaType) === 'video') {
-        const codec = s.codecId ? report.get(s.codecId) : null;
-        return {
-          pcs: pcs.length, connectionState: pc.connectionState, framesDecoded: s.framesDecoded,
-          framesPerSecond: s.framesPerSecond, bytesReceived: s.bytesReceived, packetsLost: s.packetsLost,
-          frameWidth: s.frameWidth, frameHeight: s.frameHeight, codec: codec ? codec.mimeType : null,
-        };
-      }
+      if (s.type === 'inbound-rtp' && (s.kind || s.mediaType) === 'video' && (!best || (s.framesDecoded || 0) > (best.framesDecoded || 0))) best = s;
+    }
+    if (best) {
+      const codec = best.codecId ? report.get(best.codecId) : null;
+      return {
+        pcs: pcs.length, connectionState: pc.connectionState, framesDecoded: best.framesDecoded,
+        framesPerSecond: best.framesPerSecond, bytesReceived: best.bytesReceived, packetsLost: best.packetsLost,
+        frameWidth: best.frameWidth, frameHeight: best.frameHeight, codec: codec ? codec.mimeType : null,
+      };
     }
   }
   return { pcs: pcs.length, framesDecoded: null };

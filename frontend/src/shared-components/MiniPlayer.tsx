@@ -20,7 +20,6 @@ import {
 import { cleanName } from '@/infra/names';
 import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
-import { panelClassName } from '@/shared-components/Panel';
 import { ChatIcon, IconButton, SoundControl, revealClassName } from '@/shared-components/VideoControls';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
@@ -38,6 +37,12 @@ const hasOwnChat = (pathname: string) => /^\/(watch\/|live\/?$)/.test(pathname);
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
 
 /**
+ * The panel look without its offset shadow: a floating box over a page of boxes with shadows
+ * of their own would read as one more block behind it. The stroke alone marks its edge.
+ */
+const FRAME = 'border border-primaryStroke bg-backgroundSecondary';
+
+/**
  * Where the player is and how wide. The height follows: a 16:9 video over a one-line footer.
  * `null` is the default, the bottom right corner, until the first move or resize.
  */
@@ -50,8 +55,6 @@ interface Box {
 /** A press that travels less than this is a click (back to the page, ×), not a move. */
 const CLICK_SLOP = 4;
 const MIN_WIDTH = 160;
-/** `shadow-hard-lg` is 8px: the box stops that far from the right and bottom edges, so the shadow stays on screen with it. */
-const SHADOW = 8;
 
 /** The corner handles. `sx`/`sy`: which way the box grows when that corner is pulled outward. */
 const CORNERS = [
@@ -76,8 +79,8 @@ interface Gesture {
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-/** The area the box may use: the viewport less the room the shadow needs. */
-const room = () => ({ w: document.documentElement.clientWidth - SHADOW, h: document.documentElement.clientHeight - SHADOW });
+/** The area the box may use: the viewport. */
+const room = () => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight });
 /** What the box adds under the video (footer, borders). Constant, so the measured box gives it. */
 const extraOf = (rect: DOMRect) => rect.height - (rect.width * 9) / 16;
 const heightAt = (w: number, extra: number) => (w * 9) / 16 + extra;
@@ -234,7 +237,7 @@ export function MiniPlayer() {
       style={box ? { left: box.x, top: box.y, width: box.w } : undefined}
       onClickCapture={swallowClickAfterDrag}
       onDragStart={(e) => e.preventDefault()}
-      className={panelClassName(cn('group fixed z-50 shadow-hard-lg', !box && 'bottom-6 right-6 w-[min(320px,calc(100vw-3rem))]'))}
+      className={cn(FRAME, 'group fixed z-50', !box && 'bottom-6 right-6 w-[min(320px,calc(100vw-3rem))]')}
     >
       <div className={cn('relative', GRIP)} onPointerDown={(e) => press(e, 'move')}>
         <Link to={to} aria-label={`back to ${name}`} className="block">

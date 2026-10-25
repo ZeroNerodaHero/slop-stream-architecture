@@ -3,6 +3,25 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      the theme this browser keeps, before first paint: the css variables the appearance setting
+      derived (src/infra/atoms/settings-atoms.ts writes them under settings.themeVars), applied
+      inline on <html> so a light or custom theme does not flash dark while the bundle loads.
+      vite keeps a classic inline script as it is, and the api's /watch document leaves it in
+      place (api/src/profile.rs looks for the title, the end of the head and #root only, none of
+      them in here). nor may this comment spell the end-of-head tag out: vite's build injects the
+      bundle before the first one it finds, and would put it inside the comment.
+    -->
+    <script>
+      try {
+        var kept = JSON.parse(localStorage.getItem('settings.themeVars') || 'null');
+        if (kept && kept.vars) {
+          var style = document.documentElement.style;
+          for (var name in kept.vars) style.setProperty(name, kept.vars[name]);
+          if (kept.scheme) style.setProperty('color-scheme', kept.scheme);
+        }
+      } catch (e) {}
+    </script>
     <title>streams</title>
     <link rel="icon" href="data:," />
   </head>

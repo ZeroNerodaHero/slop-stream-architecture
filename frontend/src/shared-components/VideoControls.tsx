@@ -7,16 +7,17 @@ import { cn } from '@/utils/cn';
 /**
  * The controls that sit on a playing video: the watch page's and the corner player's. Dark
  * glass chips, 32px tall, the same as the cards' live chip. An icon-only control carries its
- * name for screen readers and shows it next to itself on hover and keyboard focus.
+ * name for screen readers and shows it next to itself on hover and keyboard focus. Everything
+ * here is white on black whatever the theme: it sits on the picture, not on the page.
  */
 
 /** A control over the video. */
-export const CHIP = 'flex h-8 items-center border border-white/10 bg-black/70 text-sm font-semibold text-textPrimary backdrop-blur-sm transition-colors duration-150';
+export const CHIP = 'flex h-8 items-center border border-white/10 bg-black/70 text-sm font-semibold text-white backdrop-blur-sm transition-colors duration-150';
 /** A chip that is itself the button: blue stroke and blue glyph on hover, like every button on the site, over solid black. */
 export const CHIP_BUTTON = cn(CHIP, 'hover:border-primaryBlue hover:bg-black/90 hover:text-primaryBlue');
 /** The name of an icon-only control, shown while the pointer or keyboard focus is on it (`group/control relative` is the control). */
 const TIP =
-  'pointer-events-none absolute whitespace-nowrap border border-white/10 bg-black/90 px-2 py-1 text-xs font-semibold text-textPrimary opacity-0 transition-opacity duration-150 group-hover/control:opacity-100 group-focus-visible/control:opacity-100';
+  'pointer-events-none absolute whitespace-nowrap border border-white/10 bg-black/90 px-2 py-1 text-xs font-semibold text-white opacity-0 transition-opacity duration-150 group-hover/control:opacity-100 group-focus-visible/control:opacity-100';
 const TIP_AT = {
   'above-left': 'bottom-full left-0 mb-2',
   'above-right': 'bottom-full right-0 mb-2',
@@ -56,7 +57,7 @@ export function IconButton({ label, tipAt = 'above-right', active = false, class
       aria-pressed={active || undefined}
       className={cn(
         CHIP_BUTTON,
-        'group/control relative w-8 justify-center disabled:cursor-default disabled:opacity-50 disabled:hover:border-white/10 disabled:hover:bg-black/70 disabled:hover:text-textPrimary',
+        'group/control relative w-8 justify-center disabled:cursor-default disabled:opacity-50 disabled:hover:border-white/10 disabled:hover:bg-black/70 disabled:hover:text-white',
         active && 'border-primaryBlue text-primaryBlue',
         className
       )}
@@ -89,12 +90,18 @@ export function ChatIcon() {
   );
 }
 
-/** A speaker. Crossed out while muted; angular sound waves (no arcs in this theme) when the sound is on. */
-function SpeakerIcon({ muted }: { muted: boolean }) {
+/**
+ * A speaker. Crossed out while muted; otherwise its sound waves say how loud, the way youtube's
+ * do: two above two thirds, one above a third, none for a whisper. Angular waves, no arcs in this theme.
+ */
+function SpeakerIcon({ muted, level }: { muted: boolean; level: number }) {
+  const waves = muted ? 0 : level > 2 / 3 ? 2 : level > 1 / 3 ? 1 : 0;
   return (
     <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinejoin="miter">
       <path d="M3 9h4l5-4v14l-5-4H3z" fill="currentColor" />
-      {muted ? <path d="M16 9l6 6M22 9l-6 6" /> : <path d="M16 9l2 3-2 3M19 6l3 6-3 6" />}
+      {muted && <path d="M16 9l6 6M22 9l-6 6" />}
+      {waves >= 1 && <path d="M16 9l2 3-2 3" />}
+      {waves >= 2 && <path d="M19 6l3 6-3 6" />}
     </svg>
   );
 }
@@ -105,8 +112,8 @@ function SpeakerIcon({ muted }: { muted: boolean }) {
  */
 const DIAL = cn(
   'h-1 cursor-pointer appearance-none bg-white/30',
-  '[&::-webkit-slider-thumb]:-mt-1 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:bg-textPrimary',
-  '[&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-none [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-textPrimary',
+  '[&::-webkit-slider-thumb]:-mt-1 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:bg-white',
+  '[&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-none [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white',
   '[&:focus-visible::-webkit-slider-thumb]:bg-primaryBlue [&:focus-visible::-moz-range-thumb]:bg-primaryBlue'
 );
 
@@ -121,10 +128,12 @@ interface SoundControlProps {
 }
 
 /**
- * One chip: the speaker (mute, unmute) and the volume dial, one control. Mute drops the dial
- * to 0 and crosses the speaker, unmute brings the level back; the dial dragged to 0 is a mute,
- * dragged up from 0 an unmute. A drag that ends on 0 went through every level on the way down,
- * so the level when the dial was taken hold of is kept for the way back (`settleDial`).
+ * The speaker (mute, unmute) and the volume dial, one control. No box of its own, the way a
+ * player's sound control usually sits straight on the picture: a shadow under the glyph and the
+ * dial keeps them readable over a bright frame. Mute drops the dial to 0 and crosses the speaker,
+ * unmute brings the level back; the dial dragged to 0 is a mute, dragged up from 0 an unmute. A
+ * drag that ends on 0 went through every level on the way down, so the level when the dial was
+ * taken hold of is kept for the way back (`settleDial`).
  */
 export function SoundControl({ videoRef, buttonId, dialId, dialClassName = 'w-24' }: SoundControlProps) {
   const muted = useAtomValue(mutedAtom);
@@ -133,7 +142,7 @@ export function SoundControl({ videoRef, buttonId, dialId, dialClassName = 'w-24
   const grabbed = useRef(dial);
 
   return (
-    <div className={cn(CHIP, 'gap-3 pr-3 hover:border-white/30')}>
+    <div className="flex h-8 items-center gap-2 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
       <button
         id={buttonId}
         type="button"
@@ -141,7 +150,7 @@ export function SoundControl({ videoRef, buttonId, dialId, dialClassName = 'w-24
         className="group/control relative flex h-full w-8 items-center justify-center transition-colors duration-150 hover:text-primaryBlue"
         onClick={() => (muted ? unmuteVideo : muteVideo)(videoRef.current)}
       >
-        <SpeakerIcon muted={muted} />
+        <SpeakerIcon muted={muted} level={dial} />
         <span role="tooltip" className={cn(TIP, TIP_AT['above-left'])}>
           {muted ? 'unmute' : 'mute'}
         </span>
@@ -163,7 +172,7 @@ export function SoundControl({ videoRef, buttonId, dialId, dialClassName = 'w-24
         }}
         onKeyUp={() => settleDial(grabbed.current)}
         className={cn(DIAL, dialClassName)}
-        style={{ background: `linear-gradient(to right, rgb(var(--text-primary)) ${dial * 100}%, rgb(255 255 255 / 0.3) ${dial * 100}%)` }}
+        style={{ background: `linear-gradient(to right, rgb(255 255 255) ${dial * 100}%, rgb(255 255 255 / 0.3) ${dial * 100}%)` }}
       />
     </div>
   );

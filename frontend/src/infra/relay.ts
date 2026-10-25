@@ -1,18 +1,58 @@
 /**
- * The video server speaks one websocket at /ws. One message each way:
+ * The video server speaks one websocket at /ws. One message each way to set up:
  *   we send   {"role":"publish"|"watch","name":"...","sdp":"<offer>"}
  *             (a publisher adds the go-live "session" and "token"; video checks them with the api)
  *   we get    {"sdp":"<answer>"}  or  {"error":"..."}
- *   later     {"event":"ended"}  (watchers, when the publisher leaves)
- * The socket stays open for the whole session. Closing it hangs up.
+ * The socket stays open for the whole session. Closing it hangs up. On the open socket:
+ *   a publisher sends  {"slots":[{"slot":0,"kind":"camera"},{"slot":1,"kind":"screen","label":"screen"}]}
+ *                      whenever what it shows changes: its video slots that are live, see `SlotInfo`
+ *   a watcher gets     {"event":"slots","slots":[...]}  right after the answer and on every change
+ *                      {"event":"ended"}  when the publisher leaves
+ *
+ * A publisher's offer carries every video section it may ever send on: the camera and
+ * SCREEN_SLOTS empty ones for screens, filled and emptied later with `replaceTrack`, which
+ * renegotiates nothing. A watcher's offer asks for as many, so a screen shared mid-stream
+ * reaches everyone already watching. Which slot is what travels in the slots frames: packets
+ * alone cannot say (an empty section still gets padding, and a muted track never says so).
  */
+
+import { record } from '@/infra/atoms/inspector-atoms';
 
 export type RelayRole = 'publish' | 'watch';
 
-interface RelayReply {
+/** Screens a publisher can share beside the camera, at once. Both sides offer this many video sections for them. */
+export const SCREEN_SLOTS = 3;
+
+/**
+ * One live video slot of a publisher, as it tells the watchers. `slot` counts the video
+ * sections of its offer from 0: the camera is 0, the screens are 1 to SCREEN_SLOTS.
+ */
+export interface SlotInfo {
+  slot: number;
+  /** `camera`, `screen`; anything else is shown as is. */
+  kind: string;
+  label?: string;
+}
+
+export interface RelayReply {
   sdp?: string;
   error?: string;
   event?: string;
+  slots?: SlotInfo[];
+}
+
+/** The slots of a `slots` event, kept to the well-formed entries. `null` when the message has none. */
+export function slotsOf(msg: RelayReply): SlotInfo[] | null {
+  if (!Array.isArray(msg.slots)) return null;
+  return msg.slots.filter(
+    (s): s is SlotInfo =>
+      typeof s === 'object' &&
+      s !== null &&
+      Number.isInteger(s.slot) &&
+      s.slot >= 0 &&
+      typeof s.kind === 'string' &&
+      (s.label === undefined || typeof s.label === 'string')
+  );
 }
 
 /**
@@ -65,16 +105,24 @@ interface ConnectRelayOptions {
   timeoutMs?: number;
   /** Aborting rejects with "cancelled" (the user pressed stop while we were connecting). */
   signal?: AbortSignal;
+  /**
+   * The frames after the answer (`{"event":...}`). Installed on the socket before it is handed
+   * back, so nothing is lost between the answer and a handler set afterwards: the first slots
+   * event follows the answer at once, while `setRemoteDescription` is still being awaited here.
+   * Frames that came in that window are delivered first, in order, once the caller has the socket.
+   */
+  onMessage?: (msg: RelayReply) => void;
 }
 
 /**
  * Open the socket, send the offer, apply the answer. Resolves with the open socket.
  * Rejects with Error(text) on {"error"}, socket trouble, timeout, or abort.
  */
-export function connectRelay({ role, name, pc, session, token, url = '/ws', timeoutMs = 15000, signal }: ConnectRelayOptions): Promise<WebSocket> {
+export function connectRelay({ role, name, pc, session, token, url = '/ws', timeoutMs = 15000, signal, onMessage }: ConnectRelayOptions): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(relayUrl(url));
     let done = false;
+    const pending: RelayReply[] = [];
 
     const fail = (err: Error) => {
       if (done) return;
@@ -94,13 +142,16 @@ export function connectRelay({ role, name, pc, session, token, url = '/ws', time
 
     ws.onopen = () => {
       // JSON.stringify drops the undefined ones, so a watcher's frame has no session or token
-      ws.send(JSON.stringify({ role, name, sdp: pc.localDescription?.sdp ?? '', session, token }));
+      const setup = { role, name, sdp: pc.localDescription?.sdp ?? '', session, token };
+      record(url, 'out', setup); // the token is taken out, the sdp clipped, before it is kept
+      ws.send(JSON.stringify(setup));
     };
     ws.onerror = () => fail(new Error('socket error'));
     ws.onclose = () => fail(new Error('socket closed'));
     ws.onmessage = async (e) => {
       if (done) return;
       const msg = parseRelayMessage(e.data);
+      if (msg) record(url, 'in', msg);
       if (!msg) {
         fail(new Error('bad reply'));
         return;
@@ -109,7 +160,10 @@ export function connectRelay({ role, name, pc, session, token, url = '/ws', time
         fail(new Error(msg.error));
         return;
       }
-      if (!msg.sdp) return;
+      if (!msg.sdp) {
+        if (onMessage) pending.push(msg);
+        return;
+      }
       try {
         await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
       } catch (err) {
@@ -119,8 +173,19 @@ export function connectRelay({ role, name, pc, session, token, url = '/ws', time
       if (done) return;
       done = true;
       clearTimeout(timer);
-      ws.onopen = ws.onerror = ws.onclose = ws.onmessage = null;
+      ws.onopen = ws.onerror = ws.onclose = null;
+      ws.onmessage = onMessage
+        ? (ev) => {
+            const later = parseRelayMessage(ev.data);
+            if (later) {
+              record(url, 'in', later);
+              onMessage(later);
+            }
+          }
+        : null;
       resolve(ws);
+      // after the caller's own continuation (it takes the socket and sets onclose first)
+      if (onMessage && pending.length) queueMicrotask(() => pending.forEach(onMessage));
     };
   });
 }

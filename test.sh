@@ -18,9 +18,13 @@
 #   dup        a second person on the same name is refused
 #   chat       two viewers talk, history survives a reload, 501 chars refused, streamer lines marked
 #   auth       sign up, log in, log out, a claimed name is only its owner's, verified chat lines, 429 after 10 tries
+#   groups     bot is built in, a login makes a group, another joins and leaves, badges on chat lines, a bot's lines wear BOT and the panel hides them, only the maker deletes, the groups tab
 #   preview    /watch/<name> html: title + og tags offline, with a picture, live with the thumbnail; the picture round-trips
 #   errors     /api/health has the monitor fields, a page's error report lands (204, log, debug db), bad ones 400, /admin renders
 #   pip        picture in picture: the button goes home with the stream in a corner, the player moves and resizes, has the sound and the chat, coming back takes it over, another stream replaces it, × ends it
+#   screen     screen sharing: screens beside the camera go to watchers mid-stream with no renegotiation, tiles, click to swap, stop, a late watcher sees it all
+#   presence   a tab open is online over the events socket, do not disturb and appear offline reach a watcher pushed, live is streaming,
+#              two tabs share one socket and the last closing is offline at once, a claimed name is refused, the inspector shows the frames
 #   regress    token-gated stop, auto-recovery, trailing slash, fast restart, races, bad offers
 #   monitor    (local only) `api monitor` watches this stack and a dead address: up with the right build,
 #              down with a reason, the page shows both, a restart keeps its memory. runs monitor/docker-compose.yml
@@ -104,9 +108,12 @@ run e2e
 run dup
 run chat
 run auth
+run groups
 run preview
 run errors
 run pip
+run screen
+run presence
 if [ "$LOCAL" = 1 ]; then
   run regress
   run monitor

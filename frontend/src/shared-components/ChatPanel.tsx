@@ -1,3 +1,4 @@
+import { RiRobot2Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type KeyboardEvent, type UIEvent, useEffect, useLayoutEffect, useRef } from 'react';
 
@@ -9,19 +10,23 @@ import {
   chatCanSendAtom,
   chatCountAtom,
   chatDraftAtom,
-  chatLinesAtom,
   chatNoticeAtom,
   chatPhaseAtom,
   chatSpeakerAtom,
   chars,
   closeChat,
+  hiddenBotLinesAtom,
+  isBotLine,
   nickAtom,
   nickIsValidAtom,
   openChat,
   sendChat,
   setChatDraft,
-  setNick
+  setNick,
+  visibleChatLinesAtom
 } from '@/infra/atoms/chat-atoms';
+import { hideBotsAtom, setHideBots } from '@/infra/atoms/settings-atoms';
+import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { panelClassName } from '@/shared-components/Panel';
 import { cn } from '@/utils/cn';
@@ -48,17 +53,21 @@ function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
 
 /**
  * The chat next to the video. Lines newest at the bottom, a nick box until you
- * have one (or a login), a text box with a 500 countdown. Joins on mount, leaves
- * on unmount; a change of `owner` (going live, stopping) or of the login
- * reconnects through `openChat`. One at a time: the chat atoms hold one room, and
- * the ids here are the ones the tests key on.
+ * have one (or a login), a text box with a 500 countdown. Each line wears its
+ * speaker's group badges; the robot in the header hides the bots' lines (a setting
+ * of this browser, the settings tab has it too). Joins on mount, leaves on
+ * unmount; a change of `owner` (going live, stopping) or of the login reconnects
+ * through `openChat`. One at a time: the chat atoms hold one room, and the ids
+ * here are the ones the tests key on.
  */
 export function ChatPanel({ name, owner = null, embedded = false, className }: ChatPanelProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   // true while the view sits at the newest line. someone who scrolled up to read is left there.
   const stuck = useRef(true);
   const shown = useRef(0);
-  const lines = useAtomValue(chatLinesAtom);
+  const lines = useAtomValue(visibleChatLinesAtom);
+  const hideBots = useAtomValue(hideBotsAtom);
+  const hiddenBots = useAtomValue(hiddenBotLinesAtom);
   const count = useAtomValue(chatCountAtom);
   const phase = useAtomValue(chatPhaseAtom);
   const draft = useAtomValue(chatDraftAtom);
@@ -101,15 +110,32 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
 
   return (
     <aside id="chat" className={embedded ? cn('flex flex-col', className) : panelClassName(cn('flex min-h-[320px] flex-col', className))}>
-      <header className="flex items-center justify-between border-b border-primaryStroke px-4 py-2 text-base">
+      <header className="flex items-center justify-between gap-3 border-b border-primaryStroke px-4 py-2 text-base">
         <span className="font-semibold">chat</span>
-        <span id="chat-count" className="text-textSecondary">
-          {count} here · {phase === 'open' ? 'live' : phase}
+        <span className="flex min-w-0 items-center gap-3">
+          <span id="chat-count" className="truncate text-textSecondary">
+            {count} here · {phase === 'open' ? 'live' : phase}
+          </span>
+          {/* the bots' lines: shown, or held back with how many. a setting of this browser, so it follows you from room to room */}
+          <button
+            id="chat-hide-bots"
+            type="button"
+            aria-pressed={hideBots}
+            title={hideBots ? `the bots' lines are hidden. click to show them` : "hide the bots' lines (the fake streams' chatters)"}
+            onClick={() => setHideBots(!hideBots)}
+            className={cn(
+              'flex shrink-0 items-center gap-1 whitespace-nowrap border px-1.5 py-0.5 text-xs font-semibold tabular-nums transition-colors duration-150',
+              hideBots ? 'border-primaryBlue text-primaryBlue' : 'border-primaryStroke text-textTertiary hover:border-secondaryStroke hover:text-textSecondary'
+            )}
+          >
+            <RiRobot2Line aria-hidden size={14} />
+            {hideBots ? `${hiddenBots} hidden` : 'hide bots'}
+          </button>
         </span>
       </header>
 
       <div ref={listRef} onScroll={onScroll} id="chat-lines" role="log" aria-live="polite" className="min-h-0 flex-1 overflow-y-auto px-4 py-2 text-base leading-snug">
-        {lines.length === 0 && <p className="text-textTertiary">nothing yet. say something.</p>}
+        {lines.length === 0 && <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>}
         {lines.map((line) => {
           const mine = line.from === myName;
           return (
@@ -117,6 +143,8 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
               key={line.id}
               data-streamer={line.streamer || undefined}
               data-verified={line.verified || undefined}
+              data-bot={isBotLine(line) || undefined}
+              data-groups={line.groups.length ? line.groups.map((g) => g.name).join(' ') : undefined}
               data-mine={mine || undefined}
               className="my-1 [overflow-wrap:anywhere]"
             >
@@ -126,6 +154,9 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
                   ✓
                 </span>
               )}
+              {line.groups.map((group) => (
+                <Badge key={group.name} group={group} className="ml-1" />
+              ))}
               {line.streamer && <span className="ml-1 bg-increase/15 px-1 text-xs uppercase text-increase">streamer</span>}
               {mine && <span className="ml-1 bg-primaryBlue/15 px-1 text-xs uppercase text-primaryBlue">you</span>}
               <span className="text-textSecondary">: </span>

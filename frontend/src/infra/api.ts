@@ -1,5 +1,6 @@
 /** The json api behind /api. Same origin, so the dev server and caddy both forward it. */
 
+import type { Presence, PresenceChoice } from '@/infra/frames';
 import { report } from '@/infra/report';
 
 export class ApiError extends Error {
@@ -26,6 +27,36 @@ export interface Streamer {
   bio: string;
   verified: boolean;
   avatar: number | null;
+  /** The word next to the name: `offline` `online` `dnd` `streaming`. See docs/status.md. */
+  presence: Presence;
+}
+
+/** A group as worn on a chat line: enough to draw the badge. */
+export interface GroupBadge {
+  name: string;
+  /** The word on the badge. Shown in capitals. */
+  badge: string;
+  /** `#rrggbb` */
+  color: string;
+}
+
+/** A group as `GET /api/groups` lists it. */
+export interface Group extends GroupBadge {
+  about: string;
+  /** The login that made it. null for the built-in `bot`. */
+  made_by: string | null;
+  members: number;
+  /** The login this list was asked with is in it. Always false for nobody. */
+  mine: boolean;
+  /** `bot`: nobody joins it, a chat socket that says `bot: true` wears it. */
+  automatic: boolean;
+}
+
+export interface NewGroup {
+  name: string;
+  badge: string;
+  color: string;
+  about: string;
 }
 
 export interface Grant {
@@ -40,6 +71,7 @@ export interface WatchGrant {
   live: boolean;
   verified: boolean;
   avatar: number | null;
+  presence: Presence;
 }
 
 /** Proof that this page is the one that went live. Heartbeat and stop carry it. */
@@ -132,13 +164,25 @@ export const api = {
   signup: (name: string, password: string) => request<{ name: string }>('POST', '/api/signup', { name, password }),
   login: (name: string, password: string) => request<{ name: string }>('POST', '/api/login', { name, password }),
   logout: () => request<null>('POST', '/api/logout'),
+  /** Every login of the account, this one included. */
+  logoutAll: () => request<null>('POST', '/api/logout-all'),
   changePassword: (old: string, next: string) => request<null>('POST', '/api/password', { old, new: next }),
+  /** Every group, `bot` first; `mine` says which the login is in. See docs/groups.md. */
+  groups: () => request<Group[]>('GET', '/api/groups'),
+  /** A login makes a group and is in it. 400 bad name/badge/colour, 409 `name taken`. */
+  createGroup: (group: NewGroup) => request<Group>('POST', '/api/groups', group),
+  joinGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/join`),
+  leaveGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/leave`),
+  /** The one who made it (or an admin). Its members are out with it. */
+  deleteGroup: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}`),
   streams: () => request<LiveStream[]>('GET', '/api/streams'),
   streamer: (name: string) => request<Streamer>('GET', `/api/streamers/${name}`),
   saveBio: (name: string, bio: string) => request<{ name: string; bio: string }>('PUT', `/api/streamers/${name}`, { bio }),
   /** The jpeg itself as the body. The page has already made it 256x256. */
   saveAvatar: (name: string, jpeg: Blob) => request<{ name: string; avatar: number }>('PUT', `/api/streamers/${name}/avatar`, jpeg),
   deleteAvatar: (name: string) => request<null>('DELETE', `/api/streamers/${name}/avatar`),
+  /** The presence choice, through the bio's gate. The answer also arrives on the events socket, to every tab and device. */
+  setPresence: (name: string, status: PresenceChoice) => request<{ status: PresenceChoice; presence: Presence }>('PUT', `/api/streamers/${name}/presence`, { status }),
   /** `version` is the upload time the api hands out, so a new picture is a new url and the old one can be cached. */
   avatarUrl: (name: string, version: number) => `/api/streamers/${encodeURIComponent(name)}/avatar?v=${version}`,
   goLive: (name: string) => request<Grant>('POST', `/api/streams/${name}/go-live`),

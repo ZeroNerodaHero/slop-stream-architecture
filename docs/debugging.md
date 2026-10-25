@@ -5,6 +5,7 @@ how you find out something broke, and what. three layers, each cheap.
 - **is the box up** — a monitor on a different machine polls every box and tells you. our own code: `api monitor`, one container, one json file, one page.
 - **what broke for a person** — the pages report their own failures to `/api/errors`. the api keeps them in a separate `debug` database. `/admin` shows them, and so does the monitor, for every box at once.
 - **what is the box doing** — digitalocean's own graphs for cpu, ram, disk and, the one that matters for video, outbound bandwidth.
+- **what is the browser being told** — the messages inspector (`status.md`): a setting in the user modal keeps the frames this browser sends and gets on its three sockets (the events socket, which lives in a shared worker and so never shows in a tab's devtools; the chat; the video setup), the last 1000, with a filter, in a panel that floats over the page. tokens are taken out before anything is kept. nothing leaves the browser: frames are not failures, and the report budget below would go in seconds.
 
 built: the health answer, the error reports, the debug database, `/admin`, the monitor (`api monitor`, its page, its compose file, `./status.sh` for a look from a shell). not built: the monitor box itself (you make it, ten minutes), the watcher bot, grafana. see the end.
 

@@ -16,23 +16,23 @@ flowchart LR
     direction TB
     frontend["frontend<br/>caddy · :80 → :443<br/>serves the pages, forwards the rest"]
     api["api<br/>rust axum · :4000<br/>bio, go-live, heartbeat, stop, watch, streams"]
-    chat["chat<br/>the api binary run as api chat · :4100<br/>text chat"]
+    chat["chat<br/>the api binary run as api chat · :4100<br/>text chat · /events: presence and pushes, one socket per browser"]
     video["video<br/>rust webrtc · ws :7880 · media udp :7882<br/>one upload in, copies out, thumbnails"]
     database[("database<br/>postgres · streamers, sessions<br/>+ a second database, debug · client_errors")]
-    redis[("redis<br/>live:name locks · chat:name streams")]
+    redis[("redis<br/>live:name locks · seen:name sets · events stream · chat:name streams")]
     dummy["dummy<br/>the video binary run as video dummy<br/>fake streams, off by default"]
     certs["certs<br/>self-signed cert for PUBLIC_IP<br/>runs once, exits"]
     pages["pages<br/>vite build → volume<br/>runs once, exits"]
   end
 
-  streamer -->|"https · pages, /api, /thumb<br/>wss /ws, wss /chat"| frontend
-  watcher -->|"https · pages, /api, /thumb<br/>wss /ws, wss /chat"| frontend
+  streamer -->|"https · pages, /api, /thumb<br/>wss /ws, wss /chat, wss /events"| frontend
+  watcher -->|"https · pages, /api, /thumb<br/>wss /ws, wss /chat, wss /events"| frontend
   streamer ==>|"webrtc media · udp 7882"| video
   video ==>|"webrtc media · udp 7882"| watcher
 
   frontend -->|"/api/*"| api
   frontend -->|"/ws · /thumb/*"| video
-  frontend -->|"/chat/*"| chat
+  frontend -->|"/chat/* · /events"| chat
 
   api --> database
   api --> redis
@@ -61,7 +61,8 @@ flowchart LR
   q -->|"/watch/*"| doc["api:4000<br/>index.html from the pages volume<br/>+ title, og tags, profile card for that name<br/>so a shared link gets a preview"]
   q -->|"/ws"| vws["video:7880<br/>websocket · offer in, answer out"]
   q -->|"/thumb/*"| vthumb["video:7880<br/>jpeg of a live stream, a few seconds old"]
-  q -->|"/chat/*"| chat["chat:4100<br/>websocket · one per person"]
+  q -->|"/chat/*"| chat["chat:4100<br/>websocket · one per person per room"]
+  q -->|"/events"| events["chat:4100<br/>websocket · one per browser, every page<br/>presence · live · ended"]
   q -->|"/assets/*"| assets["/srv/assets<br/>hashed js + css · cache forever"]
   q -->|"anything else"| spa["/srv/index.html<br/>no-cache · react router takes it from here"]
   spa --> home["/<br/>home · who is live"]
@@ -92,7 +93,7 @@ sequenceDiagram
   S->>V: wss /ws · {"role":"publish","name":"billy","sdp":offer}
   V-->>S: {"sdp": answer}
   S-)V: opus + vp8 over udp 7882
-  Note over V: room billy · 2 tracks · a small ffmpeg writes /tmp/thumb-billy.jpg
+  Note over V: room billy · a slot per offered section (audio, camera, 3 empty screen slots) · a small ffmpeg writes /tmp/thumb-billy.jpg
 
   loop every 15s
     S->>A: POST heartbeat (session, token)
@@ -112,9 +113,15 @@ sequenceDiagram
   A-->>W: { url: "/ws", bio, live: true }
   W->>V: wss /ws · {"role":"watch","name":"billy","sdp":offer}
   V-->>W: {"sdp": answer}
+  V-->>W: {"event":"slots"} · what is live where (the camera, until billy says)
   V-)W: copies of billy's packets over udp 7882
-  W--)V: PLI when the picture is lost
-  V--)S: PLI forwarded, at most one per 1.5s
+  W--)V: PLI when a picture is lost
+  V--)S: PLI forwarded for that slot, at most one per 1.5s
+
+  S->>S: share screen · getDisplayMedia → replaceTrack into an empty slot
+  S-)V: the screen's packets on that section · routed to the slot by mid, no renegotiation
+  S->>V: {"slots":[camera, screen]}
+  V-->>W: {"event":"slots","slots":[camera, screen]} · the screen goes big, the camera is a tile
 
   S->>A: POST stop (session, token) · sendBeacon if the tab closed
   A->>D: UPDATE sessions SET ended_at = now()
@@ -131,11 +138,12 @@ flowchart LR
 
   subgraph video["video · every peer shares one udp socket :7882"]
     direction LR
-    ws["/ws<br/>one json frame in, one out"]
+    ws["/ws<br/>one json frame in, one out to set up<br/>then slots frames"]
     subgraph room["room billy · in the Hub"]
       direction TB
       pp["publisher peer"]
-      tr["2 × TrackLocalStaticRTP<br/>opus · vp8"]
+      tr["a slot per offered section<br/>TrackLocalStaticRTP each · opus · vp8<br/>packets routed in by mid"]
+      sl["slots · what is live where<br/>relayed to watchers"]
       gen["generation<br/>bumps when the publisher leaves"]
     end
     wp1["watcher peer"]
@@ -156,10 +164,11 @@ flowchart LR
   wp1 ==>|"rtp out, one copy each"| w1
   wp2 ==> w2
   wp3 ==> w3
-  tr -.->|"same packets"| ff
-  w1 -.->|"PLI · lost the picture"| wp1
-  wp1 -.->|"request_keyframe · max 1 per 1.5s"| pp
+  tr -.->|"the camera slot's packets"| ff
+  w1 -.->|"PLI · lost a picture"| wp1
+  wp1 -.->|"request_keyframe for that slot · max 1 per 1.5s"| pp
   pp -.->|"PLI"| cam
+  cam -.->|"slots frame"| sl -.->|"event slots"| wp1 & wp2 & wp3
   gen -.->|"event ended"| wp1 & wp2 & wp3
 ```
 
@@ -268,13 +277,16 @@ redis has no volume. who is live clears when it restarts. the database keeps the
 ```text
 docker-compose.yml       the services above, their env, ports, volumes
 deploy.sh                one command: pick PUBLIC_IP, write .env, build, up, wait for /api/health
-test.sh  test/           playwright + chrome with a fake camera: e2e, dup, chat, auth, preview, errors, regress, redeploy, dummy
+test.sh  test/           playwright + chrome with a fake camera (and a picked screen): e2e, dup, chat, auth, preview, errors, pip, screen, regress, redeploy, dummy
 .env  .env.example       PUBLIC_IP, CARGO_BUILD_JOBS, ENV_NAME, ADMIN_NAMES, OPS_TOKEN, DUMMY_STREAMS, DUMMY_PASSWORD, DUMMY_NAMES
 Cargo.toml  Cargo.lock   one rust workspace, two members
 
 api/                     → containers api, chat
   src/main.rs              axum on :4000. bios, go-live, heartbeat, stop, watch, streams, health
   src/chat.rs              `api chat` on :4100. websocket chat on redis streams
+  src/events.rs            the gateway on the same listener: /events, /online, the seen sets, the events tail. docs/status.md
+  src/presence.rs          the word and the choice: presence(), PUT …/presence, the facts onto the events stream
+  src/socket.rs            the websocket plumbing chat.rs and events.rs share
   src/debug.rs             POST/GET /api/errors, the debug database. see docs/debugging.md
   Dockerfile               rust:1-bookworm build → debian-slim, one binary
 
@@ -288,16 +300,20 @@ video/                   → containers video, dummy
   Dockerfile.dummy         + static ffmpeg + a font + the gifs, entrypoint `video dummy`
 
 frontend/                → containers pages (build), frontend (caddy)
-  Caddyfile                /api /ws /chat /thumb, spa fallback, cache headers
+  Caddyfile                /api /ws /chat /events /thumb, spa fallback, cache headers
   Dockerfile               node build → alpine with dist/ + publish-pages.sh
-  vite.config.mts          dev on :42069, proxies /api /ws /chat /thumb to BACKEND
+  vite.config.mts          dev on :42069, proxies /api /ws /chat /events /thumb to BACKEND
   src/router.tsx           /  /live  /watch/:name  /admin  *   (CrashPage as the error boundary)
   src/app/                 HomePage  LivePage  WatchPage  AdminPage  CrashPage  NotFoundPage
   src/infra/api.ts         fetch wrappers for /api
   src/infra/report.ts      the pages' own failures → POST /api/errors (sendBeacon)
   src/infra/relay.ts       the /ws one-frame protocol + RTCPeerConnection
-  src/infra/atoms/         publish, watch, chat, auth session state (jotai)
-  src/shared-components/   Avatar  Button  ChatPanel  GeneratedAvatar  PageFrame  StatusLine  TestBadge  UserPanel  VideoFrame
+  src/infra/events.ts      the /events socket from a tab: the shared worker's port, the per-tab fallback, watch / unwatch
+  src/infra/events.worker.ts  the shared worker: one socket per browser, the hello, the watches, the inspector's ring
+  src/infra/frames.ts      the frames, the tab↔worker envelope, the ring. pure
+  src/infra/theme.ts       the palette: presets, and the derivation of twelve readable colours from a background and an accent
+  src/infra/atoms/         publish, watch, chat, auth session state, profile, presence, inspector, settings (chat side, theme, inspector), user-modal (jotai)
+  src/shared-components/   Avatar  Button  ChatPanel  Face  GeneratedAvatar  Inspector  MiniPlayer  PageFrame  StatusLine  StreamTile  TestBadge  UserModal (+ user-modal/)  UserPanel  VideoControls  VideoFrame
 
 monitor/                 docker-compose.yml for the monitor droplet: uptime kuma polling every box. docs/debugging.md
 docs/                    overview, spec, chat, architecture, accounts, kubernetes, debugging, this file
@@ -336,6 +352,6 @@ flowchart LR
   dev ==>|"webrtc media · udp 7882"| stack
 
   ts["./test.sh<br/>optional url · optional --all"] --> pw["playwright · installed chrome<br/>fake camera + mic"]
-  pw -->|"e2e · dup · chat · auth · preview · errors"| stack
+  pw -->|"e2e · dup · chat · auth · preview · errors · pip · screen"| stack
   pw -->|"regress · redeploy · dummy<br/>local stack only, they restart containers"| stack
 ```

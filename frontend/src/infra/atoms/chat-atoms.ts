@@ -7,8 +7,10 @@
 import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
-import type { Owner } from '@/infra/api';
+import type { GroupBadge, Owner } from '@/infra/api';
 import { forgetMe, meAtom } from '@/infra/atoms/auth-atoms';
+import { record } from '@/infra/atoms/inspector-atoms';
+import { hideBotsAtom } from '@/infra/atoms/settings-atoms';
 import { relayUrl } from '@/infra/relay';
 import { store } from '@/infra/store';
 
@@ -19,7 +21,16 @@ export interface ChatLine {
   streamer: boolean;
   /** said by a login: `from` really is that account */
   verified: boolean;
+  /** the speaker's groups as badges, `bot` first when it is one. see docs/groups.md */
+  groups: GroupBadge[];
   at: number;
+}
+
+/** The automatic group a socket that says `bot: true` wears. The hide switch keys on it. */
+export const BOT_GROUP = 'bot';
+
+export function isBotLine(line: ChatLine): boolean {
+  return line.groups.some((g) => g.name === BOT_GROUP);
 }
 
 export type ChatPhase = 'off' | 'connecting' | 'open' | 'closed';
@@ -30,7 +41,9 @@ const RECONNECT_MS = 3000;
 const NICK_RE = /^[a-zA-Z0-9_-]{1,24}$/;
 
 /** Your name without an account. Remembered across pages and visits (localstorage). */
-export const nickAtom = atomWithStorage<string>('nick', '');
+// read at init, not on first mount: the events socket says hello as this name from main.tsx,
+// before any component has mounted (docs/status.md)
+export const nickAtom = atomWithStorage<string>('nick', '', undefined, { getOnInit: true });
 export const chatPhaseAtom = atom<ChatPhase>('off');
 export const chatLinesAtom = atom<ChatLine[]>([]);
 export const chatCountAtom = atom(0);
@@ -38,6 +51,14 @@ export const chatDraftAtom = atom('');
 export const chatNoticeAtom = atom('');
 /** True while this socket speaks as the streamer. */
 export const chatAsStreamerAtom = atom(false);
+
+/** The lines on screen: every line, or without the bots' while `hideBotsAtom` is on. */
+export const visibleChatLinesAtom = atom((get) => {
+  const lines = get(chatLinesAtom);
+  return get(hideBotsAtom) ? lines.filter((line) => !isBotLine(line)) : lines;
+});
+/** How many lines the switch is holding back right now. 0 while it is off. */
+export const hiddenBotLinesAtom = atom((get) => (get(hideBotsAtom) ? get(chatLinesAtom).filter(isBotLine).length : 0));
 
 export const nickIsValidAtom = atom((get) => NICK_RE.test(get(nickAtom).trim()));
 /** The name this browser talks as: the login, else the nick. */
@@ -86,7 +107,7 @@ export function openChat(name: string, owner: Owner | null = null) {
   connect();
 }
 
-/** The name changed (nick edited, logged in or out): say hello again as the new one. */
+/** The name changed (nick edited, logged in or out), or its groups did: say hello again as the new one. */
 export function reconnectChat() {
   if (!session) return;
   const { name, owner } = session;
@@ -121,7 +142,9 @@ export function sendChat() {
     showNotice('too long');
     return;
   }
-  session.ws.send(JSON.stringify({ type: 'say', text }));
+  const say = { type: 'say', text };
+  record(`/chat/${session.name}`, 'out', say);
+  session.ws.send(JSON.stringify(say));
   inFlight.push(text);
   store.set(chatDraftAtom, '');
 }
@@ -151,6 +174,7 @@ function connect() {
   ws.onopen = () => {
     // a login needs no nick: the cookie went with the handshake and the server names us
     const hello = current.owner ? { type: 'hello', nick, session: current.owner.session, token: current.owner.token } : me ? { type: 'hello' } : { type: 'hello', nick };
+    record(`/chat/${current.name}`, 'out', hello); // the token is taken out before it is kept
     ws.send(JSON.stringify(hello));
     store.set(chatPhaseAtom, 'open');
     store.set(chatAsStreamerAtom, current.owner !== null || me === current.name);
@@ -162,11 +186,12 @@ function connect() {
     } catch {
       return;
     }
-    if (msg.type === 'history' && msg.messages) store.set(chatLinesAtom, msg.messages.slice(-KEEP_LINES));
+    record(`/chat/${current.name}`, 'in', msg);
+    if (msg.type === 'history' && msg.messages) store.set(chatLinesAtom, msg.messages.slice(-KEEP_LINES).map(withGroups));
     else if (msg.type === 'message' && msg.id) {
       const sent = inFlight.indexOf(msg.text ?? '');
       if (sent >= 0) inFlight.splice(sent, 1);
-      appendLine(msg as ChatLine);
+      appendLine(withGroups(msg as ChatLine));
     } else if (msg.type === 'count' && typeof msg.count === 'number') store.set(chatCountAtom, msg.count);
     else if (msg.type === 'error' && msg.error) {
       // the server refused who we are (bad nick, somebody's name): back to the nick box, no retry loop
@@ -190,6 +215,11 @@ function connect() {
     current.ws = null;
     current.timer = setTimeout(connect, RECONNECT_MS);
   };
+}
+
+/** A line from a chat server older than the badges has no `groups`: that is a line with none. */
+function withGroups(line: ChatLine): ChatLine {
+  return Array.isArray(line.groups) ? line : { ...line, groups: [] };
 }
 
 function appendLine(line: ChatLine) {

@@ -9,8 +9,9 @@ import { atom } from 'jotai';
 import { ApiError, api, type Owner, messageOf, statusOf } from '@/infra/api';
 import { loadMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { nickAtom } from '@/infra/atoms/chat-atoms';
+import { record } from '@/infra/atoms/inspector-atoms';
 import { cleanName, isValidName } from '@/infra/names';
-import { connectRelay, waitForIceGathering } from '@/infra/relay';
+import { connectRelay, SCREEN_SLOTS, type SlotInfo, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
 import { store } from '@/infra/store';
 import type { Tone } from '@/shared-components/StatusLine';
@@ -19,10 +20,29 @@ export type PublishPhase = 'camera-off' | 'camera-blocked' | 'no-camera' | 'came
 
 const HEARTBEAT_MS = 15000;
 const VIDEO_MAX_BITRATE = 2_500_000;
+/** The camera while a screen is shared too: the screen is what people look at. */
+const CAMERA_SHARING_BITRATE = 500_000;
+/** All the shared screens together. One alone gets it all, three get a third each. */
+const SCREENS_BITRATE = 3_000_000;
 const BUSY_PHASES: readonly PublishPhase[] = ['starting', 'connecting', 'live', 'reconnecting'];
 const BAD_PHASES: readonly PublishPhase[] = ['camera-blocked', 'no-camera', 'failed'];
+/** Sharing a screen needs the socket, which exists once connected. */
+const SHARE_PHASES: readonly PublishPhase[] = ['live', 'reconnecting'];
 
 export const cameraAtom = atom<MediaStream | null>(null);
+/** A screen being shared: which screen slot (0 to SCREEN_SLOTS-1) and what the browser called it. Its stream is in `screenStreamAtoms`. */
+export interface SharedScreen {
+  slot: number;
+  label: string;
+}
+export const screensAtom = atom<SharedScreen[]>([]);
+/** The shared screens' streams by screen slot, for the previews. A stream is not render data, so they are bound imperatively (`VideoFrame`). */
+const screenStreamAtoms = Array.from({ length: SCREEN_SLOTS }, () => atom<MediaStream | null>(null));
+/** For a screen slot that does not exist (never: slots come from `screenSenders`, which has SCREEN_SLOTS): an atom that stays empty. */
+const spareStreamAtom = atom<MediaStream | null>(null);
+export const screenStreamAtom = (slot: number) => screenStreamAtoms[slot] ?? spareStreamAtom;
+/** Phones have no screen capture; there the button is not shown at all. */
+export const screenShareSupported = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 export const publishPhaseAtom = atom<PublishPhase>('camera-off');
 export const publishMessageAtom = atom('camera off');
 /** Always clean: lowercase, trimmed. Set through `setStreamName`. */
@@ -46,6 +66,7 @@ const AVATAR_QUALITY = 0.85;
 export const hasMicAtom = atom((get) => (get(cameraAtom)?.getAudioTracks().length ?? 0) > 0);
 export const isPublishingAtom = atom((get) => BUSY_PHASES.includes(get(publishPhaseAtom)));
 export const canStartAtom = atom((get) => get(cameraAtom) !== null && isValidName(get(streamNameAtom)) && !get(isPublishingAtom));
+export const canShareScreenAtom = atom((get) => screenShareSupported && SHARE_PHASES.includes(get(publishPhaseAtom)) && get(screensAtom).length < SCREEN_SLOTS);
 /**
  * The link to share. `?s=<session>` makes it a new url every time you go live: chat apps
  * cache a link's preview card (discord for hours, x for days), so without it a card made
@@ -65,6 +86,9 @@ let pc: RTCPeerConnection | null = null;
 let ws: WebSocket | null = null;
 let abort: AbortController | null = null;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
+/** The camera's video sender, and the SCREEN_SLOTS senders offered empty for screens (`screenSenders[i]` is screen slot i). */
+let cameraSender: RTCRtpSender | null = null;
+let screenSenders: RTCRtpSender[] = [];
 /** Bumped on leaving /live: a camera granted after that belongs to nobody and is stopped. */
 let liveGeneration = 0;
 /** The name whose bio and picture are in the boxes, and the bio as it was loaded for it. */
@@ -156,8 +180,16 @@ export async function goLive(): Promise<void> {
       track.contentHint = 'motion';
       init.sendEncodings = [{ maxBitrate: VIDEO_MAX_BITRATE }];
     }
-    myPc.addTransceiver(track, init);
+    const transceiver = myPc.addTransceiver(track, init);
+    if (track.kind === 'video') cameraSender = transceiver.sender;
   }
+  // The screens' sections, offered now with nothing in them: a screen shared later goes
+  // into one with `replaceTrack`, and nothing is renegotiated, with video or with anyone
+  // watching. The camera is video slot 0 to everyone, these are 1 to SCREEN_SLOTS.
+  screenSenders = Array.from(
+    { length: SCREEN_SLOTS },
+    () => myPc.addTransceiver('video', { direction: 'sendonly', sendEncodings: [{ maxBitrate: SCREENS_BITRATE }] }).sender
+  );
 
   try {
     await myPc.setLocalDescription(await myPc.createOffer());
@@ -207,6 +239,97 @@ function onConnection(state: RTCPeerConnectionState) {
 }
 
 /**
+ * The share button: the browser's picker, one screen (or window, or tab) per press, into the
+ * first free screen slot. The picker closed without a choice is nothing. Sharp text over
+ * smooth motion (`contentHint`), and no more than 1080p: a retina display would hand over
+ * a picture too big for the bitrate. The browser's own "stop sharing" bar ends the track,
+ * which is a stop here.
+ */
+export async function shareScreen(): Promise<void> {
+  const myPc = pc;
+  if (!myPc || !store.get(canShareScreenAtom)) return;
+  let display: MediaStream;
+  try {
+    display = await navigator.mediaDevices.getDisplayMedia({ video: { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 30 } }, audio: false });
+  } catch {
+    return;
+  }
+  const track = display.getVideoTracks()[0];
+  const slot = screenSenders.findIndex((sender) => !sender.track);
+  const sender = screenSenders[slot];
+  // stopped, or every slot filled, while the picker was up
+  if (pc !== myPc || !track || !sender) {
+    display.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  track.contentHint = 'detail';
+  try {
+    await sender.replaceTrack(track);
+  } catch {
+    display.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  track.addEventListener('ended', () => stopScreen(slot));
+  const surface = track.getSettings().displaySurface;
+  const base = surface === 'window' ? 'window' : surface === 'browser' ? 'tab' : 'screen';
+  const alike = store.get(screensAtom).filter((s) => s.label.startsWith(base)).length;
+  const label = alike ? `${base} ${alike + 1}` : base;
+  store.set(screenStreamAtom(slot), display);
+  store.set(screensAtom, [...store.get(screensAtom), { slot, label }]);
+  screensChanged();
+}
+
+/** The tile's stop, or the browser's "stop sharing" bar. The slot is emptied and free again. */
+export function stopScreen(slot: number) {
+  const screens = store.get(screensAtom);
+  if (!screens.some((s) => s.slot === slot)) return;
+  store
+    .get(screenStreamAtom(slot))
+    ?.getTracks()
+    .forEach((t) => t.stop());
+  store.set(screenStreamAtom(slot), null);
+  store.set(
+    screensAtom,
+    screens.filter((s) => s.slot !== slot)
+  );
+  // a closed peer refuses this; nothing is lost then, the stream is over
+  screenSenders[slot]?.replaceTrack(null).catch(() => undefined);
+  screensChanged();
+}
+
+function screensChanged() {
+  announceSlots();
+  void shareBitrate();
+}
+
+/** Tell video what is live where, for the watchers: the camera, then each shared screen. */
+function announceSlots() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const screens: SlotInfo[] = store.get(screensAtom).map((s) => ({ slot: s.slot + 1, kind: 'screen', label: s.label }));
+  const slots: SlotInfo[] = [{ slot: 0, kind: 'camera' }, ...screens];
+  record('/ws', 'out', { slots });
+  ws.send(JSON.stringify({ slots }));
+}
+
+/** The upload, divided: the camera steps back while a screen is shared, the screens share their part. */
+async function shareBitrate() {
+  const sharing = store.get(screensAtom).length;
+  await capBitrate(cameraSender, sharing ? CAMERA_SHARING_BITRATE : VIDEO_MAX_BITRATE);
+  for (const sender of screenSenders) {
+    if (sender.track) await capBitrate(sender, Math.floor(SCREENS_BITRATE / Math.max(1, sharing)));
+  }
+}
+
+async function capBitrate(sender: RTCRtpSender | null, maxBitrate: number) {
+  if (!sender) return;
+  const params = sender.getParameters();
+  const encoding = params.encodings?.[0];
+  if (!encoding) return; // not negotiated yet: the offer's cap holds
+  encoding.maxBitrate = maxBitrate;
+  await sender.setParameters(params).catch(() => undefined);
+}
+
+/**
  * Stop button, failures, leaving. The camera preview keeps running. A failure is reported,
  * with the peer's stats, before the peer is closed below; `report: false` for one that is
  * not ours (the api said no, the name is taken).
@@ -231,6 +354,17 @@ export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', {
     pc.close();
     pc = null;
   }
+  // the shared screens go with the stream (the camera preview stays)
+  for (const streamAtom of screenStreamAtoms) {
+    store
+      .get(streamAtom)
+      ?.getTracks()
+      .forEach((track) => track.stop());
+    store.set(streamAtom, null);
+  }
+  store.set(screensAtom, []);
+  cameraSender = null;
+  screenSenders = [];
   const owner = store.get(ownerAtom);
   if (owner) {
     api.stop(owner).catch(() => undefined);
@@ -299,10 +433,29 @@ export async function loadProfile(): Promise<void> {
 }
 
 /**
- * Any picture file to a square jpeg, in the browser, before it goes anywhere: the middle
- * square of it, scaled to AVATAR_PX. So the api never has to decode an image.
+ * The name box follows the identity when the user modal or the corner panel changes it (a
+ * login, a logout, a new nick) while this page is open and nothing is on air: the page seeds
+ * the box once, on arrival, and would otherwise go live under the old name while the chat
+ * speaks as the new. With `was` (a nick change), only a box that still held the old nick
+ * follows: a name typed by hand is theirs.
  */
-async function squareJpeg(file: File): Promise<Blob> {
+export function followIdentityOnLivePage(was?: string) {
+  if (location.pathname.replace(/\/$/, '') !== '/live' || store.get(isPublishingAtom)) return;
+  const me = store.get(meAtom);
+  const name = me ?? cleanName(store.get(nickAtom));
+  const box = store.get(streamNameAtom);
+  if (!isValidName(name) || box === name) return;
+  if (was !== undefined && !me && box !== cleanName(was)) return;
+  setStreamName(name);
+  void commitStreamName();
+}
+
+/**
+ * Any picture file to a square jpeg, in the browser, before it goes anywhere: the middle
+ * square of it, scaled to AVATAR_PX. So the api never has to decode an image. The user
+ * modal's profile tab makes its pictures the same way.
+ */
+export async function squareJpeg(file: File): Promise<Blob> {
   const bitmap = await createImageBitmap(file);
   const side = Math.min(bitmap.width, bitmap.height);
   const canvas = document.createElement('canvas');

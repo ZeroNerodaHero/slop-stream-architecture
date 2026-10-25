@@ -14,7 +14,8 @@
 //! video does not have the name connected.
 //!
 //! Nobody has to log in. A name with an account (auth.rs) is the one thing a
-//! login is for: only its owner can go live, save its bio or chat as it.
+//! login is for: only its owner can go live, save its bio or chat as it. A login
+//! can also join groups (groups.rs), whose badges go on its chat lines.
 //!
 //! The same binary run as `api chat` is the text chat server (chat.rs),
 //! `api monitor` watches the other boxes from a box of its own (monitor.rs), and
@@ -29,8 +30,12 @@
 mod auth;
 mod chat;
 mod debug;
+mod events;
+mod groups;
 mod monitor;
+mod presence;
 mod profile;
+mod socket;
 
 use std::collections::HashSet;
 use std::env;
@@ -95,6 +100,25 @@ CREATE TABLE IF NOT EXISTS logins (
 CREATE INDEX IF NOT EXISTS logins_name_idx ON logins (name);
 ALTER TABLE streamers ADD COLUMN IF NOT EXISTS avatar bytea;
 ALTER TABLE streamers ADD COLUMN IF NOT EXISTS avatar_at timestamptz;
+ALTER TABLE streamers ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'online';
+CREATE TABLE IF NOT EXISTS groups (
+    name text PRIMARY KEY,
+    badge text NOT NULL,
+    color text NOT NULL,
+    about text NOT NULL DEFAULT '',
+    created_by text REFERENCES streamers(name) ON DELETE SET NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS memberships (
+    name text NOT NULL REFERENCES streamers(name) ON DELETE CASCADE,
+    group_name text NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
+    joined_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (name, group_name)
+);
+CREATE INDEX IF NOT EXISTS memberships_group_idx ON memberships (group_name);
+INSERT INTO groups (name, badge, color, about)
+    VALUES ('bot', 'BOT', '#5865f2', 'automatic. the fake streams'' pretend chatters, and any chat socket that says it is one. nobody joins it.')
+    ON CONFLICT (name) DO NOTHING;
 ";
 
 #[derive(Clone)]
@@ -124,6 +148,7 @@ impl FromRef<AppState> for PgPool {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct ApiError(StatusCode, String);
 
 impl ApiError {
@@ -240,7 +265,7 @@ pub(crate) async fn may_write(s: &AppState, name: &str, me: Option<&str>, passwo
     auth::may_act_as(&s.db, name, me).await
 }
 
-fn live_key(name: &str) -> String {
+pub(crate) fn live_key(name: &str) -> String {
     format!("live:{name}")
 }
 
@@ -344,17 +369,23 @@ async fn sweep_once(s: &AppState) -> anyhow::Result<u64> {
     };
     let connected: Vec<String> = connected.into_iter().collect();
     let held = held_sessions(s).await?;
-    let done = sqlx::query(
+    let ended: Vec<(String, i64)> = sqlx::query_as(
         "UPDATE sessions SET ended_at = now()
          WHERE ended_at IS NULL AND started_at < now() - make_interval(secs => $1)
-           AND id <> ALL($2) AND name <> ALL($3)",
+           AND id <> ALL($2) AND name <> ALL($3)
+         RETURNING name, id",
     )
     .bind(ZOMBIE_AFTER_SECS as f64)
     .bind(&held)
     .bind(&connected)
-    .execute(&s.db)
+    .fetch_all(&s.db)
     .await?;
-    Ok(done.rows_affected())
+    // one `ended` per stream the sweep closed, for whoever is watching it (docs/status.md)
+    let mut r = s.redis.clone();
+    for (name, id) in &ended {
+        presence::publish_ended(&mut r, name, Some(*id), "sweep").await;
+    }
+    Ok(ended.len() as u64)
 }
 
 /// 53 random bits from the os. The page keeps the token as a js number, which is
@@ -471,7 +502,8 @@ async fn put_streamer(
 
 async fn get_streamer(State(s): State<AppState>, Name(name): Name) -> ApiResult {
     let p = profile::load_profile(&s.db, &name).await?;
-    Ok(Json(json!({ "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified })))
+    let presence = presence::presence(&s, &name).await?;
+    Ok(Json(json!({ "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified, "presence": presence })))
 }
 
 async fn list_sessions(State(s): State<AppState>, Name(name): Name) -> ApiResult {
@@ -590,6 +622,8 @@ async fn go_live(
     .execute(&s.db)
     .await?;
 
+    // the fact, for whoever is watching the name (docs/status.md): the gateway pushes `live`
+    presence::publish_live(&mut r, &name, presence::now_ms(), id).await;
     log::info!("{name}: go live, session {id}");
     Ok(Json(
         json!({ "url": WS_PATH, "session": id, "token": token }),
@@ -622,6 +656,13 @@ async fn heartbeat(
             if claimed.is_none() {
                 return Err(ApiError::already_live());
             }
+            // live again as far as the key knows (a redis restart, an api outage past the ttl):
+            // the watchers' word follows the key, so they are told. `since` stays the session's
+            let since: Option<DateTime<Utc>> = sqlx::query_scalar("SELECT started_at FROM sessions WHERE id = $1")
+                .bind(owner.session)
+                .fetch_optional(&s.db)
+                .await?;
+            presence::publish_live(&mut r, &name, since.map_or_else(presence::now_ms, |t| t.timestamp_millis()), owner.session).await;
             Ok(Json(json!({ "ok": true, "reclaimed": true })))
         }
     }
@@ -650,7 +691,13 @@ async fn stop(
     // between a read here and the delete would lose its fresh key to this one's stop
     let key = live_key(&name);
     let mut r = s.redis.clone();
-    let _: i64 = redis::cmd("EVAL").arg(DEL_IF_HELD_BY).arg(1).arg(&key).arg(owner.session).query_async(&mut r).await?;
+    let deleted: i64 = redis::cmd("EVAL").arg(DEL_IF_HELD_BY).arg(1).arg(&key).arg(owner.session).query_async(&mut r).await?;
+    // `ended` for whoever is watching, unless another session took the name meanwhile: then
+    // the name is still live and the word must not say otherwise (docs/status.md)
+    let another_holds = deleted == 0 && matches!(r.get::<_, Option<i64>>(&key).await?, Some(holder) if holder != owner.session);
+    if !another_holds {
+        presence::publish_ended(&mut r, &name, Some(owner.session), "stop").await;
+    }
     log::info!("{name}: stop, session {}", owner.session);
     Ok(Json(json!({ "ok": true })))
 }
@@ -660,13 +707,16 @@ async fn watch(State(s): State<AppState>, Name(name): Name) -> ApiResult {
     let p = profile::load_profile(&s.db, &name).await?;
     // the ✓ belongs to the live session (started by the account), not to the name
     let verified = live && session_verified(&s.db, &name).await?;
-    Ok(Json(json!({ "url": WS_PATH, "bio": p.bio, "live": live, "verified": verified, "avatar": p.avatar })))
+    let presence = presence::presence_with(&mut s.redis.clone(), &s.db, &name, live).await?;
+    Ok(Json(json!({ "url": WS_PATH, "bio": p.bio, "live": live, "verified": verified, "avatar": p.avatar, "presence": presence })))
 }
 
 fn router(state: AppState) -> Router {
     Router::new()
         .merge(auth::routes())
         .merge(profile::routes())
+        .merge(groups::routes())
+        .merge(presence::routes())
         .merge(debug::routes())
         .route("/api/health", get(health))
         .route("/api/streams", get(list_streams))

@@ -21,6 +21,16 @@
   --decrease: 248 81 73;
 }
 
+html {
+  /* classic scrollbars: the page under a modal loses its scrollbar below; the gutter stays, so nothing moves */
+  scrollbar-gutter: stable;
+}
+
+/* the page under a modal stays put: no browser locks it on its own, and a wheel over the backdrop would scroll it */
+html:has(dialog:modal) {
+  overflow: hidden;
+}
+
 body {
   @apply bg-background font-sans text-[20px] leading-relaxed text-textPrimary antialiased;
 }
