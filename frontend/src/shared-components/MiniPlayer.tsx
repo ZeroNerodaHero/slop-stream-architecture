@@ -37,7 +37,7 @@ import { cleanName } from '@/infra/names';
 import { cn } from '@/utils/cn';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
-import { CornerPlayer } from '@/shared-components/CornerPlayer';
+import { CORNER_BADGE, CornerPlayer } from '@/shared-components/CornerPlayer';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { SoundControl } from '@/shared-components/VideoControls';
 import { ViewerCount } from '@/shared-components/ViewerCount';
@@ -57,8 +57,8 @@ const hasOwnChat = (pathname: string) => /^\/(watch\/|live\/?$)/.test(pathname);
 type Corner = 'pip' | 'live-pip';
 
 /**
- * Which player's chat button is on, if any. One, not one each: the chat atoms hold one room,
- * so the second chat opened closes the first. Kept while a page with its own chat hides the
+ * Which player's chat button is on, if any. One, not one each: the chat atoms hold one room
+ * (and only one player shows at a time anyway). Kept while a page with its own chat hides the
  * chat, and across streams: the button is a choice for the visit.
  */
 const cornerChatAtom = atom<Corner | null>(null);
@@ -120,14 +120,8 @@ function WatchCorner() {
           </Button>
         )
       }
-      bar={
-        canHear && (
-          <>
-            <SoundControl videoRef={videoRef} buttonId="pip-unmute" dialId="pip-volume" dialClassName="w-20" />
-            <StreamStatsButton id="pip-stats" role="watch" stats={stats} tipAt="above-left" panel="up" playback={{ muted, level: volume }} />
-          </>
-        )
-      }
+      badge={canHear && <StreamStatsButton id="pip-stats" role="watch" stats={stats} className={CORNER_BADGE} playback={{ muted, level: volume }} />}
+      bar={canHear && <SoundControl videoRef={videoRef} buttonId="pip-unmute" dialId="pip-volume" dialClassName="w-20" />}
       barShown={muted}
     />
   );
@@ -138,8 +132,9 @@ function WatchCorner() {
  * air puts it here) and you are anywhere but that page: the camera (muted, it is you), the
  * status word (`live`, green), how many are watching, the upload stats on hover, and your own
  * chat with your lines marked. The stream itself is untouched: the peer, the socket and the
- * camera are the same module handles the page uses. The × is stop: your stream ends and the
- * camera goes, as if you had pressed stop on the page.
+ * camera are the same module handles the page uses. The × is stop, after a yes (a box in a
+ * corner is easy to close by habit, and this one ends the stream for everyone): your stream
+ * ends and the camera goes, as if you had pressed stop on the page.
  */
 function LiveCorner() {
   const pip = useAtomValue(publishPipAtom);
@@ -171,7 +166,9 @@ function LiveCorner() {
       chat={{ name, owner, place: pipChat, open: cornerChat === 'live-pip', pageHasChat: hasOwnChat(pathname), onToggle: () => toggleCornerChat('live-pip') }}
       closeLabel="stop streaming"
       onClose={endLive}
-      bar={sending && <StreamStatsButton id="live-pip-stats" role="publish" stats={stats} tipAt="above-left" panel="up" />}
+      // × here ends the stream for everyone watching, from a box in a corner: a yes or no first
+      closeConfirm={{ title: 'stop streaming?', message: 'closing this will stop the stream. everyone watching sees it end.', yes: 'yes, stop' }}
+      badge={sending && <StreamStatsButton id="live-pip-stats" role="publish" stats={stats} className={CORNER_BADGE} />}
       footer={<ViewerCount id="live-pip-viewers" count={viewers} />}
     />
   );
@@ -179,10 +176,10 @@ function LiveCorner() {
 
 /**
  * The corner players, rendered once by the router's shell so they survive every route change,
- * and so does where you put them. Stacked at the bottom right corner until dragged: your own
- * stream at the corner, the stream you watch above it, so going live and watching someone
- * else in picture in picture at once do not sit on each other. A player that was dragged
- * leaves the stack and stays where it was dropped.
+ * and so does where you put them. One shows at a time: your own stream while it is on air
+ * (the watch page's picture in picture button is disabled then), else the stream you watch
+ * (start on the go live page ends it). Each sits at the bottom right corner until dragged,
+ * then stays where it was dropped.
  */
 export function MiniPlayer() {
   const side = useAtomValue(panelSideAtom);

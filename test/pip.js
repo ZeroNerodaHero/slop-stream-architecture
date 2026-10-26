@@ -1,21 +1,29 @@
 // Picture in picture: the button is a home click that keeps the stream, which then plays in a
 // corner of every other page (#pip-player); the player drags anywhere and resizes from a
 // corner, and stays where it was put; it has the sound chip on hover and a chat button that
-// opens the stream's chat under it; coming back takes the same stream over without a second
-// /watch call; opening another stream's page replaces it and the player follows that one; the
-// player's × ends it. Two publishers with fake cameras and one watcher.
+// opens the stream's chat under it; pop out takes it, chat and all, into an always-on-top
+// window of its own (document picture in picture: chrome; SKIP where the browser has none) and
+// the button in there brings it back where it was; coming back takes the same stream over
+// without a second /watch call; opening another stream's page replaces it and the player
+// follows that one; the player's × ends it. Two publishers with fake cameras and one watcher.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node pip.js
 const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const A = 'piptest';
 const B = 'piptest2';
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors'];
-const results = [];
+const results = []; // 'pass' | 'fail' | 'skip'
+// fn returns a string (shown after PASS) or { skip: 'why' } when it could not check anything
 async function step(name, fn) {
   const t0 = Date.now();
   const ms = () => String(Date.now() - t0).padStart(6);
   try {
     const info = await fn();
+    if (info && typeof info === 'object' && info.skip) {
+      results.push('skip');
+      console.log(`SKIP  ${name.padEnd(70)} ${ms()} ms  ${info.skip}`);
+      return;
+    }
     results.push('pass');
     console.log(`PASS  ${name.padEnd(70)} ${ms()} ms  ${info || ''}`);
   } catch (e) {
@@ -41,6 +49,19 @@ async function framesFlow(p, sel) {
 }
 const rect = (p, sel) => p.$eval(sel, (el) => el.getBoundingClientRect().toJSON());
 const near = (a, b) => Math.abs(a - b) <= 1.5;
+// the popped out player's window is the page's own (same origin, opened by it, no scripts of its
+// own), so the page reaches into its document: documentPictureInPicture.window
+const popped = (p, sel) => p.evaluate((s) => !!window.documentPictureInPicture?.window?.document.querySelector(s), sel);
+const poppedClick = (p, sel) => p.evaluate((s) => window.documentPictureInPicture.window.document.querySelector(s).click(), sel);
+const poppedFrames = (p, sel) =>
+  p.evaluate((s) => {
+    const v = window.documentPictureInPicture.window.document.querySelector(s);
+    return { w: v.videoWidth, frames: v.getVideoPlaybackQuality().totalVideoFrames, paused: v.paused, muted: v.muted, volume: v.volume };
+  }, sel);
+const waitPopped = (p, sel, timeout = 5000) =>
+  p.waitForFunction((s) => !!window.documentPictureInPicture?.window?.document.querySelector(s), sel, { timeout });
+const waitUnpopped = (p, sel, timeout = 5000) =>
+  p.waitForFunction((s) => !window.documentPictureInPicture?.window?.document.querySelector(s), sel, { timeout });
 const at = (r) => `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}×${Math.round(r.height)}`;
 // press in the middle of an element and pull it by (dx, dy)
 async function drag(p, sel, dx, dy) {
@@ -187,6 +208,42 @@ async function drag(p, sel, dx, dy) {
     expect(Math.abs((v.width * 9) / 16 - v.height) <= 2, `video ${v.width}×${v.height} is not 16:9`);
     box = b;
     return `${at(b)} · ${await framesFlow(w, '#pip-video')}`;
+  });
+
+  await step('pop out: the player leaves the page for a window of its own, the same picture playing, the chat opens in it; its button there brings it back where it was', async () => {
+    if (!(await w.evaluate(() => 'documentPictureInPicture' in window))) return { skip: 'this browser has no document picture in picture' };
+    const before = await rect(w, '#pip-player');
+    await w.click('#pip-popout');
+    await waitPopped(w, '#pip-video', 10000);
+    expect((await w.$('#pip-player')) === null, 'the player is still in the page while popped out');
+    const size = await w.evaluate(() => ({ w: window.documentPictureInPicture.window.innerWidth, h: window.documentPictureInPicture.window.innerHeight }));
+    // the window's own document is dressed as the page: the box's colour and the page's font came along
+    const dressed = await w.evaluate(() => {
+      const d = window.documentPictureInPicture.window.document;
+      return { bg: getComputedStyle(d.querySelector('#pip-player')).backgroundColor, font: getComputedStyle(d.body).fontFamily, scheme: getComputedStyle(d.documentElement).colorScheme };
+    });
+    expect(dressed.bg !== 'rgba(0, 0, 0, 0)' && /geist/i.test(dressed.font), `the window is not dressed as the page: ${JSON.stringify(dressed)}`);
+    // a new document may be refused sound (its gesture was the page's): the tap is there for that
+    if (await popped(w, '#pip-tap-to-play')) await poppedClick(w, '#pip-tap-to-play');
+    const a = await poppedFrames(w, '#pip-video');
+    await sleep(1500);
+    const b = await poppedFrames(w, '#pip-video');
+    expect(b.w > 0 && b.frames > a.frames, `no frames in the window: ${JSON.stringify(a)} -> ${JSON.stringify(b)}`);
+    expect(Math.abs(b.volume - 0.5) < 0.05, `the window does not play at the corner's level: ${JSON.stringify(b)}`);
+    // the chat button in the window opens the chat in there, under the picture
+    await poppedClick(w, '#pip-chat');
+    await waitPopped(w, '#pip-player #chat');
+    const place = await w.evaluate(() => window.documentPictureInPicture.window.document.querySelector('#pip-player').dataset.chatPlace);
+    expect(place === 'bottom', `the chat is at "${place}"`);
+    await poppedClick(w, '#pip-chat');
+    await waitUnpopped(w, '#pip-player #chat');
+    // back: the window closes and the box is in the page again, where it was left
+    await poppedClick(w, '#pip-popout');
+    await w.waitForSelector('#pip-player', { timeout: 5000 });
+    await w.waitForFunction(() => window.documentPictureInPicture.window === null, null, { timeout: 5000 });
+    const after = await rect(w, '#pip-player');
+    expect(near(after.left, before.left) && near(after.top, before.top) && near(after.width, before.width), `the player came back elsewhere: ${at(before)} -> ${at(after)}`);
+    return `a ${size.w}×${size.h} window for a ${Math.round(before.width)}×${Math.round(before.height)} box · ${b.frames - a.frames} frames in 1.5s · back at ${at(after)}`;
   });
 
   await step('click the player: back on the page, the same stream is taken over (no second /watch call)', async () => {

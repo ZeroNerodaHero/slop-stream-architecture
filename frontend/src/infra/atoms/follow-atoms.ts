@@ -9,6 +9,7 @@ import { atom } from 'jotai';
 
 import { api, type Followed, messageOf, type SearchHit } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
+import { PRESENCE_RANK } from '@/infra/atoms/presence-atoms';
 import { store } from '@/infra/store';
 
 /** `undefined` until asked once this page load; `[]` for nobody. */
@@ -102,7 +103,15 @@ export async function unfollow(name: string): Promise<boolean> {
 
 let searchSeq = 0;
 
-/** `GET /api/search`. The newest query wins: an older answer arriving later is dropped. */
+/** The exact name first, then whoever is here (streaming, online, do not disturb, offline), then as the api ranked them. */
+function order(hits: SearchHit[], query: string): SearchHit[] {
+  return hits
+    .map((hit, i) => ({ hit, i }))
+    .sort((a, b) => Number(b.hit.name === query) - Number(a.hit.name === query) || PRESENCE_RANK[a.hit.presence] - PRESENCE_RANK[b.hit.presence] || a.i - b.i)
+    .map(({ hit }) => hit);
+}
+
+/** `GET /api/search`, the hits in `order`. The newest query wins: an older answer arriving later is dropped. */
 export async function search(q: string): Promise<void> {
   const mine = ++searchSeq;
   const query = q.trim().toLowerCase();
@@ -115,7 +124,7 @@ export async function search(q: string): Promise<void> {
   try {
     const hits = await api.search(query);
     if (mine !== searchSeq) return;
-    store.set(searchResultsAtom, hits);
+    store.set(searchResultsAtom, order(hits, query));
   } catch {
     if (mine === searchSeq) store.set(searchResultsAtom, []);
   } finally {

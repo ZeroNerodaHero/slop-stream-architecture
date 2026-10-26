@@ -35,6 +35,7 @@ import {
   watchViewersAtom
 } from '@/infra/atoms/watch-atoms';
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
+import { publishPipAtom } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
 import { api } from '@/infra/api';
@@ -92,6 +93,10 @@ export function WatchPage() {
   // closed, a column slides out to that side and the video takes the row
   const chatSide = useAtomValue(chatSideAtom);
   const chatOpen = useAtomValue(chatModalOpenAtom);
+  // one corner player at a time: while your own stream is in it (left on air on the go live
+  // page), this stream cannot go there too, and the button says so. the other way round, start
+  // on the go live page ends a stream kept in the corner (publish-atoms' goLive)
+  const cornerTaken = useAtomValue(publishPipAtom);
 
   // Mount only: start watching the name in the url (or take back the stream picture in picture
   // kept alive), and on the way out stop, unless picture in picture keeps it going in the corner.
@@ -226,13 +231,14 @@ export function WatchPage() {
                   tap to play
                 </Button>
               )}
+              {/* top left, once frames play: how the picture is arriving. up on its own while it is in trouble */}
+              {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} playback={{ muted, level: volume }} />}
               {/* while the chat is closed the bar stays up, so the button that brings it back is on the picture */}
               {phase !== 'bad-name' && (
                 <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || !chatOpen))}>
                   {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
-                  {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} tipAt="above-left" panel="up" playback={{ muted, level: volume }} />}
                   <ChatOpenButton className="ml-auto" />
-                  <IconButton id="pip" label="picture in picture" onClick={toCorner}>
+                  <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'picture in picture'} disabled={cornerTaken} onClick={toCorner}>
                     <PipIcon />
                   </IconButton>
                 </div>

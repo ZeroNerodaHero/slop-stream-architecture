@@ -6,9 +6,9 @@ import { Link, useLocation } from 'react-router-dom';
 import { loadMe, logout, meAtom } from '@/infra/atoms/auth-atoms';
 import { nickAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { closeDm } from '@/infra/atoms/dm-atoms';
-import { followingAtom, forgetFollowing, friendsOpenAtom, loadFollowing, streamingFriendsAtom } from '@/infra/atoms/follow-atoms';
+import { forgetFollowing, friendsOpenAtom, loadFollowing, streamingFriendsAtom } from '@/infra/atoms/follow-atoms';
 import { openInspector } from '@/infra/atoms/inspector-atoms';
-import { type Presence, myPresenceAtom, PRESENCE_SQUARE, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
+import { myPresenceAtom, PRESENCE_SQUARE, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { identityChanged, loadMyProfile, myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { inspectorEnabledAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
@@ -35,50 +35,6 @@ function Dot() {
     <span aria-hidden className="mx-1.5 text-textTertiary">
       ·
     </span>
-  );
-}
-
-/** One followed person, as the closed sidebar shows them: the picture and the presence square. */
-function RailFace({ name, avatar, presence }: { name: string; avatar: number | null; presence: Presence }) {
-  return (
-    <span className="relative block border border-transparent" title={`${name} · ${PRESENCE_WORD[presence]}`}>
-      <Face name={name} version={avatar} />
-      <span aria-hidden data-presence={presence} className={cn('absolute -bottom-1 -right-1 h-3.5 w-3.5 border-2 border-background', PRESENCE_SQUARE[presence])} />
-    </span>
-  );
-}
-
-/**
- * Who you follow, while the sidebar is closed: pictures only, friends above the rest, the same
- * order the open list uses. Not a control. Pointing at the panel opens the names.
- */
-function PeopleRail() {
-  const list = useAtomValue(followingAtom);
-  if (!list || list.length === 0) return null;
-  const friends = list.filter((f) => f.mutual);
-  const following = list.filter((f) => !f.mutual);
-  return (
-    <div aria-hidden className="pointer-events-none flex w-full flex-col items-center gap-2 px-2 py-2.5">
-      {friends.length > 0 && (
-        <ul className="flex flex-col gap-2">
-          {friends.map((f) => (
-            <li key={f.name}>
-              <RailFace name={f.name} avatar={f.avatar} presence={f.presence} />
-            </li>
-          ))}
-        </ul>
-      )}
-      {friends.length > 0 && following.length > 0 && <span className="mx-auto h-px w-6 bg-primaryStroke" />}
-      {following.length > 0 && (
-        <ul className="flex flex-col gap-2">
-          {following.map((f) => (
-            <li key={f.name}>
-              <RailFace name={f.name} avatar={f.avatar} presence={f.presence} />
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
   );
 }
 
@@ -131,13 +87,16 @@ function FriendsOpener({ open, onToggle }: { open: boolean; onToggle: () => void
 
 /**
  * A column beside every page (left, or the right from settings). Collapsed it is only as wide as
- * the pictures, and the streams use the rest. Hover, focus, or the `following` button widens it
- * over the streams (the page does not move): names, unfollow, chat for a friend, and your
- * actions. Logged in: your account name, a ✓, and log out under it. Not logged in: a name box
- * (localstorage, used in chat and as the go-live default) that reads as plain text until you
- * point at it, with sign up and log in under it. Nobody has to. The picture, and a login's name,
- * open the user modal (profile, security, settings, appearance). Go live and the settings icon
- * sit at the right of the centered search, over the page. The ids are the ones the tests key on.
+ * the pictures, and the streams use the rest: the search box as its icon, then friends, a line,
+ * then the rest of who you follow (Friends.tsx), you at the bottom. Hover, focus, or the
+ * `following` button widens it over the streams (the page does not move, and neither do the
+ * pictures): the box, and beside each picture the name, how they are, unfollow, chat for a
+ * friend, and your actions. Logged in: your account name, a ✓, and log out under it. Not logged
+ * in: a name box (localstorage, used in chat and as the go-live default) that reads as plain
+ * text until you point at it, with sign up and log in under it. Nobody has to. The picture, and
+ * a login's name, open the user modal (profile, security, settings, appearance). Go live and the
+ * settings icon sit at the top right of the page. The ids are the ones the tests key on;
+ * `data-open` says which state the panel is in.
  */
 export function UserPanel() {
   const me = useAtomValue(meAtom);
@@ -148,6 +107,7 @@ export function UserPanel() {
   const side = useAtomValue(panelSideAtom);
   const streaming = useAtomValue(streamingFriendsAtom);
   const { pathname } = useLocation();
+  const panel = useRef<HTMLElement | null>(null);
   // the nick as it was when the box got focus: leaving it tells the chat only on a real change
   const nickAtFocus = useRef('');
   // the box over the panel (docs/follows.md): hovered or focused it is there; the button pins it
@@ -156,6 +116,8 @@ export function UserPanel() {
   const pinned = useRef(false);
   const [byKey, setByKey] = useState(false);
   const leaving = useRef<number | null>(null);
+  // the pointer is over the panel: losing focus then (a click on a line of words in it) is not leaving
+  const hovered = useRef(false);
 
   // Mount only. Asks /api/me once per page load, then loads my picture; every later mount reuses the answer.
   useEffect(() => {
@@ -176,6 +138,14 @@ export function UserPanel() {
     pinned.current = false;
   }, [pathname]);
 
+  // closed with focus still inside (Escape, a page change): the box and the rows are in the
+  // closed column now, and typing into a box with no room would show nothing. focus lets go
+  useEffect(() => {
+    if (friendsOpen) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== panel.current && panel.current?.contains(active)) active.blur();
+  }, [friendsOpen]);
+
   function stayOpen() {
     if (leaving.current !== null) {
       window.clearTimeout(leaving.current);
@@ -188,6 +158,9 @@ export function UserPanel() {
   }
   function leaveSoon() {
     if (pinned.current) return;
+    // typing in the box, or tabbing along the rows: the pointer leaving does not close it. a click elsewhere takes the focus, and that does
+    const active = document.activeElement;
+    if (active && active !== panel.current && panel.current?.contains(active)) return;
     if (leaving.current !== null) window.clearTimeout(leaving.current);
     leaving.current = window.setTimeout(() => {
       leaving.current = null;
@@ -210,18 +183,28 @@ export function UserPanel() {
 
   if (me === undefined) return null;
   const next = encodeURIComponent(pathname);
+  // on the right the panel grows leftward, so the row is mirrored and your picture stays at the edge, like the rows above it
+  const mirrored = side === 'right';
 
   return (
     <aside
+      ref={panel}
       id="user-panel"
       aria-label="you"
       data-side={side}
-      onMouseEnter={stayOpen}
-      onMouseLeave={leaveSoon}
+      data-open={friendsOpen}
+      onMouseEnter={() => {
+        hovered.current = true;
+        stayOpen();
+      }}
+      onMouseLeave={() => {
+        hovered.current = false;
+        leaveSoon();
+      }}
       onFocusCapture={stayOpen}
       onBlurCapture={(e) => {
-        // focus went somewhere outside the panel and its list
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) leaveSoon();
+        // focus went somewhere outside the panel and its list, or nowhere, and the pointer is not here either
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null) && !hovered.current) leaveSoon();
       }}
       onKeyDown={(e) => {
         if (e.key === 'Escape' && friendsOpen) {
@@ -239,10 +222,12 @@ export function UserPanel() {
           friendsOpen ? cn(EXPANDED, 'shadow-hard') : COLLAPSED
         )}
       >
-        <div className={cn('flex min-h-0 flex-1 flex-col', !friendsOpen && 'overflow-y-auto')}>
-          {friendsOpen ? <Friends onClose={closeFriends} focusSearch={byKey} /> : <PeopleRail />}
+        <div className="flex min-h-0 flex-1 flex-col">
+          <Friends open={friendsOpen} side={side} focusSearch={byKey} onPick={closeFriends} />
         </div>
-        <div className={cn('flex shrink-0 items-center gap-3 border-t border-primaryStroke py-2.5', friendsOpen ? 'px-3' : 'justify-center px-2')}>
+        {/* your picture 19px in from the edge, open or closed: centered in the closed column, in line with the faces above. the
+            row sits on the bottom edge, so the name block, a little taller than the picture, grows upward and the picture stays put */}
+        <div className={cn('flex shrink-0 items-end gap-2 border-t border-primaryStroke py-2.5', mirrored ? 'flex-row-reverse pl-3 pr-[19px]' : 'pl-[19px] pr-3')}>
           <button
             id="you"
             type="button"
@@ -274,7 +259,7 @@ export function UserPanel() {
 
           {me ? (
             <>
-              <span className={cn('min-w-0 flex-1', !friendsOpen && 'hidden')}>
+              <span className={cn('min-w-0 flex-1', mirrored && 'text-right', !friendsOpen && 'hidden')}>
                 {/* a login's name is a second way in. #me stays the bare name, for the tests, even while the panel is closed */}
                 <button
                   type="button"
@@ -283,7 +268,8 @@ export function UserPanel() {
                   onClick={openProfile}
                   className={cn(
                     NAME_LINE,
-                    'flex w-full items-center gap-1.5 text-left hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none'
+                    'flex w-full items-center gap-1.5 text-left hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none',
+                    mirrored && 'flex-row-reverse text-right'
                   )}
                 >
                   <span id="me" className="truncate font-semibold">
@@ -311,7 +297,7 @@ export function UserPanel() {
             </>
           ) : (
             <>
-              <span className={cn('min-w-0 flex-1', !friendsOpen && 'hidden')}>
+              <span className={cn('min-w-0 flex-1', mirrored && 'text-right', !friendsOpen && 'hidden')}>
                 <label htmlFor="username" className="sr-only">
                   your name
                 </label>
@@ -340,10 +326,14 @@ export function UserPanel() {
                     className={cn(
                       NAME_LINE,
                       // the border shows on hover and goes blue on focus (said here too: the hover rule outranks the one in globals.css)
-                      'mx-0 w-full truncate bg-transparent pr-6 font-semibold text-textPrimary placeholder:font-normal placeholder:text-textTertiary hover:border-primaryStroke focus:border-primaryBlue focus:bg-background'
+                      'mx-0 w-full truncate bg-transparent font-semibold text-textPrimary placeholder:font-normal placeholder:text-textTertiary hover:border-primaryStroke focus:border-primaryBlue focus:bg-background',
+                      mirrored ? 'pl-6 text-right' : 'pr-6'
                     )}
                   />
-                  <span aria-hidden className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-sm text-textTertiary">
+                  <span
+                    aria-hidden
+                    className={cn('pointer-events-none absolute top-1/2 -translate-y-1/2 text-sm text-textTertiary', mirrored ? 'left-1.5' : 'right-1.5')}
+                  >
                     ✎
                   </span>
                 </span>

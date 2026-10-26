@@ -194,8 +194,8 @@ export function customFrom(p: Palette): CustomTheme {
  * THEME_VARS_KEY for the inline script in index.html, so the next load paints right first time.
  */
 function applyTheme(choice: ThemeChoice) {
+  applyThemeTo(document.documentElement);
   if (choice.kind === 'preset' && choice.name === 'dark') {
-    clearPalette();
     try {
       localStorage.removeItem(THEME_VARS_KEY);
     } catch {
@@ -204,12 +204,21 @@ function applyTheme(choice: ThemeChoice) {
     return;
   }
   const palette = paletteOf(choice);
-  applyPalette(palette);
   try {
     localStorage.setItem(THEME_VARS_KEY, JSON.stringify({ vars: toCssVars(palette), scheme: schemeOf(palette) }));
   } catch {
     // same
   }
+}
+
+/**
+ * The choice onto a document's <html>: this page's, and the popped out player's window
+ * (infra/popout.ts), which has a document of its own and is dressed as this one.
+ */
+export function applyThemeTo(root: HTMLElement) {
+  const choice = store.get(themeAtom);
+  if (choice.kind === 'preset' && choice.name === 'dark') clearPalette(root);
+  else applyPalette(paletteOf(choice), root);
 }
 
 // one subscriber for the life of the page: every change of the choice reaches the document,

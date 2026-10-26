@@ -1,8 +1,7 @@
-import { RiSettings3Line } from '@remixicon/react';
 import { useEffect, useRef, useState } from 'react';
 
 import type { AudioLine, QualityWord, StreamStats, VideoLine } from '@/infra/stream-stats';
-import { CHIP_BUTTON, ControlTip, type TipAt } from '@/shared-components/VideoControls';
+import { CHIP_BUTTON, ControlTip, revealClassName } from '@/shared-components/VideoControls';
 import { cn } from '@/utils/cn';
 
 interface Playback {
@@ -15,21 +14,56 @@ interface StreamStatsButtonProps {
   id: string;
   role: 'watch' | 'publish';
   stats: StreamStats | null;
-  /** The hover line hangs this way, so it stays over the picture. */
-  tipAt: TipAt;
-  /** Up from a bottom bar, down from the streamer's top corner. */
-  panel: 'up' | 'down';
+  /** Where in the picture's top left corner it sits: the offset the player's other chips use. */
+  className?: string;
   /** Watcher only: how loud this browser is playing it. */
   playback?: Playback;
 }
 
-const PANEL_AT = {
-  up: 'bottom-full left-0 mb-2',
-  down: 'right-0 top-full mt-2'
-} as const;
-
 function unhealthy(word: QualityWord): boolean {
   return word === 'breaking' || word === 'upload limited' || word === 'cpu limited';
+}
+
+/** The trouble is the pipe: the picture arriving in holes, or the upload not getting through. */
+function broken(word: QualityWord): boolean {
+  return word === 'breaking' || word === 'upload limited';
+}
+
+/** How many of the four bars are lit: all on a clear picture, two on a rough one, none while it breaks or before the first sample. */
+function barsOf(stats: StreamStats | null): number {
+  if (!stats) return 0;
+  if (stats.word === 'rough') return 2;
+  return unhealthy(stats.word) ? 0 : 4;
+}
+
+/** The bars' heights, left to right, in a 24px box standing on y=21. */
+const BARS = [6, 10, 14, 18];
+
+/**
+ * Reception bars, the way a phone shows its signal: four bars rising to the right, the lit
+ * ones solid and the rest faint. `broken` strikes them through. Flat rectangles: the theme
+ * has no arcs.
+ */
+function SignalIcon({ bars, broken }: { bars: number; broken: boolean }) {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
+      {BARS.map((h, i) => (
+        <rect key={h} x={3 + i * 5} y={21 - h} width={3} height={h} opacity={i < bars ? 1 : 0.3} />
+      ))}
+      {broken && <path d="M2 22L22 2" fill="none" stroke="currentColor" strokeWidth={2} />}
+    </svg>
+  );
+}
+
+/** A chip with its legs: the streamer's own machine is what holds the picture back, not any pipe. */
+function CpuIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinejoin="miter">
+      <path d="M6 6h12v12H6z" />
+      <path d="M10 10h4v4h-4z" fill="currentColor" stroke="none" />
+      <path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" />
+    </svg>
+  );
 }
 
 function wordColor(word: QualityWord): string {
@@ -141,11 +175,15 @@ function Sound({ role, audio }: { role: 'watch' | 'publish'; audio: AudioLine | 
 }
 
 /**
- * The stats button on a video. Hover and keyboard focus show the quality line; a click opens
- * the numbers and a click again, Escape, or a press outside closes them. Sits with the other
- * controls: a dark chip, the remix settings glyph, red while the picture is actually in trouble.
+ * The stream's health, in the picture's top left corner: a dark chip with signal bars in it.
+ * While the picture is actually in trouble it is up on its own, red, the bars struck through
+ * (a chip glyph instead when the streamer's cpu is what limits it); otherwise it comes and goes
+ * with the other controls, on hover and keyboard focus, so the numbers stay a click away.
+ * Hover and keyboard focus show the quality line under it; a click opens the numbers and a
+ * click again, Escape, or a press outside closes them. It is not a setting: a watcher gets the
+ * one picture the box has (docs/bitrates.md), so there is nothing here to choose.
  */
-export function StreamStatsButton({ id, role, stats, tipAt, panel, playback }: StreamStatsButtonProps) {
+export function StreamStatsButton({ id, role, stats, className = 'left-3 top-3', playback }: StreamStatsButtonProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const bad = stats ? unhealthy(stats.word) : false;
@@ -158,16 +196,19 @@ export function StreamStatsButton({ id, role, stats, tipAt, panel, playback }: S
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false);
     };
-    addEventListener('pointerdown', onPointer);
-    addEventListener('keydown', onKey);
+    // the window this button is in: the page's, or the popped out player's (CornerPlayer), whose presses never reach the page
+    const win = root.current?.ownerDocument.defaultView ?? window;
+    win.addEventListener('pointerdown', onPointer);
+    win.addEventListener('keydown', onKey);
     return () => {
-      removeEventListener('pointerdown', onPointer);
-      removeEventListener('keydown', onKey);
+      win.removeEventListener('pointerdown', onPointer);
+      win.removeEventListener('keydown', onKey);
     };
   }, [open]);
 
   return (
-    <div ref={root} data-video-stats="" className="relative">
+    // `data-video-stats`: the corner player does not take a press here as a drag
+    <div ref={root} data-video-stats="" className={cn('absolute z-20', revealClassName(bad), className)}>
       <button
         id={id}
         type="button"
@@ -177,9 +218,9 @@ export function StreamStatsButton({ id, role, stats, tipAt, panel, playback }: S
         onClick={() => setOpen((v) => !v)}
         className={cn(CHIP_BUTTON, 'group/control relative w-8 justify-center', open && 'border-primaryBlue text-primaryBlue', bad && !open && 'text-decrease')}
       >
-        <RiSettings3Line aria-hidden size={20} />
+        {stats?.word === 'cpu limited' ? <CpuIcon /> : <SignalIcon bars={barsOf(stats)} broken={stats ? broken(stats.word) : false} />}
         {!open && (
-          <ControlTip at={tipAt}>
+          <ControlTip at="below-left">
             {stats ? (
               <>
                 <span className={wordColor(stats.word)}>{stats.word}</span>
@@ -196,7 +237,7 @@ export function StreamStatsButton({ id, role, stats, tipAt, panel, playback }: S
           id={`${id}-panel`}
           role="region"
           aria-label="stream stats"
-          className={cn('absolute z-20 w-60 border border-white/10 bg-black/90 p-3 text-xs text-white backdrop-blur-sm', PANEL_AT[panel])}
+          className="absolute left-0 top-full z-20 mt-2 w-60 border border-white/10 bg-black/90 p-3 text-xs text-white backdrop-blur-sm"
         >
           {stats ? (
             <>

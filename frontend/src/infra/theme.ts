@@ -275,16 +275,16 @@ export const toCssVars = (p: Palette): Record<string, string> => Object.fromEntr
 
 export const schemeOf = (p: Palette): 'dark' | 'light' => (isDark(p.background) ? 'dark' : 'light');
 
-/** The palette onto the document: inline on <html>, which outranks the stylesheet's :root. */
-export function applyPalette(p: Palette): void {
-  const style = document.documentElement.style;
+/** The palette onto a document: inline on its <html> (this page's unless another is given: the popped out player's), which outranks the stylesheet's :root. */
+export function applyPalette(p: Palette, root: HTMLElement = document.documentElement): void {
+  const style = root.style;
   for (const [name, value] of Object.entries(toCssVars(p))) style.setProperty(name, value);
   style.setProperty('color-scheme', schemeOf(p));
 }
 
 /** Back to the stylesheet: the dark theme, as written. */
-export function clearPalette(): void {
-  const style = document.documentElement.style;
+export function clearPalette(root: HTMLElement = document.documentElement): void {
+  const style = root.style;
   for (const t of TOKENS) style.removeProperty(CSS_VAR[t]);
   style.removeProperty('color-scheme');
 }

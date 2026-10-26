@@ -34,6 +34,7 @@ export function FollowButton({ id, name, small, className, onChange }: FollowBut
       openUserModal('security');
       return;
     }
+    if (busy) return;
     setBusy(true);
     const ok = following ? await unfollow(name) : await follow(name);
     setBusy(false);
@@ -42,11 +43,13 @@ export function FollowButton({ id, name, small, className, onChange }: FollowBut
 
   if (mine) return null;
   const word = following ? (hover ? 'unfollow' : 'following') : 'follow';
+  // dim while the request is out, but not `disabled`: chrome drops focus from a disabled button and
+  // stops counting the pointer as over it, which reads as leaving the sidebar this button sits in
   return (
     <Button
       id={id}
       variant={following ? 'secondary' : 'primary'}
-      disabled={busy}
+      aria-busy={busy}
       aria-pressed={following}
       data-following={following}
       title={me ? (following ? `stop following ${name}` : `follow ${name}`) : 'sign up or log in to follow people'}
@@ -54,7 +57,12 @@ export function FollowButton({ id, name, small, className, onChange }: FollowBut
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onBlur={() => setHover(false)}
-      className={cn(small ? 'px-2.5 py-1 text-sm shadow-none' : 'px-3 py-1.5 text-sm', following && hover && 'text-decrease hover:border-decrease', className)}
+      className={cn(
+        small ? 'px-2.5 py-1 text-sm shadow-none' : 'px-3 py-1.5 text-sm',
+        following && hover && 'text-decrease hover:border-decrease',
+        busy && 'opacity-40',
+        className
+      )}
     >
       {word}
     </Button>

@@ -115,11 +115,8 @@ export function LivePage() {
         <div className={cn('min-w-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-1')}>
           <div className="group relative">
             <VideoFrame id="preview" streamAtom={cameraAtom} videoRef={previewRef} muted />
-            {(phase === 'live' || phase === 'reconnecting') && (
-              <div className="absolute right-3 top-3 z-20">
-                <StreamStatsButton id="live-stats" role="publish" stats={stats} tipAt="below-right" panel="down" />
-              </div>
-            )}
+            {/* top left, while live: how the upload is going. up on its own while something limits it */}
+            {(phase === 'live' || phase === 'reconnecting') && <StreamStatsButton id="live-stats" role="publish" stats={stats} />}
             {/* while the chat is closed the bar stays up, so it can be opened again off the preview. once
                 live, picture in picture beside it: the same button as the watch page's, for your own stream
                 (here any way off the page keeps the stream; the button is the one that says so) */}

@@ -21,6 +21,7 @@ const TIP =
 const TIP_AT = {
   'above-left': 'bottom-full left-0 mb-2',
   'above-right': 'bottom-full right-0 mb-2',
+  'below-left': 'left-0 top-full mt-2',
   'below-right': 'right-0 top-full mt-2'
 } as const;
 
@@ -89,6 +90,17 @@ export function PipIcon() {
     <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2}>
       <path d="M3 5h18v14H3z" />
       <path d="M11 11h8v6h-8z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** Out of the page: a box with its top right corner open, and an arrow leaving through it. Angular, like the rest. */
+export function PopOutIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinejoin="miter">
+      <path d="M14 13v6H3V8h6" />
+      <path d="M11 13L21 3" />
+      <path d="M13 3h8v8" />
     </svg>
   );
 }

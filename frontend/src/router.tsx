@@ -19,10 +19,10 @@ import { UserPanel } from '@/shared-components/UserPanel';
 import { cn } from '@/utils/cn';
 
 /**
- * Every page, plus the things that live outside pages: the sidebar (who you follow, and you at
- * the bottom of it; collapsed beside the page, open it covers the streams), the picture in picture players (bottom right
- * of the page: a stream you watch, your own while live), the centered search with go live and
- * the settings icon over the top of the page, and the user modal that icon opens.
+ * Every page, plus the things that live outside pages: the sidebar (the search, who you follow,
+ * and you at the bottom of it; collapsed beside the page, open it covers the streams), the picture in picture players (bottom right
+ * of the page: a stream you watch, your own while live), go live and the settings icon over the
+ * top right of the page, and the user modal that icon opens.
  */
 function Shell() {
   const side = useAtomValue(panelSideAtom);

@@ -104,7 +104,9 @@ export const needsTapAtom = atom(false);
  * the watch page keeps the stream alive and the MiniPlayer shows it in a corner of every other
  * page. Off, leaving ends it. Stays on when another stream replaces this one; off again on
  * close, on a page load, when the stream is ended by hand, and when you go live (publish-atoms'
- * `goLive` ends the stream in the corner: yours takes its place).
+ * `goLive` ends the stream in the corner: yours takes its place). Never on while your own
+ * stream has the corner (`publishPipAtom`): one corner player at a time, so the watch page
+ * disables its button then.
  */
 export const pipAtom = atom(false);
 

@@ -4,11 +4,12 @@
 // keep getting frames, with no stop call and the name still listed; you can open another
 // stream's page and watch it with your own still going; the corner's chat is your own room with
 // your lines marked; coming back takes the stream over (one go-live in total); the page's
-// button is the same home click; it stacks above/below a watched stream's corner player without
-// overlapping; × ends it; leaving with nothing on air (stopped on the page) puts nothing in the
-// corner; a tab closed with the stream in the corner ends it too (the tab-close listener
-// outlives the page); and start with someone else's stream in the corner ends that one (their
-// player goes, their count drops). Two publishers with fake cameras and one watcher.
+// button is the same home click; one corner at a time: while yours is there, picture in picture
+// on another stream's page is disabled and says so, and works again once yours is closed; × ends
+// it; leaving with nothing on air (stopped on the page) puts nothing in the corner; a tab closed
+// with the stream in the corner ends it too (the tab-close listener outlives the page); and
+// start with someone else's stream in the corner ends that one (their player goes, their count
+// drops). Two publishers with fake cameras and one watcher.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node live-pip.js
 const { chromium } = require('playwright');
 const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
@@ -48,7 +49,6 @@ async function framesFlow(p, sel) {
 const rect = (p, sel) => p.$eval(sel, (el) => el.getBoundingClientRect().toJSON());
 const near = (a, b) => Math.abs(a - b) <= 1.5;
 const at = (r) => `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}×${Math.round(r.height)}`;
-const overlap = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
 // press in the middle of an element and pull it by (dx, dy)
 async function drag(p, sel, dx, dy) {
   const r = await rect(p, sel);
@@ -151,7 +151,7 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     return `${flow} · "${await text(s, '#live-pip-viewers')}"`;
   });
 
-  await step(`watching different stuff while live: ${OTHER}'s page plays, the corner stays, its chat button yields to the page's chat`, async () => {
+  await step(`watching different stuff while live: ${OTHER}'s page plays, the corner stays, its chat button yields to the page's chat; the page's picture in picture is disabled: one corner at a time`, async () => {
     await s.click(`#list a[aria-label="watch ${OTHER}"]`);
     await s.waitForURL(`**/watch/${OTHER}`, { timeout: 10000 });
     await waitStatus(s, /^watching$/);
@@ -159,9 +159,13 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     expect((await s.$('#live-pip-player')) !== null, "the corner player is gone on another stream's page");
     expect(/^live$/i.test(await text(s, '#live-pip-status')), `the corner says "${await text(s, '#live-pip-status')}"`);
     expect(await s.$eval('#live-pip-chat', (b) => b.disabled), 'the corner chat button is not disabled on a page with its own chat');
+    // your stream has the corner: theirs cannot go there too, and the button says why
+    const label = await s.getAttribute('#pip', 'aria-label');
+    expect(await s.$eval('#pip', (b) => b.disabled), 'the picture in picture button is enabled with your own stream in the corner');
+    expect(label === 'your stream is in the corner', `the button is named "${label}"`);
     const corner = await framesFlow(s, '#live-pip-video');
     const theirs = await framesFlow(w, '#video');
-    return `${page} · ${corner} · watcher still gets ${theirs}`;
+    return `${page} · ${corner} · watcher still gets ${theirs} · "${label}"`;
   });
 
   await step("home: the corner's chat opens your own room, no nick needed, and your line reaches a watcher marked as the streamer's", async () => {
@@ -198,7 +202,7 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     return `${preview} · watcher ${theirs}`;
   });
 
-  await step(`the page's button is the same home click; then ${OTHER} in picture in picture too, over your own; stacked bottom right, not overlapping, both playing`, async () => {
+  await step(`the page's button is the same home click: your stream in the corner, alone (${OTHER}'s page cannot add theirs)`, async () => {
     await s.click('#live-pip');
     await s.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
     await s.waitForSelector('#live-pip-player', { timeout: 10000 });
@@ -206,32 +210,16 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await s.click(`#list a[aria-label="watch ${OTHER}"]`);
     await s.waitForURL(`**/watch/${OTHER}`, { timeout: 10000 });
     await waitStatus(s, /^watching$/);
-    await s.click('#pip');
-    await s.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
-    await s.waitForSelector('#pip-player', { timeout: 10000 });
-    await s.waitForSelector('#live-pip-player', { timeout: 10000 });
-    await waitText(s, '#pip-status', /^(\d+ )?watching$/, 10000);
+    expect(await s.$eval('#pip', (b) => b.disabled), 'the picture in picture button is enabled with your own stream in the corner');
+    await s.click('header a[href="/"]');
+    await s.waitForSelector('#list article', { timeout: 10000 });
+    await sleep(300);
+    expect((await s.$('#pip-player')) === null, 'a watched player showed beside yours');
     const mine = await rect(s, '#live-pip-player');
-    const theirs = await rect(s, '#pip-player');
     const view = await s.evaluate(() => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight }));
-    expect(!overlap(mine, theirs), `the players overlap: mine ${at(mine)}, theirs ${at(theirs)}`);
     expect(near(mine.right, view.w - 24) && near(mine.bottom, view.h - 24), `your own is not at the corner: ${at(mine)}`);
-    expect(near(theirs.right, view.w - 24) && theirs.bottom < mine.top, `the watched one is not above yours: ${at(theirs)} over ${at(mine)}`);
     box = mine;
-    return `mine ${at(mine)} · theirs ${at(theirs)} · ${await framesFlow(s, '#live-pip-video')} · ${await framesFlow(s, '#pip-video')}`;
-  });
-
-  await step('one corner chat at a time: opening the watched stream\'s chat closes your own', async () => {
-    await s.click('#live-pip-chat');
-    await s.waitForSelector('#live-pip-player #chat', { timeout: 5000 });
-    await s.click('#pip-chat');
-    await s.waitForSelector('#pip-player #chat', { timeout: 5000 });
-    await s.waitForSelector('#live-pip-player #chat', { state: 'detached', timeout: 5000 });
-    expect((await s.getAttribute('#live-pip-chat', 'aria-pressed')) === null, "your own chat button is still pressed");
-    expect((await s.getAttribute('#pip-chat', 'aria-pressed')) === 'true', "the watched stream's chat button is not pressed");
-    await s.click('#pip-chat');
-    await s.waitForSelector('#pip-player #chat', { state: 'detached', timeout: 5000 });
-    return 'switched, then closed';
+    return `mine ${at(mine)} · ${await framesFlow(s, '#live-pip-video')}`;
   });
 
   await step('drag your own player away: it follows, leaves the stack, and the drop is not a click back to the page', async () => {
@@ -240,22 +228,50 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     const b = await rect(s, '#live-pip-player');
     expect(near(b.left, box.left - 300) && near(b.top, box.top - 200), `${at(box)} -> ${at(b)}`);
     expect(new URL(s.url()).pathname === '/', `went to ${new URL(s.url()).pathname}`);
-    const theirs = await rect(s, '#pip-player');
-    const view = await s.evaluate(() => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight }));
-    expect(near(theirs.bottom, view.h - 24), `the watched player did not take the corner: ${at(theirs)}`);
-    return `${at(box)} -> ${at(b)}, the watched one at the corner`;
+    return `${at(box)} -> ${at(b)}`;
   });
 
-  await step(`× on your player: it goes, the watcher sees ended, one stop call, ${ME} unlisted; the watched player is untouched`, async () => {
+  await step('× on your player asks first: "no" (and escape) keep streaming, nothing stopped, the player stays', async () => {
     await s.click('#live-pip-close');
+    await s.waitForSelector('#live-pip-confirm[open]', { timeout: 5000 });
+    const words = await text(s, '#live-pip-confirm-message');
+    expect(/stop the stream/i.test(words), `the question says "${words}"`);
+    expect(await s.evaluate(() => document.activeElement?.id === 'live-pip-confirm-no'), `focus is on #${await s.evaluate(() => document.activeElement?.id)}, not on no`);
+    await s.click('#live-pip-confirm-no');
+    await s.waitForSelector('#live-pip-confirm', { state: 'detached', timeout: 5000 });
+    expect((await s.$('#live-pip-player')) !== null, 'the player went on a no');
+    // escape is a no too
+    await s.click('#live-pip-close');
+    await s.waitForSelector('#live-pip-confirm[open]', { timeout: 5000 });
+    await s.keyboard.press('Escape');
+    await s.waitForSelector('#live-pip-confirm', { state: 'detached', timeout: 5000 });
+    await sleep(300);
+    expect((await s.$('#live-pip-player')) !== null, 'the player went on escape');
+    expect(calls.stop === 0, `${calls.stop} stop calls: a no stopped the stream`);
+    expect(/^live$/i.test(await text(s, '#live-pip-status')), `the corner says "${await text(s, '#live-pip-status')}"`);
+    return `"${words}" · still live, ${await framesFlow(w, '#video')}`;
+  });
+
+  await step(`× then "yes, stop": it goes, the watcher sees ended, one stop call, ${ME} unlisted; and the corner is free: ${OTHER}'s page offers picture in picture again, and it works`, async () => {
+    await s.click('#live-pip-close');
+    await s.waitForSelector('#live-pip-confirm[open]', { timeout: 5000 });
+    await s.click('#live-pip-confirm-yes');
     await s.waitForSelector('#live-pip-player', { state: 'detached', timeout: 5000 });
     await waitStatus(w, /ended/, 15000);
     expect(calls.stop === 1, `${calls.stop} stop calls in total`);
     await waitUnlisted(s, ME);
-    expect((await s.$('#pip-player')) !== null, "the watched stream's player went with yours");
+    await s.click(`#list a[aria-label="watch ${OTHER}"]`);
+    await s.waitForURL(`**/watch/${OTHER}`, { timeout: 10000 });
+    await waitStatus(s, /^watching$/);
+    const label = await s.getAttribute('#pip', 'aria-label');
+    expect(!(await s.$eval('#pip', (b) => b.disabled)) && label === 'picture in picture', `the button is still off with the corner free (named "${label}")`);
+    await s.click('#pip');
+    await s.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
+    await s.waitForSelector('#pip-player', { timeout: 10000 });
+    await waitText(s, '#pip-status', /^(\d+ )?watching$/, 10000);
     await s.click('#pip-close');
     await s.waitForSelector('#pip-player', { state: 'detached', timeout: 5000 });
-    return 'ended, unlisted';
+    return `ended, unlisted; then ${OTHER} in the corner, and closed`;
   });
 
   await step('stop on the page, then home: nothing on air, so nothing in the corner, and leaving adds no second stop call', async () => {

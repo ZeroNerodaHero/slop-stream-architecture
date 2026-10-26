@@ -116,7 +116,7 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     fanPage = await fresh();
     await login(fanPage, FAN);
     await fanPage.hover('#user-panel');
-    await fanPage.waitForSelector('#friends', { timeout: 10000 });
+    await fanPage.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
     await fanPage.waitForSelector(`#friend-${STAR}`, { timeout: 10000 });
     await fanPage.waitForSelector(`#friend-${FREE}`, { timeout: 10000 });
     // star goes live, for real, in a second browser
@@ -126,28 +126,27 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     await starPage.waitForFunction(() => !document.querySelector('#start')?.disabled, null, { timeout: 20000 });
     await starPage.click('#start');
     await starPage.waitForFunction(() => /^\s*live\b/i.test(document.querySelector('#status')?.textContent || ''), null, { timeout: 20000 });
-    // the box asks again every time it opens: off, then on, and star is streaming at the top
+    // the panel asks again every time it opens: closed, then open, and star is streaming at the top
     await fanPage.mouse.move(600, 100);
-    await fanPage.waitForSelector('#friends', { state: 'detached', timeout: 5000 });
+    await fanPage.waitForSelector('#user-panel[data-open="false"]', { timeout: 5000 });
     let word = '';
     for (let i = 0; i < 10 && word !== 'streaming'; i++) {
       await fanPage.hover('#user-panel');
+      await fanPage.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
       await fanPage.waitForSelector(`#friend-${STAR}`, { timeout: 10000 });
       word = await fanPage.$eval(`#friend-${STAR}`, (el) => el.closest('li')?.dataset.presence || '');
       if (word !== 'streaming') {
         await fanPage.mouse.move(600, 100);
-        await fanPage.waitForSelector('#friends', { state: 'detached', timeout: 5000 });
+        await fanPage.waitForSelector('#user-panel[data-open="false"]', { timeout: 5000 });
         await new Promise((r) => setTimeout(r, 1000));
       }
     }
     expect(word === 'streaming', `star reads ${word}`);
     const first = await fanPage.$eval('#friends-list li', (el) => el.querySelector('a')?.id || '');
     expect(first === `friend-${STAR}`, `first in the list is ${first}`);
-    const count = await fanPage.textContent('#friends-count');
-    expect(/1 streaming/.test(count || ''), `the count reads: ${count}`);
     const corner = await fanPage.textContent('#friends-streaming');
     expect(corner === '1', `the corner says ${corner}`);
-    return `${STAR} streaming, first; "${(count || '').trim()}"`;
+    return `${STAR} streaming, first; the corner says 1`;
   });
 
   await step('the search box: type a few letters, a result with a follow button, following it joins the list', async () => {
@@ -186,7 +185,7 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     return 'following → follow → following, 1 → 0 → 1';
   });
 
-  await step('home: the people under the streams (star is live, so not there; pal is, with a word), online first; the top search finds pal', async () => {
+  await step('home: the people under the streams (star is live, so not there; pal is, with a word), online first; the sidebar search finds pal', async () => {
     const pal = 'pal' + RUN;
     const people = await body(await anon.get('/api/people'));
     expect(Array.isArray(people) && !find(people, STAR) && find(people, pal), `people: star ${!!find(people, STAR)}, pal ${!!find(people, pal)}`);
@@ -199,9 +198,11 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     expect(word && word in rank, `pal's card says ${word}`);
     const button = await fanPage.getAttribute(`#person-follow-${pal}`, 'data-following');
     expect(button === 'true', `pal's card button says following=${button}`);
-    await fanPage.fill('#search', 'PAL' + RUN.slice(0, 3));
-    await fanPage.waitForSelector(`#search-${pal}`, { timeout: 10000 });
-    await fanPage.click(`#search-${pal}`);
+    await fanPage.hover('#user-panel');
+    await fanPage.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+    await fanPage.fill('#friends-search', 'PAL' + RUN.slice(0, 3));
+    await fanPage.waitForSelector(`#result-${pal}`, { timeout: 10000 });
+    await fanPage.click(`#result-${pal}`);
     await fanPage.waitForFunction((n) => location.pathname === `/watch/${n}`, pal, { timeout: 10000 });
     return `${people.length} people, ${pal} ${word}; the search went to /watch/${pal}`;
   });
