@@ -18,17 +18,26 @@ import {
   canEditProfileAtom,
   identityChanged,
   loadMyProfile,
+  MAX_OFFLINE_NOTE_CHARS,
   myAvatarVersionAtom,
   myNameAtom,
+  myOfflineVersionAtom,
   profileAvatarStatusAtom,
   profileBioAtom,
   profileBioStatusAtom,
+  profileOfflineNoteAtom,
+  profileOfflineNoteStatusAtom,
+  profileOfflineStatusAtom,
   profileVerifiedAtom,
   removeMyAvatar,
+  removeMyOffline,
   saveMyAvatar,
-  saveMyBio
+  saveMyBio,
+  saveMyOffline,
+  saveMyOfflineNote
 } from '@/infra/atoms/profile-atoms';
 import { pickTab } from '@/infra/atoms/user-modal-atoms';
+import { api } from '@/infra/api';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
@@ -158,7 +167,12 @@ export function ProfileTab() {
   const presence = useAtomValue(myPresenceAtom);
   const choice = useAtomValue(presenceChoiceAtom);
   const presenceNote = useAtomValue(presenceChoiceNoteAtom);
+  const offline = useAtomValue(myOfflineVersionAtom);
+  const offlineStatus = useAtomValue(profileOfflineStatusAtom);
+  const offlineNote = useAtomValue(profileOfflineNoteAtom);
+  const offlineNoteStatus = useAtomValue(profileOfflineNoteStatusAtom);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const offlineFileRef = useRef<HTMLInputElement | null>(null);
   // the nick as it was when its box got focus: leaving the box tells the chat only on a real change
   const nickAtFocus = useRef('');
 
@@ -344,6 +358,81 @@ export function ProfileTab() {
             {left}
           </span>
           <Status id="profile-bio-status" text={bioStatus || (canEdit ? '' : whyNot)} />
+        </div>
+      </Section>
+
+      {/* what the stream's page shows while I am not live: a picture where the player would be (the
+          way twitch has an offline banner) and a line under the word. the picture is the card of a
+          shared link too while I am off (docs/spec.md, "the watch document") */}
+      <Section
+        title="while you are offline"
+        description="your stream's page has no player then: a picture goes where it would be, and a line of yours under the word. the picture is the preview of your link too."
+      >
+        <div className="flex flex-col gap-3">
+          {offline !== null ? (
+            <img
+              id="profile-offline-preview"
+              src={api.offlineUrl(name, offline)}
+              alt=""
+              className="aspect-video w-full max-w-[480px] border border-primaryStroke bg-black object-cover"
+            />
+          ) : (
+            <div className="flex aspect-video w-full max-w-[480px] items-center justify-center border border-dashed border-secondaryStroke p-4 text-center text-sm text-textTertiary">
+              no picture yet. the page shows your face and the word, which it does anyway.
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              ref={offlineFileRef}
+              id="profile-offline-file"
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (file) void saveMyOffline(file);
+              }}
+            />
+            <Button id="profile-offline-pick" className={BUTTON} disabled={!canEdit} onClick={() => offlineFileRef.current?.click()}>
+              {offline === null ? 'choose picture' : 'change picture'}
+            </Button>
+            {offline !== null && (
+              <Button id="profile-offline-remove" className={BUTTON} disabled={!canEdit} onClick={() => void removeMyOffline()}>
+                remove
+              </Button>
+            )}
+          </div>
+          <Status id="profile-offline-status" text={offlineStatus || (canEdit ? 'a wide jpeg, 1280×720: the middle of your picture, cut to 16:9.' : whyNot)} />
+        </div>
+        <Field
+          id="profile-offline-note"
+          label="the line"
+          hint={`${MAX_OFFLINE_NOTE_CHARS} characters, one line. when you are back, where else to find you. empty takes it off.`}
+        >
+          <input
+            id="profile-offline-note"
+            value={offlineNote}
+            onChange={(e) => {
+              store.set(profileOfflineNoteAtom, e.target.value);
+              if (store.get(profileOfflineNoteStatusAtom)) store.set(profileOfflineNoteStatusAtom, '');
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void saveMyOfflineNote();
+            }}
+            placeholder="back tuesday at 8"
+            maxLength={MAX_OFFLINE_NOTE_CHARS}
+            disabled={!canEdit}
+            autoComplete="off"
+            aria-describedby="profile-offline-note-hint"
+            className={INPUT}
+          />
+        </Field>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button id="profile-save-offline-note" variant="primary" className={BUTTON} disabled={!canEdit} onClick={() => void saveMyOfflineNote()}>
+            save line
+          </Button>
+          <Status id="profile-offline-note-status" text={offlineNoteStatus || (canEdit ? '' : whyNot)} />
         </div>
       </Section>
     </div>

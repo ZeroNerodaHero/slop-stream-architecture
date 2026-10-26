@@ -73,7 +73,10 @@ export async function follow(name: string): Promise<boolean> {
   }
   const list = store.get(followingAtom) ?? [];
   if (!list.some((f) => f.name === name)) {
-    store.set(followingAtom, [...list, { name, verified: false, avatar: null, bio: '', live: false, presence: 'offline', followed_at: new Date().toISOString() }]);
+    store.set(followingAtom, [
+      ...list,
+      { name, verified: false, avatar: null, bio: '', live: false, presence: 'offline', followed_at: new Date().toISOString(), mutual: false }
+    ]);
   }
   markSearch(name, true);
   void loadFollowing();
@@ -89,7 +92,10 @@ export async function unfollow(name: string): Promise<boolean> {
     store.set(followNoteAtom, `not unfollowed: ${messageOf(err)}`);
     return false;
   }
-  store.set(followingAtom, (store.get(followingAtom) ?? []).filter((f) => f.name !== name));
+  store.set(
+    followingAtom,
+    (store.get(followingAtom) ?? []).filter((f) => f.name !== name)
+  );
   markSearch(name, false);
   return true;
 }

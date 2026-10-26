@@ -1,8 +1,10 @@
-import { RiCloseLine } from '@remixicon/react';
+import { RiChat3Line, RiCloseLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
 
+import { type Followed } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
+import { openDm } from '@/infra/atoms/dm-atoms';
 import {
   followNoteAtom,
   followingAtom,
@@ -17,14 +19,60 @@ import {
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { store } from '@/infra/store';
 import { FollowButton } from '@/shared-components/FollowButton';
-import { panelClassName } from '@/shared-components/Panel';
 import { PersonRow } from '@/shared-components/PersonRow';
 import { INPUT } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 const ROW = 'flex min-w-0 items-center gap-2.5 px-2 py-1.5';
 const SEARCH_WAIT_MS = 200;
+const ICON_BUTTON = 'shrink-0 border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
+const SECTION = 'px-2 pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-textTertiary';
 
+function Unfollow({ name }: { name: string }) {
+  return (
+    <button
+      id={`friend-unfollow-${name}`}
+      type="button"
+      aria-label={`stop following ${name}`}
+      title="unfollow"
+      onClick={() => void unfollow(name)}
+      className={cn(ICON_BUTTON, 'hover:text-decrease')}
+    >
+      <RiCloseLine aria-hidden size={16} />
+    </button>
+  );
+}
+
+function Rows({ people, onPick, chat, listId }: { people: Followed[]; onPick: () => void; chat?: boolean; listId: string }) {
+  return (
+    <ul id={listId} className="flex flex-col">
+      {people.map((f) => (
+        <li key={f.name} className={ROW} data-presence={f.presence} data-mutual={f.mutual ? 'true' : 'false'}>
+          <PersonRow id={`friend-${f.name}`} name={f.name} verified={f.verified} avatar={f.avatar} bio={f.bio} presence={f.presence} onPick={onPick} />
+          {chat && (
+            <button
+              id={`friend-chat-${f.name}`}
+              type="button"
+              aria-label={`chat with ${f.name}`}
+              title="chat"
+              onClick={() => openDm({ name: f.name, avatar: f.avatar, verified: f.verified })}
+              className={cn(ICON_BUTTON, 'hover:text-textPrimary')}
+            >
+              <RiChat3Line aria-hidden size={16} />
+            </button>
+          )}
+          <Unfollow name={f.name} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Two groups, the way the explorer splits yours and discover: friends (they follow you back)
+ * and everyone else you follow. A friend gets a chat button as well as unfollow. The one list
+ * the tests read (`#friends-list`) is the second group, streaming first, as the api sent them.
+ */
 function Following({ onPick }: { onPick: () => void }) {
   const me = useAtomValue(meAtom);
   const list = useAtomValue(followingAtom);
@@ -43,9 +91,11 @@ function Following({ onPick }: { onPick: () => void }) {
   }
   if (list === undefined) return <p className="px-2 py-3 text-sm text-textTertiary">loading</p>;
   if (list.length === 0) return <p className="px-2 py-3 text-sm text-textSecondary">nobody yet. find someone above.</p>;
+  const friends = list.filter((f) => f.mutual);
+  const following = list.filter((f) => !f.mutual);
   return (
     <>
-      <p id="friends-count" className="flex items-baseline gap-2 px-2 pb-1 text-xs font-semibold uppercase tracking-wider text-textTertiary">
+      <p id="friends-count" className={cn(SECTION, 'flex items-baseline gap-2 pt-1')}>
         following {list.length}
         {streaming > 0 && (
           <>
@@ -54,23 +104,22 @@ function Following({ onPick }: { onPick: () => void }) {
           </>
         )}
       </p>
-      <ul id="friends-list" className="flex flex-col">
-        {list.map((f) => (
-          <li key={f.name} className={ROW} data-presence={f.presence}>
-            <PersonRow id={`friend-${f.name}`} name={f.name} verified={f.verified} avatar={f.avatar} bio={f.bio} presence={f.presence} onPick={onPick} />
-            <button
-              id={`friend-unfollow-${f.name}`}
-              type="button"
-              aria-label={`stop following ${f.name}`}
-              title="unfollow"
-              onClick={() => void unfollow(f.name)}
-              className="shrink-0 border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke hover:text-decrease focus-visible:border-primaryBlue focus-visible:outline-none"
-            >
-              <RiCloseLine aria-hidden size={16} />
-            </button>
-          </li>
-        ))}
-      </ul>
+      <section aria-label="friends">
+        <h3 id="mutual-count" className={SECTION}>
+          friends {friends.length}
+        </h3>
+        {friends.length === 0 ? (
+          <p className="px-2 pb-2 text-sm text-textSecondary">nobody follows you back yet.</p>
+        ) : (
+          <Rows people={friends} onPick={onPick} chat listId="mutual-list" />
+        )}
+      </section>
+      {following.length > 0 && (
+        <section aria-label="following">
+          {friends.length > 0 && <h3 className={SECTION}>following {following.length}</h3>}
+          <Rows people={following} onPick={onPick} listId="friends-list" />
+        </section>
+      )}
     </>
   );
 }
@@ -94,10 +143,10 @@ function Results({ onPick }: { onPick: () => void }) {
 }
 
 /**
- * The box over the corner panel (docs/follows.md): who you follow, streaming first, each with
- * the word beside their name, and a box to find more. Opens on hover, focus, or the `following`
- * button in the panel; it asks `GET /api/following` every time it opens, so the words are now.
- * `focusSearch`: opened by the button, not the mouse, so the box takes focus.
+ * The body of the sidebar (docs/follows.md): who you follow, friends first among them, and a
+ * box to find more. The sidebar opens this on hover, focus, or its `following` button, and
+ * asks `GET /api/following` every time, so the words are now. `focusSearch`: opened by the
+ * button, not the mouse, so the box takes focus.
  */
 export function Friends({ onClose, focusSearch }: { onClose: () => void; focusSearch: boolean }) {
   const query = useAtomValue(searchQueryAtom);
@@ -117,12 +166,7 @@ export function Friends({ onClose, focusSearch }: { onClose: () => void; focusSe
   }, [query]);
 
   return (
-    <div
-      id="friends"
-      role="region"
-      aria-label="following"
-      className={panelClassName('absolute bottom-full left-0 mb-3 flex w-[min(360px,calc(100vw-3rem))] flex-col text-base')}
-    >
+    <div id="friends" role="region" aria-label="following" className="flex min-h-0 flex-1 flex-col">
       <div className="border-b border-primaryStroke p-2.5">
         <label htmlFor="friends-search" className="sr-only">
           find someone
@@ -140,7 +184,7 @@ export function Friends({ onClose, focusSearch }: { onClose: () => void; focusSe
           className={cn(INPUT, 'py-1.5 text-sm')}
         />
       </div>
-      <div className="max-h-[50vh] overflow-y-auto p-1.5">{query.trim() ? <Results onPick={onClose} /> : <Following onPick={onClose} />}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-1.5">{query.trim() ? <Results onPick={onClose} /> : <Following onPick={onClose} />}</div>
       {note && (
         <p id="friends-note" aria-live="polite" className="border-t border-primaryStroke px-3 py-1.5 text-sm text-decrease">
           {note}

@@ -247,6 +247,7 @@ const body = async (res) => {
     await p.fill('#auth-name', NAME);
     await p.fill('#auth-password', 'a brand new password');
     await p.click('#auth-submit');
+    await p.hover('#user-panel');
     await p.waitForSelector('#logout', { timeout: 10000 });
     await p.click('#logout');
     await p.waitForSelector('#username', { timeout: 10000 });

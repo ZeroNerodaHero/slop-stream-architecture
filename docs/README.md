@@ -18,3 +18,5 @@
 - `hover-preview.md` — a plan, not a build. hold the mouse on a card and it plays the stream; click and the page uses the connection the card made, so the first frame is instant. where a click's time goes today, why hover and not mousedown, the one refactor in `watch-atoms.ts`. once `bitrates.md` exists the card joins the 360 rung and the click steps that same peer up.
 - `viewers.md` — built. `N watching`: video counts connected watcher peers, one per ip, capped per ip. why it is hard to spam, and what cloudflare would and would not add.
 - `bitrates.md` — a plan, not a build. the streamer keeps sending one 1080p vp8. the ingest box makes the 720 and 360 copies, and a watcher gets one of those sizes.
+- `audio.md` — a plan, not a build. go live with a mic and no camera, and while live open up to 4 spots so people on the watch page come on with a mic, or a mic and a camera.
+- `screen.md` — a plan, not a build. the screen share already running, aimed at a tab of some other site: sharp text at the same 1080p30 vp8 and 3 Mbps. the tab's sound stays in `audio.md`. obs stays later.

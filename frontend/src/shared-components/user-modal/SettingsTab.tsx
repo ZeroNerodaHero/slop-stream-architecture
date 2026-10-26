@@ -5,14 +5,17 @@ import type { ReactNode } from 'react';
 import { openInspector } from '@/infra/atoms/inspector-atoms';
 import {
   type ChatSide,
+  type PanelSide,
   type PipChatPlace,
   chatSideAtom,
   hideBotsAtom,
   inspectorEnabledAtom,
+  panelSideAtom,
   pipChatPlaceAtom,
   setChatSide,
   setHideBots,
   setInspectorEnabled,
+  setPanelSide,
   setPipChatPlace
 } from '@/infra/atoms/settings-atoms';
 import { Button } from '@/shared-components/Button';
@@ -25,6 +28,31 @@ const CHAT_SIDE_OPTIONS: readonly { side: ChatSide; label: string; detail: strin
   { side: 'right', label: 'right of the stream', detail: 'a column on the right, the usual way. the chat button slides it shut' },
   { side: 'modal', label: 'in a window', detail: 'the video full width, the chat in a window you can move and close' }
 ];
+
+const PANEL_SIDE_OPTIONS: readonly { side: PanelSide; label: string; detail: string }[] = [
+  { side: 'left', label: 'left of the page', detail: 'a column beside the streams. hover it and the names cover the page' },
+  { side: 'right', label: 'right of the page', detail: 'the same column on the right. hover covers the streams; the picture in picture player stays above' }
+];
+
+/** The page in miniature: the open column covering the streams from one side. */
+function YouPreview({ side }: { side: PanelSide }) {
+  return (
+    <span aria-hidden className="relative flex h-36 min-w-0 flex-1 border border-primaryStroke bg-background">
+      <span className="m-2 min-w-0 flex-1 bg-backgroundTertiary" />
+      <span
+        className={cn(
+          'absolute inset-y-0 z-10 flex w-14 flex-col items-center gap-1 bg-background py-1 shadow-hard',
+          side === 'right' ? 'right-0 border-l border-primaryStroke' : 'left-0 border-r border-primaryStroke'
+        )}
+      >
+        <span className="h-3 w-3 bg-backgroundTertiary" />
+        <span className="relative mt-auto h-4 w-4 bg-primaryBlue">
+          <span className="absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 bg-increase" />
+        </span>
+      </span>
+    </span>
+  );
+}
 
 /** The three places the corner player's chat can open. The card's picture is the player. */
 const PIP_CHAT_OPTIONS: readonly { place: PipChatPlace; label: string; detail: string }[] = [
@@ -117,6 +145,7 @@ const BOT_OPTIONS: readonly { hide: boolean; id: string; label: string; detail: 
 export function SettingsTab() {
   const chatSide = useAtomValue(chatSideAtom);
   const pipChat = useAtomValue(pipChatPlaceAtom);
+  const panelSide = useAtomValue(panelSideAtom);
   const inspectorOn = useAtomValue(inspectorEnabledAtom);
   const hideBots = useAtomValue(hideBotsAtom);
   return (
@@ -139,8 +168,32 @@ export function SettingsTab() {
           ))}
         </div>
         <p className="mt-4 text-sm text-textTertiary">
-          kept in this browser. the page behind follows as you pick. on a narrow screen a column sits under the video. the chat button on the video closes it and opens it again.
+          kept in this browser. the page behind follows as you pick. on a narrow screen a column sits under the video. the chat button on the video closes it and opens
+          it again.
         </p>
+      </fieldset>
+
+      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+        <legend className={SECTION_TITLE}>you</legend>
+        <p className="mt-1 text-textSecondary">
+          which side of the page the column sits on. collapsed it is pictures and the streams stay put. hover widens it over the streams. each card is the page with the
+          column there.
+        </p>
+        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {PANEL_SIDE_OPTIONS.map(({ side, label, detail }) => (
+            <OptionCard
+              key={side}
+              id={`panel-side-${side}`}
+              name="panel-side"
+              checked={side === panelSide}
+              onChange={() => setPanelSide(side)}
+              picture={<YouPreview side={side} />}
+              label={label}
+              detail={detail}
+            />
+          ))}
+        </div>
+        <p className="mt-4 text-sm text-textTertiary">kept in this browser. the corner follows as you pick.</p>
       </fieldset>
 
       <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">

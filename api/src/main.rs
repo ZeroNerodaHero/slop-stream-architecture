@@ -14,8 +14,9 @@
 //! video does not have the name connected.
 //!
 //! Nobody has to log in. A name with an account (auth.rs) is the one thing a
-//! login is for: only its owner can go live, save its bio or chat as it. A login
-//! can also join groups (groups.rs), whose badges go on its chat lines.
+//! login is for: only its owner can go live, save its bio, its pictures (profile.rs:
+//! the face, the home card's, and the one its page shows while it is not live) or
+//! chat as it. A login can also join groups (groups.rs), whose badges go on its chat lines.
 //!
 //! Every streamers row has a uuid that never changes (docs/ids.md). Logins,
 //! memberships, groups and the pictures in the bucket point at it, so a login can
@@ -483,6 +484,7 @@ async fn get_streamer(State(s): State<AppState>, Name(name): Name, me: Me) -> Ap
     let (followers, following) = follows::stats(&s.db, &name, me.0.as_ref().map(|a| a.id)).await?;
     Ok(Json(json!({
         "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified, "presence": presence, "thumbs": thumbs,
+        "offline": p.offline, "offline_note": p.offline_note,
         "followers": followers, "following": following,
     })))
 }
@@ -701,6 +703,7 @@ async fn watch(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult
     let (followers, following) = follows::stats(&s.db, &name, me.0.as_ref().map(|a| a.id)).await?;
     Ok(Json(json!({
         "url": WS_PATH, "name": name, "bio": p.bio, "live": live, "verified": verified, "avatar": p.avatar, "presence": presence,
+        "offline": p.offline, "offline_note": p.offline_note,
         "followers": followers, "following": following,
     })))
 }

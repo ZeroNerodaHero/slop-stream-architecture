@@ -94,11 +94,12 @@ export const publishToneAtom = atom<Tone>((get) => {
   return BAD_PHASES.includes(phase) ? 'bad' : 'neutral';
 });
 /**
- * Picture in picture for the broadcast: the go live page's button turns it on and goes home;
- * from then on leaving the page keeps the stream (and the camera it sends) up, and the corner
- * player shows it on every other page, watching someone else included. Off again on the
- * corner's ×, on a page load, and when the page is left with nothing on air. A stream that
- * fails out there stays in the corner saying so, until × or a visit back to the page.
+ * Picture in picture for the broadcast: on whenever the go live page is left with a stream up
+ * (or on its way up). Leaving never ends a stream: the stream (and the camera it sends) stays
+ * up, and the corner player shows it on every other page, watching someone else included.
+ * The page's button is the same thing as a home click. Off again on the corner's ×, on a page
+ * load, and when the page is left with nothing on air. A stream that fails out there stays in
+ * the corner saying so, until × or a visit back to the page.
  */
 export const publishPipAtom = atom(false);
 
@@ -453,24 +454,30 @@ export function stopOnLeave() {
   stopLive();
 }
 
-/** From here on, leaving the go live page keeps the stream in the corner. The way back off is the corner's ×. */
+/**
+ * The page's button, before its home click: the corner is on by the time home shows. Leaving
+ * any other way (`leaveLivePage`) turns it on just the same; the way back off is the corner's ×.
+ */
 export function startPublishPip() {
   store.set(publishPipAtom, true);
 }
 
 /**
- * Navigated away inside the app. With picture in picture on and a stream up (or on its way
- * up), everything stays as it is and the corner player takes over; otherwise the stream ends
- * and the camera is released.
+ * Navigated away inside the app. With a stream up (or on its way up), everything stays as it
+ * is and the corner player takes over: going home to look around, or to watch someone else,
+ * is not a stop. With nothing on air the camera is released and the page's boxes forgotten.
  */
 export function leaveLivePage() {
-  if (store.get(publishPipAtom) && store.get(isPublishingAtom)) return;
+  if (store.get(isPublishingAtom)) {
+    store.set(publishPipAtom, true);
+    return;
+  }
   endLive();
 }
 
 /**
- * The corner's ×, and leaving the page without picture in picture: the stream ends, the camera
- * goes, the page's boxes are forgotten. What leaving used to do unconditionally.
+ * The corner's ×, and leaving the page with nothing on air: the stream ends, the camera goes,
+ * the page's boxes are forgotten.
  */
 export function endLive() {
   store.set(publishPipAtom, false);
@@ -566,10 +573,11 @@ export async function squareJpeg(file: File): Promise<Blob> {
 }
 
 /**
- * Any picture file to a 16:9 jpeg, in the browser, before it goes anywhere: the middle
- * of it, scaled to 640x360. So the api never has to decode an image.
+ * Any picture file to a 16:9 jpeg, in the browser, before it goes anywhere: the middle of
+ * it, scaled to `width` x `height` (a thumbnail's 640x360 unless said otherwise; the offline
+ * picture asks for 1280x720). So the api never has to decode an image.
  */
-export async function wideJpeg(file: File): Promise<Blob> {
+export async function wideJpeg(file: File, width = THUMB_W, height = THUMB_H, quality = THUMB_QUALITY): Promise<Blob> {
   const bitmap = await createImageBitmap(file);
   try {
     const target = 16 / 9;
@@ -586,13 +594,13 @@ export async function wideJpeg(file: File): Promise<Blob> {
       sy = (bitmap.height - sh) / 2;
     }
     const canvas = document.createElement('canvas');
-    canvas.width = THUMB_W;
-    canvas.height = THUMB_H;
+    canvas.width = width;
+    canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('no canvas');
-    ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, THUMB_W, THUMB_H);
+    ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, width, height);
     return await new Promise((resolve, reject) => {
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('could not make a jpeg'))), 'image/jpeg', THUMB_QUALITY);
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('could not make a jpeg'))), 'image/jpeg', quality);
     });
   } finally {
     bitmap.close();

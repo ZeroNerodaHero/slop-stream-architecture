@@ -1,24 +1,27 @@
-import { RiLoginBoxLine, RiLogoutBoxRLine, RiSettings3Line, RiTerminalBoxLine, RiUserAddLine, RiUserFollowLine } from '@remixicon/react';
+import { RiLoginBoxLine, RiLogoutBoxRLine, RiTerminalBoxLine, RiUserAddLine, RiUserFollowLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 import { loadMe, logout, meAtom } from '@/infra/atoms/auth-atoms';
 import { nickAtom, setNick } from '@/infra/atoms/chat-atoms';
-import { forgetFollowing, friendsOpenAtom, loadFollowing, streamingFriendsAtom } from '@/infra/atoms/follow-atoms';
+import { closeDm } from '@/infra/atoms/dm-atoms';
+import { followingAtom, forgetFollowing, friendsOpenAtom, loadFollowing, streamingFriendsAtom } from '@/infra/atoms/follow-atoms';
 import { openInspector } from '@/infra/atoms/inspector-atoms';
-import { myPresenceAtom, PRESENCE_SQUARE, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
+import { type Presence, myPresenceAtom, PRESENCE_SQUARE, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { identityChanged, loadMyProfile, myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
-import { inspectorEnabledAtom } from '@/infra/atoms/settings-atoms';
+import { inspectorEnabledAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { store } from '@/infra/store';
-import { buttonClassName } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { Friends } from '@/shared-components/Friends';
-import { panelClassName } from '@/shared-components/Panel';
 import { cn } from '@/utils/cn';
 
-/** How long the mouse may be off the panel before the box over it goes. Room to cross the gap. */
+/** Closed: a column of pictures. Open: wide enough for the names. The page sits in what's left. */
+const COLLAPSED = 'w-20';
+const EXPANDED = 'w-[min(360px,calc(100vw-12rem))]';
+
+/** How long the pointer may be off the panel before the sidebar closes. Room to reach the chat window. */
 const LEAVE_GRACE_MS = 250;
 
 /** The name line in both states: the same box, so logging in or out does not move anything. */
@@ -32,6 +35,50 @@ function Dot() {
     <span aria-hidden className="mx-1.5 text-textTertiary">
       ·
     </span>
+  );
+}
+
+/** One followed person, as the closed sidebar shows them: the picture and the presence square. */
+function RailFace({ name, avatar, presence }: { name: string; avatar: number | null; presence: Presence }) {
+  return (
+    <span className="relative block border border-transparent" title={`${name} · ${PRESENCE_WORD[presence]}`}>
+      <Face name={name} version={avatar} />
+      <span aria-hidden data-presence={presence} className={cn('absolute -bottom-1 -right-1 h-3.5 w-3.5 border-2 border-background', PRESENCE_SQUARE[presence])} />
+    </span>
+  );
+}
+
+/**
+ * Who you follow, while the sidebar is closed: pictures only, friends above the rest, the same
+ * order the open list uses. Not a control. Pointing at the panel opens the names.
+ */
+function PeopleRail() {
+  const list = useAtomValue(followingAtom);
+  if (!list || list.length === 0) return null;
+  const friends = list.filter((f) => f.mutual);
+  const following = list.filter((f) => !f.mutual);
+  return (
+    <div aria-hidden className="pointer-events-none flex w-full flex-col items-center gap-2 px-2 py-2.5">
+      {friends.length > 0 && (
+        <ul className="flex flex-col gap-2">
+          {friends.map((f) => (
+            <li key={f.name}>
+              <RailFace name={f.name} avatar={f.avatar} presence={f.presence} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {friends.length > 0 && following.length > 0 && <span className="mx-auto h-px w-6 bg-primaryStroke" />}
+      {following.length > 0 && (
+        <ul className="flex flex-col gap-2">
+          {following.map((f) => (
+            <li key={f.name}>
+              <RailFace name={f.name} avatar={f.avatar} presence={f.presence} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -59,7 +106,7 @@ function openProfile(e: { currentTarget: HTMLElement }) {
 }
 
 /** The way into the box over the panel without a mouse: a word, and how many of them are streaming. */
-function FriendsOpener({ open, onToggle, iconOnly }: { open: boolean; onToggle: () => void; iconOnly?: boolean }) {
+function FriendsOpener({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const streaming = useAtomValue(streamingFriendsAtom);
   return (
     <button
@@ -67,13 +114,12 @@ function FriendsOpener({ open, onToggle, iconOnly }: { open: boolean; onToggle: 
       type="button"
       aria-expanded={open}
       aria-controls="friends"
-      aria-label={iconOnly ? 'following' : undefined}
       title={streaming > 0 ? `following: ${streaming} streaming` : 'who you follow, and finding more'}
       onClick={onToggle}
-      className={cn(ACTION, iconOnly && 'align-middle hover:no-underline')}
+      className={ACTION}
     >
       <RiUserFollowLine aria-hidden size={ICON} />
-      {!iconOnly && 'following'}
+      following
       {streaming > 0 && (
         <span id="friends-streaming" className="font-semibold text-primaryBlue">
           {streaming}
@@ -84,14 +130,14 @@ function FriendsOpener({ open, onToggle, iconOnly }: { open: boolean; onToggle: 
 }
 
 /**
- * Who you are, pinned to the bottom left corner of every page the way discord does it: a
- * picture, your name in bold, a small line under it saying how you are here, and the actions
- * on the right. Logged in: your account name, a ✓, and log out under it. Not logged in: a
- * name box (localstorage, used in chat and as the go-live default) that reads as plain text
- * until you point at it, with sign up and log in under it. Nobody has to. The picture, and a
- * login's name, open the user modal (profile, security, settings, appearance); the gear that
- * ends the actions line opens it on settings. "go live" is the one thing on the right, on
- * every page but its own. The ids are the ones the tests key on.
+ * A column beside every page (left, or the right from settings). Collapsed it is only as wide as
+ * the pictures, and the streams use the rest. Hover, focus, or the `following` button widens it
+ * over the streams (the page does not move): names, unfollow, chat for a friend, and your
+ * actions. Logged in: your account name, a ✓, and log out under it. Not logged in: a name box
+ * (localstorage, used in chat and as the go-live default) that reads as plain text until you
+ * point at it, with sign up and log in under it. Nobody has to. The picture, and a login's name,
+ * open the user modal (profile, security, settings, appearance). Go live and the settings icon
+ * sit at the right of the centered search, over the page. The ids are the ones the tests key on.
  */
 export function UserPanel() {
   const me = useAtomValue(meAtom);
@@ -99,6 +145,8 @@ export function UserPanel() {
   const avatar = useAtomValue(myAvatarVersionAtom);
   const presence = useAtomValue(myPresenceAtom);
   const inspectorOn = useAtomValue(inspectorEnabledAtom);
+  const side = useAtomValue(panelSideAtom);
+  const streaming = useAtomValue(streamingFriendsAtom);
   const { pathname } = useLocation();
   // the nick as it was when the box got focus: leaving it tells the chat only on a real change
   const nickAtFocus = useRef('');
@@ -115,10 +163,11 @@ export function UserPanel() {
   }, []);
 
   // who I follow: a login's list, once the login is known and whenever it changes (in, out, a rename).
-  // the watch page's follow button and the number on the corner read it
+  // the watch page's follow button and the number on the corner read it. a guest has no chat window.
   useEffect(() => {
     forgetFollowing();
     if (me) void loadFollowing();
+    if (me === null) closeDm();
   }, [me]);
 
   // a page change closes the box: a friend's name was clicked, or the back button
@@ -161,22 +210,17 @@ export function UserPanel() {
 
   if (me === undefined) return null;
   const next = encodeURIComponent(pathname);
-  const onLivePage = pathname.replace(/\/$/, '') === '/live';
-  const goLive = !onLivePage && (
-    <Link id="go-live" to="/live" className={buttonClassName('primary', 'px-3 py-1.5 text-sm')}>
-      go live
-    </Link>
-  );
 
   return (
     <aside
       id="user-panel"
       aria-label="you"
+      data-side={side}
       onMouseEnter={stayOpen}
       onMouseLeave={leaveSoon}
       onFocusCapture={stayOpen}
       onBlurCapture={(e) => {
-        // focus went somewhere outside the panel and its box
+        // focus went somewhere outside the panel and its list
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) leaveSoon();
       }}
       onKeyDown={(e) => {
@@ -185,146 +229,149 @@ export function UserPanel() {
           closeFriends();
         }
       }}
-      className={panelClassName('fixed bottom-6 left-6 z-40 flex w-[min(360px,calc(100vw-3rem))] items-center gap-3 px-3 py-2.5 text-base')}
+      className={cn('sticky top-0 h-screen w-20 shrink-0 self-start', friendsOpen && 'z-40')}
     >
-      {friendsOpen && <Friends onClose={closeFriends} focusSearch={byKey} />}
-      <button
-        id="you"
-        type="button"
-        aria-label={`you: profile and settings. ${PRESENCE_WORD[presence]}`}
-        aria-haspopup="dialog"
-        title={`profile and settings · ${PRESENCE_WORD[presence]}`}
-        onClick={openProfile}
-        className="relative shrink-0 border border-transparent transition-[border-color,box-shadow] duration-150 hover:border-primaryBlue hover:shadow-hard-blue focus-visible:border-primaryBlue focus-visible:shadow-hard-blue focus-visible:outline-none"
+      {/* the column stays this wide in the page. open, the panel grows out of it and covers the streams */}
+      <div
+        className={cn(
+          'absolute top-0 flex h-full flex-col overflow-hidden bg-background text-base transition-[width] duration-150',
+          side === 'right' ? 'right-0 border-l border-primaryStroke' : 'left-0 border-r border-primaryStroke',
+          friendsOpen ? cn(EXPANDED, 'shadow-hard') : COLLAPSED
+        )}
       >
-        <Face name={me ?? nick} version={avatar} />
-        {/* the presence square in the corner of the picture: blue streaming, green online, red do not
+        <div className={cn('flex min-h-0 flex-1 flex-col', !friendsOpen && 'overflow-y-auto')}>
+          {friendsOpen ? <Friends onClose={closeFriends} focusSearch={byKey} /> : <PeopleRail />}
+        </div>
+        <div className={cn('flex shrink-0 items-center gap-3 border-t border-primaryStroke py-2.5', friendsOpen ? 'px-3' : 'justify-center px-2')}>
+          <button
+            id="you"
+            type="button"
+            aria-label={`you: profile and settings. ${PRESENCE_WORD[presence]}${streaming > 0 ? `. ${streaming} streaming` : ''}`}
+            aria-haspopup="dialog"
+            title={`profile and settings · ${PRESENCE_WORD[presence]}`}
+            onClick={openProfile}
+            className="relative shrink-0 border border-transparent transition-[border-color,box-shadow] duration-150 hover:border-primaryBlue hover:shadow-hard-blue focus-visible:border-primaryBlue focus-visible:shadow-hard-blue focus-visible:outline-none"
+          >
+            <Face name={me ?? nick} version={avatar} />
+            {/* the presence square in the corner of the picture: blue streaming, green online, red do not
             disturb, grey offline (docs/status.md). the word is in the button's label; the ✓ keeps meaning login */}
-        <span
-          id="my-presence"
-          aria-hidden
-          data-presence={presence}
-          className={cn('absolute -bottom-1 -right-1 h-3.5 w-3.5 border-2 border-backgroundSecondary', PRESENCE_SQUARE[presence])}
-        />
-      </button>
-
-      {me ? (
-        <>
-          <span className="min-w-0 flex-1">
-            {/* a login's name is a second way in. #me stays the bare name, for the tests */}
-            <button
-              type="button"
-              aria-haspopup="dialog"
-              title="profile and settings"
-              onClick={openProfile}
-              className={cn(
-                NAME_LINE,
-                'flex w-full items-center gap-1.5 text-left hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none'
-              )}
-            >
-              <span id="me" className="truncate font-semibold">
-                {me}
-              </span>
-              <span className="shrink-0 text-increase" title="logged in: this name is yours">
-                ✓
-              </span>
-            </button>
-            <span className="block text-sm leading-tight">
-              <button id="logout" type="button" onClick={() => void logout().then(() => identityChanged('login'))} className={ACTION}>
-                <RiLogoutBoxRLine aria-hidden size={ICON} />
-                log out
-              </button>
-              <Dot />
-              <FriendsOpener open={friendsOpen} onToggle={toggleFriends} />
-              <Dot />
-              <button id="settings" type="button" onClick={() => openUserModal('settings')} className={ACTION}>
-                <RiSettings3Line aria-hidden size={ICON} />
-                settings
-              </button>
-              {inspectorOn && (
-                <>
-                  <Dot />
-                  <InspectorOpener />
-                </>
-              )}
-            </span>
-          </span>
-          {goLive}
-        </>
-      ) : (
-        <>
-          <span className="min-w-0 flex-1">
-            <label htmlFor="username" className="sr-only">
-              your name
-            </label>
-            {/* a guest's name is the box: clicking it edits, it does not open anything */}
-            <span className="relative -mx-1 block">
-              <input
-                id="username"
-                value={nick}
-                onChange={(e) => setNick(e.target.value)}
-                onFocus={(e) => {
-                  nickAtFocus.current = e.currentTarget.value;
-                }}
-                onBlur={(e) => {
-                  // a reconnect replaces the history and blips the count for the whole room: only for a new name
-                  if (e.currentTarget.value !== nickAtFocus.current) identityChanged('nick', nickAtFocus.current);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') e.currentTarget.blur();
-                }}
-                placeholder="pick a name"
-                title="your name. click to change it"
-                maxLength={24}
-                autoComplete="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                className={cn(
-                  NAME_LINE,
-                  // the border shows on hover and goes blue on focus (said here too: the hover rule outranks the one in globals.css)
-                  'mx-0 w-full truncate bg-transparent pr-6 font-semibold text-textPrimary placeholder:font-normal placeholder:text-textTertiary hover:border-primaryStroke focus:border-primaryBlue focus:bg-background'
-                )}
-              />
-              <span aria-hidden className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-sm text-textTertiary">
-                ✎
-              </span>
-            </span>
-            {/* the way to make the name yours, right under it */}
-            <span className="block text-sm leading-tight text-textSecondary">
-              <Link id="signup-link" to={`/signup?next=${next}`} className={ACTION}>
-                <RiUserAddLine aria-hidden size={ICON} />
-                sign up
-              </Link>
-              <Dot />
-              <Link id="login-link" to={`/login?next=${next}`} className={ACTION}>
-                <RiLoginBoxLine aria-hidden size={ICON} />
-                log in
-              </Link>
-              <Dot />
-              {/* the icons alone: four words and four icons would not fit this line */}
-              <FriendsOpener open={friendsOpen} onToggle={toggleFriends} iconOnly />
-              <Dot />
-              <button
-                id="settings"
-                type="button"
-                aria-label="settings"
-                title="settings"
-                onClick={() => openUserModal('settings')}
-                className={cn(ACTION, 'align-middle hover:no-underline')}
+            <span
+              id="my-presence"
+              aria-hidden
+              data-presence={presence}
+              className={cn('absolute -bottom-1 -right-1 h-3.5 w-3.5 border-2 border-background', PRESENCE_SQUARE[presence])}
+            />
+            {/* how many of them are live, while the list itself is closed */}
+            {!friendsOpen && streaming > 0 && (
+              <span
+                aria-hidden
+                className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background"
               >
-                <RiSettings3Line aria-hidden size={ICON} />
-              </button>
-              {inspectorOn && (
-                <>
+                {streaming}
+              </span>
+            )}
+          </button>
+
+          {me ? (
+            <>
+              <span className={cn('min-w-0 flex-1', !friendsOpen && 'hidden')}>
+                {/* a login's name is a second way in. #me stays the bare name, for the tests, even while the panel is closed */}
+                <button
+                  type="button"
+                  aria-haspopup="dialog"
+                  title="profile and settings"
+                  onClick={openProfile}
+                  className={cn(
+                    NAME_LINE,
+                    'flex w-full items-center gap-1.5 text-left hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none'
+                  )}
+                >
+                  <span id="me" className="truncate font-semibold">
+                    {me}
+                  </span>
+                  <span className="shrink-0 text-increase" title="logged in: this name is yours">
+                    ✓
+                  </span>
+                </button>
+                <span className="block text-sm leading-tight">
+                  <button id="logout" type="button" onClick={() => void logout().then(() => identityChanged('login'))} className={ACTION}>
+                    <RiLogoutBoxRLine aria-hidden size={ICON} />
+                    log out
+                  </button>
                   <Dot />
-                  <InspectorOpener />
-                </>
-              )}
-            </span>
-          </span>
-          {goLive}
-        </>
-      )}
+                  <FriendsOpener open={friendsOpen} onToggle={toggleFriends} />
+                  {inspectorOn && (
+                    <>
+                      <Dot />
+                      <InspectorOpener />
+                    </>
+                  )}
+                </span>
+              </span>
+            </>
+          ) : (
+            <>
+              <span className={cn('min-w-0 flex-1', !friendsOpen && 'hidden')}>
+                <label htmlFor="username" className="sr-only">
+                  your name
+                </label>
+                {/* a guest's name is the box: clicking it edits, it does not open anything */}
+                <span className="relative -mx-1 block">
+                  <input
+                    id="username"
+                    value={nick}
+                    onChange={(e) => setNick(e.target.value)}
+                    onFocus={(e) => {
+                      nickAtFocus.current = e.currentTarget.value;
+                    }}
+                    onBlur={(e) => {
+                      // a reconnect replaces the history and blips the count for the whole room: only for a new name
+                      if (e.currentTarget.value !== nickAtFocus.current) identityChanged('nick', nickAtFocus.current);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur();
+                    }}
+                    placeholder="pick a name"
+                    title="your name. click to change it"
+                    maxLength={24}
+                    autoComplete="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    className={cn(
+                      NAME_LINE,
+                      // the border shows on hover and goes blue on focus (said here too: the hover rule outranks the one in globals.css)
+                      'mx-0 w-full truncate bg-transparent pr-6 font-semibold text-textPrimary placeholder:font-normal placeholder:text-textTertiary hover:border-primaryStroke focus:border-primaryBlue focus:bg-background'
+                    )}
+                  />
+                  <span aria-hidden className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-sm text-textTertiary">
+                    ✎
+                  </span>
+                </span>
+                {/* the way to make the name yours, right under it */}
+                <span className="block text-sm leading-tight text-textSecondary">
+                  <Link id="signup-link" to={`/signup?next=${next}`} className={ACTION}>
+                    <RiUserAddLine aria-hidden size={ICON} />
+                    sign up
+                  </Link>
+                  <Dot />
+                  <Link id="login-link" to={`/login?next=${next}`} className={ACTION}>
+                    <RiLoginBoxLine aria-hidden size={ICON} />
+                    log in
+                  </Link>
+                  <Dot />
+                  <FriendsOpener open={friendsOpen} onToggle={toggleFriends} />
+                  {inspectorOn && (
+                    <>
+                      <Dot />
+                      <InspectorOpener />
+                    </>
+                  )}
+                </span>
+              </span>
+            </>
+          )}
+        </div>
+      </div>
     </aside>
   );
 }

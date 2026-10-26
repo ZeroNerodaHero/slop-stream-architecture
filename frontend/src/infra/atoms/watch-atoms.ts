@@ -46,6 +46,10 @@ export const bioAtom = atom('');
 export const verifiedAtom = atom(false);
 /** Their picture's upload time (the `?v=` of its url). `null`: none. */
 export const avatarAtom = atom<number | null>(null);
+/** Their offline picture's upload time: shown where the player would be while they are not live. `null`: none. */
+export const offlineAtom = atom<number | null>(null);
+/** The line they wrote for under the word while not live. '' for none. */
+export const offlineNoteAtom = atom('');
 /** How many follow them (docs/follows.md). `null` until the grant says, or on an older api. */
 export const followersAtom = atom<number | null>(null);
 /**
@@ -281,6 +285,8 @@ async function start(name: string): Promise<void> {
   store.set(bioAtom, grant.bio ?? '');
   store.set(verifiedAtom, grant.verified === true);
   store.set(avatarAtom, grant.avatar ?? null);
+  store.set(offlineAtom, grant.offline ?? null);
+  store.set(offlineNoteAtom, grant.offline_note ?? '');
   store.set(followersAtom, typeof grant.followers === 'number' ? grant.followers : null);
   // the word beside the name: the socket's while it is open (it is told on `watch` and on every
   // change, and a grant answered a beat behind a push must not undo the push); the grant's otherwise
@@ -499,6 +505,8 @@ export function endWatch() {
   store.set(bioAtom, '');
   store.set(verifiedAtom, false);
   store.set(avatarAtom, null);
+  store.set(offlineAtom, null);
+  store.set(offlineNoteAtom, '');
   store.set(followersAtom, null);
   setPhase('loading', 'loading');
 }

@@ -14,7 +14,8 @@ import {
   publishToneAtom,
   streamNameAtom
 } from '@/infra/atoms/publish-atoms';
-import { pipChatPlaceAtom } from '@/infra/atoms/settings-atoms';
+import { friendsOpenAtom } from '@/infra/atoms/follow-atoms';
+import { pipChatPlaceAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import {
   canHearAtom,
   endWatch,
@@ -32,6 +33,7 @@ import {
   watchToneAtom
 } from '@/infra/atoms/watch-atoms';
 import { cleanName } from '@/infra/names';
+import { cn } from '@/utils/cn';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
 import { CornerPlayer } from '@/shared-components/CornerPlayer';
@@ -129,11 +131,12 @@ function WatchCorner() {
 }
 
 /**
- * Your own stream, while its picture in picture is on and you are anywhere but the go live
- * page: the camera (muted, it is you), the status word, how many are watching, the upload
- * stats on hover, and your own chat with your lines marked. The stream itself is untouched:
- * the peer, the socket and the camera are the same module handles the page uses. The × is
- * stop: your stream ends and the camera goes, as if you had never left the page without it.
+ * Your own stream, wherever you go while it is up (leaving the go live page with a stream on
+ * air puts it here) and you are anywhere but that page: the camera (muted, it is you), the
+ * status word (`live`, green), how many are watching, the upload stats on hover, and your own
+ * chat with your lines marked. The stream itself is untouched: the peer, the socket and the
+ * camera are the same module handles the page uses. The × is stop: your stream ends and the
+ * camera goes, as if you had pressed stop on the page.
  */
 function LiveCorner() {
   const pip = useAtomValue(publishPipAtom);
@@ -179,8 +182,17 @@ function LiveCorner() {
  * leaves the stack and stays where it was dropped.
  */
 export function MiniPlayer() {
+  const side = useAtomValue(panelSideAtom);
+  const sidebarOpen = useAtomValue(friendsOpenAtom);
   return (
-    <div id="corner-players" className="pointer-events-none fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+    <div
+      id="corner-players"
+      className={cn(
+        'pointer-events-none fixed bottom-6 z-50 flex flex-col items-end gap-3',
+        // the sidebar can take the right edge: keep the players in the page, not on the column
+        side === 'right' ? (sidebarOpen ? 'right-96' : 'right-[6.5rem]') : 'right-6'
+      )}
+    >
       <WatchCorner />
       <LiveCorner />
     </div>

@@ -1,3 +1,4 @@
+import { useAtomValue } from 'jotai';
 import { Outlet, createBrowserRouter, useParams } from 'react-router-dom';
 
 import { CrashPage } from '@/app/CrashPage';
@@ -8,25 +9,35 @@ import { HomePage } from '@/app/home/HomePage';
 import { ExplorePage, ChannelPage } from '@/app/explore/ExplorePage';
 import { LivePage } from '@/app/live/LivePage';
 import { WatchPage } from '@/app/watch/WatchPage';
+import { panelSideAtom } from '@/infra/atoms/settings-atoms';
+import { FriendChat } from '@/shared-components/FriendChat';
 import { Inspector } from '@/shared-components/Inspector';
 import { MiniPlayer } from '@/shared-components/MiniPlayer';
+import { TopBar } from '@/shared-components/TopBar';
 import { UserModal } from '@/shared-components/UserModal';
 import { UserPanel } from '@/shared-components/UserPanel';
+import { cn } from '@/utils/cn';
 
 /**
- * Every page, plus the things that live outside pages: who you are (bottom left), the picture
- * in picture players (bottom right: a stream you watch, your own while live), and the user
- * modal the panel opens (profile, security, settings, appearance).
+ * Every page, plus the things that live outside pages: the sidebar (who you follow, and you at
+ * the bottom of it; collapsed beside the page, open it covers the streams), the picture in picture players (bottom right
+ * of the page: a stream you watch, your own while live), the centered search with go live and
+ * the settings icon over the top of the page, and the user modal that icon opens.
  */
 function Shell() {
+  const side = useAtomValue(panelSideAtom);
   return (
-    <>
-      <Outlet />
+    <div className={cn('flex min-h-screen items-start', side === 'right' && 'flex-row-reverse')}>
       <UserPanel />
+      <div className="relative min-w-0 flex-1">
+        <TopBar />
+        <Outlet />
+      </div>
       <MiniPlayer />
+      <FriendChat />
       <UserModal />
       <Inspector />
-    </>
+    </div>
   );
 }
 

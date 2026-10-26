@@ -22,11 +22,13 @@
 #   follows    a login follows names: counts and the flag on a profile, the list with its words, a free name gets a row, the box over the corner
 #              panel (hover: who you follow, streaming first; search finds and follows), the watch page's button and count, home's people under
 #              the streams (online first) and the top search, a rename keeps the followers
-#   preview    /watch/<name> html: title + og tags offline, with a picture, live with the thumbnail; the picture round-trips
+#   preview    /watch/<name> html: title + og tags offline, with a picture, with the offline picture, live with the thumbnail; the pictures round-trip,
+#              the offline picture and the line under the word show on the page and in the profile tab
 #   errors     /api/health has the monitor fields, a page's error report lands (204, log, debug db), bad ones 400, /admin renders
 #   pip        picture in picture: the button goes home with the stream in a corner, the player moves and resizes, has the sound and the chat, coming back takes it over, another stream replaces it, × ends it
-#   live-pip   picture in picture for the broadcast: the button on /live goes home with your camera in a corner and the stream still up for watchers, you can watch
-#              someone else meanwhile, the corner has your chat, coming back takes the stream over, both corners stack, × stops, a page load stops, a plain leave still stops
+#   live-pip   picture in picture for the broadcast: leaving /live (a plain home click, or the button) keeps your camera in a corner and the stream up for watchers,
+#              you can watch someone else meanwhile, the corner has your chat, coming back takes the stream over, both corners stack, × stops, a page load stops,
+#              leaving with nothing on air puts nothing in the corner
 #   screen     screen sharing: screens beside the camera go to watchers mid-stream with no renegotiation, tiles, click to swap, stop, a late watcher sees it all
 #   presence   a tab open is online over the events socket, do not disturb and appear offline reach a watcher pushed, live is streaming,
 #              two tabs share one socket and the last closing is offline at once, a claimed name is refused, the inspector shows the frames

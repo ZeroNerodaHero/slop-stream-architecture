@@ -90,16 +90,17 @@ export function LivePage() {
   const thumbFileRef = useRef<HTMLInputElement | null>(null);
 
   // Mount only: open the camera (or find it still on, back from the corner), fill the name box,
-  // and on the way out end the stream, unless picture in picture keeps it going in the corner.
-  // The tab closing is the stream's own listener (publish-atoms), since the stream can outlive this page.
+  // and on the way out leave a stream that is up to the corner player; with nothing on air,
+  // release the camera. The tab closing is the stream's own listener (publish-atoms), since the
+  // stream can outlive this page.
   useEffect(() => {
     void startCamera();
     void enterLivePage();
     return leaveLivePage;
   }, []);
 
-  // The picture in picture button is a home click that keeps the stream: on, then away, and
-  // the corner player has the camera by the time the home page shows.
+  // The picture in picture button is a home click: leaving keeps the stream either way, the
+  // button only turns the corner on first, so it has the camera by the time home shows.
   const toCorner = () => {
     startPublishPip();
     navigate('/');
@@ -120,7 +121,8 @@ export function LivePage() {
               </div>
             )}
             {/* while the chat is closed the bar stays up, so it can be opened again off the preview. once
-                live, picture in picture beside it: the same button as the watch page's, for your own stream */}
+                live, picture in picture beside it: the same button as the watch page's, for your own stream
+                (here any way off the page keeps the stream; the button is the one that says so) */}
             <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(!chatOpen))}>
               <ChatOpenButton className="ml-auto" />
               {publishing && (

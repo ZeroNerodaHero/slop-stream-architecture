@@ -13,7 +13,6 @@ import { buttonClassName } from '@/shared-components/Button';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { PersonRow } from '@/shared-components/PersonRow';
-import { SearchBox } from '@/shared-components/SearchBox';
 import { TestBadge } from '@/shared-components/TestBadge';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { cn } from '@/utils/cn';
@@ -143,12 +142,7 @@ function Card({
 }) {
   const age = since(stream.since, now);
   return (
-    <article
-      className={CARD_LINK}
-      data-featured={featured ? stream.name : undefined}
-      onPointerEnter={(event) => onEnter(event.pointerType)}
-      onPointerLeave={onLeave}
-    >
+    <article className={CARD_LINK} data-featured={featured ? stream.name : undefined} onPointerEnter={(event) => onEnter(event.pointerType)} onPointerLeave={onLeave}>
       <Link
         to={`/watch/${encodeURIComponent(stream.name)}`}
         aria-label={`watch ${stream.name}`}
@@ -282,16 +276,9 @@ export function HomePage() {
     []
   );
 
-  // no title row: the cards are the page. "go live" is in the corner panel (UserPanel), and once more in the empty state.
-  // the one thing above the cards is the search box, in the middle: a few letters find anyone (docs/follows.md)
+  // no title row: the cards are the page. search, go live, and settings are the top bar. the empty state has go live again.
   return (
     <PageFrame wide>
-      <div className="mx-auto mb-8 flex w-full max-w-xl flex-col items-center gap-3">
-        <SearchBox className="w-full" />
-        <Link id="explore-link" to="/explore" className="text-sm font-semibold text-primaryBlue">
-          servers
-        </Link>
-      </div>
       {streams.error && (
         <p className="border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
           api is down: {messageOf(streams.error)}
@@ -310,15 +297,7 @@ export function HomePage() {
         {featured.length > 0 && (
           <div id="featured" className={cn('grid grid-cols-1 gap-6 lg:grid-cols-2', rest.length > 0 && 'mb-6')}>
             {featured.map((stream) => (
-              <Card
-                key={stream.name}
-                stream={stream}
-                now={now}
-                featured
-                playing
-                onEnter={() => undefined}
-                onLeave={() => undefined}
-              />
+              <Card key={stream.name} stream={stream} now={now} featured playing onEnter={() => undefined} onLeave={() => undefined} />
             ))}
           </div>
         )}

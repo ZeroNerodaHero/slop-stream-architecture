@@ -1,7 +1,8 @@
 /**
  * The preferences this browser keeps (localstorage, like the nick): where the chat sits on a
- * page, where it sits on the corner player, whether the bots' lines show, and the theme. Not
- * part of the account: a laptop and a phone can each have their own. Same shape as the other
+ * page, where it sits on the corner player, which corner the you panel sits in, whether the
+ * bots' lines show, and the theme. Not part of the account: a laptop and a phone can each have
+ * their own. Same shape as the other
  * atom modules: atoms for what renders, action functions to change it. The modal that edits
  * them is user-modal-atoms.ts.
  */
@@ -78,6 +79,25 @@ export const pipChatPlaceAtom = atom((get) => {
 
 export function setPipChatPlace(place: PipChatPlace) {
   store.set(storedPipChatPlaceAtom, place);
+}
+
+/**
+ * Which bottom corner the you panel sits in. Left, unless this browser says right. The corner
+ * players stay on the right and lift when the panel joins them there.
+ */
+export type PanelSide = 'left' | 'right';
+
+export const PANEL_SIDES: readonly PanelSide[] = ['left', 'right'];
+
+const storedPanelSideAtom = atomWithStorage<string>('settings.panelSide', 'left', undefined, { getOnInit: true });
+/** Read: always one of PANEL_SIDES, whatever localstorage holds. */
+export const panelSideAtom = atom((get) => {
+  const side = get(storedPanelSideAtom);
+  return (PANEL_SIDES as readonly string[]).includes(side) ? (side as PanelSide) : 'left';
+});
+
+export function setPanelSide(side: PanelSide) {
+  store.set(storedPanelSideAtom, side);
 }
 
 // ---- debugging -------------------------------------------------------------------------------

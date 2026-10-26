@@ -99,6 +99,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
 
   await step(`a tab as ${NAME}: the api says online within 5s, the square is green, the watcher is told`, async () => {
     await a.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await a.hover('#user-panel');
     await a.waitForSelector('#username', { timeout: 15000 });
     await a.fill('#username', NAME);
     await a.press('#username', 'Enter'); // blur: the nick is committed and the socket says hello as it
@@ -111,12 +112,14 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
   });
 
   await step('the inspector setting on: the frames are kept from here', async () => {
+    await a.hover('#user-panel');
     await a.click('#settings');
     await a.waitForSelector('#user-modal[open]', { timeout: 5000 });
     await a.click('#inspector');
     expect(await a.isChecked('#inspector'), '#inspector is not checked');
     await a.keyboard.press('Escape');
     await a.waitForSelector('#user-modal', { state: 'detached', timeout: 5000 });
+    await a.hover('#user-panel');
     await a.waitForSelector('#inspector-open', { timeout: 5000 });
   });
 
@@ -169,6 +172,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
   });
 
   await step('the inspector: a me frame, a presence frame, the filter narrows, the chat socket is in it too', async () => {
+    await a.hover('#user-panel');
     await a.click('#inspector-open');
     await a.waitForSelector('#inspector-panel[open]', { timeout: 5000 });
     await a.waitForSelector('#inspector-frames li[data-source="/events"][data-type="me"]', { timeout: 5000 });
@@ -182,6 +186,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     expect(/\d+ of the last \d+/.test(count || ''), `count line: ${count}`);
     // the chat's frames ride in too: watching a room as r8 says hello to its chat
     await a.goto(`${BASE}/watch/${CLAIMED}`, { waitUntil: 'domcontentloaded' });
+    await a.hover('#user-panel');
     await a.waitForSelector('#inspector-open', { timeout: 15000 });
     await a.click('#inspector-open');
     await a.waitForSelector(`#inspector-frames li[data-source="/chat/${CLAIMED}"]`, { timeout: 15000 });
@@ -253,6 +258,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     const ctxC = await browser.newContext({ ignoreHTTPSErrors: true });
     const p = await ctxC.newPage();
     await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await p.hover('#user-panel');
     await p.waitForSelector('#username', { timeout: 15000 });
     await p.fill('#username', NAME);
     await p.press('#username', 'Enter');

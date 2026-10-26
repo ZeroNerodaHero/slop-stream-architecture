@@ -13,6 +13,8 @@ import {
   markPlaying,
   mutedAtom,
   needsTapAtom,
+  offlineAtom,
+  offlineNoteAtom,
   pickSlot,
   remoteStreamAtom,
   retry,
@@ -30,11 +32,12 @@ import {
   watchPhaseAtom,
   watchRenamedToAtom,
   watchToneAtom,
-  watchViewersAtom,
+  watchViewersAtom
 } from '@/infra/atoms/watch-atoms';
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
+import { api } from '@/infra/api';
 import { cleanName, isDummyName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { Avatar } from '@/shared-components/Avatar';
@@ -77,6 +80,8 @@ export function WatchPage() {
   const stats = useAtomValue(watchStatsAtom);
   const verified = useAtomValue(verifiedAtom);
   const avatar = useAtomValue(avatarAtom);
+  const offline = useAtomValue(offlineAtom);
+  const offlineNote = useAtomValue(offlineNoteAtom);
   const followers = useAtomValue(followersAtom);
   const phase = useAtomValue(watchPhaseAtom);
   const presence = useAtomValue(presenceOfAtom(name));
@@ -169,53 +174,70 @@ export function WatchPage() {
               screen with no hover at all. "tap to play" is the exception: big, in the middle. */}
           {/* not live: the profile where the picture would be (docs/follows.md). the face, the word and a
               sentence; the bio sits below and the chat stays. the player comes back the moment they start
-              (the pushed `live`, else the retry timer), so there is nothing to press and no black box */}
+              (the pushed `live`, else the retry timer), so there is nothing to press and no black box.
+              a streamer who put an offline picture gets it where the player goes, the profile under it,
+              and the line they wrote (if any) above the sentence */}
           {phase === 'waiting' ? (
-            <div id="profile" className={cn(panelClassName('flex flex-wrap items-center gap-6 p-6'))} data-presence={presence}>
-              <Face name={name} version={avatar} className="h-28 w-28 text-5xl" />
-              <div className="min-w-0 flex-1">
-                <p className={cn('flex items-center gap-2 text-lg font-semibold', PRESENCE_TEXT[presence])}>
-                  <span aria-hidden className={cn('inline-block h-3 w-3', PRESENCE_SQUARE[presence])} />
-                  {PRESENCE_WORD[presence]}
-                </p>
-                <p className="mt-1 text-textSecondary">{NOT_LIVE_WORDS[presence]}</p>
+            <>
+              {offline !== null && (
+                <img
+                  id="offline-picture"
+                  src={api.offlineUrl(name, offline)}
+                  alt=""
+                  className="mb-3 aspect-video w-full border border-primaryStroke bg-black object-cover"
+                />
+              )}
+              <div id="profile" className={cn(panelClassName('flex flex-wrap items-center gap-6 p-6'))} data-presence={presence}>
+                <Face name={name} version={avatar} className="h-28 w-28 text-5xl" />
+                <div className="min-w-0 flex-1">
+                  <p className={cn('flex items-center gap-2 text-lg font-semibold', PRESENCE_TEXT[presence])}>
+                    <span aria-hidden className={cn('inline-block h-3 w-3', PRESENCE_SQUARE[presence])} />
+                    {PRESENCE_WORD[presence]}
+                  </p>
+                  {offlineNote && (
+                    <p id="offline-note" className="mt-1 [overflow-wrap:anywhere]">
+                      {offlineNote}
+                    </p>
+                  )}
+                  <p className="mt-1 text-textSecondary">{NOT_LIVE_WORDS[presence]}</p>
+                </div>
+                {/* the chat's button lives on the player; without a player it lives here */}
+                <ChatOpenButton className="self-start" />
               </div>
-              {/* the chat's button lives on the player; without a player it lives here */}
-              <ChatOpenButton className="self-start" />
-            </div>
+            </>
           ) : (
-          <div className="group relative">
-            <VideoFrame
-              id="video"
-              streamAtom={remoteStreamAtom}
-              videoRef={videoRef}
-              muted={muted}
-              volume={volume}
-              onPlaying={markPlaying}
-              onAutoplayBlocked={markAutoplayBlocked}
-            />
-            {needsTap && (
-              <Button
-                id="tap-to-play"
-                variant="primary"
-                className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-                onClick={() => unmuteVideo(videoRef.current)}
-              >
-                tap to play
-              </Button>
-            )}
-            {/* while the chat is closed the bar stays up, so the button that brings it back is on the picture */}
-            {phase !== 'bad-name' && (
-              <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || !chatOpen))}>
-                {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
-                {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} tipAt="above-left" panel="up" playback={{ muted, level: volume }} />}
-                <ChatOpenButton className="ml-auto" />
-                <IconButton id="pip" label="picture in picture" onClick={toCorner}>
-                  <PipIcon />
-                </IconButton>
-              </div>
-            )}
-          </div>
+            <div className="group relative">
+              <VideoFrame
+                id="video"
+                streamAtom={remoteStreamAtom}
+                videoRef={videoRef}
+                muted={muted}
+                volume={volume}
+                onPlaying={markPlaying}
+                onAutoplayBlocked={markAutoplayBlocked}
+              />
+              {needsTap && (
+                <Button
+                  id="tap-to-play"
+                  variant="primary"
+                  className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+                  onClick={() => unmuteVideo(videoRef.current)}
+                >
+                  tap to play
+                </Button>
+              )}
+              {/* while the chat is closed the bar stays up, so the button that brings it back is on the picture */}
+              {phase !== 'bad-name' && (
+                <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || !chatOpen))}>
+                  {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
+                  {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} tipAt="above-left" panel="up" playback={{ muted, level: volume }} />}
+                  <ChatOpenButton className="ml-auto" />
+                  <IconButton id="pip" label="picture in picture" onClick={toCorner}>
+                    <PipIcon />
+                  </IconButton>
+                </div>
+              )}
+            </div>
           )}
           {/* the streamer's other pictures while a screen is shared: the camera beside the screen,
               or the other way round. click one and it is the big one; the sound stays put */}

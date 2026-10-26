@@ -33,6 +33,10 @@ export interface Streamer {
   avatar: number | null;
   /** Pictures on the home card, oldest first. Empty when they have put none. */
   thumbs?: number[];
+  /** The offline picture's upload time (the `?v=` of its url): on the watch page where the player would be while not live. `null`: none. Absent on an older api. */
+  offline?: number | null;
+  /** The line under the word while not live. Empty for none. Absent on an older api. */
+  offline_note?: string;
   /** The word next to the name: `offline` `online` `dnd` `streaming`. See docs/status.md. */
   presence: Presence;
   /** How many follow the name (docs/follows.md). Absent on an older api. */
@@ -50,6 +54,8 @@ export interface Followed {
   live: boolean;
   presence: Presence;
   followed_at: string;
+  /** They follow this login back. Absent on an older api, which means they do not. */
+  mutual?: boolean;
 }
 
 /** One of home's people (`GET /api/people`): a name with a row who is not live, with the word beside it. */
@@ -140,6 +146,9 @@ export interface WatchGrant {
   verified: boolean;
   avatar: number | null;
   presence: Presence;
+  /** The offline picture and the line under the word, for the page while they are not live. Absent on an older api. */
+  offline?: number | null;
+  offline_note?: string;
   /** How many follow the name, and whether the asking login does (docs/follows.md). Absent on an older api. */
   followers?: number;
   following?: boolean;
@@ -265,8 +274,7 @@ export const api = {
   /** A member adds a channel. 403 until they have joined, 409 when the name is taken. */
   createChannel: (server: string, name: string) => request<Channel>('POST', `/api/groups/${encodeURIComponent(server)}/channels`, { name }),
   /** Who made the channel, who made the server, or an admin. `general` stays. */
-  deleteChannel: (server: string, channel: string) =>
-    request<null>('DELETE', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`),
+  deleteChannel: (server: string, channel: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`),
   streams: () => request<LiveStream[]>('GET', '/api/streams'),
   streamer: (name: string) => request<Streamer>('GET', `/api/streamers/${name}`),
   /** The login's follows, streaming first, with each one's word. 401 for nobody. See docs/follows.md. */
@@ -287,6 +295,13 @@ export const api = {
   deleteStreamThumb: (name: string, id: number) => request<null>('DELETE', `/api/streamers/${name}/thumbs/${id}`),
   /** One picture on the home card. The id is the url, so it can be cached. */
   streamThumbUrl: (name: string, id: number) => `/api/streamers/${encodeURIComponent(name)}/thumbs/${id}`,
+  /** The jpeg itself as the body. The page has already made it 1280x720 and under 512 kb. */
+  saveOffline: (name: string, jpeg: Blob) => request<{ name: string; offline: number }>('PUT', `/api/streamers/${name}/offline`, jpeg),
+  deleteOffline: (name: string) => request<null>('DELETE', `/api/streamers/${name}/offline`),
+  /** Like `avatarUrl`: the version makes a new url per upload, so a day of cache is safe. */
+  offlineUrl: (name: string, version: number) => `/api/streamers/${encodeURIComponent(name)}/offline?v=${version}`,
+  /** The line under the word while not live. One line, 140 characters; empty clears it. */
+  saveOfflineNote: (name: string, note: string) => request<{ name: string; offline_note: string }>('PUT', `/api/streamers/${name}/offline-note`, { note }),
   /** The presence choice, through the bio's gate. The answer also arrives on the events socket, to every tab and device. */
   setPresence: (name: string, status: PresenceChoice) => request<{ status: PresenceChoice; presence: Presence }>('PUT', `/api/streamers/${name}/presence`, { status }),
   /** `version` is the upload time the api hands out, so a new picture is a new url and the old one can be cached. */

@@ -78,7 +78,7 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
   await step('the list has star with a word; a free name with no row is followable and gets one', async () => {
     const list = await body(await fan.get('/api/following'));
     const s = find(list, STAR);
-    expect(s && typeof s.presence === 'string' && s.live === false && s.verified === true, `the list: ${JSON.stringify(list)}`);
+    expect(s && typeof s.presence === 'string' && s.live === false && s.verified === true && s.mutual === false, `the list: ${JSON.stringify(list)}`);
     const before = await body(await anon.get(`/api/streamers/${FREE}`));
     expect(before.verified === false && before.followers === 0, `free before: ${JSON.stringify(before)}`);
     const f = await fan.post(`/api/streamers/${FREE}/follow`);
@@ -87,7 +87,17 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     expect(after.followers === 1, `free after: ${JSON.stringify(after)}`);
     const again = await body(await fan.get('/api/following'));
     expect(again.length === 2 && find(again, FREE), `the list now: ${again.map((f) => f.name).join(' ')}`);
-    return `${STAR} is ${s.presence}; ${FREE} has a row and 1 follower`;
+    const back = await star.post(`/api/streamers/${FAN}/follow`);
+    expect(back.status() === 204, `star following fan got ${back.status()}`);
+    const mutual = find(await body(await fan.get('/api/following')), STAR);
+    const freeMutual = find(await body(await fan.get('/api/following')), FREE);
+    expect(mutual && mutual.mutual === true, `star should be a friend: ${JSON.stringify(mutual)}`);
+    expect(freeMutual && freeMutual.mutual === false, `a free name cannot follow back: ${JSON.stringify(freeMutual)}`);
+    const undo = await star.post(`/api/streamers/${FAN}/unfollow`);
+    expect(undo.status() === 204, `star unfollowing fan got ${undo.status()}`);
+    const plain = find(await body(await fan.get('/api/following')), STAR);
+    expect(plain && plain.mutual === false, `after star unfollows: ${JSON.stringify(plain)}`);
+    return `${STAR} is ${s.presence}; ${FREE} has a row and 1 follower; mutual flips`;
   });
 
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });

@@ -20,9 +20,10 @@ function order(hits: SearchHit[], query: string): SearchHit[] {
 }
 
 /**
- * The box at the top of home (docs/follows.md): a few letters of a name, and the people who
- * have them drop down under it, the ones here first, each a link to their page with a follow
- * button beside it. Its own state, not the corner box's: the two can be open at once.
+ * The box centered at the top of every page, with go live and the settings icon to its right (docs/follows.md):
+ * a few letters of a name, and the people who have them drop down under it, the ones here
+ * first, each a link to their page with a follow button beside it. Its own state, not the
+ * corner box's: the two can be open at once. `z-30` keeps that list over the video under it.
  */
 export function SearchBox({ className }: { className?: string }) {
   const [query, setQuery] = useState('');
@@ -57,7 +58,7 @@ export function SearchBox({ className }: { className?: string }) {
   return (
     <div
       ref={box}
-      className={cn('relative', className)}
+      className={cn('relative z-30', className)}
       onFocusCapture={() => setOpen(true)}
       onBlurCapture={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
@@ -105,7 +106,15 @@ export function SearchBox({ className }: { className?: string }) {
           ) : (
             hits.map((h) => (
               <li key={h.name} role="option" aria-selected={false} className="flex min-w-0 items-center gap-2.5 px-2 py-1.5" data-presence={h.presence}>
-                <PersonRow id={`search-${h.name}`} name={h.name} verified={h.verified} avatar={h.avatar} bio={h.bio} presence={h.presence} onPick={() => setOpen(false)} />
+                <PersonRow
+                  id={`search-${h.name}`}
+                  name={h.name}
+                  verified={h.verified}
+                  avatar={h.avatar}
+                  bio={h.bio}
+                  presence={h.presence}
+                  onPick={() => setOpen(false)}
+                />
                 <FollowButton id={`search-follow-${h.name}`} name={h.name} small />
               </li>
             ))

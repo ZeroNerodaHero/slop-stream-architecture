@@ -16,6 +16,11 @@
 //! dropped again if the bucket does not take the bytes. None means home shows the
 //! camera, the way it always has.
 //!
+//! The offline picture is what the watch page shows where the player would be while the
+//! name is not live: a 1280x720 jpeg the browser made, at `offline/<id>.jpg`, its save time
+//! in `offline_at` as the `?v=`. Newer than ids, so there is no name key to lift. With it
+//! goes a line under the word, `offline_note`. Both through the bio's gate.
+//!
 //! `GET /watch/<name>` exists for link previews. iMessage, Discord, Slack and X
 //! make them with a bot that fetches the url once, reads `<title>` and the
 //! `og:*` tags, and never runs js; the spa's index.html says "streams" for
@@ -30,14 +35,15 @@ use std::collections::HashMap;
 use std::env;
 
 use axum::body::Bytes;
-use axum::extract::rejection::{BytesRejection, FailedToBufferBody, QueryRejection};
+use axum::extract::rejection::{BytesRejection, FailedToBufferBody, JsonRejection, QueryRejection};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, put};
 use axum::{Json, Router};
 use rand::rngs::OsRng;
 use rand::RngCore;
+use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -50,6 +56,11 @@ use crate::{is_live, may_write, thumb_exists, unique_violation, valid_name, ApiE
 /// The browser sends 256x256 at quality 0.85, a few tens of kb. This is the ceiling.
 /// A thumbnail is 640x360 and shares it: the same body limit covers both routes.
 const MAX_AVATAR_BYTES: usize = 256 * 1024;
+/// The offline picture is 1280x720 at quality 0.8, and a photo at that size runs past the
+/// avatar's ceiling. The page steps the quality down until it fits under this one.
+const MAX_OFFLINE_BYTES: usize = 512 * 1024;
+/// The line under the word while they are not live. One line; the page's box stops here too.
+const MAX_NOTE_CHARS: usize = 140;
 /// How many pictures one name may put on its home card.
 const MAX_THUMBS: i64 = 6;
 /// The url changes with every upload (`?v=`), so a day is safe.
@@ -78,19 +89,24 @@ pub(crate) struct Profile {
     pub(crate) avatar: Option<i64>,
     /// The name has an account, so only its owner can be behind it.
     pub(crate) verified: bool,
+    /// When the offline picture was saved, unix seconds. None: none. The `?v=` of its url.
+    pub(crate) offline: Option<i64>,
+    /// The line under the word while they are not live. Empty for none.
+    pub(crate) offline_note: String,
 }
 
-/// Bio, picture version and account flag in one query. A name nobody saved anything for is all defaults.
+/// Bio, picture versions, account flag and the offline line in one query. A name nobody saved anything for is all defaults.
 pub(crate) async fn load_profile(db: &PgPool, name: &str) -> Result<Profile, sqlx::Error> {
-    let row: Option<(String, Option<i64>, bool)> = sqlx::query_as(
-        "SELECT bio, (EXTRACT(EPOCH FROM avatar_at))::bigint, password_hash IS NOT NULL
+    let row: Option<(String, Option<i64>, bool, Option<i64>, String)> = sqlx::query_as(
+        "SELECT bio, (EXTRACT(EPOCH FROM avatar_at))::bigint, password_hash IS NOT NULL,
+                (EXTRACT(EPOCH FROM offline_at))::bigint, offline_note
          FROM streamers WHERE name = $1",
     )
     .bind(name)
     .fetch_optional(db)
     .await?;
-    let (bio, avatar, verified) = row.unwrap_or_default();
-    Ok(Profile { name: name.to_owned(), bio, avatar, verified })
+    let (bio, avatar, verified, offline, offline_note) = row.unwrap_or_default();
+    Ok(Profile { name: name.to_owned(), bio, avatar, verified, offline, offline_note })
 }
 
 // ---- the row behind a name ---------------------------------------------------------------
@@ -228,7 +244,7 @@ pub(crate) async fn lift_pictures(s: &AppState, id: Uuid, name: &str) {
 
 /// Every key a row's pictures can sit under: for a rename that takes a free name's row away.
 pub(crate) fn picture_keys(id: Uuid, thumbs: &[i64]) -> Vec<String> {
-    std::iter::once(avatar_key(id)).chain(thumbs.iter().map(|n| thumb_key(id, *n))).collect()
+    [avatar_key(id), offline_key(id)].into_iter().chain(thumbs.iter().map(|n| thumb_key(id, *n))).collect()
 }
 
 /// Objects nobody can reach any more, dropped. Best effort: a miss leaves an orphan, nothing worse.
@@ -244,8 +260,25 @@ fn too_big() -> ApiError {
     ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "picture too big. 256 kb at most")
 }
 
-/// The body is the jpeg itself, not a form. The page resizes before sending. The route's
-/// body limit stops reading at the ceiling, so an oversized upload costs nothing past it.
+/// The body as the jpeg it has to be: not a form, under `max` (the route's read limit stopped
+/// an oversized one already, and that reads as the same 413 here), and starting like a jpeg.
+/// The page resizes before sending, so this is all the api ever checks of a picture.
+fn jpeg_body(body: Result<Bytes, BytesRejection>, max: usize, too_big: fn() -> ApiError) -> Result<Bytes, ApiError> {
+    let body = match body {
+        Ok(body) => body,
+        Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_))) => return Err(too_big()),
+        Err(_) => return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad body")),
+    };
+    if body.len() > max {
+        return Err(too_big());
+    }
+    if !body.starts_with(&JPEG_MAGIC) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "not a jpeg"));
+    }
+    Ok(body)
+}
+
+/// The route's body limit stops reading at the ceiling, so an oversized upload costs nothing past it.
 async fn put_avatar(
     State(s): State<AppState>,
     Name(name): Name,
@@ -254,18 +287,8 @@ async fn put_avatar(
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult {
     let Query(q) = q?;
-    let body = match body {
-        Ok(body) => body,
-        Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_))) => return Err(too_big()),
-        Err(_) => return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad body")),
-    };
     may_write(&s, &name, me.name(), q.password.as_deref()).await?;
-    if body.len() > MAX_AVATAR_BYTES {
-        return Err(too_big());
-    }
-    if !body.starts_with(&JPEG_MAGIC) {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "not a jpeg"));
-    }
+    let body = jpeg_body(body, MAX_AVATAR_BYTES, too_big)?;
     // the row's id is the key, so the row first (bare, if the name had none). then the
     // bucket, then the version: a failed save leaves the old version number, so a cached
     // url does not start pointing at a picture that never landed.
@@ -403,18 +426,8 @@ async fn put_thumb(
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult {
     let Query(q) = q?;
-    let body = match body {
-        Ok(body) => body,
-        Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_))) => return Err(too_big()),
-        Err(_) => return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad body")),
-    };
     may_write(&s, &name, me.name(), q.password.as_deref()).await?;
-    if body.len() > MAX_AVATAR_BYTES {
-        return Err(too_big());
-    }
-    if !body.starts_with(&JPEG_MAGIC) {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "not a jpeg"));
-    }
+    let body = jpeg_body(body, MAX_AVATAR_BYTES, too_big)?;
     // the row's id is the key in the bucket; the thumbs table still lists them by name
     let row = ensure_row(&s.db, &name).await?;
     for _ in 0..2 {
@@ -505,6 +518,118 @@ async fn delete_thumb(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ---- the offline picture and the line under the word ----------------------------------------
+
+fn offline_key(id: Uuid) -> String {
+    format!("offline/{id}.jpg")
+}
+
+fn offline_failed(name: &str, what: &str, err: String) -> ApiError {
+    log::error!("s3 offline {name}: {err}");
+    ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, what)
+}
+
+fn offline_too_big() -> ApiError {
+    ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "picture too big. 512 kb at most")
+}
+
+async fn get_offline(State(s): State<AppState>, Name(name): Name) -> Result<Response, ApiError> {
+    let id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM streamers WHERE name = $1 AND offline_at IS NOT NULL")
+        .bind(&name)
+        .fetch_optional(&s.db)
+        .await?;
+    let Some(id) = id else {
+        return Err(no_picture());
+    };
+    match s3::get(&s.s3, &offline_key(id)).await {
+        Ok(Some(bytes)) => Ok(jpeg(bytes)),
+        Ok(None) => Err(no_picture()),
+        Err(e) => Err(offline_failed(&name, "could not load the picture", e)),
+    }
+}
+
+/// The same shape as the avatar's save, with its own ceiling: the bucket first, then the version,
+/// so a cached url never points at a picture that did not land.
+async fn put_offline(
+    State(s): State<AppState>,
+    Name(name): Name,
+    me: Me,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult {
+    let Query(q) = q?;
+    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    let body = jpeg_body(body, MAX_OFFLINE_BYTES, offline_too_big)?;
+    let id = ensure_row(&s.db, &name).await?;
+    if let Err(e) = s3::put(&s.s3, &offline_key(id), &body, "image/jpeg").await {
+        return Err(offline_failed(&name, "could not save the picture", e));
+    }
+    let version: i64 = sqlx::query_scalar(
+        "UPDATE streamers SET offline_at = now(), updated_at = now() WHERE id = $1
+         RETURNING (EXTRACT(EPOCH FROM offline_at))::bigint",
+    )
+    .bind(id)
+    .fetch_one(&s.db)
+    .await?;
+    log::info!("{name}: new offline picture, {} bytes", body.len());
+    Ok(Json(json!({ "name": name, "offline": version })))
+}
+
+async fn delete_offline(
+    State(s): State<AppState>,
+    Name(name): Name,
+    me: Me,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
+) -> Result<StatusCode, ApiError> {
+    let Query(q) = q?;
+    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    // the object first: a miss there leaves the version, so the next try removes it
+    if let Some(id) = row_id(&s.db, &name).await? {
+        if let Err(e) = s3::delete(&s.s3, &offline_key(id)).await {
+            return Err(offline_failed(&name, "could not remove the picture", e));
+        }
+        sqlx::query("UPDATE streamers SET offline_at = NULL, updated_at = now() WHERE id = $1")
+            .bind(id)
+            .execute(&s.db)
+            .await?;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct NoteBody {
+    note: String,
+}
+
+/// The note as it is kept: one line (any run of whitespace is a space), MAX_NOTE_CHARS at most.
+fn clean_note(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_NOTE_CHARS).collect()
+}
+
+/// `{ note }`: the line under the word while they are not live. Empty clears it. The bio's
+/// upsert, so a name nobody saved anything for gets its row here too.
+async fn put_offline_note(
+    State(s): State<AppState>,
+    Name(name): Name,
+    me: Me,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
+    body: Result<Json<NoteBody>, JsonRejection>,
+) -> ApiResult {
+    let Query(q) = q?;
+    let Json(body) = body?;
+    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    let note: String = sqlx::query_scalar(
+        "INSERT INTO streamers (name, offline_note) VALUES ($1, $2)
+         ON CONFLICT (name) DO UPDATE SET offline_note = EXCLUDED.offline_note, updated_at = now()
+         RETURNING offline_note",
+    )
+    .bind(&name)
+    .bind(clean_note(&body.note))
+    .fetch_one(&s.db)
+    .await?;
+    Ok(Json(json!({ "name": name, "offline_note": note })))
+}
+
 // ---- the watch document ------------------------------------------------------------------
 
 /// Text into html: safe inside a tag and inside a double-quoted attribute.
@@ -541,10 +666,12 @@ fn origin(headers: &HeaderMap) -> String {
     format!("{proto}://{host}")
 }
 
-/// What the picture in the card is: the stream itself while live and a thumbnail exists,
-/// else the profile picture, else nothing. `summary_large_image` shows the thumbnail big.
+/// What the picture in the card is: the stream itself while live and a thumbnail exists, else
+/// the offline picture while not live, else the profile picture, else nothing. The two wide
+/// ones show big (`summary_large_image`); the profile picture is a square beside the words.
 enum Card {
     Thumbnail,
+    Offline(i64),
     Picture(i64),
     None,
 }
@@ -568,6 +695,7 @@ fn head_tags(p: &Profile, presence: Presence, card: &Card, origin: &str) -> Stri
     let url = format!("{origin}/watch/{}", p.name);
     let (image, kind) = match card {
         Card::Thumbnail => (Some(format!("{origin}/thumb/{}.jpg", p.name)), "summary_large_image"),
+        Card::Offline(v) => (Some(format!("{origin}/api/streamers/{}/offline?v={v}", p.name)), "summary_large_image"),
         Card::Picture(v) => (Some(format!("{origin}/api/streamers/{}/avatar?v={v}", p.name)), "summary"),
         Card::None => (None, "summary"),
     };
@@ -597,16 +725,24 @@ fn head_tags(p: &Profile, presence: Presence, card: &Card, origin: &str) -> Stri
 
 /// The `<template id="watch-shell">` of index.html with the placeholders filled in.
 /// None if the pages have no such template (an older build): the head alone still works.
-fn card_html(shell: &str, p: &Profile, presence: Presence) -> Option<String> {
+fn card_html(shell: &str, p: &Profile, presence: Presence, card: &Card) -> Option<String> {
     let start = shell.find(TEMPLATE_OPEN)? + TEMPLATE_OPEN.len();
     let end = start + shell[start..].find(TEMPLATE_CLOSE)?;
     let avatar = p
         .avatar
         .map(|v| format!(r#"<img src="/api/streamers/{}/avatar?v={v}" alt="" class="{AVATAR_IMG_CLASS}">"#, p.name))
         .unwrap_or_default();
+    // the box where the player goes: the offline picture over it while they are not live and
+    // have one, else black. an inline style, so an api older than the placeholder leaves words
+    // the browser ignores, not words on the page
+    let banner = match card {
+        Card::Offline(v) => format!("background-image:url(/api/streamers/{}/offline?v={v})", p.name),
+        _ => String::new(),
+    };
     Some(
         shell[start..end]
             .replace("{{avatar}}", &avatar)
+            .replace("{{banner}}", &escape(&banner))
             .replace("{{name}}", &escape(&p.name))
             .replace("{{verified}}", if p.verified { VERIFIED_HTML } else { "" })
             .replace("{{status}}", presence.shown())
@@ -638,7 +774,7 @@ fn render(shell: &str, p: &Profile, presence: Presence, card: &Card, origin: &st
     if let Some(at) = html.find("</head>") {
         html.insert_str(at, &head_tags(p, presence, card, origin));
     }
-    if let Some(filled) = card_html(shell, p, presence) {
+    if let Some(filled) = card_html(shell, p, presence, card) {
         html = html.replacen(EMPTY_ROOT, &format!(r#"<div id="root">{filled}</div>"#), 1);
     }
     html
@@ -684,7 +820,12 @@ async fn watch_page(State(s): State<AppState>, headers: HeaderMap, Path(rest): P
     let card = if live && thumb_exists(&s, &name).await {
         Card::Thumbnail
     } else {
-        profile.avatar.map_or(Card::None, Card::Picture)
+        match (live, profile.offline, profile.avatar) {
+            // the offline picture is for a page with no player on it: live without a thumbnail yet shows the face
+            (false, Some(v), _) => Card::Offline(v),
+            (_, _, Some(v)) => Card::Picture(v),
+            _ => Card::None,
+        }
     };
     // the word beside the name: live is known; here and the choice come from redis and the row.
     // a redis that does not answer leaves the two words the page always had
@@ -711,6 +852,12 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/streamers/{name}/thumbs/{id}", get(get_thumb).delete(delete_thumb))
         // the picture's ceiling is the read limit too: past it the body is dropped, not buffered
         .layer(DefaultBodyLimit::max(MAX_AVATAR_BYTES))
+        // after that layer, so the wider picture gets its own ceiling and nothing else does
+        .route(
+            "/api/streamers/{name}/offline",
+            get(get_offline).put(put_offline).delete(delete_offline).layer(DefaultBodyLimit::max(MAX_OFFLINE_BYTES)),
+        )
+        .route("/api/streamers/{name}/offline-note", put(put_offline_note))
         .route("/watch/", get(watch_nobody))
         .route("/watch/{*rest}", get(watch_page))
 }
@@ -727,7 +874,7 @@ mod tests {
     <script type="module" crossorigin src="/assets/index-abc.js"></script>
   </head>
   <body>
-    <template id="watch-shell"><h1>{{avatar}}{{name}}{{verified}}</h1><p class="{{tone}}">{{status}}</p><p>{{bio}}</p></template>
+    <template id="watch-shell"><h1>{{avatar}}{{name}}{{verified}}</h1><div style="{{banner}}"></div><p class="{{tone}}">{{status}}</p><p>{{bio}}</p></template>
     <div id="root"></div>
   </body>
 </html>
@@ -741,11 +888,12 @@ mod tests {
         // the ones from before ids, read and lifted, never written
         assert_eq!(legacy_thumb_key("bob", 7), "thumbs/bob/7.jpg");
         assert_eq!(legacy_avatar_key("bob"), "avatars/bob.jpg");
-        assert_eq!(picture_keys(id, &[7, 9]).len(), 3);
+        assert_eq!(offline_key(id), "offline/7f3a1b2c-0000-4000-8000-000000000001.jpg");
+        assert_eq!(picture_keys(id, &[7, 9]).len(), 4);
     }
 
     fn profile(bio: &str, avatar: Option<i64>, verified: bool) -> Profile {
-        Profile { name: "bob".into(), bio: bio.into(), avatar, verified }
+        Profile { name: "bob".into(), bio: bio.into(), avatar, verified, offline: None, offline_note: String::new() }
     }
 
     #[test]
@@ -759,6 +907,8 @@ mod tests {
         assert!(html.contains(r#"<div id="root"><h1>bob<span class="ml-2 text-increase""#));
         assert!(html.contains(r#"<p class="text-primaryBlue">streaming</p>"#));
         assert!(html.contains("<p>hi &lt;all&gt;</p>"));
+        // the player's box stays black: the stream goes there
+        assert!(html.contains(r#"<div style=""></div>"#));
         // the head came after the charset, before </head>, and the script is still there
         assert!(html.find("<meta charset").unwrap() < html.find("og:title").unwrap());
         assert!(html.find("og:title").unwrap() < html.find("</head>").unwrap());
@@ -777,6 +927,25 @@ mod tests {
         // every placeholder in the card is filled; the inert <template> keeps its own
         let root = &html[html.find(r#"<div id="root">"#).unwrap()..];
         assert!(!root.contains("{{"));
+    }
+
+    #[test]
+    fn offline_with_an_offline_picture() {
+        let mut p = profile("", Some(1700000000), false);
+        p.offline = Some(1700000001);
+        let html = render(SHELL, &p, Presence::Offline, &Card::Offline(1700000001), "https://x");
+        // the wide picture is the card, big; the face stays beside the name; the player's box is the picture
+        assert!(html.contains(r#"og:image" content="https://x/api/streamers/bob/offline?v=1700000001""#));
+        assert!(html.contains(r#"twitter:card" content="summary_large_image""#));
+        assert!(html.contains(r#"<img src="/api/streamers/bob/avatar?v=1700000000" alt="""#));
+        assert!(html.contains(r#"<div style="background-image:url(/api/streamers/bob/offline?v=1700000001)"></div>"#));
+    }
+
+    #[test]
+    fn notes_are_one_line_and_capped() {
+        assert_eq!(clean_note("  back\n\ttuesday   8pm  "), "back tuesday 8pm");
+        assert_eq!(clean_note("").len(), 0);
+        assert_eq!(clean_note(&"x".repeat(300)).chars().count(), MAX_NOTE_CHARS);
     }
 
     #[test]

@@ -103,8 +103,8 @@ fn rank(word: Presence) -> u8 {
     }
 }
 
-/// name, verified, avatar, bio, followed_at
-type FollowedRow = (String, bool, Option<i64>, String, DateTime<Utc>);
+/// name, verified, avatar, bio, followed_at, mutual (that name follows this login back: a friend)
+type FollowedRow = (String, bool, Option<i64>, String, DateTime<Utc>, bool);
 
 // ---- the routes -------------------------------------------------------------------------------
 
@@ -162,15 +162,17 @@ async fn unfollow(State(s): State<AppState>, Name(name): Name, Me(me): Me) -> Re
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn followed_json((name, verified, avatar, bio, followed_at): &FollowedRow, live: bool, word: Presence) -> Value {
-    json!({ "name": name, "verified": verified, "avatar": avatar, "bio": bio, "live": live, "presence": word, "followed_at": followed_at })
+fn followed_json((name, verified, avatar, bio, followed_at, mutual): &FollowedRow, live: bool, word: Presence) -> Value {
+    json!({ "name": name, "verified": verified, "avatar": avatar, "bio": bio, "live": live, "presence": word, "followed_at": followed_at, "mutual": mutual })
 }
 
 /// `GET /api/following`: the login's, streaming first, then by how they are, then newest follow first.
+/// `mutual` is the other edge: they follow this login too. Nothing stores "friends"; the join is the list.
 async fn following(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let rows: Vec<FollowedRow> = sqlx::query_as(
-        "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio, f.followed_at
+        "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio, f.followed_at,
+                EXISTS (SELECT 1 FROM follows b WHERE b.follower_id = s.id AND b.followed_id = $1)
          FROM follows f JOIN streamers s ON s.id = f.followed_id
          WHERE f.follower_id = $1
          ORDER BY f.followed_at DESC",

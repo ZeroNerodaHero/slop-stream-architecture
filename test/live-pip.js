@@ -1,12 +1,13 @@
-// Picture in picture for the broadcast: the go live page's button is a home click that keeps
-// the stream, which then shows in a corner of every other page (#live-pip-player: your camera,
-// the status word, how many are watching) while watchers keep getting frames; you can open
-// another stream's page and watch it with your own still going; the corner's chat is your own
-// room with your lines marked; coming back takes the stream over (one go-live in total); it
-// stacks above/below a watched stream's corner player without overlapping; × ends it; and a
-// tab closed with the stream in the corner ends it too (the tab-close listener outlives the
-// page). A plain home click without the button still ends the stream. Two publishers with
-// fake cameras and one watcher.
+// Picture in picture for the broadcast: leaving the go live page with a stream up keeps it. A
+// plain home click, no button, lands with your stream in a corner of every other page
+// (#live-pip-player: your camera, the status word `live`, how many are watching) while watchers
+// keep getting frames, with no stop call and the name still listed; you can open another
+// stream's page and watch it with your own still going; the corner's chat is your own room with
+// your lines marked; coming back takes the stream over (one go-live in total); the page's
+// button is the same home click; it stacks above/below a watched stream's corner player without
+// overlapping; × ends it; leaving with nothing on air (stopped on the page) puts nothing in the
+// corner; and a tab closed with the stream in the corner ends it too (the tab-close listener
+// outlives the page). Two publishers with fake cameras and one watcher.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node live-pip.js
 const { chromium } = require('playwright');
 const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
@@ -60,6 +61,14 @@ async function drag(p, sel, dx, dy) {
   await sleep(100);
 }
 const listed = async (p, name) => (await p.evaluate(() => fetch('/api/streams').then((r) => r.json()))).some((s) => s.name === name);
+const waitListed = async (p, name, timeout = 20000) => {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeout) {
+    if (await listed(p, name)) return;
+    await sleep(500);
+  }
+  throw new Error(`${name} is not listed on /api/streams after ${timeout}ms`);
+};
 const waitUnlisted = async (p, name, timeout = 20000) => {
   const t0 = Date.now();
   while (Date.now() - t0 < timeout) {
@@ -110,27 +119,18 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     return `${calls.goLive} go-live call`;
   });
 
-  await step('without the button, a plain home click still ends the stream and releases the camera', async () => {
-    await s.click('header a[href="/"]');
-    await s.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
-    await sleep(300);
-    expect((await s.$('#live-pip-player')) === null, 'the corner player showed without the button');
-    expect(calls.stop === 1, `${calls.stop} stop calls`);
-    await waitUnlisted(s, ME);
-    return 'stopped, unlisted';
-  });
-
   const w = await (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();
   let box;
-  await step('live again, then the button: home, with your stream in the bottom right corner, live, the camera playing', async () => {
-    await goLive(s, ME);
-    await s.click('#live-pip');
+  await step('a plain home click, no button: home, with your stream in the bottom right corner saying live, the camera playing; no stop call, still listed', async () => {
+    await s.click('header a[href="/"]');
     await s.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
     await s.waitForSelector('#live-pip-player', { timeout: 10000 });
     await waitText(s, '#live-pip-status', /^live$/, 10000);
     const name = await text(s, '#live-pip-player a.font-semibold');
     expect(name === ME, `the player names "${name}"`);
     expect((await s.$('#pip-player')) === null, 'a watch player showed with nothing being watched');
+    expect(calls.stop === 0, `${calls.stop} stop calls: leaving the page stopped the stream`);
+    await waitListed(s, ME);
     box = await rect(s, '#live-pip-player');
     const view = await s.evaluate(() => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight }));
     expect(near(box.right, view.w - 24) && near(box.bottom, view.h - 24), `not in the corner: ${at(box)} in ${view.w}×${view.h}`);
@@ -146,7 +146,7 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await s.waitForSelector('#live-pip-viewers[data-viewers]', { timeout: 15000 });
     const viewers = Number(await s.getAttribute('#live-pip-viewers', 'data-viewers'));
     expect(viewers >= 1, `the corner says ${viewers} watching`);
-    expect(calls.goLive === 2 && calls.stop === 1, `go-live ${calls.goLive}, stop ${calls.stop}`);
+    expect(calls.goLive === 1 && calls.stop === 0, `go-live ${calls.goLive}, stop ${calls.stop}`);
     return `${flow} · "${await text(s, '#live-pip-viewers')}"`;
   });
 
@@ -191,15 +191,17 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await waitStatus(s, /^live$/, 10000);
     expect((await s.$('#live-pip-player')) === null, "the corner player is still there on the stream's own page");
     expect((await s.$('#stop')) !== null, 'no stop button');
-    expect(calls.goLive === 2, `go-live was called again (${calls.goLive} in total)`);
+    expect(calls.goLive === 1, `go-live was called again (${calls.goLive} in total)`);
     const preview = await framesFlow(s, '#preview');
     const theirs = await framesFlow(w, '#video');
     return `${preview} · watcher ${theirs}`;
   });
 
-  await step(`both corners: ${OTHER} in picture in picture too, over your own; stacked bottom right, not overlapping, both playing`, async () => {
-    await s.click('header a[href="/"]');
+  await step(`the page's button is the same home click; then ${OTHER} in picture in picture too, over your own; stacked bottom right, not overlapping, both playing`, async () => {
+    await s.click('#live-pip');
+    await s.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
     await s.waitForSelector('#live-pip-player', { timeout: 10000 });
+    expect(calls.goLive === 1 && calls.stop === 0, `go-live ${calls.goLive}, stop ${calls.stop}`);
     await s.click(`#list a[aria-label="watch ${OTHER}"]`);
     await s.waitForURL(`**/watch/${OTHER}`, { timeout: 10000 });
     await waitStatus(s, /^watching$/);
@@ -247,7 +249,7 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await s.click('#live-pip-close');
     await s.waitForSelector('#live-pip-player', { state: 'detached', timeout: 5000 });
     await waitStatus(w, /ended/, 15000);
-    expect(calls.stop === 2, `${calls.stop} stop calls in total`);
+    expect(calls.stop === 1, `${calls.stop} stop calls in total`);
     await waitUnlisted(s, ME);
     expect((await s.$('#pip-player')) !== null, "the watched stream's player went with yours");
     await s.click('#pip-close');
@@ -255,9 +257,22 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     return 'ended, unlisted';
   });
 
-  await step('live once more, kept in the corner on home, then the document is left: the stream ends at once (the tab-close stop outlived the page) and the new load starts clean', async () => {
+  await step('stop on the page, then home: nothing on air, so nothing in the corner, and leaving adds no second stop call', async () => {
     await goLive(s, ME);
-    await s.click('#live-pip');
+    await s.click('#stop');
+    await waitStatus(s, /^stopped$/);
+    await s.click('header a[href="/"]');
+    await s.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
+    await sleep(300);
+    expect((await s.$('#live-pip-player')) === null, 'the corner player showed with nothing on air');
+    expect(calls.stop === 2, `${calls.stop} stop calls in total: one for the button, none for leaving`);
+    await waitUnlisted(s, ME);
+    return 'nothing in the corner, unlisted';
+  });
+
+  await step('live once more, a plain home click keeps it in the corner, then the document is left: the stream ends at once (the tab-close stop outlived the page) and the new load starts clean', async () => {
+    await goLive(s, ME);
+    await s.click('header a[href="/"]');
     await s.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
     await s.waitForSelector('#live-pip-player', { timeout: 10000 });
     await w.goto(`${BASE}/watch/${ME}`, { waitUntil: 'domcontentloaded' });

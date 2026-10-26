@@ -1,7 +1,8 @@
-// The watch document and the profile picture: /watch/<name> is html from the api with a
-// <title>, og:* tags and the profile filled in (offline, with a picture, live with the
-// thumbnail), the picture round-trips and is the owner's only, the shared link carries
-// ?s=<session>, and the spa still boots on the page the api served.
+// The watch document and the profile pictures: /watch/<name> is html from the api with a
+// <title>, og:* tags and the profile filled in (offline, with a picture, with the offline
+// picture, live with the thumbnail), the pictures round-trip and are the owner's only, the
+// offline picture and the line under the word show on the page and in the profile tab, the
+// shared link carries ?s=<session>, and the spa still boots on the page the api served.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node preview.js
 const { chromium, request } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
@@ -115,7 +116,101 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     return meta(html, 'og:image');
   });
 
-  await step("a claimed name's picture: anonymous 403, the owner 200", async () => {
+  // ---- the offline picture and the line under the word: what the page shows while they are not live ----
+  let offlineVersion;
+  const NOTE = 'back tuesday at 8';
+  const putOffline = (ctx, name, data) => ctx.put(`/api/streamers/${name}/offline`, { data, headers: { 'content-type': 'image/jpeg' } });
+  const putNote = (ctx, name, note) => ctx.put(`/api/streamers/${name}/offline-note`, { data: { note } });
+
+  await step('the offline picture: not a jpeg 400, over 512 kb 413, 300 kb 200 (its own ceiling), round-trips; the line is kept as one line', async () => {
+    const text = await putOffline(anon, NAME, Buffer.from('hello'));
+    expect(text.status() === 400, `text got ${text.status()}`);
+    const big = await putOffline(anon, NAME, Buffer.concat([JPEG, Buffer.alloc(600 * 1024)]));
+    expect(big.status() === 413, `600 kb got ${big.status()}`);
+    // past the avatar's 256 kb and under this picture's 512: the wider one has a ceiling of its own
+    const wide = await putOffline(anon, NAME, Buffer.concat([JPEG, Buffer.alloc(300 * 1024)]));
+    expect(wide.status() === 200, `300 kb got ${wide.status()}`);
+    const ok = await putOffline(anon, NAME, JPEG);
+    const saved = await ok.json();
+    expect(ok.status() === 200 && Number.isInteger(saved.offline), `jpeg got ${ok.status()} ${JSON.stringify(saved)}`);
+    offlineVersion = saved.offline;
+    const back = await anon.get(`/api/streamers/${NAME}/offline?v=${offlineVersion}`);
+    expect(back.status() === 200 && back.headers()['content-type'] === 'image/jpeg', `get got ${back.status()} ${back.headers()['content-type']}`);
+    expect(/public/.test(back.headers()['cache-control'] || ''), `cache-control ${back.headers()['cache-control']}`);
+    expect(Buffer.compare(await back.body(), JPEG) === 0, 'bytes differ');
+    const note = await putNote(anon, NAME, '  back\n tuesday   at 8 ');
+    const kept = await note.json();
+    expect(note.status() === 200 && kept.offline_note === NOTE, `the line got ${note.status()} ${JSON.stringify(kept)}`);
+    const me = await (await anon.get(`/api/streamers/${NAME}`)).json();
+    expect(me.offline === offlineVersion && me.offline_note === NOTE, `streamer json ${JSON.stringify(me)}`);
+    return `v=${offlineVersion}, "${kept.offline_note}"`;
+  });
+
+  await step('offline with an offline picture: og:image is it, a large card, the player box wears it; the page shows it and the line', async () => {
+    const html = await (await anon.get(`/watch/${NAME}`)).text();
+    expect((meta(html, 'og:image') || '').endsWith(`/api/streamers/${NAME}/offline?v=${offlineVersion}`), `og:image ${meta(html, 'og:image')}`);
+    expect(meta(html, 'twitter:card') === 'summary_large_image', `twitter:card ${meta(html, 'twitter:card')}`);
+    expect(hasCard(html) && html.includes(`style="background-image:url(/api/streamers/${NAME}/offline?v=${offlineVersion})"`), 'the player box does not wear the picture');
+    expect(html.includes(`<img src="/api/streamers/${NAME}/avatar?v=${version}"`), 'the face left the card');
+    const w = await fresh();
+    await w.goto(`${BASE}/watch/${NAME}`, { waitUntil: 'domcontentloaded' });
+    await w.waitForSelector('#offline-picture', { timeout: 15000 });
+    const src = await w.getAttribute('#offline-picture', 'src');
+    expect((src || '').endsWith(`/api/streamers/${NAME}/offline?v=${offlineVersion}`), `the page's picture is ${src}`);
+    const line = ((await w.textContent('#offline-note')) || '').trim();
+    expect(line === NOTE, `the line reads "${line}"`);
+    expect((await w.$$('#video')).length === 0, 'a player is on the page while nobody is live');
+    await w.close();
+    return meta(html, 'og:image');
+  });
+
+  await step('the profile tab as the name: the picture and the line are there; a wide png lands as a 1280x720 jpeg under 512 kb', async () => {
+    const p = await fresh();
+    await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await p.hover('#user-panel');
+    await p.waitForSelector('#username', { timeout: 15000 });
+    await p.fill('#username', NAME);
+    await p.press('#username', 'Enter');
+    await p.click('#you');
+    await p.waitForSelector('#user-modal[open]', { timeout: 5000 });
+    await p.waitForFunction((v) => (document.querySelector('#profile-offline-preview')?.getAttribute('src') || '').endsWith(`/offline?v=${v}`), offlineVersion, { timeout: 10000 });
+    expect((await p.inputValue('#profile-offline-note')) === NOTE, `the box holds "${await p.inputValue('#profile-offline-note')}"`);
+    // a 2000x1000 png with a gradient: not a jpeg, not 16:9, far over the ceiling as it is
+    const png = await p.evaluate(() => {
+      const c = document.createElement('canvas');
+      c.width = 2000;
+      c.height = 1000;
+      const x = c.getContext('2d');
+      const g = x.createLinearGradient(0, 0, 2000, 1000);
+      g.addColorStop(0, '#ff8800');
+      g.addColorStop(1, '#0044ff');
+      x.fillStyle = g;
+      x.fillRect(0, 0, 2000, 1000);
+      return c.toDataURL('image/png');
+    });
+    await p.setInputFiles('#profile-offline-file', { name: 'banner.png', mimeType: 'image/png', buffer: Buffer.from(png.split(',')[1], 'base64') });
+    await p.waitForFunction(() => document.querySelector('#profile-offline-status')?.textContent === 'saved', null, { timeout: 15000 });
+    const me = await (await anon.get(`/api/streamers/${NAME}`)).json();
+    expect(Number.isInteger(me.offline) && me.offline >= offlineVersion, `after the upload: ${JSON.stringify(me)}`);
+    offlineVersion = me.offline;
+    const bytes = await (await anon.get(`/api/streamers/${NAME}/offline?v=${offlineVersion}`)).body();
+    expect(bytes.length <= 512 * 1024 && bytes[0] === 0xff && bytes[1] === 0xd8, `${bytes.length} bytes, not a jpeg under 512 kb`);
+    const size = await p.evaluate(
+      (url) =>
+        new Promise((res, rej) => {
+          const i = new Image();
+          i.onload = () => res([i.naturalWidth, i.naturalHeight]);
+          i.onerror = () => rej(new Error('the picture did not load'));
+          i.src = url;
+        }),
+      `/api/streamers/${NAME}/offline?v=${offlineVersion}`
+    );
+    expect(size[0] === 1280 && size[1] === 720, `the picture is ${size.join('x')}`);
+    await p.close();
+    return `${bytes.length} bytes, ${size.join('x')}`;
+  });
+
+  await step("a claimed name's pictures and line: anonymous 403, the owner 200", async () => {
     const CLAIMED = 'pvacct' + RUN;
     const signup = await owner.post('/api/signup', { data: { name: CLAIMED, password: 'correct horse battery' } });
     expect(signup.status() === 201, `signup got ${signup.status()}`);
@@ -125,6 +220,13 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     expect(yes.status() === 200, `owner got ${yes.status()}`);
     const del = await anon.delete(`/api/streamers/${CLAIMED}/avatar`);
     expect(del.status() === 403, `anonymous delete got ${del.status()}`);
+    const noOffline = await putOffline(anon, CLAIMED, JPEG);
+    const noNote = await putNote(anon, CLAIMED, 'not mine');
+    const noOfflineDel = await anon.delete(`/api/streamers/${CLAIMED}/offline`);
+    expect(noOffline.status() === 403 && noNote.status() === 403 && noOfflineDel.status() === 403, `anonymous offline picture ${noOffline.status()}, line ${noNote.status()}, delete ${noOfflineDel.status()}`);
+    const yesOffline = await putOffline(owner, CLAIMED, JPEG);
+    const yesNote = await putNote(owner, CLAIMED, 'mine');
+    expect(yesOffline.status() === 200 && yesNote.status() === 200, `owner offline picture ${yesOffline.status()}, line ${yesNote.status()}`);
     await owner.post('/api/logout');
     return `${CLAIMED}`;
   });
@@ -146,7 +248,7 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     return href.replace(BASE, '');
   });
 
-  await step('live: og:title says live, og:image is the thumbnail once there is one (<= 15s)', async () => {
+  await step('live: og:title says live, og:image is the thumbnail once there is one (<= 15s), not the offline picture', async () => {
     const t0 = Date.now();
     while ((await anon.get(`/thumb/${NAME}.jpg`)).status() !== 200) {
       expect(Date.now() - t0 < 15000, 'no thumbnail after 15s');
@@ -158,7 +260,9 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     expect(meta(html, 'twitter:card') === 'summary_large_image', `twitter:card ${meta(html, 'twitter:card')}`);
     expect(meta(html, 'og:description') === 'live now', `og:description ${meta(html, 'og:description')}`);
     expect((meta(html, 'og:url') || '').endsWith(`/watch/${NAME}`), `og:url keeps the query: ${meta(html, 'og:url')}`);
-    expect(html.includes('>live</p>'), 'the card does not say live');
+    // the word beside the name is the presence word (docs/status.md): `streaming`, the title alone says live
+    expect(html.includes('>streaming</p>'), 'the card does not say streaming');
+    expect(hasCard(html) && !html.includes('background-image:url('), 'the player box wears the offline picture while live');
     return `thumbnail after ${Date.now() - t0} ms`;
   });
 
@@ -175,6 +279,20 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     await publisher.click('#stop');
     await waitStatus(publisher, /stopped/);
     return `status "${s}"`;
+  });
+
+  await step('remove the offline picture: 204, then 404, the card is the face again; an empty line clears it', async () => {
+    const del = await anon.delete(`/api/streamers/${NAME}/offline`);
+    expect(del.status() === 204, `delete got ${del.status()}`);
+    const gone = await anon.get(`/api/streamers/${NAME}/offline?v=${offlineVersion}`);
+    expect(gone.status() === 404, `get after delete got ${gone.status()}`);
+    const cleared = await (await putNote(anon, NAME, '   ')).json();
+    expect(cleared.offline_note === '', `the cleared line is ${JSON.stringify(cleared)}`);
+    const html = await (await anon.get(`/watch/${NAME}`)).text();
+    expect((meta(html, 'og:image') || '').endsWith(`/api/streamers/${NAME}/avatar?v=${version}`), `og:image ${meta(html, 'og:image')}`);
+    expect(meta(html, 'twitter:card') === 'summary', `twitter:card ${meta(html, 'twitter:card')}`);
+    expect(hasCard(html) && !html.includes('background-image:url('), 'the player box still wears a picture');
+    return 'the face again';
   });
 
   await step('remove the picture: 204, then 404 and no og:image', async () => {

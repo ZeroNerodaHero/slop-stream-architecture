@@ -28,11 +28,10 @@ export function HomeLink({ reload = false }: { reload?: boolean }) {
   );
 }
 
-/** The page's title row and its width. Who you are is not here: UserPanel sits in the corner, mounted once by the router's Shell. */
+/** The page's title row and its width. Who you are is not here: the sidebar is mounted once by the router's Shell, beside this column. */
 export function PageFrame({ title, titleId, aside, wide = false, children }: PageFrameProps) {
   return (
-    // the bottom padding is room for the corner panel, so the end of a page can scroll out from under it
-    <main className={cn('mx-auto px-5 pb-28 pt-6', wide ? 'max-w-[1360px]' : 'max-w-[960px]')}>
+    <main className={cn('mx-auto px-5 pb-10 pt-16', wide ? 'max-w-[1360px]' : 'max-w-[960px]')}>
       {(title || aside) && (
         <header className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-primaryStroke pb-4">
           <div className="flex min-w-0 items-center gap-4">
@@ -43,7 +42,7 @@ export function PageFrame({ title, titleId, aside, wide = false, children }: Pag
               </h1>
             )}
           </div>
-          {aside && <div className="flex flex-wrap items-center gap-4">{aside}</div>}
+          {aside && <div className="ml-auto max-w-full shrink-0">{aside}</div>}
         </header>
       )}
       {children}
