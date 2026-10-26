@@ -8,9 +8,11 @@
 # and runs the ones before it, so nothing is recreated for it.
 #
 # one pathspec per line. `#` starts a comment. the caddyfile is bind-mounted, in no image.
+# random-media/gifs is in the dummy image (the rest of random-media, the seed script's pictures, is in none).
 api
 video
 frontend
+random-media/gifs
 :(exclude)frontend/Caddyfile
 Cargo.toml
 Cargo.lock

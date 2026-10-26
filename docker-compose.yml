@@ -162,7 +162,8 @@ services:
 
   chat:
     # the text chat. the api binary run as `api chat`, same image, no extra build.
-    # one websocket per viewer at /chat/<name>; lines live in redis streams. see docs/chat.md
+    # one websocket per viewer at /chat/<name>; the live lines are a redis stream. see docs/chat.md.
+    # CHAT_PERSIST=1 also writes each line to postgres, so a room can be scrolled, searched and jumped to.
     image: ${IMAGES:-}stream-api:${TAG:-latest}
     container_name: chat
     restart: unless-stopped
@@ -172,6 +173,8 @@ services:
       DATABASE_URL: postgres://stream:stream@database:5432/stream
       REDIS_URL: redis://redis:6379/0
       PORT: "4100"
+      # empty or 0: redis only, last 500 lines. 1: also keep every line in postgres.
+      CHAT_PERSIST: ${CHAT_PERSIST:-}
       RUST_LOG: info
     depends_on:
       # healthy, not started: the api creates the tables (accounts included) on its
@@ -291,7 +294,7 @@ services:
     # 7880 (the setup websocket) stays inside. browsers reach it through the frontend, at /ws
 
   dummy:
-    # fake streams for styling and debugging. each one is a few gifs (video/gifs, dealt
+    # fake streams for styling and debugging. each one is a few gifs (random-media/gifs, dealt
     # out at random) bouncing around, the stream's name on top, a clock, plus a quiet
     # tone. same binary as video, run as `video dummy`, with ffmpeg drawing the picture.
     # DUMMY_STREAMS=0 means it sits idle. change .env, then: ./deploy.sh dummy

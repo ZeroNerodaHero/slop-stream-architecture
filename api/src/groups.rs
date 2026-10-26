@@ -5,6 +5,9 @@
 //! Nobody joins it; a chat socket whose hello says `bot: true` wears it (chat.rs), so the
 //! pretend chatters of the fake streams can be told apart, and hidden, in the panel.
 //!
+//! Every other group is also a server. It starts with a channel called `general`, and a
+//! member can add more. The explorer lists them; the room is `/chat/<server>/<channel>`.
+//!
 //! Badges travel on the chat line itself (`groups`: name, badge, colour, as they were when
 //! the line was said), so drawing a room needs no lookup here.
 
@@ -16,6 +19,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::auth::Me;
 use crate::chat::clean_text;
@@ -29,6 +33,12 @@ const MAX_ABOUT_CHARS: usize = 200;
 /// Groups one login may make, and be in. Every badge goes on every line, so both are capped.
 const GROUPS_PER_MAKER: i64 = 10;
 const GROUPS_PER_MEMBER: i64 = 8;
+/// Channels on one server, `general` included.
+const CHANNELS_PER_SERVER: i64 = 20;
+/// The channel a group starts with. It is not deleted.
+const GENERAL: &str = "general";
+/// Words the chat history routes already use, so a channel cannot be one of them.
+const RESERVED_CHANNELS: &[&str] = &["before", "search", "by", "around"];
 
 /// What a chat line carries for each group its speaker is in.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -38,16 +48,16 @@ pub(crate) struct Badge {
     pub(crate) color: String,
 }
 
-/// The badges `name` wears: its groups' in the order joined, with `bot` first when the
-/// socket said so. One query. An anonymous nick passes "" and matches no membership.
-pub(crate) async fn badges_of(db: &PgPool, name: &str, bot: bool) -> Result<Vec<Badge>, sqlx::Error> {
+/// The badges an account wears: its groups' in the order joined, with `bot` first when the
+/// socket said so. One query. `None` (an anonymous nick) matches no membership.
+pub(crate) async fn badges_of(db: &PgPool, user: Option<Uuid>, bot: bool) -> Result<Vec<Badge>, sqlx::Error> {
     let rows: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT g.name, g.badge, g.color FROM groups g
-         LEFT JOIN memberships m ON m.group_name = g.name AND m.name = $1
-         WHERE (g.name = $2 AND $3) OR m.name IS NOT NULL
+         LEFT JOIN memberships m ON m.group_name = g.name AND m.user_id = $1
+         WHERE (g.name = $2 AND $3) OR m.user_id IS NOT NULL
          ORDER BY g.name = $2 DESC, m.joined_at",
     )
-    .bind(name)
+    .bind(user)
     .bind(BOT_GROUP)
     .bind(bot)
     .fetch_all(db)
@@ -101,9 +111,9 @@ fn clean_about(raw: &str) -> String {
     clean_text(raw).chars().take(MAX_ABOUT_CHARS).collect()
 }
 
-/// How many groups `name` is in. The cap says when joining one more is one too many.
-async fn member_of(db: &PgPool, name: &str) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar("SELECT count(*) FROM memberships WHERE name = $1").bind(name).fetch_one(db).await
+/// How many groups an account is in. The cap says when joining one more is one too many.
+async fn member_of(db: &PgPool, user: Uuid) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT count(*) FROM memberships WHERE user_id = $1").bind(user).fetch_one(db).await
 }
 
 fn too_many_groups() -> ApiError {
@@ -129,16 +139,18 @@ fn group_json((name, badge, color, about, made_by, members, mine): GroupRow) -> 
 }
 
 /// `GET /api/groups`: every group, `bot` first, then oldest first; how many are in each
-/// and, for a login, whether it is one of them.
+/// and, for a login, whether it is one of them. `made_by` is the maker's name as it is
+/// now, by the id: a renamed maker reads right everywhere.
 async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let rows: Vec<GroupRow> = sqlx::query_as(
-        "SELECT g.name, g.badge, g.color, g.about, g.created_by,
+        "SELECT g.name, g.badge, g.color, g.about, maker.name,
                 (SELECT count(*) FROM memberships m WHERE m.group_name = g.name),
-                EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.name = $1)
+                EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1)
          FROM groups g
+         LEFT JOIN streamers maker ON maker.id = g.created_by_id
          ORDER BY g.name = $2 DESC, g.created_at, g.name",
     )
-    .bind(me.as_deref().unwrap_or(""))
+    .bind(me.as_ref().map(|a| a.id))
     .bind(BOT_GROUP)
     .fetch_all(&s.db)
     .await?;
@@ -163,39 +175,47 @@ async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGrou
     let badge = clean_badge(&body.badge)?;
     let color = clean_color(&body.color)?;
     let about = clean_about(&body.about);
-    let made: i64 = sqlx::query_scalar("SELECT count(*) FROM groups WHERE created_by = $1").bind(&maker).fetch_one(&s.db).await?;
+    let made: i64 = sqlx::query_scalar("SELECT count(*) FROM groups WHERE created_by_id = $1").bind(maker.id).fetch_one(&s.db).await?;
     if made >= GROUPS_PER_MAKER {
         return Err(ApiError::new(StatusCode::FORBIDDEN, format!("you have made {GROUPS_PER_MAKER} groups already. delete one first")));
     }
-    if member_of(&s.db, &maker).await? >= GROUPS_PER_MEMBER {
+    if member_of(&s.db, maker.id).await? >= GROUPS_PER_MEMBER {
         return Err(too_many_groups());
     }
-    // the group and its first member in one statement: no group without its maker in it
+    // the group, its first member, and its first channel in one statement: no server
+    // without `general`, and no group without its maker in it.
+    // the id is the key; the name columns are written while they exist (docs/ids.md)
     let made: Option<String> = sqlx::query_scalar(
         "WITH g AS (
-            INSERT INTO groups (name, badge, color, about, created_by) VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO groups (name, badge, color, about, created_by, created_by_id) VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (name) DO NOTHING RETURNING name
+         ),
+         c AS (
+            INSERT INTO channels (server, name, about, created_by_id)
+            SELECT name, 'general', '', $6 FROM g RETURNING server
          )
-         INSERT INTO memberships (name, group_name) SELECT $5, name FROM g RETURNING group_name",
+         INSERT INTO memberships (name, group_name, user_id)
+         SELECT $5, g.name, $6 FROM g JOIN c ON c.server = g.name RETURNING group_name",
     )
     .bind(&name)
     .bind(&badge)
     .bind(&color)
     .bind(&about)
-    .bind(&maker)
+    .bind(&maker.name)
+    .bind(maker.id)
     .fetch_optional(&s.db)
     .await?;
     if made.is_none() {
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     }
-    log::info!("{maker}: made the group {name} ({badge})");
-    Ok((StatusCode::CREATED, Json(group_json((name, badge, color, about, Some(maker), 1, true)))))
+    log::info!("{}: made the group {name} ({badge})", maker.name);
+    Ok((StatusCode::CREATED, Json(group_json((name, badge, color, about, Some(maker.name), 1, true)))))
 }
 
 /// `POST /api/groups/:group/join`: 204, also when already in it. 401 for nobody, 404 for no
 /// such group, 403 for `bot` (automatic) and past the cap.
 async fn join(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
-    let name = me.ok_or_else(not_logged_in)?;
+    let me = me.ok_or_else(not_logged_in)?;
     let group = group_name(&group)?;
     if group == BOT_GROUP {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "bot is automatic: a bot's chat socket says so. nobody joins it"));
@@ -204,37 +224,38 @@ async fn join(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) 
     if !exists {
         return Err(no_such_group());
     }
-    let already: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM memberships WHERE name = $1 AND group_name = $2)")
-        .bind(&name)
+    let already: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1 AND group_name = $2)")
+        .bind(me.id)
         .bind(&group)
         .fetch_one(&s.db)
         .await?;
     if already {
         return Ok(StatusCode::NO_CONTENT);
     }
-    if member_of(&s.db, &name).await? >= GROUPS_PER_MEMBER {
+    if member_of(&s.db, me.id).await? >= GROUPS_PER_MEMBER {
         return Err(too_many_groups());
     }
-    sqlx::query("INSERT INTO memberships (name, group_name) VALUES ($1, $2) ON CONFLICT DO NOTHING")
-        .bind(&name)
+    sqlx::query("INSERT INTO memberships (name, group_name, user_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING")
+        .bind(&me.name)
         .bind(&group)
+        .bind(me.id)
         .execute(&s.db)
         .await?;
-    log::info!("{name}: joined {group}");
+    log::info!("{}: joined {group}", me.name);
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// `POST /api/groups/:group/leave`: 204, also when not in it. 401 for nobody.
 async fn leave(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
-    let name = me.ok_or_else(not_logged_in)?;
+    let me = me.ok_or_else(not_logged_in)?;
     let group = group_name(&group)?;
-    let done = sqlx::query("DELETE FROM memberships WHERE name = $1 AND group_name = $2")
-        .bind(&name)
+    let done = sqlx::query("DELETE FROM memberships WHERE user_id = $1 AND group_name = $2")
+        .bind(me.id)
         .bind(&group)
         .execute(&s.db)
         .await?;
     if done.rows_affected() > 0 {
-        log::info!("{name}: left {group}");
+        log::info!("{}: left {group}", me.name);
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -247,22 +268,190 @@ async fn remove(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
     if group == BOT_GROUP {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "bot is built in"));
     }
-    let made_by: Option<Option<String>> = sqlx::query_scalar("SELECT created_by FROM groups WHERE name = $1").bind(&group).fetch_optional(&s.db).await?;
+    let made_by: Option<Option<Uuid>> = sqlx::query_scalar("SELECT created_by_id FROM groups WHERE name = $1").bind(&group).fetch_optional(&s.db).await?;
     let Some(made_by) = made_by else { return Err(no_such_group()) };
-    if made_by.as_deref() != Some(who.as_str()) && !s.admin_names.contains(&who) {
+    if made_by != Some(who.id) && !s.admins.iter().any(|a| a.id == who.id) {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "not your group"));
     }
     sqlx::query("DELETE FROM groups WHERE name = $1").bind(&group).execute(&s.db).await?;
-    log::info!("{who}: deleted the group {group}");
+    log::info!("{}: deleted the group {group}", who.name);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A server and a channel, cleaned. `bot` is not a server. The history words are not channels,
+/// or `/chat/vip/by/alice` would be a room and a search at once.
+pub(crate) fn channel_names(server: &str, channel: &str) -> Result<(String, String), ApiError> {
+    let server = group_name(server)?;
+    let channel = group_name(channel)?;
+    if server == BOT_GROUP {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "bot is not a server"));
+    }
+    if RESERVED_CHANNELS.contains(&channel.as_str()) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "that name is reserved"));
+    }
+    Ok((server, channel))
+}
+
+/// The room key `server/channel` once the channel is really there.
+pub(crate) async fn channel_room(db: &PgPool, server: &str, channel: &str) -> Result<(String, String), ApiError> {
+    let (server, channel) = channel_names(server, channel)?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM channels WHERE server = $1 AND name = $2)")
+        .bind(&server)
+        .bind(&channel)
+        .fetch_one(db)
+        .await?;
+    if !exists {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel"));
+    }
+    let room = format!("{server}/{channel}");
+    Ok((server, room))
+}
+
+/// Whether this account is in the group. Speaking in a channel asks; reading does not.
+pub(crate) async fn member(db: &PgPool, user: Uuid, group: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1 AND group_name = $2)")
+        .bind(user)
+        .bind(group)
+        .fetch_one(db)
+        .await
+}
+
+#[derive(Serialize)]
+struct ChannelView {
+    name: String,
+    about: String,
+    can_delete: bool,
+}
+
+#[derive(Serialize)]
+struct ServerView {
+    name: String,
+    badge: String,
+    color: String,
+    about: String,
+    members: i64,
+    mine: bool,
+    channels: Vec<ChannelView>,
+}
+
+/// `GET /api/explore`: every server (not `bot`), split into the ones this login is in and
+/// the rest. Channels oldest first, `general` first because it was made with the group.
+async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
+    let user = me.as_ref().map(|a| a.id);
+    let admin = me.as_ref().is_some_and(|a| s.admins.iter().any(|admin| admin.id == a.id));
+    // name, badge, color, about, members, mine, channel, channel about, can delete
+    let rows: Vec<(String, String, String, String, i64, bool, Option<String>, Option<String>, bool)> = sqlx::query_as(
+        "SELECT g.name, g.badge, g.color, g.about,
+                (SELECT count(*) FROM memberships m WHERE m.group_name = g.name),
+                EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1),
+                c.name, c.about,
+                COALESCE(c.name IS NOT NULL AND c.name <> 'general'
+                    AND (c.created_by_id = $1 OR g.created_by_id = $1 OR $2), false)
+         FROM groups g
+         LEFT JOIN channels c ON c.server = g.name
+         WHERE g.name <> $3
+         ORDER BY g.created_at, g.name, c.created_at NULLS LAST, c.name",
+    )
+    .bind(user)
+    .bind(admin)
+    .bind(BOT_GROUP)
+    .fetch_all(&s.db)
+    .await?;
+    let mut servers: Vec<ServerView> = Vec::new();
+    for (name, badge, color, about, members, mine, channel, channel_about, can_delete) in rows {
+        if servers.last().is_none_or(|server| server.name != name) {
+            servers.push(ServerView { name, badge, color, about, members, mine, channels: Vec::new() });
+        }
+        if let Some(name) = channel {
+            servers.last_mut().unwrap().channels.push(ChannelView { name, about: channel_about.unwrap_or_default(), can_delete });
+        }
+    }
+    let (yours, discover): (Vec<ServerView>, Vec<ServerView>) = servers.into_iter().partition(|server| server.mine);
+    Ok(Json(json!({ "yours": yours, "discover": discover })))
+}
+
+#[derive(Deserialize)]
+struct NewChannel {
+    name: String,
+    #[serde(default)]
+    about: String,
+}
+
+/// `POST /api/groups/:group/channels`: a member adds one. 201. `general` already exists.
+async fn create_channel(
+    State(s): State<AppState>,
+    Path(group): Path<String>,
+    Me(me): Me,
+    body: Result<Json<NewChannel>, JsonRejection>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let who = me.ok_or_else(not_logged_in)?;
+    let Json(body) = body?;
+    let (server, channel) = channel_names(&group, &body.name)?;
+    let about = clean_about(&body.about);
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM groups WHERE name = $1)").bind(&server).fetch_one(&s.db).await?;
+    if !exists {
+        return Err(no_such_group());
+    }
+    if !member(&s.db, who.id, &server).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "join the server first"));
+    }
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM channels WHERE server = $1").bind(&server).fetch_one(&s.db).await?;
+    if n >= CHANNELS_PER_SERVER {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, format!("this server has {CHANNELS_PER_SERVER} channels already")));
+    }
+    let added = sqlx::query(
+        "INSERT INTO channels (server, name, about, created_by_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+    )
+    .bind(&server)
+    .bind(&channel)
+    .bind(&about)
+    .bind(who.id)
+    .execute(&s.db)
+    .await?;
+    if added.rows_affected() == 0 {
+        return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
+    }
+    log::info!("{}: added #{channel} to {server}", who.name);
+    Ok((StatusCode::CREATED, Json(json!({ "name": channel, "about": about, "can_delete": channel != GENERAL }))))
+}
+
+/// `DELETE /api/groups/:group/channels/:channel`: who made the channel, who made the server,
+/// or an admin. `general` stays.
+async fn delete_channel(State(s): State<AppState>, Path((group, channel)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
+    let who = me.ok_or_else(not_logged_in)?;
+    let (server, channel) = channel_names(&group, &channel)?;
+    if channel == GENERAL {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "general stays"));
+    }
+    let row: Option<(Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT c.created_by_id, g.created_by_id FROM channels c
+         JOIN groups g ON g.name = c.server WHERE c.server = $1 AND c.name = $2",
+    )
+    .bind(&server)
+    .bind(&channel)
+    .fetch_optional(&s.db)
+    .await?;
+    let Some((made_channel, made_server)) = row else {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel"));
+    };
+    let admin = s.admins.iter().any(|a| a.id == who.id);
+    if made_channel != Some(who.id) && made_server != Some(who.id) && !admin {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "not your channel"));
+    }
+    sqlx::query("DELETE FROM channels WHERE server = $1 AND name = $2").bind(&server).bind(&channel).execute(&s.db).await?;
+    log::info!("{}: removed #{channel} from {server}", who.name);
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
+        .route("/api/explore", get(explore))
         .route("/api/groups", get(list).post(create))
         .route("/api/groups/{group}", delete(remove))
         .route("/api/groups/{group}/join", post(join))
         .route("/api/groups/{group}/leave", post(leave))
+        .route("/api/groups/{group}/channels", post(create_channel))
+        .route("/api/groups/{group}/channels/{channel}", delete(delete_channel))
 }
 
 #[cfg(test)]
@@ -302,6 +491,16 @@ mod tests {
     fn about_is_capped() {
         assert_eq!(clean_about("  hi  "), "hi");
         assert_eq!(clean_about(&"x".repeat(300)).chars().count(), MAX_ABOUT_CHARS);
+    }
+
+    #[test]
+    fn channel_names_keep_the_history_words_free() {
+        assert!(channel_names("vip", "before").is_err());
+        assert!(channel_names("vip", "search").is_err());
+        assert!(channel_names("vip", "by").is_err());
+        assert!(channel_names("vip", "around").is_err());
+        assert!(channel_names("bot", "general").is_err());
+        assert_eq!(channel_names("VIP", "General").unwrap(), ("vip".into(), "general".into()));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import { api } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
@@ -34,14 +35,14 @@ import {
   setStreamName,
   shareScreen,
   startCamera,
+  startPublishPip,
   stopLive,
-  stopOnLeave,
   stopScreen,
   streamNameAtom,
   streamThumbsAtom,
   thumbStatusAtom,
   watchUrlAtom,
-  liveViewersAtom,
+  liveViewersAtom
 } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
@@ -56,11 +57,12 @@ import { StatusLine } from '@/shared-components/StatusLine';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { StreamTile } from '@/shared-components/StreamTile';
-import { IconButton, revealClassName } from '@/shared-components/VideoControls';
+import { IconButton, PipIcon, revealClassName } from '@/shared-components/VideoControls';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
 
 export function LivePage() {
+  const navigate = useNavigate();
   const previewRef = useRef<HTMLVideoElement | null>(null);
   const message = useAtomValue(publishMessageAtom);
   const tone = useAtomValue(publishToneAtom);
@@ -87,18 +89,21 @@ export function LivePage() {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const thumbFileRef = useRef<HTMLInputElement | null>(null);
 
-  // Mount only: open the camera, fill the name box, end the stream when the tab or the page goes away.
+  // Mount only: open the camera (or find it still on, back from the corner), fill the name box,
+  // and on the way out end the stream, unless picture in picture keeps it going in the corner.
+  // The tab closing is the stream's own listener (publish-atoms), since the stream can outlive this page.
   useEffect(() => {
     void startCamera();
     void enterLivePage();
-    addEventListener('pagehide', stopOnLeave);
-    addEventListener('beforeunload', stopOnLeave);
-    return () => {
-      removeEventListener('pagehide', stopOnLeave);
-      removeEventListener('beforeunload', stopOnLeave);
-      leaveLivePage();
-    };
+    return leaveLivePage;
   }, []);
+
+  // The picture in picture button is a home click that keeps the stream: on, then away, and
+  // the corner player has the camera by the time the home page shows.
+  const toCorner = () => {
+    startPublishPip();
+    navigate('/');
+  };
 
   return (
     <PageFrame title="go live" wide>
@@ -114,9 +119,15 @@ export function LivePage() {
                 <StreamStatsButton id="live-stats" role="publish" stats={stats} tipAt="below-right" panel="down" />
               </div>
             )}
-            {/* while the chat is closed the button stays up, so it can be opened again off the preview */}
-            <div className={cn('absolute inset-x-0 bottom-0 flex p-3', revealClassName(!chatOpen))}>
+            {/* while the chat is closed the bar stays up, so it can be opened again off the preview. once
+                live, picture in picture beside it: the same button as the watch page's, for your own stream */}
+            <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(!chatOpen))}>
               <ChatOpenButton className="ml-auto" />
+              {publishing && (
+                <IconButton id="live-pip" label="picture in picture" onClick={toCorner}>
+                  <PipIcon />
+                </IconButton>
+              )}
             </div>
           </div>
           {/* the screens being shared, each with its stop. the browser's own "stop sharing" bar works too */}

@@ -7,6 +7,7 @@ import {
   bioAtom,
   canHearAtom,
   canRetryAtom,
+  followersAtom,
   leaveWatchPage,
   markAutoplayBlocked,
   markPlaying,
@@ -27,6 +28,7 @@ import {
   watchMessageAtom,
   watchNameAtom,
   watchPhaseAtom,
+  watchRenamedToAtom,
   watchToneAtom,
   watchViewersAtom,
 } from '@/infra/atoms/watch-atoms';
@@ -34,7 +36,9 @@ import { PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceOfAtom } from '@
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
 import { cleanName, isDummyName } from '@/infra/names';
+import { store } from '@/infra/store';
 import { Avatar } from '@/shared-components/Avatar';
+import { FollowButton } from '@/shared-components/FollowButton';
 import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -63,10 +67,12 @@ export function WatchPage() {
   const stats = useAtomValue(watchStatsAtom);
   const verified = useAtomValue(verifiedAtom);
   const avatar = useAtomValue(avatarAtom);
+  const followers = useAtomValue(followersAtom);
   const phase = useAtomValue(watchPhaseAtom);
   const presence = useAtomValue(presenceOfAtom(name));
   const tiles = useAtomValue(tilesAtom);
   const viewers = useAtomValue(watchViewersAtom);
+  const renamedTo = useAtomValue(watchRenamedToAtom);
   // the layout setting: a column on the left, a column on the right, or a window over the page.
   // closed, a column slides out to that side and the video takes the row
   const chatSide = useAtomValue(chatSideAtom);
@@ -84,6 +90,14 @@ export function WatchPage() {
       leaveWatchPage();
     };
   }, []);
+
+  // The name in the url was renamed (the grant or a push said so): this page is the new name's
+  // now. The route is keyed on the name, so this remounts and starts over there. See docs/ids.md
+  useEffect(() => {
+    if (!renamedTo) return;
+    store.set(watchRenamedToAtom, null);
+    navigate(`/watch/${renamedTo}`, { replace: true });
+  }, [renamedTo]);
 
   // The picture in picture button is a home click that keeps the stream: on, then away, and
   // the MiniPlayer has it in the corner by the time the home page shows.
@@ -114,6 +128,17 @@ export function WatchPage() {
             >
               <span aria-hidden className={cn('inline-block h-3 w-3', PRESENCE_SQUARE[presence])} />
               {PRESENCE_WORD[presence]}
+            </span>
+          )}
+          {/* follow them, and how many do (docs/follows.md). the count moves with the click; the api's number comes with the next grant */}
+          {name && !isDummyName(name) && (
+            <span className="ml-3 inline-flex items-center gap-2 align-middle text-base font-normal">
+              <FollowButton id="follow" name={name} onChange={(now) => store.set(followersAtom, (followers ?? 0) + (now ? 1 : -1))} />
+              {followers !== null && (
+                <span id="followers" className="text-textSecondary">
+                  {followers} {followers === 1 ? 'follower' : 'followers'}
+                </span>
+              )}
             </span>
           )}
         </>

@@ -1,7 +1,10 @@
 /**
  * The video server speaks one websocket at /ws. One message each way to set up:
  *   we send   {"role":"publish"|"watch","name":"...","sdp":"<offer>"}
- *             (a publisher adds the go-live "session" and "token"; video checks them with the api)
+ *             (a publisher adds the go-live "session" and "token"; video checks them with the api.
+ *              home's muted camera previews add "preview":true: video serves them like watchers but
+ *              counts none as a viewer and caps them apart, 12 per address in all, past which it
+ *              answers "too many previews from your address")
  *   we get    {"sdp":"<answer>"}  or  {"error":"..."}
  * The socket stays open for the whole session. Closing it hangs up. On the open socket:
  *   a publisher sends  {"slots":[{"slot":0,"kind":"camera"},{"slot":1,"kind":"screen","label":"screen"}]}
@@ -109,6 +112,8 @@ interface ConnectRelayOptions {
   /** The api's go-live grant. Publishers only; without it video answers "not your stream". */
   session?: number;
   token?: number;
+  /** One of home's muted camera previews. Watchers only: video holds it apart from the viewers and their caps. */
+  preview?: boolean;
   url?: string;
   timeoutMs?: number;
   /** Aborting rejects with "cancelled" (the user pressed stop while we were connecting). */
@@ -126,7 +131,7 @@ interface ConnectRelayOptions {
  * Open the socket, send the offer, apply the answer. Resolves with the open socket.
  * Rejects with Error(text) on {"error"}, socket trouble, timeout, or abort.
  */
-export function connectRelay({ role, name, pc, session, token, url = '/ws', timeoutMs = 15000, signal, onMessage }: ConnectRelayOptions): Promise<WebSocket> {
+export function connectRelay({ role, name, pc, session, token, preview, url = '/ws', timeoutMs = 15000, signal, onMessage }: ConnectRelayOptions): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(relayUrl(url));
     let done = false;
@@ -150,7 +155,8 @@ export function connectRelay({ role, name, pc, session, token, url = '/ws', time
 
     ws.onopen = () => {
       // JSON.stringify drops the undefined ones, so a watcher's frame has no session or token
-      const setup = { role, name, sdp: pc.localDescription?.sdp ?? '', session, token };
+      // and only a preview's has preview
+      const setup = { role, name, sdp: pc.localDescription?.sdp ?? '', session, token, preview };
       record(url, 'out', setup); // the token is taken out, the sdp clipped, before it is kept
       ws.send(JSON.stringify(setup));
     };

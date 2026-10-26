@@ -1,8 +1,8 @@
 import { RiCheckboxBlankCircleLine, RiEyeOffLine, RiIndeterminateCircleLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type ReactNode, useEffect, useRef } from 'react';
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 
-import { meAtom } from '@/infra/atoms/auth-atoms';
+import { clearRenameStatus, meAtom, RENAME_DAYS, renameAgainAtom, renameBusyAtom, renameMe, renameStatusAtom } from '@/infra/atoms/auth-atoms';
 import { MAX_CHAT_CHARS, chars, nickAtom, setNick } from '@/infra/atoms/chat-atoms';
 import {
   myPresenceAtom,
@@ -29,13 +29,89 @@ import {
   saveMyBio
 } from '@/infra/atoms/profile-atoms';
 import { pickTab } from '@/infra/atoms/user-modal-atoms';
-import { isDummyName, isValidName } from '@/infra/names';
+import { cleanName, isDummyName, isValidName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
-import { BUTTON, Field, INPUT, OptionCard, SECTION_TITLE, Section, Status } from '@/shared-components/user-modal/parts';
+import { BUTTON, Field, INPUT, OptionCard, PasswordInput, SECTION_TITLE, Section, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
+
+/**
+ * A new name for the account (docs/ids.md): the name rule, the password (a stolen cookie must
+ * not walk off with the name), a `sure?` because every shared link changes, and a 30 day wait
+ * after. On a 200 `me` is already the new name; `identityChanged` tells the rest of the page.
+ */
+function Rename({ me }: { me: string }) {
+  const busy = useAtomValue(renameBusyAtom);
+  const status = useAtomValue(renameStatusAtom);
+  const again = useAtomValue(renameAgainAtom);
+  const [next, setNext] = useState('');
+  const [password, setPassword] = useState('');
+  const [sure, setSure] = useState(false);
+
+  // Mount only: the last visit's "changed" should not still be there.
+  useEffect(() => {
+    clearRenameStatus();
+  }, []);
+
+  const wanted = cleanName(next);
+  const ready = !busy && !again && isValidName(wanted) && !isDummyName(wanted) && wanted !== me && password.length >= 8;
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!sure) {
+      setSure(true);
+      return;
+    }
+    setSure(false);
+    if (await renameMe(wanted, password)) {
+      setNext('');
+      setPassword('');
+      identityChanged('login');
+    }
+  }
+
+  return (
+    <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
+      {/* for password managers: which account the password belongs to */}
+      <input type="text" name="username" value={me} autoComplete="username" readOnly tabIndex={-1} aria-hidden className="sr-only" />
+      <fieldset disabled={!!again} className="m-0 flex flex-col gap-4 border-0 p-0 disabled:opacity-60">
+        <Field id="profile-new-name" label="new name" hint="a-z 0-9 _ and -. up to 32. lowercase.">
+          <input
+            id="profile-new-name"
+            value={next}
+            onChange={(e) => {
+              setNext(e.target.value);
+              setSure(false);
+            }}
+            placeholder={me}
+            maxLength={32}
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            aria-describedby="profile-new-name-hint"
+            className={INPUT}
+          />
+        </Field>
+        <Field id="profile-rename-password" label="your password">
+          <PasswordInput id="profile-rename-password" value={password} onChange={setPassword} autoComplete="current-password" />
+        </Field>
+      </fieldset>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button id="profile-rename" type="submit" variant={sure ? 'danger' : undefined} className={BUTTON} disabled={!ready}>
+          {sure ? `sure? /watch/${me} becomes /watch/${wanted}` : 'change name'}
+        </Button>
+        {sure && (
+          <button type="button" onClick={() => setSure(false)} className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline">
+            keep {me}
+          </button>
+        )}
+        <Status id="profile-rename-status" text={status || (again ? `you can change it again on ${again.toISOString().slice(0, 10)}` : '')} />
+      </div>
+    </form>
+  );
+}
 
 /** The api caps the bio here (in characters, the way `chars` counts). */
 const MAX_BIO_CHARS = MAX_CHAT_CHARS;
@@ -196,15 +272,22 @@ export function ProfileTab() {
 
       <Section
         title="username"
-        description={me ? 'your account name. it is yours alone, and it does not change.' : 'your chat name and your go live default. sign up to make it yours.'}
+        description={
+          me
+            ? `your account name. it is yours alone. it can change once every ${RENAME_DAYS} days, and the old one is kept for you as long.`
+            : 'your chat name and your go live default. sign up to make it yours.'
+        }
       >
         {me ? (
-          <p className="flex items-center gap-2 font-semibold">
-            <span id="profile-me">{me}</span>
-            <span className="text-increase" title="logged in: this name is yours">
-              ✓
-            </span>
-          </p>
+          <>
+            <p className="flex items-center gap-2 font-semibold">
+              <span id="profile-me">{me}</span>
+              <span className="text-increase" title="logged in: this name is yours">
+                ✓
+              </span>
+            </p>
+            <Rename me={me} />
+          </>
         ) : (
           <Field id="profile-name" label="name" hint={`letters, digits, _ and -. up to 24.${nick && name !== nick ? ` saved as ${name}.` : ''}`}>
             <input

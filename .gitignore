@@ -7,3 +7,6 @@ frontend/dist/
 .env
 # the commit the last deploy.sh run that ended well deployed. --pull diffs from it.
 .deployed
+
+# seed.sh: the names and passwords it made (local only)
+.seeded-users

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 
 import { cn } from '@/utils/cn';
 
@@ -33,6 +33,46 @@ export function Field({ id, label, hint, children }: { id: string; label: ReactN
           {hint}
         </p>
       )}
+    </div>
+  );
+}
+
+/** A password box with its show/hide word inside, the way the login page has it. The security tab's and the profile tab's. */
+export function PasswordInput({
+  id,
+  value,
+  onChange,
+  autoComplete,
+  minLength
+}: {
+  id: string;
+  value: string;
+  onChange: (v: string) => void;
+  autoComplete: string;
+  minLength?: number;
+}) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="relative">
+      <input
+        id={id}
+        type={show ? 'text' : 'password'}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        autoComplete={autoComplete}
+        minLength={minLength}
+        maxLength={128}
+        required
+        className={cn(INPUT, 'pr-16')}
+      />
+      <button
+        id={`${id}-show`}
+        type="button"
+        onClick={() => setShow((s) => !s)}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-textSecondary underline-offset-2 hover:underline"
+      >
+        {show ? 'hide' : 'show'}
+      </button>
     </div>
   );
 }

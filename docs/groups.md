@@ -31,7 +31,7 @@ flowchart LR
 
 | | route | does |
 |---|---|---|
-| GET | `/api/groups` | `[{ name, badge, color, about, made_by, members, mine, automatic }]`, `bot` first, then oldest first. `mine` is for the login cookie, always false for nobody. `made_by` is null for `bot` |
+| GET | `/api/groups` | `[{ name, badge, color, about, made_by, members, mine, automatic }]`, `bot` first, then oldest first. `mine` is for the login cookie, always false for nobody. `made_by` is the maker's name as it is now (by id, `ids.md`: a renamed maker reads right), null for `bot` |
 | POST | `/api/groups` | `{ name, badge, color, about? }` → 201 with the group as the list shows it; the maker is in it. 401 nobody, 400 `bad name…` / `badge: 1 to 12 characters` / `color: #rrggbb`, 403 past 10 made or 8 joined, 409 `name taken` (`bot` too) |
 | POST | `/api/groups/:group/join` | 204, also when already in it. 401 nobody, 404 `no such group`, 403 for `bot` and past 8 groups |
 | POST | `/api/groups/:group/leave` | 204, also when not in it. 401 nobody |
@@ -47,11 +47,11 @@ CREATE TABLE IF NOT EXISTS groups (
   badge text NOT NULL,
   color text NOT NULL,
   about text NOT NULL DEFAULT '',
-  created_by text REFERENCES streamers(name) ON DELETE SET NULL,   -- null: built in
+  created_by text REFERENCES streamers(name) ON DELETE SET NULL,   -- null: built in. since ids.md: created_by_id uuid, the key; this column one release more
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS memberships (
-  name text NOT NULL REFERENCES streamers(name) ON DELETE CASCADE,
+  name text NOT NULL REFERENCES streamers(name) ON DELETE CASCADE,  -- since ids.md: user_id uuid is the key; this column one release more
   group_name text NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
   joined_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (name, group_name)
@@ -69,10 +69,31 @@ INSERT INTO groups (name, badge, color, about) VALUES ('bot', 'BOT', '#5865f2', 
 
 `test/groups.js` (`./test.sh`, anywhere): the list has `bot` built in and nobody can make or join; a login makes a group (bad badge, colour and name 400, `bot` 409, the badge trimmed and the colour lowercased), another login joins (204, twice 204, `bot` 403, no such group 404), a member's chat line wears the badge in the group's colour, a raw socket with `bot: true` wears `BOT`, the robot hides it, counts it, keeps the choice over a reload and shows it again, leave (204, twice 204), delete is 403 for a member, 401 for nobody, 403 for `bot`, 204 for the maker and 404 after, and the groups tab makes a group, lists it with `leave`, wears it on the card and deletes it.
 
+## servers
+
+a group other than `bot` is a server. it starts with one channel, `general`, and a member can add more (20 at most). the explorer (`/explore`) lists the servers this login is in, then the rest. a channel is a chat room at `/chat/<server>/<channel>` (`chat.md`): anyone can read it, and speaking takes a login that has joined the server. `general` cannot be deleted. the words `before`, `search`, `by` and `around` are not channel names, because those are the history routes.
+
+| | route | does |
+|---|---|---|
+| GET | `/api/explore` | `{ yours, discover }`, each a list of `{ name, badge, color, about, members, mine, channels: [{ name, about, can_delete }] }`. not `bot`. yours first is the login's, oldest servers first, channels oldest first. `can_delete` is for who made the channel, who made the server, or an admin, and never for `general` |
+| POST | `/api/groups/:group/channels` | `{ name, about? }` → 201 `{ name, about, can_delete }`. a member. 401 nobody, 403 `join the server first` and past 20, 404 `no such group`, 400 `bad name…` / `that name is reserved`, 409 `name taken` |
+| DELETE | `/api/groups/:group/channels/:channel` | 204. who made the channel, who made the server, or an admin. 401, 403 `general stays` and `not your channel`, 404 `no such channel` |
+
+```sql
+CREATE TABLE IF NOT EXISTS channels (
+  server text NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
+  name text NOT NULL,
+  about text NOT NULL DEFAULT '',
+  created_by_id uuid REFERENCES streamers(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (server, name)
+);
+```
+
 ## not here
 
 - roles, permissions, moderators: a badge means nothing to the server.
 - private or invite-only groups, approvals, kicking.
 - editing a group. delete and make it again.
-- badges anywhere but chat and the modal: home and the watch page show the `✓` only.
+- badges on chat lines, in the user modal, and on the explorer. home and the watch page show the `✓` only.
 - a list of who is in a group.

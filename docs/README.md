@@ -1,12 +1,15 @@
 # docs
 
 - `overview.md` — the short one. what this is, how to deploy, test, and work on it. read this first.
+- `idea.md` — the product, not a build. open groups where people show their face and talk, a person's own stream they can decorate, and one person sharing audio for everyone else to hear. `overview.md` is what runs.
 - `spec.md` — the long one. every port, route, env, timeout and rule, for a person or an llm building on it.
 - `chat.md` — the text chat: why redis streams and a websocket, the protocol, the limits, the panel.
 - `architecture.md` — background from before the build. the big picture of calls vs broadcasts, not the repo layout.
 - `architecture-picture.md` — the repo as pictures. what runs, what talks to what, what builds into what. no new rules, just diagrams of what is already here.
 - `accounts.md` — username + password, optional: argon2id on the api, hashed login tokens in a cookie, what an account protects, what a breach gets.
 - `groups.md` — a login joins a group and its chat lines wear the group's badge, discord style. `bot` is built in and automatic (a socket says `bot: true`), and the chat panel can hide the bots' lines.
+- `ids.md` — built. a uuid on every `streamers` row that never changes; logins, memberships, groups and the bucket keys point at it instead of the name, so a login can change its name (`POST /api/name`, the profile tab: once a month, with its password, not while live) and keep everything. the old name held 30 days with links that follow. the migration, proven on a copy first and run at boot on the real database, with a way back.
+- `follows.md` — built, the first half. a login follows a name: one edge table in postgres keyed on the ids of `ids.md` (why not a graph database, redis sets or a counter column), the box over the corner panel (who you follow, streaming first, and a search box to find more), `N followers` and the button on the watch page. still a plan: "alice went live" pushed to every tab and device, gated by `do not disturb`; followed streams first on home; the modal tab.
 - `kubernetes.md` — a plan, not a build. what k8s would buy here, the video routing problem, the code to change first, the steps.
 - `debugging.md` — how you find out something broke. the health answer, the pages reporting their own failures to `/api/errors`, the separate debug database, `/admin`, and the monitor box that polls every box.
 - `metrics.md` — a plan, not a build. cpu, memory, disk and network per container and per box, in our own code: an `api agent` on every box, the monitor keeping and drawing it, alerts on the lines that matter. the questions to settle first.

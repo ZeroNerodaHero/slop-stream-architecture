@@ -32,6 +32,12 @@ const SOUND_PHASES: readonly WatchPhase[] = ['watching', 'reconnecting'];
 const VIDEO_SLOTS = 1 + SCREEN_SLOTS;
 
 export const watchNameAtom = atom('');
+/**
+ * The name this page should be on instead: the one asked for was renamed (the grant said so,
+ * or a `renamed` frame did). The page navigates there and clears it; this module has no router.
+ * See docs/ids.md.
+ */
+export const watchRenamedToAtom = atom<string | null>(null);
 export const watchPhaseAtom = atom<WatchPhase>('loading');
 export const watchMessageAtom = atom('loading');
 export const bioAtom = atom('');
@@ -39,6 +45,8 @@ export const bioAtom = atom('');
 export const verifiedAtom = atom(false);
 /** Their picture's upload time (the `?v=` of its url). `null`: none. */
 export const avatarAtom = atom<number | null>(null);
+/** How many follow them (docs/follows.md). `null` until the grant says, or on an older api. */
+export const followersAtom = atom<number | null>(null);
 /**
  * The main <video>'s stream: the sound and the big picture. One MediaStream for the attempt
  * whose video track is swapped as the big slot changes, so the element never rebinds and the
@@ -209,6 +217,9 @@ onEvents((event) => {
   if (event.type === 'live') streamerLive(event.name);
   else if (event.type === 'ended') {
     if (event.name === store.get(watchNameAtom)) toldLiveAt = 0;
+  } else if (event.type === 'renamed') {
+    // the name on screen became another: the page moves there (docs/ids.md)
+    if (event.name === store.get(watchNameAtom) && isValidName(event.to)) store.set(watchRenamedToAtom, event.to);
   } else if (event.type === 'link' && event.phase === 'open') {
     if (store.get(watchPhaseAtom) === 'waiting') {
       if (linkWasOpen) void start(store.get(watchNameAtom));
@@ -260,9 +271,16 @@ async function start(name: string): Promise<void> {
   }
   // left the page, or a newer call took over, while the api was answering
   if (mine !== attempt) return;
+  // a grant for another name: the one asked for was renamed and is held for the hold's length.
+  // the page moves there, and that mount starts over under the right name
+  if (grant.name && grant.name !== name && isValidName(grant.name)) {
+    store.set(watchRenamedToAtom, grant.name);
+    return;
+  }
   store.set(bioAtom, grant.bio ?? '');
   store.set(verifiedAtom, grant.verified === true);
   store.set(avatarAtom, grant.avatar ?? null);
+  store.set(followersAtom, typeof grant.followers === 'number' ? grant.followers : null);
   // the word beside the name: the socket's while it is open (it is told on `watch` and on every
   // change, and a grant answered a beat behind a push must not undo the push); the grant's otherwise
   if (grant.presence && store.get(eventsPhaseAtom) !== 'open') presenceChanged(name, grant.presence);
@@ -480,5 +498,6 @@ export function endWatch() {
   store.set(bioAtom, '');
   store.set(verifiedAtom, false);
   store.set(avatarAtom, null);
+  store.set(followersAtom, null);
   setPhase('loading', 'loading');
 }

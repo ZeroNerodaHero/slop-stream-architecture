@@ -72,7 +72,7 @@ flowchart TB
 
 ## rules
 
-- name: what it is everywhere. `a-z 0-9 _ -`, 1 to 32. already lowercase, so no two spellings of one name.
+- name: what it is everywhere. `a-z 0-9 _ -`, 1 to 32. already lowercase, so no two spellings of one name. behind it a uuid that never changes (`ids.md`), so a login can change its name once a month and keep its logins, groups and pictures; the old name is held for it 30 days.
 - reserved: `dummy-*` stays with the dummy box.
 - password: 8 to 128 characters, anything in them. no complexity rules, they make passwords worse. unicode normalised (nfkc) first, then measured, the same way at signup, login and password change, so a phone and a laptop type the same thing and what signup took can log in.
 - same error for wrong name and wrong password: `wrong name or password`, and a verify against a fixed decoy hash when the name does not exist, so the timing matches too. that hides *which* of the two was wrong, nothing more: whether a name has an account is public (`GET /api/streamers/<name>` says `verified`, home and watch show the `✓`, an anonymous chat nick on a claimed name is told so). it has to be, the `✓` is the point.
@@ -94,6 +94,12 @@ CREATE TABLE IF NOT EXISTS logins (
   expires_at timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS logins_name_idx ON logins (name);
+
+-- since ids.md: the row has a uuid that never changes, and the login points at it, so the
+-- name can change. `logins.name` stays one release (ON UPDATE CASCADE), then goes.
+ALTER TABLE streamers ADD COLUMN IF NOT EXISTS id uuid NOT NULL DEFAULT gen_random_uuid();
+ALTER TABLE logins ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES streamers(id) ON DELETE CASCADE;
+CREATE TABLE IF NOT EXISTS held_names (name text PRIMARY KEY, user_id uuid NOT NULL REFERENCES streamers(id) ON DELETE CASCADE, until timestamptz NOT NULL);
 ```
 
 `sessions` keeps meaning a stream, so the login rows are `logins`.
@@ -102,12 +108,13 @@ CREATE INDEX IF NOT EXISTS logins_name_idx ON logins (name);
 
 | | route | does |
 |---|---|---|
-| POST | `/api/signup` | `{name, password}` → 201 `{name}` + cookie. 400, 403 `reserved name`, 409 `name taken`, 429 |
-| POST | `/api/login` | `{name, password}` → 200 `{name}` + cookie. 401 `wrong name or password`. 429 `too many tries. wait 15 minutes` |
+| POST | `/api/signup` | `{name, password}` → 201 `{id, name}` + cookie. 400, 403 `reserved name`, 409 `name taken` (another account's, or held after a rename), 429 |
+| POST | `/api/login` | `{name, password}` → 200 `{id, name}` + cookie. 401 `wrong name or password`. 429 `too many tries. wait 15 minutes` |
 | POST | `/api/logout` | 204. deletes the row, clears the cookie. 403 when the browser says it came from another site |
-| POST | `/api/logout-all` | 204. deletes every row for the name. 401 without a login |
-| GET | `/api/me` | `{name}`; `null` for nobody |
+| POST | `/api/logout-all` | 204. deletes every row for the account. 401 without a login |
+| GET | `/api/me` | `{id, name, renamed_at}`; every field `null` for nobody |
 | POST | `/api/password` | `{old, new}` → 204. kills every other login. 401 without a login, 403 `wrong password`, 429 on the login counter |
+| POST | `/api/name` | `{name, password}` → 200 `{id, name, renamed_at}`: the account's name changes, every login of it stays. once in 30 days, not while live; the old name is held 30 days. `ids.md` has the rules and the errors |
 
 changed:
 
@@ -133,16 +140,16 @@ changed:
 
 ## code
 
-- `api/src/auth.rs`: hash, verify, token, cookie, the `Me` extractor (cookie → name), `may_act_as` (the one rule), rate limits, the six routes, `api passwd`.
+- `api/src/auth.rs`: hash, verify, token, cookie, the `Me` extractor (cookie → `Account { id, name }`), `may_act_as` (the one rule), rate limits, the seven routes (`/api/name` is the rename, `ids.md`), `api passwd`.
 - `api/src/main.rs`: schema, the two guards, `verified` on the lists, the `passwd` dispatch.
 - `api/src/chat.rs`: `Me` on the handshake, claimed nicks refused, `verified` on lines.
 - `frontend`: `AuthPage`, `UserPanel` (mounted once by the router's `Shell`), `auth-atoms.ts`, the go-live seed, the chat changes, the `✓`s.
-- `test/auth.js`: sixteen steps, see `spec.md`.
+- `test/auth.js`: twenty steps, see `spec.md`.
 - `video/src/main.rs`: `owns_stream`, the one call to the api's heartbeat that makes the socket honour the gate. the api decides; video checks that it did. (no signing: one http round trip on the same box is simpler than a second secret.)
 
 ## not here
 
 - email, reset links, 2fa
 - oauth (github, discord). it fits later: same `logins` table, one more way to make a row
-- display names with capitals. the stream name is the login name
+- display names with capitals. the stream name is the login name (it can change, `ids.md`, but it is still the one word)
 - admin pages

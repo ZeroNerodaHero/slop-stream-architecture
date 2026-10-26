@@ -315,7 +315,7 @@ frontend/                → containers pages (build), frontend (caddy)
   src/infra/frames.ts      the frames, the tab↔worker envelope, the ring. pure
   src/infra/theme.ts       the palette: presets, and the derivation of twelve readable colours from a background and an accent
   src/infra/atoms/         publish, watch, chat, auth session state, profile, presence, inspector, settings (chat side, theme, inspector), user-modal (jotai)
-  src/shared-components/   Avatar  Button  ChatPanel  Face  GeneratedAvatar  Inspector  MiniPlayer  PageFrame  StatusLine  StreamTile  TestBadge  UserModal (+ user-modal/)  UserPanel  VideoControls  VideoFrame
+  src/shared-components/   Avatar  Button  ChatPanel  CornerPlayer  Face  GeneratedAvatar  Inspector  MiniPlayer  PageFrame  StatusLine  StreamTile  TestBadge  UserModal (+ user-modal/)  UserPanel  VideoControls  VideoFrame
 
 monitor/                 docker-compose.yml for the monitor droplet: uptime kuma polling every box. docs/debugging.md
 docs/                    overview, spec, chat, architecture, accounts, kubernetes, debugging, this file

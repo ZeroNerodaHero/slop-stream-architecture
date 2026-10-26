@@ -32,7 +32,8 @@
 # Partial run: keeps PUBLIC_IP from .env, gets (or builds) the named services'
 # images, swaps only their containers. frontend = the pages; caddy keeps
 # running, so live streams survive. api = a few seconds of 502, streams
-# survive. video = every live stream ends (the script says so first).
+# survive, and the s3 container is created first when it is missing (never
+# recreated). video = every live stream ends (the script says so first).
 # Afterwards the swapped containers are checked: running, healthy where the
 # image has a check, or the script exits non-zero (no rollback).
 #
@@ -710,6 +711,9 @@ redeploy_service() {   # api | video
   fi
   build_one "$1"
   if [ "$1" = api ]; then
+    # the api waits for the bucket at boot, and --no-deps below never creates s3 on a box
+    # deployed before it existed. --no-recreate: one that is here is left alone, never bounced
+    "${DOCKER[@]}" compose up -d --no-deps --no-recreate s3
     # chat is the same image run as `api chat`, so it moves with the api
     say "swapping the api and chat containers"
     "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} api chat
@@ -845,6 +849,7 @@ changed_services() {
       frontend/.dockerignore) echo frontend ;;              # the pages build context is frontend/
       api/*) echo api ;;
       video/*) printf 'video\ndummy\n' ;;
+      random-media/gifs/*) echo dummy ;;                   # the gifs are baked into the dummy image
       frontend/Caddyfile) echo caddy ;;
       frontend/*) echo frontend ;;
       docker-compose.yml) echo compose ;;

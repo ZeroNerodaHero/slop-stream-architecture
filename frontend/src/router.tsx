@@ -5,6 +5,7 @@ import { NotFoundPage } from '@/app/NotFoundPage';
 import { AdminPage } from '@/app/admin/AdminPage';
 import { AuthPage } from '@/app/auth/AuthPage';
 import { HomePage } from '@/app/home/HomePage';
+import { ExplorePage, ChannelPage } from '@/app/explore/ExplorePage';
 import { LivePage } from '@/app/live/LivePage';
 import { WatchPage } from '@/app/watch/WatchPage';
 import { Inspector } from '@/shared-components/Inspector';
@@ -14,8 +15,8 @@ import { UserPanel } from '@/shared-components/UserPanel';
 
 /**
  * Every page, plus the things that live outside pages: who you are (bottom left), the picture
- * in picture player (bottom right), and the user modal the panel opens (profile, security,
- * settings, appearance).
+ * in picture players (bottom right: a stream you watch, your own while live), and the user
+ * modal the panel opens (profile, security, settings, appearance).
  */
 function Shell() {
   return (
@@ -35,6 +36,12 @@ function WatchRoute() {
   return <WatchPage key={name} />;
 }
 
+/** Keyed on the channel, so moving from one room to another starts that room's chat. */
+function ChannelRoute() {
+  const { server, channel } = useParams<{ server: string; channel: string }>();
+  return <ChannelPage key={`${server}/${channel}`} />;
+}
+
 export const router = createBrowserRouter([
   {
     // a pathless parent, so one error boundary covers every page. a crash renders CrashPage
@@ -43,6 +50,8 @@ export const router = createBrowserRouter([
     errorElement: <CrashPage />,
     children: [
       { path: '/', element: <HomePage /> },
+      { path: '/explore', element: <ExplorePage /> },
+      { path: '/explore/:server/:channel', element: <ChannelRoute /> },
       { path: '/live', element: <LivePage /> },
       { path: '/watch/:name', element: <WatchRoute /> },
       { path: '/login', element: <AuthPage mode="login" /> },

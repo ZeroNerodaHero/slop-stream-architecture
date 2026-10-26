@@ -9,6 +9,9 @@ const REPO = require('path').join(__dirname, '..');
 const RUN = Date.now().toString(36).slice(-5);
 const NAME = 'acct' + RUN;
 const PW = 'correct horse battery';
+// the account's name after the rename steps (docs/ids.md): what the steps after them use
+const NEW = 'renamed' + RUN;
+let CURRENT = NAME;
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors'];
 const results = [];
 async function step(name, fn) {
@@ -253,19 +256,114 @@ const body = async (res) => {
     return 'the panel shows the name box';
   });
 
+  // ---- the name can change (docs/ids.md): the id stays, the logins stay, the old name is held ----
+  const PW2 = 'a brand new password';
+  const OTHER = 'other' + RUN;
+
+  await step('rename: nobody 401, wrong password 403, own name 400, reserved 403, a taken name 409', async () => {
+    const nobody = await anon.post('/api/name', { data: { name: NEW, password: PW2 } });
+    expect(nobody.status() === 401, `nobody got ${nobody.status()}`);
+    const login = await owner.post('/api/login', { data: { name: NAME, password: PW2 } });
+    expect(login.status() === 200, `login got ${login.status()}`);
+    const me = await body(await owner.get('/api/me'));
+    expect(me.id && me.name === NAME && me.renamed_at === null, `me before: ${JSON.stringify(me)}`);
+    const wrong = await owner.post('/api/name', { data: { name: NEW, password: 'not the password' } });
+    const same = await owner.post('/api/name', { data: { name: NAME, password: PW2 } });
+    const reserved = await owner.post('/api/name', { data: { name: 'dummy-' + RUN, password: PW2 } });
+    const up = await anon.post('/api/signup', { data: { name: OTHER, password: PW } });
+    expect(up.status() === 201, `signup of ${OTHER} got ${up.status()}`);
+    await anon.post('/api/logout');
+    const taken = await owner.post('/api/name', { data: { name: OTHER, password: PW2 } });
+    expect(wrong.status() === 403, `wrong password got ${wrong.status()}`);
+    expect(same.status() === 400, `the own name got ${same.status()}`);
+    expect(reserved.status() === 403, `a reserved name got ${reserved.status()}`);
+    expect(taken.status() === 409, `a taken name got ${taken.status()}`);
+    return `id ${me.id.slice(0, 8)}…  403 400 403 409`;
+  });
+
+  await step('rename while live is 409; stopped, it works: same id, the other device stays in, a watcher moves', async () => {
+    const live = await owner.post(`/api/streams/${NAME}/go-live`);
+    expect(live.status() === 200, `go-live got ${live.status()}`);
+    const grant = await body(live);
+    const busy = await owner.post('/api/name', { data: { name: NEW, password: PW2 } });
+    expect(busy.status() === 409 && /stop/.test((await body(busy)).error), `while live got ${busy.status()}`);
+    const stop = await owner.post(`/api/streams/${NAME}/stop?session=${grant.session}&token=${grant.token}`);
+    expect(stop.status() === 200, `stop got ${stop.status()}`);
+    // a phone: logged in as the same account before the rename
+    const device = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
+    const second = await device.post('/api/login', { data: { name: NAME, password: PW2 } });
+    expect(second.status() === 200, `the other device's login got ${second.status()}`);
+    // a stranger's page on /watch/<old>, open while the name changes: the renamed frame moves it
+    const watcher = await fresh();
+    await watcher.goto(`${BASE}/watch/${NAME}`, { waitUntil: 'domcontentloaded' });
+    await watcher.waitForFunction(() => /not live|loading|checking/.test(document.querySelector('#status')?.textContent || ''), null, { timeout: 10000 });
+    const before = await body(await owner.get('/api/me'));
+    const res = await owner.post('/api/name', { data: { name: NEW, password: PW2 } });
+    const got = await body(res);
+    if (res.status() === 200) CURRENT = NEW; // whatever the checks below say, the account is called this now
+    expect(res.status() === 200 && got.name === NEW && got.id === before.id && got.renamed_at, `rename got ${res.status()} ${JSON.stringify(got)}`);
+    const after = await body(await owner.get('/api/me'));
+    const other = await body(await device.get('/api/me'));
+    expect(after.name === NEW && after.id === before.id, `me after: ${JSON.stringify(after)}`);
+    expect(other.name === NEW && other.id === before.id, `the other device sees ${JSON.stringify(other)}`);
+    await watcher.waitForFunction((n) => location.pathname === `/watch/${n}`, NEW, { timeout: 10000 });
+    await watcher.close();
+    await device.dispose();
+    return `${NAME} → ${NEW}, id ${before.id.slice(0, 8)}… kept`;
+  });
+
+  await step('the old name is held: signup 409, /watch/<old> is a 302, the grant says the new name, another rename waits', async () => {
+    const up = await anon.post('/api/signup', { data: { name: NAME, password: PW } });
+    expect(up.status() === 409, `a signup on the held name got ${up.status()}`);
+    const doc = await anon.get(`/watch/${NAME}`, { maxRedirects: 0 });
+    expect(doc.status() === 302 && doc.headers()['location'] === `/watch/${NEW}`, `the document got ${doc.status()} → ${doc.headers()['location']}`);
+    const grant = await body(await anon.post(`/api/streams/${NAME}/watch`));
+    expect(grant && grant.name === NEW, `the grant says ${JSON.stringify(grant)}`);
+    const again = await owner.post('/api/name', { data: { name: 'again' + RUN, password: PW2 } });
+    expect(again.status() === 403 && /again from/.test((await body(again)).error), `a second rename got ${again.status()}`);
+    const old = await body(await anon.get(`/api/streamers/${NAME}`));
+    const now = await body(await anon.get(`/api/streamers/${NEW}`));
+    expect(old.verified === false && now.verified === true, `old verified ${old.verified}, new ${now.verified}`);
+    return `302 → /watch/${NEW}; the grant is for ${grant.name}`;
+  });
+
+  await step('the pages: logging in as the new name shows it, and the profile tab has the name box', async () => {
+    const p = await fresh();
+    await p.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
+    await p.fill('#auth-name', NEW);
+    await p.fill('#auth-password', PW2);
+    await p.click('#auth-submit');
+    await p.waitForFunction((n) => document.querySelector('#me')?.textContent === n, NEW, { timeout: 10000 });
+    await p.click('#you');
+    await p.waitForSelector('#profile-new-name', { timeout: 10000 });
+    // the date comes with /api/me, a beat after the login
+    await p.waitForFunction(() => /change it again on/.test(document.querySelector('#profile-rename-status')?.textContent || ''), null, { timeout: 10000 });
+    const note = await p.textContent('#profile-rename-status');
+    await p.close();
+    return `#me is ${NEW}; "${(note || '').trim()}"`;
+  });
+
   if (LOCAL) {
     await step('api passwd <name> prints a new password that works, and ends the logins', async () => {
-      const before = await owner.post('/api/login', { data: { name: NAME, password: 'a brand new password' } });
+      const before = await owner.post('/api/login', { data: { name: CURRENT, password: 'a brand new password' } });
       expect(before.status() === 200, `login before passwd got ${before.status()}`);
-      const out = execSync(`docker compose exec -T api api passwd ${NAME}`, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      const out = execSync(`docker compose exec -T api api passwd ${CURRENT}`, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
       const pw = (out.match(/new password is\s+(\S+)/) || [])[1];
       expect(pw, `no password in: ${out}`);
       const dead = await body(await owner.get('/api/me'));
       expect(dead.name === null, `a login survived passwd: ${JSON.stringify(dead)}`);
-      const old = await anon.post('/api/login', { data: { name: NAME, password: 'a brand new password' } });
-      const fresh = await anon.post('/api/login', { data: { name: NAME, password: pw } });
+      const old = await anon.post('/api/login', { data: { name: CURRENT, password: 'a brand new password' } });
+      const fresh = await anon.post('/api/login', { data: { name: CURRENT, password: pw } });
       expect(old.status() === 401 && fresh.status() === 200, `old ${old.status()}, printed one ${fresh.status()}`);
-      return `"${pw}"`;
+      // the name renamed away from is held: passwd must not make a stranger's account on it
+      let refused = '';
+      try {
+        execSync(`docker compose exec -T api api passwd ${NAME}`, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) {
+        refused = String(e.stderr || e.stdout || e.message);
+      }
+      expect(/held/.test(refused), `passwd on the held name: ${refused || 'went through'}`);
+      return `"${pw}"; the held ${NAME} refused`;
     });
 
     // this run's wrong passwords and signups count against this machine's ip for a while.

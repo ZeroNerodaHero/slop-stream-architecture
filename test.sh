@@ -19,9 +19,14 @@
 #   chat       two viewers talk, history survives a reload, 501 chars refused, streamer lines marked
 #   auth       sign up, log in, log out, a claimed name is only its owner's, verified chat lines, 429 after 10 tries
 #   groups     bot is built in, a login makes a group, another joins and leaves, badges on chat lines, a bot's lines wear BOT and the panel hides them, only the maker deletes, the groups tab
+#   follows    a login follows names: counts and the flag on a profile, the list with its words, a free name gets a row, the box over the corner
+#              panel (hover: who you follow, streaming first; search finds and follows), the watch page's button and count, home's people under
+#              the streams (online first) and the top search, a rename keeps the followers
 #   preview    /watch/<name> html: title + og tags offline, with a picture, live with the thumbnail; the picture round-trips
 #   errors     /api/health has the monitor fields, a page's error report lands (204, log, debug db), bad ones 400, /admin renders
 #   pip        picture in picture: the button goes home with the stream in a corner, the player moves and resizes, has the sound and the chat, coming back takes it over, another stream replaces it, × ends it
+#   live-pip   picture in picture for the broadcast: the button on /live goes home with your camera in a corner and the stream still up for watchers, you can watch
+#              someone else meanwhile, the corner has your chat, coming back takes the stream over, both corners stack, × stops, a page load stops, a plain leave still stops
 #   screen     screen sharing: screens beside the camera go to watchers mid-stream with no renegotiation, tiles, click to swap, stop, a late watcher sees it all
 #   presence   a tab open is online over the events socket, do not disturb and appear offline reach a watcher pushed, live is streaming,
 #              two tabs share one socket and the last closing is offline at once, a claimed name is refused, the inspector shows the frames
@@ -109,9 +114,11 @@ run dup
 run chat
 run auth
 run groups
+run follows
 run preview
 run errors
 run pip
+run live-pip
 run screen
 run presence
 if [ "$LOCAL" = 1 ]; then

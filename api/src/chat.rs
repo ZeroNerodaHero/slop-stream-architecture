@@ -4,6 +4,10 @@
 //! stream per room (`chat:<name>`, last 500 kept). One task per room with
 //! viewers tails that stream with XREAD BLOCK and pushes new lines to every
 //! socket in the room; sending is just XADD, so everyone sees the same order.
+//! `CHAT_PERSIST` also inserts each line into postgres (history.rs): the scroll
+//! past this window, the search, and the jump to one line.
+//! A group's channel is the same room with two names: `/chat/<server>/<channel>`.
+//! Anyone may read it. Speaking takes a login that has joined the server.
 //! The database is asked two things: is this socket really the streamer, and
 //! who does its login cookie say it is (auth.rs). A login names you; without
 //! one you pick a nick, as long as nobody owns that name. A login's groups
@@ -17,9 +21,9 @@ use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{FromRef, State};
+use axum::extract::{FromRef, Path, State};
 use axum::http::HeaderMap;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use redis::aio::ConnectionManager;
@@ -29,8 +33,11 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio::sync::{broadcast, watch, Mutex};
 
+use uuid::Uuid;
+
 use crate::auth::{client_ip, is_claimed, whoami};
 use crate::groups::{badges_of, Badge, BOT_GROUP};
+use crate::history;
 use crate::socket::{first_text, id_parts, send, send_within, DRAIN_LIMIT, IDLE_LIMIT, MAX_FRAME_BYTES, PING_EVERY, READ_BLOCK_MS, SEND_TIMEOUT};
 use crate::{events, owns_session, Name, Owner};
 
@@ -49,15 +56,17 @@ const MAX_SOCKETS_PER_IP: usize = 8;
 const HISTORY_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
-struct ChatState {
-    db: PgPool,
-    redis: ConnectionManager,
+pub(crate) struct ChatState {
+    pub(crate) db: PgPool,
+    pub(crate) redis: ConnectionManager,
     client: redis::Client,
     rooms: Arc<Mutex<HashMap<String, Room>>>,
     /// Flips to true on SIGTERM. Every socket then sends a close frame and leaves.
     shutdown: watch::Receiver<bool>,
     /// Nicks starting with this are the fake streams' names: nobody's to wear.
     dummy_prefix: String,
+    /// `CHAT_PERSIST`. Off: redis only. On: each line is also a row in `chat_lines`.
+    pub(crate) persist: bool,
 }
 
 impl FromRef<ChatState> for PgPool {
@@ -80,17 +89,17 @@ enum Event {
 }
 
 #[derive(Serialize, Clone)]
-struct Line {
-    id: String,
-    from: String,
-    text: String,
-    streamer: bool,
+pub(crate) struct Line {
+    pub(crate) id: String,
+    pub(crate) from: String,
+    pub(crate) text: String,
+    pub(crate) streamer: bool,
     /// said by a login, so `from` really is that account
-    verified: bool,
+    pub(crate) verified: bool,
     /// the speaker's groups as badges, `bot` first when it is one. empty for most lines
-    groups: Vec<Badge>,
+    pub(crate) groups: Vec<Badge>,
     /// unix ms, from the stream id
-    at: u64,
+    pub(crate) at: u64,
 }
 
 #[derive(Deserialize)]
@@ -126,6 +135,8 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
     let redis = crate::connect_redis(redis_url).await;
     let (stop, shutdown) = watch::channel(false);
     let dummy_prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
+    let persist = history::enabled();
+    log::info!("chat history {}", if persist { "on" } else { "off" });
     let state = ChatState {
         db: db.clone(),
         redis: redis.clone(),
@@ -133,6 +144,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         rooms: Arc::new(Mutex::new(HashMap::new())),
         shutdown: shutdown.clone(),
         dummy_prefix: dummy_prefix.clone(),
+        persist,
     };
     let rooms = state.rooms.clone();
     // the gateway: /events (one socket per browser, presence and pushes) and /online, on the
@@ -143,6 +155,8 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
     let router = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/chat/{name}", get(ws))
+        .route("/chat/{server}/{channel}", get(ws_channel))
+        .merge(history::routes())
         .with_state(state)
         .merge(events::routes(gateway));
 
@@ -173,7 +187,25 @@ async fn ws(State(s): State<ChatState>, Name(name): Name, headers: HeaderMap, up
     upgrade
         .max_message_size(MAX_FRAME_BYTES)
         .max_frame_size(MAX_FRAME_BYTES)
-        .on_upgrade(move |socket| handle(s, name, ip, headers, socket))
+        .on_upgrade(move |socket| handle(s, name, None, ip, headers, socket))
+}
+
+/// `/chat/<server>/<channel>`. Same room as a stream, named `server/channel`. A missing
+/// channel is said on the socket and the socket stops, so the panel does not reconnect.
+async fn ws_channel(State(s): State<ChatState>, Path((server, channel)): Path<(String, String)>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    let upgrade = upgrade.max_message_size(MAX_FRAME_BYTES).max_frame_size(MAX_FRAME_BYTES);
+    match crate::groups::channel_room(&s.db, &server, &channel).await {
+        Ok((server, room)) => {
+            let ip = client_ip(&headers);
+            upgrade.on_upgrade(move |socket| handle(s, room, Some(server), ip, headers, socket))
+        }
+        Err(err) => {
+            let message = err.message().to_owned();
+            upgrade.on_upgrade(move |mut socket| async move {
+                let _ = send(&mut socket, &Out::Error { error: &message }).await;
+            })
+        }
+    }
 }
 
 /// Who a socket speaks as, once the database has said.
@@ -186,6 +218,8 @@ struct Who {
     /// The account's groups (only when `verified`: the badges belong to the name on the
     /// line, not to whoever holds the socket), plus `bot` when the hello said so.
     groups: Vec<Badge>,
+    /// The account, when `verified`. Null on the row otherwise.
+    user_id: Option<Uuid>,
 }
 
 impl Who {
@@ -226,11 +260,11 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
         },
         _ => false,
     };
-    let streamer = owns || me.as_deref() == Some(room);
+    let streamer = owns || me.as_ref().is_some_and(|a| a.name == room);
     let from = if streamer {
         room.to_owned()
-    } else if let Some(me) = me.clone() {
-        me
+    } else if let Some(me) = &me {
+        me.name.clone()
     } else {
         let Some(nick) = hello.nick.as_deref().map(clean_nick).filter(|n| valid_nick(n)) else {
             return Err(Unknown::Refused("bad nick. 1 to 24 letters, digits, _ -"));
@@ -253,12 +287,12 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
     };
     // the login behind this socket is the name it speaks as. not just "logged in": the
     // one who went live speaks as the room while logged in as somebody else, or as nobody
-    let verified = me.as_deref() == Some(from.as_str());
+    let verified = me.as_ref().is_some_and(|a| a.name == from);
     // the badges: the account's groups when the line is really the account's, and `bot`
     // when asked for. read once, here; a group joined mid-chat shows after a reconnect
     let bot = hello.bot == Some(true);
     let groups = if verified || bot {
-        match badges_of(&s.db, if verified { &from } else { "" }, bot).await {
+        match badges_of(&s.db, me.as_ref().filter(|_| verified).map(|a| a.id), bot).await {
             Ok(groups) => groups,
             Err(e) => {
                 log::warn!("{room}: cannot read the groups of {from}: {e}");
@@ -268,10 +302,11 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
     } else {
         Vec::new()
     };
-    Ok(Who { from, streamer, verified, groups })
+    let user_id = if verified { me.as_ref().map(|a| a.id) } else { None };
+    Ok(Who { from, streamer, verified, groups, user_id })
 }
 
-async fn handle(s: ChatState, name: String, ip: String, headers: HeaderMap, mut socket: WebSocket) {
+async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, headers: HeaderMap, mut socket: WebSocket) {
     // 1. hello: who is talking
     let Some(first) = first_text(&mut socket).await else { return };
     let Ok(In::Hello(hello)) = serde_json::from_str::<In>(&first) else {
@@ -392,6 +427,24 @@ async fn handle(s: ChatState, name: String, ip: String, headers: HeaderMap, mut 
                     }
                 }
                 let Some(w) = who.as_ref() else { continue };
+                // a channel is open to read. talking is for people in the server.
+                if let Some(server) = &server {
+                    let allowed = match w.user_id {
+                        Some(id) => match crate::groups::member(&s.db, id, server).await {
+                            Ok(yes) => yes,
+                            Err(e) => {
+                                log::warn!("{name}: membership: {e}");
+                                let _ = send(&mut socket, &Out::Error { error: "chat is busy, try again" }).await;
+                                continue;
+                            }
+                        },
+                        None => false,
+                    };
+                    if !allowed {
+                        let _ = send(&mut socket, &Out::Error { error: "join the server first" }).await;
+                        continue;
+                    }
+                }
                 let mut r = s.redis.clone();
                 // the badges as json, and no field at all for the common case of none
                 let groups = if w.groups.is_empty() { String::new() } else { serde_json::to_string(&w.groups).unwrap_or_default() };
@@ -412,10 +465,20 @@ async fn handle(s: ChatState, name: String, ip: String, headers: HeaderMap, mut 
                     .expire(&key, ROOM_TTL_SECS)
                     .query_async(&mut r)
                     .await;
-                if let Err(e) = added {
-                    log::warn!("{name}: xadd: {e}");
-                    let _ = send(&mut socket, &Out::Error { error: "chat is down, try again" }).await;
-                    continue;
+                let id = match added {
+                    Ok((id, _)) => id,
+                    Err(e) => {
+                        log::warn!("{name}: xadd: {e}");
+                        let _ = send(&mut socket, &Out::Error { error: "chat is down, try again" }).await;
+                        continue;
+                    }
+                };
+                // redis already has the line, and the room will fan it out. the insert
+                // follows on its own, so a slow database does not hold this socket.
+                if s.persist {
+                    if let Some(id) = id {
+                        remember(&s, &name, &id, w, &text);
+                    }
                 }
             }
         }
@@ -423,6 +486,31 @@ async fn handle(s: ChatState, name: String, ip: String, headers: HeaderMap, mut 
 
     s.leave(&name, &ip).await;
     log::info!("{name}: {} left", shown(&who));
+}
+
+/// The row for a line redis already accepted. Its own task: the socket goes back to the room.
+fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str) {
+    let db = s.db.clone();
+    let room = room.to_owned();
+    let id = id.to_owned();
+    let speaker = w.from.clone();
+    let user_id = w.user_id;
+    let text = text.to_owned();
+    let streamer = w.streamer;
+    let verified = w.verified;
+    let groups = w.groups.clone();
+    tokio::spawn(async move {
+        let inserted = tokio::time::timeout(
+            Duration::from_secs(2),
+            history::store(&db, &room, &id, &speaker, user_id, &text, streamer, verified, &groups),
+        )
+        .await;
+        match inserted {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => log::warn!("{room}: history: {e}"),
+            Err(_) => log::warn!("{room}: history insert timed out"),
+        }
+    });
 }
 
 impl ChatState {
@@ -548,7 +636,7 @@ async fn history(s: &ChatState, name: &str) -> Result<Vec<Line>, redis::RedisErr
     Ok(lines)
 }
 
-fn line_from(entry: StreamId) -> Option<Line> {
+pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
     let from: String = entry.get("from")?;
     let text: String = entry.get("text")?;
     let streamer: String = entry.get("streamer").unwrap_or_else(|| "0".to_owned());
@@ -566,7 +654,7 @@ fn line_from(entry: StreamId) -> Option<Line> {
     })
 }
 
-fn room_key(name: &str) -> String {
+pub(crate) fn room_key(name: &str) -> String {
     format!("chat:{name}")
 }
 
@@ -634,6 +722,15 @@ fn is_combining(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Building the router is what notices two patterns that can be the same url.
+    #[test]
+    fn a_channel_sits_beside_a_stream_room() {
+        let _ = Router::<ChatState>::new()
+            .route("/chat/{name}", get(|| async { "stream" }))
+            .route("/chat/{server}/{channel}", get(|| async { "channel" }))
+            .merge(history::routes());
+    }
 
     #[test]
     fn text_is_trimmed_and_control_free() {

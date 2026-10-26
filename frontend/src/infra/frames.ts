@@ -15,6 +15,8 @@ export type ServerFrame =
   | { type: 'presence'; name: string; presence: Presence }
   | { type: 'live'; name: string; since: number }
   | { type: 'ended'; name: string }
+  /** `name` became `to` (docs/ids.md): to the account's own sockets and to `name`'s watchers. */
+  | { type: 'renamed'; name: string; to: string }
   | { type: 'error'; error: string };
 
 export type LinkPhase = 'off' | 'connecting' | 'open' | 'closed';

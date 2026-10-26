@@ -9,10 +9,10 @@
 import { atom } from 'jotai';
 
 import { api, messageOf } from '@/infra/api';
-import { meAtom } from '@/infra/atoms/auth-atoms';
+import { meAtom, reloadMe } from '@/infra/atoms/auth-atoms';
 import { nickAtom, reconnectChat } from '@/infra/atoms/chat-atoms';
 import { followIdentityOnLivePage, myAvatarAtom, squareJpeg, streamNameAtom } from '@/infra/atoms/publish-atoms';
-import { reconnectEvents } from '@/infra/events';
+import { onEvents, reconnectEvents } from '@/infra/events';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
 import { store } from '@/infra/store';
 
@@ -140,3 +140,12 @@ export function identityChanged(change: 'login' | 'nick', was?: string) {
   reconnectEvents();
   followIdentityOnLivePage(change === 'nick' ? was : undefined);
 }
+
+// my name changed on another device, or in another tab of this browser (the tab that did it
+// already knows: `renameMe` set `me` first, so the frame names a name that is not mine any
+// more and is ignored there). /api/me again, then everything an identity change brings.
+// see docs/ids.md
+onEvents((event) => {
+  if (event.type !== 'renamed' || event.name !== store.get(meAtom)) return;
+  void reloadMe().then(() => identityChanged('login'));
+});

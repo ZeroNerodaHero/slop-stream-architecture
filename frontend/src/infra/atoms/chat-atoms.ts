@@ -1,5 +1,6 @@
 /**
- * The text chat next to a stream. One websocket at /chat/<name>; see docs/chat.md.
+ * The text chat next to a stream, and in a server's channel. One websocket at
+ * /chat/<name> or /chat/<server>/<channel>; see docs/chat.md.
  * Same shape as the other atom modules: atoms for what renders, a module handle
  * for the socket, action functions for every transition.
  */
@@ -38,6 +39,11 @@ export type ChatPhase = 'off' | 'connecting' | 'open' | 'closed';
 export const MAX_CHAT_CHARS = 500;
 const KEEP_LINES = 500;
 const RECONNECT_MS = 3000;
+
+/** A stream is one segment. A server channel is two (`vip/general`): encode each, keep the slash. */
+function chatPath(room: string): string {
+  return room.split('/').map((part) => encodeURIComponent(part)).join('/');
+}
 const NICK_RE = /^[a-zA-Z0-9_-]{1,24}$/;
 
 /** Your name without an account. Remembered across pages and visits (localstorage). */
@@ -59,6 +65,32 @@ export const visibleChatLinesAtom = atom((get) => {
 });
 /** How many lines the switch is holding back right now. 0 while it is off. */
 export const hiddenBotLinesAtom = atom((get) => (get(hideBotsAtom) ? get(chatLinesAtom).filter(isBotLine).length : 0));
+
+/** Search hits, or one account's lines, newest first. Null when the list is closed. */
+export const chatResultsAtom = atom<ChatLine[] | null>(null);
+/** The query, or the account name, that `chatResultsAtom` is for. */
+export const chatResultsForAtom = atom('');
+/** The panel is showing a window around an old line, not the live tail. */
+export const chatPinnedAtom = atom(false);
+/** Lines that arrived in the live tail while the panel was pinned to an old one. */
+export const chatBehindAtom = atom(0);
+/** Bumped when the panel should scroll and the lines themselves did not change. */
+export const chatScrollAtom = atom(0);
+
+/** One page of older lines. A short page is the end. Matches `PAGE` in history.rs. */
+const OLDER_PAGE = 50;
+/** Loaded lines kept while the reader has scrolled up. The live tail, stuck to the bottom, stays at KEEP_LINES. */
+const MAX_LOADED = 2000;
+
+type ScrollPlan = 'bottom' | 'keep' | { id: string } | null;
+let scrollPlan: ScrollPlan = null;
+let following = true;
+let olderBusy = false;
+let noMoreOlder = false;
+let olderPaused = false;
+let pinned = false;
+let savedTail: ChatLine[] | null = null;
+let behind = 0;
 
 export const nickIsValidAtom = atom((get) => NICK_RE.test(get(nickAtom).trim()));
 /** The name this browser talks as: the login, else the nick. */
@@ -125,6 +157,7 @@ export function closeChat(reset = true) {
   }
   session = null;
   inFlight.length = 0;
+  resetHistory();
   if (reset) {
     store.set(chatLinesAtom, []);
     store.set(chatCountAtom, 0);
@@ -168,7 +201,7 @@ function connect() {
   }
 
   store.set(chatPhaseAtom, 'connecting');
-  const ws = new WebSocket(relayUrl(`/chat/${current.name}`));
+  const ws = new WebSocket(relayUrl(`/chat/${chatPath(current.name)}`));
   current.ws = ws;
 
   ws.onopen = () => {
@@ -187,22 +220,28 @@ function connect() {
       return;
     }
     record(`/chat/${current.name}`, 'in', msg);
-    if (msg.type === 'history' && msg.messages) store.set(chatLinesAtom, msg.messages.slice(-KEEP_LINES).map(withGroups));
+    if (msg.type === 'history' && msg.messages) {
+      resetHistory();
+      scrollPlan = 'bottom';
+      store.set(chatLinesAtom, msg.messages.slice(-KEEP_LINES).map(withGroups));
+    }
     else if (msg.type === 'message' && msg.id) {
       const sent = inFlight.indexOf(msg.text ?? '');
       if (sent >= 0) inFlight.splice(sent, 1);
       appendLine(withGroups(msg as ChatLine));
     } else if (msg.type === 'count' && typeof msg.count === 'number') store.set(chatCountAtom, msg.count);
     else if (msg.type === 'error' && msg.error) {
-      // the server refused who we are (bad nick, somebody's name): back to the nick box, no retry loop
+      // a bad nick, or a channel that is not there: back out, and do not reconnect.
+      // a channel that is not there is not a dead login.
       const refused = /nick|account/.test(msg.error);
-      showNotice(msg.error, refused ? 8000 : 3000);
+      const gone = /no such channel|not a server|that name is reserved|bad name/.test(msg.error);
+      showNotice(msg.error, refused || gone ? 8000 : 3000);
       // the oldest line out was not taken: back into the box, unless something new is being typed
       if (/slow down|chat is (busy|down)/.test(msg.error)) {
         const lost = inFlight.shift();
         if (lost && !store.get(chatDraftAtom)) store.set(chatDraftAtom, lost);
       }
-      if (refused && session === current) {
+      if ((refused || gone) && session === current) {
         closeChat(false);
         // a login is only ever refused when its cookie died (logout-all, passwd): stop being that name
         if (me) forgetMe();
@@ -222,10 +261,168 @@ function withGroups(line: ChatLine): ChatLine {
   return Array.isArray(line.groups) ? line : { ...line, groups: [] };
 }
 
+function resetHistory() {
+  pinned = false;
+  savedTail = null;
+  behind = 0;
+  noMoreOlder = false;
+  olderPaused = false;
+  olderBusy = false;
+  following = true;
+  store.set(chatPinnedAtom, false);
+  store.set(chatBehindAtom, 0);
+  store.set(chatResultsAtom, null);
+  store.set(chatResultsForAtom, '');
+}
+
+/** The view sits on the newest line, or the reader has scrolled up. */
+export function setChatFollowing(on: boolean) {
+  following = on;
+}
+
+/** Scroll a pixel away from the top and a failed older-page can be asked again. */
+export function noteChatScroll(scrollTop: number) {
+  if (scrollTop >= 48) olderPaused = false;
+}
+
+/**
+ * The plan for the next time the lines paint: `bottom` after a join or "latest",
+ * `keep` when older lines were prepended, or the id to put in the middle.
+ * Read once by the panel. A tick is bumped only when the lines did not change,
+ * so a line already on screen still scrolls.
+ */
+export function takeScrollPlan(): 'bottom' | 'keep' | { id: string } | null {
+  const plan = scrollPlan;
+  scrollPlan = null;
+  return plan;
+}
+
+/** Older than the oldest line on screen. Redis while it still has them, postgres past that. */
+export async function loadOlder() {
+  const name = session?.name;
+  const oldest = store.get(chatLinesAtom)[0];
+  if (!name || !oldest || olderBusy || noMoreOlder || olderPaused) return;
+  olderBusy = true;
+  try {
+    const lines = await chatGet(`/chat/${chatPath(name)}/before?id=${encodeURIComponent(oldest.id)}`);
+    if (session?.name !== name) return;
+    const have = new Set(store.get(chatLinesAtom).map((l) => l.id));
+    const older = lines.filter((l) => !have.has(l.id));
+    if (older.length === 0 || older.length < OLDER_PAGE) noMoreOlder = true;
+    if (older.length === 0) return;
+    scrollPlan = 'keep';
+    store.set(chatLinesAtom, older.concat(store.get(chatLinesAtom)));
+  } catch (err) {
+    olderPaused = true;
+    showNotice(err instanceof Error ? err.message : 'could not load older lines');
+  } finally {
+    olderBusy = false;
+  }
+}
+
+/** Matches in this room, newest first. Off, the server says history is not kept. */
+export async function searchRoom(raw: string) {
+  const name = session?.name;
+  const q = raw.trim();
+  if (!name || !q) return;
+  try {
+    const lines = await chatGet(`/chat/${chatPath(name)}/search?q=${encodeURIComponent(q)}`);
+    if (session?.name !== name) return;
+    store.set(chatResultsAtom, lines);
+    store.set(chatResultsForAtom, q);
+  } catch (err) {
+    store.set(chatResultsAtom, null);
+    showNotice(err instanceof Error ? err.message : 'search failed');
+  }
+}
+
+/** One account's lines in this room, newest first. A nick with no account is not one. */
+export async function showSpeaker(speaker: string) {
+  const name = session?.name;
+  if (!name) return;
+  try {
+    const lines = await chatGet(`/chat/${chatPath(name)}/by/${encodeURIComponent(speaker)}`);
+    if (session?.name !== name) return;
+    store.set(chatResultsAtom, lines);
+    store.set(chatResultsForAtom, speaker);
+  } catch (err) {
+    store.set(chatResultsAtom, null);
+    showNotice(err instanceof Error ? err.message : 'could not load those lines');
+  }
+}
+
+export function clearResults() {
+  store.set(chatResultsAtom, null);
+  store.set(chatResultsForAtom, '');
+}
+
+/**
+ * Put `id` in view. Already loaded: just scroll. Otherwise load the window around it
+ * and leave the live tail parked, so "latest" comes back to it.
+ */
+export async function openLine(id: string) {
+  const name = session?.name;
+  if (!name) return;
+  if (store.get(chatLinesAtom).some((l) => l.id === id)) {
+    scrollPlan = { id };
+    store.set(chatScrollAtom, store.get(chatScrollAtom) + 1);
+    return;
+  }
+  try {
+    const lines = await chatGet(`/chat/${chatPath(name)}/around/${encodeURIComponent(id)}`);
+    if (session?.name !== name) return;
+    if (!pinned) savedTail = store.get(chatLinesAtom).slice();
+    pinned = true;
+    following = false;
+    store.set(chatPinnedAtom, true);
+    scrollPlan = { id };
+    store.set(chatLinesAtom, lines);
+  } catch (err) {
+    showNotice(err instanceof Error ? err.message : 'could not open that line');
+  }
+}
+
+/** Back to the live tail that was on screen before a jump. */
+export function backToLatest() {
+  const tail = savedTail;
+  savedTail = null;
+  pinned = false;
+  behind = 0;
+  following = true;
+  noMoreOlder = false;
+  store.set(chatPinnedAtom, false);
+  store.set(chatBehindAtom, 0);
+  scrollPlan = 'bottom';
+  if (tail) store.set(chatLinesAtom, tail);
+  else store.set(chatScrollAtom, store.get(chatScrollAtom) + 1);
+}
+
+async function chatGet(path: string): Promise<ChatLine[]> {
+  const res = await fetch(path, { cache: 'no-store' });
+  let data: { lines?: ChatLine[]; error?: string } | null = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  if (!res.ok) throw new Error(data?.error || `http ${res.status}`);
+  return (data?.lines ?? []).map(withGroups);
+}
+
 function appendLine(line: ChatLine) {
+  if (pinned && savedTail) {
+    if (savedTail[savedTail.length - 1]?.id === line.id) return;
+    savedTail.push(line);
+    if (savedTail.length > MAX_LOADED) savedTail.splice(0, savedTail.length - MAX_LOADED);
+    behind += 1;
+    store.set(chatBehindAtom, behind);
+    return;
+  }
   const lines = store.get(chatLinesAtom);
   if (lines.length && lines[lines.length - 1]?.id === line.id) return;
-  const next = lines.length >= KEEP_LINES ? lines.slice(lines.length - KEEP_LINES + 1) : lines.slice();
+  const cap = following ? KEEP_LINES : MAX_LOADED;
+  const next = lines.length >= cap ? lines.slice(lines.length - cap + 1) : lines.slice();
+  if (next.length < lines.length) noMoreOlder = false;
   next.push(line);
   store.set(chatLinesAtom, next);
 }

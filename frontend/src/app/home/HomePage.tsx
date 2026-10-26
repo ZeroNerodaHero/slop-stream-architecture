@@ -3,26 +3,27 @@ import { useAtomValue } from 'jotai';
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { api, messageOf, type LiveStream } from '@/infra/api';
+import { hoverPreview } from '@/app/home/hover';
+import { stillPictures } from '@/app/home/stills';
+import { api, messageOf, type LiveStream, type Person } from '@/infra/api';
 import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { Avatar } from '@/shared-components/Avatar';
 import { buttonClassName } from '@/shared-components/Button';
+import { FollowButton } from '@/shared-components/FollowButton';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { PersonRow } from '@/shared-components/PersonRow';
+import { SearchBox } from '@/shared-components/SearchBox';
 import { TestBadge } from '@/shared-components/TestBadge';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { cn } from '@/utils/cn';
 import { since } from '@/utils/since';
 
 const POLL_MS = 3000;
-/** A pause, not a pass across the grid. Under this, hovering a card sends nothing. */
-const HOVER_DWELL_MS = 300;
-/** Crossing from the picture to the name must not hang the preview up. */
-const HOVER_GRACE_MS = 400;
+/** The people under the streams: who is here changes by the minute, not the second. */
+const PEOPLE_POLL_MS = 10_000;
 /** The newest streams, played live at the top. There is no viewer count to rank by. */
 const FEATURED = 2;
-/** How many times to ask again for a camera frame that is not written yet (~6s after go-live). */
-const STILL_TRIES = 8;
 
 /** One card per column, as many columns as fit: 1 on a phone, 2 on a tablet, 4 at full width. */
 const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-6';
@@ -34,54 +35,15 @@ const CARD = 'border border-primaryStroke bg-backgroundSecondary';
 const CARD_LINK = cn(CARD, 'group transition-[border-color] duration-150 hover:border-primaryBlue focus-within:border-primaryBlue');
 
 /** One per page load, so a refresh can land on a different picture and a sitting page never does. */
-const pagePick = Math.floor(Math.random() * 0x7fffffff);
-
-type Still = { kind: 'custom'; id: number } | { kind: 'camera'; token: number; tries: number };
-
-const stills = new Map<string, Still>();
-
-function pickIndex(name: string, length: number): number {
-  let n = pagePick;
-  for (let i = 0; i < name.length; i++) n = (n + name.charCodeAt(i)) >>> 0;
-  return n % length;
-}
-
-/** The one picture this name shows until the document is loaded again. */
-function stillSrc(name: string, thumbs: readonly number[]): string {
-  let still = stills.get(name);
-  if (!still) {
-    const id = thumbs.length > 0 ? thumbs[pickIndex(name, thumbs.length)] : undefined;
-    still = id !== undefined ? { kind: 'custom', id } : { kind: 'camera', token: pagePick, tries: 0 };
-    stills.set(name, still);
-  }
-  return still.kind === 'custom' ? api.streamThumbUrl(name, still.id) : api.thumbUrl(name, still.token);
-}
-
-/**
- * The picture was not there. A custom one that 404s falls back to one camera frame.
- * A camera frame that is not written yet gets a new url a few times, then stops.
- */
-function stillMissed(name: string): string | null {
-  const still = stills.get(name);
-  if (!still) return null;
-  if (still.kind === 'custom') {
-    const camera: Still = { kind: 'camera', token: pagePick, tries: 0 };
-    stills.set(name, camera);
-    return api.thumbUrl(name, camera.token);
-  }
-  if (still.tries >= STILL_TRIES) return null;
-  still.tries += 1;
-  still.token += 1;
-  return api.thumbUrl(name, still.token);
-}
+const stills = stillPictures({ custom: api.streamThumbUrl, camera: api.thumbUrl });
 
 /**
  * One picture for the whole visit. The streamer's own when they put some, else one frame
  * of the camera. A 404 on that first frame (it takes ~6s, home lists the stream within 3s)
  * asks again, and then the url stays: the next bucket used to swap the picture under you.
  */
-function Thumb({ name, thumbs, hidden }: { name: string; thumbs: number[]; hidden: boolean }) {
-  const [src, setSrc] = useState(() => stillSrc(name, thumbs));
+function Thumb({ name, thumbs }: { name: string; thumbs: number[] }) {
+  const [src, setSrc] = useState(() => stills.src(name, thumbs));
   const [missing, setMissing] = useState(false);
   const wait = useRef<number | null>(null);
 
@@ -97,10 +59,10 @@ function Thumb({ name, thumbs, hidden }: { name: string; thumbs: number[]; hidde
       src={src}
       alt=""
       data-thumb={name}
-      className={cn('absolute inset-0 h-full w-full object-cover', (hidden || missing) && 'opacity-0')}
+      className={cn('absolute inset-0 h-full w-full object-cover', missing && 'opacity-0')}
       onError={() => {
         if (wait.current !== null) return;
-        const next = stillMissed(name);
+        const next = stills.missed(name);
         if (!next) {
           setMissing(true);
           return;
@@ -111,13 +73,19 @@ function Thumb({ name, thumbs, hidden }: { name: string; thumbs: number[]; hidde
           setSrc(next);
         }, 2000);
       }}
-      onLoad={() => setMissing(false)}
+      onLoad={() => {
+        stills.loaded(name);
+        setMissing(false);
+      }}
     />
   );
 }
 
-/** The camera, once its track has arrived. `cover` is the featured cards: no still underneath. */
-function PreviewVideo({ name, cover }: { name: string; cover: boolean }) {
+/**
+ * The camera, once it is playing. Until then the still underneath shows, on the featured cards too:
+ * a preview that video refused, or that is still connecting, is a picture and not a black box.
+ */
+function PreviewVideo({ name }: { name: string }) {
   const stream = useAtomValue(previewStreamsAtom)[name] ?? null;
   const ref = useRef<HTMLVideoElement | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -139,7 +107,7 @@ function PreviewVideo({ name, cover }: { name: string; cover: boolean }) {
       muted
       aria-hidden
       onPlaying={() => setPlaying(true)}
-      className={cn('absolute inset-0 h-full w-full object-cover', !cover && !playing && 'opacity-0')}
+      className={cn('absolute inset-0 h-full w-full object-cover', !playing && 'opacity-0')}
     />
   );
 }
@@ -191,14 +159,15 @@ function Card({
         {/* one chip, top right: "live for 52 hr". the fake streams draw their name top-left and a clock bottom-left */}
         <div className="relative aspect-video overflow-hidden border-b border-primaryStroke bg-black">
           <div className="absolute inset-0 transition-transform duration-300 ease-out group-hover:scale-105">
-            <Thumb name={stream.name} thumbs={stream.thumbs ?? []} hidden={featured} />
-            {playing && <PreviewVideo name={stream.name} cover={featured} />}
+            <Thumb name={stream.name} thumbs={stream.thumbs ?? []} />
+            {playing && <PreviewVideo name={stream.name} />}
           </div>
           <span className="absolute right-3 top-3 z-10 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
             <span aria-hidden className="h-2 w-2 animate-pulse bg-increase" />
             {age || 'live'}
           </span>
-          {stream.viewers !== null && (
+          {/* /api/streams does not send `viewers` yet, so it arrives undefined: a chip only when there is a number to show */}
+          {typeof stream.viewers === 'number' && (
             <span className="absolute bottom-3 right-3 z-10 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold text-white backdrop-blur-sm">
               <ViewerCount count={stream.viewers} />
             </span>
@@ -225,6 +194,42 @@ function Card({
         </div>
       </Link>
     </article>
+  );
+}
+
+/**
+ * Everyone who is not live, under the streams (docs/follows.md): a rectangle each, the face, the
+ * name with its marks, the word beside it, a line of the bio, and the follow button. Online
+ * first, the api's order. The fake streams are people too when they are not on.
+ */
+function People() {
+  const people = useQuery({ queryKey: ['people'], queryFn: api.people, refetchInterval: PEOPLE_POLL_MS, refetchOnWindowFocus: false });
+  const list: Person[] = people.data ?? [];
+  if (!people.data || list.length === 0) return null;
+  const here = list.filter((p) => p.presence !== 'offline').length;
+  return (
+    <section id="people" aria-labelledby="people-title" className="mt-10">
+      <h2 id="people-title" className="mb-4 flex items-baseline gap-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">
+        people
+        <span id="people-count">{list.length}</span>
+        {here > 0 && (
+          <>
+            <span aria-hidden>·</span>
+            <span id="people-here" className="text-increase">
+              {here} here
+            </span>
+          </>
+        )}
+      </h2>
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3">
+        {list.map((p) => (
+          <article key={p.name} id={`person-${p.name}`} data-presence={p.presence} className={cn(CARD_LINK, 'flex items-center gap-2 p-3')}>
+            <PersonRow id={`person-link-${p.name}`} name={p.name} verified={p.verified} avatar={p.avatar} bio={p.bio} presence={p.presence} size="card" />
+            <FollowButton id={`person-follow-${p.name}`} name={p.name} small className="self-start" />
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -258,54 +263,35 @@ export function HomePage() {
   const rest = list?.slice(FEATURED) ?? [];
   const namesKey = (list ?? []).map((stream) => stream.name).join(',');
   const [hover, setHover] = useState<string | null>(null);
-  const dwell = useRef<number | null>(null);
-  const grace = useRef<number | null>(null);
+  const [cardHover] = useState(() => hoverPreview(window, setHover));
 
   useEffect(() => {
     const liveNames = namesKey ? namesKey.split(',') : [];
-    if (hover && !liveNames.includes(hover)) setHover(null);
     const names = liveNames.slice(0, FEATURED);
-    if (hover && liveNames.includes(hover) && !names.includes(hover)) names.push(hover);
+    // gone offline, or moved up into featured: those cards' handlers are noops, so nothing would ever hang it up
+    if (hover && (!liveNames.includes(hover) || names.includes(hover))) setHover(null);
+    else if (hover) names.push(hover);
     setHomePreviews(names);
   }, [namesKey, hover]);
 
   useEffect(
     () => () => {
-      if (dwell.current !== null) clearTimeout(dwell.current);
-      if (grace.current !== null) clearTimeout(grace.current);
+      cardHover.dispose();
       setHomePreviews([]);
     },
     []
   );
 
-  function enter(name: string, pointer: string) {
-    if (pointer === 'touch') return;
-    if (grace.current !== null) {
-      clearTimeout(grace.current);
-      grace.current = null;
-    }
-    if (dwell.current !== null) clearTimeout(dwell.current);
-    dwell.current = window.setTimeout(() => {
-      dwell.current = null;
-      setHover(name);
-    }, HOVER_DWELL_MS);
-  }
-
-  function leave(name: string) {
-    if (dwell.current !== null) {
-      clearTimeout(dwell.current);
-      dwell.current = null;
-    }
-    if (grace.current !== null) clearTimeout(grace.current);
-    grace.current = window.setTimeout(() => {
-      grace.current = null;
-      setHover((current) => (current === name ? null : current));
-    }, HOVER_GRACE_MS);
-  }
-
   // no title row: the cards are the page. "go live" is in the corner panel (UserPanel), and once more in the empty state.
+  // the one thing above the cards is the search box, in the middle: a few letters find anyone (docs/follows.md)
   return (
     <PageFrame wide>
+      <div className="mx-auto mb-8 flex w-full max-w-xl flex-col items-center gap-3">
+        <SearchBox className="w-full" />
+        <Link id="explore-link" to="/explore" className="text-sm font-semibold text-primaryBlue">
+          servers
+        </Link>
+      </div>
       {streams.error && (
         <p className="border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
           api is down: {messageOf(streams.error)}
@@ -345,13 +331,14 @@ export function HomePage() {
                 now={now}
                 featured={false}
                 playing={hover === stream.name}
-                onEnter={(pointer) => enter(stream.name, pointer)}
-                onLeave={() => leave(stream.name)}
+                onEnter={(pointer) => cardHover.enter(stream.name, pointer, hover)}
+                onLeave={() => cardHover.leave(stream.name)}
               />
             ))}
           </div>
         )}
       </div>
+      {!streams.error && <People />}
     </PageFrame>
   );
 }

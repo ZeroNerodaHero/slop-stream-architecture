@@ -1,6 +1,6 @@
 # chat
 
-text chat next to a stream. short lines, newest at the bottom, the last 500 kept per stream. nothing kept beyond that.
+text chat next to a stream. short lines, newest at the bottom. the last 500 live in redis. with `CHAT_PERSIST` the older ones stay in postgres, and a room can be searched and scrolled to one line.
 
 ```mermaid
 flowchart LR
@@ -28,7 +28,7 @@ one task per room with at least one viewer runs `XREAD BLOCK 5000 STREAMS chat:<
 
 ## protocol
 
-one websocket per viewer at `wss://<host>/chat/<stream name>`. json text frames.
+one websocket per viewer at `wss://<host>/chat/<stream name>`. a server's channel is the same socket at `wss://<host>/chat/<server>/<channel>` (`groups.md`): the room key is `server/channel`, redis `chat:server/channel`. anyone can read it, including the history below. a line is accepted only from a login that has joined that server; anyone else hears `join the server first` and the line is not kept. a channel that is not there says `no such channel` and the panel stops. json text frames.
 
 client → server
 
@@ -65,16 +65,30 @@ server → client
 - rate: 5 lines at once, then 1 per second per socket. over that is `slow down` and the line is dropped. one ip may hold 8 sockets in a room; the ninth gets `too many tabs` and is closed, so tabs do not multiply the rate or the count.
 - frame size: 8 kb. a bigger frame closes the socket.
 - liveness: the server pings every 30s; a socket that sent nothing (pong, text, anything) for 90s is dropped and leaves the count.
-- history: 200 lines sent on join, 500 kept in redis, a room's key expires 7 days after its last line.
+- history: 200 lines sent on join, 500 kept in redis, a room's key expires 7 days after its last line. past that, with `CHAT_PERSIST`, the lines are in postgres (below).
 - the stream does not have to be live. people can talk in an empty room while they wait.
+
+## kept lines
+
+off unless `CHAT_PERSIST=1` on the chat process (`.env`, then a deploy of the api image so the chat container picks it up). the api process creates the table and never serves it. off, a room is the redis stream alone, and search says `history is not kept`.
+
+on, every accepted line is still `XADD`'d first. the insert into `chat_lines` follows on its own, so a slow database does not hold the socket. redis stays the live tail and the recent page. scrolling past the oldest id redis still has reads postgres, strictly older than the id the panel sends, so a line kept in both is not drawn twice.
+
+- `GET /chat/<name>/before?id=` older lines, oldest first. one page. a short page is the end.
+- `GET /chat/<name>/search?q=` matches in this room, newest first. the words as written (`simple`, not stems).
+- `GET /chat/<name>/by/<account>` that account's verified lines in this room, newest first. a nick with no account is not one.
+- `GET /chat/<name>/around/<id>` the window a hit opens on. redis when that id is still in the stream, otherwise postgres. the panel scrolls to it. `latest` comes back to the live tail.
+
+a server channel has the same four, with the room in two segments: `/chat/<server>/<channel>/before`, `/search`, `/by/<account>`, `/around/<id>`. the room stored is `server/channel`.
+
+a row is the redis id, the room, the time, who said it, the account id when the line is verified (otherwise null), the text, the streamer and verified flags, and the badges as they were on the line. search is a generated `tsvector` on the text.
 
 ## the panel
 
-on the watch page and the go-live page the chat sits in a column to the right of the video (or the left, or in a window you can drag: a setting of this browser, and the settings tab shows a picture of each). the chat button on the video closes it and opens it again: a column slides out to its side, a window fades. on a narrow screen a column sits under the video. the streamer on the go-live page sees the same panel and speaks as themselves. on the corner player it opens under the picture, or in a column to the picture's left or right: a setting of this browser, and the settings tab shows a picture of each. the panel: the lines, a nick box (remembered in the browser), a text box with a `500` countdown, a send button. the streamer's lines get a mark; a line wears its speaker's group badges after the name. the viewer count sits in the panel header, next to a robot button: `hide bots` takes the bots' lines off the screen and then reads `N hidden`. that choice is this browser's (localstorage, the settings tab has it too), so it holds from room to room.
+on the watch page and the go-live page the chat sits in a column to the right of the video (or the left, or in a window you can drag: a setting of this browser, and the settings tab shows a picture of each). the chat button on the video closes it and opens it again: a column slides out to its side, a window fades. on a narrow screen a column sits under the video. the streamer on the go-live page sees the same panel and speaks as themselves. on the corner player it opens under the picture, or in a column to the picture's left or right: a setting of this browser, and the settings tab shows a picture of each. the panel: the lines, a nick box (remembered in the browser), a text box with a `500` countdown, a send button, and a search box under the header. the same panel is the chat of a server channel, on `/explore/<server>/<channel>`, reached from home (`servers`) and from the explorer. a verified name opens that account's lines. a hit scrolls the room to that line, and `latest` returns to the live tail. the streamer's lines get a mark; a line wears its speaker's group badges after the name. the viewer count sits in the panel header, next to a robot button: `hide bots` takes the bots' lines off the screen and then reads `N hidden`. that choice is this browser's (localstorage, the settings tab has it too), so it holds from room to room.
 
 ## later, not now
 
 - more than one chat machine: already works through redis streams; put them behind caddy with sticky-less round robin, counts become per-machine. the gateway was built for it: presence is a sorted set per name with a member per socket, and the facts go through one `events` stream every process tails (`status.md`). the viewer count could move to a `ZCARD` the same way.
 - moderation: a `deleted` entry type in the stream, or a per-room block list in redis. (badges mean nothing to the server: a `mod` group is a word, not a power.)
-- keeping chat: write each line to a table from the same place that does `XADD`.
 - emotes, links, mentions: client side.

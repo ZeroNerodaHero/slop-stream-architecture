@@ -26,6 +26,7 @@ on:
       - api/**
       - video/**
       - frontend/**
+      - random-media/gifs/**
       - '!frontend/Caddyfile'
       - Cargo.toml
       - Cargo.lock

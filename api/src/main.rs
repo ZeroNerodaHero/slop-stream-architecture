@@ -17,6 +17,11 @@
 //! login is for: only its owner can go live, save its bio or chat as it. A login
 //! can also join groups (groups.rs), whose badges go on its chat lines.
 //!
+//! Every streamers row has a uuid that never changes (docs/ids.md). Logins,
+//! memberships, groups and the pictures in the bucket point at it, so a login can
+//! change its name (auth.rs, `POST /api/name`) and keep all of them. The name stays
+//! the url, the chat nick and every redis key: nothing a person reads is an id.
+//!
 //! The same binary run as `api chat` is the text chat server (chat.rs),
 //! `api monitor` watches the other boxes from a box of its own (monitor.rs), and
 //! `api passwd <name>` resets a password.
@@ -31,7 +36,9 @@ mod auth;
 mod chat;
 mod debug;
 mod events;
+mod follows;
 mod groups;
+mod history;
 mod monitor;
 mod presence;
 mod profile;
@@ -126,6 +133,83 @@ CREATE TABLE IF NOT EXISTS stream_thumbs (
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (name, id)
 );
+ALTER TABLE streamers ADD COLUMN IF NOT EXISTS id uuid NOT NULL DEFAULT gen_random_uuid();
+CREATE UNIQUE INDEX IF NOT EXISTS streamers_id_idx ON streamers (id);
+ALTER TABLE streamers ADD COLUMN IF NOT EXISTS renamed_at timestamptz;
+ALTER TABLE logins ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES streamers(id) ON DELETE CASCADE;
+UPDATE logins l SET user_id = s.id FROM streamers s WHERE s.name = l.name AND l.user_id IS NULL;
+CREATE INDEX IF NOT EXISTS logins_user_idx ON logins (user_id);
+ALTER TABLE memberships ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES streamers(id) ON DELETE CASCADE;
+UPDATE memberships m SET user_id = s.id FROM streamers s WHERE s.name = m.name AND m.user_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS memberships_user_group_idx ON memberships (user_id, group_name);
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS created_by_id uuid REFERENCES streamers(id) ON DELETE SET NULL;
+UPDATE groups g SET created_by_id = s.id FROM streamers s WHERE s.name = g.created_by AND g.created_by_id IS NULL;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id uuid;
+UPDATE sessions se SET user_id = s.id FROM streamers s WHERE s.name = se.name AND se.verified AND se.user_id IS NULL;
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'logins_name_fkey' AND confupdtype <> 'c') THEN
+        ALTER TABLE logins DROP CONSTRAINT logins_name_fkey;
+        ALTER TABLE logins ADD CONSTRAINT logins_name_fkey
+            FOREIGN KEY (name) REFERENCES streamers(name) ON UPDATE CASCADE ON DELETE CASCADE;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'memberships_name_fkey' AND confupdtype <> 'c') THEN
+        ALTER TABLE memberships DROP CONSTRAINT memberships_name_fkey;
+        ALTER TABLE memberships ADD CONSTRAINT memberships_name_fkey
+            FOREIGN KEY (name) REFERENCES streamers(name) ON UPDATE CASCADE ON DELETE CASCADE;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'groups_created_by_fkey' AND confupdtype <> 'c') THEN
+        ALTER TABLE groups DROP CONSTRAINT groups_created_by_fkey;
+        ALTER TABLE groups ADD CONSTRAINT groups_created_by_fkey
+            FOREIGN KEY (created_by) REFERENCES streamers(name) ON UPDATE CASCADE ON DELETE SET NULL;
+    END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS held_names (
+    name text PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
+    until timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS follows (
+    follower_id uuid NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
+    followed_id uuid NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
+    followed_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (follower_id, followed_id),
+    CHECK (follower_id <> followed_id)
+);
+CREATE INDEX IF NOT EXISTS follows_followed_idx ON follows (followed_id, followed_at DESC);
+-- a chat line, written by the chat process when CHAT_PERSIST is on (history.rs). the api
+-- creates it here, with the other tables, and never serves it. id is the redis stream id
+-- (unique per room, not across rooms). at and seq are that id as numbers: the text does
+-- not sort. the column is quoted in the statement because text is also the type name.
+CREATE TABLE IF NOT EXISTS chat_lines (
+    room text NOT NULL,
+    id text NOT NULL,
+    at timestamptz NOT NULL,
+    seq bigint NOT NULL,
+    speaker text NOT NULL,
+    user_id uuid REFERENCES streamers(id) ON DELETE SET NULL,
+    \"text\" text NOT NULL,
+    streamer boolean NOT NULL,
+    verified boolean NOT NULL,
+    badges jsonb NOT NULL DEFAULT '[]'::jsonb,
+    search tsvector GENERATED ALWAYS AS (to_tsvector('simple', \"text\")) STORED,
+    PRIMARY KEY (room, id)
+);
+CREATE INDEX IF NOT EXISTS chat_lines_room_idx ON chat_lines (room, at, seq);
+CREATE INDEX IF NOT EXISTS chat_lines_user_idx ON chat_lines (user_id, room, at, seq);
+CREATE INDEX IF NOT EXISTS chat_lines_search_idx ON chat_lines USING gin (search);
+-- a group's channels. the group is the server; bot is not one. general is the first
+-- channel, made here for every server that already exists and again when a group is made.
+CREATE TABLE IF NOT EXISTS channels (
+    server text NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
+    name text NOT NULL,
+    about text NOT NULL DEFAULT '',
+    created_by_id uuid REFERENCES streamers(id) ON DELETE SET NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (server, name)
+);
+INSERT INTO channels (server, name, about)
+    SELECT name, 'general', '' FROM groups WHERE name <> 'bot'
+    ON CONFLICT DO NOTHING;
 ";
 
 #[derive(Clone)]
@@ -144,8 +228,9 @@ pub(crate) struct AppState {
     /// BUILD: the commit the image was built from.
     build: String,
     started: Instant,
-    /// Logins that may read /api/errors, and the bearer token a machine may use instead.
-    pub(crate) admin_names: Vec<String>,
+    /// Logins that may read /api/errors (ADMIN_NAMES, resolved to accounts at boot so a rename
+    /// keeps them admin until the next restart), and the bearer token a machine may use instead.
+    pub(crate) admins: Vec<auth::Account>,
     pub(crate) ops_token: Option<String>,
     /// The bucket. The container when S3_ENDPOINT is off, otherwise the url it names. See s3.rs.
     s3: s3::Store,
@@ -163,6 +248,9 @@ pub(crate) struct ApiError(StatusCode, String);
 impl ApiError {
     pub(crate) fn new(status: StatusCode, message: impl Into<String>) -> Self {
         Self(status, message.into())
+    }
+    pub(crate) fn message(&self) -> &str {
+        &self.1
     }
     pub(crate) fn bad_name() -> Self {
         Self::new(StatusCode::BAD_REQUEST, "bad name. use a-z 0-9 _ - (1 to 32)")
@@ -189,6 +277,11 @@ impl From<sqlx::Error> for ApiError {
         log::error!("postgres: {e}");
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "database error")
     }
+}
+
+/// Postgres said a unique key was already there (23505): a race somebody else won.
+pub(crate) fn unique_violation(err: &sqlx::Error) -> bool {
+    err.as_database_error().and_then(|e| e.code()).is_some_and(|code| code == "23505")
 }
 
 impl From<redis::RedisError> for ApiError {
@@ -285,7 +378,7 @@ fn nx_ex() -> SetOptions {
 }
 
 /// Names the video server says are connected right now. None if it cannot be reached.
-async fn video_live(s: &AppState) -> Option<HashSet<String>> {
+pub(crate) async fn video_live(s: &AppState) -> Option<HashSet<String>> {
     let res = s
         .http
         .get(format!("{}/live", s.video_url))
@@ -318,7 +411,7 @@ pub(crate) async fn thumb_exists(s: &AppState, name: &str) -> bool {
 }
 
 /// Names with a live key in redis.
-async fn redis_live(s: &AppState) -> Result<Vec<String>, redis::RedisError> {
+pub(crate) async fn redis_live(s: &AppState) -> Result<Vec<String>, redis::RedisError> {
     let mut r = s.redis.clone();
     let mut names = HashSet::new();
     let mut iter: redis::AsyncIter<String> = r.scan_match("live:*").await?;
@@ -493,13 +586,13 @@ async fn health(State(s): State<AppState>) -> Response {
 async fn put_streamer(
     State(s): State<AppState>,
     Name(name): Name,
-    Me(me): Me,
+    me: Me,
     q: Result<Query<PasswordQuery>, QueryRejection>,
     body: Result<Json<BioBody>, JsonRejection>,
 ) -> ApiResult {
     let Query(q) = q?;
     let Json(body) = body?;
-    may_write(&s, &name, me.as_deref(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
     let bio = body.bio.trim().chars().take(500).collect::<String>();
     let bio: String = sqlx::query_scalar(
         "INSERT INTO streamers (name, bio) VALUES ($1, $2)
@@ -513,11 +606,16 @@ async fn put_streamer(
     Ok(Json(json!({ "name": name, "bio": bio })))
 }
 
-async fn get_streamer(State(s): State<AppState>, Name(name): Name) -> ApiResult {
+async fn get_streamer(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult {
     let p = profile::load_profile(&s.db, &name).await?;
     let presence = presence::presence(&s, &name).await?;
     let thumbs = profile::thumb_ids(&s.db, std::slice::from_ref(&name)).await?.remove(&name).unwrap_or_default();
-    Ok(Json(json!({ "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified, "presence": presence, "thumbs": thumbs })))
+    // how many follow the name (public), and whether the asking login does (docs/follows.md)
+    let (followers, following) = follows::stats(&s.db, &name, me.0.as_ref().map(|a| a.id)).await?;
+    Ok(Json(json!({
+        "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified, "presence": presence, "thumbs": thumbs,
+        "followers": followers, "following": following,
+    })))
 }
 
 async fn list_sessions(State(s): State<AppState>, Name(name): Name) -> ApiResult {
@@ -575,11 +673,11 @@ async fn list_streams(State(s): State<AppState>) -> ApiResult {
 async fn go_live(
     State(s): State<AppState>,
     Name(name): Name,
-    Me(me): Me,
+    me: Me,
     q: Result<Query<PasswordQuery>, QueryRejection>,
 ) -> ApiResult {
     let Query(q) = q?;
-    may_write(&s, &name, me.as_deref(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
 
     let key = live_key(&name);
     let mut r = s.redis.clone();
@@ -612,13 +710,16 @@ async fn go_live(
         let _: i64 = redis::cmd("EVAL").arg(DEL_IF_HELD_BY).arg(1).arg(&key).arg(holder).query_async(&mut r).await?;
     }
 
-    // the ✓: this session was started by the name's own account, not just by someone
-    let verified = me.as_deref() == Some(name.as_str());
+    // the ✓: this session was started by the name's own account, not just by someone. the
+    // account's id goes on the row too, so its history is one list after a rename (docs/ids.md)
+    let account = me.0.as_ref().filter(|a| a.name == name);
+    let verified = account.is_some();
     let token = new_session_token();
-    let id: i64 = sqlx::query_scalar("INSERT INTO sessions (name, token, verified) VALUES ($1, $2, $3) RETURNING id")
+    let id: i64 = sqlx::query_scalar("INSERT INTO sessions (name, token, verified, user_id) VALUES ($1, $2, $3, $4) RETURNING id")
         .bind(&name)
         .bind(token)
         .bind(verified)
+        .bind(account.map(|a| a.id))
         .fetch_one(&s.db)
         .await?;
 
@@ -719,13 +820,20 @@ async fn stop(
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn watch(State(s): State<AppState>, Name(name): Name) -> ApiResult {
+async fn watch(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult {
+    // a name held after a rename answers for the name it became; the grant says which, and the
+    // page moves there (docs/ids.md). the url the person typed keeps working for the hold's length
+    let name = auth::renamed_to(&s.db, &name).await?.unwrap_or(name);
     let live = is_live(&s, &name).await?;
     let p = profile::load_profile(&s.db, &name).await?;
     // the ✓ belongs to the live session (started by the account), not to the name
     let verified = live && session_verified(&s.db, &name).await?;
     let presence = presence::presence_with(&mut s.redis.clone(), &s.db, &name, live).await?;
-    Ok(Json(json!({ "url": WS_PATH, "bio": p.bio, "live": live, "verified": verified, "avatar": p.avatar, "presence": presence })))
+    let (followers, following) = follows::stats(&s.db, &name, me.0.as_ref().map(|a| a.id)).await?;
+    Ok(Json(json!({
+        "url": WS_PATH, "name": name, "bio": p.bio, "live": live, "verified": verified, "avatar": p.avatar, "presence": presence,
+        "followers": followers, "following": following,
+    })))
 }
 
 fn router(state: AppState) -> Router {
@@ -733,6 +841,7 @@ fn router(state: AppState) -> Router {
         .merge(auth::routes())
         .merge(profile::routes())
         .merge(groups::routes())
+        .merge(follows::routes())
         .merge(presence::routes())
         .merge(debug::routes())
         .route("/api/health", get(health))
@@ -845,7 +954,8 @@ async fn main() {
         .map(|n| n.trim().to_lowercase())
         .filter(|n| valid_name(n))
         .collect();
-    let admin_names = debug::admins_with_accounts(&db, admin_names).await.expect("read streamers");
+    let admins = debug::admins_with_accounts(&db, admin_names).await.expect("read streamers");
+    let admin_names: Vec<&str> = admins.iter().map(|a| a.name.as_str()).collect();
     let ops_token = env::var("OPS_TOKEN").ok().map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
     let ops_token = match ops_token {
         Some(t) if t.len() < 16 => {
@@ -884,7 +994,7 @@ async fn main() {
         env_name,
         build,
         started: Instant::now(),
-        admin_names,
+        admins,
         ops_token,
         s3,
     };

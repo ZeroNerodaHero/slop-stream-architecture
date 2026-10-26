@@ -20,48 +20,8 @@ import { identityChanged } from '@/infra/atoms/profile-atoms';
 import { cleanName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
-import { BUTTON, Field, INPUT, Section, Status } from '@/shared-components/user-modal/parts';
+import { BUTTON, Field, INPUT, PasswordInput, Section, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
-
-/** A password box with its show/hide word inside, the way the login page has it. */
-function PasswordInput({
-  id,
-  value,
-  onChange,
-  autoComplete,
-  minLength
-}: {
-  id: string;
-  value: string;
-  onChange: (v: string) => void;
-  autoComplete: string;
-  minLength?: number;
-}) {
-  const [show, setShow] = useState(false);
-  return (
-    <div className="relative">
-      <input
-        id={id}
-        type={show ? 'text' : 'password'}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        autoComplete={autoComplete}
-        minLength={minLength}
-        maxLength={128}
-        required
-        className={cn(INPUT, 'pr-16')}
-      />
-      <button
-        id={`${id}-show`}
-        type="button"
-        onClick={() => setShow((s) => !s)}
-        className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-textSecondary underline-offset-2 hover:underline"
-      >
-        {show ? 'hide' : 'show'}
-      </button>
-    </div>
-  );
-}
 
 /**
  * The account. Nobody has to have one; with one the name is yours. Logged out: log in or sign

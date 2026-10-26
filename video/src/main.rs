@@ -30,6 +30,10 @@
 //! peer taking real packets, not a request. One address holds at most
 //! MAX_WATCHERS_PER_IP_ROOM peers in a room and MAX_WATCHERS_PER_IP in all; past
 //! that it gets {"error":"too many watchers from your address"}. docs/viewers.md.
+//! A watch frame may carry "preview":true (home's muted camera previews): a preview
+//! gets the same answer and events but is not counted as a viewer and spends none of
+//! those caps; one address holds at most MAX_PREVIEWS_PER_IP previews in all, past
+//! that it gets {"error":"too many previews from your address"}.
 //!
 //! Also on the same port: GET /live (names connected right now), GET /viewers
 //! ({name: viewers} for every live room) and GET /health
@@ -102,6 +106,10 @@ const UDP_BUFFER_BYTES: usize = 4 << 20;
 /// and every copy is ~2.5 Mbps of our egress.
 const MAX_WATCHERS_PER_IP_ROOM: usize = 4;
 const MAX_WATCHERS_PER_IP: usize = 16;
+/// Preview peers (home's muted cameras, `preview: true`) one address may hold across
+/// every room. Kept apart from the watcher caps so a few home tabs behind one address
+/// never lock it out of watching; this bounds their egress on their own.
+const MAX_PREVIEWS_PER_IP: usize = 12;
 /// How often a socket is told the count, at most. Only sent when it moved.
 const VIEWERS_TICK: Duration = Duration::from_secs(1);
 
@@ -141,7 +149,7 @@ struct App {
 #[derive(Clone, Default)]
 struct Hub {
     rooms: Arc<Mutex<HashMap<String, Room>>>,
-    /// Ids for watcher peers, to take them out of the count again.
+    /// Ids for watcher and preview peers, to take them out again.
     next_viewer: Arc<AtomicU64>,
 }
 
@@ -157,6 +165,9 @@ struct Room {
     publisher: Option<Weak<RTCPeerConnection>>,
     /// Connected watcher peers and the address each one's media goes to.
     viewers: HashMap<u64, IpAddr>,
+    /// Connected preview peers (`preview: true`) and their addresses. Not in `viewers`:
+    /// never counted, and capped on their own (MAX_PREVIEWS_PER_IP).
+    previews: HashMap<u64, IpAddr>,
     /// How many different addresses are in `viewers`: the number people see.
     viewers_tx: watch::Sender<usize>,
 }
@@ -200,6 +211,10 @@ struct In {
     /// Also needed to publish a reserved (dummy) name.
     #[serde(default)]
     password: Option<String>,
+    /// A watcher that is one of home's muted camera previews: held apart from the
+    /// viewers, their count and their caps.
+    #[serde(default)]
+    preview: Option<bool>,
 }
 
 #[derive(Serialize, Default)]
@@ -478,7 +493,7 @@ async fn handle(app: App, mut socket: WebSocket, forwarded: Option<IpAddr>) {
                 let _ = send(&mut socket, Out::error("bad offer")).await;
                 return;
             }
-            watch_stream(app, socket, name, incoming.sdp, wants, forwarded).await
+            watch_stream(app, socket, name, incoming.sdp, wants, incoming.preview.unwrap_or(false), forwarded).await
         }
         _ => {
             let _ = send(&mut socket, Out::error("role must be publish or watch")).await;
@@ -700,8 +715,9 @@ async fn end_session(app: &App, name: &str, grant: (Option<i64>, Option<i64>)) {
 
 /// `wants`: how many (audio, video) sections the watcher's offer can receive on. The
 /// room's slots are bound to them in order, as many as fit: a watcher that asks for one
-/// video gets the camera.
-async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String, wants: (usize, usize), forwarded: Option<IpAddr>) {
+/// video gets the camera. `preview`: one of home's muted previews, held apart from the
+/// viewers (not counted, its own cap) but otherwise served like any watcher.
+async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String, wants: (usize, usize), preview: bool, forwarded: Option<IpAddr>) {
     let Some((tracks, mut generation, my_generation, mut slots)) = app.hub.tracks(&name, wants).await else {
         let _ = send(&mut socket, Out::error("not live")).await;
         return;
@@ -773,14 +789,20 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
-                // Counted once the media path is up, by the address it goes to.
+                // Counted once the media path is up, by the address it goes to. A
+                // preview is held by that address instead, apart from the viewers.
                 _ = connected.notified(), if counted.is_none() => {
                     let Some(ip) = media_ip(&peer).await.or(forwarded) else {
                         log::warn!("watch {name}: connected, but no address to count it by");
                         continue;
                     };
                     let id = app.hub.next_viewer.fetch_add(1, Ordering::Relaxed);
-                    match app.hub.add_viewer(&name, my_generation, id, ip).await {
+                    let held = if preview {
+                        app.hub.add_preview(&name, my_generation, id, ip).await
+                    } else {
+                        app.hub.add_viewer(&name, my_generation, id, ip).await
+                    };
+                    match held {
                         Ok(()) => counted = Some(id),
                         Err(e) => {
                             log::info!("watch {name}: refused {ip}: {e}");
@@ -832,7 +854,11 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
     }
 
     if let Some(id) = counted {
-        app.hub.remove_viewer(&name, id).await;
+        if preview {
+            app.hub.remove_preview(&name, id).await;
+        } else {
+            app.hub.remove_viewer(&name, id).await;
+        }
     }
     let _ = peer.close().await;
 }
@@ -1107,6 +1133,26 @@ impl Hub {
         }
     }
 
+    /// Hold a connected preview, unless its address already holds its share of them.
+    /// Not a viewer: it goes in `previews`, never into the count or the watcher caps.
+    async fn add_preview(&self, name: &str, generation: u64, id: u64, ip: IpAddr) -> Result<(), &'static str> {
+        let mut rooms = self.rooms.lock().await;
+        let everywhere = rooms.values().flat_map(|r| r.previews.values()).filter(|v| **v == ip).count();
+        let room = rooms.get_mut(name).filter(|r| r.generation == generation).ok_or("not live")?;
+        if everywhere >= MAX_PREVIEWS_PER_IP {
+            return Err("too many previews from your address");
+        }
+        room.previews.insert(id, ip);
+        Ok(())
+    }
+
+    /// A held preview left. Nothing to recount: it was never in the number.
+    async fn remove_preview(&self, name: &str, id: u64) {
+        if let Some(room) = self.rooms.lock().await.get_mut(name) {
+            room.previews.remove(&id);
+        }
+    }
+
     async fn viewers_rx(&self, name: &str) -> Option<watch::Receiver<usize>> {
         self.rooms.lock().await.get(name).map(|r| r.viewers_tx.subscribe())
     }
@@ -1158,6 +1204,7 @@ impl Room {
             slots_tx,
             publisher: None,
             viewers: HashMap::new(),
+            previews: HashMap::new(),
             viewers_tx,
         }
     }
@@ -1292,5 +1339,70 @@ async fn wait_until_socket_closes(socket: &mut WebSocket) {
             Ok(Message::Close(_)) | Err(_) => break,
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ip(last: u8) -> IpAddr {
+        IpAddr::V4(Ipv4Addr::new(10, 0, 0, last))
+    }
+
+    /// A live room with one camera slot, as a publisher's claim makes it.
+    async fn live_room(hub: &Hub, name: &str) -> u64 {
+        hub.claim(name, vec![("0".to_owned(), RTPCodecType::Video)]).await.expect("the name is free")
+    }
+
+    // F-1-2: home tabs behind one address used to be watcher peers, so four of them
+    // in a featured room made the fifth peer from that address, the real watcher,
+    // "too many watchers from your address". Previews are held apart now.
+    #[tokio::test]
+    async fn previews_spend_neither_the_watcher_cap_nor_the_count() {
+        let hub = Hub::default();
+        let generation = live_room(&hub, "f").await;
+        let home = ip(1);
+        let mut ids = 0u64..;
+        for _ in 0..MAX_PREVIEWS_PER_IP {
+            hub.add_preview("f", generation, ids.next().unwrap(), home).await.expect("a preview under the cap");
+        }
+        assert_eq!(hub.viewer_counts().await["f"], 0, "previews are not viewers");
+        for _ in 0..MAX_WATCHERS_PER_IP_ROOM {
+            hub.add_viewer("f", generation, ids.next().unwrap(), home).await.expect("the watcher share is untouched by previews");
+        }
+        assert_eq!(hub.viewer_counts().await["f"], 1, "four watcher peers from one address are one viewer");
+        // the watcher cap itself still holds
+        assert_eq!(hub.add_viewer("f", generation, ids.next().unwrap(), home).await, Err("too many watchers from your address"));
+    }
+
+    #[tokio::test]
+    async fn the_thirteenth_preview_from_one_address_is_refused() {
+        let hub = Hub::default();
+        let f = live_room(&hub, "f").await;
+        let g = live_room(&hub, "g").await;
+        let home = ip(1);
+        let mut ids = 0u64..;
+        // spread over two rooms: the cap is per address across all of them
+        for i in 0..MAX_PREVIEWS_PER_IP {
+            let (name, generation) = if i % 2 == 0 { ("f", f) } else { ("g", g) };
+            hub.add_preview(name, generation, ids.next().unwrap(), home).await.expect("a preview under the cap");
+        }
+        let thirteenth = ids.next().unwrap();
+        assert_eq!(hub.add_preview("f", f, thirteenth, home).await, Err("too many previews from your address"));
+        hub.add_preview("f", f, ids.next().unwrap(), ip(2)).await.expect("another address has its own share");
+        // one leaving frees its place
+        hub.remove_preview("f", 0).await;
+        hub.add_preview("f", f, thirteenth, home).await.expect("the place a leaving preview freed");
+        assert_eq!(hub.viewer_counts().await["f"], 0);
+        assert_eq!(hub.viewer_counts().await["g"], 0);
+    }
+
+    #[tokio::test]
+    async fn a_preview_for_a_room_that_is_gone_is_not_live() {
+        let hub = Hub::default();
+        let generation = live_room(&hub, "f").await;
+        hub.clear("f").await;
+        assert_eq!(hub.add_preview("f", generation, 0, ip(1)).await, Err("not live"));
     }
 }

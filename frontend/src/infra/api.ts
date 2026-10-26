@@ -35,6 +35,42 @@ export interface Streamer {
   thumbs?: number[];
   /** The word next to the name: `offline` `online` `dnd` `streaming`. See docs/status.md. */
   presence: Presence;
+  /** How many follow the name (docs/follows.md). Absent on an older api. */
+  followers?: number;
+  /** The asking login follows it. false for nobody. */
+  following?: boolean;
+}
+
+/** Somebody the login follows, as `GET /api/following` lists them: streaming first. See docs/follows.md. */
+export interface Followed {
+  name: string;
+  verified: boolean;
+  avatar: number | null;
+  bio: string;
+  live: boolean;
+  presence: Presence;
+  followed_at: string;
+}
+
+/** One of home's people (`GET /api/people`): a name with a row who is not live, with the word beside it. */
+export interface Person {
+  name: string;
+  verified: boolean;
+  avatar: number | null;
+  bio: string;
+  presence: Presence;
+  following: boolean;
+}
+
+/** One answer of `GET /api/search?q=`: a name holding the letters, and whether the login follows it. */
+export interface SearchHit {
+  name: string;
+  verified: boolean;
+  avatar: number | null;
+  bio: string;
+  live: boolean;
+  presence: Presence;
+  following: boolean;
 }
 
 /** A group as worn on a chat line: enough to draw the badge. */
@@ -65,6 +101,30 @@ export interface NewGroup {
   about: string;
 }
 
+/** One room inside a server. `general` is the one a group starts with. */
+export interface Channel {
+  name: string;
+  about: string;
+  /** The login can delete it: they made it, they made the server, or they are an admin. Never `general`. */
+  can_delete: boolean;
+}
+
+/** A group as a server: the explorer splits these into yours and the rest. */
+export interface Server {
+  name: string;
+  badge: string;
+  color: string;
+  about: string;
+  members: number;
+  mine: boolean;
+  channels: Channel[];
+}
+
+export interface Explore {
+  yours: Server[];
+  discover: Server[];
+}
+
 export interface Grant {
   url: string;
   session: number;
@@ -73,11 +133,24 @@ export interface Grant {
 
 export interface WatchGrant {
   url: string;
+  /** The name this grant is for. Another than the one asked for: that name was renamed, go there (docs/ids.md). Absent on an older api. */
+  name?: string;
   bio: string;
   live: boolean;
   verified: boolean;
   avatar: number | null;
   presence: Presence;
+  /** How many follow the name, and whether the asking login does (docs/follows.md). Absent on an older api. */
+  followers?: number;
+  following?: boolean;
+}
+
+/** `GET /api/me`: every field null for nobody. `id` is the account's uuid (docs/ids.md); no page needs it. */
+export interface MeInfo {
+  id: string | null;
+  name: string | null;
+  /** When the name last changed, rfc3339. null: never. The profile tab says when it may change again. */
+  renamed_at: string | null;
 }
 
 /** Proof that this page is the one that went live. Heartbeat and stop carry it. */
@@ -169,14 +242,16 @@ function ownerQuery(owner: Owner): string {
 }
 
 export const api = {
-  /** The login cookie goes along on its own (httponly, same origin). `name` is null for nobody. */
-  me: () => request<{ name: string | null }>('GET', '/api/me'),
+  /** The login cookie goes along on its own (httponly, same origin). Every field null for nobody. */
+  me: () => request<MeInfo>('GET', '/api/me'),
   signup: (name: string, password: string) => request<{ name: string }>('POST', '/api/signup', { name, password }),
   login: (name: string, password: string) => request<{ name: string }>('POST', '/api/login', { name, password }),
   logout: () => request<null>('POST', '/api/logout'),
   /** Every login of the account, this one included. */
   logoutAll: () => request<null>('POST', '/api/logout-all'),
   changePassword: (old: string, next: string) => request<null>('POST', '/api/password', { old, new: next }),
+  /** The account's name changes; its logins, groups and pictures stay. Once a month, with the password, not while live. See docs/ids.md. */
+  rename: (name: string, password: string) => request<{ id: string; name: string; renamed_at: string }>('POST', '/api/name', { name, password }),
   /** Every group, `bot` first; `mine` says which the login is in. See docs/groups.md. */
   groups: () => request<Group[]>('GET', '/api/groups'),
   /** A login makes a group and is in it. 400 bad name/badge/colour, 409 `name taken`. */
@@ -185,8 +260,24 @@ export const api = {
   leaveGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/leave`),
   /** The one who made it (or an admin). Its members are out with it. */
   deleteGroup: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}`),
+  /** Servers you are in, then the ones you can find. `bot` is not a server. See docs/groups.md. */
+  explore: () => request<Explore>('GET', '/api/explore'),
+  /** A member adds a channel. 403 until they have joined, 409 when the name is taken. */
+  createChannel: (server: string, name: string) => request<Channel>('POST', `/api/groups/${encodeURIComponent(server)}/channels`, { name }),
+  /** Who made the channel, who made the server, or an admin. `general` stays. */
+  deleteChannel: (server: string, channel: string) =>
+    request<null>('DELETE', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`),
   streams: () => request<LiveStream[]>('GET', '/api/streams'),
   streamer: (name: string) => request<Streamer>('GET', `/api/streamers/${name}`),
+  /** The login's follows, streaming first, with each one's word. 401 for nobody. See docs/follows.md. */
+  following: () => request<Followed[]>('GET', '/api/following'),
+  /** 204, also when already. 400 `that is you`, 401 nobody, 403 at the cap, 429 on churn. */
+  follow: (name: string) => request<null>('POST', `/api/streamers/${encodeURIComponent(name)}/follow`),
+  unfollow: (name: string) => request<null>('POST', `/api/streamers/${encodeURIComponent(name)}/unfollow`),
+  /** Names holding the letters, the exact one first, 20 at most. Works for nobody too. */
+  search: (q: string) => request<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
+  /** Everyone with a row who is not live: home's second half, online first. 100 at most. */
+  people: () => request<Person[]>('GET', '/api/people'),
   saveBio: (name: string, bio: string) => request<{ name: string; bio: string }>('PUT', `/api/streamers/${name}`, { bio }),
   /** The jpeg itself as the body. The page has already made it 256x256. */
   saveAvatar: (name: string, jpeg: Blob) => request<{ name: string; avatar: number }>('PUT', `/api/streamers/${name}/avatar`, jpeg),

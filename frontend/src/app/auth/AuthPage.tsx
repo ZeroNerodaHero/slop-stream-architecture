@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { authBusyAtom, authErrorAtom, clearAuthError, login, meAtom, signup } from '@/infra/atoms/auth-atoms';
+import { identityChanged } from '@/infra/atoms/profile-atoms';
 import { Button } from '@/shared-components/Button';
 import { PageFrame } from '@/shared-components/PageFrame';
 
@@ -53,7 +54,13 @@ export function AuthPage({ mode }: AuthPageProps) {
   async function submit(e: FormEvent) {
     e.preventDefault();
     const ok = await (signingUp ? signup(name, password) : login(name, password));
-    if (ok) navigate(next, { replace: true });
+    if (ok) {
+      // the events socket is who the browser is: say hello again as the login, so the name reads
+      // online to everyone (the security tab's login does the same). without it the socket stays
+      // nobody until the next full page load
+      identityChanged('login');
+      navigate(next, { replace: true });
+    }
   }
 
   return (

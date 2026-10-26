@@ -47,7 +47,7 @@ to try unpushed changes on the box without compiling there:
 ## screens
 
 - **home** — who is live, with a picture of each stream a few seconds old. the video box makes it from the stream itself. no cdn, no bucket
-- **go live** — your camera, a name box, a start button, your bio and your picture. you get a watch link to copy. paste it in a chat and it unfurls into a card: your name, live or not, your bio, the picture (or the stream itself while live)
+- **go live** — your camera, a name box, a start button, your bio and your picture. you get a watch link to copy. paste it in a chat and it unfurls into a card: your name, live or not, your bio, the picture (or the stream itself while live). once live, the picture in picture button on the preview keeps the stream going in a corner of every other page, your chat with it, while you look around the site or watch someone else; × on it is stop
 - **watch** — their camera and their bio, chat on the side, and whether they are around: `online`, `do not disturb`, `offline`, `streaming`. if they are not on yet, it says so and is told the moment they start
 - **log in / sign up** — a name and a password. optional, see below
 
@@ -117,7 +117,7 @@ DUMMY_PASSWORD=anyword
 ```
 
 then `./deploy.sh dummy`. home fills with `dummy-mango`, `dummy-pixel`, `dummy-disco`.
-each is three gifs from `video/gifs` bouncing around like the dvd logo, dealt out at random so no two streams match, with its name on top and a clock. a quiet tone for sound. drop more `.gif` files in that folder and `./deploy.sh dummy` to use them.
+each is three gifs from `random-media/gifs` bouncing around like the dvd logo, dealt out at random so no two streams match, with its name on top and a clock. a quiet tone for sound. drop more `.gif` files in that folder and `./deploy.sh dummy` to use them.
 your own names: `DUMMY_NAMES=alice,bob,carol`.
 set it back to 0 and run it again to turn them off.
 the password is what lets the dummy box use `dummy-` names. nobody else can.
@@ -135,6 +135,17 @@ by script, on your mac:
 - presence too: a tab open is online, do not disturb reaches a watcher pushed, two tabs share one socket, the last one closing is offline at once
 - `./test.sh --all` — also the redeploys, with a stream running through them, and the fake streams
 - the stream names are fixed, so one person at a time per server
+
+## following
+
+hover the panel in the bottom left (or press its `following` word): who you follow, the ones streaming first, each with the word beside their name, and a box to find people and follow them. home has a search box at the top, and under the live streams everyone else: a rectangle each with their picture, name and the word beside it, online first; the fake streams are there too when they are off (`./seed.sh --dummies` gives them faces). the watch page has the button and `N followers`. `docs/follows.md`.
+
+## look inside
+
+- `./manage.sh --db` — the database in a terminal: the tables, a table's rows (scroll, page, a where clause), its columns and indexes, a query of your own. `d` hops to the error-report database. read-only
+- `./manage.sh --redis` — every key with its type and ttl; enter shows what is in it (a sorted set with its scores, a stream's last entries)
+- `./manage.sh --to billy@1.2.3.4 --db` — the same against the box, over ssh. the screen is here, the questions go there
+- `./seed.sh 5` — on the box: five accounts that look like people, each with a name, a bio, a picture and a thumbnail cut from `random-media/random-pfps`. names and passwords land in `.seeded-users`. somebody to find and, once follows exist, to follow
 
 ## working on the pages
 

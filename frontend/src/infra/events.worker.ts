@@ -130,7 +130,11 @@ function connect() {
     record('in', frame);
     if (frame.type === 'me') me = frame;
     else if (frame.type === 'presence') presences.set(frame.name, frame.presence);
-    else if (frame.type === 'error' && /nick|account|fake/.test(frame.error)) refusedNick = nick;
+    else if (frame.type === 'renamed') {
+      // the cached `me` and word of the old name are stale now; the server's next `me` says the new one
+      if (me?.name === frame.name) me = { ...me, name: frame.to };
+      presences.delete(frame.name);
+    } else if (frame.type === 'error' && /nick|account|fake/.test(frame.error)) refusedNick = nick;
     broadcast({ kind: 'frame', frame });
   };
   socket.onclose = () => {

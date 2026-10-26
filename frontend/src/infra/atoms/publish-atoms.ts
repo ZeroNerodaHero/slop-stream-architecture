@@ -93,6 +93,14 @@ export const publishToneAtom = atom<Tone>((get) => {
   if (phase === 'live') return 'live';
   return BAD_PHASES.includes(phase) ? 'bad' : 'neutral';
 });
+/**
+ * Picture in picture for the broadcast: the go live page's button turns it on and goes home;
+ * from then on leaving the page keeps the stream (and the camera it sends) up, and the corner
+ * player shows it on every other page, watching someone else included. Off again on the
+ * corner's ×, on a page load, and when the page is left with nothing on air. A stream that
+ * fails out there stays in the corner saying so, until × or a visit back to the page.
+ */
+export const publishPipAtom = atom(false);
 
 let pc: RTCPeerConnection | null = null;
 let stopStats: (() => void) | null = null;
@@ -154,9 +162,11 @@ export function commitStreamName(): Promise<void> {
 
 /**
  * The name box on arrival: a login streams as itself, anyone else starts from
- * the name in the header (and can still type another).
+ * the name in the header (and can still type another). Back from the corner with the
+ * stream still up there is nothing to fill in: the name, its room and its profile stayed.
  */
 export async function enterLivePage(): Promise<void> {
+  if (store.get(isPublishingAtom)) return;
   const generation = liveGeneration;
   await loadMe();
   if (generation !== liveGeneration) return; // left before the answer: nothing to fill in
@@ -211,6 +221,10 @@ export async function goLive(): Promise<void> {
   const gone = () => pc !== myPc;
   pc = myPc;
   abort = myAbort;
+  // the tab closing ends the stream wherever in the app it is kept (picture in picture takes it
+  // off its page), so the listeners are the stream's, from here to `stopLive`, not the page's
+  addEventListener('pagehide', stopOnLeave);
+  addEventListener('beforeunload', stopOnLeave);
   myPc.onconnectionstatechange = () => {
     if (!gone()) onConnection(myPc.connectionState);
   };
@@ -244,10 +258,17 @@ export async function goLive(): Promise<void> {
       return;
     }
     store.set(ownerAtom, owner);
-    ws = await connectRelay({ role: 'publish', name, pc: myPc, session: owner.session, token: owner.token, url: grant.url, signal: myAbort.signal,
+    ws = await connectRelay({
+      role: 'publish',
+      name,
+      pc: myPc,
+      session: owner.session,
+      token: owner.token,
+      url: grant.url,
+      signal: myAbort.signal,
       onMessage: (msg) => {
         if (msg.event === 'viewers') store.set(liveViewersAtom, viewersOf(msg));
-      },
+      }
     });
   } catch (err) {
     if (gone()) return;
@@ -383,6 +404,8 @@ async function capBitrate(sender: RTCRtpSender | null, maxBitrate: number) {
 export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', { report = phase === 'failed' }: { report?: boolean } = {}) {
   stopPublishStats();
   if (report) void reportPeerFailure('publish', store.get(streamNameAtom), message, pc);
+  removeEventListener('pagehide', stopOnLeave);
+  removeEventListener('beforeunload', stopOnLeave);
   if (heartbeat) {
     clearInterval(heartbeat);
     heartbeat = null;
@@ -430,8 +453,27 @@ export function stopOnLeave() {
   stopLive();
 }
 
-/** Navigated away inside the app: end the stream and release the camera. */
+/** From here on, leaving the go live page keeps the stream in the corner. The way back off is the corner's ×. */
+export function startPublishPip() {
+  store.set(publishPipAtom, true);
+}
+
+/**
+ * Navigated away inside the app. With picture in picture on and a stream up (or on its way
+ * up), everything stays as it is and the corner player takes over; otherwise the stream ends
+ * and the camera is released.
+ */
 export function leaveLivePage() {
+  if (store.get(publishPipAtom) && store.get(isPublishingAtom)) return;
+  endLive();
+}
+
+/**
+ * The corner's ×, and leaving the page without picture in picture: the stream ends, the camera
+ * goes, the page's boxes are forgotten. What leaving used to do unconditionally.
+ */
+export function endLive() {
+  store.set(publishPipAtom, false);
   liveGeneration++;
   stopLive();
   store

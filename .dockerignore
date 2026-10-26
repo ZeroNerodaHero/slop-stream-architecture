@@ -16,6 +16,10 @@ node_modules
 .env
 .env.*
 .deployed
+.seeded-users
+
+# the seed script's pictures (seed.sh). random-media/gifs stays: the dummy image copies it
+random-media/random-pfps
 
 # editing these must not invalidate COPY layers
 docker-compose.yml

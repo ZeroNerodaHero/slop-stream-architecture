@@ -182,6 +182,12 @@ pub(crate) async fn publish_status<C: AsyncCommands>(r: &mut C, name: &str, stat
     publish(r, &[("type", "status".into()), ("name", name.into()), ("status", status.as_str().into())]).await;
 }
 
+/// An account changed its name (docs/ids.md). The gateway re-keys its sockets of the old
+/// name and tells them, and the old name's watchers, where it went.
+pub(crate) async fn publish_renamed<C: AsyncCommands>(r: &mut C, old: &str, new: &str) {
+    publish(r, &[("type", "renamed".into()), ("name", old.into()), ("to", new.into())]).await;
+}
+
 #[derive(Deserialize)]
 struct StatusBody {
     status: String,
@@ -193,7 +199,7 @@ struct StatusBody {
 async fn put_presence(
     State(s): State<AppState>,
     Name(name): Name,
-    Me(me): Me,
+    me: Me,
     q: Result<Query<PasswordQuery>, QueryRejection>,
     body: Result<Json<StatusBody>, JsonRejection>,
 ) -> ApiResult {
@@ -202,7 +208,7 @@ async fn put_presence(
     let Some(status) = Status::parse(body.status.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad status. one of online, dnd, invisible"));
     };
-    may_write(&s, &name, me.as_deref(), q.password.as_deref()).await?;
+    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
     sqlx::query(
         "INSERT INTO streamers (name, status) VALUES ($1, $2)
          ON CONFLICT (name) DO UPDATE SET status = EXCLUDED.status",

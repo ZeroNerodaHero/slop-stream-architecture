@@ -25,6 +25,8 @@ export const PRESENCE_SQUARE: Record<Presence, string> = {
 };
 /** The word's colour, where it is written out. The api's watch document uses the same classes. */
 export const PRESENCE_TEXT: Record<Presence, string> = { streaming: 'text-primaryBlue', online: 'text-increase', dnd: 'text-decrease', offline: 'text-textSecondary' };
+/** The order a list of people goes in: the ones here first. */
+export const PRESENCE_RANK: Record<Presence, number> = { streaming: 0, online: 1, dnd: 2, offline: 3 };
 
 export const PRESENCE_CHOICES: readonly PresenceChoice[] = ['online', 'dnd', 'invisible'];
 

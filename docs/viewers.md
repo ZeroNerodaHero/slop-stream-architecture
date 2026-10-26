@@ -4,7 +4,7 @@ built. `N watching` on the home cards, the watch page and the go-live page. no a
 
 ## what counts
 
-a view is a watcher peer on `video` whose ICE and DTLS are done, so the box is really sending it packets. counted by the address those packets go to (the remote side of the selected candidate pair), not by a header or a cookie, and **one per address**: five tabs on one wifi are one viewer. it leaves the count the moment the peer goes (closed tab: at once; lid shut: the 15s ICE timeout).
+a view is a watcher peer on `video` whose ICE and DTLS are done, so the box is really sending it packets. counted by the address those packets go to (the remote side of the selected candidate pair), not by a header or a cookie, and **one per address**: five tabs on one wifi are one viewer. it leaves the count the moment the peer goes (closed tab: at once; lid shut: the 15s ICE timeout). home's muted camera previews (`preview: true` in the watch frame, `preview.ts`) are not views: video holds them apart from the viewers and their caps, so a few home tabs behind one address never lock it out of watching, and caps them on their own at `MAX_PREVIEWS_PER_IP` = 12 per address across rooms (`{"error":"too many previews from your address"}`, then close).
 
 ```mermaid
 flowchart LR
@@ -34,6 +34,7 @@ what it does not stop: many real ips (a residential proxy pool) each doing a rea
 |---|---|
 | `/ws` (watcher, publisher) | `{"event":"viewers","viewers":3}`, at most once a second, only when it moved. a watcher hears it after it is counted itself |
 | `/ws` (watcher) | `{"error":"too many watchers from your address"}`, then close |
+| `/ws` (preview) | `{"error":"too many previews from your address"}`, then close |
 | `video GET /viewers` | `{"billy": 3}` for every live room. inside the compose network |
 | `video GET /health` | + `viewers`, the sum |
 | `GET /api/streams` | + `viewers` per stream; `null` when video did not answer (the list then came from redis) |
@@ -51,7 +52,7 @@ it helps the http side, not the video:
 
 ## code
 
-- `video/src/main.rs`: `Room.viewers`, `viewers_tx`, `Hub::add_viewer` (the caps), `remove_viewer`, `viewer_counts`, `media_ip`, `tell_viewers`, the `connected` notify in `new_peer`, `GET /viewers`. `X-Forwarded-For` from caddy is the fallback when ICE gives no address.
+- `video/src/main.rs`: `Room.viewers`, `viewers_tx`, `Hub::add_viewer` (the caps), `remove_viewer`, `viewer_counts`, `media_ip`, `tell_viewers`, the `connected` notify in `new_peer`, `GET /viewers`. `X-Forwarded-For` from caddy is the fallback when ICE gives no address. previews: `In.preview`, `Room.previews`, `Hub::add_preview` (its cap), `remove_preview`.
 - `api/src/main.rs`: `video_viewers`, `viewers` in `list_streams`.
 - `frontend`: `viewersOf` (`relay.ts`), `watchViewersAtom`, `liveViewersAtom`, `ViewerCount.tsx`, the home card chip, `#viewers` on watch and live (`data-viewers` for tests).
 

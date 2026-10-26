@@ -1,19 +1,25 @@
-import { RiLoginBoxLine, RiLogoutBoxRLine, RiSettings3Line, RiTerminalBoxLine, RiUserAddLine } from '@remixicon/react';
+import { RiLoginBoxLine, RiLogoutBoxRLine, RiSettings3Line, RiTerminalBoxLine, RiUserAddLine, RiUserFollowLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 import { loadMe, logout, meAtom } from '@/infra/atoms/auth-atoms';
 import { nickAtom, setNick } from '@/infra/atoms/chat-atoms';
+import { forgetFollowing, friendsOpenAtom, loadFollowing, streamingFriendsAtom } from '@/infra/atoms/follow-atoms';
 import { openInspector } from '@/infra/atoms/inspector-atoms';
 import { myPresenceAtom, PRESENCE_SQUARE, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { identityChanged, loadMyProfile, myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { inspectorEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
+import { store } from '@/infra/store';
 import { buttonClassName } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
+import { Friends } from '@/shared-components/Friends';
 import { panelClassName } from '@/shared-components/Panel';
 import { cn } from '@/utils/cn';
+
+/** How long the mouse may be off the panel before the box over it goes. Room to cross the gap. */
+const LEAVE_GRACE_MS = 250;
 
 /** The name line in both states: the same box, so logging in or out does not move anything. */
 const NAME_LINE = '-mx-1 block border border-transparent px-1 py-0.5 leading-tight';
@@ -48,7 +54,33 @@ function InspectorOpener() {
 /** The picture (or the name, for a login) is the way into the user modal: the opener takes focus first, so the browser has somewhere to hand it back (safari does not focus a clicked button). */
 function openProfile(e: { currentTarget: HTMLElement }) {
   e.currentTarget.focus();
+  store.set(friendsOpenAtom, false);
   openUserModal('profile');
+}
+
+/** The way into the box over the panel without a mouse: a word, and how many of them are streaming. */
+function FriendsOpener({ open, onToggle, iconOnly }: { open: boolean; onToggle: () => void; iconOnly?: boolean }) {
+  const streaming = useAtomValue(streamingFriendsAtom);
+  return (
+    <button
+      id="friends-open"
+      type="button"
+      aria-expanded={open}
+      aria-controls="friends"
+      aria-label={iconOnly ? 'following' : undefined}
+      title={streaming > 0 ? `following: ${streaming} streaming` : 'who you follow, and finding more'}
+      onClick={onToggle}
+      className={cn(ACTION, iconOnly && 'align-middle hover:no-underline')}
+    >
+      <RiUserFollowLine aria-hidden size={ICON} />
+      {!iconOnly && 'following'}
+      {streaming > 0 && (
+        <span id="friends-streaming" className="font-semibold text-primaryBlue">
+          {streaming}
+        </span>
+      )}
+    </button>
+  );
 }
 
 /**
@@ -70,11 +102,62 @@ export function UserPanel() {
   const { pathname } = useLocation();
   // the nick as it was when the box got focus: leaving it tells the chat only on a real change
   const nickAtFocus = useRef('');
+  // the box over the panel (docs/follows.md): hovered or focused it is there; the button pins it
+  const friendsOpen = useAtomValue(friendsOpenAtom);
+  // pinned by its button: the mouse leaving does not close it. a ref: it changes what a leave does, not what renders
+  const pinned = useRef(false);
+  const [byKey, setByKey] = useState(false);
+  const leaving = useRef<number | null>(null);
 
   // Mount only. Asks /api/me once per page load, then loads my picture; every later mount reuses the answer.
   useEffect(() => {
     void loadMe().then(loadMyProfile);
   }, []);
+
+  // who I follow: a login's list, once the login is known and whenever it changes (in, out, a rename).
+  // the watch page's follow button and the number on the corner read it
+  useEffect(() => {
+    forgetFollowing();
+    if (me) void loadFollowing();
+  }, [me]);
+
+  // a page change closes the box: a friend's name was clicked, or the back button
+  useEffect(() => {
+    store.set(friendsOpenAtom, false);
+    pinned.current = false;
+  }, [pathname]);
+
+  function stayOpen() {
+    if (leaving.current !== null) {
+      window.clearTimeout(leaving.current);
+      leaving.current = null;
+    }
+    if (!friendsOpen) {
+      setByKey(false);
+      store.set(friendsOpenAtom, true);
+    }
+  }
+  function leaveSoon() {
+    if (pinned.current) return;
+    if (leaving.current !== null) window.clearTimeout(leaving.current);
+    leaving.current = window.setTimeout(() => {
+      leaving.current = null;
+      store.set(friendsOpenAtom, false);
+    }, LEAVE_GRACE_MS);
+  }
+  function closeFriends() {
+    pinned.current = false;
+    store.set(friendsOpenAtom, false);
+  }
+  function toggleFriends() {
+    if (friendsOpen && pinned.current) {
+      closeFriends();
+      return;
+    }
+    setByKey(true);
+    pinned.current = true;
+    store.set(friendsOpenAtom, true);
+  }
 
   if (me === undefined) return null;
   const next = encodeURIComponent(pathname);
@@ -89,8 +172,22 @@ export function UserPanel() {
     <aside
       id="user-panel"
       aria-label="you"
+      onMouseEnter={stayOpen}
+      onMouseLeave={leaveSoon}
+      onFocusCapture={stayOpen}
+      onBlurCapture={(e) => {
+        // focus went somewhere outside the panel and its box
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) leaveSoon();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && friendsOpen) {
+          e.stopPropagation();
+          closeFriends();
+        }
+      }}
       className={panelClassName('fixed bottom-6 left-6 z-40 flex w-[min(360px,calc(100vw-3rem))] items-center gap-3 px-3 py-2.5 text-base')}
     >
+      {friendsOpen && <Friends onClose={closeFriends} focusSearch={byKey} />}
       <button
         id="you"
         type="button"
@@ -137,6 +234,8 @@ export function UserPanel() {
                 <RiLogoutBoxRLine aria-hidden size={ICON} />
                 log out
               </button>
+              <Dot />
+              <FriendsOpener open={friendsOpen} onToggle={toggleFriends} />
               <Dot />
               <button id="settings" type="button" onClick={() => openUserModal('settings')} className={ACTION}>
                 <RiSettings3Line aria-hidden size={ICON} />
@@ -202,7 +301,9 @@ export function UserPanel() {
                 log in
               </Link>
               <Dot />
-              {/* the gear alone: three words and three icons would not fit this line */}
+              {/* the icons alone: four words and four icons would not fit this line */}
+              <FriendsOpener open={friendsOpen} onToggle={toggleFriends} iconOnly />
+              <Dot />
               <button
                 id="settings"
                 type="button"

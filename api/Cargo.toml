@@ -19,6 +19,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "json"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "json", "uuid"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "signal"] }
 unicode-normalization = "0.1"
+# the id behind a name (docs/ids.md). postgres makes them (gen_random_uuid); the api only carries them
+uuid = { version = "1", features = ["serde"] }

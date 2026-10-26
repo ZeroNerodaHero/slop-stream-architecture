@@ -9,11 +9,16 @@
 //! (`presence`) when it changes, and `live` / `ended` as they happen. Every socket watches its
 //! own name without asking: `me` carries the word and the choice.
 //!
-//! Facts come from one redis stream, `events`, written by the api (`live`, `ended`, `status`)
-//! and by this module (`seen`). One task per process tails it and routes each entry to the
-//! sockets that care; the word is derived here, on delivery, from the inputs (the `live:` key,
-//! the set, the column), never carried in a fact, so two writers cannot race a stale word past
-//! a fresh one. The pages never write through this socket: the choice is an http PUT.
+//! Facts come from one redis stream, `events`, written by the api (`live`, `ended`, `status`,
+//! `renamed`) and by this module (`seen`). One task per process tails it and routes each entry
+//! to the sockets that care; the word is derived here, on delivery, from the inputs (the `live:`
+//! key, the set, the column), never carried in a fact, so two writers cannot race a stale word
+//! past a fresh one. The pages never write through this socket: the choice is an http PUT.
+//!
+//! A `renamed` fact (docs/ids.md) re-keys the sockets of the old name to the new one: they
+//! leave `seen:<old>` at once and enter `seen:<new>`, and they, and the old name's watchers,
+//! get a `renamed` frame. A socket's name lives in the registry, not in its task, so the
+//! ping that keeps it here reads the current one.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -129,6 +134,8 @@ enum Out {
     Presence { name: String, presence: Presence },
     Live { name: String, since: i64 },
     Ended { name: String },
+    /// `name` became `to`. To the account's own sockets and to `name`'s watchers.
+    Renamed { name: String, to: String },
     Error { error: &'static str },
 }
 
@@ -283,9 +290,10 @@ impl Gateway {
         s.by_id.insert(id, Entry { tx, name, watching: HashSet::new(), told: HashMap::new(), me: None });
     }
 
-    async fn remove(&self, id: SocketId) {
+    /// Takes the socket out and says which name it was, at that moment: the one to unmark.
+    async fn remove(&self, id: SocketId) -> Option<String> {
         let mut s = self.registry.0.lock().await;
-        let Some(e) = s.by_id.remove(&id) else { return };
+        let e = s.by_id.remove(&id)?;
         if let Some(n) = &e.name {
             if let Some(set) = s.own.get_mut(n) {
                 set.remove(&id);
@@ -301,6 +309,49 @@ impl Gateway {
                     s.watchers.remove(n);
                 }
             }
+        }
+        e.name
+    }
+
+    /// The socket's name right now: the hello's, or what a `renamed` fact made it since.
+    async fn name_of(&self, id: SocketId) -> Option<String> {
+        self.registry.0.lock().await.by_id.get(&id).and_then(|e| e.name.clone())
+    }
+
+    /// An account changed its name (docs/ids.md). Its sockets here are the new name from now:
+    /// re-keyed in the registry, out of `seen:<old>` and into `seen:<new>` at once (not the 90s
+    /// lapse, so the old name reads offline the moment it is nobody's), and told, as are the
+    /// old name's watchers (pages on `/watch/<old>`, which move). Then a `me` with the new name.
+    async fn renamed(&self, old: &str, new: &str) {
+        let frame = Out::Renamed { name: old.to_owned(), to: new.to_owned() };
+        let moved: Vec<SocketId> = {
+            let mut s = self.registry.0.lock().await;
+            let ids: Vec<SocketId> = s.own.remove(old).into_iter().flatten().collect();
+            for id in &ids {
+                if let Some(e) = s.by_id.get_mut(id) {
+                    e.name = Some(new.to_owned());
+                    e.me = None; // the next `me` carries the new name, whatever the word
+                    let _ = e.tx.send(frame.clone());
+                }
+            }
+            if !ids.is_empty() {
+                s.own.entry(new.to_owned()).or_default().extend(ids.iter().copied());
+            }
+            let watchers: Vec<SocketId> = s.watchers.get(old).into_iter().flatten().copied().collect();
+            for id in watchers.into_iter().filter(|id| !ids.contains(id)) {
+                if let Some(e) = s.by_id.get(&id) {
+                    let _ = e.tx.send(frame.clone());
+                }
+            }
+            ids
+        };
+        for id in &moved {
+            let sid = format!("{}:{id}", self.host);
+            self.mark_last(&sid, old).await;
+            self.mark_first(&sid, new).await;
+        }
+        if !moved.is_empty() {
+            self.push(new).await;
         }
     }
 
@@ -367,6 +418,12 @@ impl Gateway {
                 self.push(&name).await;
             }
             "status" | "seen" => self.push(&name).await,
+            "renamed" => {
+                let to: Option<String> = entry.get("to");
+                if let Some(to) = to.filter(|to| valid_name(to) && *to != name) {
+                    self.renamed(&name, &to).await;
+                }
+            }
             other => log::debug!("events: unknown entry type {other}"),
         }
     }
@@ -403,7 +460,7 @@ async fn online(State(g): State<Gateway>) -> Json<Value> {
 /// chat's words: wearing somebody's name would be a lie.
 async fn identify(g: &Gateway, headers: &HeaderMap, nick: Option<&str>) -> Result<Option<String>, Refused> {
     match whoami(&g.db, headers).await {
-        Ok(Some(me)) => return Ok(Some(me)),
+        Ok(Some(me)) => return Ok(Some(me.name)),
         Ok(None) => {}
         Err(e) => {
             log::warn!("events: cannot read the login: {e}");
@@ -462,6 +519,9 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
         }
     }
     log::info!("events: {} joined", name.as_deref().unwrap_or("nobody"));
+    // from here the name is the registry's: a `renamed` fact may change it under the socket
+    let named = name.is_some();
+    drop(name);
 
     // 3. the loop: frames out, watch/unwatch in, a ping now and then that also keeps the name here
     let mut last_heard = Instant::now();
@@ -496,14 +556,14 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
             }
             _ = ping.tick() => {
                 if last_heard.elapsed() > IDLE_LIMIT {
-                    log::info!("events: {} went silent, dropping", name.as_deref().unwrap_or("nobody"));
+                    log::info!("events: {} went silent, dropping", g.name_of(id).await.as_deref().unwrap_or("nobody"));
                     break;
                 }
                 if !matches!(tokio::time::timeout(SEND_TIMEOUT, socket.send(Message::Ping(Bytes::new()))).await, Ok(Ok(()))) { break; }
-                if let Some(n) = &name { g.touch(&sid, n).await; }
+                if named { if let Some(n) = g.name_of(id).await { g.touch(&sid, &n).await; } }
             }
             _ = refresh.notified() => {
-                if let Some(n) = &name { g.touch(&sid, n).await; }
+                if named { if let Some(n) = g.name_of(id).await { g.touch(&sid, &n).await; } }
             }
             _ = shutdown.changed() => {
                 going = true;
@@ -514,7 +574,7 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
         }
     }
 
-    g.remove(id).await;
+    let name = g.remove(id).await;
     // on SIGTERM the member is left to go stale: the browser is back with a new one in ~3s,
     // and an unmark here would flicker every name offline and online on every deploy
     if let Some(n) = &name {

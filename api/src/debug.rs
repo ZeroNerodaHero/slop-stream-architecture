@@ -23,7 +23,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Executor;
+use uuid::Uuid;
 
+use crate::auth::Account;
 use crate::{auth, ApiError, ApiResult, AppState};
 
 const MAX_BODY_BYTES: usize = 16 * 1024;
@@ -183,20 +185,21 @@ pub(crate) async fn dropped(s: &AppState) -> i64 {
     n.unwrap_or(0)
 }
 
-/// Of `names`, the ones with an account. A name nobody has signed up as goes to
-/// whoever signs up as it first (auth.rs), so it must not be an admin until then.
-pub(crate) async fn admins_with_accounts(db: &PgPool, names: Vec<String>) -> Result<Vec<String>, sqlx::Error> {
-    let claimed: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM streamers WHERE name = ANY($1) AND password_hash IS NOT NULL")
+/// Of `names`, the ones with an account, as accounts: the admin check is by id from here on,
+/// so an admin who renames stays one until the next restart (docs/ids.md). A name nobody has
+/// signed up as goes to whoever signs up as it first (auth.rs), so it must not be an admin until then.
+pub(crate) async fn admins_with_accounts(db: &PgPool, names: Vec<String>) -> Result<Vec<Account>, sqlx::Error> {
+    let claimed: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, name FROM streamers WHERE name = ANY($1) AND password_hash IS NOT NULL")
             .bind(&names)
             .fetch_all(db)
             .await?;
-    for name in names.iter().filter(|n| !claimed.contains(n)) {
+    for name in names.iter().filter(|n| !claimed.iter().any(|(_, c)| c == *n)) {
         log::error!(
             "ADMIN_NAMES: {name} has no account, so it is not an admin. sign up as it, or: docker compose exec api api passwd {name}. then ./deploy.sh api"
         );
     }
-    Ok(names.into_iter().filter(|n| claimed.contains(n)).collect())
+    Ok(claimed.into_iter().map(|(id, name)| Account { id, name }).collect())
 }
 
 // ---- POST /api/errors ---------------------------------------------------------------
@@ -306,7 +309,8 @@ async fn post_error(State(s): State<AppState>, headers: HeaderMap, body: String)
         .await
         .ok()
         .and_then(|me| me.ok())
-        .flatten();
+        .flatten()
+        .map(|a| a.name);
     // one line: clip() left no control character in page or message, and kind is from KINDS
     log::warn!(
         "client error [{}] {page} {kind} ({ip}{}): {message}",
@@ -407,16 +411,16 @@ async fn is_admin(s: &AppState, headers: &HeaderMap) -> Result<bool, ApiError> {
             return Ok(true);
         }
     }
-    if s.admin_names.is_empty() {
+    if s.admins.is_empty() {
         return Ok(false);
     }
     let me = auth::whoami(&s.db, headers).await?;
-    Ok(me.is_some_and(|m| s.admin_names.contains(&m)))
+    Ok(me.is_some_and(|m| s.admins.iter().any(|a| a.id == m.id)))
 }
 
 async fn list_errors(State(s): State<AppState>, headers: HeaderMap, q: Result<Query<ListQuery>, QueryRejection>) -> ApiResult<Vec<ErrorRow>> {
     // nobody is an admin here, so for everyone the route does not exist
-    if s.admin_names.is_empty() && s.ops_token.is_none() {
+    if s.admins.is_empty() && s.ops_token.is_none() {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such route"));
     }
     if !is_admin(&s, &headers).await? {
