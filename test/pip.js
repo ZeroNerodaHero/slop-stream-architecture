@@ -203,7 +203,9 @@ async function drag(p, sel, dx, dy) {
     await w.waitForSelector('#pip-player', { timeout: 10000 });
     const b = await rect(w, '#pip-player');
     expect(near(b.left, box.left) && near(b.top, box.top) && near(b.width, box.width), `the player moved: ${at(box)} -> ${at(b)}`);
-    await w.click(`#list a[aria-label="watch ${B}"]`);
+    // the player is parked top left, 560 wide, over the picture of the first card: click the card's text under it
+    const card = await rect(w, `#list a[aria-label="watch ${B}"]`);
+    await w.click(`#list a[aria-label="watch ${B}"]`, { position: { x: 40, y: card.height - 24 } });
     await w.waitForURL(`**/watch/${B}`, { timeout: 10000 });
     await waitStatus(w, /^watching$/);
     expect((await w.$('#pip-player')) === null, `the corner player is still there on ${B}'s own page`);

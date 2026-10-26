@@ -21,6 +21,7 @@
 //! memberships, groups and the pictures in the bucket point at it, so a login can
 //! change its name (auth.rs, `POST /api/name`) and keep all of them. The name stays
 //! the url, the chat nick and every redis key: nothing a person reads is an id.
+//! The tables are the files in `api/migrations`, applied in order at boot (migrate.rs).
 //!
 //! The same binary run as `api chat` is the text chat server (chat.rs),
 //! `api monitor` watches the other boxes from a box of its own (monitor.rs), and
@@ -39,6 +40,7 @@ mod events;
 mod follows;
 mod groups;
 mod history;
+mod migrate;
 mod monitor;
 mod presence;
 mod profile;
@@ -65,7 +67,6 @@ use redis::{AsyncCommands, ExistenceCheck, SetExpiry, SetOptions};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::postgres::{PgPool, PgPoolOptions};
-use sqlx::Executor;
 use tokio::time::sleep;
 
 /// A live key dies this long after the last heartbeat. The page beats every 15s.
@@ -79,138 +80,6 @@ const GO_LIVE_GRACE_SECS: i64 = 20;
 const ZOMBIE_AFTER_SECS: i64 = 180;
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
 const WS_PATH: &str = "/ws";
-
-const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS streamers (
-    name text PRIMARY KEY,
-    bio text NOT NULL DEFAULT '',
-    updated_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS sessions (
-    id bigserial PRIMARY KEY,
-    name text NOT NULL,
-    started_at timestamptz NOT NULL DEFAULT now(),
-    ended_at timestamptz
-);
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS
-    token bigint NOT NULL DEFAULT (floor(random() * 9007199254740991))::bigint;
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS verified boolean NOT NULL DEFAULT false;
-CREATE INDEX IF NOT EXISTS sessions_name_started_idx ON sessions (name, started_at DESC);
-ALTER TABLE streamers ADD COLUMN IF NOT EXISTS password_hash text;
-ALTER TABLE streamers ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
-CREATE TABLE IF NOT EXISTS logins (
-    token_hash bytea PRIMARY KEY,
-    name text NOT NULL REFERENCES streamers(name) ON DELETE CASCADE,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    last_seen timestamptz NOT NULL DEFAULT now(),
-    expires_at timestamptz NOT NULL
-);
-CREATE INDEX IF NOT EXISTS logins_name_idx ON logins (name);
-ALTER TABLE streamers ADD COLUMN IF NOT EXISTS avatar bytea;
-ALTER TABLE streamers ADD COLUMN IF NOT EXISTS avatar_at timestamptz;
-ALTER TABLE streamers ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'online';
-CREATE TABLE IF NOT EXISTS groups (
-    name text PRIMARY KEY,
-    badge text NOT NULL,
-    color text NOT NULL,
-    about text NOT NULL DEFAULT '',
-    created_by text REFERENCES streamers(name) ON DELETE SET NULL,
-    created_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS memberships (
-    name text NOT NULL REFERENCES streamers(name) ON DELETE CASCADE,
-    group_name text NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
-    joined_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (name, group_name)
-);
-CREATE INDEX IF NOT EXISTS memberships_group_idx ON memberships (group_name);
-INSERT INTO groups (name, badge, color, about)
-    VALUES ('bot', 'BOT', '#5865f2', 'automatic. the fake streams'' pretend chatters, and any chat socket that says it is one. nobody joins it.')
-    ON CONFLICT (name) DO NOTHING;
-CREATE TABLE IF NOT EXISTS stream_thumbs (
-    name text NOT NULL,
-    id bigint NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (name, id)
-);
-ALTER TABLE streamers ADD COLUMN IF NOT EXISTS id uuid NOT NULL DEFAULT gen_random_uuid();
-CREATE UNIQUE INDEX IF NOT EXISTS streamers_id_idx ON streamers (id);
-ALTER TABLE streamers ADD COLUMN IF NOT EXISTS renamed_at timestamptz;
-ALTER TABLE logins ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES streamers(id) ON DELETE CASCADE;
-UPDATE logins l SET user_id = s.id FROM streamers s WHERE s.name = l.name AND l.user_id IS NULL;
-CREATE INDEX IF NOT EXISTS logins_user_idx ON logins (user_id);
-ALTER TABLE memberships ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES streamers(id) ON DELETE CASCADE;
-UPDATE memberships m SET user_id = s.id FROM streamers s WHERE s.name = m.name AND m.user_id IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS memberships_user_group_idx ON memberships (user_id, group_name);
-ALTER TABLE groups ADD COLUMN IF NOT EXISTS created_by_id uuid REFERENCES streamers(id) ON DELETE SET NULL;
-UPDATE groups g SET created_by_id = s.id FROM streamers s WHERE s.name = g.created_by AND g.created_by_id IS NULL;
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id uuid;
-UPDATE sessions se SET user_id = s.id FROM streamers s WHERE s.name = se.name AND se.verified AND se.user_id IS NULL;
-DO $$ BEGIN
-    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'logins_name_fkey' AND confupdtype <> 'c') THEN
-        ALTER TABLE logins DROP CONSTRAINT logins_name_fkey;
-        ALTER TABLE logins ADD CONSTRAINT logins_name_fkey
-            FOREIGN KEY (name) REFERENCES streamers(name) ON UPDATE CASCADE ON DELETE CASCADE;
-    END IF;
-    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'memberships_name_fkey' AND confupdtype <> 'c') THEN
-        ALTER TABLE memberships DROP CONSTRAINT memberships_name_fkey;
-        ALTER TABLE memberships ADD CONSTRAINT memberships_name_fkey
-            FOREIGN KEY (name) REFERENCES streamers(name) ON UPDATE CASCADE ON DELETE CASCADE;
-    END IF;
-    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'groups_created_by_fkey' AND confupdtype <> 'c') THEN
-        ALTER TABLE groups DROP CONSTRAINT groups_created_by_fkey;
-        ALTER TABLE groups ADD CONSTRAINT groups_created_by_fkey
-            FOREIGN KEY (created_by) REFERENCES streamers(name) ON UPDATE CASCADE ON DELETE SET NULL;
-    END IF;
-END $$;
-CREATE TABLE IF NOT EXISTS held_names (
-    name text PRIMARY KEY,
-    user_id uuid NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
-    until timestamptz NOT NULL
-);
-CREATE TABLE IF NOT EXISTS follows (
-    follower_id uuid NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
-    followed_id uuid NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
-    followed_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (follower_id, followed_id),
-    CHECK (follower_id <> followed_id)
-);
-CREATE INDEX IF NOT EXISTS follows_followed_idx ON follows (followed_id, followed_at DESC);
--- a chat line, written by the chat process when CHAT_PERSIST is on (history.rs). the api
--- creates it here, with the other tables, and never serves it. id is the redis stream id
--- (unique per room, not across rooms). at and seq are that id as numbers: the text does
--- not sort. the column is quoted in the statement because text is also the type name.
-CREATE TABLE IF NOT EXISTS chat_lines (
-    room text NOT NULL,
-    id text NOT NULL,
-    at timestamptz NOT NULL,
-    seq bigint NOT NULL,
-    speaker text NOT NULL,
-    user_id uuid REFERENCES streamers(id) ON DELETE SET NULL,
-    \"text\" text NOT NULL,
-    streamer boolean NOT NULL,
-    verified boolean NOT NULL,
-    badges jsonb NOT NULL DEFAULT '[]'::jsonb,
-    search tsvector GENERATED ALWAYS AS (to_tsvector('simple', \"text\")) STORED,
-    PRIMARY KEY (room, id)
-);
-CREATE INDEX IF NOT EXISTS chat_lines_room_idx ON chat_lines (room, at, seq);
-CREATE INDEX IF NOT EXISTS chat_lines_user_idx ON chat_lines (user_id, room, at, seq);
-CREATE INDEX IF NOT EXISTS chat_lines_search_idx ON chat_lines USING gin (search);
--- a group's channels. the group is the server; bot is not one. general is the first
--- channel, made here for every server that already exists and again when a group is made.
-CREATE TABLE IF NOT EXISTS channels (
-    server text NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
-    name text NOT NULL,
-    about text NOT NULL DEFAULT '',
-    created_by_id uuid REFERENCES streamers(id) ON DELETE SET NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (server, name)
-);
-INSERT INTO channels (server, name, about)
-    SELECT name, 'general', '' FROM groups WHERE name <> 'bot'
-    ON CONFLICT DO NOTHING;
-";
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -922,7 +791,8 @@ async fn main() {
         return;
     }
 
-    db.execute(SCHEMA).await.expect("create tables");
+    // chat returned above and does not create tables. this process does, from api/migrations.
+    migrate::run(&db).await.expect("migrations");
 
     // `api passwd <name>`: a new random password, printed once. see auth.rs
     if env::args().nth(1).as_deref() == Some("passwd") {

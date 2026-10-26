@@ -29,13 +29,13 @@ flowchart LR
 
 ## api
 
-| | route | does |
-|---|---|---|
-| GET | `/api/groups` | `[{ name, badge, color, about, made_by, members, mine, automatic }]`, `bot` first, then oldest first. `mine` is for the login cookie, always false for nobody. `made_by` is the maker's name as it is now (by id, `ids.md`: a renamed maker reads right), null for `bot` |
-| POST | `/api/groups` | `{ name, badge, color, about? }` → 201 with the group as the list shows it; the maker is in it. 401 nobody, 400 `bad name…` / `badge: 1 to 12 characters` / `color: #rrggbb`, 403 past 10 made or 8 joined, 409 `name taken` (`bot` too) |
-| POST | `/api/groups/:group/join` | 204, also when already in it. 401 nobody, 404 `no such group`, 403 for `bot` and past 8 groups |
-| POST | `/api/groups/:group/leave` | 204, also when not in it. 401 nobody |
-| DELETE | `/api/groups/:group` | 204 for the maker or an admin. 401 nobody, 403 `not your group` and for `bot`, 404 |
+|        | route                      | does                                                                                                                                                                                                                                                                     |
+| ------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| GET    | `/api/groups`              | `[{ name, badge, color, about, made_by, members, mine, automatic }]`, `bot` first, then oldest first. `mine` is for the login cookie, always false for nobody. `made_by` is the maker's name as it is now (by id, `ids.md`: a renamed maker reads right), null for `bot` |
+| POST   | `/api/groups`              | `{ name, badge, color, about? }` → 201 with the group as the list shows it; the maker is in it. 401 nobody, 400 `bad name…` / `badge: 1 to 12 characters` / `color: #rrggbb`, 403 past 10 made or 8 joined, 409 `name taken` (`bot` too)                                 |
+| POST   | `/api/groups/:group/join`  | 204, also when already in it. 401 nobody, 404 `no such group`, 403 for `bot` and past 8 groups                                                                                                                                                                           |
+| POST   | `/api/groups/:group/leave` | 204, also when not in it. 401 nobody                                                                                                                                                                                                                                     |
+| DELETE | `/api/groups/:group`       | 204 for the maker or an admin. 401 nobody, 403 `not your group` and for `bot`, 404                                                                                                                                                                                       |
 
 chat (`chat.md`): the `hello` takes `"bot": true`; every `history` and `message` line carries `groups`, an array, empty for most lines.
 
@@ -73,11 +73,11 @@ INSERT INTO groups (name, badge, color, about) VALUES ('bot', 'BOT', '#5865f2', 
 
 a group other than `bot` is a server. it starts with one channel, `general`, and a member can add more (20 at most). the explorer (`/explore`) lists the servers this login is in, then the rest. a channel is a chat room at `/chat/<server>/<channel>` (`chat.md`): anyone can read it, and speaking takes a login that has joined the server. `general` cannot be deleted. the words `before`, `search`, `by` and `around` are not channel names, because those are the history routes.
 
-| | route | does |
-|---|---|---|
-| GET | `/api/explore` | `{ yours, discover }`, each a list of `{ name, badge, color, about, members, mine, channels: [{ name, about, can_delete }] }`. not `bot`. yours first is the login's, oldest servers first, channels oldest first. `can_delete` is for who made the channel, who made the server, or an admin, and never for `general` |
-| POST | `/api/groups/:group/channels` | `{ name, about? }` → 201 `{ name, about, can_delete }`. a member. 401 nobody, 403 `join the server first` and past 20, 404 `no such group`, 400 `bad name…` / `that name is reserved`, 409 `name taken` |
-| DELETE | `/api/groups/:group/channels/:channel` | 204. who made the channel, who made the server, or an admin. 401, 403 `general stays` and `not your channel`, 404 `no such channel` |
+|        | route                                  | does                                                                                                                                                                                                                                                                                                                   |
+| ------ | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/explore`                         | `{ yours, discover }`, each a list of `{ name, badge, color, about, members, mine, channels: [{ name, about, can_delete }] }`. not `bot`. yours first is the login's, oldest servers first, channels oldest first. `can_delete` is for who made the channel, who made the server, or an admin, and never for `general` |
+| POST   | `/api/groups/:group/channels`          | `{ name, about? }` → 201 `{ name, about, can_delete }`. a member. 401 nobody, 403 `join the server first` and past 20, 404 `no such group`, 400 `bad name…` / `that name is reserved`, 409 `name taken`                                                                                                                |
+| DELETE | `/api/groups/:group/channels/:channel` | 204. who made the channel, who made the server, or an admin. 401, 403 `general stays` and `not your channel`, 404 `no such channel`                                                                                                                                                                                    |
 
 ```sql
 CREATE TABLE IF NOT EXISTS channels (

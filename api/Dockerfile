@@ -15,6 +15,7 @@ RUN mkdir -p video/src api/src \
  && echo 'fn main() {}' > api/src/main.rs \
  && cargo build --release --locked -p api
 
+COPY api/migrations api/migrations
 COPY api/src api/src
 RUN touch api/src/main.rs \
  && cargo build --release --locked -p api
