@@ -6,7 +6,7 @@
 // picture is where is read off the tiles (#tile-<slot>, the big one is the slot without a
 // tile) and off track identity (a track that moves from a tile to #video is the same track);
 // not off sizes, which the encoder changes with the bitrate.
-// Run through ./test.sh, or: BASE_URL=https://<ip> node screen.js
+// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node screen.js
 const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const NAME = 'screentest';

@@ -101,7 +101,7 @@ old pages and a new server will be up together: a tab open for a day keeps its b
 | new pages, old caddy (no `/events` handle) | the upgrade request falls to the spa catch-all and gets `index.html` with a 200. the browser's `WebSocket` fails, `onclose` fires, and a flat 3s reconnect (the chat's, `chat-atoms.ts:191`) hits caddy every 3s from every browser until the next deploy | **no.** two rules below |
 | new pages, new caddy, old chat process | caddy forwards to `chat:4100`, which has no `/events` route: a 404, the same failed handshake | **no.** same rules |
 | old api, new gateway | nothing is `XADD`ed to `events`; the tail reads nothing; presence is `online`/`offline` from the sockets alone, `streaming` from the `live:` key the old api still writes | yes, degraded |
-| a `./deploy.sh api` with sockets open | the chat process sends close 1001 and drains 2s (`chat.rs:52`); the api and chat containers swap together (`deploy.sh:713`); every browser reconnects, re-hellos, the tail replays ten seconds | yes. a herd of hellos within 3s, see the numbers |
+| a `./scripts/deploy.sh api` with sockets open | the chat process sends close 1001 and drains 2s (`chat.rs:52`); the api and chat containers swap together (`deploy.sh:713`); every browser reconnects, re-hellos, the tail replays ten seconds | yes. a herd of hellos within 3s, see the numbers |
 | a Caddyfile change | reloaded in place (`deploy.sh:699`); a reload that fails recreates the container and drops every open websocket, the chat's and video's included, and says so | yes, when the reload works |
 | the first draft's `seen:` string, the socket's `seen:` zset | the same key name, two types: `WRONGTYPE` on the first `ZADD`. nothing of the first draft is in the repo, so there is nothing to migrate. a box that ever ran it: `redis-cli --scan --pattern 'seen:*' \| xargs redis-cli DEL` before the gateway starts | n/a |
 
@@ -114,11 +114,11 @@ the two rules the "no" rows need:
 
 ```mermaid
 flowchart LR
-  p1["1 · api<br/>column · presence() · PUT · XADDs<br/>./deploy.sh api"]
-  p2["2 · gateway<br/>socket.rs out of chat.rs · events.rs<br/>+ Caddyfile handle · ./deploy.sh api, caddy reload"]
-  p3["3 · pages<br/>events.ts · the worker · the square · the cards<br/>./deploy.sh frontend"]
-  p4["4 · inspector<br/>./deploy.sh frontend"]
-  p5["5 · video<br/>stop when the publisher leaves<br/>with the next ./deploy.sh video"]
+  p1["1 · api<br/>column · presence() · PUT · XADDs<br/>./scripts/deploy.sh api"]
+  p2["2 · gateway<br/>socket.rs out of chat.rs · events.rs<br/>+ Caddyfile handle · ./scripts/deploy.sh api, caddy reload"]
+  p3["3 · pages<br/>events.ts · the worker · the square · the cards<br/>./scripts/deploy.sh frontend"]
+  p4["4 · inspector<br/>./scripts/deploy.sh frontend"]
+  p5["5 · video<br/>stop when the publisher leaves<br/>with the next ./scripts/deploy.sh video"]
   p6["later · home off its poll · chat rooms over the socket"]
   p1 --> p2 --> p3 --> p4 --> p5 --> p6
 ```
@@ -129,7 +129,7 @@ each step, what proves it, and the way back:
 |---|---|---|
 | 1 api | `curl` the three reads say the right word; `redis-cli XRANGE events - +` has a `live`, an `ended`, a `status` entry after a go-live, a stop, a put | the previous tag. the column stays (harmless, `DEFAULT 'online'`); the stream stays (`MAXLEN ~ 1000`, trims itself) |
 | 2 gateway | a raw `wss /events` probe from `page.evaluate` (`chat.js:80` has the shape) gets `me`; `GET http://chat:4100/online` from inside the network; every chat test still passes | the previous tag and the handle removed. nothing connects to it yet |
-| 3 pages | `test/presence.js`; the caddy log's count of `POST /api/streams/<name>/watch` lines per waiting watcher falls from 12 a minute to 1 | `./deploy.sh frontend` at the previous tag. the gateway stays up, idle |
+| 3 pages | `test/presence.js`; the caddy log's count of `POST /api/streams/<name>/watch` lines per waiting watcher falls from 12 a minute to 1 | `./scripts/deploy.sh frontend` at the previous tag. the gateway stays up, idle |
 | 4 inspector | `#inspector-frames` has a `me` row in a browser that has done nothing else | the previous pages |
 | 5 video | a publisher tab killed → `ended` on the stream within ~15s, not ~4 minutes | the previous video image. ends every stream, like any video deploy |
 | later | the caddy log's `GET /api/streams` lines fall the same way | the poll is still there at 60s |
@@ -154,7 +154,7 @@ each step, what proves it, and the way back:
 what grows: open sockets on the chat process, one per browser plus the chat's own per room. things to check once, before phase 3 ships to anyone but the tests:
 
 - **file descriptors.** `cat /proc/1/limits` inside the chat container. docker's default `nofile` differs by version (recent daemons ship a soft limit of 1024 unless `default-ulimits` says otherwise), and a rust process does not raise its own soft limit the way go does. 1024 is a thousand browsers, then `accept` fails. `ulimits: nofile: { soft: 65536, hard: 65536 }` on the chat service in compose fixes it; a compose edit is a `compose up -d` that recreates video too (`deploy.sh:596`), so bundle it with the healthcheck change `status.md` already wants in the same full deploy.
-- **the reconnect herd.** a `./deploy.sh api` closes every socket at once and every browser is back within 3s: n hellos, n `EVAL`s, n `whoami` queries in three seconds. hundreds is nothing; the jitter in rule 2 spreads thousands. the api's pool is 8 connections (`main.rs:685`); the gateway's `whoami` goes through the same pool size, so a `Busy` on hello must be the chat's answer (admitted, identified later), never a refusal.
+- **the reconnect herd.** a `./scripts/deploy.sh api` closes every socket at once and every browser is back within 3s: n hellos, n `EVAL`s, n `whoami` queries in three seconds. hundreds is nothing; the jitter in rule 2 spreads thousands. the api's pool is 8 connections (`main.rs:685`); the gateway's `whoami` goes through the same pool size, so a `Busy` on hello must be the chat's answer (admitted, identified later), never a refusal.
 - **memory per socket.** tokio task + buffers + the registry's per-socket "what it was last told" map. measure with `docker stats` at 1, 10, 100 tabs before trusting any estimate.
 - **the per-ip cap.** the chat's 8 sockets per ip per room (`chat.rs:46`) is right for a room. for `/events` it would lock out the ninth browser of a school or an office behind one address. none, or a high one.
 

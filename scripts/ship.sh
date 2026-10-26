@@ -2,26 +2,26 @@
 #
 # ship.sh — build the images on this machine and get them to the box, so the box builds nothing.
 #
-#   ./ship.sh --to gcloud:test-machine     build for linux/amd64, send straight to that vm over ssh (docker save | docker load).
+#   ./scripts/ship.sh --to gcloud:test-machine     build for linux/amd64, send straight to that vm over ssh (docker save | docker load).
 #                                          no registry, no account, nothing public. the way to go for one box
-#   ./ship.sh --to billy@1.2.3.4           same, over plain ssh (anything `ssh` accepts: user@host, an ssh config alias)
-#   ./ship.sh --to gcloud:test-machine api video     only these images
-#   ./ship.sh                              build and push to a registry instead (ghcr.io/<owner of the git remote>/ by default,
+#   ./scripts/ship.sh --to billy@1.2.3.4           same, over plain ssh (anything `ssh` accepts: user@host, an ssh config alias)
+#   ./scripts/ship.sh --to gcloud:test-machine api video     only these images
+#   ./scripts/ship.sh                              build and push to a registry instead (ghcr.io/<owner of the git remote>/ by default,
 #                                          IMAGES=ghcr.io/you/ to change). for several boxes, or ci later. needs a docker login
-#   ./ship.sh --local                      build for this machine and keep them here, no send, no push (TAG=local)
-#   PLATFORM=linux/arm64 ./ship.sh ...     another target architecture (default linux/amd64: what the cloud boxes are)
+#   ./scripts/ship.sh --local                      build for this machine and keep them here, no send, no push (TAG=local)
+#   PLATFORM=linux/arm64 ./scripts/ship.sh ...     another target architecture (default linux/amd64: what the cloud boxes are)
 #
 # The box is amd64 and this laptop may not be: docker builds for the box's architecture through
 # emulation (rust under rosetta is several times slower than native, still minutes where a small
-# box takes an hour), with the same Dockerfiles ./deploy.sh uses. The dependency layers are cached
+# box takes an hour), with the same Dockerfiles ./scripts/deploy.sh uses. The dependency layers are cached
 # here, so a source change rebuilds only that crate.
 #
 # The tag is the commit the images are named after everywhere: the last one that touched
 # what they are built from (./image-paths; -dirty with uncommitted edits there), the rule
 # deploy.sh and the github action use too, so a box at the same tree finds them by itself.
 #
-# After --to, on the box:   ./deploy.sh --images <the tag this prints>     (the images are there; nothing is pulled)
-# After a push, on the box:  ./deploy.sh --pull                              (the registry comes from the git remote)
+# After --to, on the box:   ./scripts/deploy.sh --images <the tag this prints>     (the images are there; nothing is pulled)
+# After a push, on the box:  ./scripts/deploy.sh --pull                              (the registry comes from the git remote)
 #                            login here, once:  gh auth refresh -s write:packages,read:packages
 #                                               gh auth token | docker login ghcr.io -u <you> --password-stdin
 #                            a package a laptop push creates is private until made public once on github
@@ -29,7 +29,7 @@
 #
 set -euo pipefail
 
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 say()  { printf '\n==> %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
@@ -51,7 +51,7 @@ for a in "$@"; do
     pages|frontend) TARGETS+=(pages) ;;
     api|chat) TARGETS+=(api) ;;
     video|dummy) TARGETS+=("$a") ;;
-    *) die "don't know what '$a' is. images are: pages api video dummy. see ./ship.sh --help" ;;
+    *) die "don't know what '$a' is. images are: pages api video dummy. see ./scripts/ship.sh --help" ;;
   esac
 done
 [ "$want_to" = 0 ] && { [ "$MODE" != send ] || [ -n "$TO" ]; } || die "--to needs a destination: gcloud:<instance>, or user@host"
@@ -65,7 +65,7 @@ have git || die "git is not installed"
 # images are built from (./image-paths, 7 characters), -dirty when that has uncommitted edits
 PATHSPECS=()
 while IFS= read -r p; do PATHSPECS+=("$p"); done < <(tr -d '\r' < image-paths 2>/dev/null | sed -E 's/[[:space:]]+$//' | grep -Ev '^[[:space:]]*(#|$)' || true)
-[ ${#PATHSPECS[@]} -gt 0 ] || die "image-paths is missing or empty next to ship.sh"
+[ ${#PATHSPECS[@]} -gt 0 ] || die "image-paths is missing or empty in the repo root"
 BUILD="$(git log -1 --format=%h --abbrev=7 -- "${PATHSPECS[@]}" 2>/dev/null || true)"
 BUILD="${BUILD:-dev}"
 if [ "$BUILD" != dev ] && [ -n "$(git status --porcelain -- "${PATHSPECS[@]}" 2>/dev/null)" ]; then
@@ -86,7 +86,7 @@ remote() {
 # them under the name compose looks for, with nothing to configure.
 if [ -z "${IMAGES:-}" ] && [ "$MODE" != local ]; then
   owner="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https://github\.com/|git@github\.com:)([^/]+)/.*$#\2#' | tr '[:upper:]' '[:lower:]')"
-  [ -n "$owner" ] && [ "$owner" != "$(git remote get-url origin 2>/dev/null | tr '[:upper:]' '[:lower:]')" ] || die "cannot tell the registry from the git remote. set it:  IMAGES=ghcr.io/<you>/ ./ship.sh"
+  [ -n "$owner" ] && [ "$owner" != "$(git remote get-url origin 2>/dev/null | tr '[:upper:]' '[:lower:]')" ] || die "cannot tell the registry from the git remote. set it:  IMAGES=ghcr.io/<you>/ ./scripts/ship.sh"
   IMAGES="ghcr.io/$owner/"
 fi
 IMAGES="${IMAGES:-}"
@@ -105,15 +105,15 @@ case "$MODE" in
       die "not logged in to $host. once:
   gh auth refresh -h github.com -s write:packages,read:packages      (the token needs the package scopes)
   gh auth token | docker login $host -u <your github user> --password-stdin
-or skip registries altogether:  ./ship.sh --to gcloud:<instance>"
+or skip registries altogether:  ./scripts/ship.sh --to gcloud:<instance>"
     fi ;;
   send)
     PLATFORM="${PLATFORM:-linux/amd64}"
     TAG="$BUILD"
     OUT=(--load)
     say "checking the box ($TO)"
-    remote 'command -v docker >/dev/null && docker info >/dev/null 2>&1 && echo "docker answers" || { echo "docker is not usable there for this user (./deploy.sh installs it; a re-login after that puts you in the docker group)"; exit 1; }' \
-      || die "cannot use docker on $TO. run ./deploy.sh there once (it installs docker), then ship"
+    remote 'command -v docker >/dev/null && docker info >/dev/null 2>&1 && echo "docker answers" || { echo "docker is not usable there for this user (./scripts/deploy.sh installs it; a re-login after that puts you in the docker group)"; exit 1; }' \
+      || die "cannot use docker on $TO. run ./scripts/deploy.sh there once (it installs docker), then ship"
     ;;
   local)
     arch="$(uname -m)"; case "$arch" in arm64|aarch64) arch=arm64 ;; x86_64|amd64) arch=amd64 ;; esac
@@ -140,7 +140,7 @@ build() {   # image, context, dockerfile
   say "stream-$name"
   docker buildx build --platform "$PLATFORM" --build-arg BUILD="$BUILD" --build-arg CARGO_BUILD_JOBS="$JOBS" \
     "${tags[@]}" "${OUT[@]}" -f "$file" "$ctx" \
-    || die "building stream-$name failed. 'signal: 9, SIGKILL' in the output means docker's vm ran out of memory: give it more in docker desktop › resources, or CARGO_BUILD_JOBS=2 ./ship.sh"
+    || die "building stream-$name failed. 'signal: 9, SIGKILL' in the output means docker's vm ran out of memory: give it more in docker desktop › resources, or CARGO_BUILD_JOBS=2 ./scripts/ship.sh"
   secs=$(( $(date +%s) - t0 ))
   note "stream-$name done in $(( secs / 60 ))m $(( secs % 60 ))s"
 }
@@ -170,13 +170,13 @@ say "done: ${TARGETS[*]} as $TAG"
 case "$MODE" in
   local) note "run them here with:  TAG=local docker compose up -d --no-build" ;;
   send)
-    note "on the box:  cd slop-stream-architecture && ./deploy.sh --images $TAG"
+    note "on the box:  cd slop-stream-architecture && ./scripts/deploy.sh --images $TAG"
     note "(it finds them here under that tag and pulls nothing. --pull first if the compose file or caddyfile changed too)" ;;
   push)
     if [[ "$TAG" == *-dirty ]]; then
-      note "on the box:  ./deploy.sh --images $TAG     (uncommitted edits went into these, so the box cannot work the tag out; commit, and --pull finds them by itself)"
+      note "on the box:  ./scripts/deploy.sh --images $TAG     (uncommitted edits went into these, so the box cannot work the tag out; commit, and --pull finds them by itself)"
     else
-      note "on the box:  ./deploy.sh --pull     (once it has this commit it names the images the same way, so no tag to type; the registry comes from the git remote)"
+      note "on the box:  ./scripts/deploy.sh --pull     (once it has this commit it names the images the same way, so no tag to type; the registry comes from the git remote)"
     fi
     note "a 'denied' on the pull means a package a laptop push created is private (the action's are public by themselves): github › your profile › Packages › stream-x › Package settings › Change visibility › public" ;;
 esac

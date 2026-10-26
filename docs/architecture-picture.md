@@ -330,12 +330,12 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  fe["./deploy.sh frontend"] --> pagesc["pages rebuilt, files copied<br/>caddy untouched · streams stay up"]
-  apid["./deploy.sh api"] --> apic["api + chat swapped<br/>a few seconds of 502 · streams stay up"]
-  vid["./deploy.sh video"] --> videoc["video swapped<br/>ends every stream · warns first"]
-  dum["./deploy.sh dummy"] --> dummyc["dummy rebuilt<br/>DUMMY_* from .env"]
+  fe["./scripts/deploy.sh frontend"] --> pagesc["pages rebuilt, files copied<br/>caddy untouched · streams stay up"]
+  apid["./scripts/deploy.sh api"] --> apic["api + chat swapped<br/>a few seconds of 502 · streams stay up"]
+  vid["./scripts/deploy.sh video"] --> videoc["video swapped<br/>ends every stream · warns first"]
+  dum["./scripts/deploy.sh dummy"] --> dummyc["dummy rebuilt<br/>DUMMY_* from .env"]
 
-  pull["./deploy.sh --pull"] --> gp["git pull --ff-only"] --> diff{"what changed?"}
+  pull["./scripts/deploy.sh --pull"] --> gp["git pull --ff-only"] --> diff{"what changed?"}
   diff -->|"api/**"| apic
   diff -->|"video/**"| videoc & dummyc
   diff -->|"Cargo.toml · Cargo.lock"| apic & videoc & dummyc
@@ -353,7 +353,7 @@ flowchart LR
   vite -->|"/api /thumb /ws /chat proxied"| stack["the stack<br/>BACKEND, else https://PUBLIC_IP from .env"]
   dev ==>|"webrtc media · udp 7882"| stack
 
-  ts["./test.sh<br/>optional url · optional --all"] --> pw["playwright · installed chrome<br/>fake camera + mic"]
+  ts["./scripts/test.sh<br/>optional url · optional --all"] --> pw["playwright · installed chrome<br/>fake camera + mic"]
   pw -->|"e2e · dup · chat · auth · preview · errors · pip · screen"| stack
   pw -->|"regress · redeploy · dummy<br/>local stack only, they restart containers"| stack
 ```

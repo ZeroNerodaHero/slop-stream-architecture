@@ -114,11 +114,11 @@ pub async fn run() -> anyhow::Result<()> {
     let password = std::env::var("DUMMY_PASSWORD").ok().filter(|p| !p.trim().is_empty());
 
     if count == 0 {
-        log::info!("DUMMY_STREAMS=0, nothing to do. set it in .env and run: ./deploy.sh dummy");
+        log::info!("DUMMY_STREAMS=0, nothing to do. set it in .env and run: ./scripts/deploy.sh dummy");
         return wait_for_signal().await;
     }
     if password.is_none() {
-        log::error!("DUMMY_PASSWORD is empty. set any word in .env (video and api read it too) and run: ./deploy.sh dummy");
+        log::error!("DUMMY_PASSWORD is empty. set any word in .env (video and api read it too) and run: ./scripts/deploy.sh dummy");
         return wait_for_signal().await;
     }
     if Command::new("ffmpeg").arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().await.is_err() {
@@ -208,14 +208,27 @@ async fn publish_once(i: usize, name: &str, cfg: &Config, http: &reqwest::Client
     // The api part: a bio so the cards have text, and a session so home shows "since".
     let mut owner: Option<Grant> = None;
     if let Some(api) = &cfg.api_url {
-        let bio = format!("fake stream {} for styling and debugging. gifs bounce around. not a real person.", i + 1);
-        // a reserved name's bio wants the password like its go-live: nobody else may write it
-        let _ = http
-            .put(format!("{api}/api/streamers/{name}"))
-            .query(&[("password", cfg.password.as_deref().unwrap_or(""))])
-            .json(&serde_json::json!({ "bio": bio }))
-            .send()
-            .await;
+        // a bio so the cards have text, but only for a name that has none: one put there by hand
+        // (`./scripts/seed.sh --dummies`, so the fake streams read like people) must not be written over
+        // at every start. a reserved name's bio wants the password like its go-live
+        let has_bio = match http.get(format!("{api}/api/streamers/{name}")).send().await {
+            Ok(res) => res
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|v| v.get("bio")?.as_str().map(|b| !b.trim().is_empty()))
+                .unwrap_or(false),
+            Err(_) => false,
+        };
+        if !has_bio {
+            let bio = format!("fake stream {} for styling and debugging. gifs bounce around. not a real person.", i + 1);
+            let _ = http
+                .put(format!("{api}/api/streamers/{name}"))
+                .query(&[("password", cfg.password.as_deref().unwrap_or(""))])
+                .json(&serde_json::json!({ "bio": bio }))
+                .send()
+                .await;
+        }
         let res = http
             .post(format!("{api}/api/streams/{name}/go-live"))
             .query(&[("password", cfg.password.as_deref().unwrap_or(""))])

@@ -99,7 +99,7 @@ flowchart LR
 
 ## deploys that keep streams up
 
-today `./deploy.sh video` ends every stream.
+today `./scripts/deploy.sh video` ends every stream.
 
 - api, chat, caddy: rolling update. zero downtime. nothing to do.
 - video: rolling, one pod at a time, with a **drain**. on sigterm: refuse new rooms, wait for the ones it has to end, up to `terminationGracePeriodSeconds` (say 10 min), then exit. new streamers land on the other pods.
@@ -171,7 +171,7 @@ k8s/
 
 ## steps
 
-0. the code changes above, still on compose. `./test.sh --all` keeps passing.
+0. the code changes above, still on compose. `./scripts/test.sh --all` keeps passing.
 1. k3s on the vm you have. same one box, everything as pods. learn kubectl. nothing new to pay for. (k3s is one binary. turn its traefik off; caddy stays the edge.)
 2. a second media node. room routing gets its first real test. this is where k8s starts paying.
 3. doks, or more vms as k3s agents. pools, autoscaler, grafana.

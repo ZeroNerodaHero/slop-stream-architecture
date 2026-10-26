@@ -78,7 +78,7 @@ flowchart TB
 - same error for wrong name and wrong password: `wrong name or password`, and a verify against a fixed decoy hash when the name does not exist, so the timing matches too. that hides *which* of the two was wrong, nothing more: whether a name has an account is public (`GET /api/streamers/<name>` says `verified`, home and watch show the `✓`, an anonymous chat nick on a claimed name is told so). it has to be, the `✓` is the point.
 - rate limits in redis, counted *before* the password is checked, so a burst of parallel tries cannot all slip past a zero: 10 tries per name from one ip per 15 min (a right one clears it; wrong `old` passwords on `/api/password` count on the same key), 100 tries per ip per 15 min, 20 signups per ip per hour. the ip is caddy's `X-Forwarded-For`. per name *and* ip, not per name: a stranger's ten wrong guesses lock the stranger out of your name, not you. the cost: an attacker with many ips gets ten guesses from each; argon2 at ~50 ms and 4 at a time is the wall then.
 - the api never logs the body of `/api/login` or `/api/signup`.
-- no email, so no password reset. `./deploy.sh passwd <name>` (`docker compose exec api api passwd <name>` underneath) prints a new random one, once, and logs every login of that name out. that is the reset.
+- no email, so no password reset. `./scripts/deploy.sh passwd <name>` (`docker compose exec api api passwd <name>` underneath) prints a new random one, once, and logs every login of that name out. that is the reset.
 
 ## database
 

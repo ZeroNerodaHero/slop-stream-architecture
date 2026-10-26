@@ -2,7 +2,7 @@
 // the list with its words, search, a free name gets a row, the box over the corner panel (hover
 // shows who you follow, streaming first; the search box finds and follows), the watch page's
 // button and count, a rename keeps the followers, unfollow.
-// Run through ./test.sh, or: BASE_URL=https://<ip> node follows.js
+// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node follows.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';

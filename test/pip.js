@@ -4,7 +4,7 @@
 // opens the stream's chat under it; coming back takes the same stream over without a second
 // /watch call; opening another stream's page replaces it and the player follows that one; the
 // player's × ends it. Two publishers with fake cameras and one watcher.
-// Run through ./test.sh, or: BASE_URL=https://<ip> node pip.js
+// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node pip.js
 const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const A = 'piptest';

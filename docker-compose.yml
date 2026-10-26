@@ -11,10 +11,10 @@
 #   video      rust. one upload in, copies it out. media on udp 7882
 #   dummy      fake streams for styling: gifs bouncing around. DUMMY_STREAMS in .env says how many
 #
-# start:  ./deploy.sh                 everything, first time or any time
-#         ./deploy.sh api             only the api (also: frontend, video, dummy)
-#         ./deploy.sh --pull          git pull, then rebuild what changed since the last deploy that ended well
-#         ./deploy.sh --images TAG    no build here: pull the images ./ship.sh pushed from a laptop
+# start:  ./scripts/deploy.sh                 everything, first time or any time
+#         ./scripts/deploy.sh api             only the api (also: frontend, video, dummy)
+#         ./scripts/deploy.sh --pull          git pull, then rebuild what changed since the last deploy that ended well
+#         ./scripts/deploy.sh --images TAG    no build here: pull the images ./scripts/ship.sh pushed from a laptop
 #                                     (IMAGES=ghcr.io/<you>/ and TAG in .env name them; empty = built here)
 #         (by hand: cp .env.example .env, set PUBLIC_IP, BUILD=$(git rev-parse --short HEAD) docker compose up -d --build)
 #         the images carry BUILD and are named after the last commit that touched what they are
@@ -22,7 +22,7 @@
 #         that moved since the last one: every live stream ends. deploy.sh warns first.
 # open:   https://<PUBLIC_IP from the .env file>
 # ports:  80/tcp 443/tcp 7882/udp
-# dummies: in .env set DUMMY_STREAMS=3 and DUMMY_PASSWORD=anyword, then ./deploy.sh dummy
+# dummies: in .env set DUMMY_STREAMS=3 and DUMMY_PASSWORD=anyword, then ./scripts/deploy.sh dummy
 # peek:   docker compose exec database psql -U stream
 #         docker compose exec database psql -U stream -d debug      (the pages' error reports)
 #         docker compose exec redis redis-cli
@@ -297,7 +297,7 @@ services:
     # fake streams for styling and debugging. each one is a few gifs (random-media/gifs, dealt
     # out at random) bouncing around, the stream's name on top, a clock, plus a quiet
     # tone. same binary as video, run as `video dummy`, with ffmpeg drawing the picture.
-    # DUMMY_STREAMS=0 means it sits idle. change .env, then: ./deploy.sh dummy
+    # DUMMY_STREAMS=0 means it sits idle. change .env, then: ./scripts/deploy.sh dummy
     build:
       context: .
       dockerfile: video/Dockerfile.dummy

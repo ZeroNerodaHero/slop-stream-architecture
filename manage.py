@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-the screen behind ./manage.sh: the stack's postgres and redis, in a terminal, read-only.
+the screen behind ./scripts/manage.sh: the stack's postgres and redis, in a terminal, read-only.
 see that file's header for how to run it. this file is not run on its own: manage.sh
 checks docker, python and the containers and hands over with MANAGE_* in the environment.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // End-to-end WebRTC live-stream test: publisher (/live) -> video server -> watcher (/watch/<name>).
 //
-// Run through ./test.sh at the repo root, or: BASE_URL=https://<ip> node e2e.js
+// Run through ./scripts/test.sh at the repo root, or: BASE_URL=https://<ip> node e2e.js
 // HEADED=1 to watch it. Exit code 0 when every step passes. Screenshots land in $TMPDIR/stream-e2e.
 
 const fs = require('fs');
@@ -265,8 +265,10 @@ function tap(page, tag) {
       return `status="${v}"`;
     });
 
-    await step('8b. watcher: #retry is offered after ended', async () => {
-      await watcher.locator('#retry').waitFor({ state: 'visible', timeout: 5000 });
+    await step('8b. watcher: after ended the player is gone and the profile shows; no #retry (the page waits on its own)', async () => {
+      await watcher.locator('#profile').waitFor({ state: 'visible', timeout: 5000 });
+      if (await watcher.locator('#video').count()) throw new Error('#video is still on the page');
+      if (await watcher.locator('#retry').count()) throw new Error('#retry is still offered');
     });
 
     await step(`9. api: GET /api/streams no longer lists ${NAME}`, async () => {

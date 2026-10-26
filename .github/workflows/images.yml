@@ -5,17 +5,17 @@
 # a push can end on a docs commit), 7 characters; deploy.sh and ship.sh name the images by
 # the same rule, so a docs-only commit runs the images of the one before it and nothing
 # is recreated for it. the box then runs
-#   ./deploy.sh --pull --images
+#   ./scripts/deploy.sh --pull --images
 # and pulls those, building nothing. see docs/spec.md, "deploy script".
 #
 # free: actions minutes are unlimited for a public repo, and public packages cost nothing.
-# the runners are x86-64, so no emulation: the same dockerfiles ./deploy.sh and ./ship.sh use,
+# the runners are x86-64, so no emulation: the same dockerfiles ./scripts/deploy.sh and ./scripts/ship.sh use,
 # built natively on 4 cores. the dependency layers are cached between runs (type=gha), so a
 # source change is a few minutes; a Cargo.lock change rebuilds them once.
 #
 # the GITHUB_TOKEN pushes the packages; no personal token anywhere. packages a workflow
 # creates take the repo's visibility, so from a public repo they are public from the first
-# push and the box pulls without a login. (a push from a laptop with ./ship.sh makes them
+# push and the box pulls without a login. (a push from a laptop with ./scripts/ship.sh makes them
 # private instead; then: github › your profile › Packages › stream-x › Package settings › Change visibility.)
 name: images
 
@@ -104,4 +104,4 @@ jobs:
 
       - run: |
           echo "pushed ghcr.io/${{ steps.meta.outputs.owner }}/stream-${{ matrix.name }}:${{ steps.meta.outputs.tag }}"
-          echo "on the box:  ./deploy.sh --pull --images     (IMAGES=ghcr.io/${{ steps.meta.outputs.owner }}/ in its .env)"
+          echo "on the box:  ./scripts/deploy.sh --pull --images     (IMAGES=ghcr.io/${{ steps.meta.outputs.owner }}/ in its .env)"

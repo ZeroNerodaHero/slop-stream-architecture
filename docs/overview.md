@@ -15,45 +15,45 @@ on the server:
 
 ```
 git clone <repo> && cd slop-stream-architecture
-./deploy.sh
+./scripts/deploy.sh
 ```
 
 it prints a url. open it. click through the warning.
 
-nothing is compiled on the server. every push to `main` makes github build the four images (`.github/workflows/images.yml`, free for a public repo) and push them to `ghcr.io/<you>/stream-<x>:<commit>`; `./deploy.sh` works out the registry from the git remote and pulls the images for the last commit that changed them (a docs-only commit has none of its own and runs the ones before it). a 1 GB box is enough. the action takes a few minutes after a push; a deploy before it finishes says so and does nothing.
+nothing is compiled on the server. every push to `main` makes github build the four images (`.github/workflows/images.yml`, free for a public repo) and push them to `ghcr.io/<you>/stream-<x>:<commit>`; `./scripts/deploy.sh` works out the registry from the git remote and pulls the images for the last commit that changed them (a docs-only commit has none of its own and runs the ones before it). a 1 GB box is enough. the action takes a few minutes after a push; a deploy before it finishes says so and does nothing.
 
 ## update
 
-- `./deploy.sh --pull` — pull the repo, then the images for that commit. new settings land in `.env` with defaults
-- `./deploy.sh api` — only the api. streams stay up
-- `./deploy.sh frontend` — only the pages. streams stay up
-- `./deploy.sh video` — ends every stream. it warns first
-- `./deploy.sh` — everything again
-- `./deploy.sh --prune-deploy` — the disk is full of old builds and images: drop them first, then deploy
+- `./scripts/deploy.sh --pull` — pull the repo, then the images for that commit. new settings land in `.env` with defaults
+- `./scripts/deploy.sh api` — only the api. streams stay up
+- `./scripts/deploy.sh frontend` — only the pages. streams stay up
+- `./scripts/deploy.sh video` — ends every stream. it warns first
+- `./scripts/deploy.sh` — everything again
+- `./scripts/deploy.sh --prune-deploy` — the disk is full of old builds and images: drop them first, then deploy
 
 ## building yourself
 
-`./deploy.sh --build` compiles the images on the machine it runs on instead of pulling them: an hour and 4 GB of ram on a small box, a few minutes on a laptop. for a laptop with changes that are not pushed yet, or a box whose git remote is not on github (then `IMAGES=<registry>/<owner>/` in `.env` is the other way).
+`./scripts/deploy.sh --build` compiles the images on the machine it runs on instead of pulling them: an hour and 4 GB of ram on a small box, a few minutes on a laptop. for a laptop with changes that are not pushed yet, or a box whose git remote is not on github (then `IMAGES=<registry>/<owner>/` in `.env` is the other way).
 
 to try unpushed changes on the box without compiling there:
 
 ```
-./ship.sh --to gcloud:test-machine        # on the laptop: builds for the box, sends the images straight into its docker over ssh, prints a tag
-./deploy.sh --images <that tag>           # on the box: finds them there, starts them, pulls nothing
+./scripts/ship.sh --to gcloud:test-machine        # on the laptop: builds for the box, sends the images straight into its docker over ssh, prints a tag
+./scripts/deploy.sh --images <that tag>           # on the box: finds them there, starts them, pulls nothing
 ```
 
-`--to billy@1.2.3.4` for a box that is not on gcloud. an arm laptop builds the box's amd64 images under emulation: minutes, not an hour. `./ship.sh` with no `--to` pushes to the registry like the action does (needs a `docker login` once).
+`--to billy@1.2.3.4` for a box that is not on gcloud. an arm laptop builds the box's amd64 images under emulation: minutes, not an hour. `./scripts/ship.sh` with no `--to` pushes to the registry like the action does (needs a `docker login` once).
 
 ## screens
 
 - **home** — who is live, with a picture of each stream a few seconds old. the video box makes it from the stream itself. no cdn, no bucket
 - **go live** — your camera, a name box, a start button, your bio and your picture. you get a watch link to copy. paste it in a chat and it unfurls into a card: your name, live or not, your bio, the picture (or the stream itself while live). once live, the picture in picture button on the preview keeps the stream going in a corner of every other page, your chat with it, while you look around the site or watch someone else; × on it is stop
-- **watch** — their camera and their bio, chat on the side, and whether they are around: `online`, `do not disturb`, `offline`, `streaming`. if they are not on yet, it says so and is told the moment they start
+- **watch** — their camera and their bio, chat on the side, and whether they are around: `online`, `do not disturb`, `offline`, `streaming`. if they are not on, the page is their profile instead of a player: the picture big, the word, the bio, the chat; the camera appears the moment they start
 - **log in / sign up** — a name and a password. optional, see below
 
 ## on the computer
 
-`./deploy.sh` starts these. same names in the compose file.
+`./scripts/deploy.sh` starts these. same names in the compose file.
 
 ```mermaid
 flowchart LR
@@ -92,7 +92,7 @@ the square in the corner of your picture is your presence: green while a tab of 
 
 an account can join groups, and each puts a badge next to your name in chat, the way discord tags a bot. the fake streams' chatters wear `BOT`, and the robot button in the chat hides their lines. see `groups.md`.
 
-no email, so no reset. on the server: `./deploy.sh passwd <name>` prints a new one.
+no email, so no reset. on the server: `./scripts/deploy.sh passwd <name>` prints a new one.
 
 ## this test skips
 
@@ -116,8 +116,8 @@ DUMMY_STREAMS=3
 DUMMY_PASSWORD=anyword
 ```
 
-then `./deploy.sh dummy`. home fills with `dummy-mango`, `dummy-pixel`, `dummy-disco`.
-each is three gifs from `random-media/gifs` bouncing around like the dvd logo, dealt out at random so no two streams match, with its name on top and a clock. a quiet tone for sound. drop more `.gif` files in that folder and `./deploy.sh dummy` to use them.
+then `./scripts/deploy.sh dummy`. home fills with `dummy-mango`, `dummy-pixel`, `dummy-disco`.
+each is three gifs from `random-media/gifs` bouncing around like the dvd logo, dealt out at random so no two streams match, with its name on top and a clock. a quiet tone for sound. drop more `.gif` files in that folder and `./scripts/deploy.sh dummy` to use them.
 your own names: `DUMMY_NAMES=alice,bob,carol`.
 set it back to 0 and run it again to turn them off.
 the password is what lets the dummy box use `dummy-` names. nobody else can.
@@ -129,23 +129,23 @@ by hand: open the url, go live, open the watch link on your phone.
 
 by script, on your mac:
 
-- `./test.sh` — real chrome with a fake camera. go live, watch, stop, chat, accounts, previews, error reports. a few minutes
-- `./test.sh https://1.2.3.4` — same thing against the server
+- `./scripts/test.sh` — real chrome with a fake camera. go live, watch, stop, chat, accounts, previews, error reports. a few minutes
+- `./scripts/test.sh https://1.2.3.4` — same thing against the server
 - chat is in there too: two people talk, a reload keeps the lines, 501 letters is refused
 - presence too: a tab open is online, do not disturb reaches a watcher pushed, two tabs share one socket, the last one closing is offline at once
-- `./test.sh --all` — also the redeploys, with a stream running through them, and the fake streams
+- `./scripts/test.sh --all` — also the redeploys, with a stream running through them, and the fake streams
 - the stream names are fixed, so one person at a time per server
 
 ## following
 
-hover the panel in the bottom left (or press its `following` word): who you follow, the ones streaming first, each with the word beside their name, and a box to find people and follow them. home has a search box at the top, and under the live streams everyone else: a rectangle each with their picture, name and the word beside it, online first; the fake streams are there too when they are off (`./seed.sh --dummies` gives them faces). the watch page has the button and `N followers`. `docs/follows.md`.
+hover the panel in the bottom left (or press its `following` word): who you follow, the ones streaming first, each with the word beside their name, and a box to find people and follow them. home has a search box at the top, and under the live streams everyone else: a rectangle each with their picture, name and the word beside it, online first; the fake streams are there too when they are off (`./scripts/seed.sh --dummies` gives them faces). the watch page has the button and `N followers`. `docs/follows.md`.
 
 ## look inside
 
-- `./manage.sh --db` — the database in a terminal: the tables, a table's rows (scroll, page, a where clause), its columns and indexes, a query of your own. `d` hops to the error-report database. read-only
-- `./manage.sh --redis` — every key with its type and ttl; enter shows what is in it (a sorted set with its scores, a stream's last entries)
-- `./manage.sh --to billy@1.2.3.4 --db` — the same against the box, over ssh. the screen is here, the questions go there
-- `./seed.sh 5` — on the box: five accounts that look like people, each with a name, a bio, a picture and a thumbnail cut from `random-media/random-pfps`. names and passwords land in `.seeded-users`. somebody to find and, once follows exist, to follow
+- `./scripts/manage.sh --db` — the database in a terminal: the tables, a table's rows (scroll, page, a where clause), its columns and indexes, a query of your own. `d` hops to the error-report database. read-only
+- `./scripts/manage.sh --redis` — every key with its type and ttl; enter shows what is in it (a sorted set with its scores, a stream's last entries)
+- `./scripts/manage.sh --to billy@1.2.3.4 --db` — the same against the box, over ssh. the screen is here, the questions go there
+- `./scripts/seed.sh 5` — on the box: five accounts that look like people, each with a name, a bio, a picture and a thumbnail cut from `random-media/random-pfps`. names and passwords land in `.seeded-users`. somebody to find and, once follows exist, to follow
 
 ## working on the pages
 
@@ -156,7 +156,7 @@ the camera works there too.
 which backend it talks to:
 
 - `BACKEND=https://192.81.135.162 npm run dev` — the server. no docker needed on your mac
-- plain `npm run dev` — the docker stack on your mac (`./deploy.sh --build` first: your own build, not the registry's images)
+- plain `npm run dev` — the docker stack on your mac (`./scripts/deploy.sh --build` first: your own build, not the registry's images)
 
 put `BACKEND=...` in `frontend/.env` to make it stick.
 no password needed. the backend talks to any pages that speak its api.

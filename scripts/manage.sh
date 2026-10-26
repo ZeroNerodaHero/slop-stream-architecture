@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 # manage.sh: look inside the running stack's postgres and redis, from a terminal. read-only.
 #
-#   ./manage.sh --db              the tables of the stream database: pick one, see its rows
+#   ./scripts/manage.sh --db              the tables of the stream database: pick one, see its rows
 #                                 (scroll, page, a where clause), its columns and indexes,
 #                                 or type a query. `d` hops to the other database (debug)
-#   ./manage.sh --db debug        start on the error-report database instead
-#   ./manage.sh --redis           every key with its type and ttl: pick one, see what is in
+#   ./scripts/manage.sh --db debug        start on the error-report database instead
+#   ./scripts/manage.sh --redis           every key with its type and ttl: pick one, see what is in
 #                                 it (a string, a hash, a sorted set with scores, a stream's
 #                                 last 500 entries). `/` narrows the scan pattern
 #
 # everything goes through `docker compose exec` into the database and redis containers
 # (neither has a host port), so it works wherever the stack runs: here, or on the box over
-# ssh, like ship.sh's --to. docker must answer for your ssh user there (./deploy.sh puts
+# ssh, like ship.sh's --to. docker must answer for your ssh user there (./scripts/deploy.sh puts
 # you in the docker group).
 #
-#   ./manage.sh --to billy@1.2.3.4 --redis         the repo is ~/slop-stream-architecture there
-#   ./manage.sh --to gcloud:test-machine --db      or --dir <path> to say where it is
+#   ./scripts/manage.sh --to billy@1.2.3.4 --redis         the repo is ~/slop-stream-architecture there
+#   ./scripts/manage.sh --to gcloud:test-machine --db      or --dir <path> to say where it is
 #
 # the screen is python3's curses, run here, not on the box. keys: ↑↓ move, pgup pgdn page,
 # ←→ scroll the columns, enter opens, / filters, r asks again, q goes back, ? says this.
 # nothing here writes: every query runs in a read-only transaction that is rolled back.
 set -euo pipefail
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -45,12 +45,12 @@ for a in "$@"; do
     --to=*) TO="${a#--to=}" ;;
     --dir) want_dir=1 ;;
     --dir=*) DIR="${a#--dir=}" ;;
-    *) die "don't know what '$a' is. it is --db [name], --redis, --to <host>, --dir <path>. see ./manage.sh --help" ;;
+    *) die "don't know what '$a' is. it is --db [name], --redis, --to <host>, --dir <path>. see ./scripts/manage.sh --help" ;;
   esac
 done
 [ "$want_to" = 0 ] || die "--to needs a destination: gcloud:<instance>, or user@host"
 [ "$want_dir" = 0 ] || die "--dir needs a path"
-[ -n "$MODE" ] || die "say what to look at: --db [name] or --redis. see ./manage.sh --help"
+[ -n "$MODE" ] || die "say what to look at: --db [name] or --redis. see ./scripts/manage.sh --help"
 [[ "$DB" =~ ^[a-z0-9_]+$ ]] || die "bad database name '$DB'. the two here are stream and debug"
 
 [ -t 0 ] && [ -t 1 ] || die "manage.sh draws a screen: run it in a terminal, not through a pipe"
@@ -61,7 +61,7 @@ if [ -z "$TO" ]; then
   have docker || die "docker is not installed here. point at the box instead: --to user@host"
   docker info >/dev/null 2>&1 || die "docker is not answering here. start it, or point at the box: --to user@host"
   [ "$MODE" = db ] && svc=database || svc=redis
-  [ -n "$(docker compose ps -q "$svc" 2>/dev/null)" ] || die "the stack is not up here (no $svc container). ./deploy.sh first, or --to user@host"
+  [ -n "$(docker compose ps -q "$svc" 2>/dev/null)" ] || die "the stack is not up here (no $svc container). ./scripts/deploy.sh first, or --to user@host"
 fi
 
 MANAGE_MODE="$MODE" MANAGE_DB="$DB" MANAGE_TO="$TO" MANAGE_DIR="$DIR" exec python3 manage.py

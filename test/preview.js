@@ -2,7 +2,7 @@
 // <title>, og:* tags and the profile filled in (offline, with a picture, live with the
 // thumbnail), the picture round-trips and is the owner's only, the shared link carries
 // ?s=<session>, and the spa still boots on the page the api served.
-// Run through ./test.sh, or: BASE_URL=https://<ip> node preview.js
+// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node preview.js
 const { chromium, request } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const RUN = Date.now().toString(36).slice(-5);

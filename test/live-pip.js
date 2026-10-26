@@ -7,7 +7,7 @@
 // tab closed with the stream in the corner ends it too (the tab-close listener outlives the
 // page). A plain home click without the button still ends the stream. Two publishers with
 // fake cameras and one watcher.
-// Run through ./test.sh, or: BASE_URL=https://<ip> node live-pip.js
+// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node live-pip.js
 const { chromium } = require('playwright');
 const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
 const ME = 'livepip';

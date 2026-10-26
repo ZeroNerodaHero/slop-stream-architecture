@@ -1,5 +1,5 @@
 // The text chat: two viewers talk, history survives a reload, 501 chars is refused,
-// the streamer's lines are marked. Run through ./test.sh, or: BASE_URL=https://<ip> node chat.js
+// the streamer's lines are marked. Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node chat.js
 const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const ROOM = 'chattest' + Date.now().toString(36).slice(-4);

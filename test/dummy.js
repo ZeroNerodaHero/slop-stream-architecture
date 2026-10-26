@@ -1,5 +1,5 @@
 // The fake streams: home shows them, one plays with video and audio, and the dummy- names are password-gated.
-// Needs DUMMY_STREAMS >= 1 in .env. Run through ./test.sh --all, or: BASE_URL=https://<ip> node dummy.js
+// Needs DUMMY_STREAMS >= 1 in .env. Run through ./scripts/test.sh --all, or: BASE_URL=https://<ip> node dummy.js
 const { chromium, request } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const ARGS = ['--ignore-certificate-errors', '--autoplay-policy=no-user-gesture-required'];

@@ -196,7 +196,7 @@ pub(crate) async fn admins_with_accounts(db: &PgPool, names: Vec<String>) -> Res
             .await?;
     for name in names.iter().filter(|n| !claimed.iter().any(|(_, c)| c == *n)) {
         log::error!(
-            "ADMIN_NAMES: {name} has no account, so it is not an admin. sign up as it, or: docker compose exec api api passwd {name}. then ./deploy.sh api"
+            "ADMIN_NAMES: {name} has no account, so it is not an admin. sign up as it, or: docker compose exec api api passwd {name}. then ./scripts/deploy.sh api"
         );
     }
     Ok(claimed.into_iter().map(|(id, name)| Account { id, name }).collect())

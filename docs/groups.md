@@ -67,7 +67,7 @@ INSERT INTO groups (name, badge, color, about) VALUES ('bot', 'BOT', '#5865f2', 
 
 ## tests
 
-`test/groups.js` (`./test.sh`, anywhere): the list has `bot` built in and nobody can make or join; a login makes a group (bad badge, colour and name 400, `bot` 409, the badge trimmed and the colour lowercased), another login joins (204, twice 204, `bot` 403, no such group 404), a member's chat line wears the badge in the group's colour, a raw socket with `bot: true` wears `BOT`, the robot hides it, counts it, keeps the choice over a reload and shows it again, leave (204, twice 204), delete is 403 for a member, 401 for nobody, 403 for `bot`, 204 for the maker and 404 after, and the groups tab makes a group, lists it with `leave`, wears it on the card and deletes it.
+`test/groups.js` (`./scripts/test.sh`, anywhere): the list has `bot` built in and nobody can make or join; a login makes a group (bad badge, colour and name 400, `bot` 409, the badge trimmed and the colour lowercased), another login joins (204, twice 204, `bot` 403, no such group 404), a member's chat line wears the badge in the group's colour, a raw socket with `bot: true` wears `BOT`, the robot hides it, counts it, keeps the choice over a reload and shows it again, leave (204, twice 204), delete is 403 for a member, 401 for nobody, 403 for `bot`, 204 for the maker and 404 after, and the groups tab makes a group, lists it with `leave`, wears it on the card and deletes it.
 
 ## servers
 

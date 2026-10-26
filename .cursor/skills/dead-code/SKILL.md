@@ -41,7 +41,7 @@ These are live even when nothing in Rust or TypeScript calls them. Mark them, do
 - **Frontend entry.** `frontend/src/main.tsx`, `frontend/src/router.tsx`, and `frontend/src/infra/events.worker.ts`. The worker is imported as `@/infra/events.worker?sharedworker` from `events.ts`. A search that ignores the `?sharedworker` query will call the worker unused.
 - **Pages imported only by the router.** One importer is enough.
 - **Tests.** `#[cfg(test)]` modules and `test/*.js`. Production code used only from there is live.
-- **Root scripts and images.** `deploy.sh`, `test.sh`, `seed.sh`, `manage.sh`, `manage.py`, `ship.sh`, Dockerfiles, and compose files. A person runs these. No in-repo caller does not make them dead.
+- **Scripts you run.** `scripts/deploy.sh`, `scripts/ship.sh`, `scripts/test.sh`, `scripts/seed.sh`, `scripts/manage.sh`, and `manage.py` (the screen behind manage). `frontend/publish-pages.sh` runs inside the pages image, not from a shell. Dockerfiles and compose files too. A person runs these. No in-repo caller does not make them dead.
 - **Plan docs.** `docs/README.md` says which docs are "a plan, not a build". A plan is not stale. Do not delete it.
 - **Prose comments.** This repo's comments state invariants. Delete a comment only when it is commented-out code, not when it explains why something works the way it does.
 

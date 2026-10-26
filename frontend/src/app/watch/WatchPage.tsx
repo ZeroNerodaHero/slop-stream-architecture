@@ -32,7 +32,7 @@ import {
   watchToneAtom,
   watchViewersAtom,
 } from '@/infra/atoms/watch-atoms';
-import { PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
+import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
 import { cleanName, isDummyName } from '@/infra/names';
@@ -41,6 +41,8 @@ import { Avatar } from '@/shared-components/Avatar';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
+import { Face } from '@/shared-components/Face';
+import { panelClassName } from '@/shared-components/Panel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { StatusLine } from '@/shared-components/StatusLine';
 import { ViewerCount } from '@/shared-components/ViewerCount';
@@ -50,6 +52,14 @@ import { TestBadge } from '@/shared-components/TestBadge';
 import { IconButton, PipIcon, SoundControl, revealClassName } from '@/shared-components/VideoControls';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
+
+/** The sentence under the word while they are not live: why to wait, or not. */
+const NOT_LIVE_WORDS: Record<Presence, string> = {
+  offline: 'not streaming right now. the stream shows up here the moment they start.',
+  online: 'around, not streaming. the stream shows up here the moment they start.',
+  dnd: 'do not disturb, not streaming.',
+  streaming: 'starting'
+};
 
 export function WatchPage() {
   const params = useParams<{ name: string }>();
@@ -157,6 +167,23 @@ export function WatchPage() {
               (a silent stream should show why) and otherwise come up on hover, while a control has
               keyboard focus (not the focus a mouse click leaves behind, or they would stick), and on a
               screen with no hover at all. "tap to play" is the exception: big, in the middle. */}
+          {/* not live: the profile where the picture would be (docs/follows.md). the face, the word and a
+              sentence; the bio sits below and the chat stays. the player comes back the moment they start
+              (the pushed `live`, else the retry timer), so there is nothing to press and no black box */}
+          {phase === 'waiting' ? (
+            <div id="profile" className={cn(panelClassName('flex flex-wrap items-center gap-6 p-6'))} data-presence={presence}>
+              <Face name={name} version={avatar} className="h-28 w-28 text-5xl" />
+              <div className="min-w-0 flex-1">
+                <p className={cn('flex items-center gap-2 text-lg font-semibold', PRESENCE_TEXT[presence])}>
+                  <span aria-hidden className={cn('inline-block h-3 w-3', PRESENCE_SQUARE[presence])} />
+                  {PRESENCE_WORD[presence]}
+                </p>
+                <p className="mt-1 text-textSecondary">{NOT_LIVE_WORDS[presence]}</p>
+              </div>
+              {/* the chat's button lives on the player; without a player it lives here */}
+              <ChatOpenButton className="self-start" />
+            </div>
+          ) : (
           <div className="group relative">
             <VideoFrame
               id="video"
@@ -189,6 +216,7 @@ export function WatchPage() {
               </div>
             )}
           </div>
+          )}
           {/* the streamer's other pictures while a screen is shared: the camera beside the screen,
               or the other way round. click one and it is the big one; the sound stays put */}
           {tiles.length > 0 && (

@@ -2,21 +2,21 @@
 #
 # deploy.sh — bring the stream lab up on this machine, or redeploy part of it.
 #
-#   ./deploy.sh                   everything. first time, or any time. the images come from the
+#   ./scripts/deploy.sh                   everything. first time, or any time. the images come from the
 #                                 registry (ghcr.io/<you>/, from the git remote), named after the
 #                                 last commit that touched what they are built from (./image-paths):
 #                                 what the github action pushed. nothing is compiled here
-#   ./deploy.sh --pull            git pull, then the images for the tree just pulled
-#   ./deploy.sh api               only the api (also: frontend, video, dummy): get its image, swap it
-#   ./deploy.sh --images TAG      a tag of your choosing, e.g. the one ./ship.sh --to printed
-#   ./deploy.sh --build           compile the images here instead (a laptop with uncommitted changes,
+#   ./scripts/deploy.sh --pull            git pull, then the images for the tree just pulled
+#   ./scripts/deploy.sh api               only the api (also: frontend, video, dummy): get its image, swap it
+#   ./scripts/deploy.sh --images TAG      a tag of your choosing, e.g. the one ./scripts/ship.sh --to printed
+#   ./scripts/deploy.sh --build           compile the images here instead (a laptop with uncommitted changes,
 #                                 a box without a registry). goes with --pull and services
-#   ./deploy.sh --prune-deploy    first give the disk back what builds took (docker's build cache,
+#   ./scripts/deploy.sh --prune-deploy    first give the disk back what builds took (docker's build cache,
 #                                 untagged images, old stream images), then deploy as asked. for the
 #                                 small box that says "only 2664MB free"
-#   ./deploy.sh 203.0.113.7       everything, with this ip
-#   ./deploy.sh passwd billy      a new password for an account (there is no email reset)
-#   PUBLIC_IP=10.0.0.5 ./deploy.sh
+#   ./scripts/deploy.sh 203.0.113.7       everything, with this ip
+#   ./scripts/deploy.sh passwd billy      a new password for an account (there is no email reset)
+#   PUBLIC_IP=10.0.0.5 ./scripts/deploy.sh
 #
 # Full run, Linux (Ubuntu 22.04/24.04, Debian 12): installs docker if missing,
 # refuses if 80/443 are taken, opens ufw ports, writes .env (PUBLIC_IP,
@@ -173,10 +173,10 @@ pick_public_ip() {
     detect_ip
     PUBLIC_IP="$DETECTED_IP"; IP_SOURCE="auto-detected: $DETECTED_VIA"
   fi
-  is_ipv4 "$PUBLIC_IP" || die "PUBLIC_IP '$PUBLIC_IP' ($IP_SOURCE) is not an IPv4 address. Try: ./deploy.sh 1.2.3.4"
+  is_ipv4 "$PUBLIC_IP" || die "PUBLIC_IP '$PUBLIC_IP' ($IP_SOURCE) is not an IPv4 address. Try: ./scripts/deploy.sh 1.2.3.4"
   export PUBLIC_IP
   say "PUBLIC_IP = $PUBLIC_IP   ($IP_SOURCE)"
-  note "override:  ./deploy.sh 1.2.3.4     or     PUBLIC_IP=1.2.3.4 ./deploy.sh"
+  note "override:  ./scripts/deploy.sh 1.2.3.4     or     PUBLIC_IP=1.2.3.4 ./scripts/deploy.sh"
   note "testing on your own lan? use this machine's lan ip, not 127.0.0.1 and not the router's public ip."
   if [ "$PUBLIC_IP" = "127.0.0.1" ]; then
     warn "127.0.0.1 only works for a browser on this exact machine, and video may not connect. prefer the lan ip."
@@ -185,7 +185,7 @@ pick_public_ip() {
   if [ "$IP_SOURCE" = "existing $ENV_FILE" ]; then
     detect_ip
     if [ "$DETECTED_IP" != "$PUBLIC_IP" ] && [ "$DETECTED_IP" != "127.0.0.1" ]; then
-      warn "$ENV_FILE says $PUBLIC_IP but this machine looks like $DETECTED_IP ($DETECTED_VIA). ip changed? run: ./deploy.sh $DETECTED_IP"
+      warn "$ENV_FILE says $PUBLIC_IP but this machine looks like $DETECTED_IP ($DETECTED_VIA). ip changed? run: ./scripts/deploy.sh $DETECTED_IP"
     fi
   fi
   # a public ip that is not on any interface is right behind cloud 1:1 nat, wrong on a
@@ -197,7 +197,7 @@ pick_public_ip() {
     if is_ipv4 "$lan" && [ "$lan" != "$PUBLIC_IP" ]; then
       warn "$PUBLIC_IP is not on any interface of this machine; its lan ip is $lan."
       note "cloud vm behind 1:1 nat (aws, gcp): $PUBLIC_IP is right, carry on."
-      note "home or office lan: $PUBLIC_IP is the router. video stays black for everyone. switch with:  ./deploy.sh $lan"
+      note "home or office lan: $PUBLIC_IP is the router. video stays black for everyone. switch with:  ./scripts/deploy.sh $lan"
     else
       note "$PUBLIC_IP is not on a local interface. fine on a cloud vm (1:1 nat). on a home lan use the lan ip."
     fi
@@ -238,7 +238,7 @@ ensure_docker() {
   if [ "$OS" = mac ]; then
     cat >&2 <<'EOF'
 
-ERROR: docker not found. Install Docker Desktop for Mac, start it, then re-run ./deploy.sh
+ERROR: docker not found. Install Docker Desktop for Mac, start it, then re-run ./scripts/deploy.sh
   https://docs.docker.com/desktop/setup/install/mac-install/
   or:  brew install --cask docker
 EOF
@@ -331,7 +331,7 @@ check_disk() {
   free_mb="$(free_mb_here)"
   if [ "${IMAGES_MODE:-0}" = 1 ]; then
     # no build here: the four images are ~800 MB to pull, and docker wants room to unpack them
-    [ "${free_mb:-0}" -ge 1500 ] || die "only ${free_mb}MB free here; pulling the images needs about 1.5 GB. try: ./deploy.sh --prune-deploy ${ORIGINAL_ARGS[*]:-}"
+    [ "${free_mb:-0}" -ge 1500 ] || die "only ${free_mb}MB free here; pulling the images needs about 1.5 GB. try: ./scripts/deploy.sh --prune-deploy ${ORIGINAL_ARGS[*]:-}"
     return 0
   fi
   # ensure_swap is about to dd a swapfile, most likely out of this same disk
@@ -344,7 +344,7 @@ check_disk() {
       die "only ${free_mb}MB free here (${need}MB is the floor), even after the prune. the rust images need about 6-8GB to build. grow the disk, or look at what else is on it: docker system df -v; du -sh /var/lib/docker/containers/*/*-json.log"
     fi
     die "only ${free_mb}MB free here (${need}MB is the floor). the rust images need about 6-8GB to build.
-  try:  ./deploy.sh --prune-deploy ${ORIGINAL_ARGS[*]:-}   (drops docker's build cache and untagged images first, usually several GB)
+  try:  ./scripts/deploy.sh --prune-deploy ${ORIGINAL_ARGS[*]:-}   (drops docker's build cache and untagged images first, usually several GB)
   or grow the disk."
   fi
   if [ "${free_mb:-0}" -lt 10000 ]; then
@@ -367,7 +367,7 @@ prune_for_deploy() {
   note "untagged images:  $("${DOCKER[@]}" image prune -f 2>&1 | tail -n 1 || echo "could not prune them")"
   # our own images from earlier ships or builds (stream-x:<old tag>) that no container
   # runs. not the four this run is about to start: nothing runs them yet, and the ones
-  # ./ship.sh --to just sent exist nowhere else
+  # ./scripts/ship.sh --to just sent exist nowhere else
   old="$(comm -23 <("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^([^/]+/)*stream-[a-z]+:' | sort -u) \
                  <({ "${DOCKER[@]}" ps -a --format '{{.Image}}' 2>/dev/null; target_images; } | sort -u) || true)"
   if [ -n "$old" ]; then
@@ -556,7 +556,7 @@ pick_build_jobs() {
 # so the full deploy and the partial ones work the same either way.
 build_one() {
   if [ "${IMAGES_MODE:-0}" = 1 ]; then
-    # already here under that exact name and tag (./ship.sh --to sent it, or an earlier
+    # already here under that exact name and tag (./scripts/ship.sh --to sent it, or an earlier
     # run pulled it): a tag is a commit, so there is nothing newer to fetch.
     if "${DOCKER[@]}" image inspect "$(image_name "$1")" >/dev/null 2>&1; then
       note "$(image_name "$1") is here already"
@@ -566,13 +566,13 @@ build_one() {
     ( [ -z "${PULL_PLATFORM:-}" ] || export DOCKER_DEFAULT_PLATFORM="$PULL_PLATFORM"; "${DOCKER[@]}" compose pull "$1" ) && return 0
     die "pulling $(image_name "$1") failed.
   'not found' / 'manifest unknown': nothing is pushed under tag $TAG yet. the github action builds it after a push to main
-      (a few minutes: github.com/<you>/<repo>/actions), or ./ship.sh on the laptop pushes it. is the tag the commit you mean?
+      (a few minutes: github.com/<you>/<repo>/actions), or ./scripts/ship.sh on the laptop pushes it. is the tag the commit you mean?
       (the tag is the last commit that touched api/ video/ frontend/ Cargo.* .dockerignore or the workflow, not HEAD)
-      images sent with ./ship.sh --to are named by the tag it printed:  ./deploy.sh --images <that tag>
+      images sent with ./scripts/ship.sh --to are named by the tag it printed:  ./scripts/deploy.sh --images <that tag>
   'denied' / 'unauthorized': the package is private. make it public (github.com → your profile → Packages → stream-$1 →
       Package settings → Change visibility), or log this machine in:  gh auth token | ${DOCKER[*]} login ghcr.io -u <you> --password-stdin   (token with read:packages)
   have here:  $("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E "^([^/]+/)*stream-$1:" | tr '\n' ' ' || true)
-  or compile here instead:  ./deploy.sh --build ${ORIGINAL_ARGS[*]:-}"
+  or compile here instead:  ./scripts/deploy.sh --build ${ORIGINAL_ARGS[*]:-}"
   fi
   # BUILD on the command line as well as exported: `sudo docker` resets the
   # environment, and compose would then bake "dev" while this script prints the sha.
@@ -622,7 +622,7 @@ compose_up() {
 prune_images() {
   local out
   out="$("${DOCKER[@]}" image prune -f 2>/dev/null | tail -n 1 || true)"
-  note "untagged images from earlier builds removed (${out:-nothing to remove}). the build cache stays; ./deploy.sh --prune-deploy drops it first next time"
+  note "untagged images from earlier builds removed (${out:-nothing to remove}). the build cache stays; ./scripts/deploy.sh --prune-deploy drops it first next time"
 }
 
 # ---- did the swap take? --------------------------------------------------------
@@ -741,7 +741,7 @@ image_moved() {   # service (its container_name is the service name)
 # compose recreates them if it changed: compose's own comparison, which reads .env the
 # way the containers were given it. in images mode only while the image they run is the
 # one wanted: once the images moved, the `up` would swap them for that as well, video
-# with every live stream and no warning; then a changed password is a ./deploy.sh api video.
+# with every live stream and no warning; then a changed password is a ./scripts/deploy.sh api video.
 redeploy_dummy() {
   build_one dummy
   local -a also=() moved=()
@@ -753,7 +753,7 @@ redeploy_dummy() {
   "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} dummy ${also[@]+"${also[@]}"}
   if [ ${#moved[@]} -gt 0 ]; then
     warn "the images moved since ${moved[*]} started, so they were left alone.
-  a changed DUMMY_PASSWORD reaches them with:  ./deploy.sh ${moved[*]}   (video ends every live stream)"
+  a changed DUMMY_PASSWORD reaches them with:  ./scripts/deploy.sh ${moved[*]}   (video ends every live stream)"
   fi
   note "dummy streams: $(env_file_value DUMMY_STREAMS)   (DUMMY_STREAMS in $ENV_FILE)"
 }
@@ -832,9 +832,9 @@ reexec_if_updated() {
   [ -z "${DEPLOY_REEXEC:-}" ] || return 0
   # asked of git directly, not through `| grep -q`: under pipefail a grep that quits
   # early on a long list makes git exit 141, and `|| return 0` would then skip this
-  [ -n "$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD" -- deploy.sh)" ] || return 0
+  [ -n "$(git diff --name-only "$OLD_HEAD" "$NEW_HEAD" -- scripts/deploy.sh)" ] || return 0
   say "deploy.sh itself changed in the pull, continuing with the new one"
-  DEPLOY_REEXEC=1 DEPLOY_PULLED_FROM="$OLD_HEAD" exec bash ./deploy.sh ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
+  DEPLOY_REEXEC=1 DEPLOY_PULLED_FROM="$OLD_HEAD" exec bash ./scripts/deploy.sh ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
 }
 
 # which services the files changed between two commits belong to, one per line,
@@ -858,17 +858,17 @@ changed_services() {
 }
 
 # ---- password reset ------------------------------------------------------------
-# `./deploy.sh passwd <name>`: a new random password for an account, printed once,
+# `./scripts/deploy.sh passwd <name>`: a new random password for an account, printed once,
 # every login of that name out. On a name with no account it makes one.
 passwd_account() {
   pick_docker_cmd
-  [ -n "$("${DOCKER[@]}" compose ps -q api 2>/dev/null)" ] || die "the api container is not up. ./deploy.sh first"
+  [ -n "$("${DOCKER[@]}" compose ps -q api 2>/dev/null)" ] || die "the api container is not up. ./scripts/deploy.sh first"
   # RUST_LOG=warn: without it the schema's "already exists, skipping" notices come first
   "${DOCKER[@]}" compose exec -T -e RUST_LOG=warn api api passwd "$1"
 }
 
 # ---- args --------------------------------------------------------------------
-# bold on a terminal, plain when piped (./deploy.sh --help | less). the escape codes
+# bold on a terminal, plain when piped (./scripts/deploy.sh --help | less). the escape codes
 # take no width, so the columns below are lined up by their visible text.
 usage() {
   local B="" N=""
@@ -877,8 +877,8 @@ usage() {
     N="$(tput sgr0 2>/dev/null || printf '\033[0m')"
   fi
   cat <<EOF
-${B}usage:${N} ./deploy.sh [--pull] [--prune-deploy] [--build | --images [TAG]] [PUBLIC_IP] [frontend|api|video|dummy ...]
-       ./deploy.sh passwd <name>
+${B}usage:${N} ./scripts/deploy.sh [--pull] [--prune-deploy] [--build | --images [TAG]] [PUBLIC_IP] [frontend|api|video|dummy ...]
+       ./scripts/deploy.sh passwd <name>
 
 ${B}what to deploy${N}
   ${B}(nothing named)${N}           full deploy: machine setup, every image, docker compose up
@@ -890,10 +890,10 @@ ${B}where the images come from${N}
   by default nothing is compiled here. the four images come from the registry the git remote implies
   (github.com/<you>/… → ghcr.io/<you>/; IMAGES= in .env or the environment to say otherwise), tagged
   with the last commit that touched what they are built from (./image-paths: api/ video/ frontend/
-  Cargo.* …; docs and this script do not count): what the github action pushes, and what ./ship.sh
-  tags with. an image already here under that name (./ship.sh --to sent it) is used as is. no 4 GB
+  Cargo.* …; docs and this script do not count): what the github action pushes, and what ./scripts/ship.sh
+  tags with. an image already here under that name (./scripts/ship.sh --to sent it) is used as is. no 4 GB
   floor, no swapfile: a 1 GB box runs it.
-  ${B}--images [TAG]${N}            the default, with a tag of your choosing (the one ./ship.sh --to printed, say)
+  ${B}--images [TAG]${N}            the default, with a tag of your choosing (the one ./scripts/ship.sh --to printed, say)
   ${B}--build${N}                   compile the images here instead: an hour on a small machine, 4 GB of ram,
                             8 GB of disk. for a laptop with uncommitted changes, or a box with no registry
 
@@ -945,28 +945,28 @@ parse_args() {   # sets IP_ARG PULL PRUNE IMAGES_MODE BUILD_MODE TAG TARGETS PAS
       chat) TARGETS+=("api") ;;
       *)
         if is_ipv4 "$a"; then IP_ARG="$a"
-        else die "don't know what '$a' is. services are: frontend api video dummy. see ./deploy.sh --help"
+        else die "don't know what '$a' is. services are: frontend api video dummy. see ./scripts/deploy.sh --help"
         fi ;;
     esac
   done
-  if [ "$want_name" = 1 ]; then die "usage: ./deploy.sh passwd <name>"; fi
+  if [ "$want_name" = 1 ]; then die "usage: ./scripts/deploy.sh passwd <name>"; fi
   if [ -n "$PASSWD_NAME" ] && { [ "$PULL" = 1 ] || [ "$PRUNE" = 1 ] || [ "$IMAGES_MODE" = 1 ] || [ "$BUILD_MODE" = 1 ] || [ -n "$IP_ARG" ] || [ ${#TARGETS[@]} -gt 0 ]; }; then
-    die "passwd goes alone: ./deploy.sh passwd $PASSWD_NAME"
+    die "passwd goes alone: ./scripts/deploy.sh passwd $PASSWD_NAME"
   fi
   if [ "$IMAGES_MODE" = 1 ] && [ "$BUILD_MODE" = 1 ]; then die "--images and --build: pick one"; fi
   if [ -n "$IP_ARG" ] && [ ${#TARGETS[@]} -gt 0 ]; then
-    die "changing the ip touches the cert, caddy and video. run a full deploy: ./deploy.sh $IP_ARG"
+    die "changing the ip touches the cert, caddy and video. run a full deploy: ./scripts/deploy.sh $IP_ARG"
   fi
 }
 
 load_public_ip_from_env() {
   PUBLIC_IP="${PUBLIC_IP:-$(env_file_value PUBLIC_IP)}"
-  is_ipv4 "${PUBLIC_IP:-}" || die "no PUBLIC_IP in $ENV_FILE. run a full deploy first: ./deploy.sh"
+  is_ipv4 "${PUBLIC_IP:-}" || die "no PUBLIC_IP in $ENV_FILE. run a full deploy first: ./scripts/deploy.sh"
   export PUBLIC_IP
 }
 
 # images are the default; --build is the option. the box gets the four images built
-# elsewhere (the github action on every push to main, or ./ship.sh from a laptop) and
+# elsewhere (the github action on every push to main, or ./scripts/ship.sh from a laptop) and
 # compiles nothing. --build compiles them here, the old way.
 decide_mode() {
   [ "$BUILD_MODE" = 1 ] || IMAGES_MODE=1
@@ -1028,7 +1028,7 @@ resolve_images() {
   IMAGES="${IMAGES:-$(env_file_value IMAGES)}"
   if [ -z "$IMAGES" ]; then
     IMAGES="$(registry_from_remote || true)"
-    [ -n "$IMAGES" ] || die "cannot tell where the images live: the git remote is not on github. put IMAGES=<registry>/<owner>/ in $ENV_FILE, or build here:  ./deploy.sh --build ${ORIGINAL_ARGS[*]:-}"
+    [ -n "$IMAGES" ] || die "cannot tell where the images live: the git remote is not on github. put IMAGES=<registry>/<owner>/ in $ENV_FILE, or build here:  ./scripts/deploy.sh --build ${ORIGINAL_ARGS[*]:-}"
   fi
   IMAGES="${IMAGES%/}/"
   if [ -z "$TAG" ]; then
@@ -1036,8 +1036,8 @@ resolve_images() {
     # answer would be wrong whenever that commit is a docs one. the whole history, once.
     ! is_shallow || die "this is a shallow checkout, so the commit the images are named after cannot be found. once:  git fetch --unshallow"
     TAG="$(image_commit)"
-    [ -n "$TAG" ] || die "cannot tell which images: not a git checkout. name them:  ./deploy.sh --images <tag>"
-    ! images_dirty || warn "api/ video/ frontend/ or Cargo.* have uncommitted edits: the images for $TAG are the commit's, not this tree's. ./deploy.sh --build compiles this tree"
+    [ -n "$TAG" ] || die "cannot tell which images: not a git checkout. name them:  ./scripts/deploy.sh --images <tag>"
+    ! images_dirty || warn "api/ video/ frontend/ or Cargo.* have uncommitted edits: the images for $TAG are the commit's, not this tree's. ./scripts/deploy.sh --build compiles this tree"
   fi
   # the images are built for the cloud box, linux/amd64. another machine (an arm laptop)
   # pulls that variant anyway and runs it under emulation: slower, but it runs.
@@ -1045,7 +1045,7 @@ resolve_images() {
   case "$(uname -m)" in
     x86_64|amd64) ;;
     *) PULL_PLATFORM=linux/amd64
-       note "this machine is $(uname -m); the images are linux/amd64 and will run under emulation. ./deploy.sh --build makes native ones" ;;
+       note "this machine is $(uname -m); the images are linux/amd64 and will run under emulation. ./scripts/deploy.sh --build makes native ones" ;;
   esac
   export IMAGES TAG
   UP_FLAGS=(--no-build)
@@ -1056,7 +1056,7 @@ setup_images_mode() {
   resolve_images
   set_env_key IMAGES "$IMAGES"
   set_env_key TAG "$TAG"
-  say "images: ${IMAGES}stream-<x>:$TAG   (nothing is built here; ./deploy.sh --build would. written to $ENV_FILE for a compose by hand)"
+  say "images: ${IMAGES}stream-<x>:$TAG   (nothing is built here; ./scripts/deploy.sh --build would. written to $ENV_FILE for a compose by hand)"
 }
 
 # --build: the images are made on this machine, as stream-<x>:latest, whatever .env
@@ -1089,9 +1089,9 @@ wait_for_health() {
   if [ "$local_code" = "200" ]; then
     warn "the stack answers on 127.0.0.1 but not on ${PUBLIC_IP} from this machine (last: HTTP ${code})."
     note "Normal on clouds that NAT the public ip (AWS/GCP). Try it from your browser; if that fails,"
-    note "check the cloud firewall and that PUBLIC_IP is right (./deploy.sh <ip> to change it)."
+    note "check the cloud firewall and that PUBLIC_IP is right (./scripts/deploy.sh <ip> to change it)."
     note "On a home lan this means PUBLIC_IP is the router's wan ip: the pages load, but video stays"
-    note "black for every watcher on the lan. Use the lan ip instead: ./deploy.sh <lan ip>"
+    note "black for every watcher on the lan. Use the lan ip instead: ./scripts/deploy.sh <lan ip>"
     return 0
   fi
   warn "no 200 from ${url} after ${HEALTH_TIMEOUT}s (last: HTTP ${code}; 000 = no connection)."
@@ -1118,10 +1118,10 @@ show_result() {
   Watch logs:   ${DOCKER[*]} compose logs -f video api
   Health:       https://${PUBLIC_IP}/api/health     errors from the pages: https://${PUBLIC_IP}/admin  (ADMIN_NAMES in .env)
   Env name:     ${ENV_NAME:-unnamed}       (ENV_NAME in .env; in every health answer and stored error)   build: ${BUILD:-dev}
-  Accounts:     optional, https://${PUBLIC_IP}/signup     forgot one: ./deploy.sh passwd <name>
+  Accounts:     optional, https://${PUBLIC_IP}/signup     forgot one: ./scripts/deploy.sh passwd <name>
   Stop:         ${DOCKER[*]} compose down        (add -v to also drop the database)
-  Change ip:    ./deploy.sh 1.2.3.4
-  Update:       ./deploy.sh --pull               (or: ./deploy.sh api)
+  Change ip:    ./scripts/deploy.sh 1.2.3.4
+  Update:       ./scripts/deploy.sh --pull               (or: ./scripts/deploy.sh api)
 EOF
   if [ "$ok" -ne 1 ]; then
     printf '\n  NOTE: the health check did not pass; the url above may not work yet. Check the logs first.\n'
@@ -1193,8 +1193,8 @@ pick_build() {
 }
 
 main() {
-  cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  [ -f docker-compose.yml ] || die "docker-compose.yml not found next to deploy.sh"
+  cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  [ -f docker-compose.yml ] || die "docker-compose.yml not found in the repo root"
   ORIGINAL_ARGS=("$@")
   parse_args "$@"
   decide_mode

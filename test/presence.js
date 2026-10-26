@@ -3,7 +3,7 @@
 // watcher's page pushed and the api's word agrees, going live is `streaming` on both and stopping
 // goes back to the choice, two tabs of one browser share one socket and the last one closing is
 // `offline` at once, a claimed name is refused on hello, the watch page waits by push and not by
-// poll, and the messages inspector shows the frames. Run through ./test.sh, or:
+// poll, and the messages inspector shows the frames. Run through ./scripts/test.sh, or:
 // BASE_URL=https://<ip> node presence.js   (LOCAL=1 reads redis and the gateway's /online too)
 // The local-only steps say SKIP off-box, not PASS.
 const { chromium, request } = require('playwright');

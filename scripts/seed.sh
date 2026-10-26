@@ -2,25 +2,25 @@
 # seed.sh: a few accounts that look like people, so there is somebody to find, to watch and,
 # once docs/follows.md is built, to follow. for a box you are styling or testing on.
 #
-#   ./seed.sh                     five of them
-#   ./seed.sh 12                  twelve
-#   ./seed.sh 3 --pictures DIR    cut the pictures from DIR instead of random-media/random-pfps
-#   ./seed.sh --dummies           no accounts: a face and a thumbnail for every fake stream (dummy-*) instead,
+#   ./scripts/seed.sh                     five of them
+#   ./scripts/seed.sh 12                  twelve
+#   ./scripts/seed.sh 3 --pictures DIR    cut the pictures from DIR instead of random-media/random-pfps
+#   ./scripts/seed.sh --dummies           no accounts: a bio, a face and a thumbnail for every fake stream (dummy-*) instead,
 #                                 with the dummy box's password (DUMMY_PASSWORD in .env), so they look like
 #                                 people on home and in search. the dummy must have run once (it makes the rows)
 #
 # each one gets a two-word name (quiet-otter, neon-heron), an account with a random password,
-# a bio, a profile picture and one home-card thumbnail. the two pictures are two random files
+# a bio put together from random pieces, a profile picture and one home-card thumbnail. the two pictures are two random files
 # from random-media/random-pfps (jpg, png, gif or webp, any size): ffmpeg, in docker, cuts the
 # 256x256 and 640x360 jpegs the pages would have made. names and passwords are appended to
 # .seeded-users (gitignored), one per line, so you can log in as any of them.
 #
-# the account comes from `api passwd <name>`, the path ./deploy.sh passwd uses: no signup
+# the account comes from `api passwd <name>`, the path ./scripts/deploy.sh passwd uses: no signup
 # limit to run into, and a name that already has an account (or is held after a rename,
 # docs/ids.md) is skipped for another. the rest goes through the api at https://<PUBLIC_IP>
 # (.env), through caddy, the way test.sh does. runs where the stack runs; needs docker and curl.
 set -euo pipefail
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 say()  { printf '\n==> %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
@@ -37,7 +37,7 @@ for a in "$@"; do
     --pictures) want_pics=1 ;;
     --pictures=*) PICS="${a#--pictures=}" ;;
     --dummies) DUMMIES=1 ;;
-    *) if [[ "$a" =~ ^[0-9]+$ ]] && [ "$a" -ge 1 ] && [ "$a" -le 200 ]; then COUNT="$a"; else die "don't know what '$a' is. a count (1 to 200), or --pictures DIR. see ./seed.sh --help"; fi ;;
+    *) if [[ "$a" =~ ^[0-9]+$ ]] && [ "$a" -ge 1 ] && [ "$a" -le 200 ]; then COUNT="$a"; else die "don't know what '$a' is. a count (1 to 200), or --pictures DIR. see ./scripts/seed.sh --help"; fi ;;
   esac
 done
 [ "$want_pics" = 0 ] || die "--pictures needs a folder"
@@ -45,7 +45,7 @@ done
 have docker || die "docker is not installed here. seed.sh runs where the stack runs"
 have curl || die "curl is needed"
 docker info >/dev/null 2>&1 || die "docker is not answering. is it running?"
-[ -n "$(docker compose ps -q api 2>/dev/null)" ] || die "the api container is not up. ./deploy.sh first"
+[ -n "$(docker compose ps -q api 2>/dev/null)" ] || die "the api container is not up. ./scripts/deploy.sh first"
 [ -d "$PICS" ] || die "no pictures folder at $PICS"
 PICS="$(cd "$PICS" && pwd)"
 FILES=()   # a read loop, not mapfile: a mac's bash is 3.2
@@ -54,7 +54,7 @@ while IFS= read -r f; do FILES+=("$f"); done < <(find "$PICS" -maxdepth 1 -type 
 
 # the api as the browser sees it. the cert is the box's own, so -k, like test.sh
 ip="$(sed -n 's/^[[:space:]]*PUBLIC_IP=//p' .env 2>/dev/null | tail -n 1 | tr -d "\"' \t\r")"
-[ -n "$ip" ] || die "no PUBLIC_IP in .env yet. run ./deploy.sh first"
+[ -n "$ip" ] || die "no PUBLIC_IP in .env yet. run ./scripts/deploy.sh first"
 BASE="https://$ip"
 curl -sk -o /dev/null --max-time 5 "$BASE/api/health" || die "nothing answers at $BASE. is the stack up?"
 
@@ -62,18 +62,52 @@ FFMPEG_IMAGE="mwader/static-ffmpeg:7.1"   # the same static ffmpeg the video ima
 
 ADJ=(quiet neon rusty velvet sleepy brave cosmic dusty gentle hollow lunar misty nimble polar rapid solar tidal witty amber crisp)
 NOUN=(otter heron fox lynx moth owl pike raven seal tern wren yak bison crane dingo egret finch gecko ibis koala)
-BIOS=(
-  "streams whenever the coffee kicks in. mostly building things, sometimes breaking them."
-  "night owl. chill streams, bad jokes, decent music."
-  "learning in public. ask me anything, i probably don't know either."
-  "cozy streams from a very small apartment. the cat shows up around hour two."
-  "speedrunning my own todo list. it is not going well."
-  "art, sometimes. talking, always."
+# a bio is three random pieces: how they stream, what it is like, a last word (often none). a
+# few hundred combinations; two alike is fine, nobody reads two bios side by side
+OPENERS=(
+  "streams whenever the coffee kicks in."
+  "night owl."
+  "learning in public."
+  "cozy streams from a very small apartment."
+  "weekend streamer, weekday human."
+  "mostly here for the chat, honestly."
+  "art, sometimes."
+  "speedrunning my own todo list."
+  "no schedule, no plan."
   "trying every hobby once so you don't have to."
-  "weekend streamer. weekday human."
-  "no schedule, no plan, no problem."
-  "here for the chat, honestly."
+  "late starts, long streams."
+  "building a thing. it is almost done. it has been almost done for a year."
+  "retro games and bad takes."
+  "a desk, a lamp, a microphone."
 )
+MIDDLES=(
+  "mostly building things, sometimes breaking them."
+  "bad jokes, decent music."
+  "ask me anything, i probably don't know either."
+  "the cat shows up around hour two."
+  "it is not going well."
+  "talking, always."
+  "lo-fi and long silences."
+  "expect tangents."
+  "i read every line of chat, eventually."
+  "half of this is me looking for a file."
+  "the plant in the corner is doing better than the project."
+  "we take breaks seriously here."
+)
+CLOSERS=(
+  "be nice."
+  "say hi."
+  "no face cam, ever."
+  "the mic is fine, i promise."
+  "come hang out."
+  "" "" "" ""
+)
+random_bio() {
+  local a="${OPENERS[$(rand ${#OPENERS[@]})]}" b="${MIDDLES[$(rand ${#MIDDLES[@]})]}" c="${CLOSERS[$(rand ${#CLOSERS[@]})]}"
+  if [ -n "$c" ]; then printf '%s %s %s' "$a" "$b" "$c"; else printf '%s %s' "$a" "$b"; fi
+}
+# a bio as a json string: the pieces above hold quotes (don't) and nothing else that json minds
+json_string() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
 
 JAR="$(mktemp)"; TMP="$(mktemp -d)"
 trap 'rm -rf "$JAR" "$TMP"' EXIT
@@ -122,12 +156,14 @@ if [ "$DUMMIES" = 1 ]; then
   dpw="$(sed -n 's/^[[:space:]]*DUMMY_PASSWORD=//p' .env 2>/dev/null | tail -n 1 | sed 's/[[:space:]]#.*$//' | tr -d "\"' \t\r")"
   [ -n "$dpw" ] || die "no DUMMY_PASSWORD in .env: the fake streams' names are written with it"
   names="$(curl -sk --max-time 10 "$BASE/api/search?q=dummy-" | grep -o '"name":"dummy-[^"]*"' | cut -d'"' -f4)"
-  [ -n "$names" ] || die "no dummy-* rows yet. set DUMMY_STREAMS in .env and ./deploy.sh dummy first"
+  [ -n "$names" ] || die "no dummy-* rows yet. set DUMMY_STREAMS in .env and ./scripts/deploy.sh dummy first"
   say "faces for the fake streams at $BASE, pictures from $PICS"
   pq="$(urlencode "$dpw")"
   for name in $names; do
     a="${FILES[$(rand ${#FILES[@]})]}"; b="${FILES[$(rand ${#FILES[@]})]}"
     [ ${#FILES[@]} -gt 1 ] && while [ "$b" = "$a" ]; do b="${FILES[$(rand ${#FILES[@]})]}"; done
+    code="$(status -X PUT "$BASE/api/streamers/$name?password=$pq" -H 'content-type: application/json' -d "{\"bio\":$(json_string "$(random_bio)")}")"
+    [ "$code" = 200 ] || warn "$name: bio got $code"
     if cut_picture "$a" 256:256 "$TMP/avatar.jpg"; then
       code="$(status -X PUT "$BASE/api/streamers/$name/avatar?password=$pq" -H 'content-type: image/jpeg' --data-binary "@$TMP/avatar.jpg")"
       [ "$code" = 200 ] || warn "$name: picture got $code"
@@ -163,8 +199,8 @@ while [ "$made" -lt "$COUNT" ]; do
   if [ "$code" = 429 ]; then clear_login_limit; code="$(status -c "$JAR" -X POST "$BASE/api/login" -H 'content-type: application/json' -d "{\"name\":\"$name\",\"password\":\"$pw\"}")"; fi
   [ "$code" = 200 ] || { warn "$name: login got $code"; continue; }
 
-  bio="${BIOS[$(rand ${#BIOS[@]})]}"
-  code="$(status -b "$JAR" -X PUT "$BASE/api/streamers/$name" -H 'content-type: application/json' -d "{\"bio\":$(printf '%s' "$bio" | sed 's/"/\\"/g; s/^/"/; s/$/"/')}")"
+  bio="$(random_bio)"
+  code="$(status -b "$JAR" -X PUT "$BASE/api/streamers/$name" -H 'content-type: application/json' -d "{\"bio\":$(json_string "$bio")}")"
   [ "$code" = 200 ] || warn "$name: bio got $code"
 
   # two different pictures when there are two: one for the face, one for the card
@@ -189,4 +225,4 @@ while [ "$made" -lt "$COUNT" ]; do
 done
 
 say "done: $made account(s). names and passwords are in .seeded-users"
-note "log in as one at $BASE/login, or look at them: ./manage.sh --db  (the streamers table)"
+note "log in as one at $BASE/login, or look at them: ./scripts/manage.sh --db  (the streamers table)"

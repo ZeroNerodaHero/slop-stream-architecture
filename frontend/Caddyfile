@@ -51,7 +51,7 @@ http:// {
 		reverse_proxy api:4000
 	}
 
-	# the api is down (./deploy.sh api, a crash): a shared watch link would be a bare
+	# the api is down (./scripts/deploy.sh api, a crash): a shared watch link would be a bare
 	# 502. serve the plain index.html from the volume instead, so the spa boots and
 	# keeps checking on its own. that one fetch has no preview tags; a bot that
 	# unfurls right then gets the generic card. every other route keeps its error.

@@ -19,7 +19,7 @@ async function frames(page) {
 }
 function deploy(target) {
   const t0 = Date.now();
-  const out = execSync(`./deploy.sh --build ${target} 2>&1`, { cwd: REPO, env: ENV, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const out = execSync(`./scripts/deploy.sh --build ${target} 2>&1`, { cwd: REPO, env: ENV, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   return { ms: Date.now() - t0, out };
 }
 
@@ -38,7 +38,7 @@ function deploy(target) {
   await w.waitForFunction(() => /^watching$/i.test(document.querySelector('#status').textContent.trim()), null, { timeout: 20000 });
   console.log('stream rd1 is live, watcher watching\n');
 
-  await step('./deploy.sh frontend keeps the stream alive', async () => {
+  await step('./scripts/deploy.sh frontend keeps the stream alive', async () => {
     const before = await frames(w);
     const { ms, out } = deploy('frontend');
     await sleep(1500);
@@ -49,7 +49,7 @@ function deploy(target) {
     return `${ms} ms, frames ${before} -> ${after}, pages published, caddy untouched`;
   });
 
-  await step('./deploy.sh api keeps the stream alive', async () => {
+  await step('./scripts/deploy.sh api keeps the stream alive', async () => {
     const before = await frames(w);
     const { ms } = deploy('api');
     await sleep(1500);
@@ -61,7 +61,7 @@ function deploy(target) {
     return `${ms} ms, frames ${before} -> ${after}, api healthy, still listed`;
   });
 
-  await step('./deploy.sh video warns and ends streams cleanly', async () => {
+  await step('./scripts/deploy.sh video warns and ends streams cleanly', async () => {
     const { ms, out } = deploy('video');
     await pub.waitForFunction(() => /lost|stopped|failed/i.test(document.querySelector('#status').textContent), null, { timeout: 10000 });
     await w.waitForFunction(() => /ended|checking/i.test(document.querySelector('#status').textContent), null, { timeout: 10000 });

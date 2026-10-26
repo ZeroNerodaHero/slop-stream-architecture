@@ -47,7 +47,7 @@ flowchart LR
 
 - `ENV_NAME` in `.env`: `prod`, `dev`, whatever you call the box. empty or missing, `deploy.sh` writes this machine's hostname into `.env` once (lowercased, `a-z 0-9 -`, 32 chars at most) and never touches a value that is set; an empty value left by hand is `unnamed` in the api. (not `ENV`: `sh` reads `$ENV` as a startup file.) the api puts it in every health answer and every stored error.
 - `BUILD`: `deploy.sh`, `ship.sh` and the action set it to the last commit that touched what the images are built from (`image-paths`: `api/`, `video/`, `frontend/` minus the Caddyfile, `Cargo.*`, `.dockerignore`, the workflow; 7 characters; the image tag), plus `-dirty` when those have edits or new files (docs, tests and the script itself do not count), and passes it as a build arg to `pages`, `api`, `video`, `dummy`: in the compose file and again on the `compose build` command line, so the `sudo docker` fallback (which resets the environment) cannot lose it. it is baked into the image, so a container reports the commit it was built from, not the commit on disk. built by hand without `deploy.sh`: `dev`, or `BUILD=$(git rev-parse --short HEAD) docker compose up -d --build`. the pages get it as `__BUILD__` (vite `define`).
-- the price: a new commit is a new image for every service, cache hit or not. a full `./deploy.sh` after a commit therefore swaps `video` too and ends every live stream, where before it only swapped what the build changed. the script says so before `up`, the same warning `./deploy.sh video` prints. `./deploy.sh --pull` and `./deploy.sh api` still touch only what changed.
+- the price: a new commit is a new image for every service, cache hit or not. a full `./scripts/deploy.sh` after a commit therefore swaps `video` too and ends every live stream, where before it only swapped what the build changed. the script says so before `up`, the same warning `./scripts/deploy.sh video` prints. `./scripts/deploy.sh --pull` and `./scripts/deploy.sh api` still touch only what changed.
 
 ## health
 
@@ -110,7 +110,7 @@ the api adds `env`, `ip` (from caddy's `X-Forwarded-For`, like login), `me` (the
 
 who is an admin:
 
-- `ADMIN_NAMES=billy,alice` in `.env`: those accounts, by the login cookie. that is what `/admin` in the pages uses. each name must already have an account on that box (sign up, or `./deploy.sh passwd <name>`); a name without one is dropped at boot, with an error line in the api log.
+- `ADMIN_NAMES=billy,alice` in `.env`: those accounts, by the login cookie. that is what `/admin` in the pages uses. each name must already have an account on that box (sign up, or `./scripts/deploy.sh passwd <name>`); a name without one is dropped at boot, with an error line in the api log.
 - `OPS_TOKEN=<long random string>` in `.env`: `Authorization: Bearer <that>`. for a machine, the monitor later. 16 characters at least; shorter is ignored, with a warn line at boot. `openssl rand -hex 32` makes one.
 
 what a report says about a person: the ip, the login name if there was one, the user agent, and the page path, which for `/watch/billy` is the stream they were watching. kept 14 days, visible to every name in `ADMIN_NAMES` and to whoever holds `OPS_TOKEN`. that is the trade for knowing what broke for whom; keep the admin list short and do not point `/api/errors` at anything that keeps it longer.
@@ -174,15 +174,15 @@ a dev *environment* is a second droplet with the same compose and `ENV_NAME=dev`
 
 ## rolling this out
 
-on a droplet that already runs the stack, the first update is by hand, once: `./deploy.sh --pull` would run the *old* script, which knows nothing about `BUILD` (and does not hand over to the pulled one), so every image it rebuilt would say `dev`, and later pulls would relabel only what they rebuild. instead:
+on a droplet that already runs the stack, the first update is by hand, once: `./scripts/deploy.sh --pull` would run the *old* script, which knows nothing about `BUILD` (and does not hand over to the pulled one), so every image it rebuilt would say `dev`, and later pulls would relabel only what they rebuild. instead:
 
 1. `git pull --ff-only`.
-2. in `.env`: `ENV_NAME` (or leave it empty for the hostname), `ADMIN_NAMES`, `OPS_TOKEN` (16+ characters). `./deploy.sh` appends the missing keys with their defaults, but set them now so the first boot has them.
+2. in `.env`: `ENV_NAME` (or leave it empty for the hostname), `ADMIN_NAMES`, `OPS_TOKEN` (16+ characters). `./scripts/deploy.sh` appends the missing keys with their defaults, but set them now so the first boot has them.
 3. every name in `ADMIN_NAMES` needs an account on that box already: sign up at `/signup`, or `docker compose exec api api passwd <name>` after the api is up. a name without one is dropped at boot with an error line, and `/admin` says "admins only" for it.
-4. `./deploy.sh`, the full one. this round `video` restarts anyway: the new image carries `BUILD`, so it is a new image whatever the cache says. live streams end once.
+4. `./scripts/deploy.sh`, the full one. this round `video` restarts anyway: the new image carries `BUILD`, so it is a new image whatever the cache says. live streams end once.
 5. `curl -k https://<ip>/api/health`: `build` is the image tag (the last commit that touched `image-paths`; HEAD when that was the last commit), `debug_db` true, `video` true, `video_build` the same sha. then `/admin` as one of the admin names.
 
-from then on `./deploy.sh --pull` is the normal update again, and it rebuilds only what the pull changed.
+from then on `./scripts/deploy.sh --pull` is the normal update again, and it rebuilds only what the pull changed.
 
 ## later, not now
 

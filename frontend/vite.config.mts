@@ -23,7 +23,7 @@ export default defineConfig(({ mode }) => {
       const message =
         `backend ${backend} did not answer (${err.message}).\n\n` +
         `  the server:      BACKEND=https://<server ip> npm run dev   (or put it in frontend/.env)\n` +
-        `  this machine:    ./deploy.sh in the repo root, then npm run dev\n`;
+        `  this machine:    ./scripts/deploy.sh in the repo root, then npm run dev\n`;
       console.error(`\n  ${message}`);
       const r = res as { headersSent?: boolean; writeHead?: (code: number, headers: Record<string, string>) => void; end?: (body: string) => void };
       if (r && typeof r.writeHead === 'function' && !r.headersSent) {

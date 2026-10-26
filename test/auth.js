@@ -1,5 +1,5 @@
 // Accounts: sign up, log in, log out, a claimed name is only its owner's (go live, bio, chat),
-// a login's chat lines are verified, too many tries is refused. Run through ./test.sh, or:
+// a login's chat lines are verified, too many tries is refused. Run through ./scripts/test.sh, or:
 // BASE_URL=https://<ip> node auth.js   (LOCAL=1 also checks `api passwd` through docker compose)
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');

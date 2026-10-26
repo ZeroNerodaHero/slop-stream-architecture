@@ -2,9 +2,9 @@
 // address. The live one comes up with the stack's own build, the dead one goes down after
 // DOWN_AFTER rounds with a reason, the page shows both, and the memory survives a restart of the
 // monitor. Local only: it runs monitor/docker-compose.yml as project monitor-test on port 3012
-// with the stream-api image already here (./deploy.sh builds it), joins it to the stack's network
+// with the stream-api image already here (./scripts/deploy.sh builds it), joins it to the stack's network
 // so it can reach caddy as https://frontend (from inside a container, 127.0.0.1 is the container),
-// and removes it all at the end. Run through ./test.sh, or: BASE_URL=https://<ip> LOCAL=1 node monitor.js
+// and removes it all at the end. Run through ./scripts/test.sh, or: BASE_URL=https://<ip> LOCAL=1 node monitor.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
 const path = require('path');
@@ -66,7 +66,7 @@ async function stateWhen(api, ready, what, ms = 40000) {
   }
   let log = '';
   try { log = compose('logs --no-log-prefix --tail 15 monitor'); } catch {}
-  const hint = /postgres not ready/.test(log) ? '\n      the stream-api image here predates the monitor (it tried to be the api). ./deploy.sh api builds the current one' : '';
+  const hint = /postgres not ready/.test(log) ? '\n      the stream-api image here predates the monitor (it tried to be the api). ./scripts/deploy.sh api builds the current one' : '';
   throw new Error(`${what} did not happen in ${ms / 1000}s. last state: ${last ? JSON.stringify(last.targets.map((t) => [t.name, t.status, t.reason])) : 'no answer'}${hint}\n      monitor log:\n      ${log.trim().split('\n').join('\n      ')}`);
 }
 
@@ -79,7 +79,7 @@ async function stateWhen(api, ready, what, ms = 40000) {
     try {
       compose('up --no-build --no-start');
     } catch (e) {
-      throw new Error(`docker compose up: ${String(e.stderr || e.message).trim().split('\n').pop()} (no stream-api image? ./deploy.sh builds it)`);
+      throw new Error(`docker compose up: ${String(e.stderr || e.message).trim().split('\n').pop()} (no stream-api image? ./scripts/deploy.sh builds it)`);
     }
     cleanup = true;
     try {

@@ -25,7 +25,8 @@ const NOT_LIVE_RETRY_MS = 5000;
  */
 const LINKED_RETRY_MS = 60_000;
 const NO_VIDEO_AFTER_MS = 10000;
-const RETRY_PHASES: readonly WatchPhase[] = ['waiting', 'failed'];
+/** Only a real failure offers the button: not live is the profile, and the page asks again on its own. */
+const RETRY_PHASES: readonly WatchPhase[] = ['failed'];
 /** The sound button stays through a blip: the frames come back on their own. */
 const SOUND_PHASES: readonly WatchPhase[] = ['watching', 'reconnecting'];
 /** The video sections asked for: the camera and the screens, the same count the publisher offers. */

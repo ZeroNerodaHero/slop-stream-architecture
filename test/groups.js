@@ -1,6 +1,6 @@
 // Groups: the list (bot built in), a login makes one, another joins and leaves, badges on chat
 // lines, a bot's lines wear BOT and the panel hides them, only the maker deletes, the groups tab.
-// Run through ./test.sh, or: BASE_URL=https://<ip> node groups.js
+// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node groups.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';

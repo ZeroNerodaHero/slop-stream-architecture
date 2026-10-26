@@ -150,7 +150,7 @@ function notice(err: unknown): string {
     case 401:
       return 'admins only. log in as a name in ADMIN_NAMES.';
     case 404:
-      return 'this box has no admin. put ADMIN_NAMES=yourname in .env, then ./deploy.sh api.';
+      return 'this box has no admin. put ADMIN_NAMES=yourname in .env, then ./scripts/deploy.sh api.';
     case 503:
       return 'the api has no debug database right now. see docker compose logs api.';
     default:

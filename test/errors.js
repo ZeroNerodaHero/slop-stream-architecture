@@ -1,7 +1,7 @@
 // Debugging (docs/debugging.md): /api/health has the monitor fields, a report posted the way
 // the pages do it (text/plain, sendBeacon style) is 204 and lands in the debug database and the
 // api log, a bad one is 400, the list hides from anyone who is not an admin, a throw inside a
-// real page is reported, and /admin renders for a stranger. Run through ./test.sh, or:
+// real page is reported, and /admin renders for a stranger. Run through ./scripts/test.sh, or:
 // BASE_URL=https://<ip> node errors.js   (LOCAL=1 checks the api log and the debug database too;
 // OPS_TOKEN=... reads the list back through the api instead)
 // A step that has no way to check its claim (off-box, no OPS_TOKEN) says SKIP, not PASS.
@@ -142,7 +142,7 @@ const notFound = (text) => `"${text}" did not show up: ${lastSeen}`;
       const health = await p.textContent('#admin-health').catch(() => null);
       throw new Error(
         health === null
-          ? 'GET /admin is html, but #admin-health never appeared in 15s: the pages on this box are probably older than this test (no /admin route yet). ./deploy.sh frontend puts the new ones up'
+          ? 'GET /admin is html, but #admin-health never appeared in 15s: the pages on this box are probably older than this test (no /admin route yet). ./scripts/deploy.sh frontend puts the new ones up'
           : `#admin-health never showed the health card in 15s. it says: "${health.trim()}"`
       );
     }

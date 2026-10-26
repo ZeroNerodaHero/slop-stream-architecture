@@ -2,10 +2,10 @@
 #
 # test.sh — prove the whole thing works, with real browsers.
 #
-#   ./test.sh                      the stack on this machine (starts it if it is down)
-#   ./test.sh https://1.2.3.4      a server somewhere else, from this laptop
-#   ./test.sh --all                also the redeploy test (runs ./deploy.sh api/frontend/video)
-#   HEADED=1 ./test.sh             watch the browsers
+#   ./scripts/test.sh                      the stack on this machine (starts it if it is down)
+#   ./scripts/test.sh https://1.2.3.4      a server somewhere else, from this laptop
+#   ./scripts/test.sh --all                also the redeploy test (runs ./scripts/deploy.sh api/frontend/video)
+#   HEADED=1 ./scripts/test.sh             watch the browsers
 #
 # Needs node and Google Chrome on the machine running the tests. With a url, that is any
 # machine. Without one it is the server itself: regress, redeploy and dummy restart
@@ -33,12 +33,12 @@
 #   regress    token-gated stop, auto-recovery, trailing slash, fast restart, races, bad offers
 #   monitor    (local only) `api monitor` watches this stack and a dead address: up with the right build,
 #              down with a reason, the page shows both, a restart keeps its memory. runs monitor/docker-compose.yml
-#   redeploy   (--all, local only) partial ./deploy.sh runs while a stream is live
+#   redeploy   (--all, local only) partial ./scripts/deploy.sh runs while a stream is live
 #   dummy      (--all, local only, needs DUMMY_STREAMS >= 1) the fake streams play and dummy- names are gated
 #
 set -euo pipefail
 
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 say()  { printf '\n==> %s\n' "$*"; }
 die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -51,7 +51,7 @@ for a in "$@"; do
     -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;   # the header above, up to the first code line
     --all) ALL=1 ;;
     http://*|https://*) BASE="${a%/}" ;;
-    *) die "don't know what '$a' is. see ./test.sh --help" ;;
+    *) die "don't know what '$a' is. see ./scripts/test.sh --help" ;;
   esac
 done
 
@@ -62,7 +62,7 @@ LOCAL=0
 if [ -z "$BASE" ]; then
   LOCAL=1
   ip="$(sed -n 's/^[[:space:]]*PUBLIC_IP=//p' .env 2>/dev/null | tail -n 1 | tr -d "\"' \t\r")"
-  [ -n "$ip" ] || die "no .env yet. run ./deploy.sh first"
+  [ -n "$ip" ] || die "no .env yet. run ./scripts/deploy.sh first"
   BASE="https://$ip"
   # the errors suite reads reports back through /api/errors when the local stack has a token.
   # an inline ` # comment` goes, like compose drops it; the api ignores a token under 16 characters
@@ -82,7 +82,7 @@ case "$code" in
       # memory), not one to deploy over
       [ -z "$(docker compose ps -q frontend api 2>/dev/null)" ] || die "$BASE/api/health does not answer but the stack's containers are up: look before deploying.  docker compose ps; docker compose logs api"
       say "stack is down, starting it"
-      ./deploy.sh --build >/dev/null   # the tests are about this checkout, so its own build, not the registry's images
+      ./scripts/deploy.sh --build >/dev/null   # the tests are about this checkout, so its own build, not the registry's images
     else
       die "$BASE/api/health does not answer"
     fi ;;
