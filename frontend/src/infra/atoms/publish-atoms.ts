@@ -10,6 +10,7 @@ import { ApiError, api, type Owner, messageOf, statusOf } from '@/infra/api';
 import { loadMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
+import { endWatch, pipAtom } from '@/infra/atoms/watch-atoms';
 import { cleanName, isValidName } from '@/infra/names';
 import { connectRelay, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
@@ -212,6 +213,9 @@ export async function goLive(): Promise<void> {
   const camera = store.get(cameraAtom);
   const name = store.get(streamNameAtom);
   if (!camera || !isValidName(name) || pc) return;
+  // a stream kept in the corner while you looked around (watch-atoms' picture in picture) goes
+  // when you go live, as its × would: not hidden, ended, so nothing of it plays or polls on
+  if (store.get(pipAtom)) endWatch();
   store.set(chatRoomAtom, name); // the chat is the room of the name you go live as
   setPhase('starting', 'starting');
 

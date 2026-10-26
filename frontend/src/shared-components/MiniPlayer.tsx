@@ -30,7 +30,8 @@ import {
   watchMessageAtom,
   watchNameAtom,
   watchStatsAtom,
-  watchToneAtom
+  watchToneAtom,
+  watchViewersAtom
 } from '@/infra/atoms/watch-atoms';
 import { cleanName } from '@/infra/names';
 import { cn } from '@/utils/cn';
@@ -82,6 +83,7 @@ function WatchCorner() {
   const stats = useAtomValue(watchStatsAtom);
   const canHear = useAtomValue(canHearAtom);
   const needsTap = useAtomValue(needsTapAtom);
+  const viewers = useAtomValue(watchViewersAtom);
   const pipChat = useAtomValue(pipChatPlaceAtom);
   const cornerChat = useAtomValue(cornerChatAtom);
   const { pathname } = useLocation();
@@ -94,7 +96,8 @@ function WatchCorner() {
       label={`${name}, picture in picture`}
       name={name}
       to={`/watch/${encodeURIComponent(name)}`}
-      message={message}
+      // once the stream plays, the viewer count stands where the word `watching` would: a number says that, and more
+      message={tone === 'live' && viewers !== null ? <ViewerCount id="pip-viewers" count={viewers} /> : message}
       tone={tone}
       streamAtom={remoteStreamAtom}
       videoRef={videoRef}

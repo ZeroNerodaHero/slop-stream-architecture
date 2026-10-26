@@ -160,10 +160,10 @@ function Card({
             <span aria-hidden className="h-2 w-2 animate-pulse bg-increase" />
             {age || 'live'}
           </span>
-          {/* /api/streams does not send `viewers` yet, so it arrives undefined: a chip only when there is a number to show */}
+          {/* bottom right, "3 watching": null when video did not answer (the list came from redis), absent on an older api. a chip only when there is a number to show */}
           {typeof stream.viewers === 'number' && (
             <span className="absolute bottom-3 right-3 z-10 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold text-white backdrop-blur-sm">
-              <ViewerCount count={stream.viewers} />
+              <ViewerCount id={`viewers-${stream.name}`} count={stream.viewers} />
             </span>
           )}
         </div>

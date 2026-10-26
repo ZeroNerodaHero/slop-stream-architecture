@@ -48,7 +48,7 @@ mod profile;
 mod s3;
 mod socket;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::time::{Duration, Instant};
 
@@ -258,6 +258,19 @@ pub(crate) async fn video_live(s: &AppState) -> Option<HashSet<String>> {
         .ok()?;
     let names: Vec<String> = res.json().await.ok()?;
     Some(names.into_iter().collect())
+}
+
+/// The names of `video_live` with how many different addresses are receiving each one
+/// (docs/viewers.md). One call for both, for the home list. None if video cannot be reached.
+async fn video_viewers(s: &AppState) -> Option<HashMap<String, usize>> {
+    let res = s
+        .http
+        .get(format!("{}/viewers", s.video_url))
+        .send()
+        .await
+        .map_err(|e| log::warn!("video unreachable: {e}"))
+        .ok()?;
+    res.json().await.ok()
 }
 
 /// Is this name live right now: the video server's word when it answers, else redis.
@@ -507,8 +520,11 @@ async fn list_sessions(State(s): State<AppState>, Name(name): Name) -> ApiResult
 type StreamRow = (String, String, Option<DateTime<Utc>>, bool, Option<i64>);
 
 async fn list_streams(State(s): State<AppState>) -> ApiResult {
-    let names: Vec<String> = match video_live(&s).await {
-        Some(connected) => connected.into_iter().collect(),
+    // video's /viewers is its /live with a count per name, so the home list asks that once.
+    // without video the names come from redis and `viewers` is null: nobody knows
+    let counts = video_viewers(&s).await;
+    let names: Vec<String> = match &counts {
+        Some(counts) => counts.keys().cloned().collect(),
         None => redis_live(&s).await?,
     };
     if names.is_empty() {
@@ -536,7 +552,8 @@ async fn list_streams(State(s): State<AppState>) -> ApiResult {
     let thumbs = profile::thumb_ids(&s.db, &names).await?;
     let out = rows.into_iter().map(|(name, bio, since, verified, avatar)| {
         let pictures = thumbs.get(&name).cloned().unwrap_or_default();
-        json!({ "name": name, "bio": bio, "since": since, "verified": verified, "avatar": avatar, "thumbs": pictures })
+        let viewers = counts.as_ref().map(|c| c.get(&name).copied().unwrap_or(0));
+        json!({ "name": name, "bio": bio, "since": since, "verified": verified, "avatar": avatar, "thumbs": pictures, "viewers": viewers })
     });
     Ok(Json(Value::Array(out.collect())))
 }

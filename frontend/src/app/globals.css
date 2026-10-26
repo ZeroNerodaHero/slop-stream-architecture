@@ -24,6 +24,8 @@
 html {
   /* classic scrollbars: the page under a modal loses its scrollbar below; the gutter stays, so nothing moves */
   scrollbar-gutter: stable;
+  /* the search bar sticks over the first 4rem of the page column (TopBar.tsx): a focused link or an anchor scrolled into view stops under it, not behind it */
+  scroll-padding-top: 4rem;
 }
 
 /* the page under a modal stays put: no browser locks it on its own, and a wheel over the backdrop would scroll it */

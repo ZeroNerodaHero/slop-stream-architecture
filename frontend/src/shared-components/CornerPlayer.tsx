@@ -153,8 +153,8 @@ interface CornerPlayerProps {
   name: string;
   /** The stream's own page: where a click on the picture or the name goes. */
   to: string;
-  /** The status word, and its colour. */
-  message: string;
+  /** The status word, and its colour. A node when something stands in the word's place: the watch player's viewer count, once the stream plays. */
+  message: ReactNode;
   tone: Tone;
   streamAtom: Atom<MediaStream | null>;
   /** The <video>, for the controls that need the element (the sound, tap to play). */

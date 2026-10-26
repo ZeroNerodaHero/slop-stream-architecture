@@ -116,7 +116,8 @@ async function drag(p, sel, dx, dy) {
     await w.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
     await w.waitForSelector('#pip-player', { timeout: 10000 });
     await w.waitForSelector('#list article', { timeout: 10000 });
-    await w.waitForFunction(() => /^watching$/i.test(document.querySelector('#pip-status')?.textContent || ''), null, { timeout: 10000 });
+    // the status word, or the viewer count in its place once video has counted
+    await w.waitForFunction(() => /^(\d+ )?watching$/i.test(document.querySelector('#pip-status')?.textContent || ''), null, { timeout: 10000 });
     const name = (await w.textContent('#pip-player a.font-semibold')).trim();
     expect(name === A, `player names "${name}"`);
     const v = await frames(w, '#pip-video');
@@ -125,7 +126,7 @@ async function drag(p, sel, dx, dy) {
     const view = await w.evaluate(() => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight }));
     expect(near(box.right, view.w - 24) && near(box.bottom, view.h - 24), `not in the corner: ${at(box)} in ${view.w}×${view.h}`);
     const flow = await framesFlow(w, '#pip-video');
-    return `${at(box)} · ${flow}`;
+    return `${at(box)} · "${(await w.textContent('#pip-status')).trim()}" · ${flow}`;
   });
 
   await step('hover the player: its sound chip is on the video; the dial to the middle sets the corner level', async () => {
@@ -155,12 +156,13 @@ async function drag(p, sel, dx, dy) {
     expect(open.height > before.height + 200 && near(open.bottom, before.bottom), `the player did not grow upward: ${at(before)} -> ${at(open)}`);
     await w.fill('#chat-nick', 'pipviewer');
     await w.click('#chat-join');
-    await w.waitForFunction(() => /live/.test(document.querySelector('#pip-player #chat-count')?.textContent || ''), null, { timeout: 10000 });
-    const count = (await w.textContent('#pip-player #chat-count')).trim();
+    await w.waitForSelector('#pip-player #chat[data-phase="open"]', { timeout: 10000 });
+    // the corner chat is the lines and the text box alone: no header (the count, hide bots) and no search box
+    expect((await w.$('#pip-player #chat-count, #pip-player #chat-hide-bots, #pip-player #chat-search')) === null, 'the corner chat has a header or a search box');
     await w.click('#pip-chat');
     await w.waitForSelector('#pip-player #chat', { state: 'detached', timeout: 5000 });
     expect((await w.getAttribute('#pip-chat', 'aria-pressed')) === null, 'the chat button is still pressed');
-    return `"${count}", then closed`;
+    return 'joined, then closed';
   });
 
   await step('drag the player by its video: it follows, and the drop is not a click back to the page', async () => {
@@ -216,7 +218,7 @@ async function drag(p, sel, dx, dy) {
   await step(`home again: the corner now shows ${B}`, async () => {
     await w.click('header a[href="/"]');
     await w.waitForSelector('#pip-player', { timeout: 10000 });
-    await w.waitForFunction(() => /^watching$/i.test(document.querySelector('#pip-status')?.textContent || ''), null, { timeout: 10000 });
+    await w.waitForFunction(() => /^(\d+ )?watching$/i.test(document.querySelector('#pip-status')?.textContent || ''), null, { timeout: 10000 });
     const name = (await w.textContent('#pip-player a.font-semibold')).trim();
     expect(name === B, `player names "${name}"`);
     return await framesFlow(w, '#pip-video');

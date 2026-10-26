@@ -53,7 +53,7 @@ interface ChatPanelProps {
   name: string;
   /** The streamer's own grant. With it, our lines are marked. */
   owner?: Owner | null;
-  /** Inside another box (the corner player): no stroke, shadow or minimum height of its own. */
+  /** Inside another box (the corner player): no stroke, shadow or minimum height of its own, and no header or search box, which a panel this small has no room for. The lines and the text box alone. */
   embedded?: boolean;
   className?: string;
 }
@@ -154,47 +154,51 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
   const myName = asStreamer ? name : speaker;
 
   return (
-    <aside id="chat" className={embedded ? cn('flex flex-col', className) : panelClassName(cn('flex min-h-[320px] flex-col', className))}>
-      <header className="flex items-center justify-between gap-3 border-b border-primaryStroke px-4 py-2 text-base">
-        <span className="font-semibold">chat</span>
-        <span className="flex min-w-0 items-center gap-3">
-          <span id="chat-count" className="truncate text-textSecondary">
-            {count} here · {phase === 'open' ? 'live' : phase}
+    <aside id="chat" data-phase={phase} className={embedded ? cn('flex flex-col', className) : panelClassName(cn('flex min-h-[320px] flex-col', className))}>
+      {!embedded && (
+        <header className="flex items-center justify-between gap-3 border-b border-primaryStroke px-4 py-2 text-base">
+          <span className="font-semibold">chat</span>
+          <span className="flex min-w-0 items-center gap-3">
+            <span id="chat-count" className="truncate text-textSecondary">
+              {count} here · {phase === 'open' ? 'live' : phase}
+            </span>
+            {/* the bots' lines: shown, or held back with how many. a setting of this browser, so it follows you from room to room */}
+            <button
+              id="chat-hide-bots"
+              type="button"
+              aria-pressed={hideBots}
+              title={hideBots ? `the bots' lines are hidden. click to show them` : "hide the bots' lines (the fake streams' chatters)"}
+              onClick={() => setHideBots(!hideBots)}
+              className={cn(
+                'flex shrink-0 items-center gap-1 whitespace-nowrap border px-1.5 py-0.5 text-xs font-semibold tabular-nums transition-colors duration-150',
+                hideBots ? 'border-primaryBlue text-primaryBlue' : 'border-primaryStroke text-textTertiary hover:border-secondaryStroke hover:text-textSecondary'
+              )}
+            >
+              <RiRobot2Line aria-hidden size={14} />
+              {hideBots ? `${hiddenBots} hidden` : 'hide bots'}
+            </button>
           </span>
-          {/* the bots' lines: shown, or held back with how many. a setting of this browser, so it follows you from room to room */}
-          <button
-            id="chat-hide-bots"
-            type="button"
-            aria-pressed={hideBots}
-            title={hideBots ? `the bots' lines are hidden. click to show them` : "hide the bots' lines (the fake streams' chatters)"}
-            onClick={() => setHideBots(!hideBots)}
-            className={cn(
-              'flex shrink-0 items-center gap-1 whitespace-nowrap border px-1.5 py-0.5 text-xs font-semibold tabular-nums transition-colors duration-150',
-              hideBots ? 'border-primaryBlue text-primaryBlue' : 'border-primaryStroke text-textTertiary hover:border-secondaryStroke hover:text-textSecondary'
-            )}
-          >
-            <RiRobot2Line aria-hidden size={14} />
-            {hideBots ? `${hiddenBots} hidden` : 'hide bots'}
-          </button>
-        </span>
-      </header>
+        </header>
+      )}
 
-      <form id="chat-search-form" onSubmit={onSearch} className="flex gap-2 border-b border-primaryStroke px-3 py-2">
-        <label htmlFor="chat-search" className="sr-only">
-          search this room
-        </label>
-        <input
-          id="chat-search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="search this room"
-          autoComplete="off"
-          className="min-w-0 flex-1 border border-primaryStroke bg-background px-2 py-1 text-sm"
-        />
-        <button id="chat-search-go" type="submit" disabled={!query.trim() || phase !== 'open'} className="shrink-0 text-sm font-semibold text-primaryBlue disabled:opacity-40">
-          search
-        </button>
-      </form>
+      {!embedded && (
+        <form id="chat-search-form" onSubmit={onSearch} className="flex gap-2 border-b border-primaryStroke px-3 py-2">
+          <label htmlFor="chat-search" className="sr-only">
+            search this room
+          </label>
+          <input
+            id="chat-search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="search this room"
+            autoComplete="off"
+            className="min-w-0 flex-1 border border-primaryStroke bg-background px-2 py-1 text-sm"
+          />
+          <button id="chat-search-go" type="submit" disabled={!query.trim() || phase !== 'open'} className="shrink-0 text-sm font-semibold text-primaryBlue disabled:opacity-40">
+            search
+          </button>
+        </form>
+      )}
 
       {results && (
         <div id="chat-results" className="max-h-40 overflow-y-auto border-b border-primaryStroke px-3 py-1 text-sm">
@@ -314,11 +318,12 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
               value={draft}
               onChange={(e) => setChatDraft(e.target.value)}
               onKeyDown={onKey}
-              rows={2}
+              rows={1}
               placeholder={`say something as ${asStreamer ? name : speaker}`}
-              className="w-full resize-none border border-primaryStroke bg-background px-3 py-2 text-base"
+              // block: an inline textarea sits on the text baseline and leaves descender space under itself, a gap on top of the margin
+              className="block w-full resize-none border border-primaryStroke bg-background px-3 py-2 text-base"
             />
-            <div className="mt-2 flex items-center justify-between gap-2 text-sm">
+            <div className="mt-1 flex items-center justify-between gap-2 text-sm">
               <span id="chat-notice" className="text-decrease" aria-live="polite">
                 {notice}
               </span>

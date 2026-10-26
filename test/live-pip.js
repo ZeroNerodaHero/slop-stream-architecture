@@ -6,8 +6,9 @@
 // your lines marked; coming back takes the stream over (one go-live in total); the page's
 // button is the same home click; it stacks above/below a watched stream's corner player without
 // overlapping; × ends it; leaving with nothing on air (stopped on the page) puts nothing in the
-// corner; and a tab closed with the stream in the corner ends it too (the tab-close listener
-// outlives the page). Two publishers with fake cameras and one watcher.
+// corner; a tab closed with the stream in the corner ends it too (the tab-close listener
+// outlives the page); and start with someone else's stream in the corner ends that one (their
+// player goes, their count drops). Two publishers with fake cameras and one watcher.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node live-pip.js
 const { chromium } = require('playwright');
 const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
@@ -171,7 +172,7 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     expect((await s.getAttribute('#live-pip-chat', 'aria-pressed')) === 'true', 'the chat button is not pressed');
     await s.waitForSelector('#live-pip-player #chat-text', { timeout: 10000 });
     expect((await s.$('#live-pip-player #chat-nick')) === null, 'the streamer was asked for a nick in their own room');
-    await waitText(s, '#live-pip-player #chat-count', /live/, 10000);
+    await s.waitForSelector('#live-pip-player #chat[data-phase="open"]', { timeout: 10000 });
     // the watcher joins the room, then hears the line
     await w.fill('#chat-nick', 'lpviewer');
     await w.click('#chat-join');
@@ -209,7 +210,7 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await s.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
     await s.waitForSelector('#pip-player', { timeout: 10000 });
     await s.waitForSelector('#live-pip-player', { timeout: 10000 });
-    await waitText(s, '#pip-status', /^watching$/, 10000);
+    await waitText(s, '#pip-status', /^(\d+ )?watching$/, 10000);
     const mine = await rect(s, '#live-pip-player');
     const theirs = await rect(s, '#pip-player');
     const view = await s.evaluate(() => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight }));
@@ -284,6 +285,32 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await s.waitForSelector('#list article, #empty', { timeout: 10000 }).catch(() => undefined);
     expect((await s.$('#live-pip-player')) === null, 'the corner player showed after a page load');
     return 'ended and unlisted within 6s; nothing in the corner after the load';
+  });
+
+  await step(`${OTHER} in picture in picture, then start on the go live page: your stream going up closes the watched player, and ${OTHER} counts 0 watching`, async () => {
+    await s.click(`#list a[aria-label="watch ${OTHER}"]`);
+    await s.waitForURL(`**/watch/${OTHER}`, { timeout: 10000 });
+    await waitStatus(s, /^watching$/);
+    await s.click('#pip');
+    await s.waitForURL((u) => u.pathname === '/', { timeout: 10000 });
+    await s.waitForSelector('#pip-player', { timeout: 10000 });
+    // every page here is one address, so the one watching tab is "1 watching" on the streamer's page
+    await other.waitForFunction(() => document.querySelector('#viewers')?.dataset.viewers === '1', null, { timeout: 15000 });
+    // a route change, not a load: the watched player comes along to the go live page
+    await s.click('#go-live');
+    await s.waitForURL('**/live', { timeout: 10000 });
+    expect((await s.$('#pip-player')) !== null, 'the watched player went before start');
+    await s.fill('#name', ME);
+    await s.waitForFunction(() => !document.querySelector('#start').disabled);
+    await s.click('#start');
+    await s.waitForSelector('#pip-player', { state: 'detached', timeout: 5000 });
+    await waitStatus(s, /^live$/);
+    // not hidden, ended: the streamer's count drops
+    await other.waitForFunction(() => document.querySelector('#viewers')?.dataset.viewers === '0', null, { timeout: 15000 });
+    expect((await s.$('#pip-player')) === null, 'the watched player came back');
+    await s.click('#stop');
+    await waitStatus(s, /^stopped$/);
+    return `the watched player went on start; ${OTHER} counts "${await text(other, '#viewers')}"`;
   });
 
   await s.close();

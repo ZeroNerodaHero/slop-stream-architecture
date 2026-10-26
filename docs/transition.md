@@ -37,7 +37,7 @@ every loop the pages run, and the server's own. the two in bold are the ones tha
 | admin | `GET /api/health`, `GET /api/errors` | every 10s, admins only | `AdminPage.tsx:9` |
 | the chat | one socket per viewer per room, on `/watch/*` and `/live` only | server ping 30s, idle drop 90s, reconnect 3s flat | `chat.rs:49`, `chat-atoms.ts:29` |
 | video setup | `/ws`, one frame each way, then held for the stream | per publish, per watch | `relay.ts` |
-| the api | `GET video:7880/live` | on every `streams`, `watch`, `go-live` and sweep | `main.rs:254` |
+| the api | `GET video:7880/live` (`/viewers` for `streams`: the same names with a count each) | on every `streams`, `watch`, `go-live` and sweep | `main.rs:254` |
 | the sweeper | ends open rows nobody holds | every 60s | `main.rs:67` |
 | the monitor box | `/api/health` of every box | its own interval | `monitor.rs` |
 
