@@ -335,7 +335,14 @@ const body = async (res) => {
     await p.fill('#auth-password', PW2);
     await p.click('#auth-submit');
     await p.waitForFunction((n) => document.querySelector('#me')?.textContent === n, NEW, { timeout: 10000 });
-    await p.click('#you');
+    // the login page moves to home, and a page change closes the panel: wait for the move. then the profile tab: the
+    // gear at the end of your line opens the modal (the picture is your page now), then the tab
+    await p.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 10000 });
+    await p.hover('#user-panel');
+    await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+    await p.click('#settings');
+    await p.waitForSelector('#user-modal[open]', { timeout: 5000 });
+    await p.click('#tab-profile');
     await p.waitForSelector('#profile-new-name', { timeout: 10000 });
     // the date comes with /api/me, a beat after the login
     await p.waitForFunction(() => /change it again on/.test(document.querySelector('#profile-rename-status')?.textContent || ''), null, { timeout: 10000 });

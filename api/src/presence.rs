@@ -202,6 +202,23 @@ pub(crate) async fn publish_renamed<C: AsyncCommands>(r: &mut C, old: &str, new:
     publish(r, &[("type", "renamed".into()), ("name", old.into()), ("to", new.into())]).await;
 }
 
+/// A direct message (docs/dms.md), its row written. `name` is who it is to, the gateway's
+/// key; it goes to the sockets of both names, so the writer's other devices see it too.
+/// The text rides in the fact: the stream is the one road to every gateway, and a thousand
+/// entries deep it is gone.
+pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, text: &str, at_ms: i64) {
+    publish(
+        r,
+        &[("type", "dm".into()), ("name", to.into()), ("from", from.into()), ("id", id.to_string()), ("text", text.into()), ("at", at_ms.to_string())],
+    )
+    .await;
+}
+
+/// A login read a thread up to a line, on one device: its other devices drop their count.
+pub(crate) async fn publish_dm_read<C: AsyncCommands>(r: &mut C, reader: &str, peer: &str, id: i64) {
+    publish(r, &[("type", "dm_read".into()), ("name", reader.into()), ("peer", peer.into()), ("id", id.to_string())]).await;
+}
+
 #[derive(Deserialize)]
 struct StatusBody {
     status: String,

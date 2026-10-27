@@ -833,7 +833,10 @@ pub(crate) mod tests {
         assert_eq!(edges_of(&pool, both).await, vec![(alice, then)]);
         // alice's own edge to the free name is gone, not a self edge
         assert_eq!(edges_of(&pool, alice).await, vec![]);
-        assert_eq!(crate::follows::stats(&pool, &name, Some(fan)).await.unwrap(), (2, true));
+        assert_eq!(
+            crate::follows::stats(&pool, &name, Some(fan)).await.unwrap(),
+            crate::follows::Stats { followers: 2, following: true, follows_you: false }
+        );
     }
 
     /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored claimed_meanwhile` against a throwaway postgres (see `test_db`).

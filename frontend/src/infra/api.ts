@@ -2,6 +2,7 @@
 
 import type { Presence, PresenceChoice } from '@/infra/frames';
 import { report } from '@/infra/report';
+import type { Socials } from '@/infra/socials';
 
 export class ApiError extends Error {
   constructor(
@@ -37,12 +38,40 @@ export interface Streamer {
   offline?: number | null;
   /** The line under the word while not live. Empty for none. Absent on an older api. */
   offline_note?: string;
+  /** Where else to find them (docs/socials.md). The empty document for none; absent on an older api. Read through `cleanSocials` before drawing. */
+  socials?: Socials;
   /** The word next to the name: `offline` `online` `dnd` `streaming`. See docs/status.md. */
   presence: Presence;
   /** How many follow the name (docs/follows.md). Absent on an older api. */
   followers?: number;
   /** The asking login follows it. false for nobody. */
   following?: boolean;
+  /** The name follows the asking login. false for nobody. Absent on an older api. */
+  follows_you?: boolean;
+  /** When their last stream ended, rfc3339; null when none has. Absent on an older api. */
+  last_live?: string | null;
+  /** When the account was made, rfc3339; null for a free name. Absent on an older api. */
+  joined_at?: string | null;
+}
+
+/** One line of a direct message thread (docs/dms.md). `from` is the writer's name now; `at` unix milliseconds. */
+export interface DmLine {
+  id: number;
+  from: string;
+  text: string;
+  at: number;
+}
+
+/** A thread the login is in, as `GET /api/dms` lists them, newest line first: the other side as the sidebar has people, the last line, and how many of theirs are new. */
+export interface DmThread {
+  name: string;
+  verified: boolean;
+  avatar: number | null;
+  bio: string;
+  live: boolean;
+  presence: Presence;
+  last: DmLine;
+  unread: number;
 }
 
 /** Somebody the login follows, as `GET /api/following` lists them: streaming first. See docs/follows.md. */
@@ -66,6 +95,18 @@ export interface Person {
   bio: string;
   presence: Presence;
   following: boolean;
+}
+
+/** One of home's recently offline (`GET /api/recent`): a name whose last stream ended lately, and when. Not live now. */
+export interface Recent {
+  name: string;
+  verified: boolean;
+  avatar: number | null;
+  bio: string;
+  presence: Presence;
+  following: boolean;
+  /** When their last stream ended, rfc3339. */
+  ended_at: string;
 }
 
 /** One answer of `GET /api/search?q=`: a name holding the letters, and whether the login follows it. */
@@ -149,6 +190,8 @@ export interface WatchGrant {
   /** The offline picture and the line under the word, for the page while they are not live. Absent on an older api. */
   offline?: number | null;
   offline_note?: string;
+  /** Where else to find them (docs/socials.md), for the socials tab. Absent on an older api. */
+  socials?: Socials;
   /** How many follow the name, and whether the asking login does (docs/follows.md). Absent on an older api. */
   followers?: number;
   following?: boolean;
@@ -307,6 +350,17 @@ export const api = {
   search: (q: string) => request<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
   /** Everyone with a row who is not live: home's second half, online first. 100 at most. */
   people: () => request<Person[]>('GET', '/api/people'),
+  /** The names whose last stream ended most recently and who are not live again, newest end first, 12 at most: home's recently offline. */
+  recent: () => request<Recent[]>('GET', '/api/recent'),
+  /** The login's direct message threads, newest line first, with how many lines are new in each. 401 for nobody. See docs/dms.md. */
+  dms: () => request<DmThread[]>('GET', '/api/dms'),
+  /** One page of the thread with `name`, oldest first: the newest page, or the one before line `before`. A short page is the start. */
+  dmThread: (name: string, before?: number) =>
+    request<{ name: string; friends: boolean; lines: DmLine[] }>('GET', `/api/dm/${encodeURIComponent(name)}${before === undefined ? '' : `?before=${before}`}`),
+  /** A line to a friend. 201 with the line as kept; it also comes back on the events socket. 400 `too long`, 403 not friends, 429 `slow down`. */
+  sendDm: (name: string, text: string) => request<DmLine & { to: string }>('POST', `/api/dm/${encodeURIComponent(name)}`, { text }),
+  /** The login has seen the thread with `name` up to that line. Its other devices hear it on the socket. */
+  readDm: (name: string, id: number) => request<null>('PUT', `/api/dm/${encodeURIComponent(name)}/read`, { id }),
   saveBio: (name: string, bio: string) => request<{ name: string; bio: string }>('PUT', `/api/streamers/${name}`, { bio }),
   /** The jpeg itself as the body. The page has already made it 256x256. */
   saveAvatar: (name: string, jpeg: Blob) => request<{ name: string; avatar: number }>('PUT', `/api/streamers/${name}/avatar`, jpeg),
@@ -330,6 +384,8 @@ export const api = {
   offlineUrl: (name: string, version: number) => `/api/streamers/${encodeURIComponent(name)}/offline?v=${version}`,
   /** The line under the word while not live. One line, 140 characters; empty clears it. */
   saveOfflineNote: (name: string, note: string) => request<{ name: string; offline_note: string }>('PUT', `/api/streamers/${name}/offline-note`, { note }),
+  /** The links under the player, replaced whole, through the bio's gate (docs/socials.md). 400 `bad url…` / `bad kind` / `too many links…`; the answer is the document as kept. */
+  saveSocials: (name: string, socials: Socials) => request<{ name: string; socials: Socials }>('PUT', `/api/streamers/${name}/socials`, socials),
   /** The presence choice, through the bio's gate. The answer also arrives on the events socket, to every tab and device. */
   setPresence: (name: string, status: PresenceChoice) => request<{ status: PresenceChoice; presence: Presence }>('PUT', `/api/streamers/${name}/presence`, { status }),
   /** `version` is the upload time the api hands out, so a new picture is a new url and the old one can be cached. */

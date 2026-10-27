@@ -98,15 +98,15 @@ interface OptionCardProps {
   detail: string;
 }
 
-/** A radio as a card: the chosen one has the blue stroke and shadow and says so in words too. */
+/** A radio as a card: the chosen one has the blue stroke (no shadow) and says so in words too. */
 export function OptionCard({ id, name, checked, onChange, picture, label, detail }: OptionCardProps) {
   return (
     <label
       htmlFor={id}
       className={cn(
-        'flex cursor-pointer flex-col gap-3 border bg-background p-4 transition-[border-color,box-shadow,color] duration-150',
-        checked ? 'border-primaryBlue shadow-hard-blue' : 'border-primaryStroke hover:border-secondaryStroke',
-        'has-[:focus-visible]:border-primaryBlue has-[:focus-visible]:shadow-hard-blue'
+        'flex cursor-pointer flex-col gap-3 border bg-background p-4 transition-[border-color,color] duration-150',
+        checked ? 'border-primaryBlue' : 'border-primaryStroke hover:border-secondaryStroke',
+        'has-[:focus-visible]:border-primaryBlue'
       )}
     >
       <input id={id} type="radio" name={name} checked={checked} onChange={onChange} className="sr-only" />

@@ -139,7 +139,7 @@ nothing else. `GET /api/streamers/:name` does not gain a count or a usual line; 
 - `/watch/<name>` while not live (`WatchPage.tsx:190`, the `waiting` branch): under the word and the note, above the bio. the strip and the line. the page already gets `live` and `ended` for the name on screen (`watch-atoms.ts`, `status.md`), so on either it re-fetches the current range: the block appears when she starts and closes when she stops, with no reload.
 - `/watch/<name>` while live: the line only, under the bio. the player does not get shorter (`posts.md`'s rule).
 - the profile tab, your own: the strip, the line, and the totals under it: `12h 40m this month · 9 streams · longest 4h 12m · 2 dropped`. `‹ ›` steps a month at a time (one request each), `today` comes back, `show everything` shows the blocks under 60s.
-- the person card (`PersonCard.tsx`): nothing. it makes no request, by its own rule, and the line is not on anything the sidebar already holds. open question 5.
+- the person card (`PersonCard.tsx`): `last live 3 hr ago` while they are not streaming, from the one profile read the card makes when it shows (`last_live` on `GET /api/streamers/:name`, `follows.md`). not the strip, and not the usual line: open question 5.
 
 **atoms.** `calendar-atoms.ts`: `calendarAtom` (`{ name, from, to, rows, phase }`), `loadCalendar(name, monthsBack)`, `blocksAtom` derived (the rows merged by the 5-minute rule and split by the viewer's midnight, memoised on rows and zone), `usuallyAtom` derived. `api.ts`: `sessions(name, from, to)`. the 60s tick is a module interval while a live block is on screen, not an atom. no library: bars on rows are a hundred lines of tsx and css, and the frontend has none.
 
@@ -207,7 +207,7 @@ not yet: `user-modal/ProfileTab.tsx` (the totals, `show everything`), `spec.md`'
 2. **the gap.** a dropped connection is back in under two minutes when the person is at the keyboard; a dinner break is thirty. (recommendation: 5 minutes, drawn as one block with the hairline. the detail always lists the pieces.)
 3. **the floor.** hide the failed go-lives, or draw them as ticks. (recommendation: hide under 60s by default; `show everything` on the owner's tab.)
 4. **while live.** the line under the bio, the strip under the bio, or nothing while the player is up. (recommendation: the line. the strip is a click away in the profile tab.)
-5. **the card.** `usually tue, thu ~8pm` on the person card, which today makes no request. (recommendation: not now; the card's rule is worth more than the line. `later` has the shape if it is wanted.)
+5. **the card.** `usually tue, thu ~8pm` on the person card. it makes one profile read now (`follows.md`), which says when the last stream ended but not the blocks; the line wants a month of rows, a second request. (recommendation: not now; `last live` says most of it. `later` has the shape if it is wanted.)
 6. **weeks start.** monday, or the viewer's locale's. (recommendation: monday; the labels are the locale's. `Intl.Locale.prototype.getWeekInfo` is not everywhere yet.)
 7. **free names.** the one rule (`accounts.md`) says a free name's calendar is anyone's streams under it. (recommendation: yes, by name, as its bio is; the account's by id, as its history is.)
 8. **how far back.** four weeks on the page, `‹` for older, forever in the table. (recommendation: as said. the table is small and the index makes any month one range.)

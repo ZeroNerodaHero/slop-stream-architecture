@@ -24,6 +24,8 @@ export interface ChatLine {
   verified: boolean;
   /** the speaker's groups as badges, `bot` first when it is one. see docs/groups.md */
   groups: GroupBadge[];
+  /** the speaker's picture (its `?v=`, as everywhere in the api), or null for none. only a `verified` or `streamer` line can have one */
+  avatar: number | null;
   at: number;
 }
 
@@ -223,12 +225,12 @@ function connect() {
     if (msg.type === 'history' && msg.messages) {
       resetHistory();
       scrollPlan = 'bottom';
-      store.set(chatLinesAtom, msg.messages.slice(-KEEP_LINES).map(withGroups));
+      store.set(chatLinesAtom, msg.messages.slice(-KEEP_LINES).map(fromWire));
     }
     else if (msg.type === 'message' && msg.id) {
       const sent = inFlight.indexOf(msg.text ?? '');
       if (sent >= 0) inFlight.splice(sent, 1);
-      appendLine(withGroups(msg as ChatLine));
+      appendLine(fromWire(msg as ChatLine));
     } else if (msg.type === 'count' && typeof msg.count === 'number') store.set(chatCountAtom, msg.count);
     else if (msg.type === 'error' && msg.error) {
       // a bad nick, or a channel that is not there: back out, and do not reconnect.
@@ -256,9 +258,9 @@ function connect() {
   };
 }
 
-/** A line from a chat server older than the badges has no `groups`: that is a line with none. */
-function withGroups(line: ChatLine): ChatLine {
-  return Array.isArray(line.groups) ? line : { ...line, groups: [] };
+/** A line from a chat server older than the badges has no `groups`, one older than the faces no `avatar`: a line with none of either. */
+function fromWire(line: ChatLine): ChatLine {
+  return { ...line, groups: Array.isArray(line.groups) ? line.groups : [], avatar: typeof line.avatar === 'number' ? line.avatar : null };
 }
 
 function resetHistory() {
@@ -406,7 +408,7 @@ async function chatGet(path: string): Promise<ChatLine[]> {
     data = null;
   }
   if (!res.ok) throw new Error(data?.error || `http ${res.status}`);
-  return (data?.lines ?? []).map(withGroups);
+  return (data?.lines ?? []).map(fromWire);
 }
 
 function appendLine(line: ChatLine) {

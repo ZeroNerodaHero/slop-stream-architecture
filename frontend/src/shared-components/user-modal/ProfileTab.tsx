@@ -44,6 +44,7 @@ import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { BUTTON, Field, INPUT, OptionCard, PasswordInput, SECTION_TITLE, Section, Status } from '@/shared-components/user-modal/parts';
+import { SocialsSection } from '@/shared-components/user-modal/SocialsSection';
 import { cn } from '@/utils/cn';
 
 /**
@@ -360,6 +361,9 @@ export function ProfileTab() {
           <Status id="profile-bio-status" text={bioStatus || (canEdit ? '' : whyNot)} />
         </div>
       </Section>
+
+      {/* where else to find me (docs/socials.md): the socials tab on my page. its own file: the rows, the places, the layout and size cards, the preview */}
+      <SocialsSection name={name} canEdit={canEdit} whyNot={whyNot} />
 
       {/* what the stream's page shows while I am not live: a picture where the player would be (the
           way twitch has an offline banner) and a line under the word. the picture is the card of a

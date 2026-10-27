@@ -137,6 +137,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "unicode-normalization",
+ "url",
  "uuid",
 ]
 

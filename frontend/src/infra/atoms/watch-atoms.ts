@@ -23,6 +23,7 @@ import {
   waitForIceGathering
 } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
+import { cleanSocials, EMPTY_SOCIALS, type Socials } from '@/infra/socials';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
 import type { Tone } from '@/shared-components/StatusLine';
@@ -66,6 +67,8 @@ export const offlineAtom = atom<number | null>(null);
 export const offlineNoteAtom = atom('');
 /** How many follow them (docs/follows.md). `null` until the grant says, or on an older api. */
 export const followersAtom = atom<number | null>(null);
+/** Where else to find them (docs/socials.md), as the grant said, cleaned. The empty document until it has, and on an older api. */
+export const socialsAtom = atom<Socials>(EMPTY_SOCIALS);
 /**
  * The main <video>'s stream: the sound and the big picture. One MediaStream for the attempt
  * whose video track is swapped as the big slot changes, so the element never rebinds and the
@@ -359,6 +362,7 @@ async function start(name: string): Promise<void> {
   store.set(offlineAtom, grant.offline ?? null);
   store.set(offlineNoteAtom, grant.offline_note ?? '');
   store.set(followersAtom, typeof grant.followers === 'number' ? grant.followers : null);
+  store.set(socialsAtom, cleanSocials(grant.socials));
   // the word beside the name: the socket's while it is open (it is told on `watch` and on every
   // change, and a grant answered a beat behind a push must not undo the push); the grant's otherwise
   if (grant.presence && store.get(eventsPhaseAtom) !== 'open') presenceChanged(name, grant.presence);
@@ -602,5 +606,6 @@ export function endWatch() {
   store.set(offlineAtom, null);
   store.set(offlineNoteAtom, '');
   store.set(followersAtom, null);
+  store.set(socialsAtom, EMPTY_SOCIALS);
   setPhase('loading', 'loading');
 }

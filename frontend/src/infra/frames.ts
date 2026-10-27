@@ -21,6 +21,10 @@ export type ServerFrame =
   | { type: 'viewers'; name: string; viewers: number }
   /** `name` became `to` (docs/ids.md): to the account's own sockets and to `name`'s watchers. */
   | { type: 'renamed'; name: string; to: string }
+  /** A direct message (docs/dms.md), to the sockets of both names: every device of either sees the same line. */
+  | { type: 'dm'; id: number; from: string; to: string; text: string; at: number }
+  /** `name` read its thread with `peer` up to `id` on some device: the others drop their count. */
+  | { type: 'dm_read'; name: string; peer: string; id: number }
   | { type: 'error'; error: string };
 
 export type LinkPhase = 'off' | 'connecting' | 'open' | 'closed';

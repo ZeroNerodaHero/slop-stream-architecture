@@ -12,7 +12,9 @@
 //! who does its login cookie say it is (auth.rs). A login names you; without
 //! one you pick a nick, as long as nobody owns that name. A login's groups
 //! (groups.rs) ride on its lines as badges; a hello that says `bot: true` wears
-//! the `bot` badge, whoever it is, so the panel can hide those lines.
+//! the `bot` badge, whoever it is, so the panel can hide those lines. The picture
+//! of a login, or of the streamer, rides along too (`avatar`, its upload time),
+//! so the panel can draw a face by each line.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -43,7 +45,8 @@ use crate::{owns_session, Name, Owner};
 
 const HISTORY_LINES: usize = 200;
 const KEEP_LINES: usize = 500;
-const MAX_TEXT_CHARS: usize = 500;
+/// A line's length, in unicode scalars. A direct message (dms.rs) has the same.
+pub(crate) const MAX_TEXT_CHARS: usize = 500;
 const MAX_NICK_CHARS: usize = 24;
 const ROOM_TTL_SECS: i64 = 7 * 24 * 3600;
 /// Token bucket per socket: this many lines at once, then one per second.
@@ -98,6 +101,9 @@ pub(crate) struct Line {
     pub(crate) verified: bool,
     /// the speaker's groups as badges, `bot` first when it is one. empty for most lines
     pub(crate) groups: Vec<Badge>,
+    /// the speaker's picture: its upload time (the `?v=` the pages fetch it by), the same
+    /// `avatar` as everywhere in the api. only a `verified` or `streamer` line can have one
+    pub(crate) avatar: Option<i64>,
     /// unix ms, from the stream id
     pub(crate) at: u64,
 }
@@ -215,6 +221,9 @@ struct Who {
     /// The account's groups (only when `verified`: the badges belong to the name on the
     /// line, not to whoever holds the socket), plus `bot` when the hello said so.
     groups: Vec<Badge>,
+    /// The picture of the name on the line (only when `verified` or `streamer`, for the
+    /// same reason as the badges), as its upload time. None for a name without one.
+    avatar: Option<i64>,
     /// The account, when `verified`. Null on the row otherwise.
     user_id: Option<Uuid>,
 }
@@ -299,8 +308,31 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
     } else {
         Vec::new()
     };
+    // the face: the picture of the name on the line, when the line is really that name's
+    // (a login's, or the room's for the streamer). an anonymous nick is nobody's picture,
+    // whoever's name it happens to be. read once, like the badges
+    let avatar = if verified || streamer {
+        match avatar_of(&s.db, &from).await {
+            Ok(avatar) => avatar,
+            Err(e) => {
+                log::warn!("{room}: cannot read the picture of {from}: {e}");
+                return Err(Unknown::Busy);
+            }
+        }
+    } else {
+        None
+    };
     let user_id = if verified { me.as_ref().map(|a| a.id) } else { None };
-    Ok(Who { from, streamer, verified, groups, user_id })
+    Ok(Who { from, streamer, verified, groups, avatar, user_id })
+}
+
+/// When a name's picture was saved (the `?v=` the pages fetch it by). None without one, or without a row.
+async fn avatar_of(db: &PgPool, name: &str) -> Result<Option<i64>, sqlx::Error> {
+    let version: Option<Option<i64>> = sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE name = $1")
+        .bind(name)
+        .fetch_optional(db)
+        .await?;
+    Ok(version.flatten())
 }
 
 async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, headers: HeaderMap, mut socket: WebSocket) {
@@ -443,8 +475,10 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     }
                 }
                 let mut r = s.redis.clone();
-                // the badges as json, and no field at all for the common case of none
+                // the badges as json and the picture's version as text, and no field at
+                // all for the common case of neither
                 let groups = if w.groups.is_empty() { String::new() } else { serde_json::to_string(&w.groups).unwrap_or_default() };
+                let avatar = w.avatar.map(|v| v.to_string());
                 let mut fields = vec![
                     ("from", w.from.as_str()),
                     ("text", text.as_str()),
@@ -453,6 +487,9 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                 ];
                 if !groups.is_empty() {
                     fields.push(("g", groups.as_str()));
+                }
+                if let Some(avatar) = &avatar {
+                    fields.push(("a", avatar.as_str()));
                 }
                 // the line and the room's ttl in one atomic round trip: a room whose first
                 // line landed but whose expire did not would otherwise live forever
@@ -640,6 +677,8 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
     let verified: String = entry.get("v").unwrap_or_else(|| "0".to_owned());
     // no `g` field, or one this build cannot read, is a line with no badges
     let groups: Vec<Badge> = entry.get::<String>("g").and_then(|g| serde_json::from_str(&g).ok()).unwrap_or_default();
+    // no `a` field is a line with no picture
+    let avatar: Option<i64> = entry.get::<String>("a").and_then(|a| a.parse().ok());
     Some(Line {
         at: id_parts(&entry.id).0,
         id: entry.id,
@@ -648,6 +687,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         streamer: streamer == "1",
         verified: verified == "1",
         groups,
+        avatar,
     })
 }
 

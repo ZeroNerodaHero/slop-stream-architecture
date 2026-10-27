@@ -68,6 +68,15 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await page.click(`label[for="presence-${choice}"]`);
     expect(await page.isChecked(`#presence-${choice}`), `#presence-${choice} is not checked`);
   };
+  /** the profile tab: the gear at the end of your line in the panel opens the modal (the picture is your page), then the tab */
+  const openProfile = async (page) => {
+    await page.hover('#user-panel');
+    await page.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+    await page.click('#settings');
+    await page.waitForSelector('#user-modal[open]', { timeout: 5000 });
+    await page.click('#tab-profile');
+    await page.waitForSelector('#panel-profile', { timeout: 5000 });
+  };
 
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: !process.env.HEADED, args: ARGS });
   const ctxA = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] });
@@ -153,8 +162,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
   });
 
   await step('do not disturb: the api, the square, the watcher, all within 3s, no reload', async () => {
-    await a.click('#you');
-    await a.waitForSelector('#user-modal[open]', { timeout: 5000 });
+    await openProfile(a);
     await pick(a, 'dnd');
     await presenceIs(NAME, 'dnd', 3000);
     await shownIs(a, '#my-presence', 'dnd', 3000);
@@ -203,8 +211,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
   });
 
   await step('appear offline: the watcher and the api read offline while the tab is open; the chooser still knows', async () => {
-    await a.click('#you');
-    await a.waitForSelector('#user-modal[open]', { timeout: 5000 });
+    await openProfile(a);
     await pick(a, 'invisible');
     await presenceIs(NAME, 'offline', 3000);
     await shownIs(w, '#presence', 'offline', 3000);
@@ -240,8 +247,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
   let a2 = null;
   await step('two tabs, one socket: the second tab knows the word at once; locally /online counts one socket', async () => {
     // back to online first: also the reset the next run counts on
-    await a.click('#you');
-    await a.waitForSelector('#user-modal[open]', { timeout: 5000 });
+    await openProfile(a);
     await pick(a, 'online');
     await a.keyboard.press('Escape');
     await a.waitForSelector('#user-modal', { state: 'detached', timeout: 5000 });

@@ -22,5 +22,7 @@ sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "json", "uuid"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "signal"] }
 unicode-normalization = "0.1"
+# the whatwg parser, the one the browser's `new URL` is: a social link is kept only if it parses as http(s) with a host (docs/socials.md)
+url = "2"
 # the id behind a name (docs/ids.md). postgres makes them (gen_random_uuid); the api only carries them
 uuid = { version = "1", features = ["serde"] }

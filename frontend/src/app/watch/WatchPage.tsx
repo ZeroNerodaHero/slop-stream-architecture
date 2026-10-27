@@ -23,6 +23,7 @@ import {
   sceneTileAtom,
   slotLabel,
   slotStreamAtom,
+  socialsAtom,
   startPip,
   tilesAtom,
   watchLayersAtom,
@@ -39,6 +40,7 @@ import {
   watchViewersAtom
 } from '@/infra/atoms/watch-atoms';
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
+import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
@@ -55,6 +57,7 @@ import { Face } from '@/shared-components/Face';
 import { panelClassName } from '@/shared-components/Panel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { SceneView } from '@/shared-components/SceneView';
+import { Socials } from '@/shared-components/Socials';
 import { StatusLine } from '@/shared-components/StatusLine';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
@@ -71,9 +74,9 @@ const NOT_LIVE_WORDS: Record<Presence, string> = {
   streaming: 'starting'
 };
 
-/** Under the player: their page (docs/about.md), and when they stream (docs/calendar.md). In this order. */
-type WatchTab = 'about' | 'calendar';
-const WATCH_TABS: readonly WatchTab[] = ['about', 'calendar'];
+/** Under the player: their page (docs/about.md), when they stream (docs/calendar.md), and where else to find them (docs/socials.md). In this order. */
+type WatchTab = 'about' | 'calendar' | 'socials';
+const WATCH_TABS: readonly WatchTab[] = ['about', 'calendar', 'socials'];
 const TAB_STEP: Record<string, number | undefined> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
 /** Arrows move the focus along the tabs and open the one landed on; Home and End go to the ends. The user modal's tabs do the same. */
@@ -110,6 +113,9 @@ export function WatchPage() {
   const offline = useAtomValue(offlineAtom);
   const offlineNote = useAtomValue(offlineNoteAtom);
   const followers = useAtomValue(followersAtom);
+  const socials = useAtomValue(socialsAtom);
+  // my own page: the socials tab offers its editor (the modal's profile tab) and says the links are mine
+  const mine = useAtomValue(myNameAtom) === name;
   const phase = useAtomValue(watchPhaseAtom);
   const presence = useAtomValue(presenceOfAtom(name));
   const tiles = useAtomValue(tilesAtom);
@@ -313,7 +319,7 @@ export function WatchPage() {
                     {followers} {followers === 1 ? 'follower' : 'followers'}
                   </span>
                 )}
-                <FollowButton id="follow" name={name} onChange={(now) => store.set(followersAtom, (followers ?? 0) + (now ? 1 : -1))} />
+                <FollowButton id="follow" name={name} flat onChange={(now) => store.set(followersAtom, (followers ?? 0) + (now ? 1 : -1))} />
               </span>
             )}
           </div>
@@ -334,7 +340,8 @@ export function WatchPage() {
         )}
 
         {/* under the player, where the bio alone used to be: the about tab (the bio, then the page of
-            their own, docs/about.md) and the calendar (when they stream, docs/calendar.md). the strip
+            their own, docs/about.md), the calendar (when they stream, docs/calendar.md) and the socials
+            (where else to find them, docs/socials.md: the grant brought them, no request). the strip
             is only in the page while its tab is open: no request until somebody looks */}
         {name && phase !== 'bad-name' && (
           <div
@@ -376,8 +383,10 @@ export function WatchPage() {
                   )}
                   <About name={name} doc={about} />
                 </>
-              ) : (
+              ) : tab === 'calendar' ? (
                 <Calendar name={name} />
+              ) : (
+                <Socials name={name} doc={socials} mine={mine} />
               )}
             </div>
           </div>

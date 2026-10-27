@@ -19,9 +19,9 @@ import { cn } from '@/utils/cn';
 
 /**
  * Every page, plus the things that live outside pages: the sidebar (the search, who you follow,
- * and you at the bottom of it; collapsed beside the page, open it covers the streams), the picture in picture players (bottom right
- * of the page: a stream you watch, your own while live), and the user modal that the settings
- * icon opens (the icon, and go live, are the right end of every page's title row: PageFrame.tsx).
+ * and you at the bottom of it, with the settings gear at the end of your line; collapsed beside the page, open it covers the
+ * streams), the picture in picture players (bottom right of the page: a stream you watch, your own while live), and the user
+ * modal the gear opens (go live is the right end of every page's title row: PageFrame.tsx).
  */
 function Shell() {
   const side = useAtomValue(panelSideAtom);

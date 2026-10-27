@@ -1,8 +1,34 @@
 import { RiAddLine, RiCloseLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  type FormEvent,
+  type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type UIEvent,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState
+} from 'react';
 
-import { type Dm, dmActiveAtom, dmOpenAtom, dmsAtom, hideDms, openDm, pickDm, removeDm, selectDm } from '@/infra/atoms/dm-atoms';
+import { meAtom } from '@/infra/atoms/auth-atoms';
+import {
+  type Dm,
+  dmActiveAtom,
+  dmNoticeAtom,
+  dmOpenAtom,
+  dmThreadsAtom,
+  dmsAtom,
+  hideDms,
+  loadOlderDm,
+  markRead,
+  openDm,
+  pickDm,
+  removeDm,
+  selectDm,
+  sendDm
+} from '@/infra/atoms/dm-atoms';
 import { followingAtom } from '@/infra/atoms/follow-atoms';
 import { type Presence, PRESENCE_SQUARE } from '@/infra/atoms/presence-atoms';
 import { type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
@@ -10,17 +36,9 @@ import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
-import { Who } from '@/shared-components/PersonRow';
+import { Who, Word } from '@/shared-components/PersonRow';
 import { INPUT } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
-
-interface Line {
-  mine: boolean;
-  text: string;
-}
-
-/** The one line a new thread starts with: this is not a room, and nothing leaves the browser. */
-const SEED: Line = { mine: false, text: 'not connected yet. what you type stays in this window.' };
 
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
 /** The smallest the window goes: room for the column of faces, a few lines, and the box with its button. */
@@ -28,6 +46,10 @@ const MIN_W = 300;
 const MIN_H = 260;
 /** How long the pointer rests on a face before its card shows. */
 const PEEK_MS = 100;
+/** Within this many px of the newest line counts as "at the bottom": a new line keeps the view there. */
+const STUCK_PX = 40;
+/** A line may be this long, the api's rule. */
+const MAX_CHARS = 500;
 
 /** The square a face sits in, in the column and in the grid: a stroke, blue on the one that is on. */
 const SQUARE = 'relative block shrink-0 border transition-[border-color] duration-150 focus-visible:outline-none';
@@ -122,9 +144,9 @@ interface TabProps {
 }
 
 /**
- * One face on the column, with its presence square and the × in its corner that takes the chat
- * off the column. Pointing at it, or tabbing onto it, puts the person's card (PersonCard.tsx,
- * the sidebar's) beside the column.
+ * One face on the column, with its presence square, how many of their lines are new, and the
+ * × in its corner that takes the chat off the column. Pointing at it, or tabbing onto it, puts
+ * the person's card (PersonCard.tsx, the sidebar's) beside the column.
  */
 function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
   const peek = usePeek(PEEK_MS);
@@ -143,7 +165,8 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
         aria-selected={selected}
         aria-controls="friend-chat-thread"
         tabIndex={reachable ? 0 : -1}
-        aria-label={`chat with ${dm.name}`}
+        aria-label={`chat with ${dm.name}${dm.unread > 0 ? `, ${dm.unread} new` : ''}`}
+        data-unread={dm.unread || undefined}
         onClick={() => {
           selectDm(dm.name);
           // a click means "talk to them": straight into the box (the same node for every tab, so it is there already)
@@ -154,13 +177,23 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
       >
         <Face name={dm.name} version={dm.avatar} />
         <PresenceSquare presence={dm.presence} />
+        {/* how many of their lines came while this was not on screen: the sidebar's number, in the other corner */}
+        {dm.unread > 0 && (
+          <span
+            id={`friend-chat-unread-${dm.name}`}
+            aria-hidden
+            className="absolute -left-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center border border-backgroundSecondary bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background"
+          >
+            {dm.unread > 99 ? '99+' : dm.unread}
+          </span>
+        )}
       </button>
       {/* this chat off the column, from the face's corner. there while the pointer is on the face, or the tab key reaches it */}
       <button
         id={`friend-chat-remove-${dm.name}`}
         type="button"
         aria-label={`close the chat with ${dm.name}`}
-        title="close this chat"
+        title="close this chat (it is back when a line comes)"
         onClick={() => removeDm(dm.name)}
         className={cn(
           'absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary',
@@ -225,8 +258,8 @@ function Rail({ dms, active, side }: { dms: Dm[]; active: string | null; side: P
 /**
  * The friends to pick from, where a thread would be: everyone who follows you back, a face
  * with its presence square and the name under it, the ones with a chat on the column in the
- * blue stroke. A pick opens their chat, or shows the one they have. Friends alone: a chat is
- * with somebody who chose you back.
+ * blue stroke. A pick opens their chat, or shows the one they have. Friends alone: a line can
+ * only go to somebody who chose you back.
  */
 function Picker({ dms }: { dms: Dm[] }) {
   const following = useAtomValue(followingAtom);
@@ -269,28 +302,45 @@ function Picker({ dms }: { dms: Dm[] }) {
   );
 }
 
+/** The clock of a line, in its title. */
+function stamp(at: number): string {
+  return new Date(at).toLocaleString();
+}
+
 /**
- * Direct chats with friends, opened from the sidebar: one window, a tab per friend down its
- * side, dragged by its header, resized from a corner. The lines live in this window for the
- * visit and are never sent: there is no route for them yet. A thread keeps its lines and its
+ * Direct chats with friends (docs/dms.md), opened from the sidebar: one window, a tab per
+ * friend down its side, dragged by its header, resized from a corner. The lines are the
+ * api's: a page on opening a thread, older pages as you scroll up, new ones as they come on
+ * the events socket, from either side and from your other devices. A thread keeps its
  * half-typed draft while another tab is shown. The × on the header hides the window and keeps
  * everything; the sidebar's chat button brings it back. With no tab shown, the friends to
  * pick from are where the thread would be, under `no chat` when there are no tabs at all.
  */
 export function FriendChat() {
+  const me = useAtomValue(meAtom);
   const dms = useAtomValue(dmsAtom);
   const active = useAtomValue(dmActiveAtom);
   const open = useAtomValue(dmOpenAtom);
+  const threads = useAtomValue(dmThreadsAtom);
+  const notice = useAtomValue(dmNoticeAtom);
   const side = useAtomValue(panelSideAtom);
   const following = useAtomValue(followingAtom);
-  const [threads, setThreads] = useState<Record<string, Line[]>>({});
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [sending, setSending] = useState(false);
   const [box, setBox] = useState<Box | null>(parked);
   const ref = useRef<HTMLElement | null>(null);
   const input = useRef<HTMLInputElement | null>(null);
   const log = useRef<HTMLDivElement | null>(null);
   /** Ends the drag in progress: its window listeners go. `null` between drags. */
   const stop = useRef<(() => void) | null>(null);
+  /** The view sits on the newest line. Someone who scrolled up to read is left there. */
+  const stuck = useRef(true);
+  /** The log's height before the last paint, so prepending older lines can put the same pixels back. */
+  const hold = useRef(0);
+  /** Older lines are on their way: the next paint keeps the view where it was instead of jumping to the bottom. */
+  const prepending = useRef(false);
+  /** The thread the log last showed: a change of thread starts at the bottom. */
+  const shownThread = useRef<string | undefined>(undefined);
   // each tab's person with the sidebar's current words over the ones it opened with: the list is asked again on every open of the sidebar
   const people = dms.map((d) => {
     const now = following?.find((f) => f.name === d.name);
@@ -298,8 +348,8 @@ export function FriendChat() {
   });
   const dm = active === null ? null : (people.find((d) => d.name === active) ?? null);
   const name = dm?.name;
-  // a thread nobody has typed in yet is the seed line alone; it goes into state with the first line sent
-  const lines = name ? (threads[name] ?? [SEED]) : [];
+  const thread = name ? threads[name] : undefined;
+  const lines = thread?.lines ?? [];
   const draft = (name && drafts[name]) || '';
 
   useEffect(() => {
@@ -328,10 +378,31 @@ export function FriendChat() {
     input.current?.focus();
   }, [name, open]);
 
+  // the tab comes back to the front with a thread on screen: what came meanwhile has been seen
   useEffect(() => {
+    if (!name || !open) return;
+    const onShow = () => {
+      if (document.visibilityState === 'visible') markRead(name);
+    };
+    document.addEventListener('visibilitychange', onShow);
+    return () => document.removeEventListener('visibilitychange', onShow);
+  }, [name, open]);
+
+  // Keep the newest line in view, unless the reader has scrolled up; older lines prepended keep the same pixels on screen.
+  // A layout effect: before the paint, so nothing flashes at the wrong place.
+  useLayoutEffect(() => {
     const el = log.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [lines.length, name]);
+    if (!el) return;
+    if (prepending.current) {
+      el.scrollTop += el.scrollHeight - hold.current;
+      prepending.current = false;
+    } else if (stuck.current || shownThread.current !== name) {
+      el.scrollTop = el.scrollHeight;
+      stuck.current = true;
+    }
+    hold.current = el.scrollHeight;
+    shownThread.current = name;
+  }, [lines.length, name, open]);
 
   // the window going while a drag is on: its listeners go with it
   useEffect(() => () => stop.current?.(), []);
@@ -342,12 +413,26 @@ export function FriendChat() {
     if (name) setDrafts((prev) => ({ ...prev, [name]: text }));
   }
 
-  function send(e?: FormEvent) {
+  async function send(e?: FormEvent) {
     e?.preventDefault();
-    const text = draft.trim();
-    if (!name || !text) return;
-    setThreads((prev) => ({ ...prev, [name]: [...(prev[name] ?? [SEED]), { mine: true, text }] }));
-    setDraft('');
+    if (!name || !draft.trim() || sending) return;
+    setSending(true);
+    const sent = await sendDm(name, draft);
+    setSending(false);
+    if (sent) setDraft('');
+    input.current?.focus();
+  }
+
+  function onScroll(e: UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight <= STUCK_PX;
+    if (el.scrollTop < 48 && name && thread?.loaded && !thread.start && !prepending.current) {
+      prepending.current = true;
+      hold.current = el.scrollHeight;
+      void loadOlderDm(name).then((came) => {
+        if (!came) prepending.current = false;
+      });
+    }
   }
 
   /**
@@ -385,6 +470,7 @@ export function FriendChat() {
 
   const style: CSSProperties | undefined = box ? { left: box.x, top: box.y, width: box.w, height: box.h } : undefined;
   const rail = <Rail dms={people} active={name ?? null} side={side} />;
+  const left = MAX_CHARS - [...draft.trim()].length;
 
   return (
     <section
@@ -410,10 +496,10 @@ export function FriendChat() {
           title="drag to move"
           className={cn('flex cursor-move items-center gap-2 border-b border-primaryStroke px-3 py-2', GRIP)}
         >
-          {name ? (
+          {name && dm ? (
             <>
-              <Who name={name} verified={dm?.verified ?? false} className="min-w-0 flex-1" />
-              <span className="shrink-0 text-xs text-textTertiary">not connected</span>
+              <Who name={name} verified={dm.verified} className="min-w-0 flex-1" />
+              <Word presence={dm.presence} className="text-xs" />
             </>
           ) : (
             <span id="friend-chat-title" className="min-w-0 flex-1 truncate font-semibold">
@@ -433,37 +519,65 @@ export function FriendChat() {
         </header>
         {name ? (
           <>
-            <div id="friend-chat-log" ref={log} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2.5">
-              {lines.map((line, i) => (
-                <p key={i} className={cn('text-sm leading-snug', line.mine ? 'text-right' : 'text-left')}>
-                  <span className="font-semibold">{line.mine ? 'you' : name}</span>
-                  <span className="mt-0.5 block text-textSecondary">{line.text}</span>
+            <div id="friend-chat-log" ref={log} onScroll={onScroll} role="log" aria-live="polite" className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2.5">
+              {!thread?.loaded && lines.length === 0 && <p className="text-sm text-textTertiary">loading</p>}
+              {thread?.loaded && lines.length === 0 && (
+                <p id="friend-chat-empty" className="text-sm text-textTertiary">
+                  nothing yet. say hi to {name}: only the two of you see this.
                 </p>
-              ))}
+              )}
+              {lines.map((line) => {
+                const mine = line.from === me;
+                return (
+                  <p
+                    key={line.id}
+                    data-id={line.id}
+                    data-mine={mine || undefined}
+                    title={stamp(line.at)}
+                    className={cn('text-sm leading-snug', mine ? 'text-right' : 'text-left')}
+                  >
+                    <span className="font-semibold">{mine ? 'you' : line.from}</span>
+                    <span className="mt-0.5 block whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]">{line.text}</span>
+                  </p>
+                );
+              })}
             </div>
-            <form onSubmit={send} className="flex items-center gap-2 border-t border-primaryStroke p-2">
-              <label htmlFor="friend-chat-text" className="sr-only">
-                message {name}
-              </label>
-              <input
-                ref={input}
-                id="friend-chat-text"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') {
-                    e.stopPropagation();
-                    hideDms();
-                  }
-                }}
-                placeholder={`message ${name}`}
-                maxLength={500}
-                autoComplete="off"
-                className={cn(INPUT, 'py-1.5 text-sm')}
-              />
-              <Button id="friend-chat-send" type="submit" className="px-3 py-1.5 text-sm" disabled={!draft.trim()}>
-                send
-              </Button>
+            <form onSubmit={(e) => void send(e)} className="border-t border-primaryStroke p-2">
+              <div className="flex items-center gap-2">
+                <label htmlFor="friend-chat-text" className="sr-only">
+                  message {name}
+                </label>
+                <input
+                  ref={input}
+                  id="friend-chat-text"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.stopPropagation();
+                      hideDms();
+                    }
+                  }}
+                  placeholder={`message ${name}`}
+                  maxLength={MAX_CHARS + 50}
+                  autoComplete="off"
+                  className={cn(INPUT, 'py-1.5 text-sm')}
+                />
+                <Button id="friend-chat-send" type="submit" className="px-3 py-1.5 text-sm" disabled={!draft.trim() || left < 0 || sending}>
+                  send
+                </Button>
+              </div>
+              {/* the api's words when a line was not kept (not friends, too long, too fast), and the countdown once it matters */}
+              <div className="mt-1 flex items-center justify-between gap-2 text-xs">
+                <span id="friend-chat-notice" className="min-h-[1em] text-decrease" aria-live="polite">
+                  {notice}
+                </span>
+                {left < 50 && (
+                  <span id="friend-chat-left" className={cn('shrink-0 tabular-nums text-textTertiary', left < 0 && 'font-semibold text-decrease')}>
+                    {left}
+                  </span>
+                )}
+              </div>
             </form>
           </>
         ) : (

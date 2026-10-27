@@ -327,13 +327,13 @@ an entry is `{ at, source, dir, type, text, bytes }`, with `text` the clipped js
 1. preflight: `GET /api/streamers/r8` → `presence: offline`; home does not list `r8`.
 2. a second context at `/watch/r8`, offline: `#presence[data-presence="offline"]`, `#status` matches `/not live/`; count `POST /api/streams/r8/watch` with `page.on('request')` (`pip.js:78`): exactly 1 in 12s (the old loop would make 3).
 3. first context, a tab as `r8` (`#username`, enter): `GET /api/streamers/r8` → `online` within 5s; `#my-presence[data-presence="online"]`; the watcher's `#presence` → `online` with no reload and no new `watch` call.
-4. `#you` → `label[for="presence-dnd"]`: `#my-presence` → `dnd`; the api → `dnd`; the watcher → `dnd` within 3s.
+4. hover `#user-panel` → `#settings` → `#tab-profile` → `label[for="presence-dnd"]` (the picture, `#you`, is your own page now, `socials.md`): `#my-presence` → `dnd`; the api → `dnd`; the watcher → `dnd` within 3s.
 5. go live as `r8`: the api → `streaming`; both squares `streaming`; the watcher's `#status` → `watching` and `watch` calls → exactly 2.
 6. stop: the watcher's `#status` → `/ended/`, `#presence` → `dnd`; the api → `dnd`.
 7. `label[for="presence-invisible"]`: the api → `offline`, the watcher → `offline`, the chooser's own card still `invisible` and its square grey.
 8. a second page in the first context: locally `GET /online` → `r8: 1`; CDP: two `shared_worker` targets; the new tab's inspector shows the one `hello`. close one page: still `online` after 3s. close the last: `offline` within 5s (the close `EVAL`, not the ttl).
 9. claimed: sign up `rp1`; a guest nick `rp1` in a third context: a raw `wss /events` probe (`chat.js:80`) gets `{"type":"error"}` matching `/account/`; the api says `offline`; locally `EXISTS seen:rp1` → 0.
-10. the inspector: `#settings` → `#tab-settings` → `label[for="inspector"]` → `#inspector-open`: `#inspector-frames` has a `me` and a `presence` row; `#inspector-filter` typed `presence` leaves only rows containing it; a chat line said on the watch page shows up with `data-source="/chat/r8"`; `#inspector-count` ≤ 1000.
+10. the inspector: hover `#user-panel` → `#settings` (the gear at the end of your line in it) → `#tab-settings` → `label[for="inspector"]` → `#inspector-open`: `#inspector-frames` has a `me` and a `presence` row; `#inspector-filter` typed `presence` leaves only rows containing it; a chat line said on the watch page shows up with `data-source="/chat/r8"`; `#inspector-count` ≤ 1000.
 11. locally: `TTL seen:r8` in (0, 90]; `DEL seen:r8` → `offline` at once, `online` again within 35s (the 30s refresh). off-box these two are `SKIP`, the `errors.js` way.
 12. cleanup: `label[for="presence-online"]` for `r8`, stop if live.
 

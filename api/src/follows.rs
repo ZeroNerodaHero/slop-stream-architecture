@@ -38,6 +38,10 @@ const SEARCH_LIMIT: i64 = 20;
 /// after the live ones are taken out and the rest sorted online first.
 const PEOPLE_SCAN: i64 = 300;
 const PEOPLE_LIMIT: usize = 100;
+/// Home's recently offline: this many of the names whose last stream ended most recently looked
+/// at, this many shown after the ones live again are taken out.
+const RECENT_SCAN: i64 = 40;
+const RECENT_LIMIT: usize = 12;
 
 fn not_logged_in() -> ApiError {
     ApiError::new(StatusCode::UNAUTHORIZED, "not logged in")
@@ -45,17 +49,43 @@ fn not_logged_in() -> ApiError {
 
 // ---- what the rest of the api asks ------------------------------------------------------------
 
-/// How many follow `name`, and does `me` (a login's row id, or nobody): the two fields every
-/// profile read carries. One round trip.
-pub(crate) async fn stats(db: &PgPool, name: &str, me: Option<Uuid>) -> Result<(i64, bool), sqlx::Error> {
-    sqlx::query_as(
+/// Do `a` and `b` follow each other: friends, in the sidebar's word. What a direct message
+/// (dms.rs) asks before a line is kept. One probe of each index.
+pub(crate) async fn friends(db: &PgPool, a: Uuid, b: Uuid) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM follows WHERE follower_id = $1 AND followed_id = $2)
+            AND EXISTS (SELECT 1 FROM follows WHERE follower_id = $2 AND followed_id = $1)",
+    )
+    .bind(a)
+    .bind(b)
+    .fetch_one(db)
+    .await
+}
+
+/// The follow facts of one name as a reader sees them: `stats`'s answer.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Stats {
+    /// How many follow the name. Public.
+    pub(crate) followers: i64,
+    /// The asking login follows it. False for nobody.
+    pub(crate) following: bool,
+    /// The name follows the asking login: with `following`, a friend. False for nobody.
+    pub(crate) follows_you: bool,
+}
+
+/// How many follow `name`, does `me` (a login's row id, or nobody) follow it, and does it
+/// follow `me`: what every profile read carries. One round trip.
+pub(crate) async fn stats(db: &PgPool, name: &str, me: Option<Uuid>) -> Result<Stats, sqlx::Error> {
+    let (followers, following, follows_you) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM follows f JOIN streamers s ON s.id = f.followed_id WHERE s.name = $1),
-                EXISTS (SELECT 1 FROM follows f JOIN streamers s ON s.id = f.followed_id WHERE s.name = $1 AND f.follower_id = $2)",
+                EXISTS (SELECT 1 FROM follows f JOIN streamers s ON s.id = f.followed_id WHERE s.name = $1 AND f.follower_id = $2),
+                EXISTS (SELECT 1 FROM follows f JOIN streamers s ON s.id = f.follower_id WHERE s.name = $1 AND f.followed_id = $2)",
     )
     .bind(name)
     .bind(me)
     .fetch_one(db)
-    .await
+    .await?;
+    Ok(Stats { followers, following, follows_you })
 }
 
 // ---- the words, for a list of names ----------------------------------------------------------
@@ -64,8 +94,9 @@ pub(crate) async fn stats(db: &PgPool, name: &str, me: Option<Uuid>) -> Result<(
 /// row holds, read by the caller's own query (the list already joins `streamers`; nothing reads
 /// it twice). Then video's set once (else the keys) and one pipelined `ZCOUNT` per name, the two
 /// asked at the same time. The rule is presence.rs's; this is the same answer
-/// `GET /api/streamers/:name` gives, n times for the price of one round trip.
-async fn words(s: &AppState, people: &[(String, Status)]) -> Result<HashMap<String, (bool, Presence)>, ApiError> {
+/// `GET /api/streamers/:name` gives, n times for the price of one round trip. The list of
+/// direct message threads (dms.rs) draws its faces with the same call.
+pub(crate) async fn words(s: &AppState, people: &[(String, Status)]) -> Result<HashMap<String, (bool, Presence)>, ApiError> {
     let mut out = HashMap::new();
     if people.is_empty() {
         return Ok(out);
@@ -98,7 +129,7 @@ async fn words(s: &AppState, people: &[(String, Status)]) -> Result<HashMap<Stri
 
 /// A row's status column as the choice it names: `online` for a row older than the column (its
 /// default), `status_of`'s rule. With the name, what `words` wants.
-fn choice(name: &str, raw: &str) -> (String, Status) {
+pub(crate) fn choice(name: &str, raw: &str) -> (String, Status) {
     (name.to_owned(), Status::parse(raw).unwrap_or_default())
 }
 
@@ -138,8 +169,7 @@ async fn follow_as(db: &PgPool, me_id: Uuid, me_name: &str, name: String) -> Res
     if name == me_name {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "that is you"));
     }
-    let (_, already) = stats(db, &name, Some(me_id)).await?;
-    if already {
+    if stats(db, &name, Some(me_id)).await?.following {
         return Ok(());
     }
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM follows WHERE follower_id = $1").bind(me_id).fetch_one(db).await?;
@@ -295,6 +325,46 @@ async fn people(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     Ok(Json(Value::Array(list.into_iter().map(|(_, _, v)| v).collect())))
 }
 
+/// name, verified, avatar, bio, following, status, ended_at
+type RecentRow = (String, bool, Option<i64>, String, bool, String, DateTime<Utc>);
+
+/// `GET /api/recent`: the names whose last stream ended most recently, as home's recently
+/// offline (under the live cards, before the people), newest end first, 12 at most. A row's
+/// streams are its account's (`user_id`, so a rename keeps them under the name it has now) or,
+/// for a free name, the name's; a stranger's stream under a name an account took later is
+/// nobody's, `list_sessions`'s rule. One live again is not offline and is left out. `ended_at`
+/// is when the last stream ended; `following` is for the login.
+async fn recent(State(s): State<AppState>, Me(me): Me) -> ApiResult {
+    let rows: Vec<RecentRow> = sqlx::query_as(
+        "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
+                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $1 AND f.followed_id = s.id), s.status, last.ended_at
+         FROM (
+             SELECT s.id, max(se.ended_at) AS ended_at
+             FROM sessions se
+             JOIN streamers s ON s.id = se.user_id OR (se.user_id IS NULL AND s.name = se.name AND s.password_hash IS NULL)
+             WHERE se.ended_at IS NOT NULL
+             GROUP BY s.id
+         ) last
+         JOIN streamers s ON s.id = last.id
+         ORDER BY last.ended_at DESC
+         LIMIT $2",
+    )
+    .bind(me.as_ref().map(|a| a.id))
+    .bind(RECENT_SCAN)
+    .fetch_all(&s.db)
+    .await?;
+    let people: Vec<(String, Status)> = rows.iter().map(|r| choice(&r.0, &r.5)).collect();
+    let words = words(&s, &people).await?;
+    let out = rows.into_iter().filter_map(|(name, verified, avatar, bio, following, _, ended_at)| {
+        let (live, word) = words.get(&name).copied().unwrap_or((false, Presence::Offline));
+        if live {
+            return None;
+        }
+        Some(json!({ "name": name, "verified": verified, "avatar": avatar, "bio": bio, "presence": word, "following": following, "ended_at": ended_at }))
+    });
+    Ok(Json(Value::Array(out.take(RECENT_LIMIT).collect())))
+}
+
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/streamers/{name}/follow", post(follow))
@@ -302,6 +372,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/following", get(following))
         .route("/api/search", get(search))
         .route("/api/people", get(people))
+        .route("/api/recent", get(recent))
 }
 
 #[cfg(test)]
@@ -340,7 +411,7 @@ mod tests {
         assert_eq!(followed, vec![alice], "the edge points at the account, not a row under the held name");
         let ghosts: i64 = sqlx::query_scalar("SELECT count(*) FROM streamers WHERE name = $1").bind(&old).fetch_one(&pool).await.unwrap();
         assert_eq!(ghosts, 0, "no bare row under a held name");
-        assert_eq!(stats(&pool, &new, Some(fan)).await.unwrap(), (1, true));
+        assert_eq!(stats(&pool, &new, Some(fan)).await.unwrap(), Stats { followers: 1, following: true, follows_you: false });
 
         // the holder following her own old name is following herself
         let err = follow_as(&pool, alice, &new, old.clone()).await.expect_err("that is you");
@@ -359,7 +430,7 @@ mod tests {
         assert_ne!(bare, alice);
         let followed: Vec<Uuid> = edges_of(&pool, other).await.into_iter().map(|(id, _)| id).collect();
         assert_eq!(followed, vec![bare]);
-        assert_eq!(stats(&pool, &new, Some(other)).await.unwrap(), (1, false));
+        assert_eq!(stats(&pool, &new, Some(other)).await.unwrap(), Stats { followers: 1, following: false, follows_you: false });
     }
 
     #[test]

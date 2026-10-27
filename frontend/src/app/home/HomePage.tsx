@@ -1,11 +1,11 @@
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { hoverPreview } from '@/app/home/hover';
 import { stillPictures } from '@/app/home/stills';
-import { api, type LiveStream, type Person } from '@/infra/api';
+import { api, type LiveStream, type Person, type Recent } from '@/infra/api';
 import { enterHome, homeErrorAtom, homeNowAtom, homeStreamsAtom, leaveHome } from '@/infra/atoms/home-atoms';
 import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
@@ -17,7 +17,7 @@ import { PersonRow } from '@/shared-components/PersonRow';
 import { TestBadge } from '@/shared-components/TestBadge';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { cn } from '@/utils/cn';
-import { since } from '@/utils/since';
+import { ago, since } from '@/utils/since';
 
 /** The people under the streams: who is here changes by the minute, not the second. */
 const PEOPLE_POLL_MS = 10_000;
@@ -26,6 +26,21 @@ const FEATURED = 2;
 
 /** One card per column, as many columns as fit: 1 on a phone, 2 on a tablet, 4 at full width. */
 const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-6';
+/** The smaller grid of the people: a rectangle each, as many as fit. */
+const PEOPLE_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3';
+/** The recently offline: the same rectangle, the live cards' width, so "last live 12 min ago" has room beside the face and the button. */
+const RECENT_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3';
+/**
+ * The heading over each part of the page: `active streams` in the top row, `recently offline`,
+ * `people`. The words and the count over a fat line as wide as they are, the line's colour saying
+ * what the part holds: green under the live, grey under the rest. 33px tall in all, so in the top
+ * row it stays inside go live's 38.
+ */
+const SECTION_TITLE = 'flex w-fit items-baseline gap-2 border-b-4 pb-1 text-xl font-semibold leading-tight';
+const LIVE_LINE = 'border-increase';
+const OFFLINE_LINE = 'border-textTertiary';
+/** The number beside the words, a step quieter. */
+const SECTION_COUNT = 'text-textSecondary';
 /**
  * A card is the panel look without its offset shadow: in a grid, the offsets read as a second
  * box behind every stream. The stroke goes blue on hover and keyboard focus instead.
@@ -204,9 +219,11 @@ function People() {
   const here = list.filter((p) => p.presence !== 'offline').length;
   return (
     <section id="people" aria-labelledby="people-title" className="mt-10">
-      <h2 id="people-title" className="mb-4 flex items-baseline gap-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">
+      <h2 id="people-title" className={cn(SECTION_TITLE, OFFLINE_LINE, 'mb-4')}>
         people
-        <span id="people-count">{list.length}</span>
+        <span id="people-count" className={SECTION_COUNT}>
+          {list.length}
+        </span>
         {here > 0 && (
           <>
             <span aria-hidden>·</span>
@@ -216,11 +233,60 @@ function People() {
           </>
         )}
       </h2>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3">
+      <div className={PEOPLE_GRID}>
         {list.map((p) => (
           <article key={p.name} id={`person-${p.name}`} data-presence={p.presence} className={cn(CARD_LINK, 'flex items-center gap-2 p-3')}>
             <PersonRow id={`person-link-${p.name}`} name={p.name} verified={p.verified} avatar={p.avatar} bio={p.bio} presence={p.presence} size="card" />
             <FollowButton id={`person-follow-${p.name}`} name={p.name} small className="self-start" />
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Who was live lately and is not now, under the live cards (docs/follows.md): the people's
+ * rectangle, with a line saying when the last stream ended, "last live 3 hr ago", on the page's
+ * clock. Newest end first, the api's order and cut. Asked again on the people's cadence, and the
+ * moment the live set changes: a card that just left the grid above lands here without the wait.
+ */
+function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
+  const recent = useQuery({
+    queryKey: ['recent', liveKey],
+    queryFn: api.recent,
+    placeholderData: keepPreviousData,
+    refetchInterval: PEOPLE_POLL_MS,
+    refetchOnWindowFocus: false
+  });
+  const list: Recent[] = recent.data ?? [];
+  if (!recent.data || list.length === 0) return null;
+  return (
+    <section id="recent" aria-labelledby="recent-title" className="mt-10">
+      <h2 id="recent-title" className={cn(SECTION_TITLE, OFFLINE_LINE, 'mb-4')}>
+        recently offline
+        <span id="recent-count" className={SECTION_COUNT}>
+          {list.length}
+        </span>
+      </h2>
+      <div className={RECENT_GRID}>
+        {list.map((p) => (
+          <article key={p.name} id={`recent-${p.name}`} data-presence={p.presence} className={cn(CARD_LINK, 'flex items-center gap-2 p-3')}>
+            <PersonRow
+              id={`recent-link-${p.name}`}
+              name={p.name}
+              verified={p.verified}
+              avatar={p.avatar}
+              bio={p.bio}
+              presence={p.presence}
+              size="card"
+              note={
+                <span id={`recent-when-${p.name}`} title={new Date(p.ended_at).toLocaleString()}>
+                  last live {ago(p.ended_at, now)}
+                </span>
+              }
+            />
+            <FollowButton id={`recent-follow-${p.name}`} name={p.name} small className="self-start" />
           </article>
         ))}
       </div>
@@ -285,9 +351,22 @@ export function HomePage() {
     []
   );
 
-  // no title: the row is just go live and settings, and the cards are the page. search is the sidebar's. the empty state has go live again.
+  // no title: the row is the `active streams` label with its count, then go live and settings, and the cards are the page.
+  // search is the sidebar's. the empty state has go live again.
   return (
-    <PageFrame wide>
+    <PageFrame
+      wide
+      label={
+        <h2 id="live-title" className={cn(SECTION_TITLE, LIVE_LINE)}>
+          active streams
+          {list && (
+            <span id="live-count" className={SECTION_COUNT}>
+              {list.length}
+            </span>
+          )}
+        </h2>
+      }
+    >
       {error && (
         <p className="border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
           api is down: {error}
@@ -326,6 +405,7 @@ export function HomePage() {
           </div>
         )}
       </div>
+      {!error && <RecentlyOffline liveKey={namesKey} now={now} />}
       {!error && <People />}
     </PageFrame>
   );

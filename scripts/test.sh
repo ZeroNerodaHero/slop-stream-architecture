@@ -22,6 +22,8 @@
 #   follows    a login follows names: counts and the flag on a profile, the list with its words, a free name gets a row, the box over the corner
 #              panel (hover: who you follow, streaming first; search finds and follows), the watch page's button and count, home's people under
 #              the streams (online first) and the top search, a rename keeps the followers
+#   dms        direct messages: nobody 401, a stranger 403 until both follows are there, a friend's line kept and listed with its count of what is new,
+#              read marks, paging at 50, the window gets a line pushed and sends one back, a hidden window counts on the sidebar and a second tab agrees
 #   preview    /watch/<name> html: title + og tags offline, with a picture, with the offline picture, live with the thumbnail; the pictures round-trip,
 #              the offline picture and the line under the word show on the page and in the profile tab
 #   errors     /api/health has the monitor fields, a page's error report lands (204, log, debug db), bad ones 400, /admin renders
@@ -42,6 +44,10 @@
 #   about      the about tab: the sample's blocks and media (this origin only), the music player plays and pauses, every css selector lands
 #              under the box, hostile css (hide the page, restyle the title, url(), @import, @font-face, position: fixed, a closing tag) is
 #              stripped with nothing fetched and nothing outside the box touched
+#   socials    the socials tab: a login's document of links through the api (a url that is not http(s), a kind off the list, too many links
+#              and a stranger all refused), the links drawn on the watcher's tab as anchors that leave safely (rel, target) wearing the
+#              layout and the size, nothing fetched from elsewhere, the profile tab editing them (the cards, a row from its square, the
+#              arrows, ×) so the owner's own page follows without a reload; the corner panel's picture is your page and the gear is in it
 #   regress    token-gated stop, auto-recovery, trailing slash, fast restart, races, bad offers
 #   monitor    (local only) `api monitor` watches this stack and a dead address: up with the right build,
 #              down with a reason, the page shows both, a restart keeps its memory. runs monitor/docker-compose.yml
@@ -127,6 +133,7 @@ run chat
 run auth
 run groups
 run follows
+run dms
 run preview
 run errors
 run pip
@@ -135,6 +142,7 @@ run screen
 run presence
 run calendar
 run about
+run socials
 if [ "$LOCAL" = 1 ]; then
   run regress
   run monitor

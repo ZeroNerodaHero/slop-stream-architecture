@@ -21,6 +21,12 @@
 //! in `offline_at` as the `?v=`. Newer than ids, so there is no name key to lift. With it
 //! goes a line under the word, `offline_note`. Both through the bio's gate.
 //!
+//! Socials are where else to find them (docs/socials.md): the `socials` tab under the player.
+//! One jsonb document on the row, replaced whole like the bio: how the links sit (`row` or
+//! `grid`), how big, and the links, each a kind from a fixed list (the icon the page draws),
+//! an http(s) url and a label of theirs. Checked at the door, every field: a url that is not
+//! http(s) with a host never reaches the row, so the page can draw what the row holds.
+//!
 //! Assets are the pictures a streamer lays onto the scene (docs/screen.md): png, jpeg, gif or
 //! webp, up as they are (a gif keeps its frames, a png its holes), so the api sniffs the first
 //! bytes and never decodes. Up to 24 a name, 2 mb each, at `assets/<id>/<n>.<ext>`, listed by
@@ -48,14 +54,16 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
+use chrono::{DateTime, Utc};
 use rand::rngs::OsRng;
 use rand::RngCore;
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{self, Me};
+use crate::chat::clean_text;
 use crate::presence::{self, Presence};
 use crate::s3;
 use crate::{is_live, may_write, thumb_exists, unique_violation, valid_name, ApiError, ApiResult, AppState, Name, PasswordQuery};
@@ -107,20 +115,29 @@ pub(crate) struct Profile {
     pub(crate) offline: Option<i64>,
     /// The line under the word while they are not live. Empty for none.
     pub(crate) offline_note: String,
+    /// When the account was made: the row's `created_at`, for a claimed name only (a free
+    /// name's row is made by whoever first saves a bio or follows it, and says nothing about
+    /// a person). The person card's `joined`. None for a free name.
+    pub(crate) joined: Option<DateTime<Utc>>,
+    /// Where else to find them: the links under the player, as the row keeps them. The empty document for none.
+    pub(crate) socials: Socials,
 }
 
-/// Bio, picture versions, account flag and the offline line in one query. A name nobody saved anything for is all defaults.
+/// Bio, picture versions, account flag, the offline line, when the account was made and the links, in one query. A name nobody saved anything for is all defaults.
 pub(crate) async fn load_profile(db: &PgPool, name: &str) -> Result<Profile, sqlx::Error> {
-    let row: Option<(String, Option<i64>, bool, Option<i64>, String)> = sqlx::query_as(
+    let row: Option<(String, Option<i64>, bool, Option<i64>, String, Option<DateTime<Utc>>, Value)> = sqlx::query_as(
         "SELECT bio, (EXTRACT(EPOCH FROM avatar_at))::bigint, password_hash IS NOT NULL,
-                (EXTRACT(EPOCH FROM offline_at))::bigint, offline_note
+                (EXTRACT(EPOCH FROM offline_at))::bigint, offline_note,
+                CASE WHEN password_hash IS NOT NULL THEN created_at END, socials
          FROM streamers WHERE name = $1",
     )
     .bind(name)
     .fetch_optional(db)
     .await?;
-    let (bio, avatar, verified, offline, offline_note) = row.unwrap_or_default();
-    Ok(Profile { name: name.to_owned(), bio, avatar, verified, offline, offline_note })
+    let (bio, avatar, verified, offline, offline_note, joined, socials) = row.unwrap_or_default();
+    // the row's json as the document, and the empty one for a row that has none (or one from before the column)
+    let socials = serde_json::from_value(socials).unwrap_or_default();
+    Ok(Profile { name: name.to_owned(), bio, avatar, verified, offline, offline_note, joined, socials })
 }
 
 // ---- the row behind a name ---------------------------------------------------------------
@@ -871,6 +888,248 @@ async fn put_offline_note(
     Ok(Json(json!({ "name": name, "offline_note": note })))
 }
 
+// ---- where else to find them (docs/socials.md) ------------------------------------------------
+
+/// How many links one name may put under its player.
+const MAX_LINKS: usize = 20;
+/// A link as kept, at most. The page's box stops here too.
+const MAX_URL_CHARS: usize = 500;
+/// The words on a link, if they gave any. One line.
+const MAX_LABEL_CHARS: usize = 40;
+/// The whole document, as a body: twenty links with the longest url and label each is under 12 kb.
+const MAX_SOCIALS_BYTES: usize = 32 * 1024;
+
+/// How the links sit on the page: in a line that wraps, or as squares with the words under each.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Layout {
+    #[default]
+    Row,
+    Grid,
+}
+
+impl Layout {
+    fn parse(raw: &str) -> Option<Layout> {
+        match raw {
+            "row" => Some(Layout::Row),
+            "grid" => Some(Layout::Grid),
+            _ => None,
+        }
+    }
+}
+
+/// How big the icons are drawn.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Size {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl Size {
+    fn parse(raw: &str) -> Option<Size> {
+        match raw {
+            "small" => Some(Size::Small),
+            "medium" => Some(Size::Medium),
+            "large" => Some(Size::Large),
+            _ => None,
+        }
+    }
+}
+
+/// The places a link can be of: the word the page picks its icon by. `web` is any other site.
+/// A word is a label the owner picks, never a check on the host: a `youtube` link may be a
+/// `youtu.be`, a redirector, a linktree. What is checked is the url, the same for every kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Platform {
+    Tiktok,
+    Youtube,
+    Twitch,
+    Kick,
+    Discord,
+    Instagram,
+    X,
+    Threads,
+    Bluesky,
+    Facebook,
+    Snapchat,
+    Reddit,
+    Github,
+    Spotify,
+    Soundcloud,
+    Patreon,
+    Telegram,
+    Steam,
+    Web,
+}
+
+/// Each kind and its word on the wire. One list, read both ways.
+const PLATFORMS: &[(Platform, &str)] = &[
+    (Platform::Tiktok, "tiktok"),
+    (Platform::Youtube, "youtube"),
+    (Platform::Twitch, "twitch"),
+    (Platform::Kick, "kick"),
+    (Platform::Discord, "discord"),
+    (Platform::Instagram, "instagram"),
+    (Platform::X, "x"),
+    (Platform::Threads, "threads"),
+    (Platform::Bluesky, "bluesky"),
+    (Platform::Facebook, "facebook"),
+    (Platform::Snapchat, "snapchat"),
+    (Platform::Reddit, "reddit"),
+    (Platform::Github, "github"),
+    (Platform::Spotify, "spotify"),
+    (Platform::Soundcloud, "soundcloud"),
+    (Platform::Patreon, "patreon"),
+    (Platform::Telegram, "telegram"),
+    (Platform::Steam, "steam"),
+    (Platform::Web, "web"),
+];
+
+impl Platform {
+    pub(crate) fn parse(raw: &str) -> Option<Platform> {
+        PLATFORMS.iter().find(|(_, word)| *word == raw).map(|(kind, _)| *kind)
+    }
+    fn word(self) -> &'static str {
+        PLATFORMS.iter().find(|(kind, _)| *kind == self).map(|(_, word)| *word).unwrap_or("web")
+    }
+}
+
+impl Serialize for Platform {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.word())
+    }
+}
+
+/// A word the row holds that this build does not know (a kind taken off the list) reads as
+/// `web`: the link stays, with the plain icon. The door (`clean_socials`) is where a word is refused.
+impl<'de> Deserialize<'de> for Platform {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Platform, D::Error> {
+        let word = String::deserialize(d)?;
+        Ok(Platform::parse(&word).unwrap_or(Platform::Web))
+    }
+}
+
+/// One link: where, the url, and the words on it ('' for the kind's own word).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SocialLink {
+    pub(crate) kind: Platform,
+    pub(crate) url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) label: String,
+}
+
+/// The document the row keeps and the page draws. Replaced whole, like the bio.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+pub(crate) struct Socials {
+    pub(crate) layout: Layout,
+    pub(crate) size: Size,
+    pub(crate) links: Vec<SocialLink>,
+}
+
+/// The body as the page sends it: strings, checked below. `layout` and `size` may be left out.
+#[derive(Deserialize)]
+struct SocialsBody {
+    #[serde(default)]
+    layout: Option<String>,
+    #[serde(default)]
+    size: Option<String>,
+    #[serde(default)]
+    links: Vec<LinkBody>,
+}
+
+#[derive(Deserialize)]
+struct LinkBody {
+    kind: String,
+    url: String,
+    #[serde(default)]
+    label: String,
+}
+
+fn bad_url() -> ApiError {
+    ApiError::new(StatusCode::BAD_REQUEST, "bad url. http or https, 500 characters at most")
+}
+
+/// A link as kept: absolute, `http` or `https`, with a host and no credentials, MAX_URL_CHARS at
+/// most, written back the way the parser has it (the scheme and host lowercased, a control
+/// character escaped: nothing a browser would read differently, and nothing postgres refuses in
+/// json). None for everything else: `javascript:`, `data:`, a path, a bare `twitch.tv/bob`. The
+/// parser is the whatwg one, the browser's own `new URL`, so the api and the page agree.
+fn clean_url(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.chars().count() > MAX_URL_CHARS {
+        return None;
+    }
+    let url = url::Url::parse(raw).ok()?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return None;
+    }
+    // `https://twitch.tv@evil.example/` reads as twitch and lands elsewhere
+    if !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    let kept = String::from(url);
+    (kept.chars().count() <= MAX_URL_CHARS).then_some(kept)
+}
+
+/// The words on a link as kept: a chat line's cleaning (no control or invisible characters),
+/// one line, MAX_LABEL_CHARS at most. Empty for none: the page says the kind's word then.
+fn clean_label(raw: &str) -> String {
+    clean_text(raw).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_LABEL_CHARS).collect()
+}
+
+/// The body as the document the row will hold, or the first thing wrong with it. Refused, not
+/// trimmed: the bio loses its tail quietly, but a link dropped from the middle of a list is a save
+/// the owner cannot see. A layout or size left out is the default; one given wrong is refused.
+fn clean_socials(body: SocialsBody) -> Result<Socials, ApiError> {
+    let layout = match body.layout.as_deref().map(str::trim) {
+        None | Some("") => Layout::Row,
+        Some(raw) => Layout::parse(raw).ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "bad layout. one of row, grid"))?,
+    };
+    let size = match body.size.as_deref().map(str::trim) {
+        None | Some("") => Size::Medium,
+        Some(raw) => Size::parse(raw).ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "bad size. one of small, medium, large"))?,
+    };
+    if body.links.len() > MAX_LINKS {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "too many links. 20 at most"));
+    }
+    let mut links = Vec::with_capacity(body.links.len());
+    for link in body.links {
+        let kind = Platform::parse(&link.kind.trim().to_lowercase()).ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "bad kind"))?;
+        let url = clean_url(&link.url).ok_or_else(bad_url)?;
+        links.push(SocialLink { kind, url, label: clean_label(&link.label) });
+    }
+    Ok(Socials { layout, size, links })
+}
+
+/// The document, replaced whole. The bio's gate and the bio's upsert, so a name nobody saved
+/// anything for gets its row here too; an empty list clears it. → `{ name, socials }` as kept.
+async fn put_socials(
+    State(s): State<AppState>,
+    Name(name): Name,
+    me: Me,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
+    body: Result<Json<SocialsBody>, JsonRejection>,
+) -> ApiResult {
+    let Query(q) = q?;
+    let Json(body) = body?;
+    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    let socials = clean_socials(body)?;
+    sqlx::query(
+        "INSERT INTO streamers (name, socials) VALUES ($1, $2)
+         ON CONFLICT (name) DO UPDATE SET socials = EXCLUDED.socials, updated_at = now()",
+    )
+    .bind(&name)
+    .bind(serde_json::to_value(&socials).unwrap_or_else(|_| json!({})))
+    .execute(&s.db)
+    .await?;
+    log::info!("{name}: {} links", socials.links.len());
+    // the document, not the row's json: postgres orders the keys its own way, and the profile read and the grant write the struct
+    Ok(Json(json!({ "name": name, "socials": socials })))
+}
+
 // ---- the watch document ------------------------------------------------------------------
 
 /// Text into html: safe inside a tag and inside a double-quoted attribute.
@@ -1102,6 +1361,8 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/streamers/{name}/assets", get(list_assets).put(put_asset).layer(DefaultBodyLimit::max(MAX_ASSET_BYTES)))
         .route("/api/streamers/{name}/assets/{id}", get(get_asset).delete(delete_asset))
         .route("/api/streamers/{name}/offline-note", put(put_offline_note))
+        // the links are words, not a picture: a body past this is not a document anyone wrote
+        .route("/api/streamers/{name}/socials", put(put_socials).layer(DefaultBodyLimit::max(MAX_SOCIALS_BYTES)))
         .route("/watch/", get(watch_nobody))
         .route("/watch/{*rest}", get(watch_page))
 }
@@ -1153,7 +1414,7 @@ mod tests {
     }
 
     fn profile(bio: &str, avatar: Option<i64>, verified: bool) -> Profile {
-        Profile { name: "bob".into(), bio: bio.into(), avatar, verified, offline: None, offline_note: String::new() }
+        Profile { name: "bob".into(), bio: bio.into(), avatar, verified, offline: None, offline_note: String::new(), joined: None, socials: Socials::default() }
     }
 
     #[test]
@@ -1206,6 +1467,53 @@ mod tests {
         assert_eq!(clean_note("  back\n\ttuesday   8pm  "), "back tuesday 8pm");
         assert_eq!(clean_note("").len(), 0);
         assert_eq!(clean_note(&"x".repeat(300)).chars().count(), MAX_NOTE_CHARS);
+    }
+
+    #[test]
+    fn a_link_is_http_with_a_host_and_nothing_else() {
+        assert_eq!(clean_url(" https://twitch.tv/bob ").as_deref(), Some("https://twitch.tv/bob"));
+        // written back the parser's way: the scheme and the host lowercased
+        assert_eq!(clean_url("HTTP://Example.COM").as_deref(), Some("http://example.com/"));
+        for bad in ["javascript:alert(1)", "data:text/html,hi", "twitch.tv/bob", "/watch/bob", "https://", "ftp://x.com/a", "https://twitch.tv@evil.example/", "https://bob:pw@x.com/", ""] {
+            assert!(clean_url(bad).is_none(), "{bad:?} got through");
+        }
+        assert!(clean_url(&format!("https://x.com/{}", "a".repeat(MAX_URL_CHARS))).is_none());
+    }
+
+    #[test]
+    fn the_document_is_checked_at_the_door() {
+        let link = |kind: &str, url: &str, label: &str| LinkBody { kind: kind.into(), url: url.into(), label: label.into() };
+        let body = |links: Vec<LinkBody>| SocialsBody { layout: None, size: None, links };
+        let doc = clean_socials(SocialsBody {
+            layout: Some("grid".into()),
+            size: Some("large".into()),
+            links: vec![link("youtube", "https://youtube.com/@bob", "  my\u{200b}   channel "), link("WEB", "https://example.com", "")],
+        })
+        .unwrap();
+        assert_eq!((doc.layout, doc.size), (Layout::Grid, Size::Large));
+        assert_eq!(doc.links[0].label, "my channel");
+        assert_eq!(doc.links[1].kind, Platform::Web);
+        assert_eq!(doc.links[1].url, "https://example.com/");
+        // left out: the defaults. an empty list is a document too (it clears)
+        let empty = clean_socials(body(vec![])).unwrap();
+        assert_eq!(empty, Socials::default());
+        assert_eq!((empty.layout, empty.size), (Layout::Row, Size::Medium));
+        // refused, with the word for it
+        assert_eq!(clean_socials(body(vec![link("myspace", "https://x.com", "")])).unwrap_err().message(), "bad kind");
+        assert_eq!(clean_socials(body(vec![link("web", "javascript:alert(1)", "")])).unwrap_err().message(), "bad url. http or https, 500 characters at most");
+        assert_eq!(clean_socials(body((0..=MAX_LINKS).map(|_| link("web", "https://x.com", "")).collect())).unwrap_err().message(), "too many links. 20 at most");
+        assert_eq!(clean_socials(SocialsBody { layout: Some("spiral".into()), size: None, links: vec![] }).unwrap_err().message(), "bad layout. one of row, grid");
+        assert_eq!(clean_socials(SocialsBody { layout: None, size: Some("huge".into()), links: vec![] }).unwrap_err().message(), "bad size. one of small, medium, large");
+        // the label is capped, not refused
+        assert_eq!(clean_label(&"y".repeat(100)).chars().count(), MAX_LABEL_CHARS);
+        // the row round-trips, an empty label is left off the wire, and a word this build does not know reads as web
+        let json = serde_json::to_value(&doc).unwrap();
+        assert!(json["links"][1].get("label").is_none());
+        assert_eq!(serde_json::from_value::<Socials>(json).unwrap(), doc);
+        let odd: Socials = serde_json::from_value(json!({ "layout": "row", "size": "small", "links": [{ "kind": "myspace", "url": "https://x.com/" }] })).unwrap();
+        assert_eq!((odd.links[0].kind, odd.links[0].label.as_str(), odd.size), (Platform::Web, "", Size::Small));
+        // a row from before the column, or nothing at all, is the empty document
+        assert_eq!(serde_json::from_value::<Socials>(Value::Null).unwrap_or_default(), Socials::default());
     }
 
     #[test]

@@ -234,7 +234,7 @@ export function LivePage() {
                 flat
                 disabled={!canShare}
                 title={screens.length >= SCREEN_SLOTS ? `${SCREEN_SLOTS} screens at most` : undefined}
-                onClick={() => void shareScreen('screen')}
+                onClick={() => void shareScreen()}
               >
                 share screen
               </Button>

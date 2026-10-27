@@ -117,8 +117,8 @@ function Row({ row, master = false }: { row: MixRow; master?: boolean }) {
 }
 
 /**
- * The sound, under the preview while the stream is up (docs/audio.md): a row for the mic and
- * one for each shared tab's sound, each with its bar, its mute and its fader, and under them
+ * The sound, under the preview while the stream is up (docs/audio.md): a row for the mic (and
+ * for any sound added later), each with its bar, its mute and its fader, and under them
  * `everyone hears`, the mix that leaves, with the same. The faders are what the watchers get;
  * nothing here plays on this machine.
  */
@@ -143,7 +143,7 @@ export function Mixer() {
             </div>
           )}
           <ul className="m-0 list-none divide-y divide-primaryStroke p-0">
-            {rows.length === 0 && <li className="px-3 py-2 text-sm text-textTertiary">no mic. a tab shared with its sound shows up here</li>}
+            {rows.length === 0 && <li className="px-3 py-2 text-sm text-textTertiary">no mic: the stream is silent</li>}
             {rows.map((row) => (
               <Row key={row.id} row={row} />
             ))}

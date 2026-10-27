@@ -47,8 +47,6 @@ const CAMERA_SHARING_BITRATE = 500_000;
 const SCREENS_BITRATE = 3_000_000;
 const BUSY_PHASES: readonly PublishPhase[] = ['starting', 'connecting', 'live', 'reconnecting'];
 const BAD_PHASES: readonly PublishPhase[] = ['camera-blocked', 'no-camera', 'failed'];
-/** Sharing a screen needs the socket, which exists once connected. */
-const SHARE_PHASES: readonly PublishPhase[] = ['live', 'reconnecting'];
 /**
  * A shared screen is at most this big: a retina display would hand over a picture too big for
  * the bitrate, and the bits go on pixels the cap cannot afford (docs/bitrates.md).
@@ -58,30 +56,13 @@ const SCREEN_CAP: MediaTrackConstraints = { width: { max: 1920 }, height: { max:
 interface DisplayHints extends DisplayMediaStreamOptions {
   selfBrowserSurface?: 'include' | 'exclude';
   surfaceSwitching?: 'include' | 'exclude';
-  systemAudio?: 'include' | 'exclude';
-  monitorTypeSurfaces?: 'include' | 'exclude';
 }
-/** What the + menu offers: a screen or a window, the picture alone; or a tab with its sound. */
-export type ShareKind = 'screen' | 'tab';
 /**
  * The picker for a screen or a window: this site's own tab kept out of it (sharing it is a
  * mirror), switching which tab is shared without stopping. Hints: a browser that throws on
- * them is asked again with `SCREEN_CAP` alone. No sound.
+ * them is asked again with `SCREEN_CAP` alone. No sound (docs/audio.md).
  */
 const SCREEN_HINTS: DisplayHints = { video: SCREEN_CAP, audio: false, selfBrowserSurface: 'exclude', surfaceSwitching: 'include' };
-/**
- * The picker for a tab with its sound, opened on the tabs: the sound as it is (chrome would
- * otherwise run it through the mic's echo cancelling and gain), no system sound, no screens.
- * Only chromium hands a tab's sound over; `tabShareSupported` says where to offer it.
- */
-const TAB_HINTS: DisplayHints = {
-  video: { ...SCREEN_CAP, displaySurface: 'browser' } as MediaTrackConstraints,
-  audio: { echoCancellation: false, autoGainControl: false, noiseSuppression: false },
-  selfBrowserSurface: 'exclude',
-  surfaceSwitching: 'include',
-  systemAudio: 'exclude',
-  monitorTypeSurfaces: 'exclude'
-};
 /** A drag moves a layer many times a second; the watchers are told at most this often, and within this long of the last move. */
 const SCENE_SEND_MS = 150;
 /** The encoders follow the scene (a small camera is sent small) this long after it settles: a new size costs a keyframe. */
@@ -109,8 +90,6 @@ const spareStreamAtom = atom<MediaStream | null>(null);
 export const screenStreamAtom = (slot: number) => screenStreamAtoms[slot] ?? spareStreamAtom;
 /** Phones have no screen capture; there the button is not shown at all. */
 export const screenShareSupported = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
-/** A tab with its sound is chromium's: `CaptureController` arrived with it and nowhere else. */
-export const tabShareSupported = screenShareSupported && typeof window !== 'undefined' && 'CaptureController' in window;
 
 // ---- the scene (infra/scene.ts): what is on the stream, and where ---------------------------------
 
@@ -161,7 +140,7 @@ export const livePanelsAtom = atom<LivePanels>((get) => {
 
 // ---- the sound (infra/mixer.ts): what everyone hears, and what goes into it ---------------------
 
-/** One row of the mixer: the fader's place (0..1) and the mute. `mic`, `tab-<source id>` for a share with sound, and the master. */
+/** One row of the mixer: the fader's place (0..1) and the mute. `mic` (and any sound added later), and the master. */
 export interface MixRow {
   id: string;
   label: string;
@@ -210,7 +189,8 @@ const MAX_THUMBS = 6;
 
 export const isPublishingAtom = atom((get) => BUSY_PHASES.includes(get(publishPhaseAtom)));
 export const canStartAtom = atom((get) => get(cameraAtom) !== null && isValidName(get(streamNameAtom)) && !get(isPublishingAtom));
-export const canShareScreenAtom = atom((get) => screenShareSupported && SHARE_PHASES.includes(get(publishPhaseAtom)) && get(screensAtom).length < SCREEN_SLOTS);
+/** A screen can be shared before start too: it is laid out now and goes into its section when the stream begins. */
+export const canShareScreenAtom = atom((get) => screenShareSupported && get(screensAtom).length < SCREEN_SLOTS);
 /**
  * The link to share. `?s=<session>` makes it a new url every time you go live: chat apps
  * cache a link's preview card (discord for hours, x for days), so without it a card made
@@ -368,9 +348,9 @@ export async function goLive(): Promise<void> {
   if (store.get(pipAtom)) endWatch();
   store.set(chatRoomAtom, name); // the chat is the room of the name you go live as
 
-  // The sound: one track for the whole stream, mixed in the page (infra/mixer.ts), so a tab's
-  // sound can join later without anyone renegotiating. Made here, in the click, so it runs,
-  // and before the phase changes, so the mic chip finds it when it mounts.
+  // The sound: one track for the whole stream, mixed in the page (infra/mixer.ts), so a source
+  // can join or leave the mix later without anyone renegotiating. Made here, in the click, so it
+  // runs, and before the phase changes, so the mic chip finds it when it mounts.
   const mic = camera.getAudioTracks()[0];
   if (!mixer) {
     mixer = openMixer();
@@ -405,17 +385,19 @@ export async function goLive(): Promise<void> {
   }
   // One opus, always: the mix, else (no web audio) the mic, else a section with nothing in it.
   // A silent section beats no section: video makes the room's slots from the offer, so a
-  // stream started without a mic could never carry a tab's sound otherwise.
+  // stream started without a mic could never carry a sound added later otherwise.
   const sound = mixer?.outputTrack ?? mic;
   if (sound) myPc.addTransceiver(sound, { direction: 'sendonly', streams: [camera] });
   else myPc.addTransceiver('audio', { direction: 'sendonly' });
-  // The screens' sections, offered now with nothing in them: a screen shared later goes
-  // into one with `replaceTrack`, and nothing is renegotiated, with video or with anyone
-  // watching. The camera is video slot 0 to everyone, these are 1 to SCREEN_SLOTS.
-  screenSenders = Array.from(
-    { length: SCREEN_SLOTS },
-    () => myPc.addTransceiver('video', { direction: 'sendonly', sendEncodings: [{ maxBitrate: SCREENS_BITRATE }] }).sender
-  );
+  // The screens' sections, offered now: a screen shared before start is in its section from the
+  // first frame, the rest are empty, and a screen shared later goes into one with `replaceTrack`.
+  // Nothing is renegotiated either way, with video or with anyone watching. The camera is video
+  // slot 0 to everyone, these are 1 to SCREEN_SLOTS.
+  screenSenders = Array.from({ length: SCREEN_SLOTS }, (_, i) => {
+    const init: RTCRtpTransceiverInit = { direction: 'sendonly', sendEncodings: [{ maxBitrate: SCREENS_BITRATE }] };
+    const track = store.get(screenStreamAtom(i))?.getVideoTracks()[0];
+    return (track ? myPc.addTransceiver(track, init) : myPc.addTransceiver('video', init)).sender;
+  });
 
   try {
     await myPc.setLocalDescription(await myPc.createOffer());
@@ -455,8 +437,10 @@ export async function goLive(): Promise<void> {
   setPhase('connecting', 'connecting');
   if (gone()) return;
   startPublishStats();
-  // the scene as it was laid out before start (a picture, the camera's box), to the first watcher too
+  // what was laid out before start (a screen, a picture, the camera's box), to the first watcher
+  // too, and the upload divided for it
   announceSlots();
+  void tuneSenders();
 }
 
 function sendHeartbeat() {
@@ -485,15 +469,15 @@ function onConnection(state: RTCPeerConnectionState) {
  * still happens. The picker closed without a choice (`NotAllowedError`), or anything else, is
  * `null`: nothing to share, and no second picker.
  */
-async function pickDisplay(kind: ShareKind): Promise<MediaStream | null> {
+async function pickDisplay(): Promise<MediaStream | null> {
   try {
-    return await navigator.mediaDevices.getDisplayMedia(kind === 'tab' ? TAB_HINTS : SCREEN_HINTS);
+    return await navigator.mediaDevices.getDisplayMedia(SCREEN_HINTS);
   } catch (err) {
     const rejectedHints = err instanceof TypeError || (err instanceof DOMException && err.name === 'OverconstrainedError');
     if (!rejectedHints) return null;
   }
   try {
-    return await navigator.mediaDevices.getDisplayMedia({ video: SCREEN_CAP, audio: kind === 'tab' });
+    return await navigator.mediaDevices.getDisplayMedia({ video: SCREEN_CAP, audio: false });
   } catch {
     return null;
   }
@@ -503,29 +487,32 @@ async function pickDisplay(kind: ShareKind): Promise<MediaStream | null> {
  * The share button and the + menu: the browser's picker, one screen (or window, or tab) per
  * press, into the first free screen slot. The picker closed without a choice is nothing. Sharp
  * text over smooth motion (`contentHint`), and no more than 1080p (`SCREEN_CAP`). The browser's
- * own "stop sharing" bar ends the track, which is a stop here. The new screen is a source, put
- * into the scene by the rules (`arrangedAfterAdd`); a tab's sound, when the picker gave it, is a
- * row of the mixer.
+ * own "stop sharing" bar ends the track, which is a stop here. Live, the track goes into the
+ * slot's section now; before start it waits in the slot and the section is offered with it
+ * (`goLive`). Either way the new screen is a source, put into the scene by the rules
+ * (`arrangedAfterAdd`), so the frame can be laid out before anyone sees it.
  */
-export async function shareScreen(kind: ShareKind = 'screen'): Promise<void> {
-  const myPc = pc;
-  if (!myPc || !store.get(canShareScreenAtom)) return;
-  const display = await pickDisplay(kind);
+export async function shareScreen(): Promise<void> {
+  if (!store.get(canShareScreenAtom)) return;
+  const generation = liveGeneration;
+  const display = await pickDisplay();
   if (!display) return;
   const track = display.getVideoTracks()[0];
-  const slot = screenSenders.findIndex((sender) => !sender.track);
-  const sender = screenSenders[slot];
-  // stopped, or every slot filled, while the picker was up
-  if (pc !== myPc || !track || !sender) {
+  const slot = screenStreamAtoms.findIndex((streamAtom) => store.get(streamAtom) === null);
+  // the page was left, or every slot filled, while the picker was up
+  if (generation !== liveGeneration || !track || slot < 0) {
     display.getTracks().forEach((t) => t.stop());
     return;
   }
   track.contentHint = 'detail';
-  try {
-    await sender.replaceTrack(track);
-  } catch {
-    display.getTracks().forEach((t) => t.stop());
-    return;
+  const sender = screenSenders[slot];
+  if (sender) {
+    try {
+      await sender.replaceTrack(track);
+    } catch {
+      display.getTracks().forEach((t) => t.stop());
+      return;
+    }
   }
   track.addEventListener('ended', () => stopScreen(slot));
   const surface = track.getSettings().displaySurface;
@@ -535,12 +522,6 @@ export async function shareScreen(kind: ShareKind = 'screen'): Promise<void> {
   store.set(screenStreamAtom(slot), display);
   store.set(screensAtom, [...store.get(screensAtom), { slot, label }]);
   const id = `s${slot + 1}`;
-  // the sound ends on its own when the tab is switched to one without, and the picture goes on
-  const sound = display.getAudioTracks()[0];
-  if (sound && mixer) {
-    addMixRow(`tab-${id}`, `${label} sound`, sound);
-    sound.addEventListener('ended', () => removeMixRow(`tab-${id}`));
-  }
   const source: Source = { id, kind: 'screen', label, slot: slot + 1, box: FULL, shown: true };
   setSources(arrangedAfterAdd([...store.get(sourcesAtom), source], source, store.get(lastArrangementAtom)));
   store.set(selectedSourceAtom, id);
@@ -560,11 +541,9 @@ export function stopScreen(slot: number) {
     screensAtom,
     screens.filter((s) => s.slot !== slot)
   );
-  // a closed peer refuses this; nothing is lost then, the stream is over
+  // a closed peer refuses this; nothing is lost then, the stream is over. before start there is no sender yet
   screenSenders[slot]?.replaceTrack(null).catch(() => undefined);
-  const id = `s${slot + 1}`;
-  removeMixRow(`tab-${id}`);
-  dropSource(id);
+  dropSource(`s${slot + 1}`);
   screensChanged();
 }
 
@@ -790,14 +769,6 @@ function addMixRow(id: string, label: string, track: MediaStreamTrack) {
   store.set(mixRowsAtom, [...store.get(mixRowsAtom).filter((r) => r.id !== id), row]);
 }
 
-function removeMixRow(id: string) {
-  mixer?.remove(id);
-  store.set(
-    mixRowsAtom,
-    store.get(mixRowsAtom).filter((r) => r.id !== id)
-  );
-}
-
 function setMixRow(id: string, change: (row: MixRow) => MixRow) {
   if (id === MASTER) {
     const row = change(store.get(masterRowAtom));
@@ -986,8 +957,7 @@ export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', {
     store.set(streamAtom, null);
   }
   store.set(screensAtom, []);
-  // the screens go from the scene and their sound from the mix; the camera and the pictures stay, for the next start
-  for (const row of store.get(mixRowsAtom)) if (row.id !== 'mic') removeMixRow(row.id);
+  // the screens go from the scene; the camera and the pictures stay, for the next start
   const sources = store.get(sourcesAtom);
   if (sources.some((s) => s.kind === 'screen')) {
     store.set(sourcesAtom, arrangedAfterRemove(sources.filter((s) => s.kind !== 'screen')));

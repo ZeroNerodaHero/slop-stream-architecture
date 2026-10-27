@@ -11,7 +11,9 @@
 //! own name without asking: `me` carries the word and the choice.
 //!
 //! Facts come from one redis stream, `events`, written by the api (`live`, `ended`, `viewers`,
-//! `status`, `renamed`) and by this module (`seen`). One task per process tails it and routes
+//! `status`, `renamed`, and `dm` / `dm_read` for the direct messages of docs/dms.md, which go
+//! to the sockets that *are* a name rather than to its watchers) and by this module (`seen`).
+//! One task per process tails it and routes
 //! each entry to the sockets that care; the word is derived here, on delivery, from the inputs
 //! (the `live:` key, the set, the column), never carried in a fact, so two writers cannot race
 //! a stale word past a fresh one. The pages never write through this socket: the choice is an
@@ -152,6 +154,11 @@ enum Out {
     Viewers { name: String, viewers: usize },
     /// `name` became `to`. To the account's own sockets and to `name`'s watchers.
     Renamed { name: String, to: String },
+    /// A direct message (docs/dms.md), to the sockets of both names: every device of either sees the same line.
+    Dm { id: i64, from: String, to: String, text: String, at: i64 },
+    /// `name` read its thread with `peer` up to `id` on some device. To `name`'s sockets: the others drop their count.
+    #[serde(rename = "dm_read")]
+    DmRead { name: String, peer: String, id: i64 },
     Error { error: &'static str },
 }
 
@@ -312,6 +319,22 @@ impl Gateway {
                 if e.me != Some((word, status)) {
                     e.me = Some((word, status));
                     let _ = e.tx.send(Out::Me { name: Some(name.to_owned()), presence: word, status });
+                }
+            }
+        }
+    }
+
+    /// A frame to every socket that *is* one of `names` (not their watchers): what a login's
+    /// own devices hear, a direct message, a read mark. Once each, whichever names it wears.
+    async fn tell(&self, names: &[&str], out: Out) {
+        let s = self.registry.0.lock().await;
+        let mut told: HashSet<SocketId> = HashSet::new();
+        for name in names {
+            for id in s.own.get(*name).into_iter().flatten() {
+                if told.insert(*id) {
+                    if let Some(e) = s.by_id.get(id) {
+                        let _ = e.tx.send(out.clone());
+                    }
                 }
             }
         }
@@ -492,6 +515,17 @@ impl Gateway {
                 if let Some(to) = to.filter(|to| valid_name(to) && *to != name) {
                     self.renamed(&name, &to).await;
                 }
+            }
+            // a direct message: `name` is who it is to. both names' own sockets, so the writer's other devices hear it too
+            "dm" => {
+                let (Some(from), Some(id), Some(text)): (Option<String>, Option<i64>, Option<String>) = (entry.get("from"), entry.get("id"), entry.get("text")) else { return };
+                let at: i64 = entry.get("at").unwrap_or(0);
+                self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at }).await;
+            }
+            // `name` read a thread somewhere: its other devices drop their count
+            "dm_read" => {
+                let (Some(peer), Some(id)): (Option<String>, Option<i64>) = (entry.get("peer"), entry.get("id")) else { return };
+                self.tell(&[&name], Out::DmRead { name: name.clone(), peer, id }).await;
             }
             other => log::debug!("events: unknown entry type {other}"),
         }

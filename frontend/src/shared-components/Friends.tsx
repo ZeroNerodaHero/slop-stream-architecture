@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 
 import type { Followed } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { openDm, showDms } from '@/infra/atoms/dm-atoms';
+import { dmUnreadAtom, openDm, showDms } from '@/infra/atoms/dm-atoms';
 import { followNoteAtom, followingAtom, loadFollowing, search, searchBusyAtom, searchQueryAtom, searchResultsAtom, unfollow } from '@/infra/atoms/follow-atoms';
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { friendsShareAtom, type PanelSide, setFriendsShare } from '@/infra/atoms/settings-atoms';
@@ -245,21 +245,27 @@ function Chat({ id, person }: { id: string; person: Person }) {
 
 /**
  * The chat window back on screen (FriendChat.tsx): the chats as they were left, or the friends
- * to pick one from. The far end of the friends line, open only. The footer's action
- * (UserPanel.tsx) in size and colour; leading-none, since text-sm's own 20px line would stand
- * out of the 16px head.
+ * to pick one from, and how many lines are new (docs/dms.md), in blue like the streaming count.
+ * The far end of the friends line, open only. The footer's action (UserPanel.tsx) in size and
+ * colour; leading-none, since text-sm's own 20px line would stand out of the 16px head.
  */
 function ChatsOpener() {
+  const unread = useAtomValue(dmUnreadAtom);
   return (
     <button
       id="chats-open"
       type="button"
-      title="your chats with friends"
+      title={unread > 0 ? `your chats: ${unread} new` : 'your chats with friends'}
       onClick={showDms}
       className="inline-flex shrink-0 items-center gap-1 text-sm leading-none text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline"
     >
       <RiChat3Line aria-hidden size={14} />
       chat
+      {unread > 0 && (
+        <span id="chats-unread" className="font-semibold text-primaryBlue">
+          {unread}
+        </span>
+      )}
     </button>
   );
 }
@@ -278,7 +284,8 @@ function Head({
   open,
   side,
   below,
-  action
+  action,
+  mark
 }: {
   icon: typeof RiUserHeartLine;
   word: string;
@@ -288,6 +295,8 @@ function Head({
   below: number;
   /** A button at the end of the line, away from the icon. Open only, like the word. */
   action?: ReactNode;
+  /** A number on the icon's corner, closed or open: the lines new in the chats (docs/dms.md). 0 for none. */
+  mark?: number;
 }) {
   return (
     <div
@@ -295,8 +304,17 @@ function Head({
       style={{ height: HEAD_PX, marginBottom: below }}
     >
       {/* the icon and the word say what the list's own label says, so readers skip them; the button they do not */}
-      <span aria-hidden className="flex w-[42px] shrink-0 justify-center">
+      <span aria-hidden className="relative flex w-[42px] shrink-0 justify-center">
         <Icon size={16} />
+        {/* the number stands with the closed column too, where the chat button has no room: the one sign something came */}
+        {mark !== undefined && mark > 0 && (
+          <span
+            id="friends-unread"
+            className="absolute -top-1.5 right-1 flex h-4 min-w-4 items-center justify-center border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background"
+          >
+            {mark > 99 ? '99+' : mark}
+          </span>
+        )}
       </span>
       {open && (
         <>
@@ -411,6 +429,7 @@ interface FollowingProps extends ListProps {
  * have no room: only the faces.
  */
 function Following({ side, open, onPick, friends, rest, rows, spacing }: FollowingProps) {
+  const unread = useAtomValue(dmUnreadAtom);
   const { gaps } = spacing;
   const pitchA = FACE_PX + spacing.listA;
   const pitchB = FACE_PX + spacing.listB;
@@ -418,7 +437,7 @@ function Following({ side, open, onPick, friends, rest, rows, spacing }: Followi
     <>
       {friends.length > 0 && (
         <>
-          <Head icon={RiUserHeartLine} word="friends" count={friends.length} open={open} side={side} below={gaps.headA} action={<ChatsOpener />} />
+          <Head icon={RiUserHeartLine} word="friends" count={friends.length} open={open} side={side} below={gaps.headA} action={<ChatsOpener />} mark={unread} />
           <ul id="mutual-list" aria-label="friends" className={LIST} style={{ height: rows.friends * pitchA, gap: spacing.listA }}>
             {friends.map((f) => (
               <Row key={f.name} id={`friend-${f.name}`} person={f} side={side} open={open} onPick={onPick}>
@@ -477,11 +496,9 @@ function Results({ side, open, onPick, gap }: ListProps & { gap: number }) {
 }
 
 interface FriendsProps {
-  /** Widened over the page (hover, focus, or the `following` button), or the column of faces. */
+  /** Widened over the page (hover or focus), or the column of faces. */
   open: boolean;
   side: PanelSide;
-  /** Opened by the button, not the mouse, so the box takes focus. */
-  focusSearch: boolean;
   /** A click on a name: the panel closes. */
   onPick: () => void;
 }
@@ -498,13 +515,12 @@ interface FriendsProps {
  * list would give it, a follow button for a name you do not follow; closing the panel empties
  * it. Every open asks `GET /api/following` again, so the words are now.
  */
-export function Friends({ open, side, focusSearch, onPick }: FriendsProps) {
+export function Friends({ open, side, onPick }: FriendsProps) {
   const me = useAtomValue(meAtom);
   const all = useAtomValue(followingAtom);
   const share = useAtomValue(friendsShareAtom);
   const query = useAtomValue(searchQueryAtom);
   const note = useAtomValue(followNoteAtom);
-  const input = useRef<HTMLInputElement | null>(null);
   const stack = useRef<HTMLDivElement | null>(null);
   // the room for the stack, box included. 0 until measured: then nothing is cut
   const [room, setRoom] = useState(0);
@@ -524,11 +540,6 @@ export function Friends({ open, side, focusSearch, onPick }: FriendsProps) {
     if (open) void loadFollowing();
     else store.set(searchQueryAtom, '');
   }, [open]);
-
-  // the box takes focus when a key opened this
-  useEffect(() => {
-    if (open && focusSearch) input.current?.focus();
-  }, [open, focusSearch]);
 
   // the search, a beat after the last keystroke
   useEffect(() => {
@@ -579,7 +590,6 @@ export function Friends({ open, side, focusSearch, onPick }: FriendsProps) {
               className={cn('pointer-events-none absolute top-1/2 -translate-y-1/2 text-textTertiary', mirrored ? 'right-3' : 'left-3')}
             />
             <input
-              ref={input}
               id="friends-search"
               type="search"
               value={query}

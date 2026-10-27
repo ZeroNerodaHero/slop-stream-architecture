@@ -1,11 +1,12 @@
 /**
- * My profile, from anywhere: the bio, the picture, and what my stream's page shows while I am
- * not live (the offline picture and the line under the word), saved under the name I am, which
- * is the login, else the nick lowercased (every valid nick is a valid name). The user modal's
- * profile tab edits it and the corner panel shows its picture. Its own atoms, not the go live
- * page's: those follow the name box there and are reset when that page is left, which would
- * blank a bio being typed in the modal. The one thing the two share is the picture's version,
- * bridged below.
+ * My profile, from anywhere: the bio, the picture, what my stream's page shows while I am
+ * not live (the offline picture and the line under the word), and where else to find me (the
+ * links, docs/socials.md), saved under the name I am, which is the login, else the nick
+ * lowercased (every valid nick is a valid name). The user modal's profile tab edits it and the
+ * corner panel shows its picture. Its own atoms, not the go live page's: those follow the name
+ * box there and are reset when that page is left, which would blank a bio being typed in the
+ * modal. The one thing the two share is the picture's version, bridged below; the links are
+ * bridged to the watch page the same way, so my own page follows a save.
  */
 
 import { atom } from 'jotai';
@@ -14,8 +15,22 @@ import { api, messageOf } from '@/infra/api';
 import { meAtom, reloadMe } from '@/infra/atoms/auth-atoms';
 import { nickAtom, reconnectChat } from '@/infra/atoms/chat-atoms';
 import { followIdentityOnLivePage, myAvatarAtom, squareJpeg, streamNameAtom, wideJpeg } from '@/infra/atoms/publish-atoms';
+import { socialsAtom, watchNameAtom } from '@/infra/atoms/watch-atoms';
 import { onEvents, reconnectEvents } from '@/infra/events';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
+import {
+  cleanSocials,
+  EMPTY_SOCIALS,
+  kindOfUrl,
+  MAX_SOCIALS,
+  type SocialKind,
+  type SocialLink,
+  type Socials,
+  socialHref,
+  socialsKey,
+  type SocialsLayout,
+  type SocialsSize
+} from '@/infra/socials';
 import { store } from '@/infra/store';
 
 /** Who I am, as a name: the login, else the nick lowercased. '' for nobody yet. */
@@ -36,6 +51,13 @@ export const profileOfflineStatusAtom = atom('');
 /** The line under the word while I am not live, as typed in the box. */
 export const profileOfflineNoteAtom = atom('');
 export const profileOfflineNoteStatusAtom = atom('');
+/** The links as they are being edited (docs/socials.md): the whole document, the urls as typed. Saved with one press, like the bio. */
+export const profileSocialsAtom = atom<Socials>(EMPTY_SOCIALS);
+export const profileSocialsStatusAtom = atom('');
+/** The document as the api last gave or took it, as a key: the draft differs from it while there is something to save. */
+const loadedSocialsAtom = atom(socialsKey(EMPTY_SOCIALS));
+/** Something in the links changed since the last load or save. */
+export const profileSocialsDirtyAtom = atom((get) => socialsKey(get(profileSocialsAtom)) !== get(loadedSocialsAtom));
 
 /** The api keeps this many characters of the line, one line. The box stops there too. */
 export const MAX_OFFLINE_NOTE_CHARS = 140;
@@ -67,9 +89,9 @@ let loadedNote = '';
 let generation = 0;
 
 /**
- * The bio, pictures and offline line of the name I am now. Another name than last time starts
- * clean (its saved bio, pictures and line go, so they cannot be saved under the new one; text
- * being typed stays); the same name again keeps what was loaded.
+ * The bio, pictures, offline line and links of the name I am now. Another name than last time
+ * starts clean (its saved bio, pictures, line and links go, so they cannot be saved under the
+ * new one; text being typed stays); the same name again keeps what was loaded.
  */
 export async function loadMyProfile(): Promise<void> {
   const name = store.get(myNameAtom);
@@ -77,12 +99,15 @@ export async function loadMyProfile(): Promise<void> {
   if (store.get(profileForAtom) !== name) {
     if (store.get(profileBioAtom).trim() === loadedBio) store.set(profileBioAtom, '');
     if (store.get(profileOfflineNoteAtom).trim() === loadedNote) store.set(profileOfflineNoteAtom, '');
+    if (socialsKey(store.get(profileSocialsAtom)) === store.get(loadedSocialsAtom)) store.set(profileSocialsAtom, EMPTY_SOCIALS);
     store.set(profileBioStatusAtom, '');
     store.set(profileAvatarStatusAtom, '');
     store.set(profileAvatarAtom, null);
     store.set(profileOfflineStatusAtom, '');
     store.set(profileOfflineAtom, null);
     store.set(profileOfflineNoteStatusAtom, '');
+    store.set(profileSocialsStatusAtom, '');
+    store.set(loadedSocialsAtom, socialsKey(EMPTY_SOCIALS));
     store.set(profileVerifiedAtom, false);
     store.set(profileForAtom, name);
     loadedBio = loadedNote = '';
@@ -95,6 +120,10 @@ export async function loadMyProfile(): Promise<void> {
     if (!store.get(profileBioAtom)) store.set(profileBioAtom, loadedBio);
     loadedNote = p.offline_note ?? '';
     if (!store.get(profileOfflineNoteAtom)) store.set(profileOfflineNoteAtom, loadedNote);
+    // the links: the api's, unless a row was added while it was answering (an untouched draft is the empty document)
+    const socials = cleanSocials(p.socials);
+    store.set(loadedSocialsAtom, socialsKey(socials));
+    if (socialsKey(store.get(profileSocialsAtom)) === socialsKey(EMPTY_SOCIALS)) store.set(profileSocialsAtom, socials);
     store.set(profileAvatarAtom, p.avatar ?? null);
     store.set(profileOfflineAtom, p.offline ?? null);
     store.set(profileVerifiedAtom, p.verified === true);
@@ -106,6 +135,11 @@ export async function loadMyProfile(): Promise<void> {
 /** The go live page shows the same picture from the same (day-cached) url: keep its version in step. */
 function alsoOnLivePage(name: string, version: number | null) {
   if (store.get(streamNameAtom) === name) store.set(myAvatarAtom, version);
+}
+
+/** My own page open in this tab shows the links from its grant: a save shows there at once, no reload. */
+function alsoOnWatchPage(name: string, socials: Socials) {
+  if (store.get(watchNameAtom) === name) store.set(socialsAtom, socials);
 }
 
 export async function saveMyBio(): Promise<void> {
@@ -209,6 +243,99 @@ export async function saveMyOfflineNote(): Promise<void> {
     store.set(profileOfflineNoteStatusAtom, saved.offline_note ? 'saved' : 'cleared');
   } catch (err) {
     store.set(profileOfflineNoteStatusAtom, `not saved: ${messageOf(err)}`);
+  }
+}
+
+// ---- the links (docs/socials.md) ----------------------------------------------------------
+
+/** Every edit of the draft comes through here: the document changes, and a stale `saved` goes, the bio box's onChange in one place. */
+function editSocials(change: (doc: Socials) => Socials) {
+  store.set(profileSocialsAtom, change(store.get(profileSocialsAtom)));
+  if (store.get(profileSocialsStatusAtom)) store.set(profileSocialsStatusAtom, '');
+}
+
+/** A row of that kind, with an empty url box, at the end. Nothing past the cap. Returns the row's index, for the box to take focus. */
+export function addSocial(kind: SocialKind): number {
+  const at = store.get(profileSocialsAtom).links.length;
+  if (at >= MAX_SOCIALS) return -1;
+  editSocials((doc) => ({ ...doc, links: [...doc.links, { kind, url: '', label: '' }] }));
+  return at;
+}
+
+/**
+ * The url or the words of row `i`, as typed. A `web` row whose url lands on a host from the
+ * list takes that kind (a hint, the way the name box lowercases); a kind the owner picked stands.
+ */
+export function editSocial(i: number, patch: Partial<Pick<SocialLink, 'url' | 'label'>>) {
+  editSocials((doc) => ({
+    ...doc,
+    links: doc.links.map((link, n) => {
+      if (n !== i) return link;
+      const next = { ...link, ...patch };
+      if (patch.url !== undefined && link.kind === 'web') next.kind = kindOfUrl(socialHref(patch.url) ?? '') ?? 'web';
+      return next;
+    })
+  }));
+}
+
+export function removeSocial(i: number) {
+  editSocials((doc) => ({ ...doc, links: doc.links.filter((_, n) => n !== i) }));
+}
+
+/** The row's arrows: towards the first, or the last. Display order, so `up` is i − 1. At an end, nothing. */
+export function moveSocial(i: number, dir: 'up' | 'down') {
+  editSocials((doc) => {
+    const links = [...doc.links];
+    const j = dir === 'up' ? i - 1 : i + 1;
+    if (i < 0 || j < 0 || j >= links.length) return doc;
+    [links[i], links[j]] = [links[j]!, links[i]!];
+    return { ...doc, links };
+  });
+}
+
+export function setSocialsLayout(layout: SocialsLayout) {
+  editSocials((doc) => ({ ...doc, layout }));
+}
+
+export function setSocialsSize(size: SocialsSize) {
+  editSocials((doc) => ({ ...doc, size }));
+}
+
+/**
+ * The draft goes up whole, every url as the api takes it (`https://` put in front of a bare
+ * host, the rest of about.md's rule): a row that is not a link stops the save here, named, so
+ * the owner fixes that one instead of reading a 400. What comes back is what the api kept (a
+ * url written the parser's way, a label cut) and the boxes show that, unless something was
+ * typed meanwhile. My own page open in this tab follows at once.
+ */
+export async function saveMySocials(): Promise<void> {
+  const name = store.get(myNameAtom);
+  if (!isValidName(name)) {
+    store.set(profileSocialsStatusAtom, 'pick a name first');
+    return;
+  }
+  const draft = store.get(profileSocialsAtom);
+  const links: SocialLink[] = [];
+  for (const [i, link] of draft.links.entries()) {
+    const url = socialHref(link.url);
+    if (!url) {
+      store.set(profileSocialsStatusAtom, `not saved: link ${i + 1} is not a web address`);
+      return;
+    }
+    links.push({ kind: link.kind, url, label: link.label.trim() });
+  }
+  store.set(profileSocialsStatusAtom, 'saving');
+  try {
+    const saved = await api.saveSocials(name, { layout: draft.layout, size: draft.size, links });
+    const kept = cleanSocials(saved.socials);
+    if (store.get(profileForAtom) === name) {
+      store.set(loadedSocialsAtom, socialsKey(kept));
+      if (store.get(profileSocialsAtom) === draft) store.set(profileSocialsAtom, kept);
+    }
+    store.set(profileSocialsStatusAtom, kept.links.length > 0 ? 'saved' : 'cleared');
+    alsoOnWatchPage(name, kept);
+  } catch (err) {
+    store.set(profileSocialsStatusAtom, `not saved: ${messageOf(err)}`);
   }
 }
 

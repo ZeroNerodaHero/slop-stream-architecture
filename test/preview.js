@@ -171,8 +171,12 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     await p.waitForSelector('#username', { timeout: 15000 });
     await p.fill('#username', NAME);
     await p.press('#username', 'Enter');
-    await p.click('#you');
+    // the profile tab: the gear at the end of your line opens the modal (the picture is your page now), then the tab
+    await p.hover('#user-panel');
+    await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+    await p.click('#settings');
     await p.waitForSelector('#user-modal[open]', { timeout: 5000 });
+    await p.click('#tab-profile');
     await p.waitForFunction((v) => (document.querySelector('#profile-offline-preview')?.getAttribute('src') || '').endsWith(`/offline?v=${v}`), offlineVersion, { timeout: 10000 });
     expect((await p.inputValue('#profile-offline-note')) === NOTE, `the box holds "${await p.inputValue('#profile-offline-note')}"`);
     // a 2000x1000 png with a gradient: not a jpeg, not 16:9, far over the ceiling as it is

@@ -1,8 +1,8 @@
 /**
  * The preferences this browser keeps (localstorage, like the nick): where the chat sits on a
  * page, where it sits on the corner player, which corner the you panel sits in, whether the
- * bots' lines show, and the theme. Not part of the account: a laptop and a phone can each have
- * their own. Same shape as the other
+ * bots' lines show, whether the lines wear faces, and the theme. Not part of the account: a
+ * laptop and a phone can each have their own. Same shape as the other
  * atom modules: atoms for what renders, action functions to change it. The modal that edits
  * them is user-modal-atoms.ts.
  */
@@ -140,6 +140,19 @@ export const hideBotsAtom = atom((get) => get(storedHideBotsAtom) === true);
 
 export function setHideBots(hide: boolean) {
   store.set(storedHideBotsAtom, hide);
+}
+
+/**
+ * Each line starts with its speaker's face: the picture of a login or of the streamer, else
+ * the letter the name makes (the stand-in every list uses, GeneratedAvatar.tsx). On unless
+ * this browser turned it off; off, a line is the name and the words alone.
+ */
+const storedChatFacesAtom = atomWithStorage<unknown>('settings.chatFaces', true, undefined, { getOnInit: true });
+/** Read: a boolean, whatever localstorage holds. Anything but a stored `false` is on. */
+export const chatFacesAtom = atom((get) => get(storedChatFacesAtom) !== false);
+
+export function setChatFaces(on: boolean) {
+  store.set(storedChatFacesAtom, on);
 }
 
 // ---- theme ---------------------------------------------------------------------------------

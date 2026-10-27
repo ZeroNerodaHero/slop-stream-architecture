@@ -40,9 +40,10 @@ import {
   takeScrollPlan,
   visibleChatLinesAtom
 } from '@/infra/atoms/chat-atoms';
-import { hideBotsAtom, setHideBots } from '@/infra/atoms/settings-atoms';
+import { chatFacesAtom, hideBotsAtom, setHideBots } from '@/infra/atoms/settings-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
+import { Face } from '@/shared-components/Face';
 import { panelClassName } from '@/shared-components/Panel';
 import { cn } from '@/utils/cn';
 
@@ -69,8 +70,10 @@ function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
 /**
  * The chat next to the video. Lines newest at the bottom, a nick box until you
  * have one (or a login), a text box with a 500 countdown. Each line wears its
- * speaker's group badges; the robot in the header hides the bots' lines (a setting
- * of this browser, the settings tab has it too). Joins on mount, leaves on
+ * speaker's group badges, and starts with their face (a setting of this browser,
+ * on unless the settings tab turned it off: the picture when the line is a login's
+ * or the streamer's, the letter their name makes otherwise); the robot in the
+ * header hides the bots' lines (a setting too, the settings tab has it as well). Joins on mount, leaves on
  * unmount; a change of `owner` (going live, stopping) or of the login reconnects
  * through `openChat`. One at a time: the chat atoms hold one room, and the ids
  * here are the ones the tests key on.
@@ -87,6 +90,7 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
   const loaded = useAtomValue(chatLinesAtom).length;
   const hideBots = useAtomValue(hideBotsAtom);
   const hiddenBots = useAtomValue(hiddenBotLinesAtom);
+  const faces = useAtomValue(chatFacesAtom);
   const count = useAtomValue(chatCountAtom);
   const phase = useAtomValue(chatPhaseAtom);
   const draft = useAtomValue(chatDraftAtom);
@@ -228,7 +232,15 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
         </button>
       )}
 
-      <div ref={listRef} onScroll={onScroll} id="chat-lines" role="log" aria-live="polite" className="min-h-0 flex-1 overflow-y-auto px-4 py-2 text-base leading-snug">
+      <div
+        ref={listRef}
+        onScroll={onScroll}
+        id="chat-lines"
+        role="log"
+        aria-live="polite"
+        data-faces={faces || undefined}
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-2 text-base leading-snug"
+      >
         {lines.length === 0 && <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>}
         {lines.map((line) => {
           const mine = line.from === myName;
@@ -243,6 +255,8 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
               data-mine={mine || undefined}
               className="my-1 [overflow-wrap:anywhere]"
             >
+              {/* the face: inline, one line tall, so the row stays one paragraph of text and a long line wraps under it */}
+              {faces && <Face name={line.from} version={line.avatar} className="mr-1.5 inline-flex h-5 w-5 align-middle text-[11px]" />}
               {line.verified ? (
                 <span
                   role="button"

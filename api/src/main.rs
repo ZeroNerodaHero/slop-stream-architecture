@@ -37,6 +37,7 @@
 mod auth;
 mod chat;
 mod debug;
+mod dms;
 mod events;
 mod follows;
 mod groups;
@@ -492,16 +493,33 @@ async fn put_streamer(
     Ok(Json(json!({ "name": name, "bio": bio })))
 }
 
+/// When the name's last stream ended, if one has: the person card's "last live". Whose streams
+/// are the name's is `list_sessions`'s rule (an account's by `user_id`, a free name's by name).
+/// One still open does not count; the word beside the name says that.
+async fn last_live(db: &PgPool, name: &str) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT max(se.ended_at) FROM streamers s
+         JOIN sessions se ON se.user_id = s.id OR (se.user_id IS NULL AND se.name = s.name AND s.password_hash IS NULL)
+         WHERE s.name = $1",
+    )
+    .bind(name)
+    .fetch_one(db)
+    .await
+}
+
 async fn get_streamer(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult {
     let p = profile::load_profile(&s.db, &name).await?;
     let presence = presence::presence(&s, &name).await?;
     let thumbs = profile::thumb_ids(&s.db, std::slice::from_ref(&name)).await?.remove(&name).unwrap_or_default();
-    // how many follow the name (public), and whether the asking login does (docs/follows.md)
-    let (followers, following) = follows::stats(&s.db, &name, me.0.as_ref().map(|a| a.id)).await?;
+    // how many follow the name (public), whether the asking login does and whether it follows them back (docs/follows.md)
+    let follows = follows::stats(&s.db, &name, me.0.as_ref().map(|a| a.id)).await?;
+    // when the last stream ended and when the account was made: the person card's lines
+    let last_live = last_live(&s.db, &name).await?;
     Ok(Json(json!({
         "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified, "presence": presence, "thumbs": thumbs,
-        "offline": p.offline, "offline_note": p.offline_note,
-        "followers": followers, "following": following,
+        "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials,
+        "followers": follows.followers, "following": follows.following, "follows_you": follows.follows_you,
+        "last_live": last_live, "joined_at": p.joined,
     })))
 }
 
@@ -849,11 +867,11 @@ async fn watch(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult
     // the ✓ belongs to the live session (started by the account), not to the name
     let verified = live && session_verified(&s.db, &name).await?;
     let presence = presence::presence_with(&mut s.redis.clone(), &s.db, &name, live).await?;
-    let (followers, following) = follows::stats(&s.db, &name, me.0.as_ref().map(|a| a.id)).await?;
+    let follows = follows::stats(&s.db, &name, me.0.as_ref().map(|a| a.id)).await?;
     Ok(Json(json!({
         "url": WS_PATH, "name": name, "bio": p.bio, "live": live, "verified": verified, "avatar": p.avatar, "presence": presence,
-        "offline": p.offline, "offline_note": p.offline_note,
-        "followers": followers, "following": following,
+        "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials,
+        "followers": follows.followers, "following": follows.following,
     })))
 }
 
@@ -863,6 +881,7 @@ fn router(state: AppState) -> Router {
         .merge(profile::routes())
         .merge(groups::routes())
         .merge(follows::routes())
+        .merge(dms::routes())
         .merge(presence::routes())
         .merge(debug::routes())
         .route("/api/health", get(health))

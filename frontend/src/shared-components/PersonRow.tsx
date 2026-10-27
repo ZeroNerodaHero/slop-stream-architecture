@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
@@ -42,13 +43,15 @@ interface PersonRowProps {
   onPick?: () => void;
   /** The small size, for a row in a dropdown; the large one is a card on home. */
   size?: 'row' | 'card';
+  /** A line under the word, on the card only: home's recently offline say when the last stream ended. */
+  note?: ReactNode;
 }
 
 /**
  * Somebody, as a link to their watch page: the face, the name with its marks, the word beside
  * it. One shape wherever a person is listed (the corner box, the search, home's people).
  */
-export function PersonRow({ id, name, verified, avatar, bio, presence, onPick, size = 'row' }: PersonRowProps) {
+export function PersonRow({ id, name, verified, avatar, bio, presence, onPick, size = 'row', note }: PersonRowProps) {
   const card = size === 'card';
   return (
     <Link
@@ -66,6 +69,7 @@ export function PersonRow({ id, name, verified, avatar, bio, presence, onPick, s
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <Who name={name} verified={verified} className="text-base" />
           <Word presence={presence} />
+          {note && <span className="text-sm text-textSecondary">{note}</span>}
           {bio && <span className="truncate text-sm text-textSecondary">{bio}</span>}
         </span>
       ) : (

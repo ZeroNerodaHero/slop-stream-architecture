@@ -1,7 +1,8 @@
 /**
- * The user modal: the picture or the name in the corner panel opens it, a rail of tabs down
- * its left. Which tab is open lives here, so the gear can open straight onto settings and the
- * tab is remembered for the visit.
+ * The user modal: the gear at the end of your line in the corner panel opens it (on settings),
+ * a rail of tabs down its left; a few links around the site open it on a tab of theirs (sign
+ * up or log in on security, your own page's socials tab on profile). Which tab is open lives
+ * here, and is remembered for the visit.
  */
 
 import { atom } from 'jotai';

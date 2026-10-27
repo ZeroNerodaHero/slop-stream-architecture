@@ -1,7 +1,9 @@
-// Follows (docs/follows.md): a login follows names, the counts and the flag on a profile read,
-// the list with its words, search, a free name gets a row, the box over the corner panel (hover
-// shows who you follow, streaming first; the search box finds and follows), the watch page's
-// button and count, a rename keeps the followers, unfollow.
+// Follows (docs/follows.md): a login follows names, the counts and the flags on a profile read
+// (with when they joined and were last live, for the person card), the list with its words,
+// search, a free name gets a row, the box over the corner panel (hover shows who you follow,
+// streaming first; a row's card says how many follow them; the search box finds and follows),
+// the watch page's button and count, a rename keeps the followers, home's recently offline once
+// star stops, unfollow.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node follows.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
@@ -70,9 +72,14 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     const theirs = await body(await anon.get(`/api/streamers/${STAR}`));
     expect(mine.followers === 1 && mine.following === true, `as fan: ${JSON.stringify(mine)}`);
     expect(theirs.followers === 1 && theirs.following === false, `as nobody: ${JSON.stringify(theirs)}`);
+    // the person card's lines: star follows nobody yet, has never streamed, and was made a moment ago
+    expect(mine.follows_you === false && theirs.follows_you === false, `follows_you: ${mine.follows_you} / ${theirs.follows_you}`);
+    expect(mine.last_live === null, `last_live before any stream: ${JSON.stringify(mine.last_live)}`);
+    const made = Date.now() - new Date(mine.joined_at).getTime();
+    expect(made >= 0 && made < 60 * 1000, `joined_at ${mine.joined_at} is ${Math.round(made / 1000)}s old`);
     const grant = await body(await fan.post(`/api/streams/${STAR}/watch`));
     expect(grant.followers === 1 && grant.following === true, `the grant: ${JSON.stringify(grant)}`);
-    return `followers 1, following true (the grant too)`;
+    return `followers 1, following true (the grant too); joined just now`;
   });
 
   await step('the list has star with a word; a free name with no row is followable and gets one', async () => {
@@ -85,6 +92,8 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     expect(f.status() === 204, `following a free name got ${f.status()}`);
     const after = await body(await anon.get(`/api/streamers/${FREE}`));
     expect(after.followers === 1, `free after: ${JSON.stringify(after)}`);
+    // a free name's row is not a person: no joined date on its card
+    expect(after.joined_at === null, `a free name says joined_at ${JSON.stringify(after.joined_at)}`);
     const again = await body(await fan.get('/api/following'));
     expect(again.length === 2 && find(again, FREE), `the list now: ${again.map((f) => f.name).join(' ')}`);
     const back = await star.post(`/api/streamers/${FAN}/follow`);
@@ -93,11 +102,17 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     const freeMutual = find(await body(await fan.get('/api/following')), FREE);
     expect(mutual && mutual.mutual === true, `star should be a friend: ${JSON.stringify(mutual)}`);
     expect(freeMutual && freeMutual.mutual === false, `a free name cannot follow back: ${JSON.stringify(freeMutual)}`);
+    // the profile read says the same, for the card: star follows fan, as fan reads it; not as nobody
+    const friend = await body(await fan.get(`/api/streamers/${STAR}`));
+    const stranger = await body(await anon.get(`/api/streamers/${STAR}`));
+    expect(friend.follows_you === true && stranger.follows_you === false, `follows_you as fan ${friend.follows_you}, as nobody ${stranger.follows_you}`);
     const undo = await star.post(`/api/streamers/${FAN}/unfollow`);
     expect(undo.status() === 204, `star unfollowing fan got ${undo.status()}`);
     const plain = find(await body(await fan.get('/api/following')), STAR);
     expect(plain && plain.mutual === false, `after star unfollows: ${JSON.stringify(plain)}`);
-    return `${STAR} is ${s.presence}; ${FREE} has a row and 1 follower; mutual flips`;
+    const unfriended = await body(await fan.get(`/api/streamers/${STAR}`));
+    expect(unfriended.follows_you === false, `after star unfollows the profile says follows_you ${unfriended.follows_you}`);
+    return `${STAR} is ${s.presence}; ${FREE} has a row and 1 follower; mutual and follows_you flip`;
   });
 
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
@@ -147,6 +162,28 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     const corner = await fanPage.textContent('#friends-streaming');
     expect(corner === '1', `the corner says ${corner}`);
     return `${STAR} streaming, first; the corner says 1`;
+  });
+
+  await step('the card: the pointer resting on a row shows how many follow them and when they joined; a free name has no joined line', async () => {
+    // the card comes 200ms after the pointer lands on a row of the open panel, its lines when the profile read answers
+    await fanPage.hover('#user-panel');
+    await fanPage.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+    await fanPage.hover(`#friend-${STAR}`);
+    await fanPage.waitForSelector(`#friends-peek-${STAR}`, { timeout: 5000 });
+    // the lines land when the profile read answers; the card wears the count as data-followers then
+    await fanPage.waitForSelector(`#friends-peek-${STAR}[data-followers="1"]`, { timeout: 10000 });
+    // textContent runs the lines together: no word boundaries to lean on
+    const text = (await fanPage.textContent(`#friends-peek-${STAR}`)) || '';
+    expect(/1 follower(?!s)/.test(text) && /joined .*\d{4}/.test(text), `the card says "${text}"`);
+    // live, so the word is streaming and no "last live" line; star follows nobody, so no "follows you"
+    expect(/streaming/.test(text) && !/last live/.test(text) && !/follows you/.test(text), `the card says "${text}"`);
+    // the free name: a follower, and nothing about joining
+    await fanPage.hover(`#friend-${FREE}`);
+    await fanPage.waitForSelector(`#friends-peek-${STAR}`, { state: 'detached', timeout: 5000 });
+    await fanPage.waitForSelector(`#friends-peek-${FREE}[data-followers="1"]`, { timeout: 10000 });
+    const free = (await fanPage.textContent(`#friends-peek-${FREE}`)) || '';
+    expect(/1 follower(?!s)/.test(free) && !/joined/.test(free), `the free name's card says "${free}"`);
+    return `"${text}"`;
   });
 
   await step('the search box: type a few letters, a result with a follow button; following it, the button is the list\'s × and the name joins the list', async () => {
@@ -237,6 +274,29 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     const p = await body(await fan.get(`/api/streamers/${RENAMED}`));
     expect(p.followers === 1 && p.following === true, `the new name says ${JSON.stringify(p)}`);
     return `${STAR} → ${RENAMED}, still followed`;
+  });
+
+  await step('home: recently offline has the name that just stopped, under its new name, with when it was last live', async () => {
+    // the stop landed a moment ago (the page's beacon, or video noticing the publisher gone): the list says so within a few seconds
+    let recent = [];
+    for (let i = 0; i < 15 && !find(recent, RENAMED); i++) {
+      recent = (await body(await anon.get('/api/recent'))) || [];
+      if (!find(recent, RENAMED)) await new Promise((r) => setTimeout(r, 1000));
+    }
+    const r = find(recent, RENAMED);
+    expect(r && !find(recent, STAR), `recent: ${recent.map((p) => p.name).join(' ')}`);
+    const age = Date.now() - new Date(r.ended_at).getTime();
+    expect(typeof r.presence === 'string' && age >= 0 && age < 10 * 60 * 1000, `ended_at ${r.ended_at} is ${Math.round(age / 1000)}s old`);
+    const at = (p) => new Date(p.ended_at).getTime();
+    for (let i = 1; i < recent.length; i++) expect(at(recent[i - 1]) >= at(recent[i]), `not newest first: ${recent[i - 1].name} then ${recent[i].name}`);
+    // the profile read says the same end, for the card's "last live" line, under the new name
+    const p = await body(await anon.get(`/api/streamers/${RENAMED}`));
+    expect(p.last_live && new Date(p.last_live).getTime() === at(r), `the profile says last_live ${p.last_live}, recent says ${r.ended_at}`);
+    await fanPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await fanPage.waitForSelector(`#recent-${RENAMED}`, { timeout: 15000 });
+    const when = ((await fanPage.textContent(`#recent-when-${RENAMED}`)) || '').trim();
+    expect(/^last live /.test(when), `the card says "${when}"`);
+    return `${recent.length} recently offline, ${RENAMED} ${recent[0].name === RENAMED ? 'first' : 'listed'}; the card says "${when}"`;
   });
 
   await step('unfollow from the list: 204, gone, 0 followers; twice is 204 too', async () => {

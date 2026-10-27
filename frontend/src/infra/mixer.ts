@@ -1,8 +1,8 @@
 /**
- * The sound that leaves the page (docs/audio.md): the mic, and each shared tab's own sound,
- * each with a fader, a mute and a meter, summed into one track. That track is what the audio
- * sender holds for the whole stream, so a source coming or going changes the mix without
- * anyone renegotiating and without the sender's track ever changing.
+ * The sound that leaves the page (docs/audio.md): the mic, and any sound added later, each
+ * with a fader, a mute and a meter, summed into one track. That track is what the audio sender
+ * holds for the whole stream, so a source coming or going changes the mix without anyone
+ * renegotiating and without the sender's track ever changing.
  *
  * One AudioContext for every source (mic-level.ts opens one per reader, right for one meter and
  * wrong for several). Nothing here reaches `ctx.destination`: the streamer hears the tab from
@@ -19,7 +19,7 @@ export interface MixSource {
   setMuted(muted: boolean): void;
   /** This source's own bar, measured after the fader and before the mute: a muted mic still shows it is picking you up. */
   readonly level: Level;
-  /** Out of the mix. Never stops the track: the mic is the camera's, a share's is the display's. */
+  /** Out of the mix. Never stops the track: the mic is the camera's to stop. */
   remove(): void;
 }
 

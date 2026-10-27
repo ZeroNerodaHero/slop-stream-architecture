@@ -8,7 +8,6 @@ import {
   RiEyeLine,
   RiEyeOffLine,
   RiFocus3Line,
-  RiGlobalLine,
   RiImageLine,
   RiVidiconLine
 } from '@remixicon/react';
@@ -23,7 +22,6 @@ import {
   deleteImage,
   fitSourceTo,
   imageStatusAtom,
-  isPublishingAtom,
   libraryAtom,
   livePanelsAtom,
   placeImage,
@@ -38,7 +36,6 @@ import {
   shareScreen,
   sourcesAtom,
   streamNameAtom,
-  tabShareSupported,
   toggleSource
 } from '@/infra/atoms/publish-atoms';
 import type { Source } from '@/infra/scene';
@@ -61,15 +58,14 @@ function Thumb({ id, streamAtom }: { id: string; streamAtom: Atom<MediaStream | 
 }
 
 /**
- * The `+`: a menu with what can be added. A screen or window and a tab with its sound need
- * the stream (the slots are its), a picture does not. The pictures this name put up before
- * are offered again under the upload. Escape and a press outside close it.
+ * The `+`: a menu with what can be added, before start or live. A screen or window (three at
+ * most), a picture, and the pictures this name put up before, offered again under the upload.
+ * Escape and a press outside close it.
  */
 function AddMenu() {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const publishing = useAtomValue(isPublishingAtom);
   const canShare = useAtomValue(canShareScreenAtom);
   const library = useAtomValue(libraryAtom);
   const name = useAtomValue(streamNameAtom);
@@ -90,7 +86,6 @@ function AddMenu() {
     };
   }, [open]);
 
-  const shareTitle = !publishing ? 'press start first' : !canShare ? '3 screens at most' : undefined;
   return (
     <div ref={root} className="relative mr-1">
       <button
@@ -117,31 +112,15 @@ function AddMenu() {
               id="add-screen"
               role="menuitem"
               type="button"
-              disabled={!publishing || !canShare}
-              title={shareTitle}
+              disabled={!canShare}
+              title={canShare ? undefined : '3 screens at most'}
               className={MENU_ITEM}
               onClick={() => {
                 setOpen(false);
-                void shareScreen('screen');
+                void shareScreen();
               }}
             >
               <RiComputerLine aria-hidden size={16} /> screen or window
-            </button>
-          )}
-          {tabShareSupported && (
-            <button
-              id="add-tab"
-              role="menuitem"
-              type="button"
-              disabled={!publishing || !canShare}
-              title={shareTitle}
-              className={MENU_ITEM}
-              onClick={() => {
-                setOpen(false);
-                void shareScreen('tab');
-              }}
-            >
-              <RiGlobalLine aria-hidden size={16} /> tab with its sound
             </button>
           )}
           <button

@@ -206,7 +206,12 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     await q.fill('#auth-password', PW);
     await q.click('#auth-submit');
     await q.waitForSelector('#you', { timeout: 10000 });
-    await q.click('#you');
+    // the login page moves to home, and a page change closes the panel: wait for the move, then the gear at the
+    // end of your line in the panel opens the modal (the picture is your page now)
+    await q.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 10000 });
+    await q.hover('#user-panel');
+    await q.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+    await q.click('#settings');
     await q.waitForSelector('#user-modal[open]', { timeout: 5000 });
     await q.click('#tab-groups');
     await q.waitForSelector('#group-list #group-bot', { timeout: 10000 });

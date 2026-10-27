@@ -7,11 +7,13 @@ import {
   type ChatSide,
   type PanelSide,
   type PipChatPlace,
+  chatFacesAtom,
   chatSideAtom,
   hideBotsAtom,
   inspectorEnabledAtom,
   panelSideAtom,
   pipChatPlaceAtom,
+  setChatFaces,
   setChatSide,
   setHideBots,
   setInspectorEnabled,
@@ -19,6 +21,7 @@ import {
   setPipChatPlace
 } from '@/infra/atoms/settings-atoms';
 import { Button } from '@/shared-components/Button';
+import { GeneratedAvatar } from '@/shared-components/GeneratedAvatar';
 import { OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -41,7 +44,7 @@ function YouPreview({ side }: { side: PanelSide }) {
       <span className="m-2 min-w-0 flex-1 bg-backgroundTertiary" />
       <span
         className={cn(
-          'absolute inset-y-0 z-10 flex w-14 flex-col items-center gap-1 bg-background py-1 shadow-hard',
+          'absolute inset-y-0 z-10 flex w-14 flex-col items-center gap-1 bg-background py-1',
           side === 'right' ? 'right-0 border-l border-primaryStroke' : 'left-0 border-r border-primaryStroke'
         )}
       >
@@ -78,7 +81,7 @@ function StreamChatPreview({ side }: { side: ChatSide }) {
     return (
       <span aria-hidden className="relative flex h-36 min-w-0 flex-1 items-center justify-center border border-primaryStroke bg-background p-2">
         <span className="absolute inset-2 bg-black" />
-        <span className="relative flex h-[78%] w-[58%] flex-col border border-primaryStroke bg-backgroundSecondary shadow-hard">
+        <span className="relative flex h-[78%] w-[58%] flex-col border border-primaryStroke bg-backgroundSecondary">
           <PreviewChat className="min-h-0 flex-1" />
         </span>
       </span>
@@ -141,6 +144,39 @@ const BOT_OPTIONS: readonly { hide: boolean; id: string; label: string; detail: 
   }
 ];
 
+/** The faces: before every name, or not. */
+const FACE_OPTIONS: readonly { on: boolean; id: string; label: string; detail: string }[] = [
+  {
+    on: true,
+    id: 'chat-faces-on',
+    label: 'show the faces',
+    detail: 'the picture before every name: a login\u2019s, or the streamer\u2019s. a name without one gets its letter'
+  },
+  { on: false, id: 'chat-faces-off', label: 'names only', detail: 'the name and the words alone. a little more room for the words' }
+];
+
+/** The three lines the faces cards draw: a name for the letter and its colour, a width for the words. */
+const PREVIEW_LINES: readonly { name: string; words: string }[] = [
+  { name: 'ann', words: 'w-3/5' },
+  { name: 'bob', words: 'w-2/5' },
+  { name: 'cy', words: 'w-1/2' }
+];
+
+/** The chat in miniature: three lines, each a face (or not), a name and some words. */
+function FacesPreview({ on }: { on: boolean }) {
+  return (
+    <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-2.5 border border-primaryStroke bg-background px-3">
+      {PREVIEW_LINES.map(({ name, words }) => (
+        <span key={name} className="flex items-center gap-1.5">
+          {on && <GeneratedAvatar name={name} className="h-4 w-4 text-[9px]" />}
+          <span className="h-1.5 w-8 shrink-0 bg-primaryBlue" />
+          <span className={cn('h-1.5 bg-textTertiary', words)} />
+        </span>
+      ))}
+    </span>
+  );
+}
+
 /** This browser's settings for the pages. The page behind the modal follows every change at once, so the cards are their own preview. */
 export function SettingsTab() {
   const chatSide = useAtomValue(chatSideAtom);
@@ -148,6 +184,7 @@ export function SettingsTab() {
   const panelSide = useAtomValue(panelSideAtom);
   const inspectorOn = useAtomValue(inspectorEnabledAtom);
   const hideBots = useAtomValue(hideBotsAtom);
+  const faces = useAtomValue(chatFacesAtom);
   return (
     <div className="divide-y divide-primaryStroke">
       <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
@@ -230,6 +267,29 @@ export function SettingsTab() {
         <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every room.</p>
       </fieldset>
 
+      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+        <legend className={SECTION_TITLE}>faces in chat</legend>
+        <p className="mt-1 text-textSecondary">
+          each line can start with its speaker's face: the picture a login or the streamer has on their page, else the letter their name makes, the same stand-in the
+          lists use. a nick with no account always gets the letter.
+        </p>
+        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {FACE_OPTIONS.map(({ on, id, label, detail }) => (
+            <OptionCard
+              key={id}
+              id={id}
+              name="chat-faces"
+              checked={on === faces}
+              onChange={() => setChatFaces(on)}
+              picture={<FacesPreview on={on} />}
+              label={label}
+              detail={detail}
+            />
+          ))}
+        </div>
+        <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every room. a chat that is open follows as you pick.</p>
+      </fieldset>
+
       {/* the messages inspector (docs/status.md): the frames this browser gets, in the browser. a
           shared worker's socket does not show in a tab's devtools, and a phone has no devtools */}
       <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
@@ -247,7 +307,7 @@ export function SettingsTab() {
             keep the messages
           </label>
           {inspectorOn && (
-            <Button id="inspector-open-settings" className="px-4 py-2 text-base" onClick={openInspector}>
+            <Button id="inspector-open-settings" flat className="px-4 py-2 text-base" onClick={openInspector}>
               open messages
             </Button>
           )}

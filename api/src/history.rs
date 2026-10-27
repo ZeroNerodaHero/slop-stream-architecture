@@ -42,6 +42,16 @@ const PAGE: i64 = 50;
 const WINDOW: usize = 40;
 const SEARCH_LIMIT: i64 = 50;
 
+/// A line's columns, with its speaker's picture as it is now (`LineRow`). The row keeps no
+/// picture: a read joins `streamers` for it, by account for a verified line (so a rename
+/// keeps it) and by name for the streamer's. A nick's line joins nothing: it is nobody's
+/// picture, whoever holds that name later.
+const LINE_COLUMNS: &str = "l.id, l.at, l.speaker, l.\"text\", l.streamer, l.verified, l.badges,
+                            (EXTRACT(EPOCH FROM COALESCE(u.avatar_at, r.avatar_at)))::bigint";
+const LINE_TABLES: &str = "chat_lines l
+                           LEFT JOIN streamers u ON l.verified AND u.id = l.user_id
+                           LEFT JOIN streamers r ON l.streamer AND NOT l.verified AND r.name = l.speaker";
+
 pub(crate) fn routes() -> Router<ChatState> {
     Router::new()
         .route("/chat/{name}/before", get(before))
@@ -166,16 +176,12 @@ async fn search_room(s: &ChatState, room: &str, q: &str) -> Result<JsonLines, Ap
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "too long"));
     }
     // `simple`: the words as written, not stems. websearch so a quoted phrase stays a phrase.
-    let rows: Vec<LineRow> = sqlx::query_as(
-        "SELECT id, at, speaker, \"text\", streamer, verified, badges FROM chat_lines
-         WHERE room = $1 AND search @@ websearch_to_tsquery('simple', $2)
-         ORDER BY at DESC, seq DESC LIMIT $3",
-    )
-    .bind(room)
-    .bind(q)
-    .bind(SEARCH_LIMIT)
-    .fetch_all(&s.db)
-    .await?;
+    let sql = format!(
+        "SELECT {LINE_COLUMNS} FROM {LINE_TABLES}
+         WHERE l.room = $1 AND l.search @@ websearch_to_tsquery('simple', $2)
+         ORDER BY l.at DESC, l.seq DESC LIMIT $3"
+    );
+    let rows: Vec<LineRow> = sqlx::query_as(&sql).bind(room).bind(q).bind(SEARCH_LIMIT).fetch_all(&s.db).await?;
     Ok(json_lines(rows.into_iter().map(line_of).collect()))
 }
 
@@ -196,16 +202,12 @@ async fn lines_of(s: &ChatState, room: &str, speaker: &str) -> Result<JsonLines,
     let Some(user_id) = user_id else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "that name has no account"));
     };
-    let rows: Vec<LineRow> = sqlx::query_as(
-        "SELECT id, at, speaker, \"text\", streamer, verified, badges FROM chat_lines
-         WHERE room = $1 AND user_id = $2
-         ORDER BY at DESC, seq DESC LIMIT $3",
-    )
-    .bind(room)
-    .bind(user_id)
-    .bind(SEARCH_LIMIT)
-    .fetch_all(&s.db)
-    .await?;
+    let sql = format!(
+        "SELECT {LINE_COLUMNS} FROM {LINE_TABLES}
+         WHERE l.room = $1 AND l.user_id = $2
+         ORDER BY l.at DESC, l.seq DESC LIMIT $3"
+    );
+    let rows: Vec<LineRow> = sqlx::query_as(&sql).bind(room).bind(user_id).bind(SEARCH_LIMIT).fetch_all(&s.db).await?;
     Ok(json_lines(rows.into_iter().map(line_of).collect()))
 }
 
@@ -225,13 +227,8 @@ async fn window(s: &ChatState, room: &str, id: &str) -> Result<JsonLines, ApiErr
     let Some((at, seq)) = at_seq(&id) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad id"));
     };
-    let hit: Option<LineRow> = sqlx::query_as(
-        "SELECT id, at, speaker, \"text\", streamer, verified, badges FROM chat_lines WHERE room = $1 AND id = $2",
-    )
-    .bind(room)
-    .bind(&id)
-    .fetch_optional(&s.db)
-    .await?;
+    let sql = format!("SELECT {LINE_COLUMNS} FROM {LINE_TABLES} WHERE l.room = $1 AND l.id = $2");
+    let hit: Option<LineRow> = sqlx::query_as(&sql).bind(room).bind(&id).fetch_optional(&s.db).await?;
     let Some(hit) = hit else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such line"));
     };
@@ -293,17 +290,12 @@ async fn redis_window(s: &ChatState, room: &str, id: &str) -> Result<Option<Vec<
 }
 
 async fn pg_older(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, limit: i64) -> Result<Vec<Line>, sqlx::Error> {
-    let rows: Vec<LineRow> = sqlx::query_as(
-        "SELECT id, at, speaker, \"text\", streamer, verified, badges FROM chat_lines
-         WHERE room = $1 AND (at, seq) < ($2, $3)
-         ORDER BY at DESC, seq DESC LIMIT $4",
-    )
-    .bind(room)
-    .bind(at)
-    .bind(seq)
-    .bind(limit)
-    .fetch_all(db)
-    .await?;
+    let sql = format!(
+        "SELECT {LINE_COLUMNS} FROM {LINE_TABLES}
+         WHERE l.room = $1 AND (l.at, l.seq) < ($2, $3)
+         ORDER BY l.at DESC, l.seq DESC LIMIT $4"
+    );
+    let rows: Vec<LineRow> = sqlx::query_as(&sql).bind(room).bind(at).bind(seq).bind(limit).fetch_all(db).await?;
     Ok(rows.into_iter().map(line_of).collect())
 }
 
@@ -319,9 +311,9 @@ async fn pg_side(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, side: Sid
     };
     // order is one of the two literals above, never a value
     let sql = format!(
-        "SELECT id, at, speaker, \"text\", streamer, verified, badges FROM chat_lines
-         WHERE room = $1 AND (at, seq) {cmp} ($2, $3)
-         ORDER BY at {order}, seq {order} LIMIT {WINDOW}"
+        "SELECT {LINE_COLUMNS} FROM {LINE_TABLES}
+         WHERE l.room = $1 AND (l.at, l.seq) {cmp} ($2, $3)
+         ORDER BY l.at {order}, l.seq {order} LIMIT {WINDOW}"
     );
     let rows: Vec<LineRow> = sqlx::query_as(&sql).bind(room).bind(at).bind(seq).fetch_all(db).await?;
     let mut lines: Vec<Line> = rows.into_iter().map(line_of).collect();
@@ -331,9 +323,10 @@ async fn pg_side(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, side: Sid
     Ok(lines)
 }
 
-type LineRow = (String, DateTime<Utc>, String, String, bool, bool, Value);
+/// `LINE_COLUMNS`, in order: the last is the picture the join found, if any.
+type LineRow = (String, DateTime<Utc>, String, String, bool, bool, Value, Option<i64>);
 
-fn line_of((id, at, speaker, text, streamer, verified, badges): LineRow) -> Line {
+fn line_of((id, at, speaker, text, streamer, verified, badges, avatar): LineRow) -> Line {
     let groups = serde_json::from_value::<Vec<Badge>>(badges).unwrap_or_default();
     Line {
         id,
@@ -342,6 +335,7 @@ fn line_of((id, at, speaker, text, streamer, verified, badges): LineRow) -> Line
         streamer,
         verified,
         groups,
+        avatar,
         at: at.timestamp_millis().max(0) as u64,
     }
 }
