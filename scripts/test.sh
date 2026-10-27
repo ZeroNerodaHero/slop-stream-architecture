@@ -31,8 +31,9 @@
 #              you can watch someone else meanwhile (their page's picture in picture is disabled: one corner at a time), the corner has your chat, coming back takes
 #              the stream over, × asks first (no keeps streaming) and then stops and frees the corner, a page load stops, leaving with nothing on air puts nothing in the corner, start closes a stream watched in the corner
 #   screen     screen sharing: screens beside the camera go to watchers mid-stream with no renegotiation, tiles, click to swap, stop, a late watcher sees it all
-#   presence   a tab open is online over the events socket, do not disturb and appear offline reach a watcher pushed, live is streaming,
-#              two tabs share one socket and the last closing is offline at once, a claimed name is refused, the inspector shows the frames
+#   presence   a tab open is online over the events socket, do not disturb and appear offline reach a watcher pushed, live is streaming and
+#              the watcher plays on the push (no poll, no player flashing on an offline name), two tabs share one socket and the last
+#              closing is offline at once, a claimed name is refused, the inspector shows the frames
 #   regress    token-gated stop, auto-recovery, trailing slash, fast restart, races, bad offers
 #   monitor    (local only) `api monitor` watches this stack and a dead address: up with the right build,
 #              down with a reason, the page shows both, a restart keeps its memory. runs monitor/docker-compose.yml

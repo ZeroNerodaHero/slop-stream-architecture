@@ -64,7 +64,7 @@ function deploy(target) {
   await step('./scripts/deploy.sh video warns and ends streams cleanly', async () => {
     const { ms, out } = deploy('video');
     await pub.waitForFunction(() => /lost|stopped|failed/i.test(document.querySelector('#status').textContent), null, { timeout: 10000 });
-    await w.waitForFunction(() => /ended|checking/i.test(document.querySelector('#status').textContent), null, { timeout: 10000 });
+    await w.waitForFunction(() => /ended|retrying/i.test(document.querySelector('#status').textContent), null, { timeout: 10000 });
     if (!/ends every live stream/.test(out)) throw new Error('no warning printed');
     return `${ms} ms, pub "${await status(pub)}", watch "${await status(w)}", warning printed`;
   });

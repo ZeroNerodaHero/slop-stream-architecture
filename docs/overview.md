@@ -71,7 +71,8 @@ flowchart LR
 
 - **frontend** — the pages. react, same stack as axiom-frontend. passes api and video setup through
 - **api** — save a bio and a picture. go live. stop. a log of starts and stops. only you can stop your own stream. also the html of the watch page, so links get previews
-- **chat** — the text chat. one line per person per second, 500 letters max, last 500 lines kept. see `chat.md`. also the events socket, one per browser on every page: who is here, and the pushes (`live`, `ended`, the word next to a name). see `status.md`
+- **chat** — the text chat. one line per person per second, 500 letters max, last 500 lines kept. see `chat.md`
+- **events** — the data socket, one per browser on every page: who is here, and the pushes (`live` the moment video has the streamer, `ended`, the word next to a name). the api writes facts to one redis stream; this fans them out to the browsers that asked for the name. nothing on a page polls for them. see `status.md`
 - **database** — the bio, the picture, the presence choice and the log. not the video
 - **redis** — who is live right now, who is here right now, and the stream of facts the pushes come from. the video box gets the final say on live
 - **s3** — a bucket on this computer (seaweedfs). profile pictures and stream thumbnails go here. `S3_ENDPOINT=off` in `.env` uses it. set that to a url, plus a key and a secret, to use a real bucket instead

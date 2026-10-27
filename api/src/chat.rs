@@ -655,11 +655,11 @@ pub(crate) fn room_key(name: &str) -> String {
     format!("chat:{name}")
 }
 
-fn clean_nick(raw: &str) -> String {
+pub(crate) fn clean_nick(raw: &str) -> String {
     raw.trim().chars().take(MAX_NICK_CHARS).collect()
 }
 
-fn valid_nick(nick: &str) -> bool {
+pub(crate) fn valid_nick(nick: &str) -> bool {
     !nick.is_empty() && nick.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 

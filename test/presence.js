@@ -41,9 +41,9 @@ const expect = (cond, what) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const compose = (cmd) => execSync(`docker compose ${cmd}`, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-/** GET /online on the chat container: no curl in the image, bash's /dev/tcp instead. `{ "<name>": <sockets> }`. */
+/** GET /online on the events container: no curl in the image, bash's /dev/tcp instead. `{ "<name>": <sockets> }`. */
 const online = () => {
-  const raw = compose(`exec -T chat bash -c 'exec 3<>/dev/tcp/127.0.0.1/4100; printf "GET /online HTTP/1.0\\r\\n\\r\\n" >&3; cat <&3'`);
+  const raw = compose(`exec -T events bash -c 'exec 3<>/dev/tcp/127.0.0.1/4100; printf "GET /online HTTP/1.0\\r\\n\\r\\n" >&3; cat <&3'`);
   return JSON.parse(raw.slice(raw.indexOf('{')));
 };
 
@@ -74,7 +74,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
   const ctxB = await browser.newContext({ ignoreHTTPSErrors: true });
   const a = await ctxA.newPage();
   const w = await ctxB.newPage();
-  // every POST /api/streams/<name>/watch the watcher makes: with the socket open, `live` arrives pushed and the poll is the 60s fallback
+  // every POST /api/streams/<name>/watch the watcher makes: one on arrival, then only when `live` is pushed. nothing polls
   let watchCalls = 0;
   w.on('request', (r) => {
     if (r.method() === 'POST' && new RegExp(`/api/streams/${NAME}/watch$`).test(r.url())) watchCalls++;
@@ -87,14 +87,25 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     return `presence ${await presenceOf(NAME)}`;
   });
 
-  await step(`watcher: /watch/${NAME} offline shows the word, and asks \`watch\` once in 12s (push, not poll)`, async () => {
+  await step(`watcher: /watch/${NAME} offline shows the word, asks \`watch\` once, and no player ever shows (push, not poll)`, async () => {
     await w.goto(`${BASE}/watch/${NAME}`, { waitUntil: 'domcontentloaded' });
     await shownIs(w, '#presence', 'offline', 15000);
     await w.waitForFunction(() => /not live/.test(document.querySelector('#status')?.textContent || ''), null, { timeout: 15000 });
+    expect((await w.$$('#video')).length === 0, 'a player is on the page while nobody is live');
+    // the page is watched for a player appearing at all, however briefly: a re-ask that showed
+    // one while the api answered was a black box flashing on an offline profile
+    await w.evaluate(() => {
+      window.__videoSeen = 0;
+      new MutationObserver(() => {
+        if (document.querySelector('#video')) window.__videoSeen++;
+      }).observe(document.body, { childList: true, subtree: true });
+    });
     const before = watchCalls;
     await sleep(12000);
     expect(watchCalls === before, `watch was asked ${watchCalls - before} more times in 12s (the old 5s poll would make 2)`);
-    return `${watchCalls} call(s) in all`;
+    const flashed = await w.evaluate(() => window.__videoSeen);
+    expect(flashed === 0, `a player appeared ${flashed} time(s) while nobody is live`);
+    return `${watchCalls} call(s) in all, no player`;
   });
 
   await step(`a tab as ${NAME}: the api says online within 5s, the square is green, the watcher is told`, async () => {
@@ -134,7 +145,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await a.waitForSelector('#user-modal', { state: 'detached', timeout: 5000 });
   });
 
-  await step(`go live as ${NAME}: streaming on both, the watcher plays, a \`watch\` call or two (the push, then video catching up)`, async () => {
+  await step(`go live as ${NAME}: streaming on both, the watcher plays on the push, one \`watch\` call`, async () => {
     const calls = watchCalls;
     await a.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
     await a.waitForSelector('#name', { timeout: 15000 });
@@ -146,9 +157,11 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await shownIs(a, '#my-presence', 'streaming', 5000);
     await shownIs(w, '#presence', 'streaming', 10000);
     await w.waitForFunction(() => /^watching$/.test(document.querySelector('#status')?.textContent?.trim() || ''), null, { timeout: 20000 });
-    // the push lands before video has the publisher, so the first grant can say not live and the quick retry asks once more
+    // `live` is published when video has the publisher, so the one ask on the push is answered live.
+    // two is the word `streaming` running a beat ahead of the fact (the gateway's 30s recheck landing
+    // between go-live and video's claim): that ask is answered not live, the push asks again
     const asked = watchCalls - calls;
-    expect(asked >= 1 && asked <= 3, `watch was asked ${asked} times for the start (want 1 to 3)`);
+    expect(asked >= 1 && asked <= 2, `watch was asked ${asked} times for the start (want 1, at most 2)`);
     return `${asked} watch call(s)`;
   });
 

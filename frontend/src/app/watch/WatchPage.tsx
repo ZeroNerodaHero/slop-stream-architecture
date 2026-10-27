@@ -182,12 +182,13 @@ export function WatchPage() {
               (a silent stream should show why) and otherwise come up on hover, while a control has
               keyboard focus (not the focus a mouse click leaves behind, or they would stick), and on a
               screen with no hover at all. "tap to play" is the exception: big, in the middle. */}
-          {/* not live: the profile where the picture would be (docs/follows.md). the face, the word and a
-              sentence; the bio sits below and the chat stays. the player comes back the moment they start
-              (the pushed `live`, else the retry timer), so there is nothing to press and no black box.
-              a streamer who put an offline picture gets it where the player goes, the profile under it,
-              and the line they wrote (if any) above the sentence */}
-          {phase === 'waiting' ? (
+          {/* not live, and while the api is being asked: the profile where the picture would be
+              (docs/follows.md). the face, the word and a sentence; the bio sits below and the chat stays.
+              the player appears when they start (`live` pushed on the events socket, docs/status.md), so
+              there is nothing to press and no black box, not even for the ask: a player with no stream
+              would be one. a streamer who put an offline picture gets it where the player goes, the
+              profile under it, and the line they wrote (if any) above the sentence */}
+          {phase === 'waiting' || phase === 'loading' ? (
             <>
               {offline !== null && (
                 <img
@@ -210,7 +211,7 @@ export function WatchPage() {
                       {offlineNote}
                     </p>
                   )}
-                  <p className="mt-1 text-textSecondary">{NOT_LIVE_WORDS[presence]}</p>
+                  <p className="mt-1 text-textSecondary">{phase === 'loading' ? 'loading' : NOT_LIVE_WORDS[presence]}</p>
                 </div>
                 {/* the chat's button lives on the player; without a player it lives here */}
                 <ChatOpenButton className="self-start" />

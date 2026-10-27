@@ -17,13 +17,15 @@ import type { Tone } from '@/shared-components/StatusLine';
 
 export type WatchPhase = 'loading' | 'waiting' | 'connecting' | 'connected' | 'watching' | 'reconnecting' | 'failed' | 'bad-name';
 
-const NOT_LIVE_RETRY_MS = 5000;
 /**
- * The retry while the events socket is open and watching this name: `live` arrives pushed, so
- * the poll is only the fallback behind it (docs/transition.md: slowed, never removed. an api that
- * was unreachable is only ever recovered by a pull).
+ * Nothing is polled for. A page waiting on a name is told `live` on the events socket the
+ * moment video has the publisher (docs/status.md), and starts then. The one timer is for an
+ * ask that failed (the api did not answer; the video socket dropped under a stream with no
+ * `ended`): asked again, later each time it fails again, up to RETRY_MAX_MS. A clean "not
+ * live" sets no timer at all.
  */
-const LINKED_RETRY_MS = 60_000;
+const RETRY_FIRST_MS = 3000;
+const RETRY_MAX_MS = 60_000;
 const NO_VIDEO_AFTER_MS = 10000;
 /** Only a real failure offers the button: not live is the profile, and the page asks again on its own. */
 const RETRY_PHASES: readonly WatchPhase[] = ['failed'];
@@ -137,6 +139,8 @@ let stopStats: (() => void) | null = null;
 let ws: WebSocket | null = null;
 let connectTimer: ReturnType<typeof setTimeout> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
+/** Failed asks in a row, for the backoff. Back to 0 once an ask is answered or frames play. */
+let failures = 0;
 /**
  * Which call of `watch` is the current one. Before the peer exists there is no `pc` to compare
  * against, so a grant landing after the page was left (or after a newer call) is told apart by this.
@@ -201,51 +205,60 @@ function fail(message: string, myPc: RTCPeerConnection) {
 }
 
 /**
- * `live` was pushed for the name on screen this recently. The api says live at go-live, a beat
- * before video has the publisher, so a grant that says not live right after is video catching
- * up: the retry is quick for the api's own grace, then back to the pushed cadence.
+ * Nobody is live right now, and the api said so. Nothing is asked again: the page waits to be
+ * told. `live` comes pushed the moment video has the publisher; if that frame is missed, the
+ * word `streaming` on the gateway's next recheck says the same (both land in `streamerLive`).
  */
-let toldLiveAt = 0;
-const TOLD_LIVE_RETRY_MS = 2000;
-const TOLD_LIVE_WINDOW_MS = 20_000;
+function waitForLive(message: string) {
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = null;
+  failures = 0;
+  setPhase('waiting', message);
+}
 
-/** Nobody is live right now. Check again in a bit: soon when the poll is all there is, rarely when `live` will be pushed. */
-function waitForStreamer(message: string) {
+/**
+ * The ask itself failed, so there is nothing to be told by: no answer from the api, or the
+ * video socket dropped under the stream without an `ended`. Asked again, later each time, up
+ * to RETRY_MAX_MS. The profile shows meanwhile, with the reason in the status line.
+ */
+function retryLater(message: string) {
   setPhase('waiting', message);
   if (retryTimer) clearTimeout(retryTimer);
-  const toldLive = Date.now() - toldLiveAt < TOLD_LIVE_WINDOW_MS;
-  const wait = toldLive ? TOLD_LIVE_RETRY_MS : store.get(eventsPhaseAtom) === 'open' ? LINKED_RETRY_MS : NOT_LIVE_RETRY_MS;
+  const wait = Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** failures);
+  failures++;
   retryTimer = setTimeout(() => {
     retryTimer = null;
     void start(store.get(watchNameAtom));
   }, wait);
 }
 
-/** A pushed `live` for the name on screen: start now, not at the retry. Only from `waiting`; anything else is under way, or over by hand. */
+/**
+ * The name on screen went live, as pushed: a `live` frame, or its word turning `streaming`.
+ * Start now. Only from `waiting`; anything else is under way, or over by hand. The word can
+ * run a beat ahead of video (the key is set at go-live, the fact published when video has the
+ * publisher): that ask is answered not live, and the `live` that follows starts this over.
+ */
 export function streamerLive(name: string) {
   if (name !== store.get(watchNameAtom)) return;
-  toldLiveAt = Date.now();
   if (store.get(watchPhaseAtom) !== 'waiting') return;
   void start(name);
 }
 
-// the pushes: `live` starts a waiting page now; `ended` ends the quick retry (the video socket is
-// what ends the stream). the socket opening for the first time while the page already waits (the
-// grant beat it) slows the retry to the pushed cadence; coming back after a gap it re-asks `watch`
-// (a `live` published in the gap was missed)
+// the pushes (docs/status.md): `live`, and the word `streaming` (the gateway re-derives every
+// watched word every 30s, so a `live` the page missed is still told), start a waiting page now.
+// `ended` is the video socket's to say. the events socket coming back after a gap re-asks
+// `watch` while waiting: a `live` published in the gap was missed, and the ask is the pull that
+// makes the push true (docs/transition.md)
 let linkWasOpen = false;
 onEvents((event) => {
   if (event.type === 'live') streamerLive(event.name);
-  else if (event.type === 'ended') {
-    if (event.name === store.get(watchNameAtom)) toldLiveAt = 0;
+  else if (event.type === 'presence') {
+    if (event.presence === 'streaming') streamerLive(event.name);
   } else if (event.type === 'renamed') {
     // the name on screen became another: the page moves there (docs/ids.md)
     if (event.name === store.get(watchNameAtom) && isValidName(event.to)) store.set(watchRenamedToAtom, event.to);
   } else if (event.type === 'link' && event.phase === 'open') {
-    if (store.get(watchPhaseAtom) === 'waiting') {
-      if (linkWasOpen) void start(store.get(watchNameAtom));
-      else waitForStreamer(store.get(watchMessageAtom));
-    }
+    if (linkWasOpen && store.get(watchPhaseAtom) === 'waiting') void start(store.get(watchNameAtom));
     linkWasOpen = true;
   }
 });
@@ -257,22 +270,22 @@ const RESTART_PHASES: readonly WatchPhase[] = ['failed', 'bad-name'];
  * The watch page mounted for `name`. Back on the page of the stream picture in picture kept
  * alive, there is nothing to start: the page's <video> binds to the same MediaStream. That is
  * read off the phase, not off the handles: a grant in flight (`loading`) or a wait for the
- * streamer (`waiting`) has no peer and, between the timer firing and the grant landing, no
- * timer either, yet is under way all the same.
+ * streamer (`waiting`, nothing but the events socket's subscription) has no peer, yet is under
+ * way all the same.
  */
 export async function watch(name: string): Promise<void> {
   if (store.get(pipAtom) && name === store.get(watchNameAtom) && !RESTART_PHASES.includes(store.get(watchPhaseAtom))) return;
   await start(name);
 }
 
-/** One attempt at `name`, whatever was going on before. The timer and the retry button come here directly. */
+/** One attempt at `name`, whatever was going on before. A push, the backoff timer and the retry button come here directly. */
 async function start(name: string): Promise<void> {
   teardown();
   const mine = ++attempt;
   const before = store.get(watchNameAtom);
   if (before && before !== name) {
     unwatchPresence(before);
-    toldLiveAt = 0;
+    failures = 0;
   }
   store.set(watchNameAtom, name);
   if (!isValidName(name)) {
@@ -287,7 +300,7 @@ async function start(name: string): Promise<void> {
   try {
     grant = await api.watch(name);
   } catch {
-    if (mine === attempt) waitForStreamer('cannot reach the server. retrying');
+    if (mine === attempt) retryLater('cannot reach the server. retrying');
     return;
   }
   // left the page, or a newer call took over, while the api was answering
@@ -308,7 +321,7 @@ async function start(name: string): Promise<void> {
   // change, and a grant answered a beat behind a push must not undo the push); the grant's otherwise
   if (grant.presence && store.get(eventsPhaseAtom) !== 'open') presenceChanged(name, grant.presence);
   if (!grant.live) {
-    waitForStreamer('not live yet. checking');
+    waitForLive('not live yet');
     return;
   }
 
@@ -373,13 +386,17 @@ async function start(name: string): Promise<void> {
   } catch (err) {
     if (pc !== myPc) return; // retry or leaving happened meanwhile
     if (messageOf(err) === 'not live') {
+      // the api's word ran ahead of video (a word, a key with no publisher yet): the `live`
+      // pushed when video has them starts this over
       teardown();
-      waitForStreamer('not live yet. checking');
+      waitForLive('not live yet');
     } else fail(`failed: ${messageOf(err)}`, myPc);
     return;
   }
 
-  ws.onclose = ended;
+  // the streamer leaving is an `ended` frame (onMessage). a close with none is not that: video
+  // restarted under everyone, or this link dropped. then the ask is made again, backing off
+  ws.onclose = dropped;
   if (pc === myPc) startWatchStats();
 
   connectTimer = setTimeout(() => {
@@ -387,10 +404,16 @@ async function start(name: string): Promise<void> {
   }, NO_VIDEO_AFTER_MS);
 }
 
-/** The streamer left. Keep checking so a restart shows up on its own. */
+/** The streamer left (video said `ended`). A restart is pushed like any start. */
 function ended() {
   teardown();
-  waitForStreamer('ended. checking for a restart');
+  waitForLive('ended');
+}
+
+/** The video socket closed under the stream with no `ended`: ask again, since nothing else will say whether they are still live. */
+function dropped() {
+  teardown();
+  retryLater('connection lost. retrying');
 }
 
 /** A tile clicked: that slot goes big, for as long as it is live. */
@@ -418,6 +441,7 @@ export function retry() {
 export function markPlaying() {
   if (!pc) return;
   played = true;
+  failures = 0;
   store.set(needsTapAtom, false);
   setPhase('watching', 'watching');
 }
@@ -515,6 +539,7 @@ export function leaveWatchPage() {
 export function endWatch() {
   attempt++;
   teardown();
+  failures = 0;
   const name = store.get(watchNameAtom);
   if (name) unwatchPresence(name);
   store.set(pipAtom, false);

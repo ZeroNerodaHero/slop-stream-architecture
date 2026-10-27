@@ -42,7 +42,7 @@ five lines, in two places that must agree: `presence(name)` in the api for http 
 
 the first draft of this plan was a 30s http heartbeat into a redis key. it was sized for "a word that may lag". what it could not do: reach the other tabs and the phone without a round trip and a wait, tell a watcher on `not live yet. checking` that the stream started without a 5s poll, or carry the notifications `do not disturb` exists to gate. a socket does all four, and presence falls out of it the way `live` falls out of the publish connection to `video`: the connection is the fact. hidden tabs stop mattering too: browsers do not throttle websockets in background tabs, and pong frames are the network stack's, not a js timer's.
 
-not a new service. `api/src/chat.rs` already has the hello, the identify, the ping and idle drop, the per-ip cap, the redis tail on its own connection, the drain. the gateway is a second endpoint on the same listener, `/events`, in the same process and image. caddy gets one more three-line `handle`; compose, env, ports, `deploy.sh` get nothing (`./scripts/deploy.sh api` already swaps `api` and `chat` together, `deploy.sh:711`).
+not a new binary. `api/src/chat.rs` already had the hello, the identify, the ping and idle drop, the per-ip cap, the redis tail on its own connection, the drain; that plumbing was lifted into `socket.rs` and the gateway built on it. it shipped as a second endpoint on the chat's listener and was then given a process and container of its own, `api events` (`events` in compose, `:4100`), so the chat and the data socket are two things that can be deployed, scaled and read apart: caddy sends `/chat/*` to one and `/events` to the other, and `./scripts/deploy.sh api` swaps `api`, `chat` and `events` together (same image).
 
 ## the shape
 
@@ -52,7 +52,7 @@ sequenceDiagram
   participant T1 as tab 1
   participant T2 as tab 2 · same browser
   participant WK as events worker · one per browser
-  participant G as gateway · api chat :4100 · /events
+  participant G as gateway · api events :4100 · /events
   participant R as redis
   participant D as database
   participant A as api
@@ -82,17 +82,22 @@ sequenceDiagram
   G-->>W: presence billy dnd
 
   T1->>A: POST /api/streams/billy/go-live
-  A->>R: SET live:billy NX EX 90 · XADD events live billy since
+  A->>R: SET live:billy NX EX 90 (no fact yet: video has nobody)
+  Note over T1: the publish handshake with video
+  participant V as video
+  V->>A: POST /api/streams/billy/attached?session&token (the room is claimed and answered)
+  A->>R: XADD events live billy since
   R-->>G: live billy
   G-->>W: {"type":"live","name":"billy","since":1729000000000}
   G-->>WK: me · presence streaming
+  Note over W: asks watch once, is answered live, connects
 ```
 
 every socket follows its own name. so the sender sees its own change come back through the server like everyone else, the chat's rule (`chat.md`), and every tab and every device agrees without a side channel.
 
 ## the gateway
 
-`/events` on `api chat`, same listener as `/chat/*` (`chat.rs:142`), same constants: hello within 10s, frames 8 KB at most, a ping every 30s, dropped after 90s of silence, every send under a 10s budget, close frame 1001 on SIGTERM with a 2s drain. one socket per browser, open on every page, home included.
+`/events` on `api events`, a listener and container of its own (`events.rs`'s `run`), the chat's constants from `socket.rs`: hello within 10s, frames 8 KB at most, a ping every 30s, dropped after 90s of silence, every send under a 10s budget, close frame 1001 on SIGTERM with a 2s drain. one socket per browser, open on every page, home included.
 
 ### frames
 
@@ -124,9 +129,8 @@ server → client
 
 ```mermaid
 flowchart LR
-  subgraph proc["api chat · :4100 · one process"]
+  subgraph proc["api events · :4100 · one process, the events container (the chat is another)"]
     direction TB
-    ch["/chat/name sockets · rooms · as today"]
     ev["/events sockets · one per browser"]
     reg["registry · name → its own sockets · name → its watchers · per socket: what it was last told"]
     tick["per socket, on its 30s ping · ZADD seen:name now sid · EXPIRE 90"]
@@ -135,8 +139,8 @@ flowchart LR
     online["GET /online · names with sockets here"]
   end
   redis[("redis · seen:name zsets · events stream · live:name keys")]
-  api["api · XADD live · ended · status"]
-  video["video · stop with its session + token when the publisher leaves"]
+  api["api · XADD live (on video's attached) · ended · status"]
+  video["video · attached when it has the publisher, stop when the publisher leaves, with its session + token"]
 
   ev --> reg
   ev --> tick --> redis
@@ -189,7 +193,7 @@ why a sorted set and not `SET seen:<name> 1 EX 90`: with two gateway processes, 
 | PUT | `/api/streamers/:name/presence` | body `{ status }`, one of `online` `dnd` `invisible`, else 400 `bad status`. the bio's gate (`may_write`: 403 `that name has an account. log in as it`, 403 `reserved name`). upserts the `streamers` row like the bio's put, then `XADD events status`. → `{ status, presence }` |
 | GET | `/api/streamers/:name` | + `presence` (`main.rs:474`) |
 | POST | `/api/streams/:name/watch` | + `presence` beside `live` (`main.rs:663`) |
-| GET | `/api/health` | maybe + `chat`: a probe of `http://chat:4100/health` under the same 1.5s cap as video's, reported, not part of `ok`. needs a `CHAT_URL` on the api. optional |
+| GET | `/api/health` | maybe + `chat` and `events`: a probe of `http://chat:4100/health` and `http://events:4100/health` under the same 1.5s cap as video's, reported, not part of `ok`. optional |
 
 `presence(name)`: `is_live` as today, then `ZCOUNT seen:<name> <now−90000> +inf`, then the column. `GET /api/streamers/:name` asks video for the first time (the panel calls it once per page load, the profile tab once per open; the 1.5s cap applies when video is down). `GET /api/streams` does not carry it: everything on that list is `streaming`. the dummy box opens no `/events` socket: a fake stream is `streaming` or `offline`, which is the truth about it (it does hold chat sockets as itself, `dummy.rs:238`; the gateway must never infer `online` from a chat socket).
 
@@ -245,7 +249,7 @@ flowchart LR
 - `src/infra/events.ts`: the link. `startEvents()`, `reconnectEvents()`, `stopEvents()`, `watchPresence(name)`, `unwatchPresence(name)`, the dispatch of server frames, `eventsPhaseAtom` (`off | connecting | open | closed`). `relayUrl('/events')` for the url (`relay.ts:80`). not `parseRelayMessage`: that is typed to the video socket's shape.
 - `src/infra/events.worker.ts`: the worker. the socket, the ports, the snapshot, the ring.
 - `src/infra/atoms/presence-atoms.ts`: `Presence = 'offline' | 'online' | 'dnd' | 'streaming'`, `PresenceChoice = 'online' | 'dnd' | 'invisible'`; `myPresenceAtom`, `presenceChoiceAtom`, `setPresenceChoice()` (the `PUT`; the answer arrives as `me`), a private `Map<name, Presence>` atom with a memoised `presenceOfAtom(name)` (not an atom per name: the count is not fixed, unlike the video slots). the user panel's square reads `myPresenceAtom`; `ownerAtom !== null` (`publish-atoms.ts:54`) may turn it blue the instant the go-live grant lands, before the server says so.
-- `watch-atoms.ts`: a pushed `live` for the name on screen calls `streamerLive(name)`, which guards name and phase (`waiting` only) and calls the private `start()`. not `watch()`: that one short-circuits while picture in picture is on, which is exactly the corner-player case that should restart. a pushed `ended` is only recorded: the video socket already delivers `ended` and is authoritative for the peer. `presenceOfAtom(name)` is seeded from the grant's `presence` and updated by pushes. the 5s retry (`waitForStreamer`) **stays as the fallback**: while the link is open it is armed at 60s instead of 5 (and re-armed at 60s when the link first opens under a page already waiting, since the grant usually lands first); when the link is down, 5s as before; and for 20s after a pushed `live` (the api's own go-live grace) it is 2s, because the api says `live` at go-live, a beat before video has the publisher, so the grant the push triggers can still say not live. it is the only thing that recovers from an api that was unreachable, and it re-reads the name at fire time, so it is harmless beside the push. when the link comes back after a gap the page re-fetches `watch` (a `live` published during the gap).
+- `watch-atoms.ts`: a pushed `live` for the name on screen calls `streamerLive(name)`, which guards name and phase (`waiting` only) and calls the private `start()`. not `watch()`: that one short-circuits while picture in picture is on, which is exactly the corner-player case that should restart. a `presence` frame saying `streaming` goes the same way (a `live` the page missed: the gateway re-derives every watched word every 30s and pushes it on change). a pushed `ended` is not acted on: the video socket already delivers `ended` and is authoritative for the peer. `presenceOfAtom(name)` is seeded from the grant's `presence` and updated by pushes. **nothing polls while idle**: a clean "not live" (`waitForLive`) arms no timer; the api publishes `live` when video has the publisher (the `attached` route), so the grant the push triggers says live and the page connects first time. the pulls behind the push are events: when the link comes back after a gap the page re-fetches `watch` (a `live` published during the gap), and an ask that failed (`retryLater`: the api did not answer, or the video socket closed under the stream with no `ended`) is asked again, 3s doubling to 60s, the count reset once an ask is answered or frames play. the word can run a beat ahead of the fact (the key is set at go-live): that ask is answered not live and the page waits for the `live` that follows.
 - `settings-atoms.ts`: `settings.inspector`, the `atomWithStorage` + validating read (`=== true`) + setter shape, no `store.sub` (no side effect).
 
 ### where it shows
@@ -291,9 +295,9 @@ an entry is `{ at, source, dir, type, text, bytes }`, with `text` the clipped js
 
 | container | change |
 |---|---|
-| chat (`api chat`) | `/events`, `GET /online`, the tail, the registry, the `EVAL`s. same image, same command, same env (`DATABASE_URL`, `REDIS_URL`, `PORT`), no new ports. its healthcheck is a bare tcp connect (`docker-compose.yml:174`), which calls a wedged handler healthy; the process already serves `GET /health` (`chat.rs:143`). the honest probe is bash's `/dev/tcp` with a `GET /health` and a `200` check, the api's pattern; editing `docker-compose.yml` is a `compose up -d` that recreates `video` too (`deploy.sh:850`), so fold it into the next full deploy |
+| events (`api events`) | `/events`, `GET /online`, the tail, the registry, the `EVAL`s. same image as the api and the chat, its own command and container, the chat's env (`DATABASE_URL`, `REDIS_URL`, `PORT`), no new ports. its healthcheck is bash's `/dev/tcp` with a `GET /health` and a `200` check, the api's pattern (a bare tcp connect would call a wedged handler healthy). it shipped on the chat's listener first and was split out once the pages were on it; adding the service is a `compose up -d` that recreates `video` too, so it rides a full deploy |
 | api | the column, `presence()`, the `PUT`, `presence` on two reads and the document, the four `XADD`s. optionally `CHAT_URL` for a health arm |
-| frontend (caddy) | three lines: `handle /events { reverse_proxy chat:4100 }` beside `/chat/*` (`Caddyfile:30`), an exact path like `/ws`. no timeouts to touch: caddy hijacks an upgraded connection and the chat socket already idles for weeks on the 30s ping. one access-log line per socket, at close, so fewer lines than the home poll writes today. a bind mount: a reload in place, no socket dropped, no image moved (`image-paths` excludes it) |
+| frontend (caddy) | three lines: `handle /events { reverse_proxy events:4100 }` beside `/chat/*` (`Caddyfile:30`), an exact path like `/ws`. no timeouts to touch: caddy hijacks an upgraded connection and the chat socket already idles for weeks on the 30s ping. one access-log line per socket, at close, so fewer lines than the home poll writes today. a bind mount: a reload in place, no socket dropped, no image moved (`image-paths` excludes it) |
 | pages | the worker chunk is one more hashed file under `/assets/` |
 | database | one column |
 | redis | two new key families and a stream, bounded by ttl and `MAXLEN`. still no volume |

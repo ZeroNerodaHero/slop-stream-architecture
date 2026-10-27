@@ -12,7 +12,7 @@ the first draft of `status.md` was a 30s http heartbeat into a ttl key. its "not
 | offline | 90s late, always | at once on a clean close. 90s late on a lid closed or a killed browser |
 | my other tabs | a `BroadcastChannel` | one socket per browser, every tab attached to it |
 | my phone | its next beat, up to 30s | a pushed `me` |
-| a watcher waiting | the 5s `watch` poll | a pushed `live`. the poll slowed to 60s as the fallback |
+| a watcher waiting | the 5s `watch` poll | a pushed `live`, published when video has the publisher. no poll: the page re-asks when its socket comes back or an ask failed, and the gateway re-pushes the word every 30s on change |
 | hidden tabs | chrome runs their timers once a minute; the ttl was sized around that | websockets are not throttled; a pong is the network stack's, not a timer's |
 | the choice | `PUT` | `PUT`. the answer comes back on the socket |
 | `streaming` | the api's `is_live` | the same, plus the `live:` key in the gateway |
@@ -64,7 +64,7 @@ flowchart LR
   sq -->|"phase 3 · me"| ev
   tabs -->|"phase 3 · the worker"| ev
   h -->|"later · live, ended for every name"| ev
-  w -.->|"kept · 60s while the link is open"| wf["the retry"]
+  w -.->|"kept · on reconnect and after a failed ask only"| wf["the re-ask"]
   h -.->|"kept · the fallback"| hf["the poll"]
 ```
 
@@ -72,7 +72,7 @@ flowchart LR
 
 | loop | after | what is kept behind it | phase in `status.md` |
 |---|---|---|---|
-| watch, not live | `live` arrives pushed and the page starts; `ended` only ends the quick retry (the video socket is authoritative for a peer); `presence` beside the name | the 5s retry runs every 60s while the link is open and watching this name, 5s when the link is down, and 2s for the 20s after a pushed `live` (the api says live a beat before video has the publisher). on every reconnect the page re-fetches `watch` | 3 |
+| watch, not live | `live` arrives pushed and the page starts; the word `streaming` does the same (a `live` the page missed, re-pushed by the gateway's 30s recheck); `ended` is the video socket's to say; `presence` beside the name. `live` is published when video has the publisher (`attached`), not at go-live, so the one ask on the push is answered live | no timer while idle. the page re-asks `watch` on every reconnect, and after an ask that failed (no answer; the video socket dropped with no `ended`) with a backoff from 3s to 60s. the 5s/60s idle retry was kept through the transition and removed once `attached` made the push connectable | 3 |
 | the panel's square | `me`: `offline` `online` `dnd` `streaming`, grey until the first frame | nothing to keep: there was nothing before | 3 |
 | my other tabs, my phone | the worker's one socket; `me` to every socket of the name | — | 3 |
 | home | a `watch` of `*` (or a `streams` frame): `live` adds a card, `ended` removes one, `since` is in `live`; bio, picture and `✓` for a new card from one `GET /api/streamers/:name` or carried in the frame. a full refetch on reconnect | the 3s poll at 60s. and a 1s timer for the clock the poll used to be: `since` and the thumbnail bucket (`HomePage.tsx:118`) | 7, later |
@@ -81,7 +81,7 @@ flowchart LR
 
 ## what stays http
 
-- **go-live, heartbeat, stop.** a lease on a name, renewed every 15s, with the session and token video checks through the api (`spec.md`, the publish frame). it changes server state; it is not a poll. a socket close is not a stop either: two tabs, a worker that died, a laptop asleep. the gateway is a reader of postgres and stays one (`status.md`: one writer of every column). `sendBeacon` on `pagehide` has no socket equivalent.
+- **go-live, attached, heartbeat, stop.** a lease on a name, renewed every 15s, with the session and token video checks through the api (`spec.md`, the publish frame); `attached` is video saying it has the publisher, which is when the api publishes `live`. it changes server state; it is not a poll. a socket close is not a stop either: two tabs, a worker that died, a laptop asleep. the gateway is a reader of postgres and stays one (`status.md`: one writer of every column). `sendBeacon` on `pagehide` has no socket equivalent.
 - **the watch grant.** a request for a url and a bio, once per attempt.
 - **every write.** the status `PUT`, the bio, the picture, signup, login. they want status codes, the cookie, the api's one rule in the one place it lives, and `curl`.
 - **`/api/me` and `GET /api/streamers/:name` on load.** reads, once. the socket then keeps them current.
@@ -99,9 +99,9 @@ old pages and a new server will be up together: a tab open for a day keeps its b
 | old pages, new api | `presence` is one more field on `watch` and `GET /api/streamers/:name`. ignored | yes |
 | old pages, new gateway | nobody opens `/events`. the gateway idles | yes |
 | new pages, old caddy (no `/events` handle) | the upgrade request falls to the spa catch-all and gets `index.html` with a 200. the browser's `WebSocket` fails, `onclose` fires, and a flat 3s reconnect (the chat's, `chat-atoms.ts:191`) hits caddy every 3s from every browser until the next deploy | **no.** two rules below |
-| new pages, new caddy, old chat process | caddy forwards to `chat:4100`, which has no `/events` route: a 404, the same failed handshake | **no.** same rules |
+| new pages, new caddy, no `events` container (a compose that predates it, or `api events` not up yet) | caddy forwards to `events:4100`, which is not there: a 502, the same failed handshake | **no.** same rules. a full `compose up` carries the service; `./scripts/deploy.sh api` swaps it with the api |
 | old api, new gateway | nothing is `XADD`ed to `events`; the tail reads nothing; presence is `online`/`offline` from the sockets alone, `streaming` from the `live:` key the old api still writes | yes, degraded |
-| a `./scripts/deploy.sh api` with sockets open | the chat process sends close 1001 and drains 2s (`chat.rs:52`); the api and chat containers swap together (`deploy.sh:713`); every browser reconnects, re-hellos, the tail replays ten seconds | yes. a herd of hellos within 3s, see the numbers |
+| a `./scripts/deploy.sh api` with sockets open | the events process sends close 1001 and drains 2s (`events.rs`, the chat the same for its rooms); the api, chat and events containers swap together (`deploy.sh`, `redeploy_service`); every browser reconnects, re-hellos, the tail replays ten seconds | yes. a herd of hellos within 3s, see the numbers |
 | a Caddyfile change | reloaded in place (`deploy.sh:699`); a reload that fails recreates the container and drops every open websocket, the chat's and video's included, and says so | yes, when the reload works |
 | the first draft's `seen:` string, the socket's `seen:` zset | the same key name, two types: `WRONGTYPE` on the first `ZADD`. nothing of the first draft is in the repo, so there is nothing to migrate. a box that ever ran it: `redis-cli --scan --pattern 'seen:*' \| xargs redis-cli DEL` before the gateway starts | n/a |
 
@@ -128,15 +128,15 @@ each step, what proves it, and the way back:
 | step | proves it | back |
 |---|---|---|
 | 1 api | `curl` the three reads say the right word; `redis-cli XRANGE events - +` has a `live`, an `ended`, a `status` entry after a go-live, a stop, a put | the previous tag. the column stays (harmless, `DEFAULT 'online'`); the stream stays (`MAXLEN ~ 1000`, trims itself) |
-| 2 gateway | a raw `wss /events` probe from `page.evaluate` (`chat.js:80` has the shape) gets `me`; `GET http://chat:4100/online` from inside the network; every chat test still passes | the previous tag and the handle removed. nothing connects to it yet |
-| 3 pages | `test/presence.js`; the caddy log's count of `POST /api/streams/<name>/watch` lines per waiting watcher falls from 12 a minute to 1 | `./scripts/deploy.sh frontend` at the previous tag. the gateway stays up, idle |
+| 2 gateway | a raw `wss /events` probe from `page.evaluate` (`chat.js:80` has the shape) gets `me`; `GET http://events:4100/online` from inside the network; every chat test still passes | the previous tag and the handle removed. nothing connects to it yet |
+| 3 pages | `test/presence.js`; the caddy log's count of `POST /api/streams/<name>/watch` lines per waiting watcher falls from 12 a minute to the one on arrival | `./scripts/deploy.sh frontend` at the previous tag. the gateway stays up, idle |
 | 4 inspector | `#inspector-frames` has a `me` row in a browser that has done nothing else | the previous pages |
 | 5 video | a publisher tab killed → `ended` on the stream within ~15s, not ~4 minutes | the previous video image. ends every stream, like any video deploy |
 | later | the caddy log's `GET /api/streams` lines fall the same way | the poll is still there at 60s |
 
 ## how to tell it worked
 
-- **the caddy log.** `docker compose logs frontend | grep -c 'streams/r8/watch'` over a minute with a watcher waiting: 12 before, 1 after. after the home step: `GET /api/streams` the same way, 20 a minute per tab before, 1 after.
+- **the caddy log.** `docker compose logs frontend | grep -c 'streams/r8/watch'` over a minute with a watcher waiting: 12 before, none after the one on arrival. after the home step: `GET /api/streams` the same way, 20 a minute per tab before, 1 after.
 - **`GET /online`** on the chat container, summed: how many browsers have the site open. the number the site never had.
 - **`XRANGE events - +`.** every fact of the last while, by hand.
 - **the inspector.** the frames a browser got, in the browser, which is the one a stranger can open and copy.
@@ -162,9 +162,9 @@ what grows: open sockets on the chat process, one per browser plus the chat's ow
 
 - server first, pages last. a frame type appears in the pages only after the gateway sends it; a gateway may send frames old pages do not know.
 - unknown frame types are dropped by both sides, the way the chat drops anything that is not `say` (`chat.rs:337`). the pages log them to the inspector and nowhere else.
-- every push has a pull behind it. the retry is slowed, never removed; a reconnect re-fetches; the home poll stays at 60s. the socket is the fast lane and http is what makes it true.
+- every push has a pull behind it, and the pull is an event, not a clock. a reconnect re-fetches; an ask that failed is asked again, backing off; the server re-derives every watched word every 30s and pushes it on change. nothing on a page asks on a timer while it is healthy and idle. the socket is the fast lane and http is what makes it true. (the watch page's idle retry was kept slowed through the transition, as the next rule says; it was removed once `live` was published at the moment a watcher can connect, see `status.md`. the home poll stays at 60s until home moves.)
 - a failed handshake backs off to 60s; a dropped socket retries at 3s. rule 2 above.
-- no loop is removed in the deploy that adds its push. the push ships with the loop slowed; the loop is removed, if ever, after the logs say it never fired alone.
+- no loop is removed in the deploy that adds its push. the push ships with the loop slowed; the loop is removed after the logs say it never fired alone, and the pull behind the push is then the reconnect and the failure retry, not a timer.
 - frames carry facts, never derived words (`status.md`). for home that means `live` and `ended` per name, not "the list".
 - the Caddyfile is reloaded, never recreated, while sockets are open. `deploy.sh:702` already warns when it must.
 - what the site shows a stranger does not change by transport: presence on `GET /api/streamers/:name` is public, `appear offline` comes back only to its owner in `me`, the same as the first draft.
@@ -172,11 +172,11 @@ what grows: open sockets on the chat process, one per browser plus the chat's ow
 ## not this
 
 - **every call over the socket** (rpc over websocket). writes want status codes, the cookie, `sendBeacon` and `curl`; the api's one rule lives in http handlers. the socket stays one-way for state, two-way only for `hello`, `watch` and `unwatch`.
-- **removing the polls outright.** an api that was unreachable for a while is only ever recovered by a pull. the chat keeps a reconnect for the same reason.
+- **removing the pulls outright.** an api that was unreachable for a while is only ever recovered by a pull. the chat keeps a reconnect for the same reason. what went is the *idle* poll, not the pull: a page asks again when its socket comes back and when an ask failed (backing off to 60s), and never on a clock while it has an answer and an open socket.
 - **one deploy for all of it.** the "no" rows above are exactly the pairs a big-bang creates on every box that pulls the pages a minute before the images.
 - **server-sent events instead of a websocket.** it would work: one-way is all presence needs, `EventSource` reconnects on its own, and `Last-Event-ID` is a redis stream id. but `watch`/`unwatch` would need a side channel keyed by a connection id, and the chat's socket code is already written. a second transport would be the third protocol on the site.
 - **a socket per page or per room for presence.** the chat's shape, right for the chat. for presence it is sockets × tabs with no way to know they are one person.
-- **forcing a reload of old tabs.** `index.html` is `no-cache`; the next navigation is the new build. an old tab polling at 5s against the new api is a tab the api still answers.
+- **forcing a reload of old tabs.** `index.html` is `no-cache`; the next navigation is the new build. an old tab polling against the new api is a tab the api still answers.
 
 ## open questions
 

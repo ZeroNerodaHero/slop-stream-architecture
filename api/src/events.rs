@@ -43,6 +43,7 @@ use sqlx::PgPool;
 use tokio::sync::{mpsc, watch, Mutex, Notify};
 
 use crate::auth::{is_claimed, whoami, NICK_HAS_ACCOUNT};
+use crate::chat::{clean_nick, valid_nick};
 use crate::presence::{self, Presence, Status, EVENTS_KEEP, EVENTS_KEY, SEEN_TTL_SECS, SEEN_WINDOW_MS};
 use crate::socket::{first_text, send, DRAIN_LIMIT, IDLE_LIMIT, MAX_FRAME_BYTES, PING_EVERY, READ_BLOCK_MS, SEND_TIMEOUT};
 use crate::{live_key, valid_name};
@@ -487,10 +488,25 @@ async fn online(State(g): State<Gateway>) -> Json<Value> {
     Json(Value::Object(names.into_iter().map(|(n, count)| (n.clone(), json!(count))).collect()))
 }
 
-/// Who the socket is: the cookie's login; else the nick lowercased, when it is a name nobody
-/// owns; else nobody (a hello with neither, or a database that did not answer: admitted, it
-/// may still watch, it marks nothing). A claimed or reserved nick is refused outright, in the
-/// chat's words: wearing somebody's name would be a lie.
+/// A guest's nick to the name it would be, the chat's way: cut to 24, letters digits `_` `-`,
+/// then lowercased, so the two sockets of one browser land on the same name. No nick, or a
+/// blank one, is nobody. Pure: `identify` adds the one check that needs the database.
+fn guest_name(nick: Option<&str>, dummy_prefix: &str) -> Result<Option<String>, Refused> {
+    let Some(nick) = nick.map(clean_nick).filter(|n| !n.is_empty()) else { return Ok(None) };
+    if !valid_nick(&nick) {
+        return Err(Refused("bad nick. 1 to 24 letters, digits, _ -"));
+    }
+    let name = nick.to_lowercase();
+    if name.starts_with(dummy_prefix) {
+        return Err(Refused("that nick belongs to the fake streams. pick another"));
+    }
+    Ok(Some(name))
+}
+
+/// Who the socket is: the cookie's login; else the nick cleaned the chat's way and lowercased,
+/// when it is a name nobody owns; else nobody (a hello with neither, or a database that did not
+/// answer: admitted, it may still watch, it marks nothing). A claimed or reserved nick is
+/// refused outright, in the chat's words: wearing somebody's name would be a lie.
 async fn identify(g: &Gateway, headers: &HeaderMap, nick: Option<&str>) -> Result<Option<String>, Refused> {
     match whoami(&g.db, headers).await {
         Ok(Some(me)) => return Ok(Some(me.name)),
@@ -500,14 +516,7 @@ async fn identify(g: &Gateway, headers: &HeaderMap, nick: Option<&str>) -> Resul
             return Ok(None);
         }
     }
-    let Some(nick) = nick.map(str::trim).filter(|n| !n.is_empty()) else { return Ok(None) };
-    let name = nick.to_lowercase();
-    if !valid_name(&name) {
-        return Err(Refused("bad nick. 1 to 24 letters, digits, _ -"));
-    }
-    if name.starts_with(&g.dummy_prefix) {
-        return Err(Refused("that nick belongs to the fake streams. pick another"));
-    }
+    let Some(name) = guest_name(nick, &g.dummy_prefix)? else { return Ok(None) };
     match is_claimed(&g.db, &name).await {
         Ok(false) => Ok(Some(name)),
         Ok(true) => Err(Refused(NICK_HAS_ACCOUNT)),
@@ -678,5 +687,31 @@ async fn recheck(g: Gateway) {
         for name in names {
             g.push(&name).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pure half of `identify`, with a refusal as its text.
+    fn named(nick: Option<&str>) -> Result<Option<String>, &'static str> {
+        guest_name(nick, "dummy-").map_err(|Refused(why)| why)
+    }
+
+    /// The gateway used to keep a nick of up to 32 characters (the stream-name rule) while
+    /// the chat cuts it to 24: one browser, two names. Both sockets now compute the same one.
+    #[test]
+    fn a_guest_nick_is_cleaned_the_chats_way() {
+        let long = "A".repeat(30);
+        assert_eq!(named(Some(&long)), Ok(Some("a".repeat(24))));
+        assert_eq!(named(Some(&long)), Ok(Some(clean_nick(&long).to_lowercase())));
+        let full = "AbCdEfGhIjKlMnOpQrStUv_-";
+        assert_eq!(full.chars().count(), 24);
+        assert_eq!(named(Some(full)), Ok(Some(full.to_lowercase())));
+        assert_eq!(named(Some("bad nick!")), Err("bad nick. 1 to 24 letters, digits, _ -"));
+        assert_eq!(named(Some("   ")), Ok(None));
+        assert_eq!(named(None), Ok(None));
+        assert_eq!(named(Some("Dummy-x")), Err("that nick belongs to the fake streams. pick another"));
     }
 }
