@@ -351,20 +351,25 @@ export function HomePage() {
     []
   );
 
-  // no title: the row is the `active streams` label with its count, then go live and settings, and the cards are the page.
+  // no title: the row is the `active streams` label with its count, the servers link, then go live, and the cards are the page.
   // search is the sidebar's. the empty state has go live again.
   return (
     <PageFrame
       wide
       label={
-        <h2 id="live-title" className={cn(SECTION_TITLE, LIVE_LINE)}>
-          active streams
-          {list && (
-            <span id="live-count" className={SECTION_COUNT}>
-              {list.length}
-            </span>
-          )}
-        </h2>
+        <>
+          <h2 id="live-title" className={cn(SECTION_TITLE, LIVE_LINE)}>
+            active streams
+            {list && (
+              <span id="live-count" className={SECTION_COUNT}>
+                {list.length}
+              </span>
+            )}
+          </h2>
+          <Link id="explore-link" to="/explore" className={buttonClassName('secondary', 'px-3 py-1.5 text-sm', true)}>
+            servers
+          </Link>
+        </>
       }
     >
       {error && (

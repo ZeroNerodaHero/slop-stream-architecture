@@ -78,6 +78,21 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     return `${GROUP}: badge trimmed, colour lowercased`;
   });
 
+  await step('explore: the maker has it in yours, with general and a live list', async () => {
+    const res = await maker.get('/api/explore');
+    const data = await body(res);
+    expect(res.status() === 200 && data && Array.isArray(data.yours) && Array.isArray(data.discover), `explore got ${res.status()} ${JSON.stringify(data)}`);
+    const server = data.yours.find((s) => s.name === GROUP);
+    const elsewhere = data.discover.find((s) => s.name === GROUP);
+    expect(server && !elsewhere, `placed ${JSON.stringify(server)}`);
+    expect(server.channels.some((c) => c.name === 'general' && c.can_delete === false), `channels ${JSON.stringify(server.channels)}`);
+    expect(Array.isArray(server.live), `live ${JSON.stringify(server.live)}`);
+    const guest = await body(await anon.get('/api/explore'));
+    const seen = [...guest.yours, ...guest.discover].find((s) => s.name === GROUP);
+    expect(seen && seen.mine === false && Array.isArray(seen.live), `a guest sees ${JSON.stringify(seen)}`);
+    return `${server.channels.length} channel(s), ${server.live.length} live`;
+  });
+
   await step('another login joins: 204, two members, again 204; bot 403, no such group 404', async () => {
     const up = await member.post('/api/signup', { data: { name: MEMBER, password: PW } });
     expect(up.status() === 201, `signup got ${up.status()}`);
@@ -209,6 +224,11 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     // the login page moves to home, and a page change closes the panel: wait for the move, then the gear at the
     // end of your line in the panel opens the modal (the picture is your page now)
     await q.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 10000 });
+    await q.waitForSelector('#explore-link', { timeout: 10000 });
+    await q.click('#explore-link');
+    await q.waitForSelector('#explore-title', { timeout: 10000 });
+    expect(new URL(q.url()).pathname === '/explore', q.url());
+    await q.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await q.hover('#user-panel');
     await q.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
     await q.click('#settings');

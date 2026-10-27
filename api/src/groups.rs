@@ -11,6 +11,8 @@
 //! Badges travel on the chat line itself (`groups`: name, badge, colour, as they were when
 //! the line was said), so drawing a room needs no lookup here.
 
+use std::collections::HashMap;
+
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -331,14 +333,54 @@ struct ServerView {
     about: String,
     members: i64,
     mine: bool,
+    /// Members streaming right now, by the name they have now. Not the roster.
+    live: Vec<String>,
     channels: Vec<ChannelView>,
 }
 
+/// Names video says are connected, or the `live:` keys when video cannot be asked.
+async fn live_names(s: &AppState) -> Result<Vec<String>, ApiError> {
+    if let Some(set) = crate::video_live(s).await {
+        return Ok(set.into_iter().collect());
+    }
+    crate::redis_live(s).await.map_err(Into::into)
+}
+
+/// Which groups have which of these names in them. A name not live is never asked.
+async fn live_members(db: &PgPool, names: &[String]) -> Result<HashMap<String, Vec<String>>, sqlx::Error> {
+    let mut by_group: HashMap<String, Vec<String>> = HashMap::new();
+    if names.is_empty() {
+        return Ok(by_group);
+    }
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT m.group_name, s.name FROM memberships m
+         JOIN streamers s ON s.id = m.user_id
+         WHERE s.name = ANY($1) AND m.group_name <> $2
+         ORDER BY s.name",
+    )
+    .bind(names)
+    .bind(BOT_GROUP)
+    .fetch_all(db)
+    .await?;
+    for (group, name) in rows {
+        by_group.entry(group).or_default().push(name);
+    }
+    Ok(by_group)
+}
+
+/// Someone live first, then the order the rows came in (oldest server first).
+fn live_first(mut servers: Vec<ServerView>) -> Vec<ServerView> {
+    servers.sort_by(|a, b| a.live.is_empty().cmp(&b.live.is_empty()));
+    servers
+}
+
 /// `GET /api/explore`: every server (not `bot`), split into the ones this login is in and
-/// the rest. Channels oldest first, `general` first because it was made with the group.
+/// the rest. Inside each, a server with someone live comes first. `live` is those members'
+/// names. Channels oldest first, `general` first because it was made with the group.
 async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let user = me.as_ref().map(|a| a.id);
     let admin = me.as_ref().is_some_and(|a| s.admins.iter().any(|admin| admin.id == a.id));
+    let mut living = live_members(&s.db, &live_names(&s).await?).await?;
     // name, badge, color, about, members, mine, channel, channel about, can delete
     let rows: Vec<(String, String, String, String, i64, bool, Option<String>, Option<String>, bool)> = sqlx::query_as(
         "SELECT g.name, g.badge, g.color, g.about,
@@ -360,14 +402,15 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let mut servers: Vec<ServerView> = Vec::new();
     for (name, badge, color, about, members, mine, channel, channel_about, can_delete) in rows {
         if servers.last().is_none_or(|server| server.name != name) {
-            servers.push(ServerView { name, badge, color, about, members, mine, channels: Vec::new() });
+            let live = living.remove(&name).unwrap_or_default();
+            servers.push(ServerView { name, badge, color, about, members, mine, live, channels: Vec::new() });
         }
         if let Some(name) = channel {
             servers.last_mut().unwrap().channels.push(ChannelView { name, about: channel_about.unwrap_or_default(), can_delete });
         }
     }
     let (yours, discover): (Vec<ServerView>, Vec<ServerView>) = servers.into_iter().partition(|server| server.mine);
-    Ok(Json(json!({ "yours": yours, "discover": discover })))
+    Ok(Json(json!({ "yours": live_first(yours), "discover": live_first(discover) })))
 }
 
 #[derive(Deserialize)]

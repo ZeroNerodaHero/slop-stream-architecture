@@ -13,7 +13,7 @@ flowchart LR
 | | stream | a group's channel | a direct message |
 |---|---|---|---|
 | what it is | the room of one name | one channel inside a group | one thread between two friends |
-| where | the watch page, go live, the corner player | `/explore/<server>/<channel>` | the window beside the sidebar, on every page |
+| where | the watch page, go live, the corner player | `/explore/<server>`, and each channel under it | the window beside the sidebar, on every page |
 | who may read | anyone | anyone, including the history | the two of them |
 | who may write | anyone: a login, or a nick | a login that has joined the group | a login, and only a friend (each follows the other) |
 | how a line goes out | a websocket for that room | the same websocket, a different room | `POST`, then the events socket tells both sides |
@@ -33,19 +33,17 @@ a line is 1 to 500 characters after cleaning, 5 at once and then 1 a second, 8 s
 
 ## a group's channel
 
-built, and not linked. a group other than `bot` is a server (`groups.md`). it starts with one channel, `general`. a member can add more, 20 at most, and `general` cannot be deleted. each channel is its own room of the stream chat: the same panel, the same redis key shape, the same limits, the same badges. the room is `server/channel`, the socket `wss://<host>/chat/<server>/<channel>`.
+built. a group other than `bot` is a server (`groups.md`). it starts with one channel, `general`. a member can add more, 20 at most, and `general` cannot be deleted. each channel is its own room of the stream chat: the same panel, the same redis key shape, the same limits, the same badges. the room is `server/channel`, the socket `wss://<host>/chat/<server>/<channel>`.
 
 reading is open. a guest, and a login that has not joined, sees the lines and the history. a line is accepted only from a login that has joined that server; anyone else hears `join the server first` and the line is not kept. a channel that is not there says `no such channel` and the panel stops. the words `before`, `search`, `by` and `around` are not channel names, because those are the history routes.
 
-the list is `/explore`: the servers this login is in, then the rest. a channel is `/explore/<server>/<channel>`. a member adds a channel from the server's card; who made the channel, who made the server, or an admin deletes one, after a `sure?`. on the channel page a person who has not joined is told they can read it, with `join` (or `log in to join`).
-
-nothing on the site links there. home's `servers` link (`#explore-link`) is the one thing to put back. the page, the routes and the api work by url.
+home's `servers` link (`#explore-link`) opens `/explore`: the servers this login is in, then the rest, someone live first inside each. the server's name opens `/explore/<server>`. that page is the room: members who are live, as tiles of the stream they already have (the first one big, four playing at most, muted, and not counted as viewers), and `general` beside them. other channels are links on that page, each `/explore/<server>/<channel>`. a member adds a channel from the server's card on the list; who made the channel, who made the server, or an admin deletes one, after a `sure?`. on the room and on a channel, a person who has not joined is told they can read it, with `join` (or `log in to join`).
 
 making the group, joining it, the badge and the colour are the groups api (`POST /api/groups`, `join`, `leave`, `DELETE`). the channels are three more routes on the same groups (`GET /api/explore`, `POST /api/groups/:group/channels`, `DELETE` one). `bot` is a badge, not a server: nobody joins it and it is not on the list.
 
 what a channel is not: a second copy of a stream's chat, and not a thread. there is no streamer mark that means the room, no unread count, and no friends check. leaving the group stops you writing; the lines stay, and you can still read them.
 
-`idea.md` wants something else on top of this: a group as a page of faces, cameras as tiles, the chat still there on a night when every camera is off, one room per group. that page is not built. what runs is the text channels.
+the room uses the streams people already have. a camera that exists only inside the group, and home leading with groups instead of the stream wall, are still `idea.md`.
 
 ## a direct message
 
@@ -69,4 +67,4 @@ a logout drops the direct-message window. a stream or a channel keeps going: the
 
 - **the bell.** an inbox of the last 30 things (`notifications.md`): someone you follow went live, a new follower, a friend's line. the line is a copy for the list. the thread is still the direct message.
 - **posts.** a plan (`posts.md`). a short post on a feed, not a room and not a thread.
-- **a room of cameras.** the idea (`idea.md`). several faces in one group, one of them big, the chat underneath. the channels above are the text half, and they are the half that runs.
+- **a camera that exists only in the group.** the room shows the streams people already have. a face that is not also their own stream, and one shared audio, are still `idea.md`.

@@ -191,6 +191,8 @@ export interface Server {
   about: string;
   members: number;
   mine: boolean;
+  /** Members streaming now. Empty when nobody is, and on an older api that does not say. */
+  live?: string[];
   channels: Channel[];
 }
 
