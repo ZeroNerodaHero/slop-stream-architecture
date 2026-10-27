@@ -3,21 +3,10 @@ import { useAtomValue } from 'jotai';
 import { type ReactNode, useEffect } from 'react';
 
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import {
-  clearNotifySettingsNote,
-  KEEP,
-  loadNotifications,
-  notificationsAtom,
-  notifySettingsAtom,
-  notifySettingsNoteAtom,
-  openNotifications,
-  setNotifySetting,
-  unreadNotificationsAtom
-} from '@/infra/atoms/notification-atoms';
-import { closeUserModal, pickTab } from '@/infra/atoms/user-modal-atoms';
+import { clearNotifySettingsNote, KEEP, loadNotifications, notifySettingsAtom, notifySettingsNoteAtom, setNotifySetting } from '@/infra/atoms/notification-atoms';
+import { pickTab } from '@/infra/atoms/user-modal-atoms';
 import type { NotificationKind } from '@/infra/frames';
-import { Button } from '@/shared-components/Button';
-import { BUTTON, SECTION_TITLE, Section, Status } from '@/shared-components/user-modal/parts';
+import { SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 /** The three kinds, as switches. The words say what a row of that kind reads. */
@@ -36,7 +25,7 @@ const KINDS: readonly { kind: NotificationKind; label: string; detail: string; i
   },
   {
     kind: 'dm',
-    label: 'a friend writes to you',
+    label: 'a friend messages you',
     detail: 'the newest line from each friend, one row a friend. reading the chat reads it',
     icon: <RiChat3Line aria-hidden size={24} />
   }
@@ -51,8 +40,6 @@ export function NotificationsTab() {
   const me = useAtomValue(meAtom);
   const settings = useAtomValue(notifySettingsAtom);
   const note = useAtomValue(notifySettingsNoteAtom);
-  const list = useAtomValue(notificationsAtom);
-  const unread = useAtomValue(unreadNotificationsAtom);
 
   // the settings as the api has them, for the login this is about; a stale `saved` goes with the tab
   useEffect(() => {
@@ -118,25 +105,6 @@ export function NotificationsTab() {
         </p>
         <Status id="notify-settings-note" text={note} />
       </fieldset>
-
-      <Section title="your inbox" description="the list under the bell, for this account.">
-        <p id="notify-count" className="text-sm text-textSecondary">
-          {list === undefined ? 'loading' : list.length === 0 ? 'nothing in it yet.' : `${list.length} kept${unread > 0 ? `, ${unread} new` : ''}.`}
-        </p>
-        <div>
-          <Button
-            id="notify-open"
-            flat
-            className={BUTTON}
-            onClick={() => {
-              closeUserModal();
-              openNotifications();
-            }}
-          >
-            open the list
-          </Button>
-        </div>
-      </Section>
     </div>
   );
 }

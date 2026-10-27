@@ -250,7 +250,10 @@ export function ProfileTab() {
               </Button>
             )}
           </div>
-          <Status id="profile-avatar-status" text={avatarStatus || (canEdit ? 'a square jpeg, 256px. on your stream and in the preview of its link.' : whyNot)} />
+          <Status
+            id="profile-avatar-status"
+            text={avatarStatus || (canEdit ? 'a square you cut out of any picture, 256px. on your stream and in the preview of its link.' : whyNot)}
+          />
         </div>
       </div>
 
@@ -427,7 +430,7 @@ export function ProfileTab() {
               </Button>
             )}
           </div>
-          <Status id="profile-offline-status" text={offlineStatus || (canEdit ? 'a wide jpeg, 1280×720: the middle of your picture, cut to 16:9.' : whyNot)} />
+          <Status id="profile-offline-status" text={offlineStatus || (canEdit ? 'a wide jpeg, 1280×720: the 16:9 you cut out of your picture.' : whyNot)} />
         </div>
         <Field
           id="profile-offline-note"

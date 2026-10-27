@@ -67,10 +67,6 @@ export function forgetNotifications() {
   store.set(notifySettingsNoteAtom, '');
 }
 
-export function openNotifications() {
-  store.set(notificationsOpenAtom, true);
-}
-
 export function closeNotifications() {
   store.set(notificationsOpenAtom, false);
 }

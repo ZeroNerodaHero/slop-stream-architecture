@@ -17,10 +17,12 @@ import { atom } from 'jotai';
 import { api, messageOf } from '@/infra/api';
 import { meAtom, reloadMe } from '@/infra/atoms/auth-atoms';
 import { nickAtom, reconnectChat } from '@/infra/atoms/chat-atoms';
-import { followIdentityOnLivePage, myAvatarAtom, squareJpeg, streamNameAtom, wideJpeg } from '@/infra/atoms/publish-atoms';
+import { cropPicture } from '@/infra/atoms/crop-atoms';
+import { followIdentityOnLivePage, myAvatarAtom, streamNameAtom } from '@/infra/atoms/publish-atoms';
 import { aboutAtom, socialsAtom, watchNameAtom } from '@/infra/atoms/watch-atoms';
 import { onEvents, reconnectEvents } from '@/infra/events';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
+import { AVATAR_PICTURE, OFFLINE_PICTURE } from '@/infra/picture';
 import {
   cleanSocials,
   EMPTY_SOCIALS,
@@ -70,13 +72,6 @@ export const profileSocialsDirtyAtom = atom((get) => socialsKey(get(profileSocia
 export const MAX_OFFLINE_NOTE_CHARS = 140;
 /** The api keeps this many characters of the about me. The box stops there too. */
 export const MAX_ABOUT_CHARS = 2000;
-/** The offline picture goes up at this size, the player's shape. */
-const OFFLINE_W = 1280;
-const OFFLINE_H = 720;
-/** The api's ceiling for it. */
-const MAX_OFFLINE_BYTES = 512 * 1024;
-/** Tried in order until the jpeg fits under the ceiling: a photo at 0.8 can run past it. */
-const OFFLINE_QUALITIES = [0.8, 0.7, 0.6, 0.5];
 
 /** The picture to show for me, if it has been loaded for the name I am now. */
 export const myAvatarVersionAtom = atom((get) => (get(profileForAtom) === get(myNameAtom) ? get(profileAvatarAtom) : null));
@@ -215,15 +210,18 @@ export async function saveMyAbout(): Promise<void> {
   }
 }
 
+/** The picture: the square of the file picked in the crop dialog, as a 256x256 jpeg (infra/picture.ts). Closed without, nothing happens. */
 export async function saveMyAvatar(file: File): Promise<void> {
   const name = store.get(myNameAtom);
   if (!isValidName(name)) {
     store.set(profileAvatarStatusAtom, 'pick a name first');
     return;
   }
+  const jpeg = await cropPicture(file, AVATAR_PICTURE);
+  if (!jpeg || store.get(myNameAtom) !== name) return;
   store.set(profileAvatarStatusAtom, 'saving');
   try {
-    const saved = await api.saveAvatar(name, await squareJpeg(file));
+    const saved = await api.saveAvatar(name, jpeg);
     store.set(profileAvatarAtom, saved.avatar);
     store.set(profileAvatarStatusAtom, 'saved');
     alsoOnLivePage(name, saved.avatar);
@@ -245,24 +243,18 @@ export async function removeMyAvatar(): Promise<void> {
   }
 }
 
-/** The offline picture as the api takes it: the middle 16:9 at 1280x720, encoded softer until it is under the ceiling. */
-async function offlineJpeg(file: File): Promise<Blob> {
-  for (const quality of OFFLINE_QUALITIES) {
-    const jpeg = await wideJpeg(file, OFFLINE_W, OFFLINE_H, quality);
-    if (jpeg.size <= MAX_OFFLINE_BYTES) return jpeg;
-  }
-  throw new Error('too much detail for 512 kb. try a plainer picture');
-}
-
+/** The offline picture: the 16:9 of the file picked in the crop dialog, as a 1280x720 jpeg, softer until it is under the api's ceiling. */
 export async function saveMyOffline(file: File): Promise<void> {
   const name = store.get(myNameAtom);
   if (!isValidName(name)) {
     store.set(profileOfflineStatusAtom, 'pick a name first');
     return;
   }
+  const jpeg = await cropPicture(file, OFFLINE_PICTURE);
+  if (!jpeg || store.get(myNameAtom) !== name) return;
   store.set(profileOfflineStatusAtom, 'saving');
   try {
-    const saved = await api.saveOffline(name, await offlineJpeg(file));
+    const saved = await api.saveOffline(name, jpeg);
     store.set(profileOfflineAtom, saved.offline);
     store.set(profileOfflineStatusAtom, 'saved');
   } catch (err) {

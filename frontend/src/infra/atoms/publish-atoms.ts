@@ -10,10 +10,12 @@ import { atomWithStorage } from 'jotai/utils';
 import { ApiError, api, type Owner, messageOf, statusOf } from '@/infra/api';
 import { loadMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { nickAtom } from '@/infra/atoms/chat-atoms';
+import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { endWatch, pipAtom } from '@/infra/atoms/watch-atoms';
 import { type Mixer, openMixer } from '@/infra/mixer';
 import { cleanName, isValidName } from '@/infra/names';
+import { AVATAR_PICTURE, SCENE_PICTURE, THUMB_PICTURE } from '@/infra/picture';
 import { type Box, connectRelay, type Fit, isVideoLayer, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
 import {
@@ -180,12 +182,6 @@ export const avatarStatusAtom = atom('');
 export const streamThumbsAtom = atom<number[]>([]);
 export const thumbStatusAtom = atom('');
 
-/** The picture the page sends: this big, as a jpeg of this quality. A few tens of kb. */
-const AVATAR_PX = 256;
-const AVATAR_QUALITY = 0.85;
-const THUMB_W = 640;
-const THUMB_H = 360;
-const THUMB_QUALITY = 0.8;
 const MAX_THUMBS = 6;
 
 export const isPublishingAtom = atom((get) => BUSY_PHASES.includes(get(publishPhaseAtom)));
@@ -680,7 +676,7 @@ export function setLivePanel(name: keyof LivePanels, open: boolean) {
   store.set(storedPanelsAtom, { ...store.get(livePanelsAtom), [name]: open });
 }
 
-// ---- pictures: up to the api as they are, then a source with their own shape ----------------------
+// ---- pictures: cut in the dialog, up to the api, then a source with their own shape ------------------
 
 /** A picture's shape, from the bytes the api serves: decoded once, so the box is right before the layer shows anywhere. */
 async function imageRatio(url: string): Promise<number> {
@@ -690,7 +686,11 @@ async function imageRatio(url: string): Promise<number> {
   return ratioOf(img.naturalWidth, img.naturalHeight);
 }
 
-/** The + menu's `image or gif`: the file up to the api as it is (a gif keeps its frames, a png its holes), then onto the stream. */
+/**
+ * The + menu's `image or gif`: the part of the file picked in the crop dialog, up to the api at
+ * its own pixels (the whole of it is the file itself: a png keeps its holes), then onto the
+ * stream. A gif skips the dialog and goes up whole: a cut would be one frame of it.
+ */
 export async function addImage(file: File): Promise<void> {
   const name = store.get(streamNameAtom);
   if (!isValidName(name)) {
@@ -698,9 +698,11 @@ export async function addImage(file: File): Promise<void> {
     return;
   }
   if (store.get(imageStatusAtom) === 'uploading') return;
+  const picture = file.type === 'image/gif' ? file : await cropPicture(file, SCENE_PICTURE);
+  if (!picture || store.get(streamNameAtom) !== name) return;
   store.set(imageStatusAtom, 'uploading');
   try {
-    const saved = await api.saveAsset(name, file);
+    const saved = await api.saveAsset(name, picture);
     if (store.get(streamNameAtom) !== name) return;
     store.set(libraryAtom, [...store.get(libraryAtom).filter((a) => a.id !== saved.id), { id: saved.id, mime: saved.mime }]);
     store.set(imageStatusAtom, '');
@@ -1103,59 +1105,10 @@ export function followIdentityOnLivePage(was?: string) {
 }
 
 /**
- * Any picture file to a square jpeg, in the browser, before it goes anywhere: the middle
- * square of it, scaled to AVATAR_PX. So the api never has to decode an image. The user
- * modal's profile tab makes its pictures the same way.
+ * A thumbnail: the 16:9 of the file picked in the crop dialog, as a 640x360 jpeg (infra/picture.ts),
+ * so the api never has to decode an image. Nothing is said while the dialog is open; closed
+ * without, nothing happens.
  */
-export async function squareJpeg(file: File): Promise<Blob> {
-  const bitmap = await createImageBitmap(file);
-  const side = Math.min(bitmap.width, bitmap.height);
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = AVATAR_PX;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('no canvas');
-  ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, AVATAR_PX, AVATAR_PX);
-  bitmap.close();
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('could not make a jpeg'))), 'image/jpeg', AVATAR_QUALITY);
-  });
-}
-
-/**
- * Any picture file to a 16:9 jpeg, in the browser, before it goes anywhere: the middle of
- * it, scaled to `width` x `height` (a thumbnail's 640x360 unless said otherwise; the offline
- * picture asks for 1280x720). So the api never has to decode an image.
- */
-export async function wideJpeg(file: File, width = THUMB_W, height = THUMB_H, quality = THUMB_QUALITY): Promise<Blob> {
-  const bitmap = await createImageBitmap(file);
-  try {
-    const target = 16 / 9;
-    const ratio = bitmap.width / bitmap.height;
-    let sx = 0;
-    let sy = 0;
-    let sw = bitmap.width;
-    let sh = bitmap.height;
-    if (ratio > target) {
-      sw = bitmap.height * target;
-      sx = (bitmap.width - sw) / 2;
-    } else {
-      sh = bitmap.width / target;
-      sy = (bitmap.height - sh) / 2;
-    }
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('no canvas');
-    ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, width, height);
-    return await new Promise((resolve, reject) => {
-      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('could not make a jpeg'))), 'image/jpeg', quality);
-    });
-  } finally {
-    bitmap.close();
-  }
-}
-
 export async function addStreamThumb(file: File): Promise<void> {
   const name = store.get(streamNameAtom);
   if (!isValidName(name)) {
@@ -1167,9 +1120,11 @@ export async function addStreamThumb(file: File): Promise<void> {
     store.set(thumbStatusAtom, '6 pictures at most. remove one first');
     return;
   }
+  const jpeg = await cropPicture(file, THUMB_PICTURE);
+  if (!jpeg || store.get(streamNameAtom) !== name) return;
   store.set(thumbStatusAtom, 'saving');
   try {
-    const saved = await api.saveStreamThumb(name, await wideJpeg(file));
+    const saved = await api.saveStreamThumb(name, jpeg);
     if (store.get(streamNameAtom) !== name) return;
     store.set(streamThumbsAtom, [...store.get(streamThumbsAtom), saved.id]);
     store.set(thumbStatusAtom, 'saved');
@@ -1196,15 +1151,18 @@ export async function removeStreamThumb(id: number): Promise<void> {
   }
 }
 
+/** The picture: the square of the file picked in the crop dialog, as a 256x256 jpeg. The profile tab saves it the same way. */
 export async function saveAvatar(file: File): Promise<void> {
   const name = store.get(streamNameAtom);
   if (!isValidName(name)) {
     store.set(avatarStatusAtom, 'type a name first');
     return;
   }
+  const jpeg = await cropPicture(file, AVATAR_PICTURE);
+  if (!jpeg || store.get(streamNameAtom) !== name) return;
   store.set(avatarStatusAtom, 'saving');
   try {
-    const saved = await api.saveAvatar(name, await squareJpeg(file));
+    const saved = await api.saveAvatar(name, jpeg);
     store.set(myAvatarAtom, saved.avatar);
     store.set(avatarStatusAtom, 'saved');
   } catch (err) {
