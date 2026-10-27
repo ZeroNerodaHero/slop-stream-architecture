@@ -111,4 +111,4 @@ a row of about a hundred bytes per line, with three indexes. one `XADD` per line
 - deleting a line, blocking a name (`follows.md` leaves blocks as a sibling edge table; the friends check would read it too).
 - pictures in a line; the bucket (`s3.rs`) and a `dm_assets` row are the obvious shape.
 - a thread taken off the column for good (a hidden flag per reader), not just for the visit.
-- a notification outside the page (the toast `follows.md` planned for `went live`, the browser's `Notification`): today the sign is the number on the sidebar.
+- a notification outside the page (the browser's `Notification`): the sign is the number on the sidebar, and since `notifications.md` the newest line from each friend is a row of the inbox under the bell too, read with the thread.

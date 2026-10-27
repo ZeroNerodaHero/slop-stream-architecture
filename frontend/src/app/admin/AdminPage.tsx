@@ -68,6 +68,11 @@ function HealthCard({ health, error }: { health: Health | undefined; error: unkn
   return (
     <section id="admin-health" className="flex flex-wrap items-center gap-x-5 gap-y-2 border border-primaryStroke bg-backgroundSecondary px-5 py-4 shadow-hard">
       <span className="text-xl font-semibold">{health.env}</span>
+      {health.version && (
+        <span className="font-semibold" title={health.deployed_at ? `deployed ${new Date(health.deployed_at).toLocaleString()}` : 'the release deploy.sh put up'}>
+          {health.version}
+        </span>
+      )}
       <span className="font-mono text-textSecondary" title="the commit the api was built from">
         {health.build}
       </span>

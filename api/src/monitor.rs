@@ -231,10 +231,11 @@ fn apply(t: &mut TargetState, p: Probe, now: DateTime<Utc>, down_after: u32) -> 
                 }
             }
         }
-        for (field, what) in [("build", "api"), ("video_build", "video")] {
+        // `version` is the release deploy.sh recorded (v12 → v13); a build moves with it, or alone (a laptop's ship)
+        for (field, what) in [("build", "api build"), ("video_build", "video build"), ("version", "release")] {
             if let (Some(a), Some(b)) = (prev.get(field).and_then(Value::as_str), cur.get(field).and_then(Value::as_str)) {
                 if a != b {
-                    changes.push(("build", format!("{what} build {a} → {b}")));
+                    changes.push(("build", format!("{what} {a} → {b}")));
                 }
             }
         }
@@ -640,6 +641,18 @@ mod tests {
         apply(&mut t, ok(20, "bbb"), at(15), 3);
         let builds: Vec<&str> = t.events.iter().filter(|e| e.kind == "build").map(|e| e.text.as_str()).collect();
         assert_eq!(builds, vec!["api build aaa → bbb", "video build aaa → bbb"]);
+    }
+
+    #[test]
+    fn a_new_release_is_an_event() {
+        let mut t = TargetState::default();
+        let (mut a, mut b) = (ok(10, "aaa"), ok(20, "aaa"));
+        a.body.as_mut().unwrap()["version"] = json!("v12");
+        b.body.as_mut().unwrap()["version"] = json!("v13");
+        apply(&mut t, a, at(0), 3);
+        apply(&mut t, b, at(15), 3);
+        let builds: Vec<&str> = t.events.iter().filter(|e| e.kind == "build").map(|e| e.text.as_str()).collect();
+        assert_eq!(builds, vec!["release v12 → v13"]);
     }
 
     #[test]

@@ -96,7 +96,7 @@ function LoggedOut() {
           />
         </Field>
         <div className="flex flex-wrap items-center gap-4">
-          <Button id="sec-submit" type="submit" variant="primary" className={BUTTON} disabled={busy || !name || !password}>
+          <Button id="sec-submit" type="submit" variant="primary" flat className={BUTTON} disabled={busy || !name || !password}>
             {signingUp ? 'sign up' : 'log in'}
           </Button>
           <button
@@ -160,7 +160,7 @@ function LoggedIn({ me }: { me: string }) {
             <PasswordInput id="sec-new" value={fresh} onChange={setFresh} autoComplete="new-password" minLength={8} />
           </Field>
           <div className="flex flex-wrap items-center gap-3">
-            <Button id="sec-change" type="submit" className={BUTTON} disabled={busy || !old || fresh.length < 8}>
+            <Button id="sec-change" type="submit" flat className={BUTTON} disabled={busy || !old || fresh.length < 8}>
               change password
             </Button>
             <Status id="sec-status" text={status} />
@@ -172,6 +172,7 @@ function LoggedIn({ me }: { me: string }) {
         <div className="flex flex-wrap items-center gap-3">
           <Button
             id="sec-logout"
+            flat
             className={BUTTON}
             onClick={() => {
               void logout().then(() => identityChanged('login'));
@@ -184,6 +185,7 @@ function LoggedIn({ me }: { me: string }) {
               <Button
                 id="sec-logout-all"
                 variant="danger"
+                flat
                 className={BUTTON}
                 onClick={() => {
                   void logoutAll().then(() => identityChanged('login'));
@@ -196,7 +198,7 @@ function LoggedIn({ me }: { me: string }) {
               </button>
             </>
           ) : (
-            <Button id="sec-logout-all" className={cn(BUTTON, 'text-decrease hover:border-decrease')} onClick={() => setSure(true)}>
+            <Button id="sec-logout-all" flat className={cn(BUTTON, 'text-decrease hover:border-decrease')} onClick={() => setSure(true)}>
               log out everywhere
             </Button>
           )}

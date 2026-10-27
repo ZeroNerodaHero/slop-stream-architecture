@@ -1,4 +1,4 @@
-import { RiCloseLine, RiGroupLine, RiPaletteLine, RiSettings3Line, RiShieldKeyholeLine, RiUserLine } from '@remixicon/react';
+import { RiCloseLine, RiGroupLine, RiNotification3Line, RiPaletteLine, RiSettings3Line, RiShieldKeyholeLine, RiUserLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { Fragment, type KeyboardEvent, type ReactNode, useLayoutEffect, useRef } from 'react';
 
@@ -9,6 +9,7 @@ import { USER_TABS, type UserTab, closeUserModal, pickTab, userModalOpenAtom, us
 import { Face } from '@/shared-components/Face';
 import { AppearanceTab } from '@/shared-components/user-modal/AppearanceTab';
 import { GroupsTab } from '@/shared-components/user-modal/GroupsTab';
+import { NotificationsTab } from '@/shared-components/user-modal/NotificationsTab';
 import { ProfileTab } from '@/shared-components/user-modal/ProfileTab';
 import { SecurityTab } from '@/shared-components/user-modal/SecurityTab';
 import { SettingsTab } from '@/shared-components/user-modal/SettingsTab';
@@ -18,6 +19,7 @@ const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> =
   profile: { label: 'profile', group: 'you', icon: <RiUserLine aria-hidden size={18} /> },
   groups: { label: 'groups', group: 'you', icon: <RiGroupLine aria-hidden size={18} /> },
   security: { label: 'security', group: 'you', icon: <RiShieldKeyholeLine aria-hidden size={18} /> },
+  notifications: { label: 'notifications', group: 'you', icon: <RiNotification3Line aria-hidden size={18} /> },
   settings: { label: 'settings', group: 'this browser', icon: <RiSettings3Line aria-hidden size={18} /> },
   appearance: { label: 'appearance', group: 'this browser', icon: <RiPaletteLine aria-hidden size={18} /> }
 };
@@ -52,8 +54,8 @@ function roveTabs(e: KeyboardEvent<HTMLDivElement>) {
 
 /**
  * The user modal: who you are and how this browser shows things, the way discord does its
- * settings. A rail of tabs down the left (profile, groups, security; settings, appearance), the open
- * one's pane on the right. Mounted by the Shell; it renders nothing until `openUserModal`, and
+ * settings. A rail of tabs down the left (profile, groups, security, notifications; settings,
+ * appearance), the open one's pane on the right. Mounted by the Shell; it renders nothing until `openUserModal`, and
  * the page behind follows every change at once, so the layout and theme cards are their own
  * preview. A native <dialog>: the browser keeps focus in it, closes it on escape and hands
  * focus back to what opened it; a click on the backdrop closes it too.
@@ -173,7 +175,7 @@ function Rail({ tab }: { tab: UserTab }) {
       </div>
 
       <p className="mt-auto hidden px-3 py-3 text-xs leading-5 text-textTertiary sm:block">
-        profile, groups and security are the account.
+        profile, groups, security and notifications are the account.
         <br />
         settings and appearance are this browser.
         <br />
@@ -220,6 +222,7 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
           {tab === 'profile' && <ProfileTab />}
           {tab === 'groups' && <GroupsTab />}
           {tab === 'security' && <SecurityTab />}
+          {tab === 'notifications' && <NotificationsTab />}
           {tab === 'settings' && <SettingsTab />}
           {tab === 'appearance' && <AppearanceTab />}
         </div>

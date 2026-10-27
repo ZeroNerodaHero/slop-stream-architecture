@@ -1,6 +1,6 @@
 /** The json api behind /api. Same origin, so the dev server and caddy both forward it. */
 
-import type { Presence, PresenceChoice } from '@/infra/frames';
+import type { NotificationKind, Presence, PresenceChoice } from '@/infra/frames';
 import { report } from '@/infra/report';
 import type { Socials } from '@/infra/socials';
 
@@ -75,6 +75,30 @@ export interface DmThread {
   presence: Presence;
   last: DmLine;
   unread: number;
+}
+
+/**
+ * One row of the login's inbox (docs/notifications.md), as `GET /api/notifications` lists them, newest first:
+ * who did it (`name`, as they are now, with the ✓ and the picture), when (`at`, unix ms), whether it has been
+ * seen. `text` is a dm's words (clipped); `session` a go-live's, null for the rest.
+ */
+export interface Notification {
+  id: number;
+  kind: NotificationKind;
+  name: string;
+  verified: boolean;
+  avatar: number | null;
+  at: number;
+  read: boolean;
+  text: string;
+  session: number | null;
+}
+
+/** Which kinds the login keeps, the notifications tab's switches. Kept with the account. */
+export interface NotifySettings {
+  live: boolean;
+  follow: boolean;
+  dm: boolean;
 }
 
 /** Somebody the login follows, as `GET /api/following` lists them: streaming first. See docs/follows.md. */
@@ -236,6 +260,9 @@ export interface Owner {
 export interface Health {
   ok: boolean;
   env: string;
+  /** The release the last deploy.sh run put up: `v12`, or `v12+<commit>` past the last tag. Null before the first. */
+  version: string | null;
+  deployed_at: string | null;
   build: string;
   up_secs: number;
   postgres: boolean;
@@ -366,6 +393,12 @@ export const api = {
   sendDm: (name: string, text: string) => request<DmLine & { to: string }>('POST', `/api/dm/${encodeURIComponent(name)}`, { text }),
   /** The login has seen the thread with `name` up to that line. Its other devices hear it on the socket. */
   readDm: (name: string, id: number) => request<null>('PUT', `/api/dm/${encodeURIComponent(name)}/read`, { id }),
+  /** The login's inbox, newest first, the last 30, and which kinds it keeps. 401 for nobody. See docs/notifications.md. */
+  notifications: () => request<{ settings: NotifySettings; items: Notification[] }>('GET', '/api/notifications'),
+  /** The login has seen its inbox up to that row. Its other devices hear it on the socket. */
+  readNotifications: (id: number) => request<null>('PUT', '/api/notifications/read', { id }),
+  /** Which kinds go in the inbox from now on, replaced whole; the answer is what was kept. */
+  saveNotifySettings: (settings: NotifySettings) => request<NotifySettings>('PUT', '/api/notifications/settings', settings),
   /** The status, one line beside the name: runs of whitespace become one space, 500 characters at most. `bio` on the wire. */
   saveBio: (name: string, bio: string) => request<{ name: string; bio: string }>('PUT', `/api/streamers/${name}`, { bio }),
   /** About me, the words first on the about tab (docs/about.md): paragraphs kept, 2000 characters at most, empty clears it. */

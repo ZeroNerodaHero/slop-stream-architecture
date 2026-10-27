@@ -16,7 +16,9 @@
 //! Nobody has to log in. A name with an account (auth.rs) is the one thing a
 //! login is for: only its owner can go live, save its bio, its pictures (profile.rs:
 //! the face, the home card's, and the one its page shows while it is not live) or
-//! chat as it. A login can also join groups (groups.rs), whose badges go on its chat lines.
+//! chat as it. A login can also join groups (groups.rs), whose badges go on its chat lines,
+//! follow names (follows.rs), write to friends (dms.rs), and has an inbox of the last 30
+//! things that happened to it (notify.rs): a follow went live, a new follower, a friend's line.
 //!
 //! Every streamers row has a uuid that never changes (docs/ids.md). Logins,
 //! memberships, groups and the pictures in the bucket point at it, so a login can
@@ -45,8 +47,10 @@ mod history;
 mod home;
 mod migrate;
 mod monitor;
+mod notify;
 mod presence;
 mod profile;
+mod release;
 mod s3;
 mod socket;
 
@@ -431,12 +435,14 @@ async fn video_health(s: &AppState) -> Option<VideoHealth> {
 pub(crate) const OPTIONAL_PROBE: Duration = Duration::from_millis(1500);
 
 /// 200 when postgres and redis answer, 503 otherwise. The rest of the body is for
-/// a monitor: video reachable, rooms live, uptimes (they go backwards after a
-/// restart), the build, reports the limits dropped. See docs/debugging.md.
+/// a monitor: the release deployed (`version`, release.rs) and when, video reachable,
+/// rooms live, uptimes (they go backwards after a restart), the build, reports the
+/// limits dropped. See docs/debugging.md.
 async fn health(State(s): State<AppState>) -> Response {
     // all at once: the answer takes as long as the slowest probe, not the sum
-    let (postgres, redis, debug_db, video, errors_dropped, s3_ok) = tokio::join!(
-        async { sqlx::query("SELECT 1").execute(&s.db).await.is_ok() },
+    let (deploy, redis, debug_db, video, errors_dropped, s3_ok) = tokio::join!(
+        // the postgres probe and the release in one query: the newest row of `deploys`
+        release::current(&s.db),
         async { redis::cmd("PING").query_async::<String>(&mut s.redis.clone()).await.is_ok() },
         async {
             match &s.debug {
@@ -448,10 +454,14 @@ async fn health(State(s): State<AppState>) -> Response {
         debug::dropped(&s),
         async { tokio::time::timeout(OPTIONAL_PROBE, s3::ready(&s.s3)).await.unwrap_or(false) },
     );
+    let postgres = deploy.is_ok();
+    let deploy = deploy.ok().flatten();
     let ok = postgres && redis;
     let body = json!({
         "ok": ok,
         "env": s.env_name,
+        "version": deploy.as_ref().map(|d| d.0.as_str()),
+        "deployed_at": deploy.as_ref().map(|d| d.1),
         "build": s.build,
         "up_secs": s.started.elapsed().as_secs(),
         "postgres": postgres,
@@ -737,6 +747,8 @@ async fn attached(
     let card = card_of(&s, &name, owner.session).await?;
     presence::publish_live(&mut r, &name, since.map_or_else(presence::now_ms, |t| t.timestamp_millis()), owner.session, &card).await;
     log::info!("{name}: video has the publisher, session {}", owner.session);
+    // the followers' inboxes (docs/notifications.md): once per session, however many times video asks
+    notify::stream_started(&s, &name, owner.session).await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -883,6 +895,7 @@ fn router(state: AppState) -> Router {
         .merge(groups::routes())
         .merge(follows::routes())
         .merge(dms::routes())
+        .merge(notify::routes())
         .merge(presence::routes())
         .merge(debug::routes())
         .route("/api/health", get(health))
@@ -986,6 +999,18 @@ async fn main() {
     if env::args().nth(1).as_deref() == Some("passwd") {
         let name = env::args().nth(2).unwrap_or_default();
         if let Err(e) = auth::passwd(&db, &name).await {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // `api release <version> [commit]`: the release this box runs, for /api/health. deploy.sh
+    // runs it once the health check has passed. see release.rs
+    if env::args().nth(1).as_deref() == Some("release") {
+        let version = env::args().nth(2).unwrap_or_default();
+        let commit = env::args().nth(3).unwrap_or_default();
+        if let Err(e) = release::record(&db, &version, &commit).await {
             eprintln!("{e}");
             std::process::exit(1);
         }

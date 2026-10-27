@@ -24,6 +24,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{self, bump, Me};
+use crate::notify;
 use crate::presence::{self, Presence, Status, SEEN_WINDOW_MS};
 use crate::{redis_live, video_live, ApiError, ApiResult, AppState, Name};
 
@@ -156,13 +157,17 @@ async fn follow(State(s): State<AppState>, Name(name): Name, Me(me): Me) -> Resu
     if bump(&s, &format!("rl:follow:name:{}", me.name), CHURN_WINDOW_SECS).await? > CHURN_PER_HOUR {
         return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "too many changes. wait an hour"));
     }
-    follow_as(&s.db, me.id, &me.name, name).await?;
+    // a new edge is news to the one followed, when they are a login (docs/notifications.md)
+    if let Some((followed, followed_name)) = follow_as(&s.db, me.id, &me.name, name).await? {
+        notify::followed(&s, followed, &followed_name, &me).await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// The follow itself, for the login `me_id` named `me_name`: all of it but the churn limit,
-/// which needs redis. On the pool alone so a test can run it.
-async fn follow_as(db: &PgPool, me_id: Uuid, me_name: &str, name: String) -> Result<(), ApiError> {
+/// which needs redis. On the pool alone so a test can run it. The followed row's id and the
+/// name it has now when the edge is new; None when it was there already.
+async fn follow_as(db: &PgPool, me_id: Uuid, me_name: &str, name: String) -> Result<Option<(Uuid, String)>, ApiError> {
     // a name held after a rename is the account that left it: the edge goes to the person, as
     // the watch grant does (docs/ids.md). a name with no row and no hold gets a bare one below
     let name = auth::renamed_to(db, &name).await?.unwrap_or(name);
@@ -170,7 +175,7 @@ async fn follow_as(db: &PgPool, me_id: Uuid, me_name: &str, name: String) -> Res
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "that is you"));
     }
     if stats(db, &name, Some(me_id)).await?.following {
-        return Ok(());
+        return Ok(None);
     }
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM follows WHERE follower_id = $1").bind(me_id).fetch_one(db).await?;
     if count >= FOLLOWS_PER_LOGIN {
@@ -192,7 +197,7 @@ async fn follow_as(db: &PgPool, me_id: Uuid, me_name: &str, name: String) -> Res
     if made.is_some() {
         log::info!("{me_name}: follows {name}");
     }
-    Ok(())
+    Ok(made.map(|id| (id, name)))
 }
 
 /// `POST /api/streamers/:name/unfollow`: 204, also when not following.

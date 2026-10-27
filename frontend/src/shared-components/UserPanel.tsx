@@ -8,6 +8,7 @@ import { nickAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { closeAllDms, loadDms } from '@/infra/atoms/dm-atoms';
 import { forgetFollowing, friendsOpenAtom, loadFollowing, streamingFriendsAtom } from '@/infra/atoms/follow-atoms';
 import { openInspector } from '@/infra/atoms/inspector-atoms';
+import { forgetNotifications, loadNotifications } from '@/infra/atoms/notification-atoms';
 import { myPresenceAtom, PRESENCE_SQUARE, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { identityChanged, loadMyProfile, myAvatarVersionAtom, myNameAtom } from '@/infra/atoms/profile-atoms';
 import { inspectorEnabledAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
@@ -123,15 +124,18 @@ export function UserPanel() {
     void loadMe().then(loadMyProfile);
   }, []);
 
-  // who I follow, and my chats: a login's, once the login is known and whenever it changes (in, out, a
-  // rename). the watch page's follow button and the number on the corner read the one; the chat window
-  // the other. another login's threads are not this one's, and a guest has none.
+  // who I follow, my chats and my inbox: a login's, once the login is known and whenever it changes (in,
+  // out, a rename). the watch page's follow button and the number on the corner read the first; the chat
+  // window the second; the bell at the top right the third. another login's are not this one's, and a
+  // guest has none.
   useEffect(() => {
     forgetFollowing();
     closeAllDms();
+    forgetNotifications();
     if (me) {
       void loadFollowing();
       void loadDms();
+      void loadNotifications();
     }
   }, [me]);
 

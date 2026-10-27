@@ -109,7 +109,7 @@ function Rename({ me }: { me: string }) {
         </Field>
       </fieldset>
       <div className="flex flex-wrap items-center gap-3">
-        <Button id="profile-rename" type="submit" variant={sure ? 'danger' : undefined} className={BUTTON} disabled={!ready}>
+        <Button id="profile-rename" type="submit" variant={sure ? 'danger' : undefined} flat className={BUTTON} disabled={!ready}>
           {sure ? `sure? /watch/${me} becomes /watch/${wanted}` : 'change name'}
         </Button>
         {sure && (
@@ -241,11 +241,11 @@ export function ProfileTab() {
                 if (file) void saveMyAvatar(file);
               }}
             />
-            <Button id="profile-avatar-pick" className={BUTTON} disabled={!canEdit} onClick={() => fileRef.current?.click()}>
+            <Button id="profile-avatar-pick" flat className={BUTTON} disabled={!canEdit} onClick={() => fileRef.current?.click()}>
               {avatar === null ? 'choose picture' : 'change picture'}
             </Button>
             {avatar !== null && (
-              <Button id="profile-avatar-remove" className={BUTTON} disabled={!canEdit} onClick={() => void removeMyAvatar()}>
+              <Button id="profile-avatar-remove" flat className={BUTTON} disabled={!canEdit} onClick={() => void removeMyAvatar()}>
                 remove
               </Button>
             )}
@@ -357,7 +357,7 @@ export function ProfileTab() {
           />
         </Field>
         <div className="flex flex-wrap items-center gap-3">
-          <Button id="profile-save-bio" variant="primary" className={BUTTON} disabled={!canEdit} onClick={() => void saveMyBio()}>
+          <Button id="profile-save-bio" variant="primary" flat className={BUTTON} disabled={!canEdit} onClick={() => void saveMyBio()}>
             save status
           </Button>
           <span id="profile-bio-count" className={cn('text-sm tabular-nums text-textTertiary', left < 20 && 'text-decrease')}>
@@ -418,11 +418,11 @@ export function ProfileTab() {
                 if (file) void saveMyOffline(file);
               }}
             />
-            <Button id="profile-offline-pick" className={BUTTON} disabled={!canEdit} onClick={() => offlineFileRef.current?.click()}>
+            <Button id="profile-offline-pick" flat className={BUTTON} disabled={!canEdit} onClick={() => offlineFileRef.current?.click()}>
               {offline === null ? 'choose picture' : 'change picture'}
             </Button>
             {offline !== null && (
-              <Button id="profile-offline-remove" className={BUTTON} disabled={!canEdit} onClick={() => void removeMyOffline()}>
+              <Button id="profile-offline-remove" flat className={BUTTON} disabled={!canEdit} onClick={() => void removeMyOffline()}>
                 remove
               </Button>
             )}
@@ -453,7 +453,7 @@ export function ProfileTab() {
           />
         </Field>
         <div className="flex flex-wrap items-center gap-3">
-          <Button id="profile-save-offline-note" variant="primary" className={BUTTON} disabled={!canEdit} onClick={() => void saveMyOfflineNote()}>
+          <Button id="profile-save-offline-note" variant="primary" flat className={BUTTON} disabled={!canEdit} onClick={() => void saveMyOfflineNote()}>
             save line
           </Button>
           <Status id="profile-offline-note-status" text={offlineNoteStatus || (canEdit ? '' : whyNot)} />

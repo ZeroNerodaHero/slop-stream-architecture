@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 import { buttonClassName } from '@/shared-components/Button';
+import { NotificationsBell } from '@/shared-components/Notifications';
 import { cn } from '@/utils/cn';
 
 interface PageFrameProps {
@@ -31,26 +32,29 @@ export function HomeLink({ reload = false }: { reload?: boolean }) {
 }
 
 /**
- * Go live, at the right end of every page's title row; absent on its own page. Flat: it sits in a
- * bar over the page, and a shadow there read as one more box. Search is the sidebar's
- * (Friends.tsx), and so is the settings gear, at the far end of your line in it (UserPanel.tsx).
+ * The right end of every page's title row: the notifications bell (Notifications.tsx, the
+ * inbox opens under it), then go live, absent on its own page. Flat: they sit in a bar over
+ * the page, and a shadow there read as one more box. Search is the sidebar's (Friends.tsx),
+ * and so is the settings gear, at the far end of your line in it (UserPanel.tsx).
  */
 function TopActions() {
   const { pathname } = useLocation();
   const onLivePage = pathname.replace(/\/$/, '') === '/live';
-  if (onLivePage) return null;
   return (
     <div className="ml-auto flex shrink-0 items-center gap-2">
-      <Link id="go-live" to="/live" className={buttonClassName('primary', 'px-3 py-2 text-sm', true)}>
-        go live
-      </Link>
+      <NotificationsBell />
+      {!onLivePage && (
+        <Link id="go-live" to="/live" className={buttonClassName('primary', 'px-3 py-2 text-sm', true)}>
+          go live
+        </Link>
+      )}
     </div>
   );
 }
 
 /**
  * The page's title row and its width. One row: back and the title (or home's label) on the left,
- * go live on the right. Sticky: the row stays at the top of the window while
+ * the bell and go live on the right. Sticky: the row stays at the top of the window while
  * the page scrolls under it (the page's own colour, so what scrolls under is hidden), and
  * globals.css keeps scrolled-to things from landing under its first 4rem. Who you are is not
  * here: the sidebar is mounted once by the router's Shell, beside this column.

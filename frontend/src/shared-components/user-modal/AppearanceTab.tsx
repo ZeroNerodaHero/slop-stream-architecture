@@ -166,7 +166,7 @@ export function AppearanceTab() {
               : ''}
           </p>
           <div>
-            <Button id="theme-reset" className={BUTTON} onClick={() => setTheme({ kind: 'preset', name: 'dark' })}>
+            <Button id="theme-reset" flat className={BUTTON} onClick={() => setTheme({ kind: 'preset', name: 'dark' })}>
               back to dark
             </Button>
           </div>

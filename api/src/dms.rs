@@ -23,6 +23,7 @@ use uuid::Uuid;
 use crate::auth::{self, bump, Account, Me};
 use crate::chat::{clean_text, MAX_TEXT_CHARS};
 use crate::follows;
+use crate::notify;
 use crate::presence::{self, Presence};
 use crate::{ApiError, ApiResult, AppState, Name};
 
@@ -136,6 +137,8 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     mark_read(&s.db, me.id, other.id, id).await?;
     let mut r = s.redis.clone();
     presence::publish_dm(&mut r, &me.name, &other.name, id, &text, at).await;
+    // the reader's inbox (docs/notifications.md): the newest line from a friend, one row
+    notify::messaged(&s, &other, &me, &text).await;
     log::info!("{}: dm to {} ({} chars)", me.name, other.name, text.chars().count());
     Ok((StatusCode::CREATED, Json(json!({ "id": id, "from": me.name, "to": other.name, "text": text, "at": at }))))
 }
@@ -153,7 +156,12 @@ async fn mark_read(db: &PgPool, reader: Uuid, peer: Uuid, id: i64) -> Result<boo
     .bind(id)
     .execute(db)
     .await?;
-    Ok(moved.rows_affected() > 0)
+    let moved = moved.rows_affected() > 0;
+    // what the peer wrote was in the reader's inbox too; read there with the thread
+    if moved {
+        notify::dm_read(db, reader, peer).await?;
+    }
+    Ok(moved)
 }
 
 #[derive(Deserialize)]

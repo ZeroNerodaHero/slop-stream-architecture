@@ -41,6 +41,13 @@
 # --pull diffs from there, not from HEAD, so a --pull that died in a build is
 # picked up whole by the next one instead of reporting "nothing changed".
 #
+# It also records the release it put up: the highest v<n> tag reaching HEAD (the
+# github action numbers every push to main it built images for: v1, v2, ..., and
+# tags the commit and the four images with it; v<n>+<commit> when the images are
+# newer than the tag), written into the database through `api release` once the
+# health check passed, so /api/health says it under `version`. --images v13 deploys
+# that release's four images by name.
+#
 # Stop everything later with:  docker compose down
 #
 set -euo pipefail
@@ -568,6 +575,7 @@ build_one() {
   'not found' / 'manifest unknown': nothing is pushed under tag $TAG yet. the github action builds it after a push to main
       (a few minutes: github.com/<you>/<repo>/actions), or ./scripts/ship.sh on the laptop pushes it. is the tag the commit you mean?
       (the tag is the last commit that touched api/ video/ frontend/ Cargo.* .dockerignore or the workflow, not HEAD)
+      a release by number works too, the action tags every image with its v<n>:  ./scripts/deploy.sh --images v12
       images sent with ./scripts/ship.sh --to are named by the tag it printed:  ./scripts/deploy.sh --images <that tag>
   'denied' / 'unauthorized': the package is private. make it public (github.com → your profile → Packages → stream-$1 →
       Package settings → Change visibility), or log this machine in:  gh auth token | ${DOCKER[*]} login ghcr.io -u <you> --password-stdin   (token with read:packages)
@@ -608,10 +616,9 @@ compose_up() {
   fi
   say "${DOCKER[*]} compose up -d ${UP_FLAGS[*]:-}"
   "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"}
-  # the Caddyfile is a bind mount, so compose never notices it changed. a reload
-  # is graceful and free when nothing changed, so always do it.
-  "${DOCKER[@]}" compose exec -T frontend caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 \
-    || warn "caddy did not reload its Caddyfile; if routes look stale: ${DOCKER[*]} compose restart frontend"
+  # the Caddyfile is a bind mount, so compose never notices it changed. the reload is
+  # graceful and free when nothing changed, so always do it.
+  reload_caddy
   prune_images
 }
 
@@ -697,12 +704,35 @@ redeploy_frontend() {
   [ "$code" = 0 ] || swap_failed pages "publishing the pages failed (pages exit code: $code)"
 }
 
+# the Caddyfile is a bind mount of a single file, and such a mount is of the file's
+# inode, not its path: `git pull` (an editor, sed -i) writes a new file and renames it
+# over the old one, so inside the container /etc/caddy/Caddyfile stays the file caddy
+# started with. `caddy reload --config /etc/caddy/Caddyfile` in there reads that old
+# copy, finds nothing new and exits 0, and a route added to the Caddyfile is not served
+# until the container is next (re)started, which is when the path is looked up again.
+# so the host's file is handed to the running caddy on stdin instead: graceful, free
+# when nothing changed, no websocket drops. a caddy that will not take the file keeps
+# the config it has (recreated on a broken Caddyfile it would be down, and the site
+# with it); one that does not answer at all is recreated, and the open websockets drop
+# (browsers reconnect). the mount stays stale until the next start, which reads the
+# host's file as well; just never `caddy reload` on the in-container path by hand.
 reload_caddy() {
-  say "Caddyfile changed, reloading caddy in place"
-  if ! "${DOCKER[@]}" compose exec -T frontend caddy reload --config /etc/caddy/Caddyfile 2>/dev/null; then
-    warn "reload failed, restarting caddy instead (open websockets drop)"
-    "${DOCKER[@]}" compose up -d --no-deps --force-recreate frontend
+  local out n status
+  for n in 1 2 3; do   # a caddy that `up` just started may not have its admin socket yet
+    if out="$("${DOCKER[@]}" compose exec -T frontend caddy reload --config - --adapter caddyfile < frontend/Caddyfile 2>&1)"; then
+      return 0
+    fi
+    [ "$n" -eq 3 ] || sleep 1
+  done
+  read -r status _ <<< "$(container_state frontend)"
+  if [ "$status" = running ] \
+     && ! "${DOCKER[@]}" compose exec -T frontend caddy validate --config - --adapter caddyfile < frontend/Caddyfile >/dev/null 2>&1; then
+    printf '%s\n' "$out" >&2
+    die "caddy rejected frontend/Caddyfile (its words above) and keeps the config it has. fix the file, then deploy again"
   fi
+  printf '%s\n' "$out" >&2
+  warn "caddy did not take the Caddyfile over a reload; recreating it instead (open websockets drop, browsers reconnect)"
+  "${DOCKER[@]}" compose up -d --no-deps --force-recreate frontend
 }
 
 redeploy_service() {   # api | video
@@ -765,7 +795,7 @@ redeploy_targets() {
       frontend) redeploy_frontend ;;
       api|video) redeploy_service "$t" ;;
       dummy) redeploy_dummy ;;
-      caddy) reload_caddy ;;
+      caddy) say "Caddyfile changed, reloading caddy in place"; reload_caddy ;;
       compose) say "docker-compose.yml changed, applying it"; "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} ;;
     esac
   done
@@ -800,6 +830,11 @@ pull_repo() {   # sets OLD_HEAD NEW_HEAD
   OLD_HEAD="${DEPLOY_PULLED_FROM:-$(last_deployed "$head")}"
   say "git pull --ff-only"
   git pull --ff-only || die "pull failed. local edits in the way? see: git status"
+  # the tags as well: the action puts v<n> on the commit minutes after the push, and a
+  # pull that already had the commit does not follow it on its own. not fatal (a tag
+  # moved by hand is refused): the release then reads as the one before
+  GIT_TERMINAL_PROMPT=0 git fetch --tags --quiet origin 2>/dev/null || note "could not fetch the tags; the release may read older than it is"
+  TAGS_FETCHED=1
   NEW_HEAD="$(git rev-parse HEAD)"
   if [ "$head" = "$NEW_HEAD" ]; then note "already up to date"; else note "$(git log --oneline "$head..$NEW_HEAD" | wc -l | tr -d ' ') new commit(s)"; fi
   if [ "$OLD_HEAD" != "$head" ]; then
@@ -824,6 +859,49 @@ last_deployed() {
 record_deployed() {
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
   git rev-parse HEAD > "$DEPLOYED_FILE" 2>/dev/null || true
+}
+
+# ---- the release -------------------------------------------------------------
+# the release this run puts up, for /api/health (`version`; api/src/release.rs): the one
+# named with --images v<n>, else the highest v<n> tag reachable from HEAD — the action puts
+# one on every push to main it built images for. a tree whose images are newer than that
+# tag (the action still running, --build of unpushed work, a laptop's ship) is
+# "v<n>+<commit>": past v<n>, at that commit. the tags are fetched first unless --pull just
+# did, quietly and not fatally: a box with no way to git still deploys what it has. ""
+# before the first release, or outside a git checkout: nothing is recorded then.
+pick_release() {
+  RELEASE=""
+  if [[ "${TAG:-}" =~ ^v[0-9]+$ ]]; then RELEASE="$TAG"; export RELEASE; return 0; fi
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  if [ "${TAGS_FETCHED:-0}" = 0 ] && git remote get-url origin >/dev/null 2>&1; then
+    GIT_TERMINAL_PROMPT=0 git fetch --tags --quiet origin 2>/dev/null || true
+  fi
+  local n; n="$(git tag --merged HEAD --list 'v[0-9]*' 2>/dev/null | grep -E '^v[0-9]+$' | sed 's/^v//' | sort -n | tail -n 1 || true)"
+  [ -n "$n" ] || return 0
+  RELEASE="v$n"
+  # the images are named after the last commit touching image-paths: one the tag does not reach is newer than the release
+  local ic; ic="$(image_commit)"
+  if [ -n "$ic" ] && ! git merge-base --is-ancestor "$ic" "v$n" 2>/dev/null; then RELEASE="v$n+$ic"; fi
+  export RELEASE
+}
+
+# the release into the database: `api release` (api/src/release.rs) in the api container, one
+# row in `deploys`, the newest of which /api/health says under `version`. after the health
+# check passed, so the row never names a release that did not come up. in the database and
+# not in .env on purpose: a release that moved only the pages is reported without the api
+# container being recreated for it. an api image from before the table cannot write it: a warn
+record_release() {
+  if [ -z "${RELEASE:-}" ]; then
+    note "no release to record: no v<n> tag reaches HEAD (the action makes one per push to main it builds). /api/health says \"version\": null"
+    return 0
+  fi
+  local commit out
+  commit="$(git rev-parse HEAD 2>/dev/null || true)"
+  if out="$("${DOCKER[@]}" compose exec -T -e RUST_LOG=warn api api release "$RELEASE" "$commit" 2>&1)"; then
+    note "release $RELEASE recorded: what /api/health says under \"version\""
+  else
+    warn "could not record release $RELEASE (${out:-no output}). /api/health keeps the one before. an api image older than the deploys table?"
+  fi
 }
 
 # The pull may have replaced this very script. bash reads a script while it runs,
@@ -893,7 +971,8 @@ ${B}where the images come from${N}
   Cargo.* …; docs and this script do not count): what the github action pushes, and what ./scripts/ship.sh
   tags with. an image already here under that name (./scripts/ship.sh --to sent it) is used as is. no 4 GB
   floor, no swapfile: a 1 GB box runs it.
-  ${B}--images [TAG]${N}            the default, with a tag of your choosing (the one ./scripts/ship.sh --to printed, say)
+  ${B}--images [TAG]${N}            the default, with a tag of your choosing: a release (v12; the action tags every
+                            image with its v<n>), or the one ./scripts/ship.sh --to printed
   ${B}--build${N}                   compile the images here instead: an hour on a small machine, 4 GB of ram,
                             8 GB of disk. for a laptop with uncommitted changes, or a box with no registry
 
@@ -916,6 +995,8 @@ ${B}notes${N}
   (also a --pull that finds nothing to redeploy). passwd touches nothing.
   a full deploy restarts video when the images moved since the last one (a commit that
   touched api/ video/ frontend/ Cargo.*; docs and this script do not count): every live stream ends.
+  every run that ends well records its release (the highest v<n> tag reaching HEAD, the action's
+  number for that push) in the database; /api/health says it under "version".
 EOF
 }
 
@@ -1117,7 +1198,7 @@ show_result() {
 
   Watch logs:   ${DOCKER[*]} compose logs -f video api
   Health:       https://${PUBLIC_IP}/api/health     errors from the pages: https://${PUBLIC_IP}/admin  (ADMIN_NAMES in .env)
-  Env name:     ${ENV_NAME:-unnamed}       (ENV_NAME in .env; in every health answer and stored error)   build: ${BUILD:-dev}
+  Env name:     ${ENV_NAME:-unnamed}       (ENV_NAME in .env; in every health answer and stored error)   release: ${RELEASE:-none}   build: ${BUILD:-dev}
   Accounts:     optional, https://${PUBLIC_IP}/signup     forgot one: ./scripts/deploy.sh passwd <name>
   Stop:         ${DOCKER[*]} compose down        (add -v to also drop the database)
   Change ip:    ./scripts/deploy.sh 1.2.3.4
@@ -1149,7 +1230,7 @@ full_deploy() {
   local ok=1
   wait_for_health || ok=0
   show_result "$ok"
-  if [ "$ok" -eq 1 ]; then record_deployed; fi
+  if [ "$ok" -eq 1 ]; then record_deployed; record_release; fi
   [ "$ok" -eq 1 ]
 }
 
@@ -1174,7 +1255,7 @@ partial_deploy() {
   wait_for_health || ok=0
   say "containers"
   "${DOCKER[@]}" compose ps || true
-  if [ "$ok" -eq 1 ]; then record_deployed; note "done. https://${PUBLIC_IP}/"; fi
+  if [ "$ok" -eq 1 ]; then record_deployed; record_release; note "done. https://${PUBLIC_IP}/   (release ${RELEASE:-none}, build $BUILD)"; fi
   [ "$ok" -eq 1 ]
 }
 
@@ -1236,6 +1317,7 @@ main() {
   fi
 
   pick_build   # after the pull, so BUILD is the commit that is actually built
+  pick_release # and the release that tree is, for the record after the health check
   if [ ${#TARGETS[@]} -gt 0 ]; then
     partial_deploy
   else

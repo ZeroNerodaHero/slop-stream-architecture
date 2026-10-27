@@ -1,22 +1,34 @@
 # builds the four images on github's machines on every push to main that touches what
 # they are built from (`paths` below: the list in ./image-paths, written out by hand
-# because a filter cannot read a file) and pushes them to ghcr.io/<owner>/stream-<x>:<tag>
-# and :latest. the tag is the last commit that touched ./image-paths (not the push head:
-# a push can end on a docs commit), 7 characters; deploy.sh and ship.sh name the images by
-# the same rule, so a docs-only commit runs the images of the one before it and nothing
-# is recreated for it. the box then runs
+# because a filter cannot read a file) and pushes them to ghcr.io/<owner>/stream-<x>:<tag>,
+# :v<n> and :latest. the tag is the last commit that touched ./image-paths (not the push
+# head: a push can end on a docs commit), 7 characters; deploy.sh and ship.sh name the
+# images by the same rule, so a docs-only commit runs the images of the one before it and
+# nothing is recreated for it.
+#
+# v<n> is the release: one more than the highest v<n> tag in the repo, taken by the
+# `version` job before anything is built, put on every image, and — once all four are
+# pushed — on the commit as a git tag by the `release` job. so v13 is a set of four images
+# that exist, and the commit they came from. a commit already tagged (a re-run) keeps its
+# number. one run at a time (`concurrency`), so two pushes cannot both take v13. on the box,
+# deploy.sh finds the highest v<n> reachable from its HEAD and records it after the health
+# check: /api/health says it under `version`. `./scripts/deploy.sh --images v13` pins the
+# set by hand. see docs/spec.md, "deploy script", and api/src/release.rs.
+#
+# the box then runs
 #   ./scripts/deploy.sh --pull --images
-# and pulls those, building nothing. see docs/spec.md, "deploy script".
+# and pulls those, building nothing.
 #
 # free: actions minutes are unlimited for a public repo, and public packages cost nothing.
 # the runners are x86-64, so no emulation: the same dockerfiles ./scripts/deploy.sh and ./scripts/ship.sh use,
 # built natively on 4 cores. the dependency layers are cached between runs (type=gha), so a
 # source change is a few minutes; a Cargo.lock change rebuilds them once.
 #
-# the GITHUB_TOKEN pushes the packages; no personal token anywhere. packages a workflow
-# creates take the repo's visibility, so from a public repo they are public from the first
-# push and the box pulls without a login. (a push from a laptop with ./scripts/ship.sh makes them
+# the GITHUB_TOKEN pushes the packages and the tag; no personal token anywhere. packages a
+# workflow creates take the repo's visibility, so from a public repo they are public from the
+# first push and the box pulls without a login. (a push from a laptop with ./scripts/ship.sh makes them
 # private instead; then: github › your profile › Packages › stream-x › Package settings › Change visibility.)
+# a tag pushed with the GITHUB_TOKEN starts no other workflow, by github's rule; nothing here wants one.
 name: images
 
 on:
@@ -35,12 +47,56 @@ on:
       - image-paths   # the list this filter copies: a change to it always builds, so the two cannot drift unnoticed
   workflow_dispatch:
 
+# one run at a time, in order: the version is counted from the tags, and the tag lands at
+# the end of the run. a push during a run waits; a third replaces the one waiting (its
+# commit gets no number of its own, the next run's set covers it)
+concurrency:
+  group: images
+  cancel-in-progress: false
+
 permissions:
   contents: read
   packages: write
 
 jobs:
+  # the names everything below uses: the image tag, the registry owner, the release
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      owner: ${{ steps.meta.outputs.owner }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      # the whole history, tags included: the image tag is found by walking back to the last
+      # commit that touched the image paths, and the release by the highest tag so far
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # the tag: the last commit that touched what the images are built from, 7 characters,
+      # the same rule and the same list (./image-paths) as deploy.sh and ship.sh. owner lowercased, ghcr wants that
+      - id: meta
+        run: |
+          mapfile -t paths < <(tr -d '\r' < image-paths | sed -E 's/[[:space:]]+$//' | grep -Ev '^[[:space:]]*(#|$)')
+          # an empty list would make `git log -1 --` plain HEAD, a tag deploy.sh never asks for
+          [ "${#paths[@]}" -gt 0 ] || { echo "image-paths is empty"; exit 1; }
+          echo "tag=$(git log -1 --format=%h --abbrev=7 -- "${paths[@]}")" >> "$GITHUB_OUTPUT"
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+          # the release: the v<n> already on this commit (a re-run keeps its number), else one
+          # more than the highest anywhere in the repo (a number taken on another branch stays taken)
+          here="$(git tag --points-at HEAD --list 'v[0-9]*' | grep -E '^v[0-9]+$' | sed 's/^v//' | sort -n | tail -1 || true)"
+          if [ -n "$here" ]; then
+            version="v$here"
+          else
+            last="$(git tag --list 'v[0-9]*' | grep -E '^v[0-9]+$' | sed 's/^v//' | sort -n | tail -1 || true)"
+            version="v$(( ${last:-0} + 1 ))"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "images: stream-<x>:$(git log -1 --format=%h --abbrev=7 -- "${paths[@]}") = $version"
+
   image:
+    needs: version
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -59,21 +115,7 @@ jobs:
             context: .
             file: video/Dockerfile.dummy
     steps:
-      # the whole history: the tag is found by walking back to the last commit that touched
-      # the image paths, and a shallow checkout might not see it
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # the tag: the last commit that touched what the images are built from, 7 characters,
-      # the same rule and the same list (./image-paths) as deploy.sh and ship.sh. owner lowercased, ghcr wants that
-      - id: meta
-        run: |
-          mapfile -t paths < <(tr -d '\r' < image-paths | sed -E 's/[[:space:]]+$//' | grep -Ev '^[[:space:]]*(#|$)')
-          # an empty list would make `git log -1 --` plain HEAD, a tag deploy.sh never asks for
-          [ "${#paths[@]}" -gt 0 ] || { echo "image-paths is empty"; exit 1; }
-          echo "tag=$(git log -1 --format=%h --abbrev=7 -- "${paths[@]}")" >> "$GITHUB_OUTPUT"
-          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -83,6 +125,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # BUILD stays the commit, not the release: it is what the image was built from, and
+      # /api/health says the release from the database (api/src/release.rs), so an image
+      # that did not change between two releases is the same image under two tags
       - uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -90,18 +135,45 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ghcr.io/${{ steps.meta.outputs.owner }}/stream-${{ matrix.name }}:${{ steps.meta.outputs.tag }}
-            ghcr.io/${{ steps.meta.outputs.owner }}/stream-${{ matrix.name }}:latest
+            ghcr.io/${{ needs.version.outputs.owner }}/stream-${{ matrix.name }}:${{ needs.version.outputs.tag }}
+            ghcr.io/${{ needs.version.outputs.owner }}/stream-${{ matrix.name }}:${{ needs.version.outputs.version }}
+            ghcr.io/${{ needs.version.outputs.owner }}/stream-${{ matrix.name }}:latest
           build-args: |
-            BUILD=${{ steps.meta.outputs.tag }}
+            BUILD=${{ needs.version.outputs.tag }}
             CARGO_BUILD_JOBS=4
-          # links the package to this repo on github
+          # links the package to this repo on github; the version is on the image for `docker image inspect`
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,scope=${{ matrix.name }},mode=max
 
       - run: |
-          echo "pushed ghcr.io/${{ steps.meta.outputs.owner }}/stream-${{ matrix.name }}:${{ steps.meta.outputs.tag }}"
-          echo "on the box:  ./scripts/deploy.sh --pull --images     (IMAGES=ghcr.io/${{ steps.meta.outputs.owner }}/ in its .env)"
+          echo "pushed ghcr.io/${{ needs.version.outputs.owner }}/stream-${{ matrix.name }}:${{ needs.version.outputs.tag }} = ${{ needs.version.outputs.version }}"
+          echo "on the box:  ./scripts/deploy.sh --pull --images     (IMAGES=ghcr.io/${{ needs.version.outputs.owner }}/ in its .env)"
+
+  # the git tag, last: only once all four images are in the registry under v<n>, so the tag
+  # never names a release that is not there. a failed image leaves no tag, and the next run
+  # takes the same number again, over the half-pushed set
+  release:
+    needs: [version, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: |
+          v="${{ needs.version.outputs.version }}"
+          # already there (a re-run): fine on this commit, wrong on another
+          have="$(git ls-remote --tags origin "refs/tags/$v" "refs/tags/$v^{}" | tail -n 1 | cut -f1)"
+          if [ -n "$have" ]; then
+            [ "$have" = "$GITHUB_SHA" ] || { echo "::error::$v is already on $have, not on $GITHUB_SHA"; exit 1; }
+            echo "$v is on this commit already"
+            exit 0
+          fi
+          git tag "$v" "$GITHUB_SHA"
+          git push origin "refs/tags/$v"
+          echo "released $v: stream-<x>:$v = stream-<x>:${{ needs.version.outputs.tag }}, on $GITHUB_SHA"
+          echo "on the box:  ./scripts/deploy.sh --pull     (/api/health then says \"version\": \"$v\")"

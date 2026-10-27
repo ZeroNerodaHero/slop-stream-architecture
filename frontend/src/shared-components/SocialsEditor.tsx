@@ -289,10 +289,10 @@ export function SocialsEditor({ canEdit, whyNot, onDone }: SocialsEditorProps) {
 
       {/* outside the fieldset: `done` works whether or not the boxes are on */}
       <div className="mt-5 flex flex-wrap items-center gap-3">
-        <Button id="socials-save" variant="primary" className={BUTTON} disabled={!canEdit} onClick={() => void saveMySocials()}>
+        <Button id="socials-save" variant="primary" flat className={BUTTON} disabled={!canEdit} onClick={() => void saveMySocials()}>
           save links
         </Button>
-        <Button id="socials-done" className={BUTTON} onClick={onDone}>
+        <Button id="socials-done" flat className={BUTTON} onClick={onDone}>
           done
         </Button>
         <Status id="socials-status" text={status || (canEdit ? (dirty ? 'changed. save to keep it.' : '') : whyNot)} />

@@ -7,6 +7,8 @@
 export type Presence = 'offline' | 'online' | 'dnd' | 'streaming';
 /** The one you pick. `invisible` shows as `offline` to everyone else. */
 export type PresenceChoice = 'online' | 'dnd' | 'invisible';
+/** What can happen to a login (docs/notifications.md): someone they follow went live, someone followed them, a friend wrote. */
+export type NotificationKind = 'live' | 'follow' | 'dm';
 
 /** `watch` takes a name, or `*` for every name's `live`, `ended` and `viewers` (the home page's feed). */
 export type ClientFrame = { type: 'hello'; nick?: string } | { type: 'watch'; name: string } | { type: 'unwatch'; name: string };
@@ -25,6 +27,20 @@ export type ServerFrame =
   | { type: 'dm'; id: number; from: string; to: string; text: string; at: number }
   /** `name` read its thread with `peer` up to `id` on some device: the others drop their count. */
   | { type: 'dm_read'; name: string; peer: string; id: number }
+  /** A row of the login's inbox (docs/notifications.md), to its own sockets. `name` is who did it; `at` unix ms; `text` a dm's words; `session` a go-live's. */
+  | {
+      type: 'notification';
+      id: number;
+      kind: NotificationKind;
+      name: string;
+      verified: boolean;
+      avatar: number | null;
+      at: number;
+      text: string;
+      session: number | null;
+    }
+  /** `name` saw its inbox up to `id` on some device: the others drop their count. */
+  | { type: 'notify_read'; name: string; id: number }
   | { type: 'error'; error: string };
 
 export type LinkPhase = 'off' | 'connecting' | 'open' | 'closed';

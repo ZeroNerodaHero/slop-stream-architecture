@@ -67,15 +67,17 @@ const notFound = (text) => `"${text}" did not show up: ${lastSeen}`;
 (async () => {
   const api = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
 
-  await step('/api/health carries env, build, uptimes, video and live', async () => {
+  await step('/api/health carries env, version, build, uptimes, video and live', async () => {
     const res = await api.get('/api/health');
     const h = await res.json();
     expect([200, 503].includes(res.status()), `got ${res.status()}`);
     expect(typeof h.env === 'string' && typeof h.build === 'string', `env/build: ${JSON.stringify(h)}`);
+    // the release deploy.sh recorded: a string once a run ended well on this box, null before (a test stack built by hand)
+    expect('version' in h && (h.version === null || /^v\d+/.test(h.version)) && 'deployed_at' in h, `version: ${JSON.stringify(h)}`);
     expect(typeof h.up_secs === 'number' && typeof h.postgres === 'boolean' && typeof h.redis === 'boolean', `fields: ${JSON.stringify(h)}`);
     expect(typeof h.video === 'boolean' && 'live' in h && 'video_up_secs' in h, `video fields: ${JSON.stringify(h)}`);
     expect(h.ok === (res.status() === 200), `ok=${h.ok} with status ${res.status()}`);
-    return `${h.env} ${h.build} · video ${h.video} · live ${h.live} · up ${h.up_secs}s`;
+    return `${h.env} ${h.version ?? 'unreleased'} ${h.build} · video ${h.video} · live ${h.live} · up ${h.up_secs}s`;
   });
 
   const MSG = `test report ${RUN}`;

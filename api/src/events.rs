@@ -11,8 +11,9 @@
 //! own name without asking: `me` carries the word and the choice.
 //!
 //! Facts come from one redis stream, `events`, written by the api (`live`, `ended`, `viewers`,
-//! `status`, `renamed`, and `dm` / `dm_read` for the direct messages of docs/dms.md, which go
-//! to the sockets that *are* a name rather than to its watchers) and by this module (`seen`).
+//! `status`, `renamed`, and `dm` / `dm_read` for the direct messages of docs/dms.md and
+//! `notify` / `notify_read` for the inbox of docs/notifications.md, which go to the sockets
+//! that *are* a name rather than to its watchers) and by this module (`seen`).
 //! One task per process tails it and routes
 //! each entry to the sockets that care; the word is derived here, on delivery, from the inputs
 //! (the `live:` key, the set, the column), never carried in a fact, so two writers cannot race
@@ -159,6 +160,21 @@ enum Out {
     /// `name` read its thread with `peer` up to `id` on some device. To `name`'s sockets: the others drop their count.
     #[serde(rename = "dm_read")]
     DmRead { name: String, peer: String, id: i64 },
+    /// A row of the login's inbox (docs/notifications.md), to its own sockets: `name` is who did
+    /// it, as the list draws them; `id` the row, so a replayed fact is the same row.
+    Notification {
+        id: i64,
+        kind: String,
+        name: String,
+        verified: bool,
+        avatar: Option<i64>,
+        at: i64,
+        text: String,
+        session: Option<i64>,
+    },
+    /// `name` saw its inbox up to `id` on some device. To `name`'s sockets: the others drop their count.
+    #[serde(rename = "notify_read")]
+    NotifyRead { name: String, id: i64 },
     Error { error: &'static str },
 }
 
@@ -526,6 +542,27 @@ impl Gateway {
             "dm_read" => {
                 let (Some(peer), Some(id)): (Option<String>, Option<i64>) = (entry.get("peer"), entry.get("id")) else { return };
                 self.tell(&[&name], Out::DmRead { name: name.clone(), peer, id }).await;
+            }
+            // a notification (docs/notifications.md): `name` is who did it, `to` the logins it reached
+            // and their row ids. one frame per login, to that login's own sockets
+            "notify" => {
+                let (Some(kind), Some(to)): (Option<String>, Option<String>) = (entry.get("kind"), entry.get("to")) else { return };
+                let Ok(Value::Object(to)) = serde_json::from_str::<Value>(&to) else { return };
+                let at: i64 = entry.get("at").unwrap_or(0);
+                let text: String = entry.get("text").unwrap_or_default();
+                let verified = entry.get::<i64>("verified") == Some(1);
+                let avatar: Option<i64> = entry.get("avatar");
+                let session: Option<i64> = entry.get("session");
+                for (login, id) in to {
+                    let Some(id) = id.as_i64() else { continue };
+                    let frame = Out::Notification { id, kind: kind.clone(), name: name.clone(), verified, avatar, at, text: text.clone(), session };
+                    self.tell(&[&login], frame).await;
+                }
+            }
+            // `name` saw its inbox somewhere: its other devices drop their count
+            "notify_read" => {
+                let Some(id): Option<i64> = entry.get("id") else { return };
+                self.tell(&[&name], Out::NotifyRead { name: name.clone(), id }).await;
             }
             other => log::debug!("events: unknown entry type {other}"),
         }

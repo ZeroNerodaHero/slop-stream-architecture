@@ -24,6 +24,9 @@
 #              the streams (online first) and the top search, a rename keeps the followers
 #   dms        direct messages: nobody 401, a stranger 403 until both follows are there, a friend's line kept and listed with its count of what is new,
 #              read marks, paging at 50, the window gets a line pushed and sends one back, a hidden window counts on the sidebar and a second tab agrees
+#   notifications  the inbox under the bell: nobody 401, the settings save, a follow is a row in the followed inbox (once), a go-live over the api is one
+#              live row per follower who keeps it, a friend's newest line is the one unread dm row and reading the thread reads it, the bell counts
+#              on two tabs and opening the list reads everything (the other tab drops by push), a pushed row is read at once, the tab's switch, 30 kept
 #   preview    /watch/<name> html: title + og tags offline, with a picture, with the offline picture, live with the thumbnail; the pictures round-trip,
 #              the offline picture and the line under the word show on the page and in the profile tab
 #   errors     /api/health has the monitor fields, a page's error report lands (204, log, debug db), bad ones 400, /admin renders
@@ -136,6 +139,7 @@ run auth
 run groups
 run follows
 run dms
+run notifications
 run preview
 run errors
 run pip

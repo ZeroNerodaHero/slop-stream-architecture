@@ -47,6 +47,7 @@ flowchart LR
 
 - `ENV_NAME` in `.env`: `prod`, `dev`, whatever you call the box. empty or missing, `deploy.sh` writes this machine's hostname into `.env` once (lowercased, `a-z 0-9 -`, 32 chars at most) and never touches a value that is set; an empty value left by hand is `unnamed` in the api. (not `ENV`: `sh` reads `$ENV` as a startup file.) the api puts it in every health answer and every stored error.
 - `BUILD`: `deploy.sh`, `ship.sh` and the action set it to the last commit that touched what the images are built from (`image-paths`: `api/`, `video/`, `frontend/` minus the Caddyfile, `Cargo.*`, `.dockerignore`, the workflow; 7 characters; the image tag), plus `-dirty` when those have edits or new files (docs, tests and the script itself do not count), and passes it as a build arg to `pages`, `api`, `video`, `dummy`: in the compose file and again on the `compose build` command line, so the `sudo docker` fallback (which resets the environment) cannot lose it. it is baked into the image, so a container reports the commit it was built from, not the commit on disk. built by hand without `deploy.sh`: `dev`, or `BUILD=$(git rev-parse --short HEAD) docker compose up -d --build`. the pages get it as `__BUILD__` (vite `define`).
+- the release: `v<n>`, a git tag the action puts on every push to `main` it built images for (one more than the highest so far; the four images carry it as a second tag, `stream-<x>:v<n>`, and as the label `org.opencontainers.image.version`). not baked into any image: `deploy.sh` works out the highest `v<n>` reaching HEAD (`v<n>+<commit>` when the images are newer than that tag: the action still running, `--build` of unpushed work, a `ship.sh`; `--images v<n>` names one outright) and, once `/api/health` answered 200, runs `api release <version> <commit>` in the api container — one row in `deploys` (`migrate-13.sql`, `api/src/release.rs`) per run that ended well, the newest of which is `version` and `deployed_at` in the health answer. in the database, not `.env`, so a release that moved only the pages is reported without the api container being recreated for it, and a restart does not lose it. before the first release, or on a stack built by hand without `deploy.sh`: `null`.
 - the price: a new commit is a new image for every service, cache hit or not. a full `./scripts/deploy.sh` after a commit therefore swaps `video` too and ends every live stream, where before it only swapped what the build changed. the script says so before `up`, the same warning `./scripts/deploy.sh video` prints. `./scripts/deploy.sh --pull` and `./scripts/deploy.sh api` still touch only what changed.
 
 ## health
@@ -54,13 +55,15 @@ flowchart LR
 `GET /api/health`:
 
 ```json
-{ "ok": true, "env": "prod", "build": "d668007", "up_secs": 8123,
+{ "ok": true, "env": "prod", "version": "v13", "deployed_at": "2026-10-27T19:21:18Z",
+  "build": "d668007", "up_secs": 8123,
   "postgres": true, "redis": true, "debug_db": true, "errors_dropped": 0,
   "video": true, "video_up_secs": 8120, "video_build": "d668007", "live": 3,
   "s3": true, "s3_bucket": "stream", "s3_endpoint": "http://s3:8333" }
 ```
 
 - 200 when postgres and redis answer, 503 otherwise, like before. `deploy.sh` and the image healthchecks still key on the status.
+- `version` is the release the last `deploy.sh` run that ended well recorded (`v13`; `v12+a1f05a2` for a tree past the last tag), `deployed_at` when; both `null` before the first. the postgres probe is that very read (the newest row of `deploys`), so a `version` is also proof the database answers. `build` stays the commit the api image was built from: the two differ by design, and `v13` with `build d668007` reads "release 13, whose api is the image from d668007".
 - the probes run concurrently, and the optional ones (debug database, video, the bucket) are capped at 1.5s each, so the answer fits inside the image healthcheck's 3s timeout.
 - `s3` is whether a `HEAD` of the bucket answered 2xx inside 1.5s. `s3_endpoint` is `http://s3:8333` while `S3_ENDPOINT` is `off`, otherwise the url in `.env`; `s3_bucket` is the bucket name. not part of `ok`: a bucket the api cannot reach does not 503 the site. the container's login is not in this answer.
 - `video` is whether `video`'s `GET /health` answered 2xx inside 1.5s (an old video build that still says `ok` counts); `live` is its room count; `video_up_secs` how long it has run; `video_build` its commit, `null` on a build older than this. all `null` when it did not answer. the api already degrades without video, so that is not a 503.
@@ -160,7 +163,7 @@ per box in `TARGETS`:
 
 - **down** is `DOWN_AFTER` (3) failed rounds in a row, dated from the first miss, so one lost packet is not a page. a miss while up shows as "1 missed check: <why>" on the page and nowhere else. **up** again comes with the downtime. both go to the log, the page's event list, and `ALERT_WEBHOOK` when set, as json `{"content": …, "text": …}`: a discord webhook reads the first, slack and most others the second. that webhook is the one thing a monitor cannot keep in-house; leave it empty and the page and the log are the alert.
 - the reason is the api's own words when it answered (`503: postgres down`), caddy's code when the api behind it is gone (`502: caddy answers, the api behind it does not`), or the connect error (`tcp connect error: Connection refused`, `no answer in 5s`).
-- `up_secs` going backwards is an event too, "api restarted (had been up 3h 12m)", same for video. a new `build` is "api build d668007 → 5ba44d7". so a deploy reads as two lines and a crash loop as a column of restarts, with no docker access to the box.
+- `up_secs` going backwards is an event too, "api restarted (had been up 3h 12m)", same for video. a new `build` is "api build d668007 → 5ba44d7"; a new `version` is "release v12 → v13". so a deploy reads as two lines and a crash loop as a column of restarts, with no docker access to the box.
 - its memory is one file, `/data/monitor.json` in the volume, rewritten after every round as a temp file and a rename. a restart or a rebuild keeps everything; a name removed from `TARGETS` is forgotten, a renamed one starts over. `docker compose exec monitor cat /data/monitor.json` is the whole database.
 - the page (`api/src/monitor.html`, built into the binary; no node, no vite, no caddy on this box) polls `GET /api/monitor` every 10s: one card per box with the pill, the 24-hour bar, the health grid (greyed while down, showing the last answer), the events, the error table, a row opening on click. plain html and js, every string through `textContent`: the reports come from strangers' browsers.
 - loopback only, so no login of its own: `ssh -L` is the door. `GET /health` on it answers `{ ok, up_secs, targets, build }` for whoever watches the watcher. `./status.sh https://<ip>` is the same questions asked once from a shell, no box needed.
@@ -180,7 +183,7 @@ on a droplet that already runs the stack, the first update is by hand, once: `./
 2. in `.env`: `ENV_NAME` (or leave it empty for the hostname), `ADMIN_NAMES`, `OPS_TOKEN` (16+ characters). `./scripts/deploy.sh` appends the missing keys with their defaults, but set them now so the first boot has them.
 3. every name in `ADMIN_NAMES` needs an account on that box already: sign up at `/signup`, or `docker compose exec api api passwd <name>` after the api is up. a name without one is dropped at boot with an error line, and `/admin` says "admins only" for it.
 4. `./scripts/deploy.sh`, the full one. this round `video` restarts anyway: the new image carries `BUILD`, so it is a new image whatever the cache says. live streams end once.
-5. `curl -k https://<ip>/api/health`: `build` is the image tag (the last commit that touched `image-paths`; HEAD when that was the last commit), `debug_db` true, `video` true, `video_build` the same sha. then `/admin` as one of the admin names.
+5. `curl -k https://<ip>/api/health`: `version` is the release the deploy recorded (`v<n>`; `null` until a run ended well after the first tag), `build` is the image tag (the last commit that touched `image-paths`; HEAD when that was the last commit), `debug_db` true, `video` true, `video_build` the same sha. then `/admin` as one of the admin names.
 
 from then on `./scripts/deploy.sh --pull` is the normal update again, and it rebuilds only what the pull changed.
 

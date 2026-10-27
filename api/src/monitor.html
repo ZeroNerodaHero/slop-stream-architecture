@@ -124,7 +124,7 @@
       const h = t.health || {};
       const grid = el('div', 'grid');
       grid.append(
-        field('build', h.build), field('env', h.env), field('live', h.live),
+        field('release', h.version), field('build', h.build), field('env', h.env), field('live', h.live),
         field('video', yn(h.video)), field('postgres', yn(h.postgres)), field('redis', yn(h.redis)), field('debug db', yn(h.debug_db)),
         field('reports dropped', h.errors_dropped),
         field('api up', h.up_secs != null ? human(h.up_secs) : '—'), field('video up', h.video_up_secs != null ? human(h.video_up_secs) : '—'),

@@ -63,10 +63,10 @@ export function AboutMe({ text, mine }: AboutMeProps) {
         </fieldset>
         {/* outside the fieldset: `done` works whether or not the box is on */}
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <Button id="about-me-save" variant="primary" className={BUTTON} disabled={!canEdit} onClick={() => void saveMyAbout()}>
+          <Button id="about-me-save" variant="primary" flat className={BUTTON} disabled={!canEdit} onClick={() => void saveMyAbout()}>
             save
           </Button>
-          <Button id="about-me-done" className={BUTTON} onClick={() => setOpened(false)}>
+          <Button id="about-me-done" flat className={BUTTON} onClick={() => setOpened(false)}>
             done
           </Button>
           <span id="about-me-count" className={cn('text-sm tabular-nums text-textTertiary', left < 100 && 'text-decrease')}>
