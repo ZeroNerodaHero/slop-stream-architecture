@@ -14,33 +14,33 @@ const MAX_DT_S = 0.1;
 /** Samples per read: 21ms at 48kHz, about a frame of the screen. */
 const WINDOW = 1024;
 
-export interface MicLevel {
+export interface Level {
   /** The bar's height, 0..1, as of `now` (a `performance.now()` time): the loudness over the last few milliseconds, with the fall slowed. */
   read(now: number): number;
+}
+
+export interface MicLevel extends Level {
   /** Releases the audio context. Reading after this is 0. */
   close(): void;
 }
 
-/**
- * A reader of `track`'s loudness. `null` where the browser has no web audio. One
- * `AudioContext` for the reader's life; `close` releases it.
- */
-export function openMicLevel(track: MediaStreamTrack): MicLevel | null {
-  if (typeof AudioContext === 'undefined') return null;
-  const ctx = new AudioContext();
+/** An analyser of `WINDOW` samples: what `levelOf` reads. */
+export function levelAnalyser(ctx: BaseAudioContext): AnalyserNode {
   const analyser = ctx.createAnalyser();
   analyser.fftSize = WINDOW;
-  const source = ctx.createMediaStreamSource(new MediaStream([track]));
-  source.connect(analyser);
-  // a context made with no click behind it starts suspended. the start button was one, but asking costs nothing
-  if (ctx.state === 'suspended') ctx.resume().catch(() => undefined);
+  return analyser;
+}
+
+/**
+ * A reader of the loudness at `analyser` (one from `levelAnalyser`), with the fall slowed. The
+ * same bar for the mic chip and for every row of the mixer: one floor, one release, one dt bound.
+ */
+export function levelOf(analyser: AnalyserNode): Level {
   const samples = new Float32Array(WINDOW);
   let shown = 0;
   let at = 0;
-  let closed = false;
   return {
     read(now) {
-      if (closed) return 0;
       analyser.getFloatTimeDomainData(samples);
       let sum = 0;
       for (const s of samples) sum += s * s;
@@ -52,6 +52,28 @@ export function openMicLevel(track: MediaStreamTrack): MicLevel | null {
       at = now;
       shown = target >= shown ? target : Math.max(target, shown - RELEASE_PER_S * dt);
       return shown;
+    }
+  };
+}
+
+/**
+ * A reader of `track`'s loudness. `null` where the browser has no web audio. One
+ * `AudioContext` for the reader's life; `close` releases it. (While the mixer is up the mic
+ * chip reads the mixer's own analyser instead, so the mic is never opened twice.)
+ */
+export function openMicLevel(track: MediaStreamTrack): MicLevel | null {
+  if (typeof AudioContext === 'undefined') return null;
+  const ctx = new AudioContext();
+  const analyser = levelAnalyser(ctx);
+  const source = ctx.createMediaStreamSource(new MediaStream([track]));
+  source.connect(analyser);
+  // a context made with no click behind it starts suspended. the start button was one, but asking costs nothing
+  if (ctx.state === 'suspended') ctx.resume().catch(() => undefined);
+  const level = levelOf(analyser);
+  let closed = false;
+  return {
+    read(now) {
+      return closed ? 0 : level.read(now);
     },
     close() {
       closed = true;

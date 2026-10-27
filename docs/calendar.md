@@ -1,6 +1,6 @@
 # calendar
 
-a plan, not a build. a calendar on a person's page of when they stream: one block per stream, on the day and at the hour it ran, and a line read off the blocks, `usually tuesdays and thursdays around 8pm`. the blocks already exist. `sessions` is one row per go-live with `started_at` and `ended_at`, filling since the first deploy, and a dropped connection is already what closes a row. what is missing is a range on the route that reads them, one column so a block whose tab vanished ends where the stream did and not where the sweeper found it, and the grid.
+built, the first half: a calendar on a person's page of when they stream: one block per stream, on the day and at the hour it ran, and a line read off the blocks, `usually tuesdays and thursdays around 8pm`. the blocks already existed. `sessions` is one row per go-live with `started_at` and `ended_at`, filling since the first deploy, and a dropped connection is already what closes a row. what was missing, and is in the repo now: a range on the route that reads them, two columns so a block whose tab vanished ends where the stream did and not where the sweeper found it and says who closed it, and the strip, on the watch page's `calendar` tab beside `about` (`about.md`). `api/migrations/migrate-8.sql`, `main.rs` (`heartbeat`, `stop`, `sweep_once`, `list_sessions`), `video/src/main.rs` (`by=video`), `frontend/src/infra/calendar.ts`, `atoms/calendar-atoms.ts`, `shared-components/Calendar.tsx`, `WatchPage.tsx`, `test/calendar.js`. still a plan: the totals on the profile tab, `show everything`, the schedule under *later*.
 
 ```mermaid
 flowchart LR
@@ -98,7 +98,7 @@ three writes change, each by a few words:
 | where | today | then |
 |---|---|---|
 | `heartbeat` (`main.rs:646`): `owns_session`, a `SELECT id … WHERE id, token, name, ended_at IS NULL` | the check | `UPDATE sessions SET last_beat_at = now() WHERE id = $1 AND token = $2 AND name = $3 AND ended_at IS NULL RETURNING id`: the same check, and the beat written, in the one round trip the heartbeat already makes |
-| `stop` (`main.rs:683`) | `SET ended_at = now()` | `SET ended_at = now(), ended_by = $4`, where `$4` is `?by=video` from video's call (`video/src/main.rs:707` gains `&by=video`) and `stop` otherwise. anything else in `by` is `stop`: it is a word for the log, not a right |
+| `stop` (`main.rs:683`) | `SET ended_at = now()` | `SET ended_at = now(), ended_by = $4`, where `$4` is `?by=video` from video's call and `stop` otherwise. anything else in `by` is `stop`: it is a word for the log, not a right. video says `stop` itself when the page closed its socket with a close frame (a deliberate stop, whose own call is still on its way and loses the race on a fast box) and `video` when the socket or the peer just went: so `video` means a drop, not a press |
 | `sweep_once` (`main.rs:358`) | `SET ended_at = now()` | `SET ended_at = COALESCE(last_beat_at, started_at), ended_by = 'sweep'`: the stream ended within 15s of its last beat, so that is where the block ends. the `RETURNING name, id` and the `ended` fact stay |
 
 `go_live`'s own cleanup (`main.rs:623`, "anything older that still looks open is over") sets `ended_by = 'sweep'` too: it is the same judgement, a row nobody holds.
@@ -164,11 +164,15 @@ one column written per heartbeat, inside the round trip the heartbeat already ma
 
 ## code
 
-- `api/migrations/migrate-8.sql` (or the next number), the three statements above, and its entry in `migrate.rs`.
-- `api/src/main.rs`: `heartbeat`'s check becomes the update; `stop` reads `by`; `sweep_once` and `go_live`'s cleanup set the two columns; `list_sessions` gains the range, the cap and the two fields. about 60 lines.
-- `video/src/main.rs:707`: `&by=video`. one line, a `./scripts/deploy.sh video` (ends every stream, warns first): bundle it with the next video change, as `status.md` did with the `stop` call itself. until then video's rows read `stop`, which is true enough.
-- `frontend/src/infra/atoms/calendar-atoms.ts`, `shared-components/Calendar.tsx`; `WatchPage.tsx`, `user-modal/ProfileTab.tsx`, `api.ts`. about 350 lines.
-- `test/calendar.js`. when it ships: `spec.md`'s route row (`:213`) and database row (`:104`), `README.md`'s line.
+built:
+
+- `api/migrations/migrate-8.sql`, the three statements above, and its entry in `migrate.rs`.
+- `api/src/main.rs`: `heartbeat`'s check is the update; `stop` reads `by` (`StopQuery`); `sweep_once` and `go_live`'s cleanup set the two columns; `list_sessions` has the range (`RangeQuery`, 93 days, 1000 rows, the account's rows by `user_id` for a claimed name, a held name answers for the one it became) and the two fields, and the last 20 without one.
+- `video/src/main.rs`: `&by=` on the stop it posts: `stop` after a close frame from the page, `video` after a socket or a peer that just went (`end_session`). a `./scripts/deploy.sh video` (ends every stream, warns first): until it is deployed video's rows read `stop`, which is true enough.
+- `frontend/src/infra/calendar.ts` (the arithmetic, pure: blocks, spans, rows, the usually line, the detail), `atoms/calendar-atoms.ts` (the rows for a name and a page; asked again when the stream on screen starts or ends, and once more 3s after an end, since `ended` reaches the watcher a beat before the api has written the row), `shared-components/Calendar.tsx` (the strip), `api.ts` (`sessions`), `WatchPage.tsx` (the tabs; the strip is in the page only while its tab is open, so a page nobody looks at the calendar of makes no request).
+- `test/calendar.js`, in `scripts/test.sh` after `presence`.
+
+not yet: `user-modal/ProfileTab.tsx` (the totals, `show everything`), `spec.md`'s route row and database row.
 
 ## later
 

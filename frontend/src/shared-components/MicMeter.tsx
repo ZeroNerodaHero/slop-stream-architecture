@@ -17,8 +17,10 @@ const BAR_BOTTOM = 22;
 
 interface MicMeterProps {
   id: string;
-  /** The stream whose first audio track is measured: the camera's. */
+  /** The stream whose first audio track is measured: the camera's. Its mute and end are the chip's words either way. */
   streamAtom: Atom<MediaStream | null>;
+  /** A reader to paint from instead of opening the track (the mixer's mic row, while it is up: the mic is never opened twice). Mount-only, like the stream. */
+  read?: (now: number) => number;
   /** Where in the picture's top left corner it sits: the offset the player's other chips use. */
   className?: string;
 }
@@ -55,7 +57,7 @@ function MicIcon({ state, fillRef }: { state: MicState; fillRef: RefObject<SVGRe
  * state words (hollow and struck through, `mic muted` or `no mic` on hover) are state. Not a
  * control: there is nothing here to press.
  */
-export function MicMeter({ id, streamAtom, className = 'left-3 top-3' }: MicMeterProps) {
+export function MicMeter({ id, streamAtom, read, className = 'left-3 top-3' }: MicMeterProps) {
   const root = useRef<HTMLDivElement>(null);
   const fill = useRef<SVGRectElement>(null);
   const [state, setState] = useState<MicState>('none');
@@ -107,7 +109,7 @@ export function MicMeter({ id, streamAtom, className = 'left-3 top-3' }: MicMete
         track.addEventListener('mute', onTrack);
         track.addEventListener('unmute', onTrack);
         track.addEventListener('ended', onTrack);
-        reader = openMicLevel(track);
+        reader = read ? { read, close: () => undefined } : openMicLevel(track);
       }
       setState(stateOf(track));
       draw(0);

@@ -30,10 +30,18 @@
 #   live-pip   picture in picture for the broadcast: leaving /live (a plain home click, or the button) keeps your camera in a corner and the stream up for watchers,
 #              you can watch someone else meanwhile (their page's picture in picture is disabled: one corner at a time), the corner has your chat, coming back takes
 #              the stream over, × asks first (no keeps streaming) and then stops and frees the corner, a page load stops, leaving with nothing on air puts nothing in the corner, start closes a stream watched in the corner
-#   screen     screen sharing: screens beside the camera go to watchers mid-stream with no renegotiation, tiles, click to swap, stop, a late watcher sees it all
+#   screen     the scene: screens and pictures are layers over the go live page's preview (drag, corner resize, order, hide, presets) and every
+#              watcher draws the same frame; a slot left off it is a tile; the mixer's mic and master bars move; a share mid-stream needs no
+#              renegotiation; a late watcher sees it all
 #   presence   a tab open is online over the events socket, do not disturb and appear offline reach a watcher pushed, live is streaming and
 #              the watcher plays on the push (no poll, no player flashing on an offline name), two tabs share one socket and the last
 #              closing is offline at once, a claimed name is refused, the inspector shows the frames
+#   calendar   the calendar tab: the api's range (93 days at most, the last 20 without one), a go-live is a live block on the watcher's strip,
+#              a stop closes it with ended_by stop and the heartbeat's time, a tab that goes offline and away is closed by video within a beat
+#              of its last heartbeat, two sessions a minute apart are one block with a mark at the drop, the strip pages, an account's rows
+#   about      the about tab: the sample's blocks and media (this origin only), the music player plays and pauses, every css selector lands
+#              under the box, hostile css (hide the page, restyle the title, url(), @import, @font-face, position: fixed, a closing tag) is
+#              stripped with nothing fetched and nothing outside the box touched
 #   regress    token-gated stop, auto-recovery, trailing slash, fast restart, races, bad offers
 #   monitor    (local only) `api monitor` watches this stack and a dead address: up with the right build,
 #              down with a reason, the page shows both, a restart keeps its memory. runs monitor/docker-compose.yml
@@ -125,6 +133,8 @@ run pip
 run live-pip
 run screen
 run presence
+run calendar
+run about
 if [ "$LOCAL" = 1 ]; then
   run regress
   run monitor

@@ -241,6 +241,37 @@ services:
         hard: 65536
     # no host port. browsers reach this through the frontend, at /events
 
+  home:
+    # the home list: every live stream and how many are watching it, in memory, from the facts
+    # on the `events` redis stream (`live`, `viewers`, `ended`), built from video's own word at
+    # boot and checked against it every 30s. answers GET /api/streams once per home page load;
+    # the page then takes the same facts over the events socket, so nothing polls. first on,
+    # first shown; the ranking of the home page, when there is one, goes here. the api binary
+    # run as `api home`, same image, no extra build. see docs/status.md and api/src/home.rs
+    image: ${IMAGES:-}stream-api:${TAG:-latest}
+    container_name: home
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["home"]
+    environment:
+      DATABASE_URL: postgres://stream:stream@database:5432/stream
+      REDIS_URL: redis://redis:6379/0
+      VIDEO_URL: http://video:7880
+      PORT: "4100"
+      RUST_LOG: info
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4100 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    # no host port. browsers reach this through the frontend, at /api/streams
+
   database:
     image: postgres:17-alpine
     container_name: database

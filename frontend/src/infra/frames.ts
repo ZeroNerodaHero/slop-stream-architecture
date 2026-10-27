@@ -8,13 +8,17 @@ export type Presence = 'offline' | 'online' | 'dnd' | 'streaming';
 /** The one you pick. `invisible` shows as `offline` to everyone else. */
 export type PresenceChoice = 'online' | 'dnd' | 'invisible';
 
+/** `watch` takes a name, or `*` for every name's `live`, `ended` and `viewers` (the home page's feed). */
 export type ClientFrame = { type: 'hello'; nick?: string } | { type: 'watch'; name: string } | { type: 'unwatch'; name: string };
 
 export type ServerFrame =
   | { type: 'me'; name: string | null; presence: Presence; status: PresenceChoice }
   | { type: 'presence'; name: string; presence: Presence }
-  | { type: 'live'; name: string; since: number }
+  /** A stream started. The card fields ride along for home (absent from an older gateway). */
+  | { type: 'live'; name: string; since: number; verified?: boolean; avatar?: number | null; bio?: string; thumbs?: number[] }
   | { type: 'ended'; name: string }
+  /** How many are receiving a stream now, as video counts them. To the name's watchers and to `watch *`. */
+  | { type: 'viewers'; name: string; viewers: number }
   /** `name` became `to` (docs/ids.md): to the account's own sockets and to `name`'s watchers. */
   | { type: 'renamed'; name: string; to: string }
   | { type: 'error'; error: string };

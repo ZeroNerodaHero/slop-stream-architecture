@@ -154,6 +154,21 @@ export interface WatchGrant {
   following?: boolean;
 }
 
+/**
+ * One `sessions` row: a go-live and how it ended, a block on the calendar (docs/calendar.md).
+ * `ended_at` null is a block still open. `last_beat_at` is the last heartbeat (absent on an
+ * older api); `ended_by` says who closed it: the page, video (the publisher's peer went), or
+ * the sweeper (then the end is the last heartbeat, within one beat of the truth).
+ */
+export interface SessionRow {
+  id: number;
+  name: string;
+  started_at: string;
+  ended_at: string | null;
+  last_beat_at?: string | null;
+  ended_by?: 'stop' | 'video' | 'sweep' | null;
+}
+
 /** `GET /api/me`: every field null for nobody. `id` is the account's uuid (docs/ids.md); no page needs it. */
 export interface MeInfo {
   id: string | null;
@@ -277,6 +292,12 @@ export const api = {
   deleteChannel: (server: string, channel: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`),
   streams: () => request<LiveStream[]>('GET', '/api/streams'),
   streamer: (name: string) => request<Streamer>('GET', `/api/streamers/${name}`),
+  /** The name's sessions overlapping `[from, to)`, oldest first: the calendar's blocks. At most 93 days a request, 1000 rows an answer. */
+  sessions: (name: string, from: Date, to: Date) =>
+    request<SessionRow[]>(
+      'GET',
+      `/api/streamers/${encodeURIComponent(name)}/sessions?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`
+    ),
   /** The login's follows, streaming first, with each one's word. 401 for nobody. See docs/follows.md. */
   following: () => request<Followed[]>('GET', '/api/following'),
   /** 204, also when already. 400 `that is you`, 401 nobody, 403 at the cap, 429 on churn. */
@@ -295,6 +316,13 @@ export const api = {
   deleteStreamThumb: (name: string, id: number) => request<null>('DELETE', `/api/streamers/${name}/thumbs/${id}`),
   /** One picture on the home card. The id is the url, so it can be cached. */
   streamThumbUrl: (name: string, id: number) => `/api/streamers/${encodeURIComponent(name)}/thumbs/${id}`,
+  /** A layer of the scene (docs/screen.md). The file goes up as it is: png, jpeg, gif or webp, no re-encode, so transparency and animation survive. 2 mb at most, 24 per name. */
+  saveAsset: (name: string, file: Blob) => request<{ id: number; mime: string; bytes: number }>('PUT', `/api/streamers/${name}/assets`, file),
+  deleteAsset: (name: string, id: number) => request<null>('DELETE', `/api/streamers/${name}/assets/${id}`),
+  /** The pictures this name has put up, oldest first. */
+  listAssets: (name: string) => request<{ assets: { id: number; mime: string; bytes: number }[] }>('GET', `/api/streamers/${name}/assets`),
+  /** An id is never reused and the bytes never change, so this url caches for good. */
+  assetUrl: (name: string, id: number) => `/api/streamers/${encodeURIComponent(name)}/assets/${id}`,
   /** The jpeg itself as the body. The page has already made it 1280x720 and under 512 kb. */
   saveOffline: (name: string, jpeg: Blob) => request<{ name: string; offline: number }>('PUT', `/api/streamers/${name}/offline`, jpeg),
   deleteOffline: (name: string) => request<null>('DELETE', `/api/streamers/${name}/offline`),

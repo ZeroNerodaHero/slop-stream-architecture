@@ -108,7 +108,10 @@ client → server
 {"type":"hello"}
 {"type":"watch","name":"billy"}
 {"type":"unwatch","name":"billy"}
+{"type":"watch","name":"*"}
 ```
+
+`watch` with `*` is the home page's: every name's `live`, `ended` and `viewers` from then on, no word (there is none for everyone). the list itself is one `GET /api/streams` from the home service (`api home`, `home.rs`), and these frames keep it current.
 
 the first frame is `hello`. a login sends it bare: the cookie went with the handshake (it does from inside a worker too, same origin) and the server names the socket after the account. a guest sends the nick from the name box; cleaned the chat's way, lowercased to a name, refused if that name is claimed (`that name has an account. log in as it, or pick another`, the chat's words) or reserved (`dummy-`). a hello with no cookie and no nick is allowed: an anonymous socket, which marks nothing and may still watch names. there is no `status` frame: the choice is an http `PUT` (below), and the answer arrives on the socket.
 
@@ -117,8 +120,9 @@ server → client
 ```json
 {"type":"me","name":"billy","presence":"online","status":"online"}
 {"type":"presence","name":"alice","presence":"dnd"}
-{"type":"live","name":"alice","since":1729000000000}
+{"type":"live","name":"alice","since":1729000000000,"verified":true,"avatar":1729000000,"bio":"hi","thumbs":[8123]}
 {"type":"ended","name":"alice"}
+{"type":"viewers","name":"alice","viewers":3}
 {"type":"renamed","name":"billy","to":"bobby"}
 {"type":"error","error":"that name has an account. log in as it, or pick another"}
 ```
@@ -261,7 +265,7 @@ flowchart LR
 | the profile tab | a `presence` fieldset between the card and `username` (`ProfileTab.tsx:74`, `:118`): three `OptionCard`s in `sm:grid-cols-3`, `name="presence"`, `#presence-online` `#presence-dnd` `#presence-invisible`, the chosen one marked, the page's square following the `me` frame. `OptionCard` has no `disabled`: the fieldset is disabled with the bio's `canEdit`/`whyNot` (`:46`, `:57`). a line under: `streaming while you are live, whatever you pick` |
 | the watch page | `#presence` beside `#who` in the title (`WatchPage.tsx:86`): the square and the word, `data-presence`. while not live the page says `not live yet. checking`; `online` beside the name is the reason to wait, `do not disturb` the reason not to; `live` arrives pushed and the page starts, no poll |
 | the watch document | the four words in the card and in `og:description`, above |
-| home | nothing yet. every card is a live stream. later: the home list off its 3s poll, below |
+| home | off its poll: one `GET /api/streams` from the home service, then `watch *` (`home-atoms.ts`): `live` is a card at the end, carrying bio, picture, `✓` and `thumbs`; `ended` takes it out; `viewers` moves `#viewers-<name>`. the snapshot again when the socket opens or comes back under the page, and after an ask that failed. a 1s tick for the chips |
 | chat | nothing. lines carry `from`, `streamer`, `verified`; a dot per line is noise |
 
 ### the inspector

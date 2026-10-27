@@ -9,7 +9,19 @@ import { api, messageOf } from '@/infra/api';
 import { presenceChanged } from '@/infra/atoms/presence-atoms';
 import { eventsPhaseAtom, onEvents, unwatchPresence, watchPresence } from '@/infra/events';
 import { isValidName } from '@/infra/names';
-import { connectRelay, type Layout, layoutOf, type RelayReply, SCREEN_SLOTS, type SlotInfo, slotsOf, viewersOf, waitForIceGathering } from '@/infra/relay';
+import {
+  connectRelay,
+  isVideoLayer,
+  type Layer,
+  type RelayReply,
+  type Scene,
+  sceneOf,
+  SCREEN_SLOTS,
+  type SlotInfo,
+  slotsOf,
+  viewersOf,
+  waitForIceGathering
+} from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
@@ -64,28 +76,63 @@ export const remoteStreamAtom = atom<MediaStream | null>(null);
 export const slotsAtom = atom<SlotInfo[]>([]);
 /** How many are watching, as video tells this peer. `null` until it has, and after it ends. */
 export const watchViewersAtom = atom<number | null>(null);
-/** Where the streamer put the camera while a screen is shared, as the slots frame says. `null` until it has, and from a streamer that never says (the dummy, an older page). */
-export const layoutAtom = atom<Layout | null>(null);
-/** The slot the watcher clicked to see big, if any. `null`: the rule below. */
+/** The streamer's scene (relay.ts), as the slots frame says. `null` until it has, and from a streamer that never sends one (the dummy, an older page). */
+export const sceneAtom = atom<Scene | null>(null);
+/** The slot the watcher clicked to see big, if any. `null`: the streamer's frame, or the rule below. */
 export const chosenSlotAtom = atom<number | null>(null);
-/** Which slot is big: the one chosen while it is live, else the first screen, else the camera. */
-export const primarySlotAtom = atom((get) => primaryOf(get(slotsAtom), get(chosenSlotAtom)));
-/**
- * The camera is drawn over the big picture instead of standing in the tiles: a screen is big
- * (the rule's first screen, or one the watcher chose), the camera is live, and the streamer's
- * layout puts it on the screen. Clicking it makes the camera big, as its tile would.
- */
-export const cameraOverlaidAtom = atom((get) => {
-  const layout = get(layoutAtom);
-  if (!layout || layout.camera !== 'over') return false;
-  return get(primarySlotAtom) !== 0 && get(slotsAtom).some((s) => s.slot === 0);
+/** The layers there is a picture for: a video layer needs its slot live, a picture is always there. */
+const shownLayersAtom = atom<Layer[]>((get) => {
+  const live = get(slotsAtom);
+  return (get(sceneAtom)?.layers ?? []).filter((l) => !isVideoLayer(l) || live.some((s) => s.slot === l.slot));
 });
-/** The other live slots, the small tiles under the video. Not the camera while it is over the picture. */
+/** The slot the streamer's own frame has at the bottom, live. `null` from a scene with no video in it, and from no scene. */
+const sceneSlotAtom = atom((get) => get(shownLayersAtom).find(isVideoLayer)?.slot ?? null);
+/**
+ * The watcher pulled one picture out of the frame: a live slot they clicked that is not the one
+ * the streamer has at the bottom. While it holds, that picture is the whole frame and the scene
+ * is set aside; the streamer's own slot in the tiles, or the `the stream` tile, puts it back.
+ */
+const focusedSlotAtom = atom((get) => {
+  const chosen = get(chosenSlotAtom);
+  if (chosen === null || chosen === get(sceneSlotAtom)) return null;
+  return get(slotsAtom).some((s) => s.slot === chosen) ? chosen : null;
+});
+/**
+ * Which slot the big `<video>` plays: the one pulled out of the frame, else the streamer's own,
+ * else the rule every stream had before scenes (the first live screen, else the camera: a dummy,
+ * a page that sends no scene). `null` when the streamer's frame has no video in it at all (a
+ * picture alone): the big `<video>` carries the sound and nothing else then.
+ */
+export const primarySlotAtom = atom<number | null>((get) => {
+  const focused = get(focusedSlotAtom);
+  if (focused !== null) return focused;
+  const theirs = get(sceneSlotAtom);
+  if (theirs !== null) return theirs;
+  if (get(shownLayersAtom).length > 0) return null;
+  return get(slotsAtom).find((s) => s.kind === 'screen')?.slot ?? 0;
+});
+/**
+ * The frame to draw, bottom first: the streamer's layers, the big `<video>` standing in for the
+ * bottom video layer (`SceneView`). Nothing while a picture is pulled out of the frame: that one
+ * is shown plain. The watch page and the corner player both draw this.
+ */
+export const watchLayersAtom = atom<Layer[]>((get) => (get(focusedSlotAtom) !== null ? [] : get(shownLayersAtom)));
+/**
+ * The tiles under the video: every live slot the frame does not show. While a picture is pulled
+ * out of the frame, every other live slot, so the streamer's own is one click away.
+ */
 export const tilesAtom = atom((get) => {
   const primary = get(primarySlotAtom);
-  const overlaid = get(cameraOverlaidAtom);
-  return get(slotsAtom).filter((s) => s.slot !== primary && !(overlaid && s.slot === 0));
+  const composed = get(focusedSlotAtom) === null;
+  const inFrame = new Set(
+    get(shownLayersAtom)
+      .filter(isVideoLayer)
+      .map((l) => l.slot)
+  );
+  return get(slotsAtom).filter((s) => s.slot !== primary && !(composed && inFrame.has(s.slot)));
 });
+/** One more tile, first, while a picture is pulled out of a frame the tiles cannot give back (a scene of pictures alone has no slot of the streamer's to click). */
+export const sceneTileAtom = atom((get) => get(focusedSlotAtom) !== null && get(sceneSlotAtom) === null && get(shownLayersAtom).length > 0);
 /** Each slot's own stream, picture only, for its tile. Bound imperatively (`VideoFrame`). */
 const slotStreamAtoms = Array.from({ length: VIDEO_SLOTS }, () => atom<MediaStream | null>(null));
 /** For a slot there is no section for (never, every slot number is checked against VIDEO_SLOTS first): an atom that stays empty. */
@@ -94,11 +141,6 @@ export const slotStreamAtom = (slot: number) => slotStreamAtoms[slot] ?? spareSt
 export const mutedAtom = atom(true);
 /** The arriving picture, sampled from the peer once a second while a watch is up. Null with no peer. */
 export const watchStatsAtom = atom<StreamStats | null>(null);
-
-function primaryOf(slots: SlotInfo[], chosen: number | null): number {
-  if (chosen !== null && slots.some((s) => s.slot === chosen)) return chosen;
-  return slots.find((s) => s.kind === 'screen')?.slot ?? 0;
-}
 
 /** What a tile says: the streamer's label, else the kind, and the camera is "camera". */
 export function slotLabel(slot: SlotInfo): string {
@@ -371,7 +413,9 @@ async function start(name: string): Promise<void> {
           slotsAtom,
           slots.filter((s) => s.slot < VIDEO_SLOTS)
         );
-        store.set(layoutAtom, layoutOf(msg));
+        // a layer on a slot this page has no section for has no picture: dropped, like the slot would be
+        const scene = sceneOf(msg);
+        store.set(sceneAtom, scene && { layers: scene.layers.filter((l) => !isVideoLayer(l) || l.slot < VIDEO_SLOTS) });
         showPrimary();
       }
     }
@@ -416,16 +460,23 @@ function dropped() {
   retryLater('connection lost. retrying');
 }
 
-/** A tile clicked: that slot goes big, for as long as it is live. */
+/** A tile clicked, or a video layer of the frame: that slot goes big, for as long as it is live. */
 export function pickSlot(slot: number) {
   store.set(chosenSlotAtom, slot);
   showPrimary();
 }
 
-/** The main stream's picture is the primary slot's track, whichever that is now. */
+/** The `the stream` tile: the watcher's choice is dropped and the streamer's frame is back. */
+export function clearChoice() {
+  store.set(chosenSlotAtom, null);
+  showPrimary();
+}
+
+/** The main stream's picture is the primary slot's track, whichever that is now; none with a frame of pictures alone. */
 function showPrimary() {
   if (!primary) return;
-  const want = videoTracks[store.get(primarySlotAtom)];
+  const slot = store.get(primarySlotAtom);
+  const want = slot === null ? undefined : videoTracks[slot];
   for (const track of primary.getVideoTracks()) {
     if (track !== want) primary.removeTrack(track);
   }
@@ -521,7 +572,7 @@ export function teardown() {
   store.set(remoteStreamAtom, null);
   for (const streamAtom of slotStreamAtoms) store.set(streamAtom, null);
   store.set(slotsAtom, []);
-  store.set(layoutAtom, null);
+  store.set(sceneAtom, null);
   store.set(chosenSlotAtom, null);
   store.set(watchViewersAtom, null);
 }

@@ -5,7 +5,8 @@ import { Link } from 'react-router-dom';
 
 import { hoverPreview } from '@/app/home/hover';
 import { stillPictures } from '@/app/home/stills';
-import { api, messageOf, type LiveStream, type Person } from '@/infra/api';
+import { api, type LiveStream, type Person } from '@/infra/api';
+import { enterHome, homeErrorAtom, homeNowAtom, homeStreamsAtom, leaveHome } from '@/infra/atoms/home-atoms';
 import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { Avatar } from '@/shared-components/Avatar';
@@ -18,10 +19,9 @@ import { ViewerCount } from '@/shared-components/ViewerCount';
 import { cn } from '@/utils/cn';
 import { since } from '@/utils/since';
 
-const POLL_MS = 3000;
 /** The people under the streams: who is here changes by the minute, not the second. */
 const PEOPLE_POLL_MS = 10_000;
-/** The newest streams, played live at the top. There is no viewer count to rank by. */
+/** The first two cards, played live at the top: the streams that came first, until the home service ranks them. */
 const FEATURED = 2;
 
 /** One card per column, as many columns as fit: 1 on a phone, 2 on a tablet, 4 at full width. */
@@ -249,16 +249,24 @@ function Skeleton() {
 }
 
 export function HomePage() {
-  // the poll is also the page's clock: `since` moves with each answer (every 3s), so the render
-  // never reads the time itself. the picture does not: one still per visit. no retries on focus.
-  const streams = useQuery({ queryKey: ['streams'], queryFn: api.streams, refetchInterval: POLL_MS, refetchOnWindowFocus: false });
-  const now = streams.dataUpdatedAt;
-  const list = streams.error ? undefined : streams.data;
+  // the list is one snapshot and then the facts over the events socket (home-atoms); nothing
+  // polls. the clock is the module's 1s tick, so the render never reads the time itself. the
+  // picture does not move with either: one still per visit
+  const streams = useAtomValue(homeStreamsAtom);
+  const error = useAtomValue(homeErrorAtom);
+  const now = useAtomValue(homeNowAtom);
+  const list = error ? undefined : streams;
   const featured = list?.slice(0, FEATURED) ?? [];
   const rest = list?.slice(FEATURED) ?? [];
   const namesKey = (list ?? []).map((stream) => stream.name).join(',');
   const [hover, setHover] = useState<string | null>(null);
   const [cardHover] = useState(() => hoverPreview(window, setHover));
+
+  // mount only: the feed and the snapshot on, and off on the way out
+  useEffect(() => {
+    enterHome();
+    return leaveHome;
+  }, []);
 
   useEffect(() => {
     const liveNames = namesKey ? namesKey.split(',') : [];
@@ -280,12 +288,12 @@ export function HomePage() {
   // no title row: the cards are the page. search, go live, and settings are the top bar. the empty state has go live again.
   return (
     <PageFrame wide>
-      {streams.error && (
+      {error && (
         <p className="border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
-          api is down: {messageOf(streams.error)}
+          api is down: {error}
         </p>
       )}
-      {!streams.error && !streams.data && <Skeleton />}
+      {!error && !streams && <Skeleton />}
       {list?.length === 0 && (
         <div id="empty" className="border border-dashed border-secondaryStroke px-6 py-16 text-center" aria-live="polite">
           <p className="text-textSecondary">nobody is live. you could be.</p>
@@ -318,7 +326,7 @@ export function HomePage() {
           </div>
         )}
       </div>
-      {!streams.error && <People />}
+      {!error && <People />}
     </PageFrame>
   );
 }

@@ -14,7 +14,10 @@ flowchart LR
   v -->|"count it, by the media address"| room["room billy · viewers: id → ip"]
   room -->|"distinct ips"| n["viewers_tx"]
   n -->|"{event: viewers} on change, ≤1/s"| w & pub[publisher]
-  n -->|"GET /viewers"| api -->|"/api/streams · viewers"| home
+  n -->|"POST /api/streams/billy/viewers, on change, with the grant"| api -->|"XADD viewers"| redis[("events stream")]
+  redis -->|"fan to billy's watchers and to watch *"| gw[events gateway] --> homepage[home page's card]
+  redis -->|"the count in its table"| home[home service] -->|"GET /api/streams · viewers, once per visit"| homepage
+  n -.->|"GET /viewers · at boot and every 30s"| home
 ```
 
 ## why it is hard to spam
@@ -37,9 +40,11 @@ what it does not stop: many real ips (a residential proxy pool) each doing a rea
 | `/ws` (preview) | `{"error":"too many previews from your address"}`, then close |
 | `video GET /viewers` | `{"billy": 3}` for every live room. inside the compose network |
 | `video GET /health` | + `viewers`, the sum |
-| `GET /api/streams` | + `viewers` per stream; `null` when video did not answer (the list then came from redis) |
+| `POST /api/streams/:name/viewers?session=&token=&viewers=` | video, when a room's count moved (≤1/s per room, the socket's cadence), with the publisher's grant. the api publishes a `viewers` fact and stores nothing |
+| `/events` | `{"type":"viewers","name":"billy","viewers":3}` to the name's watchers and to `watch *` (`status.md`): the home cards move without asking |
+| `GET /api/streams` | + `viewers` per stream, the latest the home service's table has; `null` until video has counted (a stream seconds old) |
 
-the api calls `/viewers` instead of `/live` for the home list: same names, one call.
+the home service builds its table from `/viewers` at boot and checks it against `/viewers` every 30s: same names and counts, one call, and a fact that was missed is put right within that.
 
 ## cloudflare
 

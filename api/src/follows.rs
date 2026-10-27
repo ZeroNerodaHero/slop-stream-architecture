@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::auth::{bump, Me};
+use crate::auth::{self, bump, Me};
 use crate::presence::{self, Presence, Status, SEEN_WINDOW_MS};
 use crate::{redis_live, video_live, ApiError, ApiResult, AppState, Name};
 
@@ -117,21 +117,32 @@ type FollowedRow = (String, bool, Option<i64>, String, DateTime<Utc>, bool, Stri
 
 // ---- the routes -------------------------------------------------------------------------------
 
-/// `POST /api/streamers/:name/follow`: 204, also when already. The followed name's row is made
-/// bare when it has none, in the one statement with the edge.
+/// `POST /api/streamers/:name/follow`: 204, also when already. A name held after a rename is
+/// followed as the account that holds it. The followed name's row is made bare when it has
+/// none, in the one statement with the edge.
 async fn follow(State(s): State<AppState>, Name(name): Name, Me(me): Me) -> Result<StatusCode, ApiError> {
     let me = me.ok_or_else(not_logged_in)?;
-    if name == me.name {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "that is you"));
-    }
     if bump(&s, &format!("rl:follow:name:{}", me.name), CHURN_WINDOW_SECS).await? > CHURN_PER_HOUR {
         return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "too many changes. wait an hour"));
     }
-    let (_, already) = stats(&s.db, &name, Some(me.id)).await?;
-    if already {
-        return Ok(StatusCode::NO_CONTENT);
+    follow_as(&s.db, me.id, &me.name, name).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The follow itself, for the login `me_id` named `me_name`: all of it but the churn limit,
+/// which needs redis. On the pool alone so a test can run it.
+async fn follow_as(db: &PgPool, me_id: Uuid, me_name: &str, name: String) -> Result<(), ApiError> {
+    // a name held after a rename is the account that left it: the edge goes to the person, as
+    // the watch grant does (docs/ids.md). a name with no row and no hold gets a bare one below
+    let name = auth::renamed_to(db, &name).await?.unwrap_or(name);
+    if name == me_name {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "that is you"));
     }
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM follows WHERE follower_id = $1").bind(me.id).fetch_one(&s.db).await?;
+    let (_, already) = stats(db, &name, Some(me_id)).await?;
+    if already {
+        return Ok(());
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM follows WHERE follower_id = $1").bind(me_id).fetch_one(db).await?;
     if count >= FOLLOWS_PER_LOGIN {
         return Err(ApiError::new(StatusCode::FORBIDDEN, format!("you follow {FOLLOWS_PER_LOGIN} names already. unfollow one first")));
     }
@@ -144,19 +155,21 @@ async fn follow(State(s): State<AppState>, Name(name): Name, Me(me): Me) -> Resu
          )
          INSERT INTO follows (follower_id, followed_id) SELECT $1, id FROM named ON CONFLICT DO NOTHING RETURNING followed_id",
     )
-    .bind(me.id)
+    .bind(me_id)
     .bind(&name)
-    .fetch_optional(&s.db)
+    .fetch_optional(db)
     .await?;
     if made.is_some() {
-        log::info!("{}: follows {name}", me.name);
+        log::info!("{me_name}: follows {name}");
     }
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
 /// `POST /api/streamers/:name/unfollow`: 204, also when not following.
 async fn unfollow(State(s): State<AppState>, Name(name): Name, Me(me): Me) -> Result<StatusCode, ApiError> {
     let me = me.ok_or_else(not_logged_in)?;
+    // the name the follow went to: a stale unfollow of a held name ends the edge to the account
+    let name = auth::renamed_to(&s.db, &name).await?.unwrap_or(name);
     if bump(&s, &format!("rl:follow:name:{}", me.name), CHURN_WINDOW_SECS).await? > CHURN_PER_HOUR {
         return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "too many changes. wait an hour"));
     }
@@ -293,7 +306,61 @@ pub(crate) fn routes() -> Router<AppState> {
 
 #[cfg(test)]
 mod tests {
+    use axum::response::IntoResponse;
+
     use super::*;
+    use crate::auth::tests::{edges_of, row, test_db};
+
+    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored follows_the_account` against a throwaway postgres (see auth.rs's `test_db`).
+    #[tokio::test]
+    #[ignore]
+    async fn following_a_held_name_follows_the_account_that_holds_it() {
+        let pool = test_db().await;
+        let run = std::process::id();
+        let old = format!("alice4-{run}");
+        let new = format!("nova4-{run}");
+        let alice = row(&pool, &old, Some("alice-hash")).await;
+        let fan_name = format!("fan4-{run}");
+        let fan = row(&pool, &fan_name, Some("fan-hash")).await;
+        let other_name = format!("other4-{run}");
+        let other = row(&pool, &other_name, Some("other-hash")).await;
+        // what change_name does: the row takes the new name, and the old one is held for the account
+        sqlx::query("UPDATE streamers SET name = $2, renamed_at = now() WHERE id = $1").bind(alice).bind(&new).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO held_names (name, user_id, until) VALUES ($1, $2, now() + interval '30 days')")
+            .bind(&old)
+            .bind(alice)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // fan follows the old name, as a stale list offers it: the edge goes to the account,
+        // and no row is made under the held name
+        follow_as(&pool, fan, &fan_name, old.clone()).await.expect("a follow");
+        let followed: Vec<Uuid> = edges_of(&pool, fan).await.into_iter().map(|(id, _)| id).collect();
+        assert_eq!(followed, vec![alice], "the edge points at the account, not a row under the held name");
+        let ghosts: i64 = sqlx::query_scalar("SELECT count(*) FROM streamers WHERE name = $1").bind(&old).fetch_one(&pool).await.unwrap();
+        assert_eq!(ghosts, 0, "no bare row under a held name");
+        assert_eq!(stats(&pool, &new, Some(fan)).await.unwrap(), (1, true));
+
+        // the holder following her own old name is following herself
+        let err = follow_as(&pool, alice, &new, old.clone()).await.expect_err("that is you");
+        assert_eq!(err.message(), "that is you");
+        assert_eq!(err.into_response().status(), StatusCode::BAD_REQUEST);
+        assert_eq!(edges_of(&pool, alice).await, vec![]);
+
+        // the hold runs out: the name is free, and a follow makes the bare row any free name gets
+        sqlx::query("UPDATE held_names SET until = now() - interval '1 second' WHERE name = $1").bind(&old).execute(&pool).await.unwrap();
+        follow_as(&pool, other, &other_name, old.clone()).await.expect("a follow");
+        let bare: Uuid = sqlx::query_scalar("SELECT id FROM streamers WHERE name = $1 AND password_hash IS NULL")
+            .bind(&old)
+            .fetch_one(&pool)
+            .await
+            .expect("a bare row under the free name");
+        assert_ne!(bare, alice);
+        let followed: Vec<Uuid> = edges_of(&pool, other).await.into_iter().map(|(id, _)| id).collect();
+        assert_eq!(followed, vec![bare]);
+        assert_eq!(stats(&pool, &new, Some(other)).await.unwrap(), (1, false));
+    }
 
     #[test]
     fn queries_keep_the_name_letters() {

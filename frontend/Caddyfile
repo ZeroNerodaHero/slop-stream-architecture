@@ -17,6 +17,12 @@ http:// {
 	tls /certs/cert.pem /certs/key.pem
 	log
 
+	# the home list, served by the home container from its table (api/src/home.rs). an exact
+	# path: /api/streams/<name>/... stays the api's. caddy puts the longer path matcher first
+	handle /api/streams {
+		reverse_proxy home:4100
+	}
+
 	# json api. path kept, so /api/x -> api:4000/api/x
 	handle /api/* {
 		reverse_proxy api:4000

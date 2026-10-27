@@ -14,12 +14,15 @@
 //! them without anyone renegotiating; its packets are routed to the slot by mid.
 //! The publisher says what is live where with later frames on its socket,
 //!   {"slots":[{"slot":0,"kind":"camera"},{"slot":1,"kind":"screen","label":"screen"}],
-//!    "layout":{"camera":"over","x":0.73,"y":0.73,"w":0.25}}
-//! (`slot` counts its video sections from 0; `layout`, optional, is where the camera
-//! sits while a screen is shared, see `Layout`), and watchers get each change as
-//!   {"event":"slots","slots":[...],"layout":{...}}
+//!    "scene":{"layers":[{"id":"s1","kind":"screen","slot":1,"x":0,"y":0,"w":1,"h":1},
+//!                       {"id":"cam","kind":"camera","slot":0,"x":0.73,"y":0.714,"w":0.25,"h":0.25},
+//!                       {"id":"i1","kind":"image","asset":12,"x":0.02,"y":0.02,"w":0.2,"h":0.11}]}}
+//! (`slot` counts its video sections from 0; `scene`, optional, is how it lays its frame
+//! out, see `Scene`: boxes in fractions of a 16:9 frame, drawn bottom first, and a live
+//! slot in none of them is a tile beside the picture), and watchers get each change as
+//!   {"event":"slots","slots":[...],"scene":{...}}
 //! right after their answer and whenever it changes. Until the publisher says,
-//! the first video slot is the camera and there is no layout.
+//! the first video slot is the camera and there is no scene.
 //!
 //! A publisher's session and token are what the api's go-live handed out; we
 //! ask the api (its heartbeat route) whether that session is open for that
@@ -106,6 +109,10 @@ const MAX_MEDIA_LINES: usize = 6;
 /// A slots frame: how long its `kind` and `label` strings may be.
 const MAX_KIND_BYTES: usize = 16;
 const MAX_LABEL_BYTES: usize = 64;
+/// A scene: layers at most, and a layer's id at most. Each layer is a box a watcher draws,
+/// and every watcher gets the whole list in every slots event.
+const MAX_LAYERS: usize = 16;
+const MAX_LAYER_ID_BYTES: usize = 16;
 const UDP_BUFFER_BYTES: usize = 4 << 20;
 /// Watcher peers one address may hold in one room, and across every room. Tabs and
 /// households share an address; past this it is someone pulling copies on purpose,
@@ -166,7 +173,7 @@ struct Room {
     /// One per audio/video section the publisher's offer sends on, in offer order.
     /// All made at claim, so watchers bind to every one before any packet has come.
     slots: Vec<Slot>,
-    /// What the publisher says is live in which video slot, and its layout. Watchers get every change.
+    /// What the publisher says is live in which video slot, and its scene. Watchers get every change.
     slots_tx: watch::Sender<Showing>,
     publisher: Option<Weak<RTCPeerConnection>>,
     /// Connected watcher peers and the address each one's media goes to.
@@ -198,39 +205,74 @@ struct SlotInfo {
     label: Option<String>,
 }
 
-/// Where the publisher put the camera while a screen is shared, for the watchers' player
-/// (docs/screen.md): over the screen (`over`), a box `w` of the frame wide with its corner at
-/// `x`,`y` of the frame, or beside it as a tile (`beside`). Passed on as it came, once checked.
+/// One box of a publisher's frame (docs/screen.md): a video slot of its own offer (`camera`,
+/// `screen`), or a picture it put up at the api (`image`, by asset id; the watcher builds the
+/// url under the stream's name). `x`,`y` is the top left corner and `w`,`h` the size, all
+/// fractions of a 16:9 frame, so every player draws the same picture at any size. `fit` is a
+/// video's: `cover` fills the box, `contain` shows the whole picture. Passed on as it came,
+/// once checked.
 #[derive(Clone, Serialize, Deserialize)]
-struct Layout {
-    camera: String,
+struct Layer {
+    id: String,
+    kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    slot: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    asset: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fit: Option<String>,
     x: f64,
     y: f64,
     w: f64,
+    h: f64,
 }
 
-impl Layout {
-    /// A known word and fractions of the frame. Json has no NaN or infinity, and a range check keeps out the rest.
-    fn well_formed(&self) -> bool {
-        matches!(self.camera.as_str(), "over" | "beside") && [self.x, self.y, self.w].iter().all(|v| (0.0..=1.0).contains(v))
+/// How the publisher lays its frame out, bottom layer first: the array order is the z-order.
+/// A live video slot that is in no layer is a tile beside the watcher's picture. Absent: the
+/// watcher's own rule (the dummy, an older page).
+#[derive(Clone, Serialize, Deserialize)]
+struct Scene {
+    layers: Vec<Layer>,
+}
+
+impl Scene {
+    /// Not more layers than a frame can be, and each one: a short plain id, a known kind, a
+    /// video slot of this publisher's own offer for the video kinds and an asset for a picture,
+    /// fractions of the frame. Json has no NaN or infinity, and the range check keeps out the
+    /// rest. The length is checked first, so a frame of ten thousand layers is refused without
+    /// walking them.
+    fn well_formed(&self, video_slots: usize) -> bool {
+        self.layers.len() <= MAX_LAYERS
+            && self.layers.iter().all(|layer| {
+                let id = (1..=MAX_LAYER_ID_BYTES).contains(&layer.id.len())
+                    && layer.id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+                let placed = [layer.x, layer.y, layer.w, layer.h].iter().all(|v| (0.0..=1.0).contains(v));
+                let fit = layer.fit.as_deref().is_none_or(|f| matches!(f, "cover" | "contain"));
+                let named = match layer.kind.as_str() {
+                    "camera" | "screen" => layer.slot.is_some_and(|slot| slot < video_slots),
+                    "image" => layer.asset.is_some_and(|asset| asset > 0),
+                    _ => false,
+                };
+                id && placed && fit && named
+            })
     }
 }
 
 /// A publisher's later frame: the video slots live right now (absent means not live), and
-/// where the camera sits while a screen is shared (absent: the watcher's own rule).
+/// how its frame is laid out (absent: the watcher's own rule).
 #[derive(Deserialize)]
 struct SlotsFrame {
     slots: Vec<SlotInfo>,
     #[serde(default)]
-    layout: Option<Layout>,
+    scene: Option<Scene>,
 }
 
-/// What the publisher says it shows: the live video slots, and its layout if it sent one.
+/// What the publisher says it shows: the live video slots, and its scene if it sent one.
 /// Watchers get the two together, in every `slots` event.
 #[derive(Clone, Default)]
 struct Showing {
     slots: Vec<SlotInfo>,
-    layout: Option<Layout>,
+    scene: Option<Scene>,
 }
 
 #[derive(Deserialize)]
@@ -263,7 +305,7 @@ struct Out {
     #[serde(skip_serializing_if = "Option::is_none")]
     slots: Option<Vec<SlotInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    layout: Option<Layout>,
+    scene: Option<Scene>,
     #[serde(skip_serializing_if = "Option::is_none")]
     viewers: Option<usize>,
 }
@@ -687,6 +729,8 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
         }
     };
 
+    // how the stream ended, for the api's record: `video` unless the page closed its socket on purpose
+    let mut by = "video";
     if send(&mut socket, Out::sdp(answer)).await.is_ok() {
         // the room is claimed and answered: a watcher who comes now is served. tell the api,
         // which pushes `live` to whoever waits on the name. off the loop: the stream must not wait on it
@@ -701,9 +745,15 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
         loop {
             tokio::select! {
                 _ = tick.tick() => {
-                    if tell_viewers(&mut socket, viewers.as_ref(), &mut told).await.is_err() {
-                        log::info!("publish {name}: socket closed");
-                        break;
+                    match tell_viewers(&mut socket, viewers.as_ref(), &mut told).await {
+                        Err(_) => {
+                            log::info!("publish {name}: socket closed");
+                            break;
+                        }
+                        // the count moved: the api hears it too, for the name's watchers and for home
+                        // (docs/status.md). off the loop, like `attached`; a miss is healed by home's own look
+                        Ok(Some(count)) => { tokio::spawn(tell_api_viewers(app.clone(), name.clone(), grant, count)); }
+                        Ok(None) => {}
                     }
                 }
                 msg = socket.recv() => match msg {
@@ -712,7 +762,13 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
                             log::info!("publish {name}: a frame was ignored: {e}");
                         }
                     }
-                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                    // a close frame is the page saying goodbye: its stop. a socket that just went is not
+                    Some(Ok(Message::Close(_))) => {
+                        log::info!("publish {name}: socket closed by the page");
+                        by = "stop";
+                        break;
+                    }
+                    Some(Err(_)) | None => {
                         log::info!("publish {name}: socket closed");
                         break;
                     }
@@ -732,7 +788,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
 
     let _ = peer.close().await;
     app.hub.clear(&name).await;
-    end_session(&app, &name, grant).await;
+    end_session(&app, &name, grant, by).await;
     log::info!("publish {name}: ended");
 }
 
@@ -767,9 +823,12 @@ async fn tell_attached(app: App, name: String, grant: (Option<i64>, Option<i64>)
 /// call finishes inside the flush while a detached one would race the exit and lose. A page
 /// that sent its own stop first gets this one a 403, which is the expected outcome, not an
 /// error; the sweeper stays the backstop when the api does not answer.
-async fn end_session(app: &App, name: &str, grant: (Option<i64>, Option<i64>)) {
+async fn end_session(app: &App, name: &str, grant: (Option<i64>, Option<i64>), by: &str) {
     let (Some(session), Some(token)) = grant else { return };
-    let url = format!("{}/api/streams/{name}/stop?session={session}&token={token}", app.api_url);
+    // `by`: the record's word for how it ended (docs/calendar.md). `stop` when the page closed its socket on
+    // purpose (its own stop call may still be on its way, and loses the race to this one on a fast box);
+    // `video` when the socket or the peer just went, and when video itself is going down
+    let url = format!("{}/api/streams/{name}/stop?session={session}&token={token}&by={by}", app.api_url);
     match app.http.post(url).send().await {
         Ok(res) if res.status().is_success() => log::info!("publish {name}: told the api to stop session {session}"),
         Ok(res) if res.status().is_client_error() => {} // already stopped by the page, or not theirs any more
@@ -937,14 +996,30 @@ async fn media_ip(peer: &RTCPeerConnection) -> Option<IpAddr> {
 }
 
 /// Send the room's count if it moved since the last one this socket was told.
-async fn tell_viewers(socket: &mut WebSocket, viewers: Option<&watch::Receiver<usize>>, told: &mut Option<usize>) -> anyhow::Result<()> {
-    let Some(viewers) = viewers else { return Ok(()) };
+/// The room's count to this socket when it moved since last told. `Some(count)` when it was sent.
+async fn tell_viewers(socket: &mut WebSocket, viewers: Option<&watch::Receiver<usize>>, told: &mut Option<usize>) -> anyhow::Result<Option<usize>> {
+    let Some(viewers) = viewers else { return Ok(None) };
     let now = *viewers.borrow();
     if *told != Some(now) {
         send(socket, Out::viewers(now)).await?;
         *told = Some(now);
+        return Ok(Some(now));
     }
-    Ok(())
+    Ok(None)
+}
+
+/// The publisher's count to the api (`viewers`, with the grant), which publishes it as a fact
+/// for the name's watchers and for home. Once per move, at most once a second per stream, the
+/// socket's own cadence. Best effort: nothing waits on it, and home reconciles against our
+/// `GET /viewers` every 30s anyway.
+async fn tell_api_viewers(app: App, name: String, grant: (Option<i64>, Option<i64>), count: usize) {
+    let (Some(session), Some(token)) = grant else { return };
+    let url = format!("{}/api/streams/{name}/viewers?session={session}&token={token}&viewers={count}", app.api_url);
+    match app.http.post(url).send().await {
+        Ok(res) if res.status().is_success() => {}
+        Ok(res) => log::debug!("publish {name}: api answered {} to viewers", res.status()),
+        Err(e) => log::debug!("publish {name}: api unreachable for viewers: {e}"),
+    }
 }
 
 /// Take the browser's offer, reply with our answer. Candidates are gathered
@@ -1104,16 +1179,16 @@ impl Hub {
     }
 
     /// A publisher's later frame, checked against its offer: at most one entry per
-    /// video slot, each naming one, strings kept short, and a layout that is one.
-    /// Watchers get it as it is.
+    /// video slot, each naming one, strings kept short, and a scene whose video layers
+    /// point at slots of that same offer. Watchers get it as it is.
     async fn set_slots(&self, name: &str, generation: u64, text: &str) -> Result<(), &'static str> {
         let frame: SlotsFrame = serde_json::from_str(text).map_err(|_| "not a slots frame")?;
-        if frame.layout.as_ref().is_some_and(|l| !l.well_formed()) {
-            return Err("bad layout");
-        }
         let mut rooms = self.rooms.lock().await;
         let room = rooms.get_mut(name).filter(|r| r.generation == generation).ok_or("room gone")?;
         let videos = room.slots.iter().filter(|s| s.kind == RTPCodecType::Video).count();
+        if frame.scene.as_ref().is_some_and(|s| !s.well_formed(videos)) {
+            return Err("bad scene");
+        }
         let mut named = vec![false; videos];
         for info in &frame.slots {
             let Some(seen) = named.get_mut(info.slot) else {
@@ -1126,7 +1201,7 @@ impl Hub {
                 return Err("kind or label too long");
             }
         }
-        room.slots_tx.send_replace(Showing { slots: frame.slots, layout: frame.layout });
+        room.slots_tx.send_replace(Showing { slots: frame.slots, scene: frame.scene });
         Ok(())
     }
 
@@ -1259,12 +1334,12 @@ impl Room {
             })
             .collect();
         // until the publisher says otherwise, its first video section is the camera and
-        // there is no layout (a browser that never says, or the dummy, has exactly that)
+        // there is no scene (a browser that never says, or the dummy, has exactly that)
         let camera = slots
             .iter()
             .any(|s| s.kind == RTPCodecType::Video)
             .then(|| SlotInfo { slot: 0, kind: "camera".to_owned(), label: None });
-        let (slots_tx, _) = watch::channel(Showing { slots: camera.into_iter().collect(), layout: None });
+        let (slots_tx, _) = watch::channel(Showing { slots: camera.into_iter().collect(), scene: None });
         let (viewers_tx, _) = watch::channel(0);
         Self {
             generation: 0,
@@ -1324,7 +1399,7 @@ impl Out {
         Self {
             event: Some("slots".to_owned()),
             slots: Some(showing.slots),
-            layout: showing.layout,
+            scene: showing.scene,
             ..Default::default()
         }
     }

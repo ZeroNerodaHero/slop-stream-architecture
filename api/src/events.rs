@@ -10,11 +10,13 @@
 //! (`presence`) when it changes, and `live` / `ended` as they happen. Every socket watches its
 //! own name without asking: `me` carries the word and the choice.
 //!
-//! Facts come from one redis stream, `events`, written by the api (`live`, `ended`, `status`,
-//! `renamed`) and by this module (`seen`). One task per process tails it and routes each entry
-//! to the sockets that care; the word is derived here, on delivery, from the inputs (the `live:`
-//! key, the set, the column), never carried in a fact, so two writers cannot race a stale word
-//! past a fresh one. The pages never write through this socket: the choice is an http PUT.
+//! Facts come from one redis stream, `events`, written by the api (`live`, `ended`, `viewers`,
+//! `status`, `renamed`) and by this module (`seen`). One task per process tails it and routes
+//! each entry to the sockets that care; the word is derived here, on delivery, from the inputs
+//! (the `live:` key, the set, the column), never carried in a fact, so two writers cannot race
+//! a stale word past a fresh one. The pages never write through this socket: the choice is an
+//! http PUT. A socket may also `watch` `*`: every name's `live`, `ended` and `viewers`, the
+//! home page's feed behind its one `GET /api/streams` (home.rs).
 //!
 //! A `renamed` fact (docs/ids.md) re-keys the sockets of the old name to the new one: they
 //! leave `seen:<old>` at once and enter `seen:<new>`, and they, and the old name's watchers,
@@ -55,6 +57,8 @@ const REPLAY_MS: i64 = 10_000;
 /// Every watched name's word again, pushed on change: notices a gateway that died without its
 /// drain (its members go stale and nobody published `seen 0`) and heals an entry a watcher missed.
 const RECHECK_EVERY: Duration = Duration::from_secs(30);
+/// The `watch` that means every name: the home page's. Not a name (names are letters, digits, `_ -`).
+const EVERYONE: &str = "*";
 
 type SocketId = u64;
 
@@ -135,8 +139,17 @@ enum In {
 enum Out {
     Me { name: Option<String>, presence: Presence, status: Status },
     Presence { name: String, presence: Presence },
-    Live { name: String, since: i64 },
+    /// A stream started. `card` is what the api put in the fact for a home card (`verified`,
+    /// `avatar`, `bio`, `thumbs`), spread into the frame as it came; empty from an older api.
+    Live {
+        name: String,
+        since: i64,
+        #[serde(flatten)]
+        card: serde_json::Map<String, Value>,
+    },
     Ended { name: String },
+    /// How many are receiving a stream now, as video counts them (docs/viewers.md).
+    Viewers { name: String, viewers: usize },
     /// `name` became `to`. To the account's own sockets and to `name`'s watchers.
     Renamed { name: String, to: String },
     Error { error: &'static str },
@@ -304,10 +317,13 @@ impl Gateway {
         }
     }
 
-    /// A fact as it is, to the name's watchers.
+    /// A fact as it is, to the name's watchers and to everyone watching `*` (the home pages:
+    /// every stream's `live`, `ended` and `viewers`, whoever it is). Once each, to a socket that is both.
     async fn fan(&self, name: &str, out: Out) {
         let s = self.registry.0.lock().await;
-        for id in s.watchers.get(name).into_iter().flatten() {
+        let named = s.watchers.get(name).into_iter().flatten();
+        let all = s.watchers.get(EVERYONE).into_iter().flatten().filter(|id| !s.watchers.get(name).is_some_and(|set| set.contains(id)));
+        for id in named.chain(all) {
             if let Some(e) = s.by_id.get(id) {
                 let _ = e.tx.send(out.clone());
             }
@@ -389,7 +405,9 @@ impl Gateway {
         }
     }
 
-    /// `watch`: from now on the word of `name` as it changes, and its word right now.
+    /// `watch`: from now on the word of `name` as it changes, and its word right now. `*` is
+    /// the home page's topic: every name's `live`, `ended` and `viewers` from now on, no word
+    /// (there is none for everyone; the list itself is `GET /api/streams`, the home service's).
     async fn watch(&self, id: SocketId, name: &str) {
         {
             let mut s = self.registry.0.lock().await;
@@ -398,6 +416,9 @@ impl Gateway {
                 return;
             }
             s.watchers.entry(name.to_owned()).or_default().insert(id);
+        }
+        if name == EVERYONE {
+            return;
         }
         let (word, _) = self.word(name, false).await;
         let mut s = self.registry.0.lock().await;
@@ -444,12 +465,26 @@ impl Gateway {
         match kind.as_str() {
             "live" => {
                 let since: i64 = entry.get("since").unwrap_or(0);
-                self.fan(&name, Out::Live { name: name.clone(), since }).await;
+                // the card as the api wrote it, json in one field; an older api wrote none
+                let card = entry
+                    .get::<String>("card")
+                    .and_then(|card| serde_json::from_str::<Value>(&card).ok())
+                    .and_then(|card| match card {
+                        Value::Object(map) => Some(map),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                self.fan(&name, Out::Live { name: name.clone(), since, card }).await;
                 self.push(&name).await;
             }
             "ended" => {
                 self.fan(&name, Out::Ended { name: name.clone() }).await;
                 self.push(&name).await;
+            }
+            "viewers" => {
+                if let Some(viewers) = entry.get::<usize>("viewers") {
+                    self.fan(&name, Out::Viewers { name: name.clone(), viewers }).await;
+                }
             }
             "status" | "seen" => self.push(&name).await,
             "renamed" => {
@@ -590,7 +625,7 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
                 match serde_json::from_str::<In>(&text) {
                     Ok(In::Watch { name: n }) => {
                         let n = n.trim().to_lowercase();
-                        if valid_name(&n) { g.watch(id, &n).await; }
+                        if n == EVERYONE || valid_name(&n) { g.watch(id, &n).await; }
                     }
                     Ok(In::Unwatch { name: n }) => g.unwatch(id, &n.trim().to_lowercase()).await,
                     _ => {}
@@ -682,7 +717,7 @@ async fn recheck(g: Gateway) {
         }
         let names: Vec<String> = {
             let s = g.registry.0.lock().await;
-            s.watchers.keys().chain(s.own.keys()).cloned().collect::<HashSet<_>>().into_iter().collect()
+            s.watchers.keys().filter(|n| n.as_str() != EVERYONE).chain(s.own.keys()).cloned().collect::<HashSet<_>>().into_iter().collect()
         };
         for name in names {
             g.push(&name).await;

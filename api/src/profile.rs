@@ -21,6 +21,13 @@
 //! in `offline_at` as the `?v=`. Newer than ids, so there is no name key to lift. With it
 //! goes a line under the word, `offline_note`. Both through the bio's gate.
 //!
+//! Assets are the pictures a streamer lays onto the scene (docs/screen.md): png, jpeg, gif or
+//! webp, up as they are (a gif keeps its frames, a png its holes), so the api sniffs the first
+//! bytes and never decodes. Up to 24 a name, 2 mb each, at `assets/<id>/<n>.<ext>`, listed by
+//! name like the thumbnails; an id is never reused and the bytes never change, so the url
+//! caches for good. The scene names them by id, and the watch page builds the url under the
+//! stream's name: nobody can point a layer at somebody else's picture.
+//!
 //! `GET /watch/<name>` exists for link previews. iMessage, Discord, Slack and X
 //! make them with a bot that fetches the url once, reads `<title>` and the
 //! `og:*` tags, and never runs js; the spa's index.html says "streams" for
@@ -66,6 +73,13 @@ const MAX_THUMBS: i64 = 6;
 /// The url changes with every upload (`?v=`), so a day is safe.
 const AVATAR_CACHE: &str = "public, max-age=86400";
 const JPEG_MAGIC: [u8; 3] = [0xFF, 0xD8, 0xFF];
+/// A scene's picture goes up as it is: no re-encode, so transparency and the frames of a gif
+/// survive. Bigger than any picture the page makes itself, which is why its route has its own
+/// read limit. And how many one name may keep.
+const MAX_ASSET_BYTES: usize = 2 * 1024 * 1024;
+const MAX_ASSETS: i64 = 24;
+/// The id is the url and an id is never reused, so the bytes behind one never change.
+const ASSET_CACHE: &str = "public, max-age=31536000, immutable";
 
 /// The markup the api itself emits into the card. The classes are tailwind's, generated
 /// because the same strings appear in the pages (`Avatar.tsx`, `WatchPage.tsx`).
@@ -243,8 +257,13 @@ pub(crate) async fn lift_pictures(s: &AppState, id: Uuid, name: &str) {
 }
 
 /// Every key a row's pictures can sit under: for a rename that takes a free name's row away.
-pub(crate) fn picture_keys(id: Uuid, thumbs: &[i64]) -> Vec<String> {
-    [avatar_key(id), offline_key(id)].into_iter().chain(thumbs.iter().map(|n| thumb_key(id, *n))).collect()
+/// `assets` are the scene pictures' ids with their mime, as `stream_assets` keeps them.
+pub(crate) fn picture_keys(id: Uuid, thumbs: &[i64], assets: &[(i64, String)]) -> Vec<String> {
+    [avatar_key(id), offline_key(id)]
+        .into_iter()
+        .chain(thumbs.iter().map(|n| thumb_key(id, *n)))
+        .chain(assets.iter().filter_map(|(n, mime)| kind_of(mime).map(|kind| asset_key(id, *n, kind.ext))))
+        .collect()
 }
 
 /// Objects nobody can reach any more, dropped. Best effort: a miss leaves an orphan, nothing worse.
@@ -511,6 +530,228 @@ async fn delete_thumb(
         }
     }
     sqlx::query("DELETE FROM stream_thumbs WHERE name = $1 AND id = $2")
+        .bind(&name)
+        .bind(id)
+        .execute(&s.db)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---- the scene's pictures ---------------------------------------------------------------
+
+/// One of the four kinds a scene's picture may be: what the first bytes say, what goes back on
+/// the wire, and what the key ends in. No decode: the bytes are stored and served as they are.
+struct Kind {
+    mime: &'static str,
+    ext: &'static str,
+}
+
+const PNG: Kind = Kind { mime: "image/png", ext: "png" };
+const JPEG: Kind = Kind { mime: "image/jpeg", ext: "jpg" };
+const GIF: Kind = Kind { mime: "image/gif", ext: "gif" };
+const WEBP: Kind = Kind { mime: "image/webp", ext: "webp" };
+
+/// What the first bytes say this is, or None. A gif is `GIF87a` or `GIF89a`; a webp is a riff
+/// container, so the word is at byte 8, past the four-byte length. Never svg: a script.
+fn sniff(b: &[u8]) -> Option<&'static Kind> {
+    if b.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Some(&PNG);
+    }
+    if b.starts_with(&JPEG_MAGIC) {
+        return Some(&JPEG);
+    }
+    if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") {
+        return Some(&GIF);
+    }
+    if b.len() >= 12 && b.starts_with(b"RIFF") && &b[8..12] == b"WEBP" {
+        return Some(&WEBP);
+    }
+    None
+}
+
+/// Back from what the row kept, for the read and the delete. An unknown string is no kind.
+fn kind_of(mime: &str) -> Option<&'static Kind> {
+    [&PNG, &JPEG, &GIF, &WEBP].into_iter().find(|k| k.mime == mime)
+}
+
+fn asset_key(id: Uuid, n: i64, ext: &str) -> String {
+    format!("assets/{id}/{n}.{ext}")
+}
+
+fn asset_failed(name: &str, what: &str, err: String) -> ApiError {
+    log::error!("s3 asset {name}: {err}");
+    ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, what)
+}
+
+fn no_asset() -> ApiError {
+    ApiError::new(StatusCode::NOT_FOUND, "no such picture")
+}
+
+fn too_many_assets() -> ApiError {
+    ApiError::new(StatusCode::CONFLICT, "24 pictures at most. remove one first")
+}
+
+fn asset_too_big() -> ApiError {
+    ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "picture too big. 2 mb at most")
+}
+
+/// The body as one of the four kinds, and which it is. Not a form, under `MAX_ASSET_BYTES`
+/// (the route's read limit stopped an oversized one already, and that reads as the same 413
+/// here), and starting like a picture. The bytes go up as they are, so this is all the api
+/// ever looks at; the browser's own content-type is not trusted.
+fn asset_body(body: Result<Bytes, BytesRejection>) -> Result<(Bytes, &'static Kind), ApiError> {
+    let body = match body {
+        Ok(body) => body,
+        Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_))) => return Err(asset_too_big()),
+        Err(_) => return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad body")),
+    };
+    if body.len() > MAX_ASSET_BYTES {
+        return Err(asset_too_big());
+    }
+    let Some(kind) = sniff(&body) else {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "not a png, jpeg, gif or webp"));
+    };
+    Ok((body, kind))
+}
+
+/// Ids with their mime and size, oldest first: the order `thumb_ids` uses.
+pub(crate) async fn asset_rows(db: &PgPool, name: &str) -> Result<Vec<(i64, String, i32)>, sqlx::Error> {
+    sqlx::query_as("SELECT id, mime, bytes FROM stream_assets WHERE name = $1 ORDER BY created_at, id")
+        .bind(name)
+        .fetch_all(db)
+        .await
+}
+
+async fn list_assets(State(s): State<AppState>, Name(name): Name) -> ApiResult {
+    let assets: Vec<serde_json::Value> = asset_rows(&s.db, &name)
+        .await?
+        .into_iter()
+        .map(|(id, mime, bytes)| json!({ "id": id, "mime": mime, "bytes": bytes }))
+        .collect();
+    Ok(Json(json!({ "assets": assets })))
+}
+
+async fn get_asset(State(s): State<AppState>, Path((raw, id)): Path<(String, i64)>) -> Result<Response, ApiError> {
+    let name = checked_name(&raw)?;
+    if id <= 0 {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
+    }
+    // the row's uuid is the key, the mime is what goes back on the wire
+    let row: Option<(Uuid, String)> =
+        sqlx::query_as("SELECT s.id, a.mime FROM stream_assets a JOIN streamers s ON s.name = a.name WHERE a.name = $1 AND a.id = $2")
+            .bind(&name)
+            .bind(id)
+            .fetch_optional(&s.db)
+            .await?;
+    let Some((row, mime)) = row else {
+        return Err(no_asset());
+    };
+    let Some(kind) = kind_of(&mime) else {
+        return Err(no_asset());
+    };
+    match s3::get(&s.s3, &asset_key(row, id, kind.ext)).await {
+        Ok(Some(bytes)) => Ok((
+            [
+                (header::CONTENT_TYPE, kind.mime),
+                (header::CACHE_CONTROL, ASSET_CACHE),
+                // bytes someone else uploaded, served from our origin: never let a browser guess
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            bytes,
+        )
+            .into_response()),
+        Ok(None) => Err(no_asset()),
+        Err(e) => Err(asset_failed(&name, "could not load the picture", e)),
+    }
+}
+
+/// `put_thumb`'s shape: the row first, then the bytes, a bucket miss dropping the row so the
+/// scene never lists a picture that is not there; the cap counted and the row written under a
+/// lock on the name, so two saves at once cannot both land as the twenty-fifth.
+async fn put_asset(
+    State(s): State<AppState>,
+    Name(name): Name,
+    me: Me,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult {
+    let Query(q) = q?;
+    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    let (body, kind) = asset_body(body)?;
+    let row = ensure_row(&s.db, &name).await?;
+    for _ in 0..2 {
+        let id = new_thumb_id();
+        let mut tx = s.db.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))").bind(&name).execute(&mut *tx).await?;
+        let inserted: Option<i64> = match sqlx::query_scalar(
+            "INSERT INTO stream_assets (name, id, mime, bytes)
+             SELECT $1, $2, $3, $4
+             WHERE (SELECT count(*) FROM stream_assets WHERE name = $1) < $5
+             RETURNING id",
+        )
+        .bind(&name)
+        .bind(id)
+        .bind(kind.mime)
+        .bind(body.len() as i32)
+        .bind(MAX_ASSETS)
+        .fetch_optional(&mut *tx)
+        .await
+        {
+            Ok(row) => row,
+            Err(e) if unique_violation(&e) => {
+                tx.rollback().await?;
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let Some(id) = inserted else {
+            return Err(too_many_assets());
+        };
+        tx.commit().await?;
+        if let Err(e) = s3::put(&s.s3, &asset_key(row, id, kind.ext), &body, kind.mime).await {
+            if let Err(drop) = sqlx::query("DELETE FROM stream_assets WHERE name = $1 AND id = $2")
+                .bind(&name)
+                .bind(id)
+                .execute(&s.db)
+                .await
+            {
+                log::warn!("postgres: {name}'s picture {id} did not reach the bucket, and the row stayed: {drop}");
+            }
+            return Err(asset_failed(&name, "could not save the picture", e));
+        }
+        log::info!("{name}: scene picture {id}, {} bytes, {}", body.len(), kind.mime);
+        return Ok(Json(json!({ "id": id, "mime": kind.mime, "bytes": body.len() })));
+    }
+    Err(ApiError::new(StatusCode::CONFLICT, "try again"))
+}
+
+async fn delete_asset(
+    State(s): State<AppState>,
+    Path((raw, id)): Path<(String, i64)>,
+    me: Me,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
+) -> Result<StatusCode, ApiError> {
+    let Query(q) = q?;
+    let name = checked_name(&raw)?;
+    if id <= 0 {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
+    }
+    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    let mime: Option<String> = sqlx::query_scalar("SELECT mime FROM stream_assets WHERE name = $1 AND id = $2")
+        .bind(&name)
+        .bind(id)
+        .fetch_optional(&s.db)
+        .await?;
+    let Some(mime) = mime else {
+        return Err(no_asset());
+    };
+    // the object first. a miss there leaves the row, so the next try removes it
+    if let (Some(row), Some(kind)) = (row_id(&s.db, &name).await?, kind_of(&mime)) {
+        if let Err(e) = s3::delete(&s.s3, &asset_key(row, id, kind.ext)).await {
+            return Err(asset_failed(&name, "could not remove the picture", e));
+        }
+    }
+    sqlx::query("DELETE FROM stream_assets WHERE name = $1 AND id = $2")
         .bind(&name)
         .bind(id)
         .execute(&s.db)
@@ -857,6 +1098,9 @@ pub(crate) fn routes() -> Router<AppState> {
             "/api/streamers/{name}/offline",
             get(get_offline).put(put_offline).delete(delete_offline).layer(DefaultBodyLimit::max(MAX_OFFLINE_BYTES)),
         )
+        // the scene's pictures go up as they are, so this ceiling is the widest of the three
+        .route("/api/streamers/{name}/assets", get(list_assets).put(put_asset).layer(DefaultBodyLimit::max(MAX_ASSET_BYTES)))
+        .route("/api/streamers/{name}/assets/{id}", get(get_asset).delete(delete_asset))
         .route("/api/streamers/{name}/offline-note", put(put_offline_note))
         .route("/watch/", get(watch_nobody))
         .route("/watch/{*rest}", get(watch_page))
@@ -889,7 +1133,23 @@ mod tests {
         assert_eq!(legacy_thumb_key("bob", 7), "thumbs/bob/7.jpg");
         assert_eq!(legacy_avatar_key("bob"), "avatars/bob.jpg");
         assert_eq!(offline_key(id), "offline/7f3a1b2c-0000-4000-8000-000000000001.jpg");
-        assert_eq!(picture_keys(id, &[7, 9]).len(), 4);
+        assert_eq!(asset_key(id, 7, "gif"), "assets/7f3a1b2c-0000-4000-8000-000000000001/7.gif");
+        // the avatar, the offline picture, two thumbnails, one scene picture; a mime nobody knows has no key
+        assert_eq!(picture_keys(id, &[7, 9], &[(3, "image/png".into()), (4, "image/svg+xml".into())]).len(), 5);
+    }
+
+    #[test]
+    fn a_scene_picture_is_what_its_first_bytes_say() {
+        assert_eq!(sniff(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0]).map(|k| k.mime), Some("image/png"));
+        assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0]).map(|k| k.ext), Some("jpg"));
+        assert_eq!(sniff(b"GIF89a\x01\x00").map(|k| k.mime), Some("image/gif"));
+        assert_eq!(sniff(b"RIFF\x00\x00\x00\x00WEBPVP8 ").map(|k| k.mime), Some("image/webp"));
+        // a wave is a riff too; an svg is a script
+        assert!(sniff(b"RIFF\x00\x00\x00\x00WAVEfmt ").is_none());
+        assert!(sniff(b"<svg xmlns=\"http://www.w3.org/2000/svg\">").is_none());
+        assert!(sniff(b"").is_none());
+        assert_eq!(kind_of("image/gif").map(|k| k.ext), Some("gif"));
+        assert!(kind_of("text/html").is_none());
     }
 
     fn profile(bio: &str, avatar: Option<i64>, verified: bool) -> Profile {

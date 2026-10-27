@@ -16,8 +16,10 @@ import { Link } from 'react-router-dom';
 import type { Owner } from '@/infra/api';
 import type { PipChatPlace } from '@/infra/atoms/settings-atoms';
 import { canPopOut, openPopout } from '@/infra/popout';
+import type { Layer } from '@/infra/relay';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
+import { SceneView } from '@/shared-components/SceneView';
 import type { Tone } from '@/shared-components/StatusLine';
 import { ChatIcon, IconButton, PopOutIcon, revealClassName } from '@/shared-components/VideoControls';
 import { VideoFrame } from '@/shared-components/VideoFrame';
@@ -181,8 +183,18 @@ interface CornerPlayerProps {
   closeConfirm?: { title: string; message: string; yes: string };
   /** Over the middle of the picture ("tap to play"). */
   center?: ReactNode;
-  /** On the picture, under the controls, placed against the picture's box: the watch player's camera over a shared screen (`CameraOverlay`). */
-  overlay?: ReactNode;
+  /**
+   * The streamer's frame (the watch player): the layers drawn around the picture, as on the
+   * page, with `streamAtom` standing in for `slot`. In the player's own window, whose shape is
+   * the os's and not 16:9, the plain picture shows instead: the layers would not line up with it.
+   */
+  scene?: {
+    layers: readonly Layer[];
+    slot: number | null;
+    streamFor: (slot: number) => Atom<MediaStream | null>;
+    imageUrl: (asset: number) => string;
+    onPick: (slot: number) => void;
+  };
   /** In the picture's top left corner, across from the chat button and ×: the stream's health, and the broadcast's mic. Each chip places itself (`CORNER_BADGE`, `CORNER_BADGE_2`). */
   badge?: ReactNode;
   /** Along the picture's bottom edge, up on hover (`barShown`: always up). Nothing: no bar at all. */
@@ -225,7 +237,7 @@ export function CornerPlayer({
   onClose,
   closeConfirm,
   center,
-  overlay,
+  scene,
   badge,
   bar,
   barShown = false,
@@ -442,18 +454,29 @@ export function CornerPlayer({
       onPointerDown={popped ? undefined : (e) => press(e, 'move')}
     >
       <Link to={to} aria-label={`back to ${name}`} className={cn('block', popped && 'absolute inset-0')}>
-        <VideoFrame
-          id={`${prefix}-video`}
-          streamAtom={streamAtom}
-          videoRef={videoRef}
-          muted={muted}
-          volume={volume}
-          onPlaying={onPlaying}
-          onAutoplayBlocked={onAutoplayBlocked}
-          className={cn('min-w-0 border-0 border-b', popped && 'h-full object-contain')}
-        />
+        {scene && !popped ? (
+          <SceneView
+            id={`${prefix}-scene`}
+            layers={scene.layers}
+            streamFor={scene.streamFor}
+            imageUrl={scene.imageUrl}
+            main={{ id: `${prefix}-video`, streamAtom, videoRef, slot: scene.slot, muted, volume, onPlaying, onAutoplayBlocked }}
+            onPick={scene.onPick}
+            className="min-w-0 border-0 border-b"
+          />
+        ) : (
+          <VideoFrame
+            id={`${prefix}-video`}
+            streamAtom={streamAtom}
+            videoRef={videoRef}
+            muted={muted}
+            volume={volume}
+            onPlaying={onPlaying}
+            onAutoplayBlocked={onAutoplayBlocked}
+            className={cn('min-w-0 border-0 border-b', popped && 'h-full object-contain')}
+          />
+        )}
       </Link>
-      {overlay}
       {center}
       {badge}
       {buttons}

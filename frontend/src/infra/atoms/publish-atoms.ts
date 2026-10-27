@@ -12,9 +12,27 @@ import { loadMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { endWatch, pipAtom } from '@/infra/atoms/watch-atoms';
+import { type Mixer, openMixer } from '@/infra/mixer';
 import { cleanName, isValidName } from '@/infra/names';
-import { clampLayout, connectRelay, DEFAULT_LAYOUT, type Layout, SCREEN_SLOTS, type SlotInfo, validLayout, viewersOf, waitForIceGathering } from '@/infra/relay';
+import { type Box, connectRelay, type Fit, isVideoLayer, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
+import {
+  applyPreset,
+  arrangedAfterAdd,
+  arrangedAfterRemove,
+  FULL,
+  imageBox,
+  MAX_SAVED_PRESETS,
+  movedBox,
+  type Preset,
+  PRESETS,
+  presetOf,
+  ratioOf,
+  resizedBox,
+  sceneOf,
+  type Source,
+  validPreset
+} from '@/infra/scene';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
 import type { Tone } from '@/shared-components/StatusLine';
@@ -36,28 +54,46 @@ const SHARE_PHASES: readonly PublishPhase[] = ['live', 'reconnecting'];
  * the bitrate, and the bits go on pixels the cap cannot afford (docs/bitrates.md).
  */
 const SCREEN_CAP: MediaTrackConstraints = { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 30 } };
-/** `DisplayMediaStreamOptions` with the picker hints the typings do not have yet (`cursor` sits in the video constraints, untyped too). */
+/** `DisplayMediaStreamOptions` with the picker hints the typings do not have yet. */
 interface DisplayHints extends DisplayMediaStreamOptions {
   selfBrowserSurface?: 'include' | 'exclude';
   surfaceSwitching?: 'include' | 'exclude';
+  systemAudio?: 'include' | 'exclude';
+  monitorTypeSurfaces?: 'include' | 'exclude';
 }
+/** What the + menu offers: a screen or a window, the picture alone; or a tab with its sound. */
+export type ShareKind = 'screen' | 'tab';
 /**
- * The picker, asked for a page: the cursor in the picture so the person can point at things,
- * this site's own tab kept out of the picker (sharing it is a mirror), and switching which tab
- * is shared without stopping. Hints, every one: a browser that throws on them is asked again
- * with `SCREEN_CAP` alone. No sound (docs/audio.md).
+ * The picker for a screen or a window: this site's own tab kept out of it (sharing it is a
+ * mirror), switching which tab is shared without stopping. Hints: a browser that throws on
+ * them is asked again with `SCREEN_CAP` alone. No sound.
  */
-const SCREEN_HINTS: DisplayHints = {
-  video: { ...SCREEN_CAP, cursor: 'always' } as MediaTrackConstraints,
-  audio: false,
+const SCREEN_HINTS: DisplayHints = { video: SCREEN_CAP, audio: false, selfBrowserSurface: 'exclude', surfaceSwitching: 'include' };
+/**
+ * The picker for a tab with its sound, opened on the tabs: the sound as it is (chrome would
+ * otherwise run it through the mic's echo cancelling and gain), no system sound, no screens.
+ * Only chromium hands a tab's sound over; `tabShareSupported` says where to offer it.
+ */
+const TAB_HINTS: DisplayHints = {
+  video: { ...SCREEN_CAP, displaySurface: 'browser' } as MediaTrackConstraints,
+  audio: { echoCancellation: false, autoGainControl: false, noiseSuppression: false },
   selfBrowserSurface: 'exclude',
-  surfaceSwitching: 'include'
+  surfaceSwitching: 'include',
+  systemAudio: 'exclude',
+  monitorTypeSurfaces: 'exclude'
 };
-/**
- * A drag moves the camera many times a second; the watchers are told at most this often, and
- * within this long of the last move.
- */
-const LAYOUT_SEND_MS = 150;
+/** A drag moves a layer many times a second; the watchers are told at most this often, and within this long of the last move. */
+const SCENE_SEND_MS = 150;
+/** The encoders follow the scene (a small camera is sent small) this long after it settles: a new size costs a keyframe. */
+const TUNE_MS = 500;
+/** A screen that is not the stage: this many bits, at this many frames (text stays readable, a video in it stutters). */
+const SIDE_SCREEN_BITRATE = 500_000;
+const SIDE_SCREEN_FPS = 15;
+/** The camera's bits over a screen: this much per unit of width, between these. */
+const CAMERA_BPS_PER_WIDTH = 1_200_000;
+const CAMERA_MIN_BITRATE = 150_000;
+/** The camera's encode is shrunk to fit its box: the picture is 1280 wide, a watcher's frame at most 1920. Steps, so a drag does not cost a keyframe per pixel. */
+const CAMERA_SCALES = [1, 1.33, 2, 2.67, 4];
 
 export const cameraAtom = atom<MediaStream | null>(null);
 /** A screen being shared: which screen slot (0 to SCREEN_SLOTS-1) and what the browser called it. Its stream is in `screenStreamAtoms`. */
@@ -73,24 +109,74 @@ const spareStreamAtom = atom<MediaStream | null>(null);
 export const screenStreamAtom = (slot: number) => screenStreamAtoms[slot] ?? spareStreamAtom;
 /** Phones have no screen capture; there the button is not shown at all. */
 export const screenShareSupported = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
-/**
- * Where the camera goes while a screen is shared (relay.ts `Layout`): on the screen where it was
- * dragged, or beside it as a tile. This browser's, kept for the next stream. The preview draws
- * it over the first shared screen, and watchers get it with every slots frame.
- */
-const storedLayoutAtom = atomWithStorage<unknown>('settings.cameraLayout', DEFAULT_LAYOUT, undefined, { getOnInit: true });
-/** Read: always a well-formed layout inside the frame, whatever localstorage holds. */
-export const layoutAtom = atom((get) => validLayout(get(storedLayoutAtom)) ?? DEFAULT_LAYOUT);
-/**
- * The big preview: what a watcher gets big. The first shared screen while one is shared (the
- * one the watch page's rule picks), else the camera.
- */
-export const stageStreamAtom = atom((get) => {
-  const first = get(screensAtom)[0];
-  return first ? get(screenStreamAtom(first.slot)) : get(cameraAtom);
+/** A tab with its sound is chromium's: `CaptureController` arrived with it and nowhere else. */
+export const tabShareSupported = screenShareSupported && typeof window !== 'undefined' && 'CaptureController' in window;
+
+// ---- the scene (infra/scene.ts): what is on the stream, and where ---------------------------------
+
+/** The sources, bottom first: the camera, the shared screens, the pictures. Those on the stream are the scene. */
+export const sourcesAtom = atom<Source[]>([]);
+/** What the watchers get: the sources on the stream as layers, in this order. */
+export const sceneAtom = atom((get) => sceneOf(get(sourcesAtom)));
+/** The slot the preview's own `<video>` (`#preview`) stands in for: the bottom video layer on the stream. `null` with none (a picture alone). */
+export const previewSlotAtom = atom((get) => get(sceneAtom).layers.find(isVideoLayer)?.slot ?? null);
+/** What `#preview` plays: that slot's stream, and the camera when no video is on the stream (it hides as a dot then). */
+export const previewStreamAtom = atom((get) => {
+  const slot = get(previewSlotAtom);
+  return slot === null || slot === 0 ? get(cameraAtom) : get(screenStreamAtom(slot - 1));
 });
-/** The camera is drawn over the preview: a screen is shared and the layout puts it on the screen. */
-export const cameraOverlaidAtom = atom((get) => get(screensAtom).length > 0 && get(layoutAtom).camera === 'over');
+/** The source whose row and layer are lit: the one the keys move. */
+export const selectedSourceAtom = atom<string | null>(null);
+/** The pictures this name has put up (api assets), oldest first: the + menu offers them again. */
+export const libraryAtom = atom<{ id: number; mime: string }[]>([]);
+export const imageStatusAtom = atom('');
+/** The presets this browser saved, as `infra/scene.ts` presets. */
+const storedPresetsAtom = atomWithStorage<unknown>('settings.scenePresets', [], undefined, { getOnInit: true });
+/** Read: well-formed presets only, whatever localstorage holds. */
+export const savedPresetsAtom = atom<Preset[]>((get) => {
+  const raw = get(storedPresetsAtom);
+  return Array.isArray(raw)
+    ? raw
+        .map(validPreset)
+        .filter((p): p is Preset => p !== null)
+        .slice(0, MAX_SAVED_PRESETS)
+    : [];
+});
+/** The arrangement of the camera and a screen this browser last had: what the first share makes again next time. */
+const storedLastAtom = atomWithStorage<unknown>('settings.lastArrangement', null, undefined, { getOnInit: true });
+const lastArrangementAtom = atom((get) => validPreset(get(storedLastAtom)));
+/** Which of the page's three panels are open. Kept. */
+export interface LivePanels {
+  sources: boolean;
+  presets: boolean;
+  sound: boolean;
+}
+const storedPanelsAtom = atomWithStorage<unknown>('settings.livePanels', { sources: true, presets: true, sound: true }, undefined, { getOnInit: true });
+/** Read: three booleans, whatever localstorage holds. */
+export const livePanelsAtom = atom<LivePanels>((get) => {
+  const raw = get(storedPanelsAtom);
+  const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  return { sources: p.sources !== false, presets: p.presets !== false, sound: p.sound !== false };
+});
+
+// ---- the sound (infra/mixer.ts): what everyone hears, and what goes into it ---------------------
+
+/** One row of the mixer: the fader's place (0..1) and the mute. `mic`, `tab-<source id>` for a share with sound, and the master. */
+export interface MixRow {
+  id: string;
+  label: string;
+  level: number;
+  muted: boolean;
+}
+export const MASTER = 'master';
+export const mixRowsAtom = atom<MixRow[]>([]);
+export const masterRowAtom = atom<MixRow>({ id: MASTER, label: 'everyone hears', level: 1, muted: false });
+/** The mic's and the master's faders, kept for the next stream. */
+const storedMixAtom = atomWithStorage<unknown>('settings.mixer', null, undefined, { getOnInit: true });
+/** The mixer is up: the mic chip and the rows read their bars off it. */
+export const mixerOpenAtom = atom(false);
+/** The mixer is sending. False while its context is suspended (made outside a click, interrupted): the stream is silent then, and a click resumes it. */
+export const mixerRunningAtom = atom(true);
 export const publishPhaseAtom = atom<PublishPhase>('camera-off');
 /** The upload, sampled from the peer once a second while a publish is up. Null once it stops. */
 export const publishStatsAtom = atom<StreamStats | null>(null);
@@ -122,7 +208,6 @@ const THUMB_H = 360;
 const THUMB_QUALITY = 0.8;
 const MAX_THUMBS = 6;
 
-export const hasMicAtom = atom((get) => (get(cameraAtom)?.getAudioTracks().length ?? 0) > 0);
 export const isPublishingAtom = atom((get) => BUSY_PHASES.includes(get(publishPhaseAtom)));
 export const canStartAtom = atom((get) => get(cameraAtom) !== null && isValidName(get(streamNameAtom)) && !get(isPublishingAtom));
 export const canShareScreenAtom = atom((get) => screenShareSupported && SHARE_PHASES.includes(get(publishPhaseAtom)) && get(screensAtom).length < SCREEN_SLOTS);
@@ -155,11 +240,18 @@ let stopStats: (() => void) | null = null;
 let ws: WebSocket | null = null;
 let abort: AbortController | null = null;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
-/** A layout change waiting to be told to the watchers (`setLayout`). */
-let layoutTimer: ReturnType<typeof setTimeout> | null = null;
-/** The camera's video sender, and the SCREEN_SLOTS senders offered empty for screens (`screenSenders[i]` is screen slot i). */
+/** A scene change waiting to be told to the watchers, and one waiting to reach the encoders (`setSources`). */
+let sceneTimer: ReturnType<typeof setTimeout> | null = null;
+let tuneTimer: ReturnType<typeof setTimeout> | null = null;
+/** The camera's video sender, and the SCREEN_SLOTS senders offered empty for screens (`screenSenders[i]` is screen slot i). The audio sender needs no handle: its track is the mix's, for the whole stream. */
 let cameraSender: RTCRtpSender | null = null;
 let screenSenders: RTCRtpSender[] = [];
+/** The mix, from the start click to the end of the camera (`endLive`); a stop in between keeps it, with the mic in it. */
+let mixer: Mixer | null = null;
+/** The camera's cap right now, for the stats badge. */
+let cameraCap = VIDEO_MAX_BITRATE;
+/** Pictures added this visit, for their ids. */
+let imageCount = 0;
 /** Bumped on leaving /live: a camera granted after that belongs to nobody and is stopped. */
 let liveGeneration = 0;
 /** The name whose bio and picture are in the boxes, and the bio as it was loaded for it. */
@@ -179,11 +271,13 @@ function startPublishStats() {
     role: 'publish',
     pc: () => pc,
     videoTrackId: () => store.get(cameraAtom)?.getVideoTracks()[0]?.id,
+    // the mix is what leaves: its master mute, else (no web audio) the mic track itself
     audioMuted: () => {
+      if (mixer) return store.get(masterRowAtom).muted;
       const track = store.get(cameraAtom)?.getAudioTracks()[0];
       return !!track && (track.muted || !track.enabled);
     },
-    capBps: () => (store.get(screensAtom).length > 0 ? CAMERA_SHARING_BITRATE : VIDEO_MAX_BITRATE),
+    capBps: () => cameraCap,
     labelOf: labelOfPublishTrack,
     write: (stats) => store.set(publishStatsAtom, stats)
   });
@@ -254,7 +348,15 @@ export async function startCamera(): Promise<void> {
     return;
   }
   store.set(cameraAtom, camera);
+  ensureCameraSource();
   setPhase('camera-ready', camera.getAudioTracks().length ? 'camera ready' : 'camera ready, no mic');
+}
+
+/** The camera is a source from the moment it is on: the bottom of the scene, the whole frame, until a screen joins it. */
+function ensureCameraSource() {
+  const sources = store.get(sourcesAtom);
+  if (sources.some((s) => s.kind === 'camera')) return;
+  setSources([{ id: 'cam', kind: 'camera', label: 'camera', slot: 0, box: FULL, shown: true }, ...sources]);
 }
 
 export async function goLive(): Promise<void> {
@@ -265,6 +367,21 @@ export async function goLive(): Promise<void> {
   // when you go live, as its × would: not hidden, ended, so nothing of it plays or polls on
   if (store.get(pipAtom)) endWatch();
   store.set(chatRoomAtom, name); // the chat is the room of the name you go live as
+
+  // The sound: one track for the whole stream, mixed in the page (infra/mixer.ts), so a tab's
+  // sound can join later without anyone renegotiating. Made here, in the click, so it runs,
+  // and before the phase changes, so the mic chip finds it when it mounts.
+  const mic = camera.getAudioTracks()[0];
+  if (!mixer) {
+    mixer = openMixer();
+    const kept = keptMix(MASTER);
+    if (kept) store.set(masterRowAtom, { ...store.get(masterRowAtom), ...kept });
+    const master = store.get(masterRowAtom);
+    mixer?.setMaster(master.level, master.muted);
+    store.set(mixerOpenAtom, mixer !== null);
+  }
+  if (mixer && mic && !mixer.has('mic')) addMixRow('mic', 'mic', mic);
+  watchMixer();
   setPhase('starting', 'starting');
 
   // Everything below belongs to this attempt. If stop runs meanwhile, `pc` changes and the
@@ -282,15 +399,16 @@ export async function goLive(): Promise<void> {
     if (!gone()) onConnection(myPc.connectionState);
   };
 
-  for (const track of camera.getTracks()) {
-    const init: RTCRtpTransceiverInit = { direction: 'sendonly', streams: [camera] };
-    if (track.kind === 'video') {
-      track.contentHint = 'motion';
-      init.sendEncodings = [{ maxBitrate: VIDEO_MAX_BITRATE }];
-    }
-    const transceiver = myPc.addTransceiver(track, init);
-    if (track.kind === 'video') cameraSender = transceiver.sender;
+  for (const track of camera.getVideoTracks()) {
+    track.contentHint = 'motion';
+    cameraSender = myPc.addTransceiver(track, { direction: 'sendonly', streams: [camera], sendEncodings: [{ maxBitrate: VIDEO_MAX_BITRATE }] }).sender;
   }
+  // One opus, always: the mix, else (no web audio) the mic, else a section with nothing in it.
+  // A silent section beats no section: video makes the room's slots from the offer, so a
+  // stream started without a mic could never carry a tab's sound otherwise.
+  const sound = mixer?.outputTrack ?? mic;
+  if (sound) myPc.addTransceiver(sound, { direction: 'sendonly', streams: [camera] });
+  else myPc.addTransceiver('audio', { direction: 'sendonly' });
   // The screens' sections, offered now with nothing in them: a screen shared later goes
   // into one with `replaceTrack`, and nothing is renegotiated, with video or with anyone
   // watching. The camera is video slot 0 to everyone, these are 1 to SCREEN_SLOTS.
@@ -335,7 +453,10 @@ export async function goLive(): Promise<void> {
   ws.onclose = () => stopLive('connection lost', 'failed');
   heartbeat = setInterval(sendHeartbeat, HEARTBEAT_MS);
   setPhase('connecting', 'connecting');
-  if (!gone()) startPublishStats();
+  if (gone()) return;
+  startPublishStats();
+  // the scene as it was laid out before start (a picture, the camera's box), to the first watcher too
+  announceSlots();
 }
 
 function sendHeartbeat() {
@@ -360,34 +481,36 @@ function onConnection(state: RTCPeerConnectionState) {
 
 /**
  * The picker, with the hints first. A browser that rejects a hint (a `TypeError` on the
- * options, an `OverconstrainedError` on the cursor) is asked again with the size cap alone,
- * and the share still happens. The picker closed without a choice (`NotAllowedError`), or
- * anything else, is `null`: nothing to share, and no second picker.
+ * options, an `OverconstrainedError`) is asked again with the size cap alone, and the share
+ * still happens. The picker closed without a choice (`NotAllowedError`), or anything else, is
+ * `null`: nothing to share, and no second picker.
  */
-async function pickDisplay(): Promise<MediaStream | null> {
+async function pickDisplay(kind: ShareKind): Promise<MediaStream | null> {
   try {
-    return await navigator.mediaDevices.getDisplayMedia(SCREEN_HINTS);
+    return await navigator.mediaDevices.getDisplayMedia(kind === 'tab' ? TAB_HINTS : SCREEN_HINTS);
   } catch (err) {
     const rejectedHints = err instanceof TypeError || (err instanceof DOMException && err.name === 'OverconstrainedError');
     if (!rejectedHints) return null;
   }
   try {
-    return await navigator.mediaDevices.getDisplayMedia({ video: SCREEN_CAP, audio: false });
+    return await navigator.mediaDevices.getDisplayMedia({ video: SCREEN_CAP, audio: kind === 'tab' });
   } catch {
     return null;
   }
 }
 
 /**
- * The share button: the browser's picker, one screen (or window, or tab) per press, into the
- * first free screen slot. The picker closed without a choice is nothing. Sharp text over
- * smooth motion (`contentHint`), and no more than 1080p (`SCREEN_CAP`). The browser's own
- * "stop sharing" bar ends the track, which is a stop here.
+ * The share button and the + menu: the browser's picker, one screen (or window, or tab) per
+ * press, into the first free screen slot. The picker closed without a choice is nothing. Sharp
+ * text over smooth motion (`contentHint`), and no more than 1080p (`SCREEN_CAP`). The browser's
+ * own "stop sharing" bar ends the track, which is a stop here. The new screen is a source, put
+ * into the scene by the rules (`arrangedAfterAdd`); a tab's sound, when the picker gave it, is a
+ * row of the mixer.
  */
-export async function shareScreen(): Promise<void> {
+export async function shareScreen(kind: ShareKind = 'screen'): Promise<void> {
   const myPc = pc;
   if (!myPc || !store.get(canShareScreenAtom)) return;
-  const display = await pickDisplay();
+  const display = await pickDisplay(kind);
   if (!display) return;
   const track = display.getVideoTracks()[0];
   const slot = screenSenders.findIndex((sender) => !sender.track);
@@ -411,10 +534,20 @@ export async function shareScreen(): Promise<void> {
   const label = alike ? `${base} ${alike + 1}` : base;
   store.set(screenStreamAtom(slot), display);
   store.set(screensAtom, [...store.get(screensAtom), { slot, label }]);
+  const id = `s${slot + 1}`;
+  // the sound ends on its own when the tab is switched to one without, and the picture goes on
+  const sound = display.getAudioTracks()[0];
+  if (sound && mixer) {
+    addMixRow(`tab-${id}`, `${label} sound`, sound);
+    sound.addEventListener('ended', () => removeMixRow(`tab-${id}`));
+  }
+  const source: Source = { id, kind: 'screen', label, slot: slot + 1, box: FULL, shown: true };
+  setSources(arrangedAfterAdd([...store.get(sourcesAtom), source], source, store.get(lastArrangementAtom)));
+  store.set(selectedSourceAtom, id);
   screensChanged();
 }
 
-/** The tile's stop, or the browser's "stop sharing" bar. The slot is emptied and free again. */
+/** The tile's stop, the row's ×, or the browser's "stop sharing" bar. The slot is emptied and free again. */
 export function stopScreen(slot: number) {
   const screens = store.get(screensAtom);
   if (!screens.some((s) => s.slot === slot)) return;
@@ -429,6 +562,9 @@ export function stopScreen(slot: number) {
   );
   // a closed peer refuses this; nothing is lost then, the stream is over
   screenSenders[slot]?.replaceTrack(null).catch(() => undefined);
+  const id = `s${slot + 1}`;
+  removeMixRow(`tab-${id}`);
+  dropSource(id);
   screensChanged();
 }
 
@@ -437,52 +573,369 @@ function screensChanged() {
   void tuneSenders();
 }
 
+// ---- the scene's actions: the sidebar, the preview and the presets strip all come through here ----
+
 /**
- * The layout row and the drag on the preview: a part of the layout changes, kept inside the
- * frame. The preview follows at once; the watchers are told within LAYOUT_SEND_MS, with the
- * latest by then (a drag is many changes a second, the box and every watcher get a few).
+ * The sources changed: the preview follows at once; the watchers are told within SCENE_SEND_MS
+ * with the latest by then (a drag is many changes a second, the box and every watcher get a
+ * few); the encoders follow once it has settled for TUNE_MS.
  */
-export function setLayout(patch: Partial<Layout>) {
-  store.set(storedLayoutAtom, clampLayout({ ...store.get(layoutAtom), ...patch }));
-  if (layoutTimer) return;
-  layoutTimer = setTimeout(() => {
-    layoutTimer = null;
-    announceSlots();
-  }, LAYOUT_SEND_MS);
+function setSources(next: Source[]) {
+  store.set(sourcesAtom, next);
+  if (!sceneTimer) {
+    sceneTimer = setTimeout(() => {
+      sceneTimer = null;
+      announceSlots();
+      rememberArrangement();
+    }, SCENE_SEND_MS);
+  }
+  if (!tuneTimer) {
+    tuneTimer = setTimeout(() => {
+      tuneTimer = null;
+      void tuneSenders();
+    }, TUNE_MS);
+  }
 }
 
-/** Tell video what is live where, for the watchers: the camera, then each shared screen, and where the camera sits over a screen. */
+/** A source went (a screen stopped, a picture removed): out of the list, and one picture left fills the frame. */
+function dropSource(id: string) {
+  const sources = store.get(sourcesAtom);
+  if (!sources.some((s) => s.id === id)) return;
+  setSources(arrangedAfterRemove(sources.filter((s) => s.id !== id)));
+  if (store.get(selectedSourceAtom) === id) store.set(selectedSourceAtom, null);
+}
+
+/** The camera and a screen both on the stream: this arrangement is the one the next first share makes. */
+function rememberArrangement() {
+  const sources = store.get(sourcesAtom);
+  const shown = sources.filter((s) => s.shown && s.kind !== 'image');
+  if (!shown.some((s) => s.kind === 'camera') || !shown.some((s) => s.kind === 'screen')) return;
+  store.set(storedLastAtom, presetOf('last', sources));
+}
+
+export function selectSource(id: string | null) {
+  store.set(selectedSourceAtom, id);
+}
+
+function withSource(id: string, change: (s: Source) => Source) {
+  setSources(store.get(sourcesAtom).map((s) => (s.id === id ? change(s) : s)));
+}
+
+/** A drag: the box as it was when the press began, slid by `dx`,`dy` of the frame. */
+export function moveSource(id: string, from: Box, dx: number, dy: number) {
+  withSource(id, (s) => ({ ...s, box: movedBox(from, dx, dy) }));
+}
+
+/** A corner pulled. A picture keeps its shape; a video keeps its box's shape unless `free` (shift). */
+export function resizeSource(id: string, from: Box, sx: number, sy: number, dx: number, dy: number, free: boolean) {
+  withSource(id, (s) => ({ ...s, box: resizedBox(from, sx, sy, dx, dy, s.ratio ?? (free ? null : from.w / from.h)) }));
+}
+
+/** The arrow keys: by `dx`,`dy` of the frame. */
+export function nudgeSource(id: string, dx: number, dy: number) {
+  withSource(id, (s) => ({ ...s, box: movedBox(s.box, dx, dy) }));
+}
+
+/** The eye: on the stream, or off it (a video source is a tile for watchers then). The box is kept for the way back. */
+export function toggleSource(id: string) {
+  withSource(id, (s) => ({ ...s, shown: !s.shown }));
+}
+
+/** The row's arrows: one step up (towards the front) or down the stack. */
+export function reorderSource(id: string, dir: 'up' | 'down') {
+  const sources = [...store.get(sourcesAtom)];
+  const i = sources.findIndex((s) => s.id === id);
+  const j = dir === 'up' ? i + 1 : i - 1;
+  if (i < 0 || j < 0 || j >= sources.length) return;
+  [sources[i], sources[j]] = [sources[j]!, sources[i]!];
+  setSources(sources);
+}
+
+/** `fill` or `whole`, on a video source. */
+export function setSourceFit(id: string, fit: Fit) {
+  withSource(id, (s) => ({ ...s, fit }));
+}
+
+/** A picture laid exactly over another source (a border over the camera), just above it in the stack. */
+export function fitSourceTo(id: string, targetId: string) {
+  const sources = store.get(sourcesAtom).filter((s) => s.id !== id);
+  const source = store.get(sourcesAtom).find((s) => s.id === id);
+  const at = sources.findIndex((s) => s.id === targetId);
+  const target = sources[at];
+  if (!source || !target) return;
+  sources.splice(at + 1, 0, { ...source, box: { ...target.box }, shown: true });
+  setSources(sources);
+}
+
+/** The row's ×: a screen stops sharing, a picture leaves the scene (its upload stays in the library). The camera has no ×: the eye takes it off. */
+export function removeSource(id: string) {
+  const source = store.get(sourcesAtom).find((s) => s.id === id);
+  if (!source) return;
+  if (source.kind === 'screen' && source.slot !== undefined) stopScreen(source.slot - 1);
+  else if (source.kind === 'image') dropSource(id);
+}
+
+/** A chip of the presets strip: built in or saved, by name. The listed sources come onto the stream. */
+export function applyPresetNamed(name: string) {
+  const preset = [...PRESETS, ...store.get(savedPresetsAtom)].find((p) => p.name === name);
+  if (preset) setSources(applyPreset(store.get(sourcesAtom), preset, true));
+}
+
+/** `save as preset`: the arrangement on the stream right now, under `name`; a saved one of that name is replaced. */
+export function savePreset(raw: string) {
+  const name = raw.trim().slice(0, 32);
+  if (!name || PRESETS.some((p) => p.name === name)) return;
+  const kept = store.get(savedPresetsAtom).filter((p) => p.name !== name);
+  store.set(storedPresetsAtom, [...kept, presetOf(name, store.get(sourcesAtom))].slice(-MAX_SAVED_PRESETS));
+}
+
+export function forgetPreset(name: string) {
+  store.set(
+    storedPresetsAtom,
+    store.get(savedPresetsAtom).filter((p) => p.name !== name)
+  );
+}
+
+export function setLivePanel(name: keyof LivePanels, open: boolean) {
+  store.set(storedPanelsAtom, { ...store.get(livePanelsAtom), [name]: open });
+}
+
+// ---- pictures: up to the api as they are, then a source with their own shape ----------------------
+
+/** A picture's shape, from the bytes the api serves: decoded once, so the box is right before the layer shows anywhere. */
+async function imageRatio(url: string): Promise<number> {
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  return ratioOf(img.naturalWidth, img.naturalHeight);
+}
+
+/** The + menu's `image or gif`: the file up to the api as it is (a gif keeps its frames, a png its holes), then onto the stream. */
+export async function addImage(file: File): Promise<void> {
+  const name = store.get(streamNameAtom);
+  if (!isValidName(name)) {
+    store.set(imageStatusAtom, 'type a name first');
+    return;
+  }
+  if (store.get(imageStatusAtom) === 'uploading') return;
+  store.set(imageStatusAtom, 'uploading');
+  try {
+    const saved = await api.saveAsset(name, file);
+    if (store.get(streamNameAtom) !== name) return;
+    store.set(libraryAtom, [...store.get(libraryAtom).filter((a) => a.id !== saved.id), { id: saved.id, mime: saved.mime }]);
+    store.set(imageStatusAtom, '');
+    await placeImage(saved.id, file.name.replace(/\.[^.]+$/, '') || 'picture');
+  } catch (err) {
+    if (store.get(streamNameAtom) !== name) return;
+    store.set(imageStatusAtom, `not added: ${messageOf(err)}`);
+  }
+}
+
+/** A picture of the library (one put up now, or on an earlier visit) as a new source, centred, on top. */
+export async function placeImage(asset: number, label: string): Promise<void> {
+  const name = store.get(streamNameAtom);
+  let ratio: number;
+  try {
+    ratio = await imageRatio(api.assetUrl(name, asset));
+  } catch {
+    store.set(imageStatusAtom, 'that picture does not load');
+    return;
+  }
+  if (store.get(streamNameAtom) !== name) return;
+  const id = `i${++imageCount}`;
+  setSources([...store.get(sourcesAtom), { id, kind: 'image', label, asset, ratio, box: imageBox(ratio), shown: true }]);
+  store.set(selectedSourceAtom, id);
+}
+
+/** The library's ×: the upload goes from the api, and from the scene with it. */
+export async function deleteImage(asset: number): Promise<void> {
+  const name = store.get(streamNameAtom);
+  if (!isValidName(name)) return;
+  try {
+    await api.deleteAsset(name, asset);
+  } catch (err) {
+    store.set(imageStatusAtom, `not removed: ${messageOf(err)}`);
+    return;
+  }
+  if (store.get(streamNameAtom) !== name) return;
+  store.set(
+    libraryAtom,
+    store.get(libraryAtom).filter((a) => a.id !== asset)
+  );
+  for (const s of store.get(sourcesAtom)) if (s.asset === asset) dropSource(s.id);
+}
+
+// ---- the mixer's actions -----------------------------------------------------------------------
+
+/** The faders this browser kept: the mic's and the master's. */
+function keptMix(id: string): { level: number; muted: boolean } | null {
+  const raw = store.get(storedMixAtom);
+  const row = raw && typeof raw === 'object' ? (raw as Record<string, unknown>)[id] : null;
+  if (!row || typeof row !== 'object') return null;
+  const { level, muted } = row as Record<string, unknown>;
+  return typeof level === 'number' && Number.isFinite(level) ? { level: Math.min(1, Math.max(0, level)), muted: muted === true } : null;
+}
+
+function rememberMix(row: MixRow) {
+  if (row.id !== 'mic' && row.id !== MASTER) return;
+  const raw = store.get(storedMixAtom);
+  store.set(storedMixAtom, { ...(raw && typeof raw === 'object' ? raw : {}), [row.id]: { level: row.level, muted: row.muted } });
+}
+
+function addMixRow(id: string, label: string, track: MediaStreamTrack) {
+  if (!mixer) return;
+  const kept = keptMix(id);
+  const row: MixRow = { id, label, level: kept?.level ?? 1, muted: kept?.muted ?? false };
+  mixer.add(id, track, row.level, row.muted);
+  store.set(mixRowsAtom, [...store.get(mixRowsAtom).filter((r) => r.id !== id), row]);
+}
+
+function removeMixRow(id: string) {
+  mixer?.remove(id);
+  store.set(
+    mixRowsAtom,
+    store.get(mixRowsAtom).filter((r) => r.id !== id)
+  );
+}
+
+function setMixRow(id: string, change: (row: MixRow) => MixRow) {
+  if (id === MASTER) {
+    const row = change(store.get(masterRowAtom));
+    store.set(masterRowAtom, row);
+    mixer?.setMaster(row.level, row.muted);
+    rememberMix(row);
+    return;
+  }
+  const rows = store.get(mixRowsAtom);
+  const row = rows.find((r) => r.id === id);
+  if (!row) return;
+  const next = change(row);
+  store.set(
+    mixRowsAtom,
+    rows.map((r) => (r.id === id ? next : r))
+  );
+  const source = mixer?.source(id);
+  source?.setLevel(next.level);
+  source?.setMuted(next.muted);
+  rememberMix(next);
+}
+
+/** A fader moved: `level` is the slider's place, 0..1 (the gain is its cube, `mixer.ts`). */
+export function setMixLevel(id: string, level: number) {
+  setMixRow(id, (row) => ({ ...row, level: Math.min(1, Math.max(0, level)) }));
+}
+
+export function setMixMuted(id: string, muted: boolean) {
+  setMixRow(id, (row) => ({ ...row, muted }));
+}
+
+/** A row's bar right now, 0..1: the mixer's reading for the mic, a tab or the master. 0 with no mixer. */
+export function readMixLevel(id: string, now: number): number {
+  if (!mixer) return 0;
+  return id === MASTER ? mixer.master.read(now) : (mixer.source(id)?.level.read(now) ?? 0);
+}
+
+/** The master clipped in the last second: the mix is too hot. */
+export function mixClipping(now: number): boolean {
+  return mixer?.clipping(now) ?? false;
+}
+
+/** The mic chip's reader while the mixer is up. */
+export const micLevelReader = (now: number) => readMixLevel('mic', now);
+
+/** The `sound paused` button: a click, so the context may run again. */
+export async function resumeMixer(): Promise<void> {
+  await mixer?.resume().catch(() => undefined);
+  store.set(mixerRunningAtom, mixer?.running ?? true);
+}
+
+const checkMixer = () => store.set(mixerRunningAtom, mixer?.running ?? true);
+let mixerWatched = false;
+
+/** The context's state, now and when it may have changed: a stream gone silent because the browser paused the mix says so. */
+function watchMixer() {
+  checkMixer();
+  if (!mixer || mixerWatched) return;
+  // the moments it changes are a tab shown again and a click; one listener for the life of the mixer (`endLive` takes it off)
+  mixerWatched = true;
+  document.addEventListener('visibilitychange', checkMixer);
+  setTimeout(checkMixer, 500);
+}
+
+function unwatchMixer() {
+  if (!mixerWatched) return;
+  mixerWatched = false;
+  document.removeEventListener('visibilitychange', checkMixer);
+}
+
+/** Tell video what is live where, for the watchers: the camera, then each shared screen, and the scene they are laid out in. */
 function announceSlots() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const screens: SlotInfo[] = store.get(screensAtom).map((s) => ({ slot: s.slot + 1, kind: 'screen', label: s.label }));
   const slots: SlotInfo[] = [{ slot: 0, kind: 'camera' }, ...screens];
-  const layout = store.get(layoutAtom);
-  record('/ws', 'out', { slots, layout });
-  ws.send(JSON.stringify({ slots, layout }));
+  const scene = store.get(sceneAtom);
+  record('/ws', 'out', { slots, scene });
+  ws.send(JSON.stringify({ slots, scene }));
+}
+
+/** The camera's encode shrunk to its box: 1280 wide, over a frame at most 1920 wide, so `0.667 / w` is enough, in steps and never past 4. */
+function cameraScale(w: number): number {
+  const want = Math.min(4, Math.max(1, 0.667 / Math.max(w, 0.05)));
+  return CAMERA_SCALES.filter((s) => s <= want + 1e-6).pop() ?? 1;
 }
 
 /**
- * The upload, divided: the camera steps back while a screen is shared, the screens share their
- * part. A screen is letters and ui: when the uplink or the cpu gets tight its encoder keeps the
- * pixels and drops frames (`maintain-resolution`), for as long as the slot has a track, and the
- * preference goes when the slot is emptied. The camera is left to the browser's default, so a
- * face keeps its frames.
+ * The upload, divided by the scene. The stage, the biggest picture on the stream, gets the
+ * budget: a screen there has the screens' 3 Mbps less a little for each other screen, the
+ * camera there its full 2.5. The camera in a corner is sent as small as its box, with the bits
+ * that is worth; off the stream (a tile) it is sent small too. Other screens get a little each
+ * at half the frames. A screen is letters and ui: when the uplink or the cpu gets tight its
+ * encoder keeps the pixels and drops frames (`maintain-resolution`) for as long as the slot has
+ * a track, and the preference goes when the slot is emptied. The camera is left to the browser's
+ * default, so a face keeps its frames.
  */
 async function tuneSenders() {
-  const sharing = store.get(screensAtom).length;
-  await tune(cameraSender, sharing ? CAMERA_SHARING_BITRATE : VIDEO_MAX_BITRATE);
-  for (const sender of screenSenders) {
-    if (sender.track) await tune(sender, Math.floor(SCREENS_BITRATE / Math.max(1, sharing)), 'maintain-resolution');
-    else await tune(sender, SCREENS_BITRATE);
+  const sources = store.get(sourcesAtom);
+  const screens = store.get(screensAtom);
+  const shown = sources.filter((s) => s.kind !== 'image' && s.shown);
+  const stage = shown.reduce<Source | null>((best, s) => (!best || s.box.w * s.box.h > best.box.w * best.box.h ? s : best), null);
+  const camera = sources.find((s) => s.kind === 'camera');
+  if (!screens.length || stage?.kind === 'camera') {
+    cameraCap = VIDEO_MAX_BITRATE;
+    await tune(cameraSender, { maxBitrate: VIDEO_MAX_BITRATE });
+  } else {
+    const w = camera?.shown ? camera.box.w : 0.5;
+    cameraCap = Math.round(Math.min(CAMERA_SHARING_BITRATE, Math.max(CAMERA_MIN_BITRATE, CAMERA_BPS_PER_WIDTH * w)));
+    await tune(cameraSender, { maxBitrate: cameraCap, scale: cameraScale(w) });
+  }
+  // the stage screen, else the first one shared, carries the budget
+  const stageScreen = stage?.kind === 'screen' ? stage.slot : screens.length ? screens[0]!.slot + 1 : null;
+  for (const [i, sender] of screenSenders.entries()) {
+    if (!sender.track) {
+      await tune(sender, { maxBitrate: SCREENS_BITRATE });
+      continue;
+    }
+    if (i + 1 === stageScreen) await tune(sender, { maxBitrate: SCREENS_BITRATE - SIDE_SCREEN_BITRATE * (screens.length - 1) }, 'maintain-resolution');
+    else await tune(sender, { maxBitrate: SIDE_SCREEN_BITRATE, maxFramerate: SIDE_SCREEN_FPS }, 'maintain-resolution');
   }
 }
 
-async function tune(sender: RTCRtpSender | null, maxBitrate: number, degradation?: RTCDegradationPreference) {
+interface Encoding {
+  maxBitrate: number;
+  /** `scaleResolutionDownBy`: 1 is the capture's own size. */
+  scale?: number;
+  maxFramerate?: number;
+}
+
+async function tune(sender: RTCRtpSender | null, { maxBitrate, scale = 1, maxFramerate }: Encoding, degradation?: RTCDegradationPreference) {
   if (!sender) return;
   const params = sender.getParameters();
   const encoding = params.encodings?.[0];
   if (!encoding) return; // not negotiated yet: the offer's cap holds
   encoding.maxBitrate = maxBitrate;
+  encoding.scaleResolutionDownBy = scale;
+  if (maxFramerate) encoding.maxFramerate = maxFramerate;
+  else delete encoding.maxFramerate;
   if (degradation) params.degradationPreference = degradation;
   else delete params.degradationPreference;
   await sender.setParameters(params).catch(() => undefined);
@@ -502,9 +955,13 @@ export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', {
     clearInterval(heartbeat);
     heartbeat = null;
   }
-  if (layoutTimer) {
-    clearTimeout(layoutTimer);
-    layoutTimer = null;
+  if (sceneTimer) {
+    clearTimeout(sceneTimer);
+    sceneTimer = null;
+  }
+  if (tuneTimer) {
+    clearTimeout(tuneTimer);
+    tuneTimer = null;
   }
   if (abort) {
     abort.abort();
@@ -529,6 +986,14 @@ export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', {
     store.set(streamAtom, null);
   }
   store.set(screensAtom, []);
+  // the screens go from the scene and their sound from the mix; the camera and the pictures stay, for the next start
+  for (const row of store.get(mixRowsAtom)) if (row.id !== 'mic') removeMixRow(row.id);
+  const sources = store.get(sourcesAtom);
+  if (sources.some((s) => s.kind === 'screen')) {
+    store.set(sourcesAtom, arrangedAfterRemove(sources.filter((s) => s.kind !== 'screen')));
+    if (store.get(selectedSourceAtom)?.startsWith('s')) store.set(selectedSourceAtom, null);
+  }
+  cameraCap = VIDEO_MAX_BITRATE;
   cameraSender = null;
   screenSenders = [];
   store.set(liveViewersAtom, null);
@@ -578,11 +1043,21 @@ export function endLive() {
   store.set(publishPipAtom, false);
   liveGeneration++;
   stopLive();
+  // the mix goes before the mic it was reading; the source tracks are the camera's to stop, below
+  unwatchMixer();
+  mixer?.close();
+  mixer = null;
+  store.set(mixerOpenAtom, false);
+  store.set(mixerRunningAtom, true);
+  store.set(mixRowsAtom, []);
   store
     .get(cameraAtom)
     ?.getTracks()
     .forEach((track) => track.stop());
   store.set(cameraAtom, null);
+  store.set(sourcesAtom, []);
+  store.set(selectedSourceAtom, null);
+  store.set(imageStatusAtom, '');
   setPhase('camera-off', 'camera off');
   profileName = loadedBio = '';
   store.set(bioDraftAtom, '');
@@ -610,6 +1085,7 @@ export async function loadProfile(): Promise<void> {
       store.set(myAvatarAtom, null);
       store.set(streamThumbsAtom, []);
       store.set(thumbStatusAtom, '');
+      store.set(libraryAtom, []);
     }
     // the same name again keeps what was loaded for it: a second commit (focus, blur) must not
     // forget the saved bio, or the next name change would take it for typed text and keep it
@@ -627,6 +1103,13 @@ export async function loadProfile(): Promise<void> {
     store.set(streamThumbsAtom, me.thumbs ?? []);
   } catch {
     // nothing saved yet
+  }
+  try {
+    const { assets } = await api.listAssets(name);
+    if (store.get(streamNameAtom) !== name || generation !== liveGeneration) return;
+    store.set(libraryAtom, assets);
+  } catch {
+    // an older api, or nothing put up yet: the + menu offers the upload alone
   }
 }
 

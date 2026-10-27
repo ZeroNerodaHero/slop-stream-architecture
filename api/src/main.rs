@@ -41,6 +41,7 @@ mod events;
 mod follows;
 mod groups;
 mod history;
+mod home;
 mod migrate;
 mod monitor;
 mod presence;
@@ -261,11 +262,11 @@ pub(crate) async fn video_live(s: &AppState) -> Option<HashSet<String>> {
 }
 
 /// The names of `video_live` with how many different addresses are receiving each one
-/// (docs/viewers.md). One call for both, for the home list. None if video cannot be reached.
-async fn video_viewers(s: &AppState) -> Option<HashMap<String, usize>> {
-    let res = s
-        .http
-        .get(format!("{}/viewers", s.video_url))
+/// (docs/viewers.md). One call for both: the home service builds and heals its table from it.
+/// None if video cannot be reached.
+pub(crate) async fn video_viewers(http: &reqwest::Client, video_url: &str) -> Option<HashMap<String, usize>> {
+    let res = http
+        .get(format!("{video_url}/viewers"))
         .send()
         .await
         .map_err(|e| log::warn!("video unreachable: {e}"))
@@ -354,8 +355,10 @@ async fn sweep_once(s: &AppState) -> anyhow::Result<u64> {
     };
     let connected: Vec<String> = connected.into_iter().collect();
     let held = held_sessions(s).await?;
+    // the block ends at the last heartbeat, not at this sweep: the stream was gone within a beat
+    // of it, and the calendar draws the row (docs/calendar.md)
     let ended: Vec<(String, i64)> = sqlx::query_as(
-        "UPDATE sessions SET ended_at = now()
+        "UPDATE sessions SET ended_at = COALESCE(last_beat_at, started_at), ended_by = 'sweep'
          WHERE ended_at IS NULL AND started_at < now() - make_interval(secs => $1)
            AND id <> ALL($2) AND name <> ALL($3)
          RETURNING name, id",
@@ -502,60 +505,100 @@ async fn get_streamer(State(s): State<AppState>, Name(name): Name, me: Me) -> Ap
     })))
 }
 
-async fn list_sessions(State(s): State<AppState>, Name(name): Name) -> ApiResult {
-    let rows: Vec<(i64, DateTime<Utc>, Option<DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT id, started_at, ended_at FROM sessions
-         WHERE name = $1 ORDER BY started_at DESC LIMIT 20",
-    )
-    .bind(&name)
-    .fetch_all(&s.db)
-    .await?;
-    let out = rows.into_iter().map(|(id, started_at, ended_at)| {
-        json!({ "id": id, "name": name, "started_at": started_at, "ended_at": ended_at })
+/// `?from=&to=`, both rfc3339, for the calendar's range. Neither: the last 20, as before.
+#[derive(Deserialize, Default)]
+struct RangeQuery {
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+}
+
+/// The most one calendar request spans: a quarter. The page asks four weeks at a time.
+const RANGE_MAX_DAYS: i64 = 93;
+/// The most rows one range answers. A person live every night for three years is a thousand.
+const RANGE_LIMIT: i64 = 1000;
+
+/// id, name, started_at, ended_at, last_beat_at, ended_by
+type SessionRow = (i64, String, DateTime<Utc>, Option<DateTime<Utc>>, Option<DateTime<Utc>>, Option<String>);
+
+/// The name's sessions: the blocks of its calendar (docs/calendar.md). With a range, every row
+/// overlapping `[from, to)`, oldest first, at most RANGE_LIMIT. A claimed name's are its
+/// account's (`user_id`: a rename keeps them as one list, a stranger's anonymous stream under
+/// the name before it was claimed is not on it); a free name's are the name's. Without a range,
+/// the last 20 newest first, the shape the route has always had. Never the token.
+async fn list_sessions(State(s): State<AppState>, Name(name): Name, q: Result<Query<RangeQuery>, QueryRejection>) -> ApiResult {
+    let Query(q) = q?;
+    // a name held after a rename answers for the name it became (docs/ids.md)
+    let name = auth::renamed_to(&s.db, &name).await?.unwrap_or(name);
+    let range = match (q.from, q.to) {
+        (None, None) => None,
+        (Some(from), Some(to)) if to > from && to - from <= chrono::Duration::days(RANGE_MAX_DAYS) => Some((from, to)),
+        _ => return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad range. from and to, rfc3339, at most 93 days apart")),
+    };
+    let rows: Vec<SessionRow> = match range {
+        None => {
+            sqlx::query_as(
+                "SELECT id, name, started_at, ended_at, last_beat_at, ended_by FROM sessions
+                 WHERE name = $1 ORDER BY started_at DESC LIMIT 20",
+            )
+            .bind(&name)
+            .fetch_all(&s.db)
+            .await?
+        }
+        Some((from, to)) => {
+            let account: Option<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM streamers WHERE name = $1 AND password_hash IS NOT NULL")
+                .bind(&name)
+                .fetch_optional(&s.db)
+                .await?;
+            match account {
+                Some(id) => {
+                    sqlx::query_as(
+                        "SELECT id, name, started_at, ended_at, last_beat_at, ended_by FROM sessions
+                         WHERE user_id = $1 AND started_at < $3 AND (ended_at IS NULL OR ended_at > $2)
+                         ORDER BY started_at LIMIT $4",
+                    )
+                    .bind(id)
+                    .bind(from)
+                    .bind(to)
+                    .bind(RANGE_LIMIT)
+                    .fetch_all(&s.db)
+                    .await?
+                }
+                None => {
+                    sqlx::query_as(
+                        "SELECT id, name, started_at, ended_at, last_beat_at, ended_by FROM sessions
+                         WHERE name = $1 AND started_at < $3 AND (ended_at IS NULL OR ended_at > $2)
+                         ORDER BY started_at LIMIT $4",
+                    )
+                    .bind(&name)
+                    .bind(from)
+                    .bind(to)
+                    .bind(RANGE_LIMIT)
+                    .fetch_all(&s.db)
+                    .await?
+                }
+            }
+        }
+    };
+    let out = rows.into_iter().map(|(id, name, started_at, ended_at, last_beat_at, ended_by)| {
+        json!({ "id": id, "name": name, "started_at": started_at, "ended_at": ended_at, "last_beat_at": last_beat_at, "ended_by": ended_by })
     });
     Ok(Json(Value::Array(out.collect())))
 }
 
-/// name, bio, since, verified, avatar version
-type StreamRow = (String, String, Option<DateTime<Utc>>, bool, Option<i64>);
-
-async fn list_streams(State(s): State<AppState>) -> ApiResult {
-    // video's /viewers is its /live with a count per name, so the home list asks that once.
-    // without video the names come from redis and `viewers` is null: nobody knows
-    let counts = video_viewers(&s).await;
-    let names: Vec<String> = match &counts {
-        Some(counts) => counts.keys().cloned().collect(),
-        None => redis_live(&s).await?,
-    };
-    if names.is_empty() {
-        return Ok(Json(json!([])));
-    }
-
-    // verified is the session's, not the name's: an account that signs up while a
-    // stranger streams anonymously under its name must not put a ✓ on that stream
-    let rows: Vec<StreamRow> = sqlx::query_as(
-        "SELECT n.name, COALESCE(st.bio, '') AS bio, s.started_at, COALESCE(s.verified, false) AS verified,
-                (EXTRACT(EPOCH FROM st.avatar_at))::bigint AS avatar
-         FROM unnest($1::text[]) AS n(name)
-         LEFT JOIN streamers st ON st.name = n.name
-         LEFT JOIN LATERAL (
-             SELECT started_at, verified FROM sessions
-             WHERE name = n.name AND ended_at IS NULL
-             ORDER BY started_at DESC LIMIT 1
-         ) s ON true
-         ORDER BY s.started_at DESC NULLS LAST, n.name",
-    )
-    .bind(&names)
-    .fetch_all(&s.db)
-    .await?;
-    // oldest first. empty means the card shows the camera, which is what a stream with none has always done
-    let thumbs = profile::thumb_ids(&s.db, &names).await?;
-    let out = rows.into_iter().map(|(name, bio, since, verified, avatar)| {
-        let pictures = thumbs.get(&name).cloned().unwrap_or_default();
-        let viewers = counts.as_ref().map(|c| c.get(&name).copied().unwrap_or(0));
-        json!({ "name": name, "bio": bio, "since": since, "verified": verified, "avatar": avatar, "thumbs": pictures, "viewers": viewers })
-    });
-    Ok(Json(Value::Array(out.collect())))
+/// What a home card draws for a live name, as the `live` fact carries it (docs/status.md): the
+/// session's ✓ (not the name's: an account that signs up while a stranger streams anonymously
+/// under its name must not put a ✓ on that stream), the profile's picture and bio, and the
+/// pictures the streamer put on the card. `GET /api/streams`, the home service's snapshot,
+/// joins the same fields from postgres per answer.
+async fn card_of(s: &AppState, name: &str, session: i64) -> Result<Value, ApiError> {
+    let verified: Option<bool> = sqlx::query_scalar("SELECT verified FROM sessions WHERE id = $1")
+        .bind(session)
+        .fetch_optional(&s.db)
+        .await?;
+    let p = profile::load_profile(&s.db, name).await?;
+    let names = [name.to_owned()];
+    let thumbs = profile::thumb_ids(&s.db, &names).await?.remove(name).unwrap_or_default();
+    Ok(json!({ "verified": verified.unwrap_or(false), "avatar": p.avatar, "bio": p.bio, "thumbs": thumbs }))
 }
 
 async fn go_live(
@@ -619,9 +662,11 @@ async fn go_live(
             .await?;
         return Err(ApiError::already_live());
     }
-    // We own the name now. Anything older that still looks open is over.
+    // We own the name now. Anything older that still looks open is over, and was over at its
+    // last heartbeat: the same judgement as the sweeper's, a row nobody holds.
     sqlx::query(
-        "UPDATE sessions SET ended_at = now() WHERE name = $1 AND ended_at IS NULL AND id <> $2",
+        "UPDATE sessions SET ended_at = COALESCE(last_beat_at, started_at), ended_by = 'sweep'
+         WHERE name = $1 AND ended_at IS NULL AND id <> $2",
     )
     .bind(&name)
     .bind(id)
@@ -670,8 +715,31 @@ async fn attached(
         .bind(owner.session)
         .fetch_optional(&s.db)
         .await?;
-    presence::publish_live(&mut r, &name, since.map_or_else(presence::now_ms, |t| t.timestamp_millis()), owner.session).await;
+    let card = card_of(&s, &name, owner.session).await?;
+    presence::publish_live(&mut r, &name, since.map_or_else(presence::now_ms, |t| t.timestamp_millis()), owner.session, &card).await;
     log::info!("{name}: video has the publisher, session {}", owner.session);
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `?session=&token=&viewers=`: the stream's grant and how many are receiving it.
+#[derive(Deserialize)]
+struct ViewersQuery {
+    session: i64,
+    token: i64,
+    viewers: usize,
+}
+
+/// How many different addresses are receiving the stream, from video, whenever the number
+/// moves (docs/viewers.md: video counts once ICE and DTLS are done, and says so at most once a
+/// second per stream). A fact for the name's watchers and for home (docs/status.md); nothing
+/// is stored here, the home service keeps the latest in its table.
+async fn viewers(State(s): State<AppState>, Name(name): Name, q: Result<Query<ViewersQuery>, QueryRejection>) -> ApiResult {
+    let Query(q) = q?;
+    let owner = Owner { session: q.session, token: q.token };
+    if !owns_session(&s.db, &name, &owner).await? {
+        return Err(ApiError::not_yours());
+    }
+    presence::publish_viewers(&mut s.redis.clone(), &name, owner.session, q.viewers).await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -681,8 +749,19 @@ async fn heartbeat(
     owner: Result<Query<Owner>, QueryRejection>,
 ) -> ApiResult {
     let Query(owner) = owner?;
-    // Session ids are guessable. The token is not. Check both every time.
-    if !owns_session(&s.db, &name, &owner).await? {
+    // Session ids are guessable. The token is not. Check both every time. The check is the
+    // write of the beat's time (docs/calendar.md): the same row, the same round trip, and a
+    // row that vanishes without stop is later ended where this last landed.
+    let beat = sqlx::query(
+        "UPDATE sessions SET last_beat_at = now()
+         WHERE id = $1 AND token = $2 AND name = $3 AND ended_at IS NULL",
+    )
+    .bind(owner.session)
+    .bind(owner.token)
+    .bind(&name)
+    .execute(&s.db)
+    .await?;
+    if beat.rows_affected() == 0 {
         return Err(ApiError::not_yours());
     }
 
@@ -707,25 +786,39 @@ async fn heartbeat(
                 .bind(owner.session)
                 .fetch_optional(&s.db)
                 .await?;
-            presence::publish_live(&mut r, &name, since.map_or_else(presence::now_ms, |t| t.timestamp_millis()), owner.session).await;
+            let card = card_of(&s, &name, owner.session).await?;
+            presence::publish_live(&mut r, &name, since.map_or_else(presence::now_ms, |t| t.timestamp_millis()), owner.session, &card).await;
             Ok(Json(json!({ "ok": true, "reclaimed": true })))
         }
     }
 }
 
+/// `stop`'s query: the grant, and who is saying it. `by=video` is video's call when the
+/// publisher's peer went; anything else, or nothing, is the page. A word for the record
+/// (`sessions.ended_by`, docs/calendar.md), not a right: the grant is what is checked.
+#[derive(Deserialize)]
+struct StopQuery {
+    session: i64,
+    token: i64,
+    by: Option<String>,
+}
+
 async fn stop(
     State(s): State<AppState>,
     Name(name): Name,
-    owner: Result<Query<Owner>, QueryRejection>,
+    q: Result<Query<StopQuery>, QueryRejection>,
 ) -> ApiResult {
-    let Query(owner) = owner?;
+    let Query(q) = q?;
+    let owner = Owner { session: q.session, token: q.token };
+    let by = if q.by.as_deref() == Some("video") { "video" } else { "stop" };
     let done = sqlx::query(
-        "UPDATE sessions SET ended_at = now()
+        "UPDATE sessions SET ended_at = now(), ended_by = $4
          WHERE id = $1 AND token = $2 AND name = $3 AND ended_at IS NULL",
     )
     .bind(owner.session)
     .bind(owner.token)
     .bind(&name)
+    .bind(by)
     .execute(&s.db)
     .await?;
     if done.rows_affected() == 0 {
@@ -773,11 +866,12 @@ fn router(state: AppState) -> Router {
         .merge(presence::routes())
         .merge(debug::routes())
         .route("/api/health", get(health))
-        .route("/api/streams", get(list_streams))
+        // `GET /api/streams`, the home list, is the home service's (`api home`, home.rs): caddy sends it there
         .route("/api/streamers/{name}", get(get_streamer).put(put_streamer))
         .route("/api/streamers/{name}/sessions", get(list_sessions))
         .route("/api/streams/{name}/go-live", post(go_live))
         .route("/api/streams/{name}/attached", post(attached))
+        .route("/api/streams/{name}/viewers", post(viewers))
         .route("/api/streams/{name}/heartbeat", post(heartbeat))
         .route("/api/streams/{name}/stop", post(stop))
         .route("/api/streams/{name}/watch", post(watch))
@@ -858,7 +952,14 @@ async fn main() {
         return;
     }
 
-    // chat and events returned above and do not create tables. this process does, from api/migrations.
+    // `api home` is the home list: every live stream and its viewers in memory, from the facts. same binary, see home.rs
+    if env::args().nth(1).as_deref() == Some("home") {
+        let port = env::var("PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(4100);
+        home::run(db, &redis_url, &video_url, port).await.expect("home");
+        return;
+    }
+
+    // chat, events and home returned above and do not create tables. this process does, from api/migrations.
     migrate::run(&db).await.expect("migrations");
 
     // `api passwd <name>`: a new random password, printed once. see auth.rs

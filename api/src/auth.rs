@@ -576,8 +576,10 @@ async fn change_password(
 /// caller's early return rolls the transaction back.
 pub(crate) async fn take_free_row(conn: &mut PgConnection, free: Uuid, me: Uuid, new: &str) -> Result<Vec<String>, ApiError> {
     let thumbs: Vec<i64> = sqlx::query_scalar("SELECT id FROM stream_thumbs WHERE name = $1").bind(new).fetch_all(&mut *conn).await?;
-    let orphaned = profile::picture_keys(free, &thumbs);
+    let assets: Vec<(i64, String)> = sqlx::query_as("SELECT id, mime FROM stream_assets WHERE name = $1").bind(new).fetch_all(&mut *conn).await?;
+    let orphaned = profile::picture_keys(free, &thumbs, &assets);
     sqlx::query("DELETE FROM stream_thumbs WHERE name = $1").bind(new).execute(&mut *conn).await?;
+    sqlx::query("DELETE FROM stream_assets WHERE name = $1").bind(new).execute(&mut *conn).await?;
     // the name's followers are mine now, from when they followed. not my own edge to it (no
     // self edges), and one who follows me already keeps the one edge
     sqlx::query(
@@ -678,6 +680,7 @@ async fn change_name(
         Err(e) => return Err(e.into()),
     };
     sqlx::query("UPDATE stream_thumbs SET name = $2 WHERE name = $1").bind(&me.name).bind(&new).execute(&mut *tx).await?;
+    sqlx::query("UPDATE stream_assets SET name = $2 WHERE name = $1").bind(&me.name).bind(&new).execute(&mut *tx).await?;
     // going back to a name of mine ends its hold; the name I leave is held from now
     sqlx::query("DELETE FROM held_names WHERE name = $1 AND user_id = $2").bind(&new).bind(me.id).execute(&mut *tx).await?;
     sqlx::query(
@@ -748,7 +751,7 @@ fn random_password() -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// The pages stop re-sending a refused nick only when the error matches `/nick|account|fake/`
@@ -762,8 +765,8 @@ mod tests {
 
     /// A throwaway postgres, migrated. For example
     /// `docker run -d --name test-pg -e POSTGRES_PASSWORD=x -e POSTGRES_DB=t -p 55434:5432 postgres:17-alpine`
-    /// and `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t`.
-    async fn test_db() -> PgPool {
+    /// and `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t`. follows.rs's tests use it too.
+    pub(crate) async fn test_db() -> PgPool {
         let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL: the postgres to run this against");
         let pool = sqlx::postgres::PgPoolOptions::new().max_connections(2).connect(&url).await.expect("connect");
         crate::migrate::run(&pool).await.expect("migrate");
@@ -771,7 +774,7 @@ mod tests {
     }
 
     /// A row with a hash is an account; without one, a name somebody used (a follow, a bio).
-    async fn row(pool: &PgPool, name: &str, hash: Option<&str>) -> Uuid {
+    pub(crate) async fn row(pool: &PgPool, name: &str, hash: Option<&str>) -> Uuid {
         sqlx::query_scalar("INSERT INTO streamers (name, password_hash) VALUES ($1, $2) RETURNING id")
             .bind(name)
             .bind(hash)
@@ -790,7 +793,7 @@ mod tests {
             .expect("an edge");
     }
 
-    async fn edges_of(pool: &PgPool, follower: Uuid) -> Vec<(Uuid, DateTime<Utc>)> {
+    pub(crate) async fn edges_of(pool: &PgPool, follower: Uuid) -> Vec<(Uuid, DateTime<Utc>)> {
         sqlx::query_as("SELECT followed_id, followed_at FROM follows WHERE follower_id = $1")
             .bind(follower)
             .fetch_all(pool)
@@ -823,7 +826,7 @@ mod tests {
         sqlx::query("UPDATE streamers SET name = $2 WHERE id = $1").bind(alice).bind(&name).execute(&mut *tx).await.unwrap();
         tx.commit().await.unwrap();
 
-        assert_eq!(orphaned, profile::picture_keys(nova, &[]));
+        assert_eq!(orphaned, profile::picture_keys(nova, &[], &[]));
         // fan's one edge points at alice now, from when it was made
         assert_eq!(edges_of(&pool, fan).await, vec![(alice, then)]);
         // one edge for somebody who followed alice already, the one they had

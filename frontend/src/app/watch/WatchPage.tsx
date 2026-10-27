@@ -1,15 +1,14 @@
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef } from 'react';
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import {
   avatarAtom,
   bioAtom,
-  cameraOverlaidAtom,
   canHearAtom,
   canRetryAtom,
+  clearChoice,
   followersAtom,
-  layoutAtom,
   leaveWatchPage,
   markAutoplayBlocked,
   markPlaying,
@@ -18,12 +17,15 @@ import {
   offlineAtom,
   offlineNoteAtom,
   pickSlot,
+  primarySlotAtom,
   remoteStreamAtom,
   retry,
+  sceneTileAtom,
   slotLabel,
   slotStreamAtom,
   startPip,
   tilesAtom,
+  watchLayersAtom,
   unmuteVideo,
   verifiedAtom,
   volumeAtom,
@@ -40,24 +42,26 @@ import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceO
 import { publishPipAtom } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
+import { demoAbout } from '@/infra/about';
 import { api } from '@/infra/api';
 import { cleanName, isDummyName } from '@/infra/names';
 import { store } from '@/infra/store';
+import { About } from '@/shared-components/About';
 import { Avatar } from '@/shared-components/Avatar';
+import { Calendar } from '@/shared-components/Calendar';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { Button } from '@/shared-components/Button';
-import { CameraOverlay } from '@/shared-components/CameraOverlay';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
 import { panelClassName } from '@/shared-components/Panel';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { SceneView } from '@/shared-components/SceneView';
 import { StatusLine } from '@/shared-components/StatusLine';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { StreamTile } from '@/shared-components/StreamTile';
 import { TestBadge } from '@/shared-components/TestBadge';
 import { IconButton, PipIcon, SoundControl, revealClassName } from '@/shared-components/VideoControls';
-import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
 
 /** The sentence under the word while they are not live: why to wait, or not. */
@@ -68,7 +72,27 @@ const NOT_LIVE_WORDS: Record<Presence, string> = {
   streaming: 'starting'
 };
 
+/** Under the player: their page (docs/about.md), and when they stream (docs/calendar.md). In this order. */
+type WatchTab = 'about' | 'calendar';
+const WATCH_TABS: readonly WatchTab[] = ['about', 'calendar'];
+const TAB_STEP: Record<string, number | undefined> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+
+/** Arrows move the focus along the tabs and open the one landed on; Home and End go to the ends. The user modal's tabs do the same. */
+function roveTabs(e: KeyboardEvent<HTMLDivElement>) {
+  const tabs = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+  const i = tabs.indexOf(e.target as HTMLButtonElement);
+  if (i < 0) return;
+  const step = TAB_STEP[e.key];
+  const next = step !== undefined ? (i + step + tabs.length) % tabs.length : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : -1;
+  const button = tabs[next];
+  if (next < 0 || !button) return;
+  e.preventDefault();
+  button.click();
+  button.focus();
+}
+
 export function WatchPage() {
+  const [tab, setTab] = useState<WatchTab>('about');
   const params = useParams<{ name: string }>();
   const navigate = useNavigate();
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -90,8 +114,9 @@ export function WatchPage() {
   const phase = useAtomValue(watchPhaseAtom);
   const presence = useAtomValue(presenceOfAtom(name));
   const tiles = useAtomValue(tilesAtom);
-  const layout = useAtomValue(layoutAtom);
-  const overlaid = useAtomValue(cameraOverlaidAtom);
+  const layers = useAtomValue(watchLayersAtom);
+  const primary = useAtomValue(primarySlotAtom);
+  const sceneTile = useAtomValue(sceneTileAtom);
   const viewers = useAtomValue(watchViewersAtom);
   const renamedTo = useAtomValue(watchRenamedToAtom);
   // the layout setting: a column on the left, a column on the right, or a window over the page.
@@ -102,6 +127,8 @@ export function WatchPage() {
   // page), this stream cannot go there too, and the button says so. the other way round, start
   // on the go live page ends a stream kept in the corner (publish-atoms' goLive)
   const cornerTaken = useAtomValue(publishPipAtom);
+  // the about tab's sample document, until there is a real one to ask for (docs/about.md)
+  const about = useMemo(() => demoAbout(name, { offline, thumbs: [] }), [name, offline]);
 
   // Mount only: start watching the name in the url (or take back the stream picture in picture
   // kept alive), and on the way out stop, unless picture in picture keeps it going in the corner.
@@ -219,17 +246,25 @@ export function WatchPage() {
             </>
           ) : (
             <div className="group relative">
-              <VideoFrame
-                id="video"
-                streamAtom={remoteStreamAtom}
-                videoRef={videoRef}
-                muted={muted}
-                volume={volume}
-                onPlaying={markPlaying}
-                onAutoplayBlocked={markAutoplayBlocked}
+              {/* the streamer's frame as they laid it out (docs/screen.md): `#video`, the one with the sound,
+                  stands in for the bottom video layer; a video layer clicked is shown alone */}
+              <SceneView
+                id="scene"
+                layers={layers}
+                streamFor={slotStreamAtom}
+                imageUrl={(asset) => api.assetUrl(name, asset)}
+                main={{
+                  id: 'video',
+                  streamAtom: remoteStreamAtom,
+                  videoRef,
+                  slot: primary,
+                  muted,
+                  volume,
+                  onPlaying: markPlaying,
+                  onAutoplayBlocked: markAutoplayBlocked
+                }}
+                onPick={pickSlot}
               />
-              {/* the camera over a shared screen, where the streamer put it; a click makes it the big one */}
-              {overlaid && layout && <CameraOverlay id="camera-overlay" streamAtom={slotStreamAtom(0)} layout={layout} onPick={() => pickSlot(0)} />}
               {needsTap && (
                 <Button
                   id="tap-to-play"
@@ -254,10 +289,21 @@ export function WatchPage() {
               )}
             </div>
           )}
-          {/* the streamer's other pictures while a screen is shared: the camera beside the screen,
-              or the other way round. click one and it is the big one; the sound stays put */}
-          {tiles.length > 0 && (
+          {/* the streamer's pictures that are not in the frame (left beside it, or the frame set aside for one
+              pulled out of it): click one and it is the big one; the sound stays put. `the stream` puts the
+              streamer's frame back when no picture of theirs can */}
+          {(tiles.length > 0 || sceneTile) && (
             <div id="tiles" className="mt-2 flex gap-2 overflow-x-auto">
+              {sceneTile && (
+                <button
+                  id="tile-scene"
+                  type="button"
+                  onClick={clearChoice}
+                  className="flex aspect-video w-40 shrink-0 items-center justify-center border border-dashed border-secondaryStroke text-sm text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-textPrimary"
+                >
+                  back to the stream
+                </button>
+              )}
               {tiles.map((tile) => (
                 <StreamTile key={tile.slot} id={`tile-${tile.slot}`} streamAtom={slotStreamAtom(tile.slot)} label={slotLabel(tile)} onPick={() => pickSlot(tile.slot)} />
               ))}
@@ -283,17 +329,54 @@ export function WatchPage() {
           </ChatSlot>
         )}
 
-        {bio && (
-          <p
-            id="bio"
-            className={cn(
-              'mt-4 whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]',
-              chatSide === 'right' && 'lg:col-start-1 lg:mt-0',
-              chatSide === 'left' && 'lg:col-start-2 lg:row-start-2 lg:mt-0'
-            )}
+        {/* under the player, where the bio alone used to be: the about tab (the bio, then the page of
+            their own, docs/about.md) and the calendar (when they stream, docs/calendar.md). the strip
+            is only in the page while its tab is open: no request until somebody looks */}
+        {name && phase !== 'bad-name' && (
+          <div
+            id="watch-tabs"
+            className={cn('mt-4 min-w-0', chatSide === 'right' && 'lg:col-start-1 lg:mt-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-2 lg:mt-0')}
           >
-            {bio}
-          </p>
+            <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className="flex gap-1 border-b border-primaryStroke">
+              {WATCH_TABS.map((t) => {
+                const on = t === tab;
+                return (
+                  <button
+                    key={t}
+                    id={`tab-${t}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    aria-controls={on ? `panel-${t}` : undefined}
+                    tabIndex={on ? 0 : -1}
+                    onClick={() => setTab(t)}
+                    className={cn(
+                      '-mb-px border-b-2 px-3 py-1.5 font-semibold leading-tight transition-colors duration-150',
+                      on
+                        ? 'border-primaryBlue bg-backgroundTertiary text-textPrimary'
+                        : 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary'
+                    )}
+                  >
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+            <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} className="pt-4">
+              {tab === 'about' ? (
+                <>
+                  {bio && (
+                    <p id="bio" className="mb-4 whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]">
+                      {bio}
+                    </p>
+                  )}
+                  <About name={name} doc={about} />
+                </>
+              ) : (
+                <Calendar name={name} />
+              )}
+            </div>
+          </div>
         )}
       </div>
     </PageFrame>

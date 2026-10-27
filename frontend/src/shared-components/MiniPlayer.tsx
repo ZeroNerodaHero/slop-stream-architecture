@@ -18,31 +18,31 @@ import {
 import { friendsOpenAtom } from '@/infra/atoms/follow-atoms';
 import { pipChatPlaceAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import {
-  cameraOverlaidAtom,
   canHearAtom,
   endWatch,
-  layoutAtom,
   markAutoplayBlocked,
   markPlaying,
   mutedAtom,
   needsTapAtom,
   pickSlot,
   pipAtom,
+  primarySlotAtom,
   remoteStreamAtom,
   slotStreamAtom,
   unmuteVideo,
   volumeAtom,
+  watchLayersAtom,
   watchMessageAtom,
   watchNameAtom,
   watchStatsAtom,
   watchToneAtom,
   watchViewersAtom
 } from '@/infra/atoms/watch-atoms';
+import { api } from '@/infra/api';
 import { cleanName } from '@/infra/names';
 import { cn } from '@/utils/cn';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
-import { CameraOverlay } from '@/shared-components/CameraOverlay';
 import { CORNER_BADGE, CORNER_BADGE_2, CornerPlayer } from '@/shared-components/CornerPlayer';
 import { MicMeter } from '@/shared-components/MicMeter';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
@@ -91,8 +91,8 @@ function WatchCorner() {
   const canHear = useAtomValue(canHearAtom);
   const needsTap = useAtomValue(needsTapAtom);
   const viewers = useAtomValue(watchViewersAtom);
-  const layout = useAtomValue(layoutAtom);
-  const overlaid = useAtomValue(cameraOverlaidAtom);
+  const layers = useAtomValue(watchLayersAtom);
+  const primary = useAtomValue(primarySlotAtom);
   const pipChat = useAtomValue(pipChatPlaceAtom);
   const cornerChat = useAtomValue(cornerChatAtom);
   const { pathname } = useLocation();
@@ -129,8 +129,8 @@ function WatchCorner() {
           </Button>
         )
       }
-      // the camera over a shared screen, as on the page: the corner shows the big picture only, so without this the face would be gone
-      overlay={overlaid && layout && <CameraOverlay id="pip-camera-overlay" streamAtom={slotStreamAtom(0)} layout={layout} onPick={() => pickSlot(0)} />}
+      // the streamer's frame, as on the page: the corner would otherwise show the big picture alone, and a face in a corner of it would be gone
+      scene={{ layers, slot: primary, streamFor: slotStreamAtom, imageUrl: (asset) => api.assetUrl(name, asset), onPick: pickSlot }}
       badge={canHear && <StreamStatsButton id="pip-stats" role="watch" stats={stats} className={CORNER_BADGE} playback={{ muted, level: volume }} />}
       bar={canHear && <SoundControl videoRef={videoRef} buttonId="pip-unmute" dialId="pip-volume" dialClassName="w-20" />}
       barShown={muted}

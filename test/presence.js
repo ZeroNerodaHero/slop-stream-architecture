@@ -79,6 +79,13 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
   w.on('request', (r) => {
     if (r.method() === 'POST' && new RegExp(`/api/streams/${NAME}/watch$`).test(r.url())) watchCalls++;
   });
+  // a home page in the watcher's browser: one GET /api/streams on arrival, the cards by push from then on (docs/status.md)
+  const h = await ctxB.newPage();
+  let listCalls = 0;
+  h.on('request', (r) => {
+    if (r.method() === 'GET' && /\/api\/streams(\?|$)/.test(r.url())) listCalls++;
+  });
+  const card = `#list article a[aria-label="watch ${NAME}"]`;
 
   await step(`preflight: ${NAME} is offline and not live`, async () => {
     const streams = await (await api.get('/api/streams')).json();
@@ -106,6 +113,17 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     const flashed = await w.evaluate(() => window.__videoSeen);
     expect(flashed === 0, `a player appeared ${flashed} time(s) while nobody is live`);
     return `${watchCalls} call(s) in all, no player`;
+  });
+
+  await step(`home: one GET /api/streams on arrival, none in the 6s after (the old poll would make 2), no card for ${NAME}`, async () => {
+    await h.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await h.waitForSelector('#list, #empty', { timeout: 15000 });
+    await h.waitForFunction(() => !document.querySelector('#loading'), null, { timeout: 15000 });
+    const before = listCalls;
+    await sleep(6000);
+    expect(listCalls === before, `home asked /api/streams ${listCalls - before} more time(s) in 6s`);
+    expect((await h.$(card)) === null, `a card for ${NAME} is on home while they are offline`);
+    return `${listCalls} call(s) in all`;
   });
 
   await step(`a tab as ${NAME}: the api says online within 5s, the square is green, the watcher is told`, async () => {
@@ -165,9 +183,21 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     return `${asked} watch call(s)`;
   });
 
-  await step('stop: the watcher sees ended and the word goes back to do not disturb', async () => {
+  await step(`home: the card for ${NAME} arrives by push, with its ✓ absent and a viewer count, and no new GET /api/streams`, async () => {
+    const before = listCalls;
+    await h.waitForSelector(card, { timeout: 10000 });
+    expect(listCalls === before, `home asked /api/streams again (${before} -> ${listCalls}) to learn of the stream`);
+    // the watcher is one address receiving it: video says so within a second or two, pushed through the api
+    await h.waitForSelector(`#viewers-${NAME}[data-viewers="1"]`, { timeout: 10000 });
+    return `card pushed, ${listCalls} list call(s) in all`;
+  });
+
+  await step('stop: the watcher sees ended, the home card goes by push, and the word goes back to do not disturb', async () => {
+    const before = listCalls;
     await a.click('#stop');
     await w.waitForFunction(() => /ended/.test(document.querySelector('#status')?.textContent || ''), null, { timeout: 15000 });
+    await h.waitForSelector(card, { state: 'detached', timeout: 10000 });
+    expect(listCalls === before, `home asked /api/streams again (${before} -> ${listCalls}) to learn of the stop`);
     await shownIs(w, '#presence', 'dnd', 5000);
     await presenceIs(NAME, 'dnd', 5000);
   });

@@ -1,6 +1,6 @@
 # audio
 
-a plan, not a build. two things on the stream that already exists.
+a plan, partly built. two things on the stream that already exists. the mix in the page is built (`screen.md`, `infra/mixer.ts`): the mic and each shared tab's sound through faders into one opus, the audio section always offered so a sound can join later; the rest of this file is still the plan.
 
 you can go live with no camera: a mic, or the sound of a tab. and while you are live you can open a few spots, a number you pick, so other people on the watch page come on with a mic, or with a mic and a camera. off unless you turn it on. `idea.md` still holds: a stream is one person, and a room where everyone sends is a different product. the spots are a small number on your stream, not that room.
 
@@ -8,7 +8,7 @@ you can go live with no camera: a mic, or the sound of a tab. and while you are 
 
 one publisher per name. `video` claims the room from the sections that offer sends, and copies the packets. opus and vp8 are separate; a room does not have to contain a video section for the copy to work (`video/src/main.rs`, `offer_slots`). a second publish of the same name is `someone is already live`.
 
-the page is what demands a camera. go live asks for a camera and a mic, then a camera with no mic, and stops at `no camera` (`publish-atoms.ts`, `startCamera`). the spec's fallback is that one way: no mic, video only. screen share asks for a picture and sets `audio: false`.
+the page is what demands a camera. go live asks for a camera and a mic, then a camera with no mic, and stops at `no camera` (`publish-atoms.ts`, `startCamera`). the spec's fallback is that one way: no mic, video only. `screen or window` asks for a picture and sets `audio: false`; `tab with its sound` asks for the tab's sound too, and gets it on chromium (`screen.md`).
 
 watch stays on `connected, waiting for video` until the `<video>` fires `playing`, which is picture frames (`watch-atoms.ts`). the speaker shows after that. home's card and the thumbnail are a frame of the camera; the thumbnail tap runs on the first video slot only (`thumbs.rs`).
 
@@ -24,7 +24,7 @@ the watch page hears that opus. with no picture coming, the big area is the avat
 
 home shows the avatar, else the still. there is no camera to preview on hover, and no thumbnail for ffmpeg to write. the card does not try.
 
-the sound of a tab or a screen is the same one opus. browsers will not hand that sound over without the picture (`getDisplayMedia` wants a video track), so that path is a screen share with audio, into a screen slot that already exists, and the page sends one opus: the mic, or the share, or the two mixed in the page before they are sent. one host audio section, as today. the share's picture is a screen tile. the camera section can still be empty.
+the sound of a tab or a screen is the same one opus. browsers will not hand that sound over without the picture (`getDisplayMedia` wants a video track), so that path is a screen share with audio, into a screen slot that already exists, and the page sends one opus: the mic, or the share, or the two mixed in the page before they are sent. built: `infra/mixer.ts` is that mix, with a fader and a mute per source and a master, and the share's picture is a layer of the scene. one host audio section, as today, offered even with nothing in it yet. the camera section can still be empty.
 
 no mic and no camera is still not a start.
 

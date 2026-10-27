@@ -10,7 +10,6 @@ import {
   bioDraftAtom,
   bioStatusAtom,
   cameraAtom,
-  cameraOverlaidAtom,
   canShareScreenAtom,
   canStartAtom,
   chatRoomAtom,
@@ -19,8 +18,13 @@ import {
   enterLivePage,
   goLive,
   isPublishingAtom,
-  layoutAtom,
   leaveLivePage,
+  micLevelReader,
+  mixerOpenAtom,
+  moveSource,
+  nudgeSource,
+  previewSlotAtom,
+  previewStreamAtom,
   publishPhaseAtom,
   publishStatsAtom,
   myAvatarAtom,
@@ -28,44 +32,53 @@ import {
   publishMessageAtom,
   publishToneAtom,
   removeAvatar,
+  removeSource,
   removeStreamThumb,
+  reorderSource,
+  resizeSource,
   saveAvatar,
   saveBio,
+  sceneAtom,
   screenShareSupported,
   screensAtom,
   screenStreamAtom,
-  setLayout,
+  selectedSourceAtom,
+  selectSource,
   setStreamName,
   shareScreen,
-  stageStreamAtom,
+  sourcesAtom,
   startCamera,
   startPublishPip,
   stopLive,
-  stopScreen,
   streamNameAtom,
   streamThumbsAtom,
   thumbStatusAtom,
+  toggleSource,
   watchUrlAtom,
   liveViewersAtom
 } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
-import { CAMERA_MAX_W, CAMERA_MIN_W, SCREEN_SLOTS } from '@/infra/relay';
+import { SCREEN_SLOTS } from '@/infra/relay';
 import { store } from '@/infra/store';
 import { Avatar } from '@/shared-components/Avatar';
 import { Button } from '@/shared-components/Button';
-import { CameraOverlay } from '@/shared-components/CameraOverlay';
 import { ChatPanel } from '@/shared-components/ChatPanel';
+import { Mixer } from '@/shared-components/live/Mixer';
+import { Presets } from '@/shared-components/live/Presets';
+import { Sources } from '@/shared-components/live/Sources';
 import { MicMeter } from '@/shared-components/MicMeter';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { panelClassName } from '@/shared-components/Panel';
+import { type SceneEdit, SceneView } from '@/shared-components/SceneView';
 import { StatusLine } from '@/shared-components/StatusLine';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
-import { StreamTile } from '@/shared-components/StreamTile';
 import { IconButton, PipIcon, revealClassName } from '@/shared-components/VideoControls';
-import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
+
+/** A layer's stream on this side: the camera, or a screen slot's own display stream. */
+const streamFor = (slot: number) => (slot === 0 ? cameraAtom : screenStreamAtom(slot - 1));
 
 export function LivePage() {
   const navigate = useNavigate();
@@ -92,10 +105,29 @@ export function LivePage() {
   const chatOpen = useAtomValue(chatModalOpenAtom);
   const screens = useAtomValue(screensAtom);
   const canShare = useAtomValue(canShareScreenAtom);
-  const layout = useAtomValue(layoutAtom);
-  const overlaid = useAtomValue(cameraOverlaidAtom);
+  const scene = useAtomValue(sceneAtom);
+  const sources = useAtomValue(sourcesAtom);
+  const previewSlot = useAtomValue(previewSlotAtom);
+  const selected = useAtomValue(selectedSourceAtom);
+  const mixerOpen = useAtomValue(mixerOpenAtom);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const thumbFileRef = useRef<HTMLInputElement | null>(null);
+
+  // the editor's hooks on the preview: a drag, a corner, the keys. delete takes a picture out and
+  // puts a video source beside (a key must not stop a share); the brackets move through the stack
+  const edit: SceneEdit = {
+    selectedId: selected,
+    onSelect: selectSource,
+    onMove: moveSource,
+    onResize: resizeSource,
+    onNudge: nudgeSource,
+    onKey: (id, what) => {
+      if (what === 'remove') {
+        if (sources.find((s) => s.id === id)?.kind === 'image') removeSource(id);
+        else toggleSource(id);
+      } else reorderSource(id, what === 'forward' ? 'up' : 'down');
+    }
+  };
 
   // Mount only: open the camera (or find it still on, back from the corner), fill the name box,
   // and on the way out leave a stream that is up to the corner player; with nothing on air,
@@ -121,95 +153,43 @@ export function LivePage() {
           closes; a window takes the chat out. */}
       <div className={chatLayoutClass(chatSide, chatOpen)}>
         <div className={cn('min-w-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-1')}>
-          <div className="group relative">
-            {/* what a watcher gets big: the camera, or the first shared screen with the camera over it where
-                it was put. the camera is dragged around in here, and the watchers' players follow */}
-            <VideoFrame id="preview" streamAtom={stageStreamAtom} videoRef={previewRef} muted />
-            {overlaid && <CameraOverlay id="camera-overlay" streamAtom={cameraAtom} layout={layout} onMove={(x, y) => setLayout({ x, y })} />}
-            {/* top left, while the stream is up: the mic, as loud as it is right now; beside it, once live, how
-                the upload is going (up on its own while something limits it, otherwise on hover) */}
-            {publishing && <MicMeter id="live-mic" streamAtom={cameraAtom} />}
-            {(phase === 'live' || phase === 'reconnecting') && <StreamStatsButton id="live-stats" role="publish" stats={stats} className="left-[3.25rem] top-3" />}
-            {/* while the chat is closed the bar stays up, so it can be opened again off the preview. once
-                live, picture in picture beside it: the same button as the watch page's, for your own stream
-                (here any way off the page keeps the stream; the button is the one that says so) */}
-            <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(!chatOpen))}>
-              <ChatOpenButton className="ml-auto" />
-              {publishing && (
-                <IconButton id="live-pip" label="picture in picture" onClick={toCorner}>
-                  <PipIcon />
-                </IconButton>
-              )}
+          {/* the sources beside the preview at lg and up, above it below that (the chat is not a column
+              there either). `items-start`: the sidebar is as tall as it needs, not as tall as the picture */}
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
+            <Sources />
+            <div className="min-w-0 flex-1">
+              <div className="group relative">
+                {/* the frame as every watcher gets it (docs/screen.md): the sources on the stream, laid out
+                    in fractions. taken hold of here; the watchers' players follow within a beat */}
+                <SceneView
+                  id="scene"
+                  layers={scene.layers}
+                  streamFor={streamFor}
+                  imageUrl={(asset) => api.assetUrl(name, asset)}
+                  main={{ id: 'preview', streamAtom: previewStreamAtom, videoRef: previewRef, slot: previewSlot, muted: true }}
+                  edit={edit}
+                />
+                {/* top left, while the stream is up: the mic, as loud as it is right now, read off the mixer once
+                    that is up (the key: a chip mounted before it opens would otherwise keep its own reader);
+                    beside it, once live, how the upload is going (up on its own while something limits it) */}
+                {publishing && <MicMeter key={mixerOpen ? 'mixer' : 'own'} id="live-mic" streamAtom={cameraAtom} read={mixerOpen ? micLevelReader : undefined} />}
+                {(phase === 'live' || phase === 'reconnecting') && <StreamStatsButton id="live-stats" role="publish" stats={stats} className="left-[3.25rem] top-3" />}
+                {/* while the chat is closed the bar stays up, so it can be opened again off the preview. once
+                    live, picture in picture beside it: the same button as the watch page's, for your own stream
+                    (here any way off the page keeps the stream; the button is the one that says so) */}
+                <div className={cn('absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 p-3', revealClassName(!chatOpen))}>
+                  <ChatOpenButton className="ml-auto" />
+                  {publishing && (
+                    <IconButton id="live-pip" label="picture in picture" onClick={toCorner}>
+                      <PipIcon />
+                    </IconButton>
+                  )}
+                </div>
+              </div>
+              <Presets />
+              {publishing && <Mixer />}
             </div>
           </div>
-          {/* the screens being shared, each with its stop (the browser's own "stop sharing" bar works too),
-              and the camera first while the layout keeps it beside the screen: a watcher's tiles */}
-          {screens.length > 0 && (
-            <div id="screens" className="mt-2 flex gap-2 overflow-x-auto">
-              {!overlaid && <StreamTile id="camera-tile" streamAtom={cameraAtom} label="camera" />}
-              {screens.map((screen) => (
-                <StreamTile
-                  key={screen.slot}
-                  id={`screen-${screen.slot}`}
-                  streamAtom={screenStreamAtom(screen.slot)}
-                  label={screen.label}
-                  corner={
-                    <IconButton
-                      id={`stop-screen-${screen.slot}`}
-                      label="stop sharing"
-                      tipAt="below-right"
-                      onClick={() => stopScreen(screen.slot)}
-                      className="text-lg leading-none"
-                    >
-                      ×
-                    </IconButton>
-                  }
-                />
-              ))}
-            </div>
-          )}
-          {/* where the camera goes while a screen is shared: on the screen (drag it in the preview; this
-              dial is its size) or beside it as a tile. kept for the next stream */}
-          {screens.length > 0 && (
-            <div id="layout" className="mt-2 flex flex-wrap items-center gap-3">
-              <span className="text-textSecondary">camera</span>
-              <Button
-                id="camera-over"
-                flat
-                variant={overlaid ? 'primary' : 'secondary'}
-                aria-pressed={overlaid}
-                className="px-3 py-1.5 text-sm"
-                onClick={() => setLayout({ camera: 'over' })}
-              >
-                on the screen
-              </Button>
-              <Button
-                id="camera-beside"
-                flat
-                variant={overlaid ? 'secondary' : 'primary'}
-                aria-pressed={!overlaid}
-                className="px-3 py-1.5 text-sm"
-                onClick={() => setLayout({ camera: 'beside' })}
-              >
-                beside it
-              </Button>
-              <label htmlFor="camera-size" className={cn('ml-2 text-textSecondary', !overlaid && 'opacity-40')}>
-                size
-              </label>
-              <input
-                id="camera-size"
-                type="range"
-                min={CAMERA_MIN_W}
-                max={CAMERA_MAX_W}
-                step={0.01}
-                value={layout.w}
-                disabled={!overlaid}
-                title={`${Math.round(layout.w * 100)}% of the width`}
-                onChange={(e) => setLayout({ w: e.target.valueAsNumber })}
-                className="w-32 accent-primaryBlue disabled:opacity-40"
-              />
-            </div>
-          )}
           <div className="flex flex-wrap items-baseline gap-x-4">
             <StatusLine text={message} tone={tone} />
             <ViewerCount id="viewers" count={viewers} className="text-lg text-textSecondary" />
@@ -246,14 +226,15 @@ export function LivePage() {
                 stop
               </Button>
             )}
-            {/* one screen (or window, or tab) per press, up to SCREEN_SLOTS at once. not on phones: no screen capture there */}
+            {/* one screen (or window, or tab) per press, up to SCREEN_SLOTS at once; the same as the sources' +.
+                not on phones: no screen capture there */}
             {publishing && screenShareSupported && (
               <Button
                 id="share-screen"
                 flat
                 disabled={!canShare}
                 title={screens.length >= SCREEN_SLOTS ? `${SCREEN_SLOTS} screens at most` : undefined}
-                onClick={() => void shareScreen()}
+                onClick={() => void shareScreen('screen')}
               >
                 share screen
               </Button>

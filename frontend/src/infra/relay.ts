@@ -8,11 +8,12 @@
  *   we get    {"sdp":"<answer>"}  or  {"error":"..."}
  * The socket stays open for the whole session. Closing it hangs up. On the open socket:
  *   a publisher sends  {"slots":[{"slot":0,"kind":"camera"},{"slot":1,"kind":"screen","label":"screen"}],
- *                       "layout":{"camera":"over","x":0.73,"y":0.73,"w":0.25}}
+ *                       "scene":{"layers":[{"id":"s1","kind":"screen","slot":1,"x":0,"y":0,"w":1,"h":1},
+ *                                          {"id":"cam","kind":"camera","slot":0,"x":0.73,"y":0.714,"w":0.25,"h":0.25}]}}
  *                      whenever what it shows changes: its video slots that are live, see `SlotInfo`,
- *                      and where the camera sits while a screen is shared, see `Layout`
- *   a watcher gets     {"event":"slots","slots":[...],"layout":{...}}  right after the answer and on every change
- *                      (no `layout` from a publisher that never sent one: the dummy, an older page)
+ *                      and how its frame is laid out, see `Scene`
+ *   a watcher gets     {"event":"slots","slots":[...],"scene":{...}}  right after the answer and on every change
+ *                      (no `scene` from a publisher that never sent one: the dummy, an older page)
  *                      {"event":"ended"}  when the publisher leaves
  *   both get           {"event":"viewers","viewers":3}  how many addresses are receiving it, on change, at most 1/s
  *
@@ -42,31 +43,49 @@ export interface SlotInfo {
 }
 
 /**
- * Where the camera sits while a screen is shared, as the streamer laid it out: on the screen
- * (`over`), a 16:9 box `w` of the frame wide with its top left corner at `x`,`y` of the frame,
- * or off it as a tile under the video (`beside`). Fractions, so the go live page's preview and
- * every watcher's player draw the same picture at any size. Travels with the slots frame.
+ * A box in the frame: its top left corner and its size, each a fraction of the 16:9 frame in
+ * 0..1, to thousandths. Fractions, so the go live page's preview and every watcher's player
+ * draw the same picture at any size.
  */
-export interface Layout {
-  camera: 'over' | 'beside';
+export interface Box {
   x: number;
   y: number;
   w: number;
+  h: number;
+}
+/** How a video fills its box: `cover` crops to fill it (a face), `contain` shows the whole picture (a screen). Absent: by kind, see `fitOf`. */
+export type Fit = 'cover' | 'contain';
+/**
+ * One layer of the streamer's frame (docs/screen.md): one of their video slots, or a picture
+ * they uploaded (an api asset, by id: the watcher builds the url under the stream's name). `id`
+ * is the streamer's, short, unique in the scene; it keys the boxes on both sides.
+ */
+export type VideoLayer = Box & { id: string; kind: 'camera' | 'screen'; slot: number; fit?: Fit };
+export type ImageLayer = Box & { id: string; kind: 'image'; asset: number };
+export type Layer = VideoLayer | ImageLayer;
+/** The frame, bottom layer first: the array order is the z-order. A live video slot in no layer is a tile beside the picture. */
+export interface Scene {
+  layers: Layer[];
 }
 
-/** The camera over the screen is between these wide, as a fraction of the frame. */
-export const CAMERA_MIN_W = 0.1;
-export const CAMERA_MAX_W = 0.5;
-/** Bottom right, a quarter of the frame wide, a little in from the edges: where a face cam usually sits. */
-export const DEFAULT_LAYOUT: Layout = { camera: 'over', x: 0.73, y: 0.73, w: 0.25 };
+/** Layers one scene may hold; video checks the same. */
+export const MAX_LAYERS = 16;
+/** A layer is at least this much of the frame wide and tall: smaller is a dot nobody can see or take hold of. */
+export const LAYER_MIN = 0.05;
+/** A layer's id: short, plain. */
+const ID_RE = /^[a-z0-9_-]{1,16}$/i;
+
+export const isVideoLayer = (layer: Layer): layer is VideoLayer => layer.kind !== 'image';
+/** How a video layer fills its box when it does not say: a face fills, a screen is shown whole (text must never be cut). */
+export const fitOf = (layer: VideoLayer): Fit => layer.fit ?? (layer.kind === 'camera' ? 'cover' : 'contain');
 
 export interface RelayReply {
   sdp?: string;
   error?: string;
   event?: string;
   slots?: SlotInfo[];
-  /** With `event: 'slots'`: the streamer's `Layout`, when it sent one. */
-  layout?: unknown;
+  /** With `event: 'slots'`: the streamer's `Scene`, when it sent one. */
+  scene?: unknown;
   /** With `event: 'viewers'`: different addresses receiving the stream right now. docs/viewers.md */
   viewers?: number;
 }
@@ -92,29 +111,59 @@ export function slotsOf(msg: RelayReply): SlotInfo[] | null {
 
 const isFraction = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
 
-/** A `Layout` from anything (a frame's `layout`, localstorage), kept inside the frame; `null` when it is not one. */
-export function validLayout(raw: unknown): Layout | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const l = raw as Record<string, unknown>;
-  if ((l.camera !== 'over' && l.camera !== 'beside') || !isFraction(l.x) || !isFraction(l.y) || !isFraction(l.w)) return null;
-  return clampLayout({ camera: l.camera, x: l.x, y: l.y, w: l.w });
-}
-
-/** The layout of a `slots` event, or `null` when the frame carries none that makes sense. */
-export function layoutOf(msg: RelayReply): Layout | null {
-  return validLayout(msg.layout);
-}
-
-const thousandth = (v: number) => Math.round(v * 1000) / 1000;
+export const thousandth = (v: number) => Math.round(v * 1000) / 1000;
 
 /**
- * The box kept inside the frame: the width between the bounds, the corner so the whole box
- * fits (a 16:9 box in a 16:9 frame is as tall a fraction as it is wide). Thousandths, so a
- * drag does not send a float's whole tail.
+ * A box kept inside the frame, to thousandths (so a drag does not send a float's whole tail):
+ * the size between `LAYER_MIN` and the frame, the corner so the whole box fits.
  */
-export function clampLayout(layout: Layout): Layout {
-  const w = thousandth(Math.min(CAMERA_MAX_W, Math.max(CAMERA_MIN_W, layout.w)));
-  return { camera: layout.camera, x: thousandth(Math.min(1 - w, Math.max(0, layout.x))), y: thousandth(Math.min(1 - w, Math.max(0, layout.y))), w };
+export function clampBox(box: Box): Box {
+  const w = thousandth(Math.min(1, Math.max(LAYER_MIN, box.w)));
+  const h = thousandth(Math.min(1, Math.max(LAYER_MIN, box.h)));
+  return { x: thousandth(Math.min(1 - w, Math.max(0, box.x))), y: thousandth(Math.min(1 - h, Math.max(0, box.y))), w, h };
+}
+
+/** One layer from anything, kept inside the frame; `null` when it is not one. */
+function validLayer(raw: unknown): Layer | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const l = raw as Record<string, unknown>;
+  if (typeof l.id !== 'string' || !ID_RE.test(l.id) || !isFraction(l.x) || !isFraction(l.y) || !isFraction(l.w) || !isFraction(l.h)) return null;
+  const box = clampBox({ x: l.x, y: l.y, w: l.w, h: l.h });
+  if (l.kind === 'camera' || l.kind === 'screen') {
+    if (!Number.isInteger(l.slot) || (l.slot as number) < 0) return null;
+    const fit = l.fit === 'cover' || l.fit === 'contain' ? l.fit : undefined;
+    return { id: l.id, kind: l.kind, slot: l.slot as number, ...(fit && { fit }), ...box };
+  }
+  if (l.kind === 'image') {
+    return Number.isInteger(l.asset) && (l.asset as number) > 0 ? { id: l.id, kind: 'image', asset: l.asset as number, ...box } : null;
+  }
+  return null;
+}
+
+/**
+ * A `Scene` from anything (a frame's `scene`, localstorage): every layer kept inside the frame
+ * and clamped to thousandths, a layer that is not one dropped and the rest standing (the way
+ * `slotsOf` drops a bad slot), the ids made unique (a second use of one is dropped); `null`
+ * when it is not a scene at all.
+ */
+export function validScene(raw: unknown): Scene | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const { layers } = raw as { layers?: unknown };
+  if (!Array.isArray(layers)) return null;
+  const seen = new Set<string>();
+  const kept: Layer[] = [];
+  for (const entry of layers.slice(0, MAX_LAYERS)) {
+    const layer = validLayer(entry);
+    if (!layer || seen.has(layer.id)) continue;
+    seen.add(layer.id);
+    kept.push(layer);
+  }
+  return { layers: kept };
+}
+
+/** The scene of a `slots` event, or `null` when the frame carries none that makes sense. */
+export function sceneOf(msg: RelayReply): Scene | null {
+  return validScene(msg.scene);
 }
 
 /**

@@ -29,7 +29,7 @@ every loop the pages run, and the server's own. the two in bold are the ones tha
 
 | who | asks | how often | file |
 |---|---|---|---|
-| **home** | `GET /api/streams` | **every 3s per open tab**. the answer is also the page's clock: `since` and the thumbnail bucket move with it | `HomePage.tsx:14`, `:118` |
+| **home** | `GET /api/streams` | **every 3s per open tab** (was: now once on arrival, `home-atoms.ts`). the answer was also the page's clock: `since` and the thumbnail bucket moved with it | `HomePage.tsx:14`, `:118` |
 | **watch, not live** | `POST /api/streams/:name/watch` | **every 5s** until `live`, after `ended`, after an api error. the corner player waits the same way | `watch-atoms.ts:17`, `:138` |
 | home, each card | `GET /thumb/<name>.jpg?t=` | every 5s per card per tab | `HomePage.tsx:16` |
 | the publisher | `POST …/heartbeat?session=&token=` | every 15s while live | `publish-atoms.ts:20`, `:216` |
@@ -65,7 +65,7 @@ flowchart LR
   tabs -->|"phase 3 · the worker"| ev
   h -->|"later · live, ended for every name"| ev
   w -.->|"kept · on reconnect and after a failed ask only"| wf["the re-ask"]
-  h -.->|"kept · the fallback"| hf["the poll"]
+  h -.->|"kept · the snapshot, once, and again on reconnect"| hf["GET /api/streams from the home service"]
 ```
 
 ## what becomes a push
@@ -75,9 +75,9 @@ flowchart LR
 | watch, not live | `live` arrives pushed and the page starts; the word `streaming` does the same (a `live` the page missed, re-pushed by the gateway's 30s recheck); `ended` is the video socket's to say; `presence` beside the name. `live` is published when video has the publisher (`attached`), not at go-live, so the one ask on the push is answered live | no timer while idle. the page re-asks `watch` on every reconnect, and after an ask that failed (no answer; the video socket dropped with no `ended`) with a backoff from 3s to 60s. the 5s/60s idle retry was kept through the transition and removed once `attached` made the push connectable | 3 |
 | the panel's square | `me`: `offline` `online` `dnd` `streaming`, grey until the first frame | nothing to keep: there was nothing before | 3 |
 | my other tabs, my phone | the worker's one socket; `me` to every socket of the name | — | 3 |
-| home | a `watch` of `*` (or a `streams` frame): `live` adds a card, `ended` removes one, `since` is in `live`; bio, picture and `✓` for a new card from one `GET /api/streamers/:name` or carried in the frame. a full refetch on reconnect | the 3s poll at 60s. and a 1s timer for the clock the poll used to be: `since` and the thumbnail bucket (`HomePage.tsx:118`) | 7, later |
-| the chat's socket per room | `join` / `leave` frames on the one socket. ends the corner player's "this page has its own chat" limit, which exists because the chat atoms hold one room | the `/chat/*` route until the last old page is gone | 7, later |
-| the viewer count | `ZCARD` on the room, pushed | — | later |
+| home | **done.** a `watch` of `*`: `live` adds a card at the end (the card carried in the frame: bio, picture, `✓`, `thumbs`, `since`), `ended` removes one, `viewers` moves the chip. the snapshot behind it is `GET /api/streams` from the home service (`api home`, `home.rs`): every live stream and its count in memory from the same facts, built from video's word at boot and checked against it every 30s, first on first; the ranking goes there when there is one | no poll. the snapshot again when the socket opens or comes back under the page, and after an ask that failed (3s doubling to 60s). a 1s timer for the clock the poll used to be. frames that land while a snapshot is in flight are held and applied on top of it | 7 |
+| the chat's socket per room | `join` / `leave` frames on the one socket. ends the corner player's "this page has its own chat" limit, which exists because the chat atoms hold one room | the `/chat/*` route until the last old page is gone | later |
+| the viewer count | **done.** video tells the api when a room's count moves (`POST …/viewers`, at most once a second per stream); the api publishes a `viewers` fact; the gateway pushes it to the name's watchers and to `*`; home's table keeps the latest | the watch page's own count still comes on its video socket, as before | 7 |
 
 ## what stays http
 
@@ -119,8 +119,9 @@ flowchart LR
   p3["3 · pages<br/>events.ts · the worker · the square · the cards<br/>./scripts/deploy.sh frontend"]
   p4["4 · inspector<br/>./scripts/deploy.sh frontend"]
   p5["5 · video<br/>stop when the publisher leaves<br/>with the next ./scripts/deploy.sh video"]
-  p6["later · home off its poll · chat rooms over the socket"]
-  p1 --> p2 --> p3 --> p4 --> p5 --> p6
+  p6["6 · home off its poll · the home service, watch *, viewers pushed"]
+  p7["later · chat rooms over the socket"]
+  p1 --> p2 --> p3 --> p4 --> p5 --> p6 --> p7
 ```
 
 each step, what proves it, and the way back:
@@ -132,11 +133,12 @@ each step, what proves it, and the way back:
 | 3 pages | `test/presence.js`; the caddy log's count of `POST /api/streams/<name>/watch` lines per waiting watcher falls from 12 a minute to the one on arrival | `./scripts/deploy.sh frontend` at the previous tag. the gateway stays up, idle |
 | 4 inspector | `#inspector-frames` has a `me` row in a browser that has done nothing else | the previous pages |
 | 5 video | a publisher tab killed → `ended` on the stream within ~15s, not ~4 minutes | the previous video image. ends every stream, like any video deploy |
-| later | the caddy log's `GET /api/streams` lines fall the same way | the poll is still there at 60s |
+| 6 home | `test/presence.js`: a home tab makes one `GET /api/streams` and gets the card, its count and its removal by push; the caddy log's `GET /api/streams` lines fall from 20 a minute per tab to one per visit | the previous pages (the poll); the `home` container and the `*` topic stay up, idle |
+| later | the chat's rooms | — |
 
 ## how to tell it worked
 
-- **the caddy log.** `docker compose logs frontend | grep -c 'streams/r8/watch'` over a minute with a watcher waiting: 12 before, none after the one on arrival. after the home step: `GET /api/streams` the same way, 20 a minute per tab before, 1 after.
+- **the caddy log.** `docker compose logs frontend | grep -c 'streams/r8/watch'` over a minute with a watcher waiting: 12 before, none after the one on arrival. `GET /api/streams` the same way with a home tab open: 20 a minute before, one per visit after.
 - **`GET /online`** on the chat container, summed: how many browsers have the site open. the number the site never had.
 - **`XRANGE events - +`.** every fact of the last while, by hand.
 - **the inspector.** the frames a browser got, in the browser, which is the one a stranger can open and copy.
@@ -162,7 +164,7 @@ what grows: open sockets on the chat process, one per browser plus the chat's ow
 
 - server first, pages last. a frame type appears in the pages only after the gateway sends it; a gateway may send frames old pages do not know.
 - unknown frame types are dropped by both sides, the way the chat drops anything that is not `say` (`chat.rs:337`). the pages log them to the inspector and nowhere else.
-- every push has a pull behind it, and the pull is an event, not a clock. a reconnect re-fetches; an ask that failed is asked again, backing off; the server re-derives every watched word every 30s and pushes it on change. nothing on a page asks on a timer while it is healthy and idle. the socket is the fast lane and http is what makes it true. (the watch page's idle retry was kept slowed through the transition, as the next rule says; it was removed once `live` was published at the moment a watcher can connect, see `status.md`. the home poll stays at 60s until home moves.)
+- every push has a pull behind it, and the pull is an event, not a clock. a reconnect re-fetches; an ask that failed is asked again, backing off; the server re-derives every watched word every 30s and pushes it on change, and the home service checks its table against video every 30s. nothing on a page asks on a timer while it is healthy and idle. the socket is the fast lane and http is what makes it true. (the watch page's idle retry and the home poll were kept slowed through the transition, as the next rule says; each was removed once its push was true at the moment it mattered: `live` published when a watcher can connect, the home list held by a service that sees every fact. see `status.md`.)
 - a failed handshake backs off to 60s; a dropped socket retries at 3s. rule 2 above.
 - no loop is removed in the deploy that adds its push. the push ships with the loop slowed; the loop is removed after the logs say it never fired alone, and the pull behind the push is then the reconnect and the failure retry, not a timer.
 - frames carry facts, never derived words (`status.md`). for home that means `live` and `ended` per name, not "the list".
@@ -182,7 +184,7 @@ what grows: open sockets on the chat process, one per browser plus the chat's ow
 
 1. ~~**backoff: `/events` only, or the chat's reconnect too?**~~ settled: `/events` only, in the worker and in the per-tab fallback (3s doubling to 60s with ±25% jitter on a handshake that never opened; 3s flat after an open socket dropped). the chat keeps its flat 3s.
 2. **the per-ip cap on `/events`.** none, or 64. (recommendation: none. a flood keeps nothing alive and costs a socket each; the chat's cap exists for the per-socket rate limit, which `/events` has no equivalent of.)
-3. **when home moves.** with phase 3, or after presence has run for a while. the home poll is also the page's clock and the thumbnail bucket, so it is more than a transport change. (recommendation: after. the watch page proves the shape first.)
+3. ~~**when home moves.**~~ settled: after, and it has. the home list is a service of its own (`api home`) that holds every stream and count from the facts, the page takes one snapshot and then `watch *`, and a 1s tick is the clock the poll used to be. the still picture never moved with the poll (one per visit).
 4. **the `nofile` limit and the healthcheck in one full deploy, before phase 3 or with it?** both are in `docker-compose.yml` now (`ulimits: nofile 65536` and a `GET /health` probe on `chat`), so the deploy that carries them is a `compose up -d`, which restarts video. (recommendation: the full deploy that ships phase 2, on a quiet hour.)
 5. **does the publish heartbeat ever ride the socket?** 4 requests a minute per live stream, and video's proof of the grant goes through the api's http route either way. (recommendation: no. a lease is a request.)
 

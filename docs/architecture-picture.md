@@ -18,6 +18,7 @@ flowchart LR
     api["api<br/>rust axum · :4000<br/>bio, go-live, heartbeat, stop, watch, streams"]
     chat["chat<br/>the api binary run as api chat · :4100<br/>text chat, one socket per person per room"]
     events["events<br/>the api binary run as api events · :4100<br/>/events: presence and the pushes, one socket per browser"]
+    home["home<br/>the api binary run as api home · :4100<br/>every live stream and its count, in memory · GET /api/streams"]
     video["video<br/>rust webrtc · ws :7880 · media udp :7882<br/>one upload in, copies out, thumbnails"]
     database[("database<br/>postgres · streamers, sessions<br/>+ a second database, debug · client_errors")]
     redis[("redis<br/>live:name locks · seen:name sets · events stream · chat:name streams")]
@@ -33,6 +34,7 @@ flowchart LR
   video ==>|"webrtc media · udp 7882"| watcher
 
   frontend -->|"/api/*"| api
+  frontend -->|"/api/streams"| home
   frontend -->|"/ws · /thumb/*"| video
   frontend -->|"/chat/*"| chat
   frontend -->|"/events"| events
@@ -41,12 +43,15 @@ flowchart LR
   api --> redis
   api --> s3
   api -.->|"GET /live · who is really connected<br/>GET /health · up_secs, live, build"| video
-  video -.->|"attached · stop, with the grant"| api
+  video -.->|"attached · viewers · stop, with the grant"| api
   streamer -.->|"POST /api/errors · when a page breaks"| frontend
   chat --> redis
   chat -.->|"is this socket the streamer"| database
   events -->|"seen:name sets · tails the events stream"| redis
   events -.->|"who is this cookie · the choice"| database
+  home -->|"tails the events stream"| redis
+  home -.->|"GET /viewers · at boot and every 30s"| video
+  home -.->|"bio, pictures, the open session"| database
 
   dummy -.->|"publishes through /ws like a browser"| video
   dummy -.->|"bio, go-live, heartbeat, stop"| api
@@ -64,6 +69,7 @@ the frontend never touches video packets. the api serves one html page, `/watch/
 flowchart LR
   http["http://ip/anything"] -->|"redirect"| https["https://ip"]
   https --> q{"path"}
+  q -->|"/api/streams"| home["home:4100<br/>the home list, from its table"]
   q -->|"/api/*"| api["api:4000<br/>json"]
   q -->|"/watch/*"| doc["api:4000<br/>index.html from the pages volume<br/>+ title, og tags, profile card for that name<br/>so a shared link gets a preview"]
   q -->|"/ws"| vws["video:7880<br/>websocket · offer in, answer out"]
@@ -245,6 +251,7 @@ flowchart LR
     api["api"]
     chat["chat · api chat"]
     events["events · api events"]
+    home["home · api home"]
     video["video"]
     dummy["dummy · video dummy"]
     pages["pages · one-shot"]
@@ -289,10 +296,11 @@ test.sh  test/           playwright + chrome with a fake camera (and a picked sc
 .env  .env.example       PUBLIC_IP, CARGO_BUILD_JOBS, ENV_NAME, ADMIN_NAMES, OPS_TOKEN, DUMMY_STREAMS, DUMMY_PASSWORD, DUMMY_NAMES
 Cargo.toml  Cargo.lock   one rust workspace, two members
 
-api/                     → containers api, chat, events
-  src/main.rs              axum on :4000. bios, go-live, attached, heartbeat, stop, watch, streams, health
+api/                     → containers api, chat, events, home
+  src/main.rs              axum on :4000. bios, go-live, attached, viewers, heartbeat, stop, watch, health
   src/chat.rs              `api chat` on :4100. websocket chat on redis streams
   src/events.rs            `api events` on :4100, its own container: the gateway. /events, /online, the seen sets, the events tail. docs/status.md
+  src/home.rs              `api home` on :4100, its own container: every live stream and its count in memory, GET /api/streams. docs/status.md
   src/presence.rs          the word and the choice: presence(), PUT …/presence, the facts onto the events stream
   src/socket.rs            the websocket plumbing chat.rs and events.rs share
   src/debug.rs             POST/GET /api/errors, the debug database. see docs/debugging.md

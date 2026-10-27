@@ -648,7 +648,7 @@ wait_one_shot() {
 
 # wait_for_health proves the api answers, and it answers 200 with video down. so a
 # partial run looks at the containers it swapped: running, no restart since we first
-# looked, and healthy where the image has a check (api, video, chat, events, database, redis, s3;
+# looked, and healthy where the image has a check (api, video, chat, events, home, database, redis, s3;
 # dummy and caddy have none, so 5s of running is what there is to see). 60s each,
 # then exit non-zero. no rollback: the old image lost its tag to the new build, so
 # the way back is a fix and another deploy.
@@ -714,9 +714,9 @@ redeploy_service() {   # api | video
     # the api waits for the bucket at boot, and --no-deps below never creates s3 on a box
     # deployed before it existed. --no-recreate: one that is here is left alone, never bounced
     "${DOCKER[@]}" compose up -d --no-deps --no-recreate s3
-    # chat and events are the same image run as `api chat` and `api events`, so they move with the api
-    say "swapping the api, chat and events containers"
-    "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} api chat events
+    # chat, events and home are the same image run as `api chat`, `api events` and `api home`, so they move with the api
+    say "swapping the api, chat, events and home containers"
+    "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} api chat events home
   else
     say "swapping the $1 container"
     "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} "$1"
@@ -777,11 +777,11 @@ swapped_containers() {
   local t out=""
   for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
     case "$t" in
-      api) out="$out api chat events" ;;
+      api) out="$out api chat events home" ;;
       video) out="$out video" ;;
       dummy) out="$out dummy video api" ;;   # video and api only move when DUMMY_PASSWORD changed; checking is free
       caddy) out="$out frontend" ;;
-      compose) out="$out frontend api chat events database redis video dummy s3" ;;
+      compose) out="$out frontend api chat events home database redis video dummy s3" ;;
     esac
   done
   printf '%s\n' $out | awk 'NF && !seen[$0]++' | tr '\n' ' '
@@ -882,8 +882,8 @@ ${B}usage:${N} ./scripts/deploy.sh [--pull] [--prune-deploy] [--build | --images
 
 ${B}what to deploy${N}
   ${B}(nothing named)${N}           full deploy: machine setup, every image, docker compose up
-  ${B}frontend api video dummy${N}  just these: get (or build) their image, swap their containers (chat and events
-                            move with api), then check them: running and healthy, or exit non-zero
+  ${B}frontend api video dummy${N}  just these: get (or build) their image, swap their containers (chat, events and
+                            home move with api), then check them: running and healthy, or exit non-zero
   ${B}PUBLIC_IP${N}                 use this ip (full deploy only). otherwise: \$PUBLIC_IP > .env > auto-detect
 
 ${B}where the images come from${N}
@@ -928,7 +928,7 @@ parse_args() {   # sets IP_ARG PULL PRUNE IMAGES_MODE BUILD_MODE TAG TARGETS PAS
     if [ "$want_tag" = 1 ]; then
       want_tag=0
       case "$a" in
-        -*|frontend|api|video|dummy|pages|chat|events|passwd) ;;
+        -*|frontend|api|video|dummy|pages|chat|events|home|passwd) ;;
         *) if ! is_ipv4 "$a" && [[ "$a" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then TAG="$a"; continue; fi ;;
       esac
     fi
@@ -942,7 +942,7 @@ parse_args() {   # sets IP_ARG PULL PRUNE IMAGES_MODE BUILD_MODE TAG TARGETS PAS
       passwd) want_name=1 ;;
       frontend|api|video|dummy) TARGETS+=("$a") ;;
       pages) TARGETS+=("frontend") ;;
-      chat|events) TARGETS+=("api") ;;
+      chat|events|home) TARGETS+=("api") ;;
       *)
         if is_ipv4 "$a"; then IP_ARG="$a"
         else die "don't know what '$a' is. services are: frontend api video dummy. see ./scripts/deploy.sh --help"

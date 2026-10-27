@@ -5,6 +5,8 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY index.html vite.config.mts tsconfig.json tailwind.config.ts postcss.config.mjs ./
 COPY src ./src
+# served as they are, under their own names: the about tab's sample media (docs/about.md)
+COPY public ./public
 # the commit, from deploy.sh. vite bakes it in as __BUILD__; every error report carries it.
 ARG BUILD=dev
 ENV BUILD=${BUILD}

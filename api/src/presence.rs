@@ -163,9 +163,23 @@ pub(crate) async fn publish<C: AsyncCommands>(r: &mut C, fields: &[(&str, String
     }
 }
 
-/// A stream started (go-live won the key, or a heartbeat took a lapsed key back).
-pub(crate) async fn publish_live<C: AsyncCommands>(r: &mut C, name: &str, since_ms: i64, session: i64) {
-    publish(r, &[("type", "live".into()), ("name", name.into()), ("since", since_ms.to_string()), ("session", session.to_string())]).await;
+/// A stream started: video has the publisher (`attached`), or a heartbeat took a lapsed key
+/// back. `card` is what a home card draws without asking anything (`verified`, `avatar`, `bio`,
+/// `thumbs`), carried in the fact so a thousand home pages do not each ask the api when
+/// someone goes live. The gateway forwards it as it is; the home service reads the ✓ off it.
+pub(crate) async fn publish_live<C: AsyncCommands>(r: &mut C, name: &str, since_ms: i64, session: i64, card: &serde_json::Value) {
+    publish(
+        r,
+        &[("type", "live".into()), ("name", name.into()), ("since", since_ms.to_string()), ("session", session.to_string()), ("card", card.to_string())],
+    )
+    .await;
+}
+
+/// How many different addresses are receiving a stream, as video counts them (docs/viewers.md),
+/// whenever it moves: video says so at most once a second per stream. To the name's watchers
+/// and to every home page, through the gateway, and into the home service's table.
+pub(crate) async fn publish_viewers<C: AsyncCommands>(r: &mut C, name: &str, session: i64, viewers: usize) {
+    publish(r, &[("type", "viewers".into()), ("name", name.into()), ("session", session.to_string()), ("viewers", viewers.to_string())]).await;
 }
 
 /// A stream ended. `by`: `stop` (the page, or video on the publisher's behalf), `sweep` (a tab that vanished).
