@@ -47,7 +47,6 @@ import { api } from '@/infra/api';
 import { cleanName, isDummyName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { About } from '@/shared-components/About';
-import { Avatar } from '@/shared-components/Avatar';
 import { Calendar } from '@/shared-components/Calendar';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { Button } from '@/shared-components/Button';
@@ -162,7 +161,8 @@ export function WatchPage() {
     <PageFrame
       title={
         <>
-          <Avatar name={name} version={avatar} />
+          {/* their picture, or the letter their name makes when they have none: a face left of the name either way */}
+          {name && <Face name={name} version={avatar} className="mr-3 inline-flex align-middle" />}
           {name}
           {verified && (
             <span className="ml-2 text-increase" title="has an account: this really is them">
@@ -180,17 +180,6 @@ export function WatchPage() {
             >
               <span aria-hidden className={cn('inline-block h-3 w-3', PRESENCE_SQUARE[presence])} />
               {PRESENCE_WORD[presence]}
-            </span>
-          )}
-          {/* follow them, and how many do (docs/follows.md). the count moves with the click; the api's number comes with the next grant */}
-          {name && !isDummyName(name) && (
-            <span className="ml-3 inline-flex items-center gap-2 align-middle text-base font-normal">
-              <FollowButton id="follow" name={name} onChange={(now) => store.set(followersAtom, (followers ?? 0) + (now ? 1 : -1))} />
-              {followers !== null && (
-                <span id="followers" className="text-textSecondary">
-                  {followers} {followers === 1 ? 'follower' : 'followers'}
-                </span>
-              )}
             </span>
           )}
         </>
@@ -309,9 +298,24 @@ export function WatchPage() {
               ))}
             </div>
           )}
-          <div className="flex flex-wrap items-baseline gap-x-4">
-            <StatusLine text={message} tone={tone} />
+          {/* under the picture: what is up, who is watching, and at the right end how many follow them and the
+              button to (docs/follows.md; the count moves with the click, the api's number comes with the next
+              grant). while the stream plays the line would say `watching`, which the picture and the word beside
+              the name already say: then it is for screen readers and the tests alone, and the count stands in its
+              place, the corner player's way. the line comes back for anything else: not live, connecting, ended */}
+          <div className="my-3 flex flex-wrap items-baseline gap-x-4">
+            <StatusLine text={message} tone={tone} className={cn('my-0', phase === 'watching' && 'sr-only')} />
             <ViewerCount id="viewers" count={viewers} className="text-lg text-textSecondary" />
+            {name && !isDummyName(name) && (
+              <span className="ml-auto inline-flex items-center gap-3">
+                {followers !== null && (
+                  <span id="followers" className="text-lg text-textSecondary">
+                    {followers} {followers === 1 ? 'follower' : 'followers'}
+                  </span>
+                )}
+                <FollowButton id="follow" name={name} onChange={(now) => store.set(followersAtom, (followers ?? 0) + (now ? 1 : -1))} />
+              </span>
+            )}
           </div>
 
           {canRetry && (
