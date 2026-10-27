@@ -60,6 +60,8 @@ const insetOf = (place: Place) => (place === 'left' ? PIP_CHAT_W : 0);
 
 /** Where the `badge` goes: the top left corner, level with the chat button and × (5% of the way down, 8px at least). */
 export const CORNER_BADGE = 'left-3 top-[max(8px,5%)]';
+/** A second chip in the `badge`, beside the first: one chip's width and the gap further in. */
+export const CORNER_BADGE_2 = 'left-[3.25rem] top-[max(8px,5%)]';
 
 /** A press that travels less than this is a click (back to the page, ×), not a move. */
 const CLICK_SLOP = 4;
@@ -181,7 +183,7 @@ interface CornerPlayerProps {
   center?: ReactNode;
   /** On the picture, under the controls, placed against the picture's box: the watch player's camera over a shared screen (`CameraOverlay`). */
   overlay?: ReactNode;
-  /** In the picture's top left corner, across from the chat button and ×: the stream's health. It places itself (`CORNER_BADGE`). */
+  /** In the picture's top left corner, across from the chat button and ×: the stream's health, and the broadcast's mic. Each chip places itself (`CORNER_BADGE`, `CORNER_BADGE_2`). */
   badge?: ReactNode;
   /** Along the picture's bottom edge, up on hover (`barShown`: always up). Nothing: no bar at all. */
   bar?: ReactNode;

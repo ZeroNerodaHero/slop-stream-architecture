@@ -628,12 +628,51 @@ async fn go_live(
     .execute(&s.db)
     .await?;
 
-    // the fact, for whoever is watching the name (docs/status.md): the gateway pushes `live`
-    presence::publish_live(&mut r, &name, presence::now_ms(), id).await;
+    // no `live` fact yet: the page has not reached video, and a watcher told now would be
+    // answered "not live". video says when it has the publisher (`attached`), and that is
+    // the push (docs/status.md)
     log::info!("{name}: go live, session {id}");
     Ok(Json(
         json!({ "url": WS_PATH, "session": id, "token": token }),
     ))
+}
+
+/// Video has the publisher: the room is claimed and answered, so a watcher who connects now
+/// is served. This is where `live` is published for the name's watchers, not at go-live: the
+/// gateway pushes it the moment it lands, and the page that gets it connects first time. Video
+/// calls it after its claim with the go-live grant, like `heartbeat` and `stop`. A key that
+/// lapsed meanwhile is taken back, as the heartbeat would.
+async fn attached(
+    State(s): State<AppState>,
+    Name(name): Name,
+    owner: Result<Query<Owner>, QueryRejection>,
+) -> ApiResult {
+    let Query(owner) = owner?;
+    if !owns_session(&s.db, &name, &owner).await? {
+        return Err(ApiError::not_yours());
+    }
+
+    let key = live_key(&name);
+    let mut r = s.redis.clone();
+    match r.get::<_, Option<i64>>(&key).await? {
+        Some(holder) if holder == owner.session => {}
+        Some(_) => return Err(ApiError::already_live()),
+        None => {
+            let claimed: Option<String> = r.set_options(&key, owner.session, nx_ex()).await?;
+            if claimed.is_none() {
+                return Err(ApiError::already_live());
+            }
+        }
+    }
+    // `since` is the session's start, the go-live: how long they have been live counts from
+    // there, not from the second or two video took to get the publisher
+    let since: Option<DateTime<Utc>> = sqlx::query_scalar("SELECT started_at FROM sessions WHERE id = $1")
+        .bind(owner.session)
+        .fetch_optional(&s.db)
+        .await?;
+    presence::publish_live(&mut r, &name, since.map_or_else(presence::now_ms, |t| t.timestamp_millis()), owner.session).await;
+    log::info!("{name}: video has the publisher, session {}", owner.session);
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn heartbeat(
@@ -738,6 +777,7 @@ fn router(state: AppState) -> Router {
         .route("/api/streamers/{name}", get(get_streamer).put(put_streamer))
         .route("/api/streamers/{name}/sessions", get(list_sessions))
         .route("/api/streams/{name}/go-live", post(go_live))
+        .route("/api/streams/{name}/attached", post(attached))
         .route("/api/streams/{name}/heartbeat", post(heartbeat))
         .route("/api/streams/{name}/stop", post(stop))
         .route("/api/streams/{name}/watch", post(watch))
@@ -811,7 +851,14 @@ async fn main() {
         return;
     }
 
-    // chat returned above and does not create tables. this process does, from api/migrations.
+    // `api events` is the gateway: the /events socket, presence and the pushes. same binary, see events.rs
+    if env::args().nth(1).as_deref() == Some("events") {
+        let port = env::var("PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(4100);
+        events::run(db, &redis_url, port).await.expect("events");
+        return;
+    }
+
+    // chat and events returned above and do not create tables. this process does, from api/migrations.
     migrate::run(&db).await.expect("migrations");
 
     // `api passwd <name>`: a new random password, printed once. see auth.rs

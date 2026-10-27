@@ -5,6 +5,7 @@ import { useLocation } from 'react-router-dom';
 import {
   cameraAtom,
   endLive,
+  isPublishingAtom,
   liveViewersAtom,
   ownerAtom,
   publishMessageAtom,
@@ -17,14 +18,18 @@ import {
 import { friendsOpenAtom } from '@/infra/atoms/follow-atoms';
 import { pipChatPlaceAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import {
+  cameraOverlaidAtom,
   canHearAtom,
   endWatch,
+  layoutAtom,
   markAutoplayBlocked,
   markPlaying,
   mutedAtom,
   needsTapAtom,
+  pickSlot,
   pipAtom,
   remoteStreamAtom,
+  slotStreamAtom,
   unmuteVideo,
   volumeAtom,
   watchMessageAtom,
@@ -37,7 +42,9 @@ import { cleanName } from '@/infra/names';
 import { cn } from '@/utils/cn';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
-import { CORNER_BADGE, CornerPlayer } from '@/shared-components/CornerPlayer';
+import { CameraOverlay } from '@/shared-components/CameraOverlay';
+import { CORNER_BADGE, CORNER_BADGE_2, CornerPlayer } from '@/shared-components/CornerPlayer';
+import { MicMeter } from '@/shared-components/MicMeter';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { SoundControl } from '@/shared-components/VideoControls';
 import { ViewerCount } from '@/shared-components/ViewerCount';
@@ -84,6 +91,8 @@ function WatchCorner() {
   const canHear = useAtomValue(canHearAtom);
   const needsTap = useAtomValue(needsTapAtom);
   const viewers = useAtomValue(watchViewersAtom);
+  const layout = useAtomValue(layoutAtom);
+  const overlaid = useAtomValue(cameraOverlaidAtom);
   const pipChat = useAtomValue(pipChatPlaceAtom);
   const cornerChat = useAtomValue(cornerChatAtom);
   const { pathname } = useLocation();
@@ -120,6 +129,8 @@ function WatchCorner() {
           </Button>
         )
       }
+      // the camera over a shared screen, as on the page: the corner shows the big picture only, so without this the face would be gone
+      overlay={overlaid && layout && <CameraOverlay id="pip-camera-overlay" streamAtom={slotStreamAtom(0)} layout={layout} onPick={() => pickSlot(0)} />}
       badge={canHear && <StreamStatsButton id="pip-stats" role="watch" stats={stats} className={CORNER_BADGE} playback={{ muted, level: volume }} />}
       bar={canHear && <SoundControl videoRef={videoRef} buttonId="pip-unmute" dialId="pip-volume" dialClassName="w-20" />}
       barShown={muted}
@@ -142,6 +153,7 @@ function LiveCorner() {
   const message = useAtomValue(publishMessageAtom);
   const tone = useAtomValue(publishToneAtom);
   const phase = useAtomValue(publishPhaseAtom);
+  const publishing = useAtomValue(isPublishingAtom);
   const stats = useAtomValue(publishStatsAtom);
   const viewers = useAtomValue(liveViewersAtom);
   const owner = useAtomValue(ownerAtom);
@@ -168,7 +180,13 @@ function LiveCorner() {
       onClose={endLive}
       // × here ends the stream for everyone watching, from a box in a corner: a yes or no first
       closeConfirm={{ title: 'stop streaming?', message: 'closing this will stop the stream. everyone watching sees it end.', yes: 'yes, stop' }}
-      badge={sending && <StreamStatsButton id="live-pip-stats" role="publish" stats={stats} className={CORNER_BADGE} />}
+      // top left, as on the page: the mic's level while the stream is up, and beside it the upload stats once live
+      badge={
+        <>
+          {publishing && <MicMeter id="live-pip-mic" streamAtom={cameraAtom} className={CORNER_BADGE} />}
+          {sending && <StreamStatsButton id="live-pip-stats" role="publish" stats={stats} className={CORNER_BADGE_2} />}
+        </>
+      }
       footer={<ViewerCount id="live-pip-viewers" count={viewers} />}
     />
   );

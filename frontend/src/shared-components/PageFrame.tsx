@@ -22,7 +22,7 @@ interface PageFrameProps {
  */
 export function HomeLink({ reload = false }: { reload?: boolean }) {
   return (
-    <Link id="home" to="/" reloadDocument={reload || undefined} className={buttonClassName('secondary', 'shrink-0 gap-1 px-3 py-1.5 text-sm')}>
+    <Link id="home" to="/" reloadDocument={reload || undefined} className={buttonClassName('secondary', 'shrink-0 gap-1 px-3 py-1.5 text-sm', true)}>
       <RiArrowLeftSLine aria-hidden size={18} />
     </Link>
   );

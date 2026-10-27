@@ -56,6 +56,7 @@ import { Avatar } from '@/shared-components/Avatar';
 import { Button } from '@/shared-components/Button';
 import { CameraOverlay } from '@/shared-components/CameraOverlay';
 import { ChatPanel } from '@/shared-components/ChatPanel';
+import { MicMeter } from '@/shared-components/MicMeter';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { panelClassName } from '@/shared-components/Panel';
 import { StatusLine } from '@/shared-components/StatusLine';
@@ -125,8 +126,10 @@ export function LivePage() {
                 it was put. the camera is dragged around in here, and the watchers' players follow */}
             <VideoFrame id="preview" streamAtom={stageStreamAtom} videoRef={previewRef} muted />
             {overlaid && <CameraOverlay id="camera-overlay" streamAtom={cameraAtom} layout={layout} onMove={(x, y) => setLayout({ x, y })} />}
-            {/* top left, while live: how the upload is going. up on its own while something limits it */}
-            {(phase === 'live' || phase === 'reconnecting') && <StreamStatsButton id="live-stats" role="publish" stats={stats} />}
+            {/* top left, while the stream is up: the mic, as loud as it is right now; beside it, once live, how
+                the upload is going (up on its own while something limits it, otherwise on hover) */}
+            {publishing && <MicMeter id="live-mic" streamAtom={cameraAtom} />}
+            {(phase === 'live' || phase === 'reconnecting') && <StreamStatsButton id="live-stats" role="publish" stats={stats} className="left-[3.25rem] top-3" />}
             {/* while the chat is closed the bar stays up, so it can be opened again off the preview. once
                 live, picture in picture beside it: the same button as the watch page's, for your own stream
                 (here any way off the page keeps the stream; the button is the one that says so) */}
@@ -170,10 +173,24 @@ export function LivePage() {
           {screens.length > 0 && (
             <div id="layout" className="mt-2 flex flex-wrap items-center gap-3">
               <span className="text-textSecondary">camera</span>
-              <Button id="camera-over" variant={overlaid ? 'primary' : 'secondary'} aria-pressed={overlaid} className="px-3 py-1.5 text-sm" onClick={() => setLayout({ camera: 'over' })}>
+              <Button
+                id="camera-over"
+                flat
+                variant={overlaid ? 'primary' : 'secondary'}
+                aria-pressed={overlaid}
+                className="px-3 py-1.5 text-sm"
+                onClick={() => setLayout({ camera: 'over' })}
+              >
                 on the screen
               </Button>
-              <Button id="camera-beside" variant={overlaid ? 'secondary' : 'primary'} aria-pressed={!overlaid} className="px-3 py-1.5 text-sm" onClick={() => setLayout({ camera: 'beside' })}>
+              <Button
+                id="camera-beside"
+                flat
+                variant={overlaid ? 'secondary' : 'primary'}
+                aria-pressed={!overlaid}
+                className="px-3 py-1.5 text-sm"
+                onClick={() => setLayout({ camera: 'beside' })}
+              >
                 beside it
               </Button>
               <label htmlFor="camera-size" className={cn('ml-2 text-textSecondary', !overlaid && 'opacity-40')}>
@@ -220,12 +237,12 @@ export function LivePage() {
               className="w-full max-w-[320px] border border-primaryStroke bg-backgroundSecondary px-4 py-3 text-textPrimary disabled:opacity-60"
             />
             {!publishing && (
-              <Button id="start" variant="primary" disabled={!canStart} onClick={() => void goLive()}>
+              <Button id="start" variant="primary" flat disabled={!canStart} onClick={() => void goLive()}>
                 start
               </Button>
             )}
             {publishing && (
-              <Button id="stop" variant="danger" onClick={() => stopLive()}>
+              <Button id="stop" variant="danger" flat onClick={() => stopLive()}>
                 stop
               </Button>
             )}
@@ -233,6 +250,7 @@ export function LivePage() {
             {publishing && screenShareSupported && (
               <Button
                 id="share-screen"
+                flat
                 disabled={!canShare}
                 title={screens.length >= SCREEN_SLOTS ? `${SCREEN_SLOTS} screens at most` : undefined}
                 onClick={() => void shareScreen()}
@@ -248,7 +266,7 @@ export function LivePage() {
               <a id="watchurl" href={watchUrl} target="_blank" rel="noopener">
                 {watchUrl}
               </a>{' '}
-              <Button id="copy" className="ml-2 px-4 py-2" onClick={copyWatchUrl}>
+              <Button id="copy" flat className="ml-2 px-4 py-2" onClick={copyWatchUrl}>
                 copy
               </Button>
             </p>
@@ -283,7 +301,7 @@ export function LivePage() {
               className="mt-2 min-h-[90px] w-full resize-y border border-primaryStroke bg-background px-4 py-3 text-textPrimary"
             />
             <div className="mt-3 flex flex-wrap items-center gap-3">
-              <Button id="savebio" onClick={() => void saveBio()}>
+              <Button id="savebio" flat onClick={() => void saveBio()}>
                 save bio
               </Button>
               <span id="biostatus" className="text-textSecondary" aria-live="polite">
@@ -307,11 +325,11 @@ export function LivePage() {
                   if (file) void saveAvatar(file);
                 }}
               />
-              <Button id="avatar-pick" onClick={() => fileRef.current?.click()}>
+              <Button id="avatar-pick" flat onClick={() => fileRef.current?.click()}>
                 {avatar === null ? 'choose picture' : 'change picture'}
               </Button>
               {avatar !== null && (
-                <Button id="avatar-remove" onClick={() => void removeAvatar()}>
+                <Button id="avatar-remove" flat onClick={() => void removeAvatar()}>
                   remove
                 </Button>
               )}
@@ -331,7 +349,7 @@ export function LivePage() {
                   {thumbs.map((id) => (
                     <li key={id} className="w-36">
                       <img src={api.streamThumbUrl(name, id)} alt="" draggable={false} className="aspect-video w-full border border-primaryStroke object-cover" />
-                      <Button id={`thumb-remove-${id}`} className="mt-2 w-full px-3 py-2 text-sm" onClick={() => void removeStreamThumb(id)}>
+                      <Button id={`thumb-remove-${id}`} flat className="mt-2 w-full px-3 py-2 text-sm" onClick={() => void removeStreamThumb(id)}>
                         remove
                       </Button>
                     </li>
@@ -351,7 +369,7 @@ export function LivePage() {
                     if (file) void addStreamThumb(file);
                   }}
                 />
-                <Button id="thumb-add" disabled={thumbs.length >= 6 || thumbStatus === 'saving'} onClick={() => thumbFileRef.current?.click()}>
+                <Button id="thumb-add" flat disabled={thumbs.length >= 6 || thumbStatus === 'saving'} onClick={() => thumbFileRef.current?.click()}>
                   add a thumbnail
                 </Button>
                 <span id="thumbstatus" className="text-textSecondary" aria-live="polite">

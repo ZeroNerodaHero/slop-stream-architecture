@@ -39,34 +39,6 @@ export interface SlotInfo {
   /** `camera`, `screen`; anything else is shown as is. */
   kind: string;
   label?: string;
-  /**
-   * Where this picture sits while another is the big one: a corner of the big picture (a `Corner`),
-   * or `beside` it as a tile. Absent, or a word not known: beside. The camera carries the
-   * streamer's choice; the pages put a shared screen beside the camera when the camera is big.
-   */
-  place?: string;
-  /** How wide the picture is in its corner, as a share of the big one: a `Size`. Absent, or not known: `medium`. */
-  size?: string;
-}
-
-/** The corners a picture can sit in over the big one, as the streamer lays it out. */
-export const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const;
-export type Corner = (typeof CORNERS)[number];
-/** A corner, or beside the big picture as a tile (what every slot did before layouts). */
-export type Place = Corner | 'beside';
-export const PLACES: readonly Place[] = [...CORNERS, 'beside'];
-/** How wide a picture in a corner is: a share of the big picture's width (`SIZE_SHARE`). */
-export const SIZES = ['small', 'medium', 'large'] as const;
-export type Size = (typeof SIZES)[number];
-export const SIZE_SHARE: Record<Size, number> = { small: 0.18, medium: 0.25, large: 0.33 };
-
-/** The slot's corner, or null when it sits beside the big picture (said so, said nothing, or said a word not known). */
-export function cornerOf(slot: Pick<SlotInfo, 'place'>): Corner | null {
-  return (CORNERS as readonly string[]).includes(slot.place ?? '') ? (slot.place as Corner) : null;
-}
-
-export function sizeOf(slot: Pick<SlotInfo, 'size'>): Size {
-  return (SIZES as readonly string[]).includes(slot.size ?? '') ? (slot.size as Size) : 'medium';
 }
 
 /**
@@ -114,9 +86,7 @@ export function slotsOf(msg: RelayReply): SlotInfo[] | null {
       Number.isInteger(s.slot) &&
       s.slot >= 0 &&
       typeof s.kind === 'string' &&
-      (s.label === undefined || typeof s.label === 'string') &&
-      (s.place === undefined || typeof s.place === 'string') &&
-      (s.size === undefined || typeof s.size === 'string')
+      (s.label === undefined || typeof s.label === 'string')
   );
 }
 

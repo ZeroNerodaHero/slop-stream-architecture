@@ -47,6 +47,21 @@ async function framesFlow(p, sel) {
   return `${sel} ${b.w}px wide, ${b.frames - a.frames} frames in 1.5s${b.muted ? ', muted' : ''}`;
 }
 const rect = (p, sel) => p.$eval(sel, (el) => el.getBoundingClientRect().toJSON());
+// the mic meter's level over 1.5s. the fake mic beeps every half second, so the bar jumps and falls back between beeps
+async function micMoves(p, sel) {
+  const levels = await p.$eval(sel, async (el) => {
+    const out = [];
+    const t0 = performance.now();
+    while (performance.now() - t0 < 1500) {
+      out.push(Number(el.getAttribute('aria-valuenow')));
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    return out;
+  });
+  const peak = Math.max(...levels);
+  expect(peak > 0 && new Set(levels).size > 3, `${sel} does not move: ${levels.join(',')}`);
+  return `${sel} peaks at ${peak}%`;
+}
 const near = (a, b) => Math.abs(a - b) <= 1.5;
 const at = (r) => `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}×${Math.round(r.height)}`;
 // press in the middle of an element and pull it by (dx, dy)
@@ -113,11 +128,20 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await s.fill('#name', ME);
     await s.waitForFunction(() => !document.querySelector('#start').disabled);
     expect((await s.$('#live-pip')) === null, 'the picture in picture button is up before start');
+    expect((await s.$('#live-mic')) === null, 'the mic meter is up before start');
     await s.click('#start');
     await waitStatus(s, /^live$/);
     await s.waitForSelector('#live-pip', { timeout: 5000 });
     expect((await s.$('#live-pip-player')) === null, "the corner player showed on the stream's own page");
     return `${calls.goLive} go-live call`;
+  });
+
+  await step("the preview's top left is the mic meter, and its bar moves with the mic", async () => {
+    await s.waitForSelector('#live-mic[data-mic="on"]', { timeout: 5000 });
+    const mic = await rect(s, '#live-mic');
+    const preview = await rect(s, '#preview');
+    expect(near(mic.left, preview.left + 12) && near(mic.top, preview.top + 12), `the meter is at ${at(mic)} on a preview at ${at(preview)}`);
+    return await micMoves(s, '#live-mic');
   });
 
   const w = await (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();
@@ -138,6 +162,14 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     const v = await frames(s, '#live-pip-video');
     expect(v.muted, 'your own camera is not muted in the corner');
     return `${at(box)} · ${await framesFlow(s, '#live-pip-video')}`;
+  });
+
+  await step('the corner has the mic meter too, top left, moving', async () => {
+    await s.waitForSelector('#live-pip-mic[data-mic="on"]', { timeout: 5000 });
+    const mic = await rect(s, '#live-pip-mic');
+    const video = await rect(s, '#live-pip-video');
+    expect(near(mic.left, video.left + 12) && mic.top >= video.top + 8 && mic.top < video.top + 20, `the meter is at ${at(mic)} on a picture at ${at(video)}`);
+    return await micMoves(s, '#live-pip-mic');
   });
 
   await step(`the stream survived leaving the page: a watcher at /watch/${ME} gets frames, and the corner counts them`, async () => {

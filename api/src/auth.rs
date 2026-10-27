@@ -275,6 +275,16 @@ pub(crate) async fn is_claimed(db: &PgPool, name: &str) -> Result<bool, sqlx::Er
     .await
 }
 
+/// The refusals for a name that is somebody's, the http one and the sockets' one. The word
+/// `account` is the wire contract: the pages recognise a refused nick by regex on this text
+/// (`/nick|account|fake/` in frontend/src/infra/events.worker.ts and events.ts,
+/// `/nick|account/` in frontend/src/infra/atoms/chat-atoms.ts) and only then stop re-sending
+/// it; docs/status.md, chat.md, accounts.md, spec.md and test/auth.js, presence.js quote it.
+/// A held name is held for an account, so the words hold for it too. Change them together
+/// with all of those, or not at all.
+pub(crate) const NAME_HAS_ACCOUNT: &str = "that name has an account. log in as it";
+pub(crate) const NICK_HAS_ACCOUNT: &str = "that name has an account. log in as it, or pick another";
+
 /// The one rule the rest of the api asks: may whoever holds `me` act as `name`?
 /// A free name: anyone. A claimed name: only its own login. A held name: nobody, not even
 /// the account that left it (its login is under the new name; it renames back instead).
@@ -282,7 +292,7 @@ pub(crate) async fn may_act_as(db: &PgPool, name: &str, me: Option<&str>) -> Res
     if me == Some(name) || !is_claimed(db, name).await? {
         return Ok(());
     }
-    Err(ApiError::new(StatusCode::FORBIDDEN, "that name is somebody's. log in as it"))
+    Err(ApiError::new(StatusCode::FORBIDDEN, NAME_HAS_ACCOUNT))
 }
 
 /// Who the cookie says this is. `None` for everyone without a (valid) login.
@@ -740,6 +750,15 @@ fn random_password() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pages stop re-sending a refused nick only when the error matches `/nick|account|fake/`
+    /// (events.worker.ts, events.ts) or `/nick|account/` (chat-atoms.ts); without the word a
+    /// guest with a claimed nick reconnects every 3 s for ever. test/auth.js and presence.js match `/account/`.
+    #[test]
+    fn the_refusals_carry_the_word_the_pages_match_on() {
+        assert!(NAME_HAS_ACCOUNT.contains("account"));
+        assert!(NICK_HAS_ACCOUNT.contains("account"));
+    }
 
     /// A throwaway postgres, migrated. For example
     /// `docker run -d --name test-pg -e POSTGRES_PASSWORD=x -e POSTGRES_DB=t -p 55434:5432 postgres:17-alpine`

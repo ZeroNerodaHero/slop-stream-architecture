@@ -19,6 +19,8 @@ interface CameraOverlayProps {
 
 /** An arrow key moves the box this much of the frame; with shift, five times that. */
 const NUDGE = 0.01;
+/** A fraction of the frame as a css percentage, to a tenth: `0.73` is `73%`, not `72.99999999999999%`. */
+const pct = (fraction: number) => `${Math.round(fraction * 1000) / 10}%`;
 const ARROWS: Record<string, readonly [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
 
 /** One press, pointerdown to pointerup: where the pointer and the box were when it began, and the frame's size then. */
@@ -82,7 +84,7 @@ export function CameraOverlay({ id, streamAtom, layout, onPick, onMove }: Camera
       onPointerUp={onMove ? release : undefined}
       onPointerCancel={onMove ? release : undefined}
       onKeyDown={onMove ? nudge : undefined}
-      style={{ left: `${layout.x * 100}%`, top: `${layout.y * 100}%`, width: `${layout.w * 100}%` }}
+      style={{ left: pct(layout.x), top: pct(layout.y), width: pct(layout.w) }}
       className={cn(
         'absolute aspect-video overflow-hidden border border-white/40 bg-black outline-none transition-[border-color] duration-150 focus-visible:border-primaryBlue',
         onMove ? 'cursor-move touch-none select-none' : 'hover:border-primaryBlue'

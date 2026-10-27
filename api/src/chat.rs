@@ -35,11 +35,11 @@ use tokio::sync::{broadcast, watch, Mutex};
 
 use uuid::Uuid;
 
-use crate::auth::{client_ip, is_claimed, whoami};
+use crate::auth::{client_ip, is_claimed, whoami, NICK_HAS_ACCOUNT};
 use crate::groups::{badges_of, Badge, BOT_GROUP};
 use crate::history;
 use crate::socket::{first_text, id_parts, send, send_within, DRAIN_LIMIT, IDLE_LIMIT, MAX_FRAME_BYTES, PING_EVERY, READ_BLOCK_MS, SEND_TIMEOUT};
-use crate::{events, owns_session, Name, Owner};
+use crate::{owns_session, Name, Owner};
 
 const HISTORY_LINES: usize = 200;
 const KEEP_LINES: usize = 500;
@@ -138,27 +138,24 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
     let persist = history::enabled();
     log::info!("chat history {}", if persist { "on" } else { "off" });
     let state = ChatState {
-        db: db.clone(),
-        redis: redis.clone(),
-        client: client.clone(),
+        db,
+        redis,
+        client,
         rooms: Arc::new(Mutex::new(HashMap::new())),
-        shutdown: shutdown.clone(),
-        dummy_prefix: dummy_prefix.clone(),
+        shutdown,
+        dummy_prefix,
         persist,
     };
     let rooms = state.rooms.clone();
-    // the gateway: /events (one socket per browser, presence and pushes) and /online, on the
-    // same listener, drained the same way. see docs/status.md and events.rs
-    let gateway = events::Gateway::new(db, redis, client, shutdown, dummy_prefix);
-    let sockets = gateway.registry();
 
+    // the rooms only. the gateway (/events, presence and the pushes) is `api events`, a
+    // process and container of its own; see events.rs and docs/status.md
     let router = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/chat/{name}", get(ws))
         .route("/chat/{server}/{channel}", get(ws_channel))
         .merge(history::routes())
-        .with_state(state)
-        .merge(events::routes(gateway));
+        .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     log::info!("chat on {addr}");
@@ -173,7 +170,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
     // ...and give them a moment to send the close frame and leave their rooms,
     // instead of being cut mid-send when the runtime goes
     let deadline = Instant::now() + DRAIN_LIMIT;
-    while (!rooms.lock().await.is_empty() || !sockets.is_empty().await) && Instant::now() < deadline {
+    while !rooms.lock().await.is_empty() && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(())
@@ -277,7 +274,7 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
         }
         match is_claimed(&s.db, &lower).await {
             Ok(false) => nick,
-            Ok(true) => return Err(Unknown::Refused("that name is somebody's. log in as it, or pick another")),
+            Ok(true) => return Err(Unknown::Refused(NICK_HAS_ACCOUNT)),
             Err(e) => {
                 // fail closed: with the database down a claimed name must not be borrowable
                 log::warn!("{room}: cannot check whether {nick} is claimed: {e}");

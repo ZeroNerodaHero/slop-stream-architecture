@@ -298,7 +298,7 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
               autoComplete="off"
               className="min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base"
             />
-            <Button id="chat-join" variant="primary" className="px-4 py-2 text-base" disabled={!nickOk} onClick={() => openChat(name, owner)}>
+            <Button id="chat-join" variant="primary" flat className="px-4 py-2 text-base" disabled={!nickOk} onClick={() => openChat(name, owner)}>
               join
             </Button>
             {/* "that name has an account": the refusal that sent you back here */}
@@ -331,7 +331,7 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
                 <span id="chat-left" className={cn('text-textTertiary', left < 0 && 'font-semibold text-decrease')}>
                   {left}
                 </span>
-                <Button id="chat-send" variant="primary" className="px-4 py-2 text-base" disabled={!canSend} onClick={sendChat}>
+                <Button id="chat-send" variant="primary" flat className="px-4 py-2 text-base" disabled={!canSend} onClick={sendChat}>
                   send
                 </Button>
               </span>

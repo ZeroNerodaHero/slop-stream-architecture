@@ -32,10 +32,10 @@ http:// {
 		reverse_proxy chat:4100
 	}
 
-	# the events websocket: presence and pushes, one per browser, open on every page. the same
-	# process as the chat. an exact path, like /ws. see docs/status.md
+	# the events websocket: presence and pushes, one per browser, open on every page. its own
+	# container, the api binary run as `api events`. an exact path, like /ws. see docs/status.md
 	handle /events {
-		reverse_proxy chat:4100
+		reverse_proxy events:4100
 	}
 
 	# the picture of each live stream, made on the video machine

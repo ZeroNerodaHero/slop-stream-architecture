@@ -36,13 +36,18 @@ const SHARE_PHASES: readonly PublishPhase[] = ['live', 'reconnecting'];
  * the bitrate, and the bits go on pixels the cap cannot afford (docs/bitrates.md).
  */
 const SCREEN_CAP: MediaTrackConstraints = { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 30 } };
+/** `DisplayMediaStreamOptions` with the picker hints the typings do not have yet (`cursor` sits in the video constraints, untyped too). */
+interface DisplayHints extends DisplayMediaStreamOptions {
+  selfBrowserSurface?: 'include' | 'exclude';
+  surfaceSwitching?: 'include' | 'exclude';
+}
 /**
  * The picker, asked for a page: the cursor in the picture so the person can point at things,
  * this site's own tab kept out of the picker (sharing it is a mirror), and switching which tab
  * is shared without stopping. Hints, every one: a browser that throws on them is asked again
- * with `SCREEN_CAP` alone. No sound (docs/audio.md). `cursor` is not in the typings.
+ * with `SCREEN_CAP` alone. No sound (docs/audio.md).
  */
-const SCREEN_HINTS: DisplayMediaStreamOptions = {
+const SCREEN_HINTS: DisplayHints = {
   video: { ...SCREEN_CAP, cursor: 'always' } as MediaTrackConstraints,
   audio: false,
   selfBrowserSurface: 'exclude',

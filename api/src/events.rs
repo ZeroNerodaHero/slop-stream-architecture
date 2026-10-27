@@ -1,5 +1,6 @@
-//! `/events`: the gateway. One websocket per browser, open on every page, on the chat's
-//! listener (`api chat`, :4100). See docs/status.md.
+//! `/events`: the gateway. One websocket per browser, open on every page. A process of its
+//! own, `api events` on :4100, the `events` container: the chat is a different socket in a
+//! different container, and the two share only the plumbing in socket.rs. See docs/status.md.
 //!
 //! A socket says hello as a name (the cookie's login, else the nick lowercased when nobody
 //! owns that name, else nobody) and from then on the name is *here*: a member of the sorted
@@ -21,6 +22,7 @@
 //! ping that keeps it here reads the current one.
 
 use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -40,9 +42,9 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use tokio::sync::{mpsc, watch, Mutex, Notify};
 
-use crate::auth::{is_claimed, whoami};
+use crate::auth::{is_claimed, whoami, NICK_HAS_ACCOUNT};
 use crate::presence::{self, Presence, Status, EVENTS_KEEP, EVENTS_KEY, SEEN_TTL_SECS, SEEN_WINDOW_MS};
-use crate::socket::{first_text, send, IDLE_LIMIT, MAX_FRAME_BYTES, PING_EVERY, READ_BLOCK_MS, SEND_TIMEOUT};
+use crate::socket::{first_text, send, DRAIN_LIMIT, IDLE_LIMIT, MAX_FRAME_BYTES, PING_EVERY, READ_BLOCK_MS, SEND_TIMEOUT};
 use crate::{live_key, valid_name};
 
 /// How far back the tail starts after a (re)start: the gap of a deploy, replayed. Deliveries
@@ -148,10 +150,41 @@ impl Registry {
     }
 }
 
+/// `api events`: the gateway on a listener of its own. `GET /health` for the container's
+/// check, `/events` for the browsers, `/online` for the tests inside the network. On SIGTERM
+/// every socket gets a close frame and up to DRAIN_LIMIT to leave, like the chat's rooms.
+pub(crate) async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
+    let client = redis::Client::open(redis_url)?;
+    let redis = crate::connect_redis(redis_url).await;
+    let (stop, shutdown) = watch::channel(false);
+    let dummy_prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
+    let gateway = Gateway::new(db, redis, client, shutdown, dummy_prefix);
+    let sockets = gateway.registry();
+
+    let router = Router::new().route("/health", get(|| async { "ok" })).merge(routes(gateway));
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    log::info!("events on {addr}");
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, router)
+        .with_graceful_shutdown(async move {
+            crate::wait_for_signal().await;
+            // axum does not wait for upgraded sockets: tell every handle to say goodbye
+            let _ = stop.send(true);
+        })
+        .await?;
+    // ...and give them a moment to send the close frame, instead of being cut mid-send
+    let deadline = Instant::now() + DRAIN_LIMIT;
+    while !sockets.is_empty().await && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Ok(())
+}
+
 impl Gateway {
     pub(crate) fn new(db: PgPool, redis: ConnectionManager, client: redis::Client, shutdown: watch::Receiver<bool>, dummy_prefix: String) -> Self {
-        // docker sets HOSTNAME to the container id; a box without it is "chat"
-        let host = std::env::var("HOSTNAME").ok().filter(|h| !h.trim().is_empty()).unwrap_or_else(|| "chat".into());
+        // docker sets HOSTNAME to the container id; a box without it is "events"
+        let host = std::env::var("HOSTNAME").ok().filter(|h| !h.trim().is_empty()).unwrap_or_else(|| "events".into());
         let g = Gateway {
             db,
             redis,
@@ -477,7 +510,7 @@ async fn identify(g: &Gateway, headers: &HeaderMap, nick: Option<&str>) -> Resul
     }
     match is_claimed(&g.db, &name).await {
         Ok(false) => Ok(Some(name)),
-        Ok(true) => Err(Refused("that name is somebody's. log in as it, or pick another")),
+        Ok(true) => Err(Refused(NICK_HAS_ACCOUNT)),
         Err(e) => {
             // fail closed: with the database down a claimed name must not be wearable
             log::warn!("events: cannot check whether {name} is claimed: {e}");
@@ -567,7 +600,7 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
             }
             _ = shutdown.changed() => {
                 going = true;
-                let goodbye = Message::Close(Some(CloseFrame { code: 1001, reason: "chat restarting".into() }));
+                let goodbye = Message::Close(Some(CloseFrame { code: 1001, reason: "events restarting".into() }));
                 let _ = tokio::time::timeout(SEND_TIMEOUT, socket.send(goodbye)).await;
                 break;
             }

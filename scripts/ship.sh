@@ -49,7 +49,7 @@ for a in "$@"; do
     --to=*) MODE=send; TO="${a#--to=}" ;;
     --local) MODE=local ;;
     pages|frontend) TARGETS+=(pages) ;;
-    api|chat) TARGETS+=(api) ;;
+    api|chat|events) TARGETS+=(api) ;;
     video|dummy) TARGETS+=("$a") ;;
     *) die "don't know what '$a' is. images are: pages api video dummy. see ./scripts/ship.sh --help" ;;
   esac
