@@ -1,6 +1,7 @@
 import { RiCheckboxBlankCircleLine, RiEyeOffLine, RiIndeterminateCircleLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import { clearRenameStatus, meAtom, RENAME_DAYS, renameAgainAtom, renameBusyAtom, renameMe, renameStatusAtom } from '@/infra/atoms/auth-atoms';
 import { MAX_CHAT_CHARS, chars, nickAtom, setNick } from '@/infra/atoms/chat-atoms';
@@ -28,15 +29,15 @@ import {
   profileOfflineNoteAtom,
   profileOfflineNoteStatusAtom,
   profileOfflineStatusAtom,
-  profileVerifiedAtom,
   removeMyAvatar,
   removeMyOffline,
   saveMyAvatar,
   saveMyBio,
   saveMyOffline,
-  saveMyOfflineNote
+  saveMyOfflineNote,
+  whyNotEditAtom
 } from '@/infra/atoms/profile-atoms';
-import { pickTab } from '@/infra/atoms/user-modal-atoms';
+import { closeUserModal, pickTab } from '@/infra/atoms/user-modal-atoms';
 import { api } from '@/infra/api';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
 import { store } from '@/infra/store';
@@ -44,7 +45,6 @@ import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { BUTTON, Field, INPUT, OptionCard, PasswordInput, SECTION_TITLE, Section, Status } from '@/shared-components/user-modal/parts';
-import { SocialsSection } from '@/shared-components/user-modal/SocialsSection';
 import { cn } from '@/utils/cn';
 
 /**
@@ -123,7 +123,7 @@ function Rename({ me }: { me: string }) {
   );
 }
 
-/** The api caps the bio here (in characters, the way `chars` counts). */
+/** The api caps the status here (in characters, the way `chars` counts). `bio` on the wire: the word `status` is the presence choice's (docs/status.md). */
 const MAX_BIO_CHARS = MAX_CHAT_CHARS;
 
 /** The three choices as cards. `invisible` shows as `offline` to everyone else; the word on the card says so. */
@@ -149,10 +149,12 @@ const PRESENCE_OPTIONS: readonly { choice: PresenceChoice; label: string; detail
 ];
 
 /**
- * Who I am, as others see it: the picture, the name, the bio. For a login the name is the
+ * Who I am, as others see it: the picture, the name, the status. For a login the name is the
  * account's and fixed; for a guest it is the nick, kept in this browser, and changing it is
- * becoming somebody else (the old name keeps its bio and picture). Everything saves under the
+ * becoming somebody else (the old name keeps its status and picture). Everything saves under the
  * name I am now, through the api's one rule: a free name is anyone's, a claimed one its login's.
+ * The about me and the links are not here: they are edited on my own page, where they show
+ * (AboutMe.tsx, SocialsEditor.tsx); this tab points there.
  */
 export function ProfileTab() {
   const me = useAtomValue(meAtom);
@@ -162,8 +164,8 @@ export function ProfileTab() {
   const avatarStatus = useAtomValue(profileAvatarStatusAtom);
   const bio = useAtomValue(profileBioAtom);
   const bioStatus = useAtomValue(profileBioStatusAtom);
-  const verified = useAtomValue(profileVerifiedAtom);
   const canEdit = useAtomValue(canEditProfileAtom);
+  const whyNot = useAtomValue(whyNotEditAtom);
   const badges = useAtomValue(myGroupsAtom);
   const presence = useAtomValue(myPresenceAtom);
   const choice = useAtomValue(presenceChoiceAtom);
@@ -177,7 +179,7 @@ export function ProfileTab() {
   // the nick as it was when its box got focus: leaving the box tells the chat only on a real change
   const nickAtFocus = useRef('');
 
-  // Mount only: the bio and picture of the name I am (the same name again keeps the draft),
+  // Mount only: the status and picture of the name I am (the same name again keeps the draft),
   // and the groups, for the badges on the card (a login's; a guest has none).
   useEffect(() => {
     void loadMyProfile();
@@ -185,14 +187,7 @@ export function ProfileTab() {
   }, []);
 
   const left = MAX_BIO_CHARS - chars(bio.trim());
-  const named = isValidName(name);
-  const whyNot = !named
-    ? 'pick a name first.'
-    : isDummyName(name)
-      ? 'a reserved name: it belongs to the fake streams, nobody writes it.'
-      : verified && me !== name
-        ? 'that name has an account. log in as it to change these.'
-        : '';
+  const named = isValidName(name) && !isDummyName(name);
 
   function commitNick() {
     const was = nickAtFocus.current;
@@ -336,24 +331,34 @@ export function ProfileTab() {
         )}
       </Section>
 
-      <Section title="bio" description="who you are. what the stream is. on your stream's page and on home while you are live.">
-        <Field id="profile-bio" label="bio">
-          <textarea
+      {/* the status: one line about me, the way a custom status is. under my name on my page, beside it on home,
+          in the sidebar and in the preview of my link. `bio` on the wire (the word `status` is the presence choice's) */}
+      <Section
+        title="status"
+        description="one line about you: what you are up to, what the stream is. under your name on your page, beside it on home and in the sidebar, and in the preview of your link."
+      >
+        <Field id="profile-bio" label="status" hint={`${MAX_BIO_CHARS} characters, one line. empty takes it off.`}>
+          <input
             id="profile-bio"
             value={bio}
             onChange={(e) => {
               store.set(profileBioAtom, e.target.value);
               if (store.get(profileBioStatusAtom)) store.set(profileBioStatusAtom, '');
             }}
-            placeholder="who are you. what is this stream."
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void saveMyBio();
+            }}
+            placeholder="what are you up to. what is this stream."
             maxLength={MAX_BIO_CHARS}
             disabled={!canEdit}
-            className={cn(INPUT, 'min-h-[120px] resize-y')}
+            autoComplete="off"
+            aria-describedby="profile-bio-hint"
+            className={INPUT}
           />
         </Field>
         <div className="flex flex-wrap items-center gap-3">
           <Button id="profile-save-bio" variant="primary" className={BUTTON} disabled={!canEdit} onClick={() => void saveMyBio()}>
-            save bio
+            save status
           </Button>
           <span id="profile-bio-count" className={cn('text-sm tabular-nums text-textTertiary', left < 20 && 'text-decrease')}>
             {left}
@@ -362,8 +367,22 @@ export function ProfileTab() {
         </div>
       </Section>
 
-      {/* where else to find me (docs/socials.md): the socials tab on my page. its own file: the rows, the places, the layout and size cards, the preview */}
-      <SocialsSection name={name} canEdit={canEdit} whyNot={whyNot} />
+      {/* the about me (docs/about.md) and the links (docs/socials.md) are edited on my page itself, under the player,
+          where they show: this is the way there, since they used to be here */}
+      <Section
+        title="your page"
+        description="the longer piece about you and where else to find you are written on your page itself, under the player, where everyone reads them: the about tab and the socials tab."
+      >
+        {named ? (
+          <p>
+            <Link id="profile-your-page" to={`/watch/${name}`} onClick={closeUserModal} className="font-semibold text-primaryBlue underline-offset-2 hover:underline">
+              /watch/{name}
+            </Link>
+          </p>
+        ) : (
+          <p className="text-sm text-textTertiary">{whyNot}</p>
+        )}
+      </Section>
 
       {/* what the stream's page shows while I am not live: a picture where the player would be (the
           way twitch has an offline banner) and a line under the word. the picture is the card of a

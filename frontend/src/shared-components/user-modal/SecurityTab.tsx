@@ -37,7 +37,7 @@ function LoggedOut() {
   const busy = useAtomValue(authBusyAtom);
   const error = useAtomValue(authErrorAtom);
   const [signingUp, setSigningUp] = useState(false);
-  // the nick, as the name it would be: signing up as it claims the bio and picture saved under it
+  // the nick, as the name it would be: signing up as it claims the status, page and picture saved under it
   const [name, setName] = useState(() =>
     cleanName(store.get(nickAtom))
       .replace(/[^a-z0-9_-]/g, '')
@@ -60,10 +60,10 @@ function LoggedOut() {
   }
 
   return (
-    <Section title="account" description="an account keeps your name yours: only you can go live, edit the bio or talk as it. nobody has to.">
+    <Section title="account" description="an account keeps your name yours: only you can go live, edit your status and your page, or talk as it. nobody has to.">
       {/* no method="dialog": a submit would close the modal. onSubmit owns enter */}
       <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
-        <Field id="sec-name" label="name" hint={signingUp ? 'a-z 0-9 _ -, up to 32. a free name is yours on sign up, bio and picture too.' : undefined}>
+        <Field id="sec-name" label="name" hint={signingUp ? 'a-z 0-9 _ -, up to 32. a free name is yours on sign up, status, page and picture too.' : undefined}>
           <input
             id="sec-name"
             name="username"

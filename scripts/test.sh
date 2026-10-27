@@ -41,13 +41,15 @@
 #   calendar   the calendar tab: the api's range (93 days at most, the last 20 without one), a go-live is a live block on the watcher's strip,
 #              a stop closes it with ended_by stop and the heartbeat's time, a tab that goes offline and away is closed by video within a beat
 #              of its last heartbeat, two sessions a minute apart are one block with a mark at the drop, the strip pages, an account's rows
-#   about      the about tab: the sample's blocks and media (this origin only), the music player plays and pauses, every css selector lands
-#              under the box, hostile css (hide the page, restyle the title, url(), @import, @font-face, position: fixed, a closing tag) is
-#              stripped with nothing fetched and nothing outside the box touched
+#   about      the about tab: the about me (through the api on a free name, first on the tab, written in place by the owner), then the
+#              sample's blocks and media (this origin only), the music player plays and pauses, every css selector lands under the box,
+#              hostile css (hide the page, restyle the title, url(), @import, @font-face, position: fixed, a closing tag) is stripped
+#              with nothing fetched and nothing outside the box touched
 #   socials    the socials tab: a login's document of links through the api (a url that is not http(s), a kind off the list, too many links
 #              and a stranger all refused), the links drawn on the watcher's tab as anchors that leave safely (rel, target) wearing the
-#              layout and the size, nothing fetched from elsewhere, the profile tab editing them (the cards, a row from its square, the
-#              arrows, ×) so the owner's own page follows without a reload; the corner panel's picture is your page and the gear is in it
+#              layout and the size, nothing fetched from elsewhere, the owner editing them on that tab (the editor under the strip: the
+#              cards, a row from its square, the arrows, ×; the strip follows the draft, done shows the saved document); the corner
+#              panel's picture is your page and the gear is in it
 #   regress    token-gated stop, auto-recovery, trailing slash, fast restart, races, bad offers
 #   monitor    (local only) `api monitor` watches this stack and a dead address: up with the right build,
 #              down with a reason, the page shows both, a restart keeps its memory. runs monitor/docker-compose.yml

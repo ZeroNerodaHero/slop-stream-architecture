@@ -1,18 +1,22 @@
-// The about tab (docs/about.md): the page of their own under the player, drawn from blocks, with
-// css of their own over it that cannot leave the box. The sample document's blocks are on the
-// page (a heading, a picture, a clip, the music player, links) and its media comes from this
-// origin; the player plays on a press and pauses on the next; every selector of the css ends up
-// under the box's id; css that tries to hide the page, restyle the title, load a picture or a
-// font from elsewhere, import a sheet, pin itself over the page, or close the style tag is
-// stripped, with nothing fetched and nothing outside the box touched; a selector list with
-// `body` in it does not reach the body. Run through ./scripts/test.sh, or:
-// BASE_URL=https://<ip> node about.js
+// The about tab (docs/about.md): the about me first (a few paragraphs, through the api on a free
+// name, first on the tab for a watcher, and written in place by the owner, the box opening where
+// the words are), then the page of their own under the player, drawn from blocks, with css of
+// their own over it that cannot leave the box. The sample document's blocks are on the page (a
+// heading, a picture, a clip, the music player, links) and its media comes from this origin; the
+// player plays on a press and pauses on the next; every selector of the css ends up under the
+// box's id; css that tries to hide the page, restyle the title, load a picture or a font from
+// elsewhere, import a sheet, pin itself over the page, or close the style tag is stripped, with
+// nothing fetched and nothing outside the box touched; a selector list with `body` in it does
+// not reach the body. Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node about.js
 const { chromium, request } = require('playwright');
 const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
-/** a free name, nobody's, not live: the page is the profile and the tabs */
+/** a free name, nobody's, not live: the page is the profile and the tabs, and its about me is anyone's to write */
 const NAME = 'ab1';
 const BOX = `#about-${NAME}`;
 const EDITOR = `#about-${NAME}-css`;
+/** the about me this suite writes: through the api (two paragraphs, kept), then in the box on the page */
+const ABOUT_API = 'written through the api.\n\ntwo paragraphs, kept.';
+const ABOUT_BOX = 'written in the box on the page.';
 const ARGS = ['--ignore-certificate-errors', '--autoplay-policy=no-user-gesture-required'];
 const results = [];
 async function step(name, fn) {
@@ -66,9 +70,25 @@ const styleText = (page) => page.evaluate((box) => document.querySelector(`${box
     if (!r.url().startsWith(BASE) && !r.url().startsWith('data:') && !r.url().startsWith('blob:')) elsewhere.push(r.url());
   });
 
-  await step(`preflight: ${NAME} is not live`, async () => {
+  await step(`preflight: ${NAME} is not live, and nobody's`, async () => {
     const who = await (await api.get(`/api/streamers/${NAME}`)).json();
     expect(who && who.presence !== 'streaming', `${NAME} is ${who && who.presence}; is another run going?`);
+    expect(who.verified !== true, `${NAME} has an account on this box: this suite writes its about me as nobody`);
+  });
+
+  await step('about me through the api: a free name is anyone\'s, the ends are trimmed and paragraphs stay, the profile read and the watch grant both carry it', async () => {
+    const clear = await api.put(`/api/streamers/${NAME}/about`, { data: { about: '' } });
+    expect(clear.status() === 200, `clearing got ${clear.status()}`);
+    const res = await api.put(`/api/streamers/${NAME}/about`, { data: { about: `  ${ABOUT_API}\n\n\n\n` } });
+    const saved = await res.json();
+    expect(res.status() === 200 && saved.about === ABOUT_API, `the put got ${res.status()}: ${JSON.stringify(saved)}`);
+    const read = await (await api.get(`/api/streamers/${NAME}`)).json();
+    expect(read.about === ABOUT_API, `the profile read says ${JSON.stringify(read.about)}`);
+    const grant = await (await api.post(`/api/streams/${NAME}/watch`)).json();
+    expect(grant.about === ABOUT_API, `the watch grant says ${JSON.stringify(grant.about)}`);
+    const bad = await api.put(`/api/streamers/${NAME}/about`, { data: { words: 'x' } });
+    expect(bad.status() === 400, `a body with no about got ${bad.status()}`);
+    return 'cleared, written, read back on both';
   });
 
   await step(`/watch/${NAME}: the about tab is open by default and the sample's blocks are on the page`, async () => {
@@ -86,6 +106,19 @@ const styleText = (page) => page.evaluate((box) => document.querySelector(`${box
     const links = await page.$$eval(`${BOX} .about-links a`, (as) => as.map((a) => a.getAttribute('href')));
     expect(links.every((h) => h.startsWith('/') || h.startsWith(BASE)), `a link goes to ${JSON.stringify(links)}`);
     return `${kinds.length} kinds of block, picture ${img}`;
+  });
+
+  await step('the about me is first on the tab, as written, and a stranger is not offered its box', async () => {
+    const text = ((await page.textContent('#about-me')) || '').trim();
+    expect(text === ABOUT_API, `the about me reads ${JSON.stringify(text)}`);
+    const first = await page.evaluate((box) => {
+      const me = document.querySelector('#about-me');
+      const b = document.querySelector(box);
+      return !!me && !!b && Boolean(me.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    }, BOX);
+    expect(first, 'the about me is not before the box');
+    expect((await page.$$('#about-me-edit')).length === 0, 'a stranger is offered the about me box');
+    return 'two paragraphs, before the box';
   });
 
   await step('the sample media is served from this origin with its own types', async () => {
@@ -203,6 +236,35 @@ const styleText = (page) => page.evaluate((box) => document.querySelector(`${box
     expect(/0 dropped/.test(note), `the editor came back with "${note}"`);
     const playing = (await page.$$(`${BOX} .about-music[data-playing]`)).length;
     expect(playing === 0, 'the player came back playing');
+  });
+
+  await step(`as ${NAME} (the nick in the corner panel): the about me offers its box in place, holding the words; typed and saved, the page has it at once and the api agrees; done folds the box`, async () => {
+    await page.hover('#user-panel');
+    await page.waitForSelector('#username', { timeout: 15000 });
+    await page.fill('#username', NAME);
+    await page.press('#username', 'Enter'); // blur: the nick is committed, and the page is mine
+    // the pointer off the panel, so it folds back off the page before anything under it is clicked
+    await page.mouse.move(1200, 360);
+    await page.waitForSelector('#user-panel[data-open="false"]', { timeout: 10000 });
+    await page.waitForSelector('#about-me-edit', { timeout: 10000 });
+    await page.click('#about-me-edit');
+    await page.waitForSelector('#about-me-text', { timeout: 5000 });
+    expect((await page.$$('#user-modal[open]')).length === 0, 'the box opened the user modal');
+    expect((await page.$$('#about-me')).length === 0, 'the words are still on the page beside their box');
+    await page.waitForFunction((v) => document.querySelector('#about-me-text')?.value === v, ABOUT_API, { timeout: 10000 });
+    await page.fill('#about-me-text', ABOUT_BOX);
+    await page.click('#about-me-save');
+    await page.waitForFunction(() => document.querySelector('#about-me-status')?.textContent === 'saved', null, { timeout: 10000 });
+    const read = await (await api.get(`/api/streamers/${NAME}`)).json();
+    expect(read.about === ABOUT_BOX, `the api says ${JSON.stringify(read.about)}`);
+    await page.click('#about-me-done');
+    await page.waitForSelector('#about-me-text', { state: 'detached', timeout: 5000 });
+    const text = ((await page.textContent('#about-me')) || '').trim();
+    expect(text === ABOUT_BOX, `the page reads ${JSON.stringify(text)} after the save, no reload`);
+    // the next run starts from nothing, like this one did
+    const clear = await api.put(`/api/streamers/${NAME}/about`, { data: { about: '' } });
+    expect(clear.status() === 200, `clearing got ${clear.status()}`);
+    return 'written in place, saved, shown, cleared again';
   });
 
   await browser.close();

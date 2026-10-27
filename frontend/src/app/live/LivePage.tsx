@@ -1,6 +1,6 @@
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { api } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
@@ -59,6 +59,7 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
+import { isValidName } from '@/infra/names';
 import { SCREEN_SLOTS } from '@/infra/relay';
 import { store } from '@/infra/store';
 import { Avatar } from '@/shared-components/Avatar';
@@ -149,7 +150,7 @@ export function LivePage() {
   return (
     <PageFrame title="go live" wide>
       {/* the same arrangement as the watch page, for the same layout setting: the preview, the
-          chat, the bio box. left or right is a column at lg+ that eases shut when the chat
+          chat, the status box. left or right is a column at lg+ that eases shut when the chat
           closes; a window takes the chat out. */}
       <div className={chatLayoutClass(chatSide, chatOpen)}>
         <div className={cn('min-w-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-1')}>
@@ -270,25 +271,41 @@ export function LivePage() {
 
         <div className={cn('min-w-0', chatSide === 'right' && 'lg:col-start-1', chatSide === 'left' && 'lg:col-start-2 lg:row-start-2')}>
           <section className={panelClassName('my-5 px-5 py-4')}>
+            {/* the status: one line about you, under your name on your page and beside it on home. `bio` on the
+                wire (the word `status` is the presence choice's, docs/status.md). the profile tab has the same box */}
             <label htmlFor="bio" className="text-textSecondary">
-              your bio
+              your status
             </label>
-            <textarea
+            <p className="mt-1 text-sm text-textSecondary">one line: what you are up to, what this stream is. under your name on your page, on your card on home.</p>
+            <input
               id="bio"
               value={bioDraft}
               onChange={(e) => store.set(bioDraftAtom, e.target.value)}
-              placeholder="who are you. what is this stream."
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void saveBio();
+              }}
+              placeholder="what are you up to. what is this stream."
               maxLength={500}
-              className="mt-2 min-h-[90px] w-full resize-y border border-primaryStroke bg-background px-4 py-3 text-textPrimary"
+              autoComplete="off"
+              className="mt-2 w-full border border-primaryStroke bg-background px-4 py-3 text-textPrimary"
             />
             <div className="mt-3 flex flex-wrap items-center gap-3">
               <Button id="savebio" flat onClick={() => void saveBio()}>
-                save bio
+                save status
               </Button>
               <span id="biostatus" className="text-textSecondary" aria-live="polite">
                 {bioStatus}
               </span>
             </div>
+            {/* the longer piece and the links are written on the page itself, where they show (AboutMe.tsx, SocialsEditor.tsx) */}
+            {isValidName(name) && (
+              <p className="mt-3 text-sm text-textTertiary">
+                the longer piece about you and your links are written on your page, under the player:{' '}
+                <Link id="your-page" to={`/watch/${name}`} className="text-primaryBlue underline-offset-2 hover:underline">
+                  /watch/{name}
+                </Link>
+              </p>
+            )}
 
             {/* the picture: on the watch page next to your name, and in the preview card of a shared link */}
             <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-primaryStroke pt-4">

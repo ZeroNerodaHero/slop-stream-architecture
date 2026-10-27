@@ -47,8 +47,8 @@ to try unpushed changes on the box without compiling there:
 ## screens
 
 - **home** — who is live, with a picture of each stream a few seconds old. the video box makes it from the stream itself. no cdn, no bucket
-- **go live** — your camera, a name box, a start button, your bio and your picture. beside the preview, your sources (`screen.md`): the camera, screens or windows, pictures and gifs, added with the `+` before start or live. each is a layer over the preview, which is what watchers see: drag it, pull a corner, order them, hide one (a hidden camera or screen is a tile for watchers), pick a preset (`screen + face`, `side by side`, ...) or save your own; under it the sound, a fader and a meter for the mic and for what everyone hears. you get a watch link to copy. paste it in a chat and it unfurls into a card: your name, live or not, your bio, the picture (or the stream itself while live). once live, leaving the page keeps the stream going in a corner of every other page, your chat with it, while you look around the site or watch someone else (the picture in picture button on the preview is that same home click); × on the corner is stop
-- **watch** — their camera and their bio, chat on the side, and whether they are around: `online`, `do not disturb`, `offline`, `streaming`. if they are not on, the page is their profile instead of a player: the picture big, the word, the bio, the chat; a streamer can put an offline picture where the player would be (the profile tab: a wide picture, and a line like `back tuesday at 8` under the word; the picture is the preview of their link too while they are off); the camera appears the moment they start
+- **go live** — your camera, a name box, a start button, your status (one line about you) and your picture. beside the preview, your sources (`screen.md`): the camera, screens or windows, pictures and gifs, added with the `+` before start or live. each is a layer over the preview, which is what watchers see: drag it, pull a corner, order them, hide one (a hidden camera or screen is a tile for watchers), pick a preset (`screen + face`, `side by side`, ...) or save your own; under it the sound, a fader and a meter for the mic and for what everyone hears. you get a watch link to copy. paste it in a chat and it unfurls into a card: your name, live or not, your status, the picture (or the stream itself while live). once live, leaving the page keeps the stream going in a corner of every other page, your chat with it, while you look around the site or watch someone else (the picture in picture button on the preview is that same home click); × on the corner is stop
+- **watch** — their camera, their status under their name, chat on the side, and whether they are around: `online`, `do not disturb`, `offline`, `streaming`. under the player, three tabs: about (their about me, then a page of their own, `about.md`), calendar, socials (`socials.md`); on your own page the about me and the links are written right there, in place. if they are not on, the page is their profile instead of a player: the picture big, the word, the tabs, the chat; a streamer can put an offline picture where the player would be (the profile tab: a wide picture, and a line like `back tuesday at 8` under the word; the picture is the preview of their link too while they are off); the camera appears the moment they start
 - **log in / sign up** — a name and a password. optional, see below
 
 ## on the computer
@@ -70,11 +70,11 @@ flowchart LR
 ```
 
 - **frontend** — the pages. react, same stack as axiom-frontend. passes api and video setup through
-- **api** — save a bio and a picture. go live. stop. a log of starts and stops. only you can stop your own stream. also the html of the watch page, so links get previews
+- **api** — save a status, an about me and a picture. go live. stop. a log of starts and stops. only you can stop your own stream. also the html of the watch page, so links get previews
 - **chat** — the text chat. one line per person per second, 500 letters max, last 500 lines kept. see `chat.md`
 - **events** — the data socket, one per browser on every page: who is here, and the pushes (`live` the moment video has the streamer, `ended`, `viewers`, the word next to a name). the api writes facts to one redis stream; this fans them out to the browsers that asked for the name, or for every name (the home page). nothing on a page polls for them. see `status.md`
 - **home** — the home list. every live stream and how many are watching it, in memory, from those same facts, checked against video every 30s. the home page asks it once and then listens; the ranking of the page, when there is one, goes here. see `status.md`
-- **database** — the bio, the picture, the presence choice and the log. not the video
+- **database** — the status, the about me, the picture, the presence choice and the log. not the video
 - **redis** — who is live right now, who is here right now, and the stream of facts the pushes come from. the video box gets the final say on live
 - **s3** — a bucket on this computer (seaweedfs). profile pictures and stream thumbnails go here. `S3_ENDPOINT=off` in `.env` uses it. set that to a url, plus a key and a secret, to use a real bucket instead
 - **video** — rust. one upload in, copies it out
@@ -88,7 +88,7 @@ all on one computer for this test.
 
 nobody has to. the name box in the panel at the bottom left is you: it is your chat name and your go-live default. it lives in your browser.
 
-sign up and the name is yours: nobody else can go live as it, change its bio, or chat as it. a `✓` next to a name means that. the password is hashed on the server (argon2id) and never stored. see `accounts.md`.
+sign up and the name is yours: nobody else can go live as it, change its status or its page, or chat as it. a `✓` next to a name means that. the password is hashed on the server (argon2id) and never stored. see `accounts.md`.
 
 the square in the corner of your picture is your presence: green while a tab of the site is open, blue while you are live, red if you picked `do not disturb`, grey if you picked `appear offline` or closed the last tab. the picker is in the profile tab; the word shows next to your name on your stream's page. see `status.md`.
 

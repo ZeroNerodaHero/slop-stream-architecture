@@ -144,8 +144,8 @@ export function AuthPage({ mode }: AuthPageProps) {
           </p>
 
           <p className="mt-6 text-sm text-textTertiary">
-            an account keeps your name yours: only you can go live, edit the bio or talk as it. there is no email and no reset, so remember it. nobody has to sign up to
-            watch, chat or stream under a free name.
+            an account keeps your name yours: only you can go live, edit your status and your page, or talk as it. there is no email and no reset, so remember it. nobody
+            has to sign up to watch, chat or stream under a free name.
           </p>
         </form>
       )}

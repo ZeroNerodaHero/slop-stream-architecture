@@ -170,6 +170,7 @@ export const chatRoomAtom = atom('');
 export const ownerAtom = atom<Owner | null>(null);
 /** How many are watching my stream, as video tells me. `null` while not live. */
 export const liveViewersAtom = atom<number | null>(null);
+/** The status box: one line about the name, as typed. `bio` on the wire (docs/status.md has the word `status`). */
 export const bioDraftAtom = atom('');
 export const bioStatusAtom = atom('');
 /** The upload time of my picture (the `?v=` of its url). `null`: none. */
@@ -234,7 +235,7 @@ let cameraCap = VIDEO_MAX_BITRATE;
 let imageCount = 0;
 /** Bumped on leaving /live: a camera granted after that belongs to nobody and is stopped. */
 let liveGeneration = 0;
-/** The name whose bio and picture are in the boxes, and the bio as it was loaded for it. */
+/** The name whose status and picture are in the boxes, and the status as it was loaded for it. */
 let profileName = '';
 let loadedBio = '';
 
@@ -1039,9 +1040,9 @@ export function endLive() {
 }
 
 /**
- * The bio, picture and thumbnails saved under the name in the box. A bio being typed is left
- * alone. Another name than last time starts clean: the old name's saved bio, picture and
- * thumbnails go, so they cannot be saved under the new one. Text the person typed is theirs
+ * The status, picture and thumbnails saved under the name in the box. A status being typed is
+ * left alone. Another name than last time starts clean: the old name's saved status, picture
+ * and thumbnails go, so they cannot be saved under the new one. Text the person typed is theirs
  * and stays.
  */
 export async function loadProfile(): Promise<void> {
@@ -1058,7 +1059,7 @@ export async function loadProfile(): Promise<void> {
       store.set(libraryAtom, []);
     }
     // the same name again keeps what was loaded for it: a second commit (focus, blur) must not
-    // forget the saved bio, or the next name change would take it for typed text and keep it
+    // forget the saved status, or the next name change would take it for typed text and keep it
     profileName = name;
     loadedBio = '';
   }
@@ -1223,17 +1224,20 @@ export async function removeAvatar(): Promise<void> {
   }
 }
 
+/** The status as typed goes up; the api keeps it as one line, and the box shows that if nothing was typed meanwhile. */
 export async function saveBio(): Promise<void> {
   const name = store.get(streamNameAtom);
   if (!isValidName(name)) {
     store.set(bioStatusAtom, 'type a name first');
     return;
   }
+  const typed = store.get(bioDraftAtom);
   try {
-    const saved = await api.saveBio(name, store.get(bioDraftAtom).trim());
-    store.set(bioStatusAtom, 'saved');
+    const saved = await api.saveBio(name, typed.trim());
+    store.set(bioStatusAtom, saved.bio ? 'saved' : 'cleared');
     // saved is as good as loaded: it belongs to this name now and goes with it on a name change
     if (name === profileName) loadedBio = saved.bio;
+    if (store.get(streamNameAtom) === name && store.get(bioDraftAtom) === typed) store.set(bioDraftAtom, saved.bio);
   } catch (err) {
     store.set(bioStatusAtom, `not saved: ${messageOf(err)}`);
   }

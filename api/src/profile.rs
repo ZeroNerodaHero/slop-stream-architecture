@@ -27,6 +27,10 @@
 //! an http(s) url and a label of theirs. Checked at the door, every field: a url that is not
 //! http(s) with a host never reaches the row, so the page can draw what the row holds.
 //!
+//! About me (docs/about.md) is the longer piece of words first on the `about` tab: a few
+//! paragraphs, `about` on the row, replaced whole through the bio's gate like the rest. The
+//! bio itself is the status, one line beside the name (main.rs `put_streamer`).
+//!
 //! Assets are the pictures a streamer lays onto the scene (docs/screen.md): png, jpeg, gif or
 //! webp, up as they are (a gif keeps its frames, a png its holes), so the api sniffs the first
 //! bytes and never decodes. Up to 24 a name, 2 mb each, at `assets/<id>/<n>.<ext>`, listed by
@@ -41,8 +45,8 @@
 //! this answers with the same index.html, read from the pages volume so the
 //! hashed asset names are always the current ones, with a real head for this
 //! one name. The profile card in its `<template id="watch-shell">` is filled
-//! in and put inside `#root`, so the page shows the name, picture, status and
-//! bio before react boots. React replaces the card when it renders.
+//! in and put inside `#root`, so the page shows the name, picture, the word and
+//! the status line before react boots. React replaces the card when it renders.
 
 use std::collections::HashMap;
 use std::env;
@@ -93,6 +97,8 @@ const ASSET_CACHE: &str = "public, max-age=31536000, immutable";
 /// because the same strings appear in the pages (`Avatar.tsx`, `WatchPage.tsx`).
 const AVATAR_IMG_CLASS: &str = "mr-3 inline-block h-10 w-10 border border-primaryStroke object-cover align-middle";
 const VERIFIED_HTML: &str = r#"<span class="ml-2 text-increase" title="has an account: this really is them">✓</span>"#;
+/// The status line under the name (`WatchPage.tsx`, `#bio`): one line, the whole of it on hover.
+const STATUS_SPAN_CLASS: &str = "mt-1 block truncate text-base font-normal text-textSecondary";
 const TEMPLATE_OPEN: &str = r#"<template id="watch-shell">"#;
 const TEMPLATE_CLOSE: &str = "</template>";
 const EMPTY_ROOT: &str = r#"<div id="root"></div>"#;
@@ -121,23 +127,25 @@ pub(crate) struct Profile {
     pub(crate) joined: Option<DateTime<Utc>>,
     /// Where else to find them: the links under the player, as the row keeps them. The empty document for none.
     pub(crate) socials: Socials,
+    /// About me: the words first on the about tab. Empty for none.
+    pub(crate) about: String,
 }
 
-/// Bio, picture versions, account flag, the offline line, when the account was made and the links, in one query. A name nobody saved anything for is all defaults.
+/// Bio, picture versions, account flag, the offline line, when the account was made, the links and the about me, in one query. A name nobody saved anything for is all defaults.
 pub(crate) async fn load_profile(db: &PgPool, name: &str) -> Result<Profile, sqlx::Error> {
-    let row: Option<(String, Option<i64>, bool, Option<i64>, String, Option<DateTime<Utc>>, Value)> = sqlx::query_as(
+    let row: Option<(String, Option<i64>, bool, Option<i64>, String, Option<DateTime<Utc>>, Value, String)> = sqlx::query_as(
         "SELECT bio, (EXTRACT(EPOCH FROM avatar_at))::bigint, password_hash IS NOT NULL,
                 (EXTRACT(EPOCH FROM offline_at))::bigint, offline_note,
-                CASE WHEN password_hash IS NOT NULL THEN created_at END, socials
+                CASE WHEN password_hash IS NOT NULL THEN created_at END, socials, about
          FROM streamers WHERE name = $1",
     )
     .bind(name)
     .fetch_optional(db)
     .await?;
-    let (bio, avatar, verified, offline, offline_note, joined, socials) = row.unwrap_or_default();
+    let (bio, avatar, verified, offline, offline_note, joined, socials, about) = row.unwrap_or_default();
     // the row's json as the document, and the empty one for a row that has none (or one from before the column)
     let socials = serde_json::from_value(socials).unwrap_or_default();
-    Ok(Profile { name: name.to_owned(), bio, avatar, verified, offline, offline_note, joined, socials })
+    Ok(Profile { name: name.to_owned(), bio, avatar, verified, offline, offline_note, joined, socials, about })
 }
 
 // ---- the row behind a name ---------------------------------------------------------------
@@ -888,6 +896,46 @@ async fn put_offline_note(
     Ok(Json(json!({ "name": name, "offline_note": note })))
 }
 
+// ---- about me (docs/about.md) -------------------------------------------------------------------
+
+/// The about me as kept, at most. The page's box stops here too.
+const MAX_ABOUT_CHARS: usize = 2000;
+
+#[derive(Deserialize)]
+struct AboutBody {
+    about: String,
+}
+
+/// The about me as it is kept: a chat line's cleaning (no control or invisible characters, no
+/// zalgo, two newlines in a row at most), trimmed, MAX_ABOUT_CHARS at most. Paragraphs stay.
+fn clean_about(raw: &str) -> String {
+    clean_text(raw).chars().take(MAX_ABOUT_CHARS).collect()
+}
+
+/// `{ about }`: the words first on the about tab. Empty clears it. The bio's gate and the bio's
+/// upsert, so a name nobody saved anything for gets its row here too. → `{ name, about }` as kept.
+async fn put_about(
+    State(s): State<AppState>,
+    Name(name): Name,
+    me: Me,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
+    body: Result<Json<AboutBody>, JsonRejection>,
+) -> ApiResult {
+    let Query(q) = q?;
+    let Json(body) = body?;
+    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    let about: String = sqlx::query_scalar(
+        "INSERT INTO streamers (name, about) VALUES ($1, $2)
+         ON CONFLICT (name) DO UPDATE SET about = EXCLUDED.about, updated_at = now()
+         RETURNING about",
+    )
+    .bind(&name)
+    .bind(clean_about(&body.about))
+    .fetch_one(&s.db)
+    .await?;
+    Ok(Json(json!({ "name": name, "about": about })))
+}
+
 // ---- where else to find them (docs/socials.md) ------------------------------------------------
 
 /// How many links one name may put under its player.
@@ -1232,6 +1280,13 @@ fn card_html(shell: &str, p: &Profile, presence: Presence, card: &Card) -> Optio
         .avatar
         .map(|v| format!(r#"<img src="/api/streamers/{}/avatar?v={v}" alt="" class="{AVATAR_IMG_CLASS}" draggable="false">"#, p.name))
         .unwrap_or_default();
+    // the status under the name, as markup: a name with none leaves no empty line
+    let status = if p.bio.is_empty() {
+        String::new()
+    } else {
+        let bio = escape(&p.bio);
+        format!(r#"<span class="{STATUS_SPAN_CLASS}" title="{bio}">{bio}</span>"#)
+    };
     // the box where the player goes: the offline picture over it while they are not live and
     // have one, else black. an inline style, so an api older than the placeholder leaves words
     // the browser ignores, not words on the page
@@ -1247,7 +1302,7 @@ fn card_html(shell: &str, p: &Profile, presence: Presence, card: &Card) -> Optio
             .replace("{{verified}}", if p.verified { VERIFIED_HTML } else { "" })
             .replace("{{status}}", presence.shown())
             .replace("{{tone}}", presence_tone(presence))
-            .replace("{{bio}}", &escape(&p.bio)),
+            .replace("{{bio}}", &status),
     )
 }
 
@@ -1361,6 +1416,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/streamers/{name}/assets", get(list_assets).put(put_asset).layer(DefaultBodyLimit::max(MAX_ASSET_BYTES)))
         .route("/api/streamers/{name}/assets/{id}", get(get_asset).delete(delete_asset))
         .route("/api/streamers/{name}/offline-note", put(put_offline_note))
+        .route("/api/streamers/{name}/about", put(put_about))
         // the links are words, not a picture: a body past this is not a document anyone wrote
         .route("/api/streamers/{name}/socials", put(put_socials).layer(DefaultBodyLimit::max(MAX_SOCIALS_BYTES)))
         .route("/watch/", get(watch_nobody))
@@ -1379,7 +1435,7 @@ mod tests {
     <script type="module" crossorigin src="/assets/index-abc.js"></script>
   </head>
   <body>
-    <template id="watch-shell"><h1>{{avatar}}{{name}}{{verified}}</h1><div style="{{banner}}"></div><p class="{{tone}}">{{status}}</p><p>{{bio}}</p></template>
+    <template id="watch-shell"><h1>{{avatar}}{{name}}{{verified}}{{bio}}</h1><div style="{{banner}}"></div><p class="{{tone}}">{{status}}</p></template>
     <div id="root"></div>
   </body>
 </html>
@@ -1414,7 +1470,7 @@ mod tests {
     }
 
     fn profile(bio: &str, avatar: Option<i64>, verified: bool) -> Profile {
-        Profile { name: "bob".into(), bio: bio.into(), avatar, verified, offline: None, offline_note: String::new(), joined: None, socials: Socials::default() }
+        Profile { name: "bob".into(), bio: bio.into(), avatar, verified, offline: None, offline_note: String::new(), joined: None, socials: Socials::default(), about: String::new() }
     }
 
     #[test]
@@ -1427,7 +1483,8 @@ mod tests {
         assert!(html.contains(r#"og:description" content="hi &lt;all&gt;""#));
         assert!(html.contains(r#"<div id="root"><h1>bob<span class="ml-2 text-increase""#));
         assert!(html.contains(r#"<p class="text-primaryBlue">streaming</p>"#));
-        assert!(html.contains("<p>hi &lt;all&gt;</p>"));
+        // the status line under the name, escaped, in the title and on hover
+        assert!(html.contains(&format!(r#"<span class="{STATUS_SPAN_CLASS}" title="hi &lt;all&gt;">hi &lt;all&gt;</span></h1>"#)));
         // the player's box stays black: the stream goes there
         assert!(html.contains(r#"<div style=""></div>"#));
         // the head came after the charset, before </head>, and the script is still there
@@ -1445,6 +1502,8 @@ mod tests {
         assert!(html.contains(r#"twitter:card" content="summary""#));
         assert!(html.contains(r#"<img src="/api/streamers/bob/avatar?v=1700000000" alt="" class=""#));
         assert!(html.contains(r#"<p class="text-textSecondary">offline</p>"#));
+        // no status: no line under the name, not an empty one
+        assert!(!html.contains(STATUS_SPAN_CLASS));
         // every placeholder in the card is filled; the inert <template> keeps its own
         let root = &html[html.find(r#"<div id="root">"#).unwrap()..];
         assert!(!root.contains("{{"));
@@ -1467,6 +1526,14 @@ mod tests {
         assert_eq!(clean_note("  back\n\ttuesday   8pm  "), "back tuesday 8pm");
         assert_eq!(clean_note("").len(), 0);
         assert_eq!(clean_note(&"x".repeat(300)).chars().count(), MAX_NOTE_CHARS);
+    }
+
+    #[test]
+    fn about_me_keeps_its_paragraphs_and_is_capped() {
+        // paragraphs stay, a third blank line in a row goes, invisible characters go, the ends are trimmed
+        assert_eq!(clean_about("  hi\n\nthere\n\n\n\nall\u{200b}  "), "hi\n\nthere\n\nall");
+        assert_eq!(clean_about("").len(), 0);
+        assert_eq!(clean_about(&"x".repeat(3000)).chars().count(), MAX_ABOUT_CHARS);
     }
 
     #[test]

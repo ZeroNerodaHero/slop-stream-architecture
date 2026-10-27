@@ -24,9 +24,9 @@ flowchart LR
   acct[account] --> yours[the name is yours. nobody else can use it]
 ```
 
-- **without an account** you are the name in the bottom left panel. it is in localstorage. any name nobody owns is free: go live as it, chat as it, save its bio.
-- **with an account** the name is claimed. only your login can go live as it, change its bio, or talk as it in chat. an anonymous nick equal to a claimed name is refused. a `✓` next to a name on home, on watch and in chat means a login is behind it.
-- a name someone used without an account (a `streamers` row with no hash) is claimed by the first signup. the bio stays.
+- **without an account** you are the name in the bottom left panel. it is in localstorage. any name nobody owns is free: go live as it, chat as it, save its status, its page and its pictures.
+- **with an account** the name is claimed. only your login can go live as it, change its status or its page, or talk as it in chat. an anonymous nick equal to a claimed name is refused. a `✓` next to a name on home, on watch and in chat means a login is behind it.
+- a name someone used without an account (a `streamers` row with no hash) is claimed by the first signup. the status, the page and the pictures stay.
 
 ## why not hash in the browser
 

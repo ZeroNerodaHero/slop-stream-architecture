@@ -2,9 +2,10 @@
 // one document of them (how they sit, how big, the links) through the bio's gate; the api
 // refuses what is not a link (a javascript: url, a kind it does not know, more than the cap)
 // and anyone the name is not; the watch page's socials tab draws them as anchors that leave
-// this origin safely, wearing the layout and the size; the profile tab edits them and the
-// page agrees, the owner's own page at once. Also the corner panel as it is now: the picture is
-// your page, the gear is at the end of your line, and the `following` button is gone.
+// this origin safely, wearing the layout and the size; the owner edits them on that same tab,
+// the editor opening under the strip, which follows the draft as it is typed and is the saved
+// document again on `done`. Also the corner panel as it is now: the picture is your page, the
+// gear is at the end of your line, and the `following` button is gone.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node socials.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
@@ -219,79 +220,88 @@ const shown = (page, box = '#socials') =>
     return `/watch/${ME}, from the picture`;
   });
 
-  await step('my own page: the socials tab says the links are mine and the way to the editor opens the profile tab at the links', async () => {
+  await step('my own page: the socials tab says the links are mine, and `edit the links` opens the editor under the strip, holding the document; no modal', async () => {
     await o.click('#tab-socials');
     await o.waitForSelector('#socials-edit', { timeout: 10000 });
     await o.click('#socials-edit');
-    await o.waitForSelector('#user-modal[open]', { timeout: 5000 });
-    await o.waitForSelector('#tab-profile[aria-selected="true"]', { timeout: 5000 });
-    await o.waitForSelector('#profile-socials', { timeout: 10000 });
+    await o.waitForSelector('#socials-editor', { timeout: 10000 });
+    expect((await o.$$('#user-modal[open]')).length === 0, 'the editor opened the user modal');
     // the rows are the document as kept
-    await o.waitForFunction((v) => document.querySelector('#profile-social-url-1')?.value === v, DOC.links[1].url, { timeout: 10000 });
-    expect((await o.inputValue('#profile-social-label-1')) === 'my site', `the second row's words: "${await o.inputValue('#profile-social-label-1')}"`);
-    expect(await o.isChecked('#profile-socials-layout-row'), 'the row card is not the one on');
-    expect(await o.isChecked('#profile-socials-size-medium'), 'the medium card is not the one on');
-    return 'the editor, with the two rows';
+    await o.waitForFunction((v) => document.querySelector('#socials-url-1')?.value === v, DOC.links[1].url, { timeout: 10000 });
+    expect((await o.inputValue('#socials-label-1')) === 'my site', `the second row's words: "${await o.inputValue('#socials-label-1')}"`);
+    expect(await o.isChecked('#socials-layout-row'), 'the row card is not the one on');
+    expect(await o.isChecked('#socials-size-medium'), 'the medium card is not the one on');
+    // the strip stays above the editor, and the way into the editor is gone while it is open
+    expect((await shown(o)).length === 2, 'the strip left the page when the editor opened');
+    expect((await o.$$('#socials-edit')).length === 0, 'the edit link is still there with the editor open');
+    return 'the editor under the strip, with the two rows';
   });
 
-  await step('the editor: the grid and large cards, a github row from its square with a bare host, save; the api has it and the page behind follows with no reload', async () => {
+  await step('the editor: the grid and large cards, a github row from its square with a bare host; the strip above follows the draft; save, and the api has it', async () => {
     // a radio as a card: the input is sr-only, so the label is what takes the click (presence.js's way)
-    await o.click('label[for="profile-socials-layout-grid"]');
-    expect(await o.isChecked('#profile-socials-layout-grid'), '#profile-socials-layout-grid is not checked');
-    await o.click('label[for="profile-socials-size-large"]');
-    expect(await o.isChecked('#profile-socials-size-large'), '#profile-socials-size-large is not checked');
-    // the preview under the cards is the same component: it wears the picks before any save
-    await o.waitForSelector('#profile-socials-preview-links[data-layout="grid"][data-size="large"]', { timeout: 5000 });
-    await o.click('#profile-social-add-github');
-    await o.waitForSelector('#profile-social-2[data-kind="github"]', { timeout: 5000 });
+    await o.click('label[for="socials-layout-grid"]');
+    expect(await o.isChecked('#socials-layout-grid'), '#socials-layout-grid is not checked');
+    await o.click('label[for="socials-size-large"]');
+    expect(await o.isChecked('#socials-size-large'), '#socials-size-large is not checked');
+    // the strip above is the draft: it wears the picks before any save
+    await o.waitForSelector('#socials[data-layout="grid"][data-size="large"]', { timeout: 5000 });
+    await o.click('#socials-add-github');
+    await o.waitForSelector('#socials-row-2[data-kind="github"]', { timeout: 5000 });
     // the new row's url box took focus; a bare host is fine: https goes in front on the way up
     const focused = await o.evaluate(() => document.activeElement?.id || '');
-    expect(focused === 'profile-social-url-2', `focus is on "${focused}"`);
-    await o.fill('#profile-social-url-2', 'github.com/you');
-    await o.fill('#profile-social-label-2', 'the code');
-    const status = ((await o.textContent('#profile-socials-status')) || '').trim();
+    expect(focused === 'socials-url-2', `focus is on "${focused}"`);
+    await o.fill('#socials-url-2', 'github.com/you');
+    await o.fill('#socials-label-2', 'the code');
+    // the strip has the third link already, as the save will keep it
+    await o.waitForFunction(() => document.querySelectorAll('#socials a').length === 3, null, { timeout: 5000 });
+    const drawn = await shown(o);
+    expect(drawn[2].href === 'https://github.com/you' && drawn[2].text === 'the code', `the strip's third link before the save: ${JSON.stringify(drawn[2])}`);
+    const status = ((await o.textContent('#socials-status')) || '').trim();
     expect(/changed/.test(status), `the status before the save reads "${status}"`);
-    await o.click('#profile-save-socials');
-    await o.waitForFunction(() => document.querySelector('#profile-socials-status')?.textContent === 'saved', null, { timeout: 10000 });
+    // nothing went up yet
+    expect((await socialsOf(ME)).links.length === 2, 'the api has the third link before the save');
+    await o.click('#socials-save');
+    await o.waitForFunction(() => document.querySelector('#socials-status')?.textContent === 'saved', null, { timeout: 10000 });
     // the box shows the url as the api kept it
-    expect((await o.inputValue('#profile-social-url-2')) === 'https://github.com/you', `the url box reads "${await o.inputValue('#profile-social-url-2')}"`);
+    expect((await o.inputValue('#socials-url-2')) === 'https://github.com/you', `the url box reads "${await o.inputValue('#socials-url-2')}"`);
     const back = await socialsOf(ME);
     expect(back.layout === 'grid' && back.size === 'large', `the api says ${back.layout}/${back.size}`);
     expect(back.links.length === 3 && back.links[2].kind === 'github' && back.links[2].url === 'https://github.com/you' && back.links[2].label === 'the code', `the api's links: ${JSON.stringify(back.links)}`);
-    // my own page, under the modal, has the new document already
-    await o.keyboard.press('Escape');
-    await o.waitForSelector('#user-modal', { state: 'detached', timeout: 5000 });
+    // done: the editor folds away and the strip is the saved document, no reload
+    await o.click('#socials-done');
+    await o.waitForSelector('#socials-editor', { state: 'detached', timeout: 5000 });
     await o.waitForSelector('#socials[data-layout="grid"][data-size="large"]', { timeout: 5000 });
     const links = await shown(o);
     expect(links.length === 3 && links[2].href === 'https://github.com/you' && links[2].text === 'the code', `my page's links: ${JSON.stringify(links)}`);
-    return `grid/large, ${back.links.length} links, the page followed`;
+    await o.waitForSelector('#socials-edit', { timeout: 5000 });
+    return `grid/large, ${back.links.length} links, the strip followed`;
   });
 
-  await step('the editor: a web row takes the kind its link lands on, the arrows move a row, × takes one out; none of it saved until the button', async () => {
-    await o.hover('#user-panel');
-    await o.click('#settings');
-    await o.waitForSelector('#user-modal[open]', { timeout: 5000 });
-    await o.click('#tab-profile');
-    await o.waitForSelector('#profile-social-2', { timeout: 10000 });
-    await o.click('#profile-social-add-web');
-    await o.waitForSelector('#profile-social-3[data-kind="web"]', { timeout: 5000 });
-    await o.fill('#profile-social-url-3', 'https://www.twitch.tv/you');
-    await o.waitForSelector('#profile-social-3[data-kind="twitch"]', { timeout: 5000 });
+  await step('the editor again: a web row takes the kind its link lands on, the arrows move a row, × takes one out; none of it saved until the button, and done shows the saved document', async () => {
+    await o.click('#socials-edit');
+    await o.waitForSelector('#socials-row-2', { timeout: 10000 });
+    await o.click('#socials-add-web');
+    await o.waitForSelector('#socials-row-3[data-kind="web"]', { timeout: 5000 });
+    await o.fill('#socials-url-3', 'https://www.twitch.tv/you');
+    await o.waitForSelector('#socials-row-3[data-kind="twitch"]', { timeout: 5000 });
+    // the strip above follows: four links while the draft has four
+    await o.waitForFunction(() => document.querySelectorAll('#socials a').length === 4, null, { timeout: 5000 });
     // up: the twitch row trades places with github
-    await o.click('#profile-social-up-3');
-    await o.waitForSelector('#profile-social-2[data-kind="twitch"]', { timeout: 5000 });
-    expect((await o.getAttribute('#profile-social-3', 'data-kind')) === 'github', 'github did not move down');
+    await o.click('#socials-up-3');
+    await o.waitForSelector('#socials-row-2[data-kind="twitch"]', { timeout: 5000 });
+    expect((await o.getAttribute('#socials-row-3', 'data-kind')) === 'github', 'github did not move down');
     // the first row's up arrow and the last row's down arrow do nothing: they are disabled
-    expect(await o.isDisabled('#profile-social-up-0'), 'the first row can move up');
-    expect(await o.isDisabled('#profile-social-down-3'), 'the last row can move down');
-    await o.click('#profile-social-remove-2');
-    await o.waitForSelector('#profile-social-3', { state: 'detached', timeout: 5000 });
-    expect((await o.getAttribute('#profile-social-2', 'data-kind')) === 'github', 'github is not back in the third row');
+    expect(await o.isDisabled('#socials-up-0'), 'the first row can move up');
+    expect(await o.isDisabled('#socials-down-3'), 'the last row can move down');
+    await o.click('#socials-remove-2');
+    await o.waitForSelector('#socials-row-3', { state: 'detached', timeout: 5000 });
+    expect((await o.getAttribute('#socials-row-2', 'data-kind')) === 'github', 'github is not back in the third row');
     // nothing went up: the api still has three
     const back = await socialsOf(ME);
     expect(back.links.length === 3, `the api has ${back.links.length} links after edits that were not saved`);
-    await o.keyboard.press('Escape');
-    await o.waitForSelector('#user-modal', { state: 'detached', timeout: 5000 });
+    await o.click('#socials-done');
+    await o.waitForSelector('#socials-editor', { state: 'detached', timeout: 5000 });
+    expect((await shown(o)).length === 3, 'the strip is not the saved document after done');
     return 'twitch from its host, moved, removed; nothing saved';
   });
 

@@ -480,7 +480,8 @@ async fn put_streamer(
     let Query(q) = q?;
     let Json(body) = body?;
     may_write(&s, &name, me.name(), q.password.as_deref()).await?;
-    let bio = body.bio.trim().chars().take(500).collect::<String>();
+    // the status: one line beside the name (any run of whitespace is a space), 500 characters at most
+    let bio = body.bio.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(500).collect::<String>();
     let bio: String = sqlx::query_scalar(
         "INSERT INTO streamers (name, bio) VALUES ($1, $2)
          ON CONFLICT (name) DO UPDATE SET bio = EXCLUDED.bio, updated_at = now()
@@ -517,7 +518,7 @@ async fn get_streamer(State(s): State<AppState>, Name(name): Name, me: Me) -> Ap
     let last_live = last_live(&s.db, &name).await?;
     Ok(Json(json!({
         "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified, "presence": presence, "thumbs": thumbs,
-        "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials,
+        "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials, "about": p.about,
         "followers": follows.followers, "following": follows.following, "follows_you": follows.follows_you,
         "last_live": last_live, "joined_at": p.joined,
     })))
@@ -870,7 +871,7 @@ async fn watch(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult
     let follows = follows::stats(&s.db, &name, me.0.as_ref().map(|a| a.id)).await?;
     Ok(Json(json!({
         "url": WS_PATH, "name": name, "bio": p.bio, "live": live, "verified": verified, "avatar": p.avatar, "presence": presence,
-        "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials,
+        "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials, "about": p.about,
         "followers": follows.followers, "following": follows.following,
     })))
 }

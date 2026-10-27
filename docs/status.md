@@ -376,7 +376,7 @@ one socket per browser, idle but for a ping every 30s: tens of kilobytes of memo
 - **idle / away.** a fifth state and input tracking in every tab. not asked for.
 - **`logins.last_seen` as presence.** hourly by design; guests have none.
 - **the choice in redis or localstorage.** gone on restart; per browser.
-- **a custom status line.** the bio is the sentence about you.
+- **a custom status line of its own.** the bio is it: one line about you, `status` in the profile tab and on the go live page, under your name on your page and beside it on home (`spec.md`). `bio` on the wire, in the row and in the ids, since this file took the word.
 
 ## when it ships, these docs move
 

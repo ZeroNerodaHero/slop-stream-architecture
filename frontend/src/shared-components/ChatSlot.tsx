@@ -236,7 +236,7 @@ export function ChatSlot({ children }: { children: ReactNode }) {
   }, []);
 
   // Escape closes the window, the way the old modal did, except while typing in the page
-  // (the stream behind the window is usable now, and a bio box should keep the key).
+  // (the stream behind the window is usable now, and a status box should keep the key).
   useEffect(() => {
     if (!modal || !open) return;
     const onKey = (e: KeyboardEvent) => {

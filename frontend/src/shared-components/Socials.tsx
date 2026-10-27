@@ -20,7 +20,6 @@ import {
   RiYoutubeFill
 } from '@remixicon/react';
 
-import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { hostOf, type SocialKind, type Socials as SocialsDoc, type SocialsSize } from '@/infra/socials';
 import { buttonClassName } from '@/shared-components/Button';
 import { cn } from '@/utils/cn';
@@ -71,20 +70,14 @@ const CARD: Record<SocialsSize, string> = {
 const LINK =
   'border border-primaryStroke bg-backgroundSecondary text-textPrimary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none';
 
-/** The editor is the profile tab's `links` section: the modal on that tab, scrolled to it once the pane is in the page. */
-export function openSocialsEditor() {
-  openUserModal('profile');
-  setTimeout(() => document.getElementById('profile-socials')?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 50);
-}
-
 interface SocialsProps {
   /** Whose: the words of an empty tab. */
   name: string;
   /** The document, already through `cleanSocials`: every url http(s), every kind known. */
   doc: SocialsDoc;
-  /** My own page: an empty tab offers the editor, and the links get an `edit` at the end. */
-  mine?: boolean;
-  /** The box's id. The watch page's tab is `socials`, the tests' handle; the editor's preview is its own. */
+  /** My own page: the way into the editor (SocialsEditor.tsx, under the strip). An empty tab offers it as a button, the links get an `edit` at the end. */
+  onEdit?: () => void;
+  /** The box's id. The watch page's tab is `socials`, the tests' handle. */
   id?: string;
   className?: string;
 }
@@ -93,17 +86,17 @@ interface SocialsProps {
  * Where else to find them (docs/socials.md): their links as icons, in a line that wraps or as
  * a grid of squares, at the size they picked. Every link leaves this origin in a new tab with
  * `rel="noopener noreferrer nofollow"` (about.md's rule for a link), its host in the title so
- * a hover says where a `twitch` icon really goes. The watch page's tab, and the editor's
- * preview under the profile tab. `data-layout` and `data-size` are for the tests.
+ * a hover says where a `twitch` icon really goes. The watch page's tab, where the owner's
+ * editor opens under it on the draft. `data-layout` and `data-size` are for the tests.
  */
-export function Socials({ name, doc, mine = false, id = 'socials', className }: SocialsProps) {
+export function Socials({ name, doc, onEdit, id = 'socials', className }: SocialsProps) {
   const px = SOCIAL_ICON_PX[doc.size];
   if (doc.links.length === 0) {
     return (
       <div id={id} data-layout={doc.layout} data-size={doc.size} data-empty className={cn('flex flex-wrap items-center gap-3 text-textSecondary', className)}>
-        <p>{mine ? 'nowhere else yet. put your links here: where you post, where to find you between streams.' : `${name} has not put any links here yet.`}</p>
-        {mine && (
-          <button id="socials-edit" type="button" onClick={openSocialsEditor} className={buttonClassName('primary', 'px-3 py-1.5 text-sm', true)}>
+        <p>{onEdit ? 'nowhere else yet. put your links here: where you post, where to find you between streams.' : `${name} has not put any links here yet.`}</p>
+        {onEdit && (
+          <button id="socials-edit" type="button" onClick={onEdit} className={buttonClassName('primary', 'px-3 py-1.5 text-sm', true)}>
             add links
           </button>
         )}
@@ -141,10 +134,10 @@ export function Socials({ name, doc, mine = false, id = 'socials', className }: 
           );
         })}
       </ul>
-      {mine && (
+      {onEdit && (
         <p className="mt-3 text-sm text-textTertiary">
           yours.{' '}
-          <button id="socials-edit" type="button" onClick={openSocialsEditor} className="text-primaryBlue underline-offset-2 hover:underline">
+          <button id="socials-edit" type="button" onClick={onEdit} className="text-primaryBlue underline-offset-2 hover:underline">
             edit the links
           </button>
         </p>

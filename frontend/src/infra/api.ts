@@ -29,6 +29,7 @@ export interface LiveStream {
 
 export interface Streamer {
   name: string;
+  /** The status: one line about them, beside the name. `bio` on the wire (the word `status` is the presence choice's, docs/status.md). */
   bio: string;
   verified: boolean;
   avatar: number | null;
@@ -40,6 +41,8 @@ export interface Streamer {
   offline_note?: string;
   /** Where else to find them (docs/socials.md). The empty document for none; absent on an older api. Read through `cleanSocials` before drawing. */
   socials?: Socials;
+  /** About me (docs/about.md): the words first on the about tab. Empty for none; absent on an older api. */
+  about?: string;
   /** The word next to the name: `offline` `online` `dnd` `streaming`. See docs/status.md. */
   presence: Presence;
   /** How many follow the name (docs/follows.md). Absent on an older api. */
@@ -192,6 +195,8 @@ export interface WatchGrant {
   offline_note?: string;
   /** Where else to find them (docs/socials.md), for the socials tab. Absent on an older api. */
   socials?: Socials;
+  /** About me (docs/about.md), for the about tab. Absent on an older api. */
+  about?: string;
   /** How many follow the name, and whether the asking login does (docs/follows.md). Absent on an older api. */
   followers?: number;
   following?: boolean;
@@ -361,7 +366,10 @@ export const api = {
   sendDm: (name: string, text: string) => request<DmLine & { to: string }>('POST', `/api/dm/${encodeURIComponent(name)}`, { text }),
   /** The login has seen the thread with `name` up to that line. Its other devices hear it on the socket. */
   readDm: (name: string, id: number) => request<null>('PUT', `/api/dm/${encodeURIComponent(name)}/read`, { id }),
+  /** The status, one line beside the name: runs of whitespace become one space, 500 characters at most. `bio` on the wire. */
   saveBio: (name: string, bio: string) => request<{ name: string; bio: string }>('PUT', `/api/streamers/${name}`, { bio }),
+  /** About me, the words first on the about tab (docs/about.md): paragraphs kept, 2000 characters at most, empty clears it. */
+  saveAbout: (name: string, about: string) => request<{ name: string; about: string }>('PUT', `/api/streamers/${name}/about`, { about }),
   /** The jpeg itself as the body. The page has already made it 256x256. */
   saveAvatar: (name: string, jpeg: Blob) => request<{ name: string; avatar: number }>('PUT', `/api/streamers/${name}/avatar`, jpeg),
   deleteAvatar: (name: string) => request<null>('DELETE', `/api/streamers/${name}/avatar`),

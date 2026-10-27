@@ -3,6 +3,7 @@ import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom';
 
 import {
+  aboutAtom,
   avatarAtom,
   bioAtom,
   canHearAtom,
@@ -49,6 +50,7 @@ import { api } from '@/infra/api';
 import { cleanName, isDummyName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { About } from '@/shared-components/About';
+import { AboutMe } from '@/shared-components/AboutMe';
 import { Calendar } from '@/shared-components/Calendar';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { Button } from '@/shared-components/Button';
@@ -57,7 +59,7 @@ import { Face } from '@/shared-components/Face';
 import { panelClassName } from '@/shared-components/Panel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { SceneView } from '@/shared-components/SceneView';
-import { Socials } from '@/shared-components/Socials';
+import { SocialsTab } from '@/shared-components/SocialsEditor';
 import { StatusLine } from '@/shared-components/StatusLine';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
@@ -102,6 +104,7 @@ export function WatchPage() {
   const message = useAtomValue(watchMessageAtom);
   const tone = useAtomValue(watchToneAtom);
   const bio = useAtomValue(bioAtom);
+  const aboutMe = useAtomValue(aboutAtom);
   const canRetry = useAtomValue(canRetryAtom);
   const canHear = useAtomValue(canHearAtom);
   const needsTap = useAtomValue(needsTapAtom);
@@ -114,7 +117,7 @@ export function WatchPage() {
   const offlineNote = useAtomValue(offlineNoteAtom);
   const followers = useAtomValue(followersAtom);
   const socials = useAtomValue(socialsAtom);
-  // my own page: the socials tab offers its editor (the modal's profile tab) and says the links are mine
+  // my own page: the about tab and the socials tab edit their words and links in place (AboutMe.tsx, SocialsEditor.tsx)
   const mine = useAtomValue(myNameAtom) === name;
   const phase = useAtomValue(watchPhaseAtom);
   const presence = useAtomValue(presenceOfAtom(name));
@@ -188,13 +191,20 @@ export function WatchPage() {
               {PRESENCE_WORD[presence]}
             </span>
           )}
+          {/* their status: the one line about them, under the name (the profile tab sets it; `bio` on the wire).
+              one line here too, the whole of it on hover */}
+          {bio && (
+            <span id="bio" title={bio} className="mt-1 block truncate text-base font-normal text-textSecondary">
+              {bio}
+            </span>
+          )}
         </>
       }
       titleId="who"
       wide
     >
-      {/* the video column, the chat, the bio, in that order. left or right is a grid at lg+ (the
-          chat across both rows, the bio under the video) whose column eases shut when the chat
+      {/* the video column, the chat, the tabs, in that order. left or right is a grid at lg+ (the
+          chat across both rows, the tabs under the video) whose column eases shut when the chat
           closes; on a narrow screen the column sits under the picture. a window takes the chat
           out of the grid. the panel itself stays mounted either way: ChatSlot is one dialog, and
           a remount would be a reconnect. */}
@@ -205,7 +215,7 @@ export function WatchPage() {
               keyboard focus (not the focus a mouse click leaves behind, or they would stick), and on a
               screen with no hover at all. "tap to play" is the exception: big, in the middle. */}
           {/* not live, and while the api is being asked: the profile where the picture would be
-              (docs/follows.md). the face, the word and a sentence; the bio sits below and the chat stays.
+              (docs/follows.md). the face, the word and a sentence; the tabs sit below and the chat stays.
               the player appears when they start (`live` pushed on the events socket, docs/status.md), so
               there is nothing to press and no black box, not even for the ask: a player with no stream
               would be one. a streamer who put an offline picture gets it where the player goes, the
@@ -339,10 +349,10 @@ export function WatchPage() {
           </ChatSlot>
         )}
 
-        {/* under the player, where the bio alone used to be: the about tab (the bio, then the page of
-            their own, docs/about.md), the calendar (when they stream, docs/calendar.md) and the socials
-            (where else to find them, docs/socials.md: the grant brought them, no request). the strip
-            is only in the page while its tab is open: no request until somebody looks */}
+        {/* under the player: the about tab (the about me first, then the page of their own, docs/about.md),
+            the calendar (when they stream, docs/calendar.md) and the socials (where else to find them,
+            docs/socials.md). the grant brought the about me and the links, no request; on my own page
+            both tabs edit theirs in place. a tab's content is only in the page while it is open */}
         {name && phase !== 'bad-name' && (
           <div
             id="watch-tabs"
@@ -376,17 +386,13 @@ export function WatchPage() {
             <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} className="pt-4">
               {tab === 'about' ? (
                 <>
-                  {bio && (
-                    <p id="bio" className="mb-4 whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]">
-                      {bio}
-                    </p>
-                  )}
+                  <AboutMe text={aboutMe} mine={mine} />
                   <About name={name} doc={about} />
                 </>
               ) : tab === 'calendar' ? (
                 <Calendar name={name} />
               ) : (
-                <Socials name={name} doc={socials} mine={mine} />
+                <SocialsTab name={name} doc={socials} mine={mine} />
               )}
             </div>
           </div>

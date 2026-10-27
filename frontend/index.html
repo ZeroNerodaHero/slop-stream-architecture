@@ -29,13 +29,15 @@
     <div id="root"></div>
     <!--
       the profile card the api puts inside #root when it serves /watch/<name>
-      (api/src/profile.rs), so the page shows the name, picture, status and bio
-      before react boots. react replaces it when it renders. a <template> draws
-      nothing, so the pages caddy serves straight from this file are unaffected.
+      (api/src/profile.rs), so the page shows the name, picture, the word and the
+      status line before react boots. react replaces it when it renders. a <template>
+      draws nothing, so the pages caddy serves straight from this file are unaffected.
       {{...}} are the api's placeholders. the markup mirrors PageFrame + WatchPage;
       tailwind scans this file, so the classes here exist in the css. {{banner}} is a
       style, not markup: the offline picture as a background on the player's box while
       they are not live, and an api older than it leaves words the browser ignores.
+      {{bio}} is the status line under the name, as markup (a span the api makes, so a
+      name with none leaves nothing), like {{avatar}} and {{verified}}.
     -->
     <template id="watch-shell">
       <main class="mx-auto max-w-[1360px] px-5 pb-16 pt-6">
@@ -47,14 +49,13 @@
               </svg>
               home
             </a>
-            <h1 class="min-w-0 border-l-4 border-primaryBlue pl-3 text-[28px] font-semibold leading-tight [overflow-wrap:anywhere]">{{avatar}}{{name}}{{verified}}</h1>
+            <h1 class="min-w-0 border-l-4 border-primaryBlue pl-3 text-[28px] font-semibold leading-tight [overflow-wrap:anywhere]">{{avatar}}{{name}}{{verified}}{{bio}}</h1>
           </div>
         </header>
         <div class="lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start lg:gap-6">
           <div class="min-w-0">
             <div class="aspect-video w-full border border-primaryStroke bg-black bg-cover bg-center" style="{{banner}}"></div>
             <p class="my-3 text-2xl font-semibold {{tone}}">{{status}}</p>
-            <p class="whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]">{{bio}}</p>
           </div>
         </div>
       </main>
