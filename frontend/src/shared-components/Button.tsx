@@ -13,7 +13,7 @@ const VARIANTS: Record<ButtonVariant, string> = {
 /**
  * Shared classes so a router Link can look like a button. A square with a hard shadow; pressing
  * it moves it onto the shadow. `flat`: no shadow and no press, for a button that sits over the
- * page (go live and settings at the top) rather than in it. Disabled: flat and dim.
+ * page (back, go live and settings in the title row) rather than in it. Disabled: flat and dim.
  */
 export function buttonClassName(variant: ButtonVariant = 'secondary', className?: string, flat = false): string {
   return cn(

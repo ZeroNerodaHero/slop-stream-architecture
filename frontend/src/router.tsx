@@ -13,7 +13,6 @@ import { panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { FriendChat } from '@/shared-components/FriendChat';
 import { Inspector } from '@/shared-components/Inspector';
 import { MiniPlayer } from '@/shared-components/MiniPlayer';
-import { TopBar } from '@/shared-components/TopBar';
 import { UserModal } from '@/shared-components/UserModal';
 import { UserPanel } from '@/shared-components/UserPanel';
 import { cn } from '@/utils/cn';
@@ -21,8 +20,8 @@ import { cn } from '@/utils/cn';
 /**
  * Every page, plus the things that live outside pages: the sidebar (the search, who you follow,
  * and you at the bottom of it; collapsed beside the page, open it covers the streams), the picture in picture players (bottom right
- * of the page: a stream you watch, your own while live), go live and the settings icon over the
- * top right of the page, and the user modal that icon opens.
+ * of the page: a stream you watch, your own while live), and the user modal that the settings
+ * icon opens (the icon, and go live, are the right end of every page's title row: PageFrame.tsx).
  */
 function Shell() {
   const side = useAtomValue(panelSideAtom);
@@ -30,7 +29,6 @@ function Shell() {
     <div className={cn('flex min-h-screen items-start', side === 'right' && 'flex-row-reverse')}>
       <UserPanel />
       <div className="relative min-w-0 flex-1">
-        <TopBar />
         <Outlet />
       </div>
       <MiniPlayer />

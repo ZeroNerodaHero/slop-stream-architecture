@@ -285,7 +285,7 @@ export function HomePage() {
     []
   );
 
-  // no title row: the cards are the page. search, go live, and settings are the top bar. the empty state has go live again.
+  // no title: the row is just go live and settings, and the cards are the page. search is the sidebar's. the empty state has go live again.
   return (
     <PageFrame wide>
       {error && (

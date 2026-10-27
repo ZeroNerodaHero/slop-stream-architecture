@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 
 import type { Followed } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { openDm } from '@/infra/atoms/dm-atoms';
+import { openDm, showDms } from '@/infra/atoms/dm-atoms';
 import { followNoteAtom, followingAtom, loadFollowing, search, searchBusyAtom, searchQueryAtom, searchResultsAtom, unfollow } from '@/infra/atoms/follow-atoms';
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { friendsShareAtom, type PanelSide, setFriendsShare } from '@/infra/atoms/settings-atoms';
@@ -45,7 +45,7 @@ const COLUMN = 'px-[19px]';
 const FACE_PX = 42;
 /** The search box. */
 const SEARCH_PX = 40;
-/** The icon line over a list: the icon, and the word in text-xs, are both 16px. */
+/** The icon line over a list: the icon, and the word in text-xs, are both 16px. The chat button at the friends line's end is 14. */
 const HEAD_PX = 16;
 /** The line between the lists. The room to grab it reaches into the gaps on either side. */
 const LINE_PX = 1;
@@ -243,20 +243,42 @@ function Chat({ id, person }: { id: string; person: Person }) {
   );
 }
 
+/**
+ * The chat window back on screen (FriendChat.tsx): the chats as they were left, or the friends
+ * to pick one from. The far end of the friends line, open only. The footer's action
+ * (UserPanel.tsx) in size and colour; leading-none, since text-sm's own 20px line would stand
+ * out of the 16px head.
+ */
+function ChatsOpener() {
+  return (
+    <button
+      id="chats-open"
+      type="button"
+      title="your chats with friends"
+      onClick={showDms}
+      className="inline-flex shrink-0 items-center gap-1 text-sm leading-none text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline"
+    >
+      <RiChat3Line aria-hidden size={14} />
+      chat
+    </button>
+  );
+}
+
 interface ListProps {
   side: PanelSide;
   open: boolean;
   onPick: () => void;
 }
 
-/** The icon over a list, and open, the word and how many. Closed, the icon alone; no list, no icon. `below`: the gap under it. */
+/** The icon over a list, and open, the word and how many, with `action` at the far end of the line. Closed, the icon alone; no list, no icon. `below`: the gap under it. */
 function Head({
   icon: Icon,
   word,
   count,
   open,
   side,
-  below
+  below,
+  action
 }: {
   icon: typeof RiUserHeartLine;
   word: string;
@@ -264,24 +286,26 @@ function Head({
   open: boolean;
   side: PanelSide;
   below: number;
+  /** A button at the end of the line, away from the icon. Open only, like the word. */
+  action?: ReactNode;
 }) {
   return (
     <div
-      aria-hidden
-      className={cn(
-        'flex shrink-0 items-center gap-2 text-xs font-semibold uppercase leading-none tracking-wider text-textTertiary',
-        side === 'right' && 'flex-row-reverse',
-        INSET[side]
-      )}
+      className={cn('flex shrink-0 items-center gap-2 text-textTertiary', side === 'right' && 'flex-row-reverse', INSET[side])}
       style={{ height: HEAD_PX, marginBottom: below }}
     >
-      <span className="flex w-[42px] shrink-0 justify-center">
+      {/* the icon and the word say what the list's own label says, so readers skip them; the button they do not */}
+      <span aria-hidden className="flex w-[42px] shrink-0 justify-center">
         <Icon size={16} />
       </span>
       {open && (
-        <span className="truncate">
-          {word} {count}
-        </span>
+        <>
+          {/* the word takes the room, so the action sits at the far end on either side */}
+          <span aria-hidden className={cn('min-w-0 flex-1 truncate text-xs font-semibold uppercase leading-none tracking-wider', side === 'right' && 'text-right')}>
+            {word} {count}
+          </span>
+          {action}
+        </>
       )}
     </div>
   );
@@ -380,10 +404,11 @@ interface FollowingProps extends ListProps {
 /**
  * Friends (they follow you back) under their icon, a line, then everyone else you follow under
  * theirs, each group streaming first, as the api sent them. A friend gets a chat button as well
- * as unfollow. The one list the tests read (`#friends-list`) is the second group. Each list is
- * cut at whole rows (`rows`) and scrolls inside, at the pitch `spacing` worked out for the room;
- * the line between them says how the rows are shared. A group nobody is in has no icon either.
- * Closed, the words have no room: only the faces.
+ * as unfollow, and the friends line ends with `chat`, which brings the chat window back. The one
+ * list the tests read (`#friends-list`) is the second group. Each list is cut at whole rows
+ * (`rows`) and scrolls inside, at the pitch `spacing` worked out for the room; the line between
+ * them says how the rows are shared. A group nobody is in has no icon either. Closed, the words
+ * have no room: only the faces.
  */
 function Following({ side, open, onPick, friends, rest, rows, spacing }: FollowingProps) {
   const { gaps } = spacing;
@@ -393,7 +418,7 @@ function Following({ side, open, onPick, friends, rest, rows, spacing }: Followi
     <>
       {friends.length > 0 && (
         <>
-          <Head icon={RiUserHeartLine} word="friends" count={friends.length} open={open} side={side} below={gaps.headA} />
+          <Head icon={RiUserHeartLine} word="friends" count={friends.length} open={open} side={side} below={gaps.headA} action={<ChatsOpener />} />
           <ul id="mutual-list" aria-label="friends" className={LIST} style={{ height: rows.friends * pitchA, gap: spacing.listA }}>
             {friends.map((f) => (
               <Row key={f.name} id={`friend-${f.name}`} person={f} side={side} open={open} onPick={onPick}>
