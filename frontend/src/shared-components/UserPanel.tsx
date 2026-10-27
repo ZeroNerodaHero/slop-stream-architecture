@@ -226,8 +226,9 @@ export function UserPanel() {
           <Friends open={friendsOpen} side={side} focusSearch={byKey} onPick={closeFriends} />
         </div>
         {/* your picture 19px in from the edge, open or closed: centered in the closed column, in line with the faces above. the
-            row sits on the bottom edge, so the name block, a little taller than the picture, grows upward and the picture stays put */}
-        <div className={cn('flex shrink-0 items-end gap-2 border-t border-primaryStroke py-2.5', mirrored ? 'flex-row-reverse pl-3 pr-[19px]' : 'pl-[19px] pr-3')}>
+            name block beside it is in the row closed too, invisible, so the row is one height in both states and the lists
+            above have the same room (Friends.tsx cuts them at whole rows of it) */}
+        <div className={cn('flex shrink-0 items-center gap-2 border-t border-primaryStroke py-2.5', mirrored ? 'flex-row-reverse pl-3 pr-[19px]' : 'pl-[19px] pr-3')}>
           <button
             id="you"
             type="button"
@@ -259,7 +260,7 @@ export function UserPanel() {
 
           {me ? (
             <>
-              <span className={cn('min-w-0 flex-1', mirrored && 'text-right', !friendsOpen && 'hidden')}>
+              <span className={cn('min-w-0 flex-1 whitespace-nowrap', mirrored && 'text-right', !friendsOpen && 'invisible')}>
                 {/* a login's name is a second way in. #me stays the bare name, for the tests, even while the panel is closed */}
                 <button
                   type="button"
@@ -279,7 +280,8 @@ export function UserPanel() {
                     ✓
                   </span>
                 </button>
-                <span className="block text-sm leading-tight">
+                {/* leading-5, not tight: tight is 17.5px on text-sm, and a half pixel here puts the whole footer, and the column over it, off the pixel grid */}
+                <span className="block text-sm leading-5">
                   <button id="logout" type="button" onClick={() => void logout().then(() => identityChanged('login'))} className={ACTION}>
                     <RiLogoutBoxRLine aria-hidden size={ICON} />
                     log out
@@ -297,7 +299,7 @@ export function UserPanel() {
             </>
           ) : (
             <>
-              <span className={cn('min-w-0 flex-1', mirrored && 'text-right', !friendsOpen && 'hidden')}>
+              <span className={cn('min-w-0 flex-1 whitespace-nowrap', mirrored && 'text-right', !friendsOpen && 'invisible')}>
                 <label htmlFor="username" className="sr-only">
                   your name
                 </label>
@@ -338,7 +340,7 @@ export function UserPanel() {
                   </span>
                 </span>
                 {/* the way to make the name yours, right under it */}
-                <span className="block text-sm leading-tight text-textSecondary">
+                <span className="block text-sm leading-5 text-textSecondary">
                   <Link id="signup-link" to={`/signup?next=${next}`} className={ACTION}>
                     <RiUserAddLine aria-hidden size={ICON} />
                     sign up

@@ -100,6 +100,23 @@ export function setPanelSide(side: PanelSide) {
   store.set(storedPanelSideAtom, side);
 }
 
+/**
+ * How the sidebar's rows are shared between friends and the rest of who you follow when both
+ * lists are longer than the room (docs/follows.md): the friends' part of the rows, 0..1, half
+ * to start. The line between the lists is dragged to change it, one row at a time. Kept as a
+ * share, not a number of rows, so a taller window keeps the same proportion.
+ */
+const storedFriendsShareAtom = atomWithStorage<unknown>('settings.friendsShare', 0.5, undefined, { getOnInit: true });
+/** Read: a number in 0..1, whatever localstorage holds. */
+export const friendsShareAtom = atom((get) => {
+  const share = get(storedFriendsShareAtom);
+  return typeof share === 'number' && Number.isFinite(share) ? Math.min(1, Math.max(0, share)) : 0.5;
+});
+
+export function setFriendsShare(share: number) {
+  store.set(storedFriendsShareAtom, Math.min(1, Math.max(0, share)));
+}
+
 // ---- debugging -------------------------------------------------------------------------------
 
 /** The messages inspector (docs/status.md): the frames this browser gets, in the browser. Off, it costs one boolean per frame. */
