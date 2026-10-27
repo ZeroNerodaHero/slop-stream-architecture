@@ -9,7 +9,7 @@ import { api, messageOf } from '@/infra/api';
 import { presenceChanged } from '@/infra/atoms/presence-atoms';
 import { eventsPhaseAtom, onEvents, unwatchPresence, watchPresence } from '@/infra/events';
 import { isValidName } from '@/infra/names';
-import { connectRelay, type RelayReply, SCREEN_SLOTS, type SlotInfo, slotsOf, viewersOf, waitForIceGathering } from '@/infra/relay';
+import { connectRelay, type Layout, layoutOf, type RelayReply, SCREEN_SLOTS, type SlotInfo, slotsOf, viewersOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
@@ -62,14 +62,27 @@ export const remoteStreamAtom = atom<MediaStream | null>(null);
 export const slotsAtom = atom<SlotInfo[]>([]);
 /** How many are watching, as video tells this peer. `null` until it has, and after it ends. */
 export const watchViewersAtom = atom<number | null>(null);
+/** Where the streamer put the camera while a screen is shared, as the slots frame says. `null` until it has, and from a streamer that never says (the dummy, an older page). */
+export const layoutAtom = atom<Layout | null>(null);
 /** The slot the watcher clicked to see big, if any. `null`: the rule below. */
 export const chosenSlotAtom = atom<number | null>(null);
 /** Which slot is big: the one chosen while it is live, else the first screen, else the camera. */
 export const primarySlotAtom = atom((get) => primaryOf(get(slotsAtom), get(chosenSlotAtom)));
-/** The other live slots, the small tiles under the video. */
+/**
+ * The camera is drawn over the big picture instead of standing in the tiles: a screen is big
+ * (the rule's first screen, or one the watcher chose), the camera is live, and the streamer's
+ * layout puts it on the screen. Clicking it makes the camera big, as its tile would.
+ */
+export const cameraOverlaidAtom = atom((get) => {
+  const layout = get(layoutAtom);
+  if (!layout || layout.camera !== 'over') return false;
+  return get(primarySlotAtom) !== 0 && get(slotsAtom).some((s) => s.slot === 0);
+});
+/** The other live slots, the small tiles under the video. Not the camera while it is over the picture. */
 export const tilesAtom = atom((get) => {
   const primary = get(primarySlotAtom);
-  return get(slotsAtom).filter((s) => s.slot !== primary);
+  const overlaid = get(cameraOverlaidAtom);
+  return get(slotsAtom).filter((s) => s.slot !== primary && !(overlaid && s.slot === 0));
 });
 /** Each slot's own stream, picture only, for its tile. Bound imperatively (`VideoFrame`). */
 const slotStreamAtoms = Array.from({ length: VIDEO_SLOTS }, () => atom<MediaStream | null>(null));
@@ -345,6 +358,7 @@ async function start(name: string): Promise<void> {
           slotsAtom,
           slots.filter((s) => s.slot < VIDEO_SLOTS)
         );
+        store.set(layoutAtom, layoutOf(msg));
         showPrimary();
       }
     }
@@ -483,6 +497,7 @@ export function teardown() {
   store.set(remoteStreamAtom, null);
   for (const streamAtom of slotStreamAtoms) store.set(streamAtom, null);
   store.set(slotsAtom, []);
+  store.set(layoutAtom, null);
   store.set(chosenSlotAtom, null);
   store.set(watchViewersAtom, null);
 }

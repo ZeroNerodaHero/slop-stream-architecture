@@ -730,7 +730,7 @@ fn card_html(shell: &str, p: &Profile, presence: Presence, card: &Card) -> Optio
     let end = start + shell[start..].find(TEMPLATE_CLOSE)?;
     let avatar = p
         .avatar
-        .map(|v| format!(r#"<img src="/api/streamers/{}/avatar?v={v}" alt="" class="{AVATAR_IMG_CLASS}">"#, p.name))
+        .map(|v| format!(r#"<img src="/api/streamers/{}/avatar?v={v}" alt="" class="{AVATAR_IMG_CLASS}" draggable="false">"#, p.name))
         .unwrap_or_default();
     // the box where the player goes: the offline picture over it while they are not live and
     // have one, else black. an inline style, so an api older than the placeholder leaves words

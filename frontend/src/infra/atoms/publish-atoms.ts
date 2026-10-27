@@ -5,6 +5,7 @@
  */
 
 import { atom } from 'jotai';
+import { atomWithStorage } from 'jotai/utils';
 
 import { ApiError, api, type Owner, messageOf, statusOf } from '@/infra/api';
 import { loadMe, meAtom } from '@/infra/atoms/auth-atoms';
@@ -12,7 +13,7 @@ import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { endWatch, pipAtom } from '@/infra/atoms/watch-atoms';
 import { cleanName, isValidName } from '@/infra/names';
-import { connectRelay, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
+import { clampLayout, connectRelay, DEFAULT_LAYOUT, type Layout, SCREEN_SLOTS, type SlotInfo, validLayout, viewersOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
@@ -30,6 +31,28 @@ const BUSY_PHASES: readonly PublishPhase[] = ['starting', 'connecting', 'live', 
 const BAD_PHASES: readonly PublishPhase[] = ['camera-blocked', 'no-camera', 'failed'];
 /** Sharing a screen needs the socket, which exists once connected. */
 const SHARE_PHASES: readonly PublishPhase[] = ['live', 'reconnecting'];
+/**
+ * A shared screen is at most this big: a retina display would hand over a picture too big for
+ * the bitrate, and the bits go on pixels the cap cannot afford (docs/bitrates.md).
+ */
+const SCREEN_CAP: MediaTrackConstraints = { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 30 } };
+/**
+ * The picker, asked for a page: the cursor in the picture so the person can point at things,
+ * this site's own tab kept out of the picker (sharing it is a mirror), and switching which tab
+ * is shared without stopping. Hints, every one: a browser that throws on them is asked again
+ * with `SCREEN_CAP` alone. No sound (docs/audio.md). `cursor` is not in the typings.
+ */
+const SCREEN_HINTS: DisplayMediaStreamOptions = {
+  video: { ...SCREEN_CAP, cursor: 'always' } as MediaTrackConstraints,
+  audio: false,
+  selfBrowserSurface: 'exclude',
+  surfaceSwitching: 'include'
+};
+/**
+ * A drag moves the camera many times a second; the watchers are told at most this often, and
+ * within this long of the last move.
+ */
+const LAYOUT_SEND_MS = 150;
 
 export const cameraAtom = atom<MediaStream | null>(null);
 /** A screen being shared: which screen slot (0 to SCREEN_SLOTS-1) and what the browser called it. Its stream is in `screenStreamAtoms`. */
@@ -45,6 +68,24 @@ const spareStreamAtom = atom<MediaStream | null>(null);
 export const screenStreamAtom = (slot: number) => screenStreamAtoms[slot] ?? spareStreamAtom;
 /** Phones have no screen capture; there the button is not shown at all. */
 export const screenShareSupported = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+/**
+ * Where the camera goes while a screen is shared (relay.ts `Layout`): on the screen where it was
+ * dragged, or beside it as a tile. This browser's, kept for the next stream. The preview draws
+ * it over the first shared screen, and watchers get it with every slots frame.
+ */
+const storedLayoutAtom = atomWithStorage<unknown>('settings.cameraLayout', DEFAULT_LAYOUT, undefined, { getOnInit: true });
+/** Read: always a well-formed layout inside the frame, whatever localstorage holds. */
+export const layoutAtom = atom((get) => validLayout(get(storedLayoutAtom)) ?? DEFAULT_LAYOUT);
+/**
+ * The big preview: what a watcher gets big. The first shared screen while one is shared (the
+ * one the watch page's rule picks), else the camera.
+ */
+export const stageStreamAtom = atom((get) => {
+  const first = get(screensAtom)[0];
+  return first ? get(screenStreamAtom(first.slot)) : get(cameraAtom);
+});
+/** The camera is drawn over the preview: a screen is shared and the layout puts it on the screen. */
+export const cameraOverlaidAtom = atom((get) => get(screensAtom).length > 0 && get(layoutAtom).camera === 'over');
 export const publishPhaseAtom = atom<PublishPhase>('camera-off');
 /** The upload, sampled from the peer once a second while a publish is up. Null once it stops. */
 export const publishStatsAtom = atom<StreamStats | null>(null);
@@ -109,6 +150,8 @@ let stopStats: (() => void) | null = null;
 let ws: WebSocket | null = null;
 let abort: AbortController | null = null;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
+/** A layout change waiting to be told to the watchers (`setLayout`). */
+let layoutTimer: ReturnType<typeof setTimeout> | null = null;
 /** The camera's video sender, and the SCREEN_SLOTS senders offered empty for screens (`screenSenders[i]` is screen slot i). */
 let cameraSender: RTCRtpSender | null = null;
 let screenSenders: RTCRtpSender[] = [];
@@ -311,21 +354,36 @@ function onConnection(state: RTCPeerConnectionState) {
 }
 
 /**
+ * The picker, with the hints first. A browser that rejects a hint (a `TypeError` on the
+ * options, an `OverconstrainedError` on the cursor) is asked again with the size cap alone,
+ * and the share still happens. The picker closed without a choice (`NotAllowedError`), or
+ * anything else, is `null`: nothing to share, and no second picker.
+ */
+async function pickDisplay(): Promise<MediaStream | null> {
+  try {
+    return await navigator.mediaDevices.getDisplayMedia(SCREEN_HINTS);
+  } catch (err) {
+    const rejectedHints = err instanceof TypeError || (err instanceof DOMException && err.name === 'OverconstrainedError');
+    if (!rejectedHints) return null;
+  }
+  try {
+    return await navigator.mediaDevices.getDisplayMedia({ video: SCREEN_CAP, audio: false });
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The share button: the browser's picker, one screen (or window, or tab) per press, into the
  * first free screen slot. The picker closed without a choice is nothing. Sharp text over
- * smooth motion (`contentHint`), and no more than 1080p: a retina display would hand over
- * a picture too big for the bitrate. The browser's own "stop sharing" bar ends the track,
- * which is a stop here.
+ * smooth motion (`contentHint`), and no more than 1080p (`SCREEN_CAP`). The browser's own
+ * "stop sharing" bar ends the track, which is a stop here.
  */
 export async function shareScreen(): Promise<void> {
   const myPc = pc;
   if (!myPc || !store.get(canShareScreenAtom)) return;
-  let display: MediaStream;
-  try {
-    display = await navigator.mediaDevices.getDisplayMedia({ video: { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 30 } }, audio: false });
-  } catch {
-    return;
-  }
+  const display = await pickDisplay();
+  if (!display) return;
   const track = display.getVideoTracks()[0];
   const slot = screenSenders.findIndex((sender) => !sender.track);
   const sender = screenSenders[slot];
@@ -371,33 +429,57 @@ export function stopScreen(slot: number) {
 
 function screensChanged() {
   announceSlots();
-  void shareBitrate();
+  void tuneSenders();
 }
 
-/** Tell video what is live where, for the watchers: the camera, then each shared screen. */
+/**
+ * The layout row and the drag on the preview: a part of the layout changes, kept inside the
+ * frame. The preview follows at once; the watchers are told within LAYOUT_SEND_MS, with the
+ * latest by then (a drag is many changes a second, the box and every watcher get a few).
+ */
+export function setLayout(patch: Partial<Layout>) {
+  store.set(storedLayoutAtom, clampLayout({ ...store.get(layoutAtom), ...patch }));
+  if (layoutTimer) return;
+  layoutTimer = setTimeout(() => {
+    layoutTimer = null;
+    announceSlots();
+  }, LAYOUT_SEND_MS);
+}
+
+/** Tell video what is live where, for the watchers: the camera, then each shared screen, and where the camera sits over a screen. */
 function announceSlots() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const screens: SlotInfo[] = store.get(screensAtom).map((s) => ({ slot: s.slot + 1, kind: 'screen', label: s.label }));
   const slots: SlotInfo[] = [{ slot: 0, kind: 'camera' }, ...screens];
-  record('/ws', 'out', { slots });
-  ws.send(JSON.stringify({ slots }));
+  const layout = store.get(layoutAtom);
+  record('/ws', 'out', { slots, layout });
+  ws.send(JSON.stringify({ slots, layout }));
 }
 
-/** The upload, divided: the camera steps back while a screen is shared, the screens share their part. */
-async function shareBitrate() {
+/**
+ * The upload, divided: the camera steps back while a screen is shared, the screens share their
+ * part. A screen is letters and ui: when the uplink or the cpu gets tight its encoder keeps the
+ * pixels and drops frames (`maintain-resolution`), for as long as the slot has a track, and the
+ * preference goes when the slot is emptied. The camera is left to the browser's default, so a
+ * face keeps its frames.
+ */
+async function tuneSenders() {
   const sharing = store.get(screensAtom).length;
-  await capBitrate(cameraSender, sharing ? CAMERA_SHARING_BITRATE : VIDEO_MAX_BITRATE);
+  await tune(cameraSender, sharing ? CAMERA_SHARING_BITRATE : VIDEO_MAX_BITRATE);
   for (const sender of screenSenders) {
-    if (sender.track) await capBitrate(sender, Math.floor(SCREENS_BITRATE / Math.max(1, sharing)));
+    if (sender.track) await tune(sender, Math.floor(SCREENS_BITRATE / Math.max(1, sharing)), 'maintain-resolution');
+    else await tune(sender, SCREENS_BITRATE);
   }
 }
 
-async function capBitrate(sender: RTCRtpSender | null, maxBitrate: number) {
+async function tune(sender: RTCRtpSender | null, maxBitrate: number, degradation?: RTCDegradationPreference) {
   if (!sender) return;
   const params = sender.getParameters();
   const encoding = params.encodings?.[0];
   if (!encoding) return; // not negotiated yet: the offer's cap holds
   encoding.maxBitrate = maxBitrate;
+  if (degradation) params.degradationPreference = degradation;
+  else delete params.degradationPreference;
   await sender.setParameters(params).catch(() => undefined);
 }
 
@@ -414,6 +496,10 @@ export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', {
   if (heartbeat) {
     clearInterval(heartbeat);
     heartbeat = null;
+  }
+  if (layoutTimer) {
+    clearTimeout(layoutTimer);
+    layoutTimer = null;
   }
   if (abort) {
     abort.abort();

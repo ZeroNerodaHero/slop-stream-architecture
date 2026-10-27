@@ -10,6 +10,7 @@ import {
   bioDraftAtom,
   bioStatusAtom,
   cameraAtom,
+  cameraOverlaidAtom,
   canShareScreenAtom,
   canStartAtom,
   chatRoomAtom,
@@ -18,6 +19,7 @@ import {
   enterLivePage,
   goLive,
   isPublishingAtom,
+  layoutAtom,
   leaveLivePage,
   publishPhaseAtom,
   publishStatsAtom,
@@ -32,8 +34,10 @@ import {
   screenShareSupported,
   screensAtom,
   screenStreamAtom,
+  setLayout,
   setStreamName,
   shareScreen,
+  stageStreamAtom,
   startCamera,
   startPublishPip,
   stopLive,
@@ -46,10 +50,11 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
-import { SCREEN_SLOTS } from '@/infra/relay';
+import { CAMERA_MAX_W, CAMERA_MIN_W, SCREEN_SLOTS } from '@/infra/relay';
 import { store } from '@/infra/store';
 import { Avatar } from '@/shared-components/Avatar';
 import { Button } from '@/shared-components/Button';
+import { CameraOverlay } from '@/shared-components/CameraOverlay';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { panelClassName } from '@/shared-components/Panel';
@@ -86,6 +91,8 @@ export function LivePage() {
   const chatOpen = useAtomValue(chatModalOpenAtom);
   const screens = useAtomValue(screensAtom);
   const canShare = useAtomValue(canShareScreenAtom);
+  const layout = useAtomValue(layoutAtom);
+  const overlaid = useAtomValue(cameraOverlaidAtom);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const thumbFileRef = useRef<HTMLInputElement | null>(null);
 
@@ -114,7 +121,10 @@ export function LivePage() {
       <div className={chatLayoutClass(chatSide, chatOpen)}>
         <div className={cn('min-w-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-1')}>
           <div className="group relative">
-            <VideoFrame id="preview" streamAtom={cameraAtom} videoRef={previewRef} muted />
+            {/* what a watcher gets big: the camera, or the first shared screen with the camera over it where
+                it was put. the camera is dragged around in here, and the watchers' players follow */}
+            <VideoFrame id="preview" streamAtom={stageStreamAtom} videoRef={previewRef} muted />
+            {overlaid && <CameraOverlay id="camera-overlay" streamAtom={cameraAtom} layout={layout} onMove={(x, y) => setLayout({ x, y })} />}
             {/* top left, while live: how the upload is going. up on its own while something limits it */}
             {(phase === 'live' || phase === 'reconnecting') && <StreamStatsButton id="live-stats" role="publish" stats={stats} />}
             {/* while the chat is closed the bar stays up, so it can be opened again off the preview. once
@@ -129,9 +139,11 @@ export function LivePage() {
               )}
             </div>
           </div>
-          {/* the screens being shared, each with its stop. the browser's own "stop sharing" bar works too */}
+          {/* the screens being shared, each with its stop (the browser's own "stop sharing" bar works too),
+              and the camera first while the layout keeps it beside the screen: a watcher's tiles */}
           {screens.length > 0 && (
             <div id="screens" className="mt-2 flex gap-2 overflow-x-auto">
+              {!overlaid && <StreamTile id="camera-tile" streamAtom={cameraAtom} label="camera" />}
               {screens.map((screen) => (
                 <StreamTile
                   key={screen.slot}
@@ -151,6 +163,34 @@ export function LivePage() {
                   }
                 />
               ))}
+            </div>
+          )}
+          {/* where the camera goes while a screen is shared: on the screen (drag it in the preview; this
+              dial is its size) or beside it as a tile. kept for the next stream */}
+          {screens.length > 0 && (
+            <div id="layout" className="mt-2 flex flex-wrap items-center gap-3">
+              <span className="text-textSecondary">camera</span>
+              <Button id="camera-over" variant={overlaid ? 'primary' : 'secondary'} aria-pressed={overlaid} className="px-3 py-1.5 text-sm" onClick={() => setLayout({ camera: 'over' })}>
+                on the screen
+              </Button>
+              <Button id="camera-beside" variant={overlaid ? 'secondary' : 'primary'} aria-pressed={!overlaid} className="px-3 py-1.5 text-sm" onClick={() => setLayout({ camera: 'beside' })}>
+                beside it
+              </Button>
+              <label htmlFor="camera-size" className={cn('ml-2 text-textSecondary', !overlaid && 'opacity-40')}>
+                size
+              </label>
+              <input
+                id="camera-size"
+                type="range"
+                min={CAMERA_MIN_W}
+                max={CAMERA_MAX_W}
+                step={0.01}
+                value={layout.w}
+                disabled={!overlaid}
+                title={`${Math.round(layout.w * 100)}% of the width`}
+                onChange={(e) => setLayout({ w: e.target.valueAsNumber })}
+                className="w-32 accent-primaryBlue disabled:opacity-40"
+              />
             </div>
           )}
           <div className="flex flex-wrap items-baseline gap-x-4">
@@ -290,7 +330,7 @@ export function LivePage() {
                 <ul className="mt-3 flex list-none flex-wrap gap-3 p-0">
                   {thumbs.map((id) => (
                     <li key={id} className="w-36">
-                      <img src={api.streamThumbUrl(name, id)} alt="" className="aspect-video w-full border border-primaryStroke object-cover" />
+                      <img src={api.streamThumbUrl(name, id)} alt="" draggable={false} className="aspect-video w-full border border-primaryStroke object-cover" />
                       <Button id={`thumb-remove-${id}`} className="mt-2 w-full px-3 py-2 text-sm" onClick={() => void removeStreamThumb(id)}>
                         remove
                       </Button>

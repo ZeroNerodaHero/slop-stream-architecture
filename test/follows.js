@@ -149,7 +149,7 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     return `${STAR} streaming, first; the corner says 1`;
   });
 
-  await step('the search box: type a few letters, a result with a follow button, following it joins the list', async () => {
+  await step('the search box: type a few letters, a result with a follow button; following it, the button is the list\'s × and the name joins the list', async () => {
     const other = 'pal' + RUN;
     const up = await anon.post('/api/signup', { data: { name: other, password: PW } });
     expect(up.status() === 201, `signup of ${other} got ${up.status()}`);
@@ -161,7 +161,9 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     const state = await fanPage.getAttribute(`#result-follow-${other}`, 'data-following');
     expect(state === 'false', `the button says following=${state}`);
     await fanPage.click(`#result-follow-${other}`);
-    await fanPage.waitForFunction((n) => document.querySelector(`#result-follow-${n}`)?.dataset.following === 'true', other, { timeout: 10000 });
+    // followed: the row wears the lists' × now, in place of the follow button
+    await fanPage.waitForSelector(`#result-unfollow-${other}`, { timeout: 10000 });
+    expect(!(await fanPage.$(`#result-follow-${other}`)), 'the follow button is still on a followed result');
     const list = await body(await fan.get('/api/following'));
     expect(find(list, other), `${other} is not in the list: ${list.map((f) => f.name).join(' ')}`);
     await fanPage.fill('#friends-search', '');

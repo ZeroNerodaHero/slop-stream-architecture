@@ -374,6 +374,7 @@ export function ProfileTab() {
               id="profile-offline-preview"
               src={api.offlineUrl(name, offline)}
               alt=""
+              draggable={false}
               className="aspect-video w-full max-w-[480px] border border-primaryStroke bg-black object-cover"
             />
           ) : (

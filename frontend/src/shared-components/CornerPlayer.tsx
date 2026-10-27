@@ -179,6 +179,8 @@ interface CornerPlayerProps {
   closeConfirm?: { title: string; message: string; yes: string };
   /** Over the middle of the picture ("tap to play"). */
   center?: ReactNode;
+  /** On the picture, under the controls, placed against the picture's box: the watch player's camera over a shared screen (`CameraOverlay`). */
+  overlay?: ReactNode;
   /** In the picture's top left corner, across from the chat button and ×: the stream's health. It places itself (`CORNER_BADGE`). */
   badge?: ReactNode;
   /** Along the picture's bottom edge, up on hover (`barShown`: always up). Nothing: no bar at all. */
@@ -221,6 +223,7 @@ export function CornerPlayer({
   onClose,
   closeConfirm,
   center,
+  overlay,
   badge,
   bar,
   barShown = false,
@@ -448,6 +451,7 @@ export function CornerPlayer({
           className={cn('min-w-0 border-0 border-b', popped && 'h-full object-contain')}
         />
       </Link>
+      {overlay}
       {center}
       {badge}
       {buttons}

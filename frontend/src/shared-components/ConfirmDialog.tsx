@@ -65,7 +65,7 @@ export function ConfirmDialog({ id, title, message, yes, onYes, onNo }: ConfirmD
       onClick={onClick}
       onClose={() => (saidYes.current ? onYes() : onNo())}
       // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
-      className="m-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary shadow-hard-lg backdrop:bg-black/60"
+      className="m-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60"
     >
       <h2 id={`${id}-title`} className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
         {title}

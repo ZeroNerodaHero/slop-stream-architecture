@@ -30,7 +30,7 @@ use redis::AsyncCommands;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use tokio::sync::Semaphore;
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
@@ -261,22 +261,28 @@ pub(crate) async fn renamed_to(db: &PgPool, name: &str) -> Result<Option<String>
     .await
 }
 
-/// Does this name have an account.
+/// Is this name somebody's: it has an account, or an account renamed away from it and the
+/// hold is still on (`is_held`; a claim in waiting). The one answer for the write gates and
+/// both socket hellos, in one statement, so nobody can go live as, write or wear a held
+/// name while `/watch/<name>` leads to the account that left it (docs/ids.md).
 pub(crate) async fn is_claimed(db: &PgPool, name: &str) -> Result<bool, sqlx::Error> {
-    let claimed: Option<bool> = sqlx::query_scalar("SELECT password_hash IS NOT NULL FROM streamers WHERE name = $1")
-        .bind(name)
-        .fetch_optional(db)
-        .await?;
-    Ok(claimed.unwrap_or(false))
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM streamers WHERE name = $1 AND password_hash IS NOT NULL)
+             OR EXISTS (SELECT 1 FROM held_names WHERE name = $1 AND until > now())",
+    )
+    .bind(name)
+    .fetch_one(db)
+    .await
 }
 
 /// The one rule the rest of the api asks: may whoever holds `me` act as `name`?
-/// A free name: anyone. A claimed name: only its own login.
+/// A free name: anyone. A claimed name: only its own login. A held name: nobody, not even
+/// the account that left it (its login is under the new name; it renames back instead).
 pub(crate) async fn may_act_as(db: &PgPool, name: &str, me: Option<&str>) -> Result<(), ApiError> {
     if me == Some(name) || !is_claimed(db, name).await? {
         return Ok(());
     }
-    Err(ApiError::new(StatusCode::FORBIDDEN, "that name has an account. log in as it"))
+    Err(ApiError::new(StatusCode::FORBIDDEN, "that name is somebody's. log in as it"))
 }
 
 /// Who the cookie says this is. `None` for everyone without a (valid) login.
@@ -553,6 +559,34 @@ async fn change_password(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Takes the free row (no account) under `new` for `me`, who is about to be renamed onto it:
+/// its followers move to `me` (they followed the name, docs/follows.md), then its thumbs and
+/// the row go. Returns its picture keys in the bucket, to drop after the commit. `name taken`
+/// when the row is not free any more: a signup claimed it between the check and here, and the
+/// caller's early return rolls the transaction back.
+pub(crate) async fn take_free_row(conn: &mut PgConnection, free: Uuid, me: Uuid, new: &str) -> Result<Vec<String>, ApiError> {
+    let thumbs: Vec<i64> = sqlx::query_scalar("SELECT id FROM stream_thumbs WHERE name = $1").bind(new).fetch_all(&mut *conn).await?;
+    let orphaned = profile::picture_keys(free, &thumbs);
+    sqlx::query("DELETE FROM stream_thumbs WHERE name = $1").bind(new).execute(&mut *conn).await?;
+    // the name's followers are mine now, from when they followed. not my own edge to it (no
+    // self edges), and one who follows me already keeps the one edge
+    sqlx::query(
+        "INSERT INTO follows (follower_id, followed_id, followed_at)
+         SELECT follower_id, $2, followed_at FROM follows WHERE followed_id = $1 AND follower_id <> $2
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(free)
+    .bind(me)
+    .execute(&mut *conn)
+    .await?;
+    // only while it is still free: a signup that claimed it since the check keeps the row
+    let gone = sqlx::query("DELETE FROM streamers WHERE id = $1 AND password_hash IS NULL").bind(free).execute(&mut *conn).await?;
+    if gone.rows_affected() == 0 {
+        return Err(name_taken());
+    }
+    Ok(orphaned)
+}
+
 /// `POST /api/name` `{ name, password }`: the login's name changes; its logins, groups and
 /// pictures stay, because they point at the id. Once in RENAME_DAYS, with the password (a
 /// stolen cookie must not walk off with the name), never while live (the stream's url, key
@@ -614,15 +648,12 @@ async fn change_name(
         return Err(name_taken());
     }
     // a free row under the new name: its bio and picture were anyone's, and yours arrive
-    // with you. the row goes, and its pictures in the bucket after the commit
+    // with you; its followers come along. the row goes, and its pictures in the bucket after the commit
     let free: Option<Uuid> = sqlx::query_scalar("SELECT id FROM streamers WHERE name = $1").bind(&new).fetch_optional(&mut *tx).await?;
-    let mut orphaned = Vec::new();
-    if let Some(free) = free {
-        let thumbs: Vec<i64> = sqlx::query_scalar("SELECT id FROM stream_thumbs WHERE name = $1").bind(&new).fetch_all(&mut *tx).await?;
-        orphaned = profile::picture_keys(free, &thumbs);
-        sqlx::query("DELETE FROM stream_thumbs WHERE name = $1").bind(&new).execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM streamers WHERE id = $1").bind(free).execute(&mut *tx).await?;
-    }
+    let orphaned = match free {
+        Some(free) => take_free_row(&mut tx, free, me.id, &new).await?,
+        None => Vec::new(),
+    };
     // the one statement the id is for. logins.name, memberships.name and groups.created_by
     // follow by ON UPDATE CASCADE while those columns live; stream_thumbs has no key and is told
     let renamed_at: DateTime<Utc> = match sqlx::query_scalar("UPDATE streamers SET name = $2, renamed_at = now() WHERE id = $1 RETURNING renamed_at")
@@ -704,4 +735,146 @@ fn random_password() -> String {
     let mut bytes = [0u8; 16];
     OsRng.fill_bytes(&mut bytes);
     bytes.iter().map(|b| ALPHABET[(*b % 32) as usize] as char).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A throwaway postgres, migrated. For example
+    /// `docker run -d --name test-pg -e POSTGRES_PASSWORD=x -e POSTGRES_DB=t -p 55434:5432 postgres:17-alpine`
+    /// and `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t`.
+    async fn test_db() -> PgPool {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL: the postgres to run this against");
+        let pool = sqlx::postgres::PgPoolOptions::new().max_connections(2).connect(&url).await.expect("connect");
+        crate::migrate::run(&pool).await.expect("migrate");
+        pool
+    }
+
+    /// A row with a hash is an account; without one, a name somebody used (a follow, a bio).
+    async fn row(pool: &PgPool, name: &str, hash: Option<&str>) -> Uuid {
+        sqlx::query_scalar("INSERT INTO streamers (name, password_hash) VALUES ($1, $2) RETURNING id")
+            .bind(name)
+            .bind(hash)
+            .fetch_one(pool)
+            .await
+            .expect("a row")
+    }
+
+    async fn edge(pool: &PgPool, follower: Uuid, followed: Uuid, at: DateTime<Utc>) {
+        sqlx::query("INSERT INTO follows (follower_id, followed_id, followed_at) VALUES ($1, $2, $3)")
+            .bind(follower)
+            .bind(followed)
+            .bind(at)
+            .execute(pool)
+            .await
+            .expect("an edge");
+    }
+
+    async fn edges_of(pool: &PgPool, follower: Uuid) -> Vec<(Uuid, DateTime<Utc>)> {
+        sqlx::query_as("SELECT followed_id, followed_at FROM follows WHERE follower_id = $1")
+            .bind(follower)
+            .fetch_all(pool)
+            .await
+            .expect("edges")
+    }
+
+    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored keeps_its_followers` against a throwaway postgres (see `test_db`).
+    #[tokio::test]
+    #[ignore]
+    async fn taking_a_free_name_keeps_its_followers() {
+        let pool = test_db().await;
+        let run = std::process::id();
+        let alice = row(&pool, &format!("alice-{run}"), Some("alice-hash")).await;
+        let fan = row(&pool, &format!("fan-{run}"), Some("fan-hash")).await;
+        let both = row(&pool, &format!("both-{run}"), Some("both-hash")).await;
+        let name = format!("nova-{run}");
+        let nova = row(&pool, &name, None).await;
+        let then: DateTime<Utc> = "2024-01-02T03:04:05Z".parse().unwrap();
+        let later: DateTime<Utc> = "2024-06-07T08:09:10Z".parse().unwrap();
+        // fan follows the free name; both follows it and alice; alice follows it herself
+        edge(&pool, fan, nova, then).await;
+        edge(&pool, both, nova, later).await;
+        edge(&pool, both, alice, then).await;
+        edge(&pool, alice, nova, then).await;
+
+        // what change_name does: take the row, then rename onto the name
+        let mut tx = pool.begin().await.unwrap();
+        let orphaned = take_free_row(&mut tx, nova, alice, &name).await.expect("the free row is taken");
+        sqlx::query("UPDATE streamers SET name = $2 WHERE id = $1").bind(alice).bind(&name).execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(orphaned, profile::picture_keys(nova, &[]));
+        // fan's one edge points at alice now, from when it was made
+        assert_eq!(edges_of(&pool, fan).await, vec![(alice, then)]);
+        // one edge for somebody who followed alice already, the one they had
+        assert_eq!(edges_of(&pool, both).await, vec![(alice, then)]);
+        // alice's own edge to the free name is gone, not a self edge
+        assert_eq!(edges_of(&pool, alice).await, vec![]);
+        assert_eq!(crate::follows::stats(&pool, &name, Some(fan)).await.unwrap(), (2, true));
+    }
+
+    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored claimed_meanwhile` against a throwaway postgres (see `test_db`).
+    #[tokio::test]
+    #[ignore]
+    async fn a_free_name_claimed_meanwhile_is_taken_not_deleted() {
+        let pool = test_db().await;
+        let run = std::process::id();
+        let bob = row(&pool, &format!("bob-{run}"), Some("bob-hash")).await;
+        let name = format!("nova2-{run}");
+        let nova = row(&pool, &name, None).await;
+        // bob's rename has read the free row's id; a signup claims the row before it is deleted
+        let claimed: Option<Uuid> = sqlx::query_scalar(
+            "INSERT INTO streamers (name, password_hash) VALUES ($1, $2)
+             ON CONFLICT (name) DO UPDATE SET password_hash = EXCLUDED.password_hash
+             WHERE streamers.password_hash IS NULL
+             RETURNING id",
+        )
+        .bind(&name)
+        .bind("carol-hash")
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert_eq!(claimed, Some(nova));
+
+        let mut tx = pool.begin().await.unwrap();
+        let err = take_free_row(&mut tx, nova, bob, &name).await.expect_err("the row is somebody's now");
+        assert_eq!(err.into_response().status(), StatusCode::CONFLICT);
+        tx.rollback().await.unwrap();
+
+        let hash: Option<String> = sqlx::query_scalar("SELECT password_hash FROM streamers WHERE id = $1").bind(nova).fetch_one(&pool).await.unwrap();
+        assert_eq!(hash.as_deref(), Some("carol-hash"));
+    }
+
+    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored held_name_is_somebodys` against a throwaway postgres (see `test_db`).
+    #[tokio::test]
+    #[ignore]
+    async fn a_held_name_is_somebodys_while_the_hold_lasts() {
+        let pool = test_db().await;
+        let run = std::process::id();
+        let nova_name = format!("nova3-{run}");
+        let nova = row(&pool, &nova_name, Some("nova-hash")).await;
+        let alice = format!("alice3-{run}");
+        // what change_name leaves behind: nova renamed away from alice, and alice is held for her
+        sqlx::query("INSERT INTO held_names (name, user_id, until) VALUES ($1, $2, now() + interval '30 days')")
+            .bind(&alice)
+            .bind(nova)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(is_claimed(&pool, &alice).await.unwrap(), "a held name is somebody's");
+        assert!(is_claimed(&pool, &nova_name).await.unwrap(), "an account's name is somebody's");
+        assert!(!is_claimed(&pool, &format!("nobody3-{run}")).await.unwrap(), "a name nobody used is free");
+        // nobody acts as the held name: not a guest, and not the account it is held for (it renames back)
+        let guest = may_act_as(&pool, &alice, None).await.expect_err("a guest is refused");
+        assert_eq!(guest.into_response().status(), StatusCode::FORBIDDEN);
+        let holder = may_act_as(&pool, &alice, Some(&nova_name)).await.expect_err("the account that left it is refused");
+        assert_eq!(holder.into_response().status(), StatusCode::FORBIDDEN);
+
+        // the hold runs out: the name is anyone's again
+        sqlx::query("UPDATE held_names SET until = now() - interval '1 second' WHERE name = $1").bind(&alice).execute(&pool).await.unwrap();
+        assert!(!is_claimed(&pool, &alice).await.unwrap(), "a lapsed hold holds nothing");
+        may_act_as(&pool, &alice, None).await.expect("free again");
+    }
 }

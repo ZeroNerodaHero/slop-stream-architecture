@@ -60,37 +60,46 @@ pub(crate) async fn stats(db: &PgPool, name: &str, me: Option<Uuid>) -> Result<(
 
 // ---- the words, for a list of names ----------------------------------------------------------
 
-/// `live` and the presence word of every name in one go: video's set once (else the keys), one
-/// pipelined `ZCOUNT` per name, one `SELECT` for every status. The rule is presence.rs's; this
-/// is the same answer `GET /api/streamers/:name` gives, n times for the price of three round trips.
-async fn words(s: &AppState, names: &[String]) -> Result<HashMap<String, (bool, Presence)>, ApiError> {
+/// `live` and the presence word of every name in one go. Each name comes with the choice its
+/// row holds, read by the caller's own query (the list already joins `streamers`; nothing reads
+/// it twice). Then video's set once (else the keys) and one pipelined `ZCOUNT` per name, the two
+/// asked at the same time. The rule is presence.rs's; this is the same answer
+/// `GET /api/streamers/:name` gives, n times for the price of one round trip.
+async fn words(s: &AppState, people: &[(String, Status)]) -> Result<HashMap<String, (bool, Presence)>, ApiError> {
     let mut out = HashMap::new();
-    if names.is_empty() {
+    if people.is_empty() {
         return Ok(out);
     }
-    let live: HashSet<String> = match video_live(s).await {
-        Some(connected) => connected,
-        None => redis_live(s).await?.into_iter().collect(),
+    let live = async {
+        Ok::<HashSet<String>, ApiError>(match video_live(s).await {
+            Some(connected) => connected,
+            None => redis_live(s).await?.into_iter().collect(),
+        })
     };
-    let mut r = s.redis.clone();
-    let floor = presence::now_ms() - SEEN_WINDOW_MS;
-    let mut pipe = redis::pipe();
-    for name in names {
-        pipe.zcount(presence::seen_key(name), floor, "+inf");
-    }
-    let here: Vec<i64> = pipe.query_async(&mut r).await?;
-    let rows: Vec<(String, String)> = sqlx::query_as("SELECT name, status FROM streamers WHERE name = ANY($1)")
-        .bind(names)
-        .fetch_all(&s.db)
-        .await?;
-    let status: HashMap<String, Status> = rows.into_iter().map(|(n, raw)| (n, Status::parse(&raw).unwrap_or_default())).collect();
-    for (i, name) in names.iter().enumerate() {
+    let here = async {
+        let mut r = s.redis.clone();
+        let floor = presence::now_ms() - SEEN_WINDOW_MS;
+        let mut pipe = redis::pipe();
+        for (name, _) in people {
+            pipe.zcount(presence::seen_key(name), floor, "+inf");
+        }
+        let here: Vec<i64> = pipe.query_async(&mut r).await?;
+        Ok::<_, ApiError>(here)
+    };
+    let (live, here) = tokio::join!(live, here);
+    let (live, here) = (live?, here?);
+    for (i, (name, status)) in people.iter().enumerate() {
         let is_live = live.contains(name);
         let is_here = here.get(i).copied().unwrap_or(0) > 0;
-        let word = presence::derive(is_live, is_here, status.get(name).copied().unwrap_or_default());
-        out.insert(name.clone(), (is_live, word));
+        out.insert(name.clone(), (is_live, presence::derive(is_live, is_here, *status)));
     }
     Ok(out)
+}
+
+/// A row's status column as the choice it names: `online` for a row older than the column (its
+/// default), `status_of`'s rule. With the name, what `words` wants.
+fn choice(name: &str, raw: &str) -> (String, Status) {
+    (name.to_owned(), Status::parse(raw).unwrap_or_default())
 }
 
 /// Streaming first, then online, do not disturb, offline; inside a word, as the rows came.
@@ -103,8 +112,8 @@ fn rank(word: Presence) -> u8 {
     }
 }
 
-/// name, verified, avatar, bio, followed_at, mutual (that name follows this login back: a friend)
-type FollowedRow = (String, bool, Option<i64>, String, DateTime<Utc>, bool);
+/// name, verified, avatar, bio, followed_at, mutual (that name follows this login back: a friend), status
+type FollowedRow = (String, bool, Option<i64>, String, DateTime<Utc>, bool, String);
 
 // ---- the routes -------------------------------------------------------------------------------
 
@@ -162,7 +171,7 @@ async fn unfollow(State(s): State<AppState>, Name(name): Name, Me(me): Me) -> Re
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn followed_json((name, verified, avatar, bio, followed_at, mutual): &FollowedRow, live: bool, word: Presence) -> Value {
+fn followed_json((name, verified, avatar, bio, followed_at, mutual, _): &FollowedRow, live: bool, word: Presence) -> Value {
     json!({ "name": name, "verified": verified, "avatar": avatar, "bio": bio, "live": live, "presence": word, "followed_at": followed_at, "mutual": mutual })
 }
 
@@ -172,7 +181,7 @@ async fn following(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let rows: Vec<FollowedRow> = sqlx::query_as(
         "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio, f.followed_at,
-                EXISTS (SELECT 1 FROM follows b WHERE b.follower_id = s.id AND b.followed_id = $1)
+                EXISTS (SELECT 1 FROM follows b WHERE b.follower_id = s.id AND b.followed_id = $1), s.status
          FROM follows f JOIN streamers s ON s.id = f.followed_id
          WHERE f.follower_id = $1
          ORDER BY f.followed_at DESC",
@@ -180,8 +189,8 @@ async fn following(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     .bind(me.id)
     .fetch_all(&s.db)
     .await?;
-    let names: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
-    let words = words(&s, &names).await?;
+    let people: Vec<(String, Status)> = rows.iter().map(|r| choice(&r.0, &r.6)).collect();
+    let words = words(&s, &people).await?;
     let mut list: Vec<(u8, usize, Value)> = rows
         .iter()
         .enumerate()
@@ -206,8 +215,8 @@ fn clean_query(raw: &str) -> String {
     raw.trim().to_lowercase().chars().filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_' || *c == '-').take(32).collect()
 }
 
-/// name, verified, avatar, bio, following
-type HitRow = (String, bool, Option<i64>, String, bool);
+/// name, verified, avatar, bio, following, status
+type HitRow = (String, bool, Option<i64>, String, bool, String);
 
 /// `GET /api/search?q=ali`: names holding the letters, the exact name first, then the ones that
 /// start with them, accounts before free names, 20 at most. `following` is for the login.
@@ -219,7 +228,7 @@ async fn search(State(s): State<AppState>, Me(me): Me, q: Result<Query<SearchQue
     }
     let rows: Vec<HitRow> = sqlx::query_as(
         "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
-                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $2 AND f.followed_id = s.id)
+                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $2 AND f.followed_id = s.id), s.status
          FROM streamers s
          WHERE position($1 in s.name) > 0
          ORDER BY s.name = $1 DESC, starts_with(s.name, $1) DESC, (s.password_hash IS NOT NULL) DESC, s.name
@@ -230,9 +239,9 @@ async fn search(State(s): State<AppState>, Me(me): Me, q: Result<Query<SearchQue
     .bind(SEARCH_LIMIT)
     .fetch_all(&s.db)
     .await?;
-    let names: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
-    let words = words(&s, &names).await?;
-    let out = rows.into_iter().map(|(name, verified, avatar, bio, following)| {
+    let people: Vec<(String, Status)> = rows.iter().map(|r| choice(&r.0, &r.5)).collect();
+    let words = words(&s, &people).await?;
+    let out = rows.into_iter().map(|(name, verified, avatar, bio, following, _)| {
         let (live, word) = words.get(&name).copied().unwrap_or((false, Presence::Offline));
         json!({ "name": name, "verified": verified, "avatar": avatar, "bio": bio, "live": live, "presence": word, "following": following })
     });
@@ -246,7 +255,7 @@ async fn search(State(s): State<AppState>, Me(me): Me, q: Result<Query<SearchQue
 async fn people(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let rows: Vec<HitRow> = sqlx::query_as(
         "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
-                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $1 AND f.followed_id = s.id)
+                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $1 AND f.followed_id = s.id), s.status
          FROM streamers s
          ORDER BY (s.password_hash IS NOT NULL) DESC, s.updated_at DESC
          LIMIT $2",
@@ -255,12 +264,12 @@ async fn people(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     .bind(PEOPLE_SCAN)
     .fetch_all(&s.db)
     .await?;
-    let names: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
-    let words = words(&s, &names).await?;
+    let people: Vec<(String, Status)> = rows.iter().map(|r| choice(&r.0, &r.5)).collect();
+    let words = words(&s, &people).await?;
     let mut list: Vec<(u8, usize, Value)> = rows
         .into_iter()
         .enumerate()
-        .filter_map(|(i, (name, verified, avatar, bio, following))| {
+        .filter_map(|(i, (name, verified, avatar, bio, following, _))| {
             let (live, word) = words.get(&name).copied().unwrap_or((false, Presence::Offline));
             if live {
                 return None;

@@ -28,6 +28,29 @@ html {
   scroll-padding-top: 4rem;
 }
 
+/* one thin bar, the page's and every pane's: a square thumb in the faintest text colour (3:1 on every surface,
+   so it reads) on nothing. the webkit parts are what hold its size: chrome and safari then draw a classic bar
+   at the width given, where the platform's overlay bar hides and swells under the pointer */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--text-tertiary));
+}
+/* firefox has no webkit parts; the standard properties are its thin bar. chrome and safari skip this: there,
+   setting either property switches the webkit parts off and brings the swelling overlay bar back */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--text-tertiary)) transparent;
+  }
+}
+
 /* the page under a modal stays put: no browser locks it on its own, and a wheel over the backdrop would scroll it */
 html:has(dialog:modal) {
   overflow: hidden;
@@ -45,5 +68,12 @@ body {
   }
   ::selection {
     @apply bg-primaryBlue text-background;
+  }
+  /* no picture lifts off as a ghost when pressed and pulled, and none lights up inside a sweep of the text
+     around it (a dragged selection would carry it). chrome and safari read the property; firefox has no such
+     property and reads only the attribute, so every <img> carries draggable="false" as well */
+  img {
+    -webkit-user-drag: none;
+    user-select: none;
   }
 }

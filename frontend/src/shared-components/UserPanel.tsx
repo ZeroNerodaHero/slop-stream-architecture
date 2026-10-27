@@ -1,11 +1,11 @@
-import { RiLoginBoxLine, RiLogoutBoxRLine, RiTerminalBoxLine, RiUserAddLine, RiUserFollowLine } from '@remixicon/react';
+import { RiChat3Line, RiLoginBoxLine, RiLogoutBoxRLine, RiTerminalBoxLine, RiUserAddLine, RiUserFollowLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 import { loadMe, logout, meAtom } from '@/infra/atoms/auth-atoms';
 import { nickAtom, setNick } from '@/infra/atoms/chat-atoms';
-import { closeDm } from '@/infra/atoms/dm-atoms';
+import { closeAllDms, showDms } from '@/infra/atoms/dm-atoms';
 import { forgetFollowing, friendsOpenAtom, loadFollowing, streamingFriendsAtom } from '@/infra/atoms/follow-atoms';
 import { openInspector } from '@/infra/atoms/inspector-atoms';
 import { myPresenceAtom, PRESENCE_SQUARE, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
@@ -61,6 +61,16 @@ function openProfile(e: { currentTarget: HTMLElement }) {
   openUserModal('profile');
 }
 
+/** The chat window back on screen (FriendChat.tsx): the chats as they were left, or the friends to pick one from. A login's: a guest has no friends. */
+function ChatsOpener() {
+  return (
+    <button id="chats-open" type="button" title="your chats with friends" onClick={showDms} className={ACTION}>
+      <RiChat3Line aria-hidden size={ICON} />
+      chat
+    </button>
+  );
+}
+
 /** The way into the box over the panel without a mouse: a word, and how many of them are streaming. */
 function FriendsOpener({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const streaming = useAtomValue(streamingFriendsAtom);
@@ -94,7 +104,8 @@ function FriendsOpener({ open, onToggle }: { open: boolean; onToggle: () => void
  * friend, and your actions. Logged in: your account name, a ✓, and log out under it. Not logged
  * in: a name box (localstorage, used in chat and as the go-live default) that reads as plain
  * text until you point at it, with sign up and log in under it. Nobody has to. The picture, and
- * a login's name, open the user modal (profile, security, settings, appearance). Go live and the
+ * a login's name, open the user modal (profile, security, settings, appearance). A login's
+ * actions have `chat` too, which brings the friend chat window back. Go live and the
  * settings icon sit at the top right of the page. The ids are the ones the tests key on;
  * `data-open` says which state the panel is in.
  */
@@ -129,7 +140,7 @@ export function UserPanel() {
   useEffect(() => {
     forgetFollowing();
     if (me) void loadFollowing();
-    if (me === null) closeDm();
+    if (me === null) closeAllDms();
   }, [me]);
 
   // a page change closes the box: a friend's name was clicked, or the back button
@@ -286,6 +297,8 @@ export function UserPanel() {
                     <RiLogoutBoxRLine aria-hidden size={ICON} />
                     log out
                   </button>
+                  <Dot />
+                  <ChatsOpener />
                   <Dot />
                   <FriendsOpener open={friendsOpen} onToggle={toggleFriends} />
                   {inspectorOn && (

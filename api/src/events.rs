@@ -477,7 +477,7 @@ async fn identify(g: &Gateway, headers: &HeaderMap, nick: Option<&str>) -> Resul
     }
     match is_claimed(&g.db, &name).await {
         Ok(false) => Ok(Some(name)),
-        Ok(true) => Err(Refused("that name has an account. log in as it, or pick another")),
+        Ok(true) => Err(Refused("that name is somebody's. log in as it, or pick another")),
         Err(e) => {
             // fail closed: with the database down a claimed name must not be wearable
             log::warn!("events: cannot check whether {name} is claimed: {e}");

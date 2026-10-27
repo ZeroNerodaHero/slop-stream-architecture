@@ -104,7 +104,7 @@ function UserDialog() {
         'open:flex flex-col sm:flex-row',
         // full bleed on a phone: the browser's margins and size caps of a modal dialog go
         'm-0 h-dvh max-h-none w-full max-w-none border-0',
-        'sm:m-auto sm:h-[min(680px,calc(100dvh-3rem))] sm:w-[min(960px,calc(100vw-3rem))] sm:border sm:border-primaryStroke sm:shadow-hard-lg',
+        'sm:m-auto sm:h-[min(680px,calc(100dvh-3rem))] sm:w-[min(960px,calc(100vw-3rem))] sm:border sm:border-primaryStroke',
         'backdrop:bg-black/60 sm:backdrop:backdrop-blur-sm'
       )}
     >

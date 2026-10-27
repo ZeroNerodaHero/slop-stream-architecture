@@ -277,7 +277,7 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
         }
         match is_claimed(&s.db, &lower).await {
             Ok(false) => nick,
-            Ok(true) => return Err(Unknown::Refused("that name has an account. log in as it, or pick another")),
+            Ok(true) => return Err(Unknown::Refused("that name is somebody's. log in as it, or pick another")),
             Err(e) => {
                 // fail closed: with the database down a claimed name must not be borrowable
                 log::warn!("{room}: cannot check whether {nick} is claimed: {e}");

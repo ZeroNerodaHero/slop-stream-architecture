@@ -7,9 +7,12 @@
  *              answers "too many previews from your address")
  *   we get    {"sdp":"<answer>"}  or  {"error":"..."}
  * The socket stays open for the whole session. Closing it hangs up. On the open socket:
- *   a publisher sends  {"slots":[{"slot":0,"kind":"camera"},{"slot":1,"kind":"screen","label":"screen"}]}
- *                      whenever what it shows changes: its video slots that are live, see `SlotInfo`
- *   a watcher gets     {"event":"slots","slots":[...]}  right after the answer and on every change
+ *   a publisher sends  {"slots":[{"slot":0,"kind":"camera"},{"slot":1,"kind":"screen","label":"screen"}],
+ *                       "layout":{"camera":"over","x":0.73,"y":0.73,"w":0.25}}
+ *                      whenever what it shows changes: its video slots that are live, see `SlotInfo`,
+ *                      and where the camera sits while a screen is shared, see `Layout`
+ *   a watcher gets     {"event":"slots","slots":[...],"layout":{...}}  right after the answer and on every change
+ *                      (no `layout` from a publisher that never sent one: the dummy, an older page)
  *                      {"event":"ended"}  when the publisher leaves
  *   both get           {"event":"viewers","viewers":3}  how many addresses are receiving it, on change, at most 1/s
  *
@@ -36,13 +39,62 @@ export interface SlotInfo {
   /** `camera`, `screen`; anything else is shown as is. */
   kind: string;
   label?: string;
+  /**
+   * Where this picture sits while another is the big one: a corner of the big picture (a `Corner`),
+   * or `beside` it as a tile. Absent, or a word not known: beside. The camera carries the
+   * streamer's choice; the pages put a shared screen beside the camera when the camera is big.
+   */
+  place?: string;
+  /** How wide the picture is in its corner, as a share of the big one: a `Size`. Absent, or not known: `medium`. */
+  size?: string;
 }
+
+/** The corners a picture can sit in over the big one, as the streamer lays it out. */
+export const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const;
+export type Corner = (typeof CORNERS)[number];
+/** A corner, or beside the big picture as a tile (what every slot did before layouts). */
+export type Place = Corner | 'beside';
+export const PLACES: readonly Place[] = [...CORNERS, 'beside'];
+/** How wide a picture in a corner is: a share of the big picture's width (`SIZE_SHARE`). */
+export const SIZES = ['small', 'medium', 'large'] as const;
+export type Size = (typeof SIZES)[number];
+export const SIZE_SHARE: Record<Size, number> = { small: 0.18, medium: 0.25, large: 0.33 };
+
+/** The slot's corner, or null when it sits beside the big picture (said so, said nothing, or said a word not known). */
+export function cornerOf(slot: Pick<SlotInfo, 'place'>): Corner | null {
+  return (CORNERS as readonly string[]).includes(slot.place ?? '') ? (slot.place as Corner) : null;
+}
+
+export function sizeOf(slot: Pick<SlotInfo, 'size'>): Size {
+  return (SIZES as readonly string[]).includes(slot.size ?? '') ? (slot.size as Size) : 'medium';
+}
+
+/**
+ * Where the camera sits while a screen is shared, as the streamer laid it out: on the screen
+ * (`over`), a 16:9 box `w` of the frame wide with its top left corner at `x`,`y` of the frame,
+ * or off it as a tile under the video (`beside`). Fractions, so the go live page's preview and
+ * every watcher's player draw the same picture at any size. Travels with the slots frame.
+ */
+export interface Layout {
+  camera: 'over' | 'beside';
+  x: number;
+  y: number;
+  w: number;
+}
+
+/** The camera over the screen is between these wide, as a fraction of the frame. */
+export const CAMERA_MIN_W = 0.1;
+export const CAMERA_MAX_W = 0.5;
+/** Bottom right, a quarter of the frame wide, a little in from the edges: where a face cam usually sits. */
+export const DEFAULT_LAYOUT: Layout = { camera: 'over', x: 0.73, y: 0.73, w: 0.25 };
 
 export interface RelayReply {
   sdp?: string;
   error?: string;
   event?: string;
   slots?: SlotInfo[];
+  /** With `event: 'slots'`: the streamer's `Layout`, when it sent one. */
+  layout?: unknown;
   /** With `event: 'viewers'`: different addresses receiving the stream right now. docs/viewers.md */
   viewers?: number;
 }
@@ -62,8 +114,37 @@ export function slotsOf(msg: RelayReply): SlotInfo[] | null {
       Number.isInteger(s.slot) &&
       s.slot >= 0 &&
       typeof s.kind === 'string' &&
-      (s.label === undefined || typeof s.label === 'string')
+      (s.label === undefined || typeof s.label === 'string') &&
+      (s.place === undefined || typeof s.place === 'string') &&
+      (s.size === undefined || typeof s.size === 'string')
   );
+}
+
+const isFraction = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+
+/** A `Layout` from anything (a frame's `layout`, localstorage), kept inside the frame; `null` when it is not one. */
+export function validLayout(raw: unknown): Layout | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const l = raw as Record<string, unknown>;
+  if ((l.camera !== 'over' && l.camera !== 'beside') || !isFraction(l.x) || !isFraction(l.y) || !isFraction(l.w)) return null;
+  return clampLayout({ camera: l.camera, x: l.x, y: l.y, w: l.w });
+}
+
+/** The layout of a `slots` event, or `null` when the frame carries none that makes sense. */
+export function layoutOf(msg: RelayReply): Layout | null {
+  return validLayout(msg.layout);
+}
+
+const thousandth = (v: number) => Math.round(v * 1000) / 1000;
+
+/**
+ * The box kept inside the frame: the width between the bounds, the corner so the whole box
+ * fits (a 16:9 box in a 16:9 frame is as tall a fraction as it is wide). Thousandths, so a
+ * drag does not send a float's whole tail.
+ */
+export function clampLayout(layout: Layout): Layout {
+  const w = thousandth(Math.min(CAMERA_MAX_W, Math.max(CAMERA_MIN_W, layout.w)));
+  return { camera: layout.camera, x: thousandth(Math.min(1 - w, Math.max(0, layout.x))), y: thousandth(Math.min(1 - w, Math.max(0, layout.y))), w };
 }
 
 /**

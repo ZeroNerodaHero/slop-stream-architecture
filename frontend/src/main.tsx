@@ -31,6 +31,13 @@ installReporting();
 // unmounts the Shell must not close it
 startEvents();
 
+// no picture lifts off as a ghost when dragged: nothing on these pages is a thing to drop
+// anywhere. at the document, not on each <img>: that reaches the pre-react avatar card the api
+// serves too (api/src/profile.rs), and works in firefox, which has no css for it
+document.addEventListener('dragstart', (e) => {
+  if (e.target instanceof HTMLImageElement) e.preventDefault();
+});
+
 function crashedInRoute(error: unknown, info: { pattern: string; errorInfo?: { componentStack?: string | null } }) {
   report('crash', error, { componentStack: info.errorInfo?.componentStack ?? undefined, route: info.pattern });
 }

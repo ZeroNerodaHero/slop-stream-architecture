@@ -13,11 +13,15 @@ import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { store } from '@/infra/store';
 import { Face } from '@/shared-components/Face';
 import { FollowButton } from '@/shared-components/FollowButton';
+import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { Who } from '@/shared-components/PersonRow';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { INPUT } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 const SEARCH_WAIT_MS = 200;
+/** How long the pointer rests on a row before the person's card shows: past the panel's 150ms widening, so the card is measured against the open panel. */
+const PEEK_MS = 200;
 const ICON_BUTTON = 'shrink-0 border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 /** A line of words where a list would be: nobody yet, loading, the pointer to an account. */
 const NOTE = 'px-3 py-3 text-sm text-textSecondary';
@@ -171,17 +175,28 @@ interface RowProps {
 /**
  * One person, closed and open alike: the face is in the same place either way, and opening
  * puts the name, the word for how they are, and the buttons beside it instead of moving
- * anything. The face and the name are one link to their page.
+ * anything. The face and the name are one link to their page. The pointer resting on the row,
+ * or the focus landing in it, puts the person's card (PersonCard.tsx, the chat window's too)
+ * beside the panel: the face, the name, how they are, the bio.
  */
 function Row({ id, person, side, open, onPick, children }: RowProps) {
   const mirrored = side === 'right';
+  const peek = usePeek(PEEK_MS);
   return (
-    <li className={cn('flex snap-start items-center gap-1', mirrored && 'flex-row-reverse', INSET[side])} data-presence={person.presence}>
+    <li
+      className={cn('flex snap-start items-center gap-1', mirrored && 'flex-row-reverse', INSET[side])}
+      data-presence={person.presence}
+      onPointerEnter={(e) => peek.show(e.currentTarget, e.currentTarget.closest('#friends'))}
+      onPointerLeave={(e) => peek.leave(e.currentTarget)}
+      onFocus={(e) => peek.show(e.currentTarget, e.currentTarget.closest('#friends'))}
+      onBlur={peek.blur}
+    >
       <Link
         id={id}
         to={`/watch/${encodeURIComponent(person.name)}`}
         onClick={onPick}
-        title={person.bio || person.name}
+        // not draggable: the face must not lift off the row as a ghost link
+        draggable={false}
         aria-label={`${person.name} · ${PRESENCE_WORD[person.presence]}`}
         className={cn(
           'flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue',
@@ -197,37 +212,34 @@ function Row({ id, person, side, open, onPick, children }: RowProps) {
         )}
       </Link>
       {open && children}
+      {open && peek.at && <PersonCard id={`friends-peek-${person.name}`} person={person} at={peek.at} side={side} />}
     </li>
   );
 }
 
-function Unfollow({ name }: { name: string }) {
+function Unfollow({ id, name }: { id: string; name: string }) {
   return (
-    <button
-      id={`friend-unfollow-${name}`}
-      type="button"
-      aria-label={`stop following ${name}`}
-      title="unfollow"
-      onClick={() => void unfollow(name)}
-      className={cn(ICON_BUTTON, 'hover:text-decrease')}
-    >
-      <RiCloseLine aria-hidden size={16} />
-    </button>
+    <Tooltip content="unfollow">
+      <button id={id} type="button" aria-label={`stop following ${name}`} onClick={() => void unfollow(name)} className={cn(ICON_BUTTON, 'hover:text-decrease')}>
+        <RiCloseLine aria-hidden size={16} />
+      </button>
+    </Tooltip>
   );
 }
 
-function Chat({ person }: { person: Person }) {
+function Chat({ id, person }: { id: string; person: Person }) {
   return (
-    <button
-      id={`friend-chat-${person.name}`}
-      type="button"
-      aria-label={`chat with ${person.name}`}
-      title="chat"
-      onClick={() => openDm({ name: person.name, avatar: person.avatar, verified: person.verified })}
-      className={cn(ICON_BUTTON, 'hover:text-textPrimary')}
-    >
-      <RiChat3Line aria-hidden size={16} />
-    </button>
+    <Tooltip content="chat">
+      <button
+        id={id}
+        type="button"
+        aria-label={`chat with ${person.name}`}
+        onClick={() => openDm({ name: person.name, avatar: person.avatar, verified: person.verified, bio: person.bio, presence: person.presence })}
+        className={cn(ICON_BUTTON, 'hover:text-textPrimary')}
+      >
+        <RiChat3Line aria-hidden size={16} />
+      </button>
+    </Tooltip>
   );
 }
 
@@ -385,8 +397,8 @@ function Following({ side, open, onPick, friends, rest, rows, spacing }: Followi
           <ul id="mutual-list" aria-label="friends" className={LIST} style={{ height: rows.friends * pitchA, gap: spacing.listA }}>
             {friends.map((f) => (
               <Row key={f.name} id={`friend-${f.name}`} person={f} side={side} open={open} onPick={onPick}>
-                <Chat person={f} />
-                <Unfollow name={f.name} />
+                <Chat id={`friend-chat-${f.name}`} person={f} />
+                <Unfollow id={`friend-unfollow-${f.name}`} name={f.name} />
               </Row>
             ))}
           </ul>
@@ -399,7 +411,7 @@ function Following({ side, open, onPick, friends, rest, rows, spacing }: Followi
           <ul id="friends-list" aria-label="following" className={LIST} style={{ height: rows.rest * pitchB, gap: spacing.listB }}>
             {rest.map((f) => (
               <Row key={f.name} id={`friend-${f.name}`} person={f} side={side} open={open} onPick={onPick}>
-                <Unfollow name={f.name} />
+                <Unfollow id={`friend-unfollow-${f.name}`} name={f.name} />
               </Row>
             ))}
           </ul>
@@ -409,20 +421,32 @@ function Following({ side, open, onPick, friends, rest, rows, spacing }: Followi
   );
 }
 
-/** What the box found, in place of the lists while it holds letters: the same rows, a follow button on each. */
+/**
+ * What the box found, in place of the lists while it holds letters: the same rows, each with the
+ * buttons its list would give it. A friend has chat and the ×, someone else you follow the ×
+ * alone, and a name you do not follow the follow button. Who you follow is `followingAtom`, the
+ * same answer the lists and the follow button read, so a click moves a row from one shape to
+ * the next in place.
+ */
 function Results({ side, open, onPick, gap }: ListProps & { gap: number }) {
   const hits = useAtomValue(searchResultsAtom);
   const busy = useAtomValue(searchBusyAtom);
+  const following = useAtomValue(followingAtom);
   if (hits.length === 0) {
     return <p className={cn(NOTE, 'text-textTertiary')}>{busy ? 'searching' : 'nobody called that'}</p>;
   }
+  const known = new Map((following ?? []).map((f) => [f.name, f] as const));
   return (
     <ul id="friends-results" className={cn('flex min-h-0 flex-1 flex-col', SCROLL)} style={{ gap, paddingBottom: gap }}>
-      {hits.map((h) => (
-        <Row key={h.name} id={`result-${h.name}`} person={h} side={side} open={open} onPick={onPick}>
-          <FollowButton id={`result-follow-${h.name}`} name={h.name} small />
-        </Row>
-      ))}
+      {hits.map((h) => {
+        const f = known.get(h.name);
+        return (
+          <Row key={h.name} id={`result-${h.name}`} person={h} side={side} open={open} onPick={onPick}>
+            {f?.mutual && <Chat id={`result-chat-${h.name}`} person={h} />}
+            {f ? <Unfollow id={`result-unfollow-${h.name}`} name={h.name} /> : <FollowButton id={`result-follow-${h.name}`} name={h.name} small />}
+          </Row>
+        );
+      })}
     </ul>
   );
 }
@@ -445,9 +469,9 @@ interface FriendsProps {
  * pointing at is still under the pointer. The whole column is one stack with one gap between
  * everything, sized (`measure`) so that the lists, cut at whole rows, spend the room exactly;
  * the line between them, which drags, says how the rows are shared. The site's one search:
- * letters in the box put what they find where the lists were, with a follow button each;
- * closing the panel empties it. Every open asks `GET /api/following` again, so the words are
- * now.
+ * letters in the box put what they find where the lists were, each row with the buttons its
+ * list would give it, a follow button for a name you do not follow; closing the panel empties
+ * it. Every open asks `GET /api/following` again, so the words are now.
  */
 export function Friends({ open, side, focusSearch, onPick }: FriendsProps) {
   const me = useAtomValue(meAtom);

@@ -57,6 +57,7 @@ function Thumb({ name, thumbs }: { name: string; thumbs: number[] }) {
     <img
       src={src}
       alt=""
+      draggable={false}
       data-thumb={name}
       className={cn('absolute inset-0 h-full w-full object-cover', missing && 'opacity-0')}
       onError={() => {

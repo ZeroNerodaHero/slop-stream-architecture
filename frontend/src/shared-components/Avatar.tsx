@@ -15,7 +15,13 @@ interface AvatarProps {
  */
 export function Avatar({ name, version, className }: AvatarProps) {
   if (version === null || version === undefined) return null;
+  // not draggable: a face in a window that is itself dragged, or on a row that is a link, must not lift off as a ghost picture
   return (
-    <img src={api.avatarUrl(name, version)} alt="" className={cn('mr-3 inline-block h-10 w-10 border border-primaryStroke object-cover align-middle', className)} />
+    <img
+      src={api.avatarUrl(name, version)}
+      alt=""
+      draggable={false}
+      className={cn('mr-3 inline-block h-10 w-10 border border-primaryStroke object-cover align-middle', className)}
+    />
   );
 }

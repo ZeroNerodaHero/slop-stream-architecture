@@ -11,6 +11,7 @@ import { buttonClassName } from '@/shared-components/Button';
  * pushed down by it: every page leaves it the first 4rem (PageFrame's `pt-16`), and
  * globals.css keeps scrolled-to things from landing under it. Go live is absent on its own
  * page. The icon opens the user modal on settings. Search is the sidebar's (Friends.tsx).
+ * Both buttons are flat: they float over the page, and a shadow there read as one more box.
  */
 export function TopBar() {
   const { pathname } = useLocation();
@@ -19,7 +20,7 @@ export function TopBar() {
   return (
     <div className="sticky top-0 z-30 -mb-16 flex h-16 items-center justify-end gap-2 bg-background px-5">
       {!onLivePage && (
-        <Link id="go-live" to="/live" className={buttonClassName('primary', 'px-3 py-2 text-sm')}>
+        <Link id="go-live" to="/live" className={buttonClassName('primary', 'px-3 py-2 text-sm', true)}>
           go live
         </Link>
       )}
@@ -29,7 +30,7 @@ export function TopBar() {
         aria-label="settings"
         title="settings"
         onClick={() => openUserModal('settings')}
-        className={buttonClassName('secondary', 'px-2 py-2')}
+        className={buttonClassName('secondary', 'px-2 py-2', true)}
       >
         <RiSettings3Line aria-hidden size={18} />
       </button>

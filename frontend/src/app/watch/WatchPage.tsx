@@ -5,9 +5,11 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   avatarAtom,
   bioAtom,
+  cameraOverlaidAtom,
   canHearAtom,
   canRetryAtom,
   followersAtom,
+  layoutAtom,
   leaveWatchPage,
   markAutoplayBlocked,
   markPlaying,
@@ -44,6 +46,7 @@ import { store } from '@/infra/store';
 import { Avatar } from '@/shared-components/Avatar';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { Button } from '@/shared-components/Button';
+import { CameraOverlay } from '@/shared-components/CameraOverlay';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
 import { panelClassName } from '@/shared-components/Panel';
@@ -87,6 +90,8 @@ export function WatchPage() {
   const phase = useAtomValue(watchPhaseAtom);
   const presence = useAtomValue(presenceOfAtom(name));
   const tiles = useAtomValue(tilesAtom);
+  const layout = useAtomValue(layoutAtom);
+  const overlaid = useAtomValue(cameraOverlaidAtom);
   const viewers = useAtomValue(watchViewersAtom);
   const renamedTo = useAtomValue(watchRenamedToAtom);
   // the layout setting: a column on the left, a column on the right, or a window over the page.
@@ -189,6 +194,7 @@ export function WatchPage() {
                   id="offline-picture"
                   src={api.offlineUrl(name, offline)}
                   alt=""
+                  draggable={false}
                   className="mb-3 aspect-video w-full border border-primaryStroke bg-black object-cover"
                 />
               )}
@@ -221,6 +227,8 @@ export function WatchPage() {
                 onPlaying={markPlaying}
                 onAutoplayBlocked={markAutoplayBlocked}
               />
+              {/* the camera over a shared screen, where the streamer put it; a click makes it the big one */}
+              {overlaid && layout && <CameraOverlay id="camera-overlay" streamAtom={slotStreamAtom(0)} layout={layout} onPick={() => pickSlot(0)} />}
               {needsTap && (
                 <Button
                   id="tap-to-play"
