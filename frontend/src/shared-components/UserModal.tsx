@@ -3,7 +3,7 @@ import { useAtomValue } from 'jotai';
 import { Fragment, type KeyboardEvent, type ReactNode, useLayoutEffect, useRef } from 'react';
 
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { myPresenceAtom, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
+import { myPresenceAtom, PRESENCE_SQUARE, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { myAvatarVersionAtom, myNameAtom } from '@/infra/atoms/profile-atoms';
 import { USER_TABS, type UserTab, closeUserModal, pickTab, userModalOpenAtom, userTabAtom } from '@/infra/atoms/user-modal-atoms';
 import { Face } from '@/shared-components/Face';
@@ -125,13 +125,22 @@ function Rail({ tab }: { tab: UserTab }) {
     <div className="flex shrink-0 flex-col border-b border-primaryStroke bg-background sm:w-56 sm:border-b-0 sm:border-r">
       {/* the corner panel again, at the head of the rail: who this is about (the phone strip has no room for it) */}
       <div className="hidden items-center gap-3 border-b border-primaryStroke px-3 py-3 sm:flex">
-        <Face name={name} version={avatar} className="h-9 w-9 text-base" />
+        <span className="relative block shrink-0" title={name ? PRESENCE_WORD[presence] : undefined}>
+          <Face name={name} version={avatar} className="h-9 w-9 text-base" />
+          {/* the presence square in the picture's corner, the corner panel's way (docs/status.md): blue streaming,
+              green online, red do not disturb, grey offline. the word is in the title; the ✓ keeps meaning login */}
+          {name && (
+            <span
+              id="modal-presence"
+              aria-hidden
+              data-presence={presence}
+              className={cn('absolute -bottom-1 -right-1 h-3.5 w-3.5 border-2 border-background', PRESENCE_SQUARE[presence])}
+            />
+          )}
+        </span>
         <span className="min-w-0">
           <span className="block truncate font-semibold leading-tight">{name || 'nobody yet'}</span>
-          <span className={cn('block text-xs', me ? 'text-increase' : 'text-textTertiary')}>
-            {me ? 'logged in ✓' : 'not logged in'}
-            {name && <span className={cn('ml-1.5', PRESENCE_TEXT[presence])}>· {PRESENCE_WORD[presence]}</span>}
-          </span>
+          <span className={cn('block text-xs', me ? 'text-increase' : 'text-textTertiary')}>{me ? 'logged in ✓' : 'not logged in'}</span>
         </span>
       </div>
 

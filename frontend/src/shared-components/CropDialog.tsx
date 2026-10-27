@@ -227,10 +227,11 @@ function CropBox({ request }: { request: CropRequest }) {
     const { width, height } = loaded.picture;
     const out = outputSize(spec, rect, width, height);
     const whole = !spec.size && isWhole(rect, width, height) && file.size <= spec.max;
+    // a file the browser gave no type goes up as whatever its first bytes say: no word for it here
     goes = spec.size
       ? `goes up as a ${out.width}×${out.height} jpeg`
       : whole
-        ? `goes up as it is: ${out.width}×${out.height} ${formatWord(file.type)}`
+        ? `goes up as it is: ${out.width}×${out.height}${file.type ? ` ${formatWord(file.type)}` : ''}`
         : `goes up cut to ${out.width}×${out.height} ${formatWord(assetType(file))}`;
     zoom = 1 / scaleOf(rect, width, height);
     zoomMost = 1 / minScale(width, height, aspect);

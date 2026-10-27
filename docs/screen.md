@@ -57,7 +57,7 @@ the layers are css on the watcher's side: absolutely positioned boxes, no second
 
 ## the pictures
 
-`PUT /api/streamers/:name/assets`, the file as it is: png, jpeg, gif or webp by the first bytes (never svg: a script), 2 mb at most, 24 a name, the same gate as the thumbnails (`may_write`). `stream_assets` (`migrate-9.sql`), keyed by name like `stream_thumbs` and renamed with it; the bytes at `assets/<id>/<n>.<ext>`. served back with the sniffed type, `nosniff`, and a year's cache. `GET` lists them, `DELETE /:id` removes one. the scene names a picture by id and the watcher builds the url under the stream's name, so nobody can point a layer at somebody else's picture.
+`PUT /api/streamers/:name/assets`, the bytes as the page sends them: png, jpeg, gif or webp by the first bytes (never svg: a script), 2 mb at most, 24 a name, the same gate as the thumbnails (`may_write`). the page sends the part of the file picked in the crop dialog (`spec.md`, "the crop dialog"; `infra/picture.ts`), at the picture's own pixels and in its own format, so a png keeps its holes; the whole picture is the file itself, untouched, and a gif is always that, since a cut would be one frame of it. `stream_assets` (`migrate-9.sql`), keyed by name like `stream_thumbs` and renamed with it; the bytes at `assets/<id>/<n>.<ext>`. served back with the sniffed type, `nosniff`, and a year's cache. `GET` lists them, `DELETE /:id` removes one. the scene names a picture by id and the watcher builds the url under the stream's name, so nobody can point a layer at somebody else's picture.
 
 ## pages
 

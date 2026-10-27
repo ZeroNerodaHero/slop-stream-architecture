@@ -164,8 +164,28 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     return meta(html, 'og:image');
   });
 
+  /** The profile tab's page and the offline picture's bytes as last put up: the crop step after reuses both. */
+  let profile;
+  let offlineBytes;
+  let PNG;
+  /** The pixel ten in from the bottom right corner of a jpeg, decoded in the page. */
+  const cornerOf = (page, buf) =>
+    page.evaluate(async (b64) => {
+      const i = new Image();
+      i.src = 'data:image/jpeg;base64,' + b64;
+      await i.decode();
+      const c = document.createElement('canvas');
+      c.width = i.naturalWidth;
+      c.height = i.naturalHeight;
+      const x = c.getContext('2d');
+      x.drawImage(i, 0, 0);
+      const [r, g, b] = x.getImageData(i.naturalWidth - 10, i.naturalHeight - 10, 1, 1).data;
+      return { r, g, b };
+    }, buf.toString('base64'));
+
   await step('the profile tab as the name: the picture and the line are there; a wide png lands as a 1280x720 jpeg under 512 kb', async () => {
     const p = await fresh();
+    profile = p;
     await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await p.hover('#user-panel');
     await p.waitForSelector('#username', { timeout: 15000 });
@@ -192,12 +212,19 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
       x.fillRect(0, 0, 2000, 1000);
       return c.toDataURL('image/png');
     });
-    await p.setInputFiles('#profile-offline-file', { name: 'banner.png', mimeType: 'image/png', buffer: Buffer.from(png.split(',')[1], 'base64') });
+    PNG = Buffer.from(png.split(',')[1], 'base64');
+    await p.setInputFiles('#profile-offline-file', { name: 'banner.png', mimeType: 'image/png', buffer: PNG });
+    // the crop dialog opens over the modal, the 16:9 box as big as fits in the middle; used as it is, that is the old middle cut
+    await p.waitForSelector('#crop[open] #crop-box', { timeout: 10000 });
+    const goes = ((await p.textContent('#crop-size')) || '').trim();
+    expect(goes === 'goes up as a 1280×720 jpeg', `the dialog says "${goes}"`);
+    await p.click('#crop-use');
     await p.waitForFunction(() => document.querySelector('#profile-offline-status')?.textContent === 'saved', null, { timeout: 15000 });
     const me = await (await anon.get(`/api/streamers/${NAME}`)).json();
     expect(Number.isInteger(me.offline) && me.offline >= offlineVersion, `after the upload: ${JSON.stringify(me)}`);
     offlineVersion = me.offline;
     const bytes = await (await anon.get(`/api/streamers/${NAME}/offline?v=${offlineVersion}`)).body();
+    offlineBytes = bytes;
     expect(bytes.length <= 512 * 1024 && bytes[0] === 0xff && bytes[1] === 0xd8, `${bytes.length} bytes, not a jpeg under 512 kb`);
     const size = await p.evaluate(
       (url) =>
@@ -210,8 +237,46 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
       `/api/streamers/${NAME}/offline?v=${offlineVersion}`
     );
     expect(size[0] === 1280 && size[1] === 720, `the picture is ${size.join('x')}`);
-    await p.close();
     return `${bytes.length} bytes, ${size.join('x')}`;
+  });
+
+  await step('the crop dialog: the box at twice the zoom, dragged into the top left corner, goes up as that part and not the middle', async () => {
+    const p = profile;
+    await p.setInputFiles('#profile-offline-file', { name: 'banner.png', mimeType: 'image/png', buffer: PNG });
+    await p.waitForSelector('#crop[open] #crop-box', { timeout: 10000 });
+    // the slider to 2×: the box is half as tall as the picture (500 of 1000, so 889 of 2000 wide). through the native setter, so react sees the input
+    await p.$eval('#crop-zoom', (el) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, '2');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // dragged far past the top left: it stops in the corner
+    const box = await (await p.$('#crop-box')).boundingBox();
+    await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await p.mouse.down();
+    await p.mouse.move(box.x + box.width / 2 - 1500, box.y + box.height / 2 - 1500, { steps: 8 });
+    await p.mouse.up();
+    const after = await (await p.$('#crop-box')).boundingBox();
+    const picture = await p.$eval('#crop-box', (el) => el.parentElement.getBoundingClientRect().toJSON());
+    expect(Math.abs(after.x - picture.x) < 2 && Math.abs(after.y - picture.y) < 2, `the box sits ${(after.x - picture.x).toFixed(0)},${(after.y - picture.y).toFixed(0)} from the picture's corner`);
+    expect(Math.abs(after.height / picture.height - 0.5) < 0.03, `the box is ${(after.height / picture.height).toFixed(2)} of the picture tall, not half`);
+    await p.click('#crop-use');
+    // the version is in seconds and this save can land in the same one as the last: new bytes, not a new number, say it arrived
+    let bytes = offlineBytes;
+    for (let i = 0; i < 50 && bytes.equals(offlineBytes); i++) {
+      await sleep(300);
+      bytes = await (await anon.get(`/api/streamers/${NAME}/offline?v=${Date.now()}`)).body();
+    }
+    expect(!bytes.equals(offlineBytes), 'the offline picture did not change');
+    expect(bytes.length <= 512 * 1024 && bytes[0] === 0xff && bytes[1] === 0xd8, `${bytes.length} bytes, not a jpeg under 512 kb`);
+    // the gradient runs orange at the top left to blue at the bottom right. the middle cut ends deep in the blue;
+    // the top left quarter ends near the picture's centre, still more orange than blue
+    const middle = await cornerOf(p, offlineBytes);
+    const corner = await cornerOf(p, bytes);
+    expect(middle.b > middle.r + 100, `the middle cut's far corner is rgb(${middle.r},${middle.g},${middle.b}), not blue`);
+    expect(corner.r > corner.b, `the top left cut's far corner is rgb(${corner.r},${corner.g},${corner.b}), not warmer than blue`);
+    offlineBytes = bytes;
+    await p.close();
+    return `middle ends rgb(${middle.r},${middle.g},${middle.b}), the corner rgb(${corner.r},${corner.g},${corner.b})`;
   });
 
   await step("a claimed name's pictures and line: anonymous 403, the owner 200", async () => {

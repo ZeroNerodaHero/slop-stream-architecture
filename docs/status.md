@@ -261,7 +261,7 @@ flowchart LR
 | where | what |
 |---|---|
 | the panel, bottom left | the square becomes `#my-presence` inside `#you`: `bg-primaryBlue` / `bg-increase` / `bg-decrease` / `bg-textTertiary` by `myPresenceAtom`, `data-presence` the value, the word folded into `#you`'s `aria-label` and `title`, grey until the first `me`. presence for guests and logins alike |
-| the user modal's rail header | `logged in ✓` / `not logged in` (`UserModal.tsx:125`) gains the presence word |
+| the user modal's rail header | the square in the picture's corner (`#modal-presence`, `data-presence`), the corner panel's way, the word in the picture's `title`; `logged in ✓` / `not logged in` under the name stays about login (`UserModal.tsx:125`) |
 | the profile tab | a `presence` fieldset between the card and `username` (`ProfileTab.tsx:74`, `:118`): three `OptionCard`s in `sm:grid-cols-3`, `name="presence"`, `#presence-online` `#presence-dnd` `#presence-invisible`, the chosen one marked, the page's square following the `me` frame. `OptionCard` has no `disabled`: the fieldset is disabled with the bio's `canEdit`/`whyNot` (`:46`, `:57`). a line under: `streaming while you are live, whatever you pick` |
 | the watch page | `#presence` beside `#who` in the title (`WatchPage.tsx:86`): the square and the word, `data-presence`. while not live the page says `not live yet. checking`; `online` beside the name is the reason to wait, `do not disturb` the reason not to; `live` arrives pushed and the page starts, no poll |
 | the watch document | the four words in the card and in `og:description`, above |

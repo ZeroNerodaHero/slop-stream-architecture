@@ -292,6 +292,11 @@ const SCREEN_CORNER = { x: 0.647, y: 0.631, w: 0.333, h: 0.333 };
     await pub.click('#add-source');
     await pub.click('#add-image');
     await pub.setInputFiles('#image-file', { name: 'border.png', mimeType: 'image/png', buffer: Buffer.from(png.split(',')[1], 'base64') });
+    // the crop dialog over the picked file: the box is the whole picture to begin with, and used as it is the file itself goes up
+    await pub.waitForSelector('#crop[open] #crop-box', { timeout: 10000 });
+    const goes = ((await pub.textContent('#crop-size')) || '').trim();
+    expect(goes === 'goes up as it is: 60×40 png', `the dialog says "${goes}"`);
+    await pub.click('#crop-use');
     await pub.waitForSelector('#source-i1', { timeout: 15000 });
     const mine = await waitBox(pub, 'i1', { x: 0.35, y: 0.322, w: 0.3, h: 0.356 }, 5000);
     expect(mine.kind === 'image', `the picture layer is a ${mine.kind}`);
