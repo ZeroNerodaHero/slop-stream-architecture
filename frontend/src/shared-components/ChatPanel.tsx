@@ -1,18 +1,20 @@
-import { RiImageAddLine, RiRobot2Line } from '@remixicon/react';
+import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine, RiRobot2Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type FormEvent, type KeyboardEvent, type UIEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type UIEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { api, messageOf, type Owner } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
   type ChatLine,
+  addChatImage,
   backToLatest,
   chatAsStreamerAtom,
   chatBehindAtom,
   chatCanSendAtom,
   chatCountAtom,
   chatDraftAtom,
-  chatImageAtom,
+  chatImagesAtom,
   chatLinesAtom,
   chatNoticeAtom,
   chatPhaseAtom,
@@ -26,17 +28,20 @@ import {
   hiddenBotLinesAtom,
   isBotLine,
   loadOlder,
+  MAX_CHAT_IMAGES,
   nickAtom,
   nickIsValidAtom,
   noteChatScroll,
   openChat,
   openLine,
+  openServerChat,
+  removeChatImage,
   searchRoom,
   sendChat,
   setChatDraft,
-  setChatImage,
   setChatFollowing,
   setNick,
+  showChannel,
   showNotice,
   showSpeaker,
   takeScrollPlan,
@@ -54,21 +59,24 @@ import { cn } from '@/utils/cn';
 const STUCK_PX = 40;
 
 interface ChatPanelProps {
+  /** A stream's room, or, with `channel`, the server. */
   name: string;
   /** The streamer's own grant. With it, our lines are marked. */
   owner?: Owner | null;
   /** Inside another box (the corner player): no stroke, shadow or minimum height of its own, and no header or search box, which a panel this small has no room for. The lines and the text box alone. */
   embedded?: boolean;
   /**
-   * A group's channel: the header is the channel, and a line is a block (the face, the name
+   * A group's channel: `name` is the server, this the channel on screen. One socket for every
+   * channel of the server (`openServerChat`); a change of channel is `showChannel`, no socket
+   * and no history. The header is the channel, and a line is a block (the face, the name
    * above the text) instead of one paragraph. The ids and the data attributes stay.
    */
-  server?: boolean;
+  channel?: string;
   className?: string;
 }
 
 /** Enter sends. The enter that picks an ime candidate is not a send (safari says it with keyCode 229). */
-function onKey(e: KeyboardEvent<HTMLInputElement>) {
+function onKey(e: ReactKeyboardEvent<HTMLInputElement>) {
   if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
     e.preventDefault();
     sendChat();
@@ -134,14 +142,137 @@ function Marks({ line, mine }: { line: ChatLine; mine: boolean }) {
   );
 }
 
-/** A group's line: the face beside a block, the name on its own row, the text under it. */
-/** Five lines of the panel's text. A chat picture is never taller than that. */
-function ChatImage({ id }: { id: string }) {
-  const src = `/api/chat-images/${encodeURIComponent(id)}`;
+function pictureSrc(id: string): string {
+  return `/api/chat-images/${encodeURIComponent(id)}`;
+}
+
+/**
+ * The pictures on a line, under the words. One is as tall as five lines; several sit in a row.
+ * Pointing at one pops a larger one beside it. Several on the line get arrows to move through them.
+ */
+function ChatImages({ ids }: { ids: string[] }) {
+  const thumbs = useRef<Array<HTMLButtonElement | null>>([]);
+  const pop = useRef<HTMLDivElement | null>(null);
+  const hide = useRef<number | null>(null);
+  // `at` is the one the pointer is on, so the pop stays put. `view` is the one it shows.
+  const [open, setOpen] = useState<{ at: number; view: number } | null>(null);
+  const [sized, setSized] = useState(0);
+
+  function stay() {
+    if (hide.current) window.clearTimeout(hide.current);
+  }
+  function hideSoon() {
+    stay();
+    hide.current = window.setTimeout(() => {
+      const box = pop.current;
+      if (box && (box.matches(':hover') || box.contains(document.activeElement))) return;
+      setOpen(null);
+    }, 160);
+  }
+  function show(i: number) {
+    stay();
+    setOpen({ at: i, view: i });
+  }
+  function step(by: number) {
+    stay();
+    setOpen((cur) => (cur ? { ...cur, view: (cur.view + by + ids.length) % ids.length } : cur));
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === 'Escape') setOpen(null);
+      if (ids.length < 2) return;
+      if (e.key === 'ArrowLeft') step(-1);
+      if (e.key === 'ArrowRight') step(1);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, ids.length]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const anchor = thumbs.current[open.at];
+    const box = pop.current;
+    if (!anchor || !box) return;
+    const place = () => {
+      const a = anchor.getBoundingClientRect();
+      const p = box.getBoundingClientRect();
+      const gap = 8;
+      let left = a.left - gap - p.width;
+      if (left < 8) left = Math.min(a.right + gap, window.innerWidth - 8 - p.width);
+      let top = a.top + (a.height - p.height) / 2;
+      top = Math.max(8, Math.min(top, window.innerHeight - 8 - p.height));
+      box.style.left = `${Math.max(8, left)}px`;
+      box.style.top = `${top}px`;
+      box.style.visibility = 'visible';
+    };
+    place();
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [open, sized]);
+
+  if (ids.length === 0) return null;
+  const many = ids.length > 1;
+  const shown = open ? ids[open.view] : undefined;
+  const host = open ? (thumbs.current[open.at]?.closest('dialog:modal') ?? document.body) : null;
   return (
-    <a href={src} target="_blank" rel="noreferrer" className="mt-1 block w-fit max-w-full">
-      <img src={src} alt="" className="max-h-[7.5rem] max-w-full object-contain" />
-    </a>
+    <span className="mt-1 flex max-w-full flex-wrap gap-1">
+      {ids.map((id, i) => (
+        <button
+          key={id}
+          type="button"
+          ref={(el) => {
+            thumbs.current[i] = el;
+          }}
+          className="block max-w-full"
+          onMouseEnter={() => show(i)}
+          onMouseLeave={hideSoon}
+          onFocus={() => show(i)}
+          onBlur={hideSoon}
+        >
+          <img src={pictureSrc(id)} alt="" className="max-h-[7.5rem] max-w-full object-contain" />
+        </button>
+      ))}
+      {open &&
+        host &&
+        createPortal(
+          <div
+            id="chat-picture-pop"
+            ref={pop}
+            role="dialog"
+            aria-label="picture"
+            onMouseEnter={stay}
+            onMouseLeave={hideSoon}
+            className="invisible fixed left-0 top-0 z-[60] flex items-center border border-primaryStroke bg-background"
+          >
+            {many && (
+              <button type="button" id="chat-picture-prev" aria-label="previous picture" className="px-1 text-textSecondary" onClick={() => step(-1)}>
+                <RiArrowLeftSLine aria-hidden size={28} />
+              </button>
+            )}
+            {shown && (
+              <img
+                src={pictureSrc(shown)}
+                alt=""
+                onLoad={() => setSized((n) => n + 1)}
+                className="max-h-[70vh] max-w-[min(32rem,70vw)] object-contain"
+              />
+            )}
+            {many && (
+              <button type="button" id="chat-picture-next" aria-label="next picture" className="px-1 text-textSecondary" onClick={() => step(1)}>
+                <RiArrowRightSLine aria-hidden size={28} />
+              </button>
+            )}
+          </div>,
+          host
+        )}
+    </span>
   );
 }
 
@@ -166,13 +297,14 @@ function ServerLine({ line, mine, faces }: { line: ChatLine; mine: boolean; face
           </time>
         </div>
         {line.text && <p className="mt-0.5 whitespace-pre-wrap">{line.text}</p>}
-        {line.image && <ChatImage id={line.image} />}
+        <ChatImages ids={line.images} />
       </div>
     </div>
   );
 }
 
-export function ChatPanel({ name, owner = null, embedded = false, server = false, className }: ChatPanelProps) {
+export function ChatPanel({ name, owner = null, embedded = false, channel, className }: ChatPanelProps) {
+  const server = channel !== undefined;
   const listRef = useRef<HTMLDivElement | null>(null);
   // height before the last paint, so prepending older lines can put the same pixels back
   const hold = useRef(0);
@@ -190,7 +322,7 @@ export function ChatPanel({ name, owner = null, embedded = false, server = false
   const count = useAtomValue(chatCountAtom);
   const phase = useAtomValue(chatPhaseAtom);
   const draft = useAtomValue(chatDraftAtom);
-  const imageId = useAtomValue(chatImageAtom);
+  const images = useAtomValue(chatImagesAtom);
   const notice = useAtomValue(chatNoticeAtom);
   const nick = useAtomValue(nickAtom);
   const nickOk = useAtomValue(nickIsValidAtom);
@@ -206,11 +338,21 @@ export function ChatPanel({ name, owner = null, embedded = false, server = false
 
   // The inputs that change while mounted: the owner (going live) and the login.
   // Nothing opens until /api/me has answered, so the first hello is the right one.
+  // A server is one socket for every channel: the channel is not one of these inputs.
   useEffect(() => {
     if (me === undefined) return;
-    openChat(name, owner);
+    if (channel !== undefined) openServerChat(name, channel);
+    else openChat(name, owner);
     return () => closeChat();
-  }, [name, owner?.session, owner?.token, me]);
+  }, [name, owner?.session, owner?.token, me, server]);
+
+  // The channel on screen, for a server: a swap of what is shown, nothing opened or asked.
+  useEffect(() => {
+    if (channel !== undefined) showChannel(channel);
+  }, [channel]);
+
+  /** The nick box's join: the socket as this panel wants it. */
+  const open = () => (channel !== undefined ? openServerChat(name, channel) : openChat(name, owner));
 
   // Keep the newest line in view, unless the reader has scrolled up, or a jump asked for one line.
   // A layout effect: the store fires before react has put the new lines in the dom.
@@ -243,13 +385,20 @@ export function ChatPanel({ name, owner = null, embedded = false, server = false
     if (el.scrollTop < 48) void loadOlder();
   }
 
-  async function pickPicture(file: File | undefined) {
-    if (!file || uploading) return;
+  async function pickPictures(list: FileList | null) {
+    const files = list ? [...list] : [];
+    if (files.length === 0 || uploading) return;
+    const room = MAX_CHAT_IMAGES - images.length;
+    const batch = files.slice(0, Math.max(0, room));
+    if (files.length > room) showNotice(`${MAX_CHAT_IMAGES} pictures at most`);
+    if (batch.length === 0) return;
     setUploading(true);
     try {
-      const blob = await compressChatImage(file);
-      const saved = await api.uploadChatImage(blob);
-      setChatImage(saved.id);
+      for (const file of batch) {
+        const blob = await compressChatImage(file);
+        const saved = await api.uploadChatImage(blob);
+        addChatImage(saved.id);
+      }
     } catch (err) {
       showNotice(messageOf(err));
     } finally {
@@ -273,7 +422,7 @@ export function ChatPanel({ name, owner = null, embedded = false, server = false
       {!embedded && (
         <header className="flex items-center justify-between gap-3 border-b border-primaryStroke px-4 py-2 text-base">
           <span id={server ? 'channel' : undefined} className="truncate font-semibold">
-            {server ? `#${name.split('/').pop()}` : 'chat'}
+            {server ? `#${channel}` : 'chat'}
           </span>
           <span className="flex min-w-0 items-center gap-3">
             <span id="chat-count" className="truncate text-textSecondary">
@@ -377,7 +526,7 @@ export function ChatPanel({ name, owner = null, embedded = false, server = false
               </span>
               <span className="text-textSecondary">: </span>
               <span className="whitespace-pre-wrap">{line.text}</span>
-              {line.image && <ChatImage id={line.image} />}
+              <ChatImages ids={line.images} />
             </p>
           );
         })}
@@ -394,14 +543,14 @@ export function ChatPanel({ name, owner = null, embedded = false, server = false
               value={nick}
               onChange={(e) => setNick(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && nickOk) openChat(name, owner);
+                if (e.key === 'Enter' && nickOk) open();
               }}
               placeholder="pick a nick"
               maxLength={24}
               autoComplete="off"
               className="min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base"
             />
-            <Button id="chat-join" variant="primary" flat className="px-4 py-2 text-base" disabled={!nickOk} onClick={() => openChat(name, owner)}>
+            <Button id="chat-join" variant="primary" flat className="px-4 py-2 text-base" disabled={!nickOk} onClick={open}>
               join
             </Button>
             {/* "that name has an account": the refusal that sent you back here */}
@@ -419,29 +568,43 @@ export function ChatPanel({ name, owner = null, embedded = false, server = false
             <span id="chat-notice" className={cn('text-sm text-decrease', notice ? 'mb-1 block' : 'sr-only')} aria-live="polite">
               {notice}
             </span>
+            {images.length > 0 && (
+              <div id="chat-picture-preview" className="mb-2 flex flex-wrap gap-2">
+                {images.map((id) => (
+                  <span key={id} className="relative">
+                    <img src={`/api/chat-images/${encodeURIComponent(id)}`} alt="" className="h-20 w-20 object-cover" />
+                    <button
+                      type="button"
+                      aria-label="remove picture"
+                      className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center bg-black/70 text-white"
+                      onClick={() => removeChatImage(id)}
+                    >
+                      <RiCloseLine aria-hidden size={14} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 id="chat-picture"
-                aria-label={imageId ? 'remove picture' : 'picture'}
-                title={imageId ? 'remove picture' : 'picture'}
+                aria-label="picture"
+                title={images.length >= MAX_CHAT_IMAGES ? `${MAX_CHAT_IMAGES} pictures at most` : 'picture'}
                 className="flex h-10 w-10 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
-                disabled={uploading}
-                onClick={() => (imageId ? setChatImage(null) : fileRef.current?.click())}
+                disabled={uploading || images.length >= MAX_CHAT_IMAGES}
+                onClick={() => fileRef.current?.click()}
               >
-                {imageId ? (
-                  <img id="chat-picture-preview" src={`/api/chat-images/${encodeURIComponent(imageId)}`} alt="" className="h-10 w-10 object-cover" />
-                ) : (
-                  <RiImageAddLine size={20} aria-hidden />
-                )}
+                <RiImageAddLine size={20} aria-hidden />
               </button>
               <input
                 ref={fileRef}
                 id="chat-picture-file"
                 type="file"
                 accept="image/*"
+                multiple
                 className="hidden"
-                onChange={(e) => void pickPicture(e.target.files?.[0])}
+                onChange={(e) => void pickPictures(e.target.files)}
               />
               <input
                 id="chat-text"

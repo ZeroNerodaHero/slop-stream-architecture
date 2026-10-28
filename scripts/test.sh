@@ -18,7 +18,9 @@
 #   dup        a second person on the same name is refused
 #   chat       two viewers talk, history survives a reload, 501 chars refused, streamer lines marked
 #   auth       sign up, log in, log out, a claimed name is only its owner's, verified chat lines, 429 after 10 tries
-#   groups     bot is built in, a login makes a group, another joins and leaves, badges on chat lines, a bot's lines wear BOT and the panel hides them, only the maker deletes, the groups tab
+#   groups     bot is built in, a login makes a group, another joins and leaves, badges on chat lines, a bot's lines wear BOT and the panel hides them, only the maker deletes, the groups tab;
+#              the room is one answer (channels, live, the roster for members, the bans) plus the last lines of every channel, a watcher of group:<name> hears a channel
+#              added and deleted, the server's one chat socket carries every channel's lines and fills from since, the page switches channels with no reload, refetch or socket
 #   follows    a login follows names: counts and the flag on a profile, the list with its words, a free name gets a row, the box over the corner
 #              panel (hover: who you follow, streaming first; search finds and follows), the watch page's button and count, home's people under
 #              the streams (online first) and the top search, a rename keeps the followers

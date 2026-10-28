@@ -1,5 +1,10 @@
 // Groups: the list (bot built in), a login makes one, another joins and leaves, badges on chat
 // lines, a bot's lines wear BOT and the panel hides them, only the maker deletes, the groups tab.
+// The room: one answer with the channels, who is live, the roster (members only) and the bans,
+// and the last lines of every channel; a watcher of `group:<name>` on the events socket hears a
+// channel added and deleted; the `*` chat socket carries every channel's lines with the channel
+// on them and fills from `since`; the page switches channels with no reload, no refetch and no
+// new socket, and a channel deleted under it is said on the page.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node groups.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
@@ -146,6 +151,30 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     return 'owner, a mod role, and private';
   });
 
+  await step('the room is one answer: channels, live, the roster for a member, null for a guest; messages has every channel', async () => {
+    const mine = await body(await maker.get(`/api/groups/${slug}`));
+    expect(mine && Array.isArray(mine.channels) && mine.channels.some((c) => c.name === 'general' && c.can_delete === false), `the maker's channels ${JSON.stringify(mine && mine.channels)}`);
+    expect(Array.isArray(mine.live), `live ${JSON.stringify(mine.live)}`);
+    expect(mine.admin === false, `admin ${JSON.stringify(mine.admin)}`);
+    expect(Array.isArray(mine.roster) && mine.roster.length === 2, `the maker's roster ${JSON.stringify(mine.roster)}`);
+    const owner = mine.roster.find((m) => m.name === MAKER);
+    const other = mine.roster.find((m) => m.name === MEMBER);
+    expect(owner && owner.owner === true && typeof owner.joined === 'number' && other && other.owner === false, `roster rows ${JSON.stringify(mine.roster)}`);
+    expect(mine.roster[0].name === MAKER, `owners first: ${mine.roster.map((m) => m.name).join(' ')}`);
+    expect(Array.isArray(mine.bans) && mine.bans.length === 0, `the maker's bans ${JSON.stringify(mine.bans)}`);
+    const theirs = await body(await member.get(`/api/groups/${slug}`));
+    expect(Array.isArray(theirs.roster) && theirs.roster.length === 2 && theirs.bans === null, `the member's roster ${JSON.stringify(theirs.roster)} bans ${JSON.stringify(theirs.bans)}`);
+    const guest = await body(await anon.get(`/api/groups/${slug}`));
+    expect(guest.roster === null && guest.bans === null && Array.isArray(guest.channels) && guest.members === 2, `a guest's room ${JSON.stringify(guest)}`);
+    const lines = await anon.get(`/api/groups/${slug}/messages`);
+    const byChannel = await body(lines);
+    expect(lines.status() === 200 && byChannel && Array.isArray(byChannel.general) && Object.keys(byChannel).length === guest.channels.length, `messages got ${lines.status()} ${JSON.stringify(byChannel)}`);
+    const bot = await anon.get('/api/groups/bot/messages');
+    const none = await anon.get(`/api/groups/nosuch${RUN}/messages`);
+    expect(bot.status() === 404 && none.status() === 404, `bot ${bot.status()}, no such ${none.status()}`);
+    return `${guest.channels.length} channel(s), roster for members only`;
+  });
+
   // the pages: a member's lines wear the badge, a bot's wear BOT, and the panel hides the bots
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
   const fresh = async () => (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();
@@ -224,8 +253,156 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     await p.waitForSelector('#chat-lines p[data-bot="true"]', { timeout: 5000 });
     const shown = await p.$eval('#chat-hide-bots', (b) => b.textContent.trim());
     expect(/hide bots/.test(shown), `after showing the header says "${shown}"`);
-    await p.close();
     return 'hidden, counted, kept, shown';
+  });
+
+  await step('a watcher of group:<name> on the events socket hears a channel added and deleted', async () => {
+    // a raw /events socket from a context with no login: hello as nobody, then watch the room's topic
+    const w = await fresh();
+    await w.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    const ready = await w.evaluate(
+      (topic) =>
+        new Promise((resolve) => {
+          window.__groupFrames = [];
+          const ws = new WebSocket(`wss://${location.host}/events`);
+          ws.onopen = () => ws.send(JSON.stringify({ type: 'hello' }));
+          ws.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'me') {
+              ws.send(JSON.stringify({ type: 'watch', name: topic }));
+              resolve({ ok: true });
+            }
+            if (msg.type === 'group') window.__groupFrames.push(msg);
+            if (msg.type === 'error') resolve({ error: msg.error });
+          };
+          setTimeout(() => resolve({ timeout: true }), 8000);
+        }),
+      `group:${slug}`
+    );
+    expect(ready.ok, `the events socket: ${JSON.stringify(ready)}`);
+    const added = await maker.post(`/api/groups/${slug}/channels`, { data: { name: 'clips' } });
+    const channel = await body(added);
+    expect(added.status() === 201 && channel.name === 'clips' && channel.made_by === MAKER && channel.can_delete === true, `adding clips got ${added.status()} ${JSON.stringify(channel)}`);
+    await w.waitForFunction(() => window.__groupFrames.some((f) => f.what === 'channel' && f.channel && f.channel.name === 'clips'), null, { timeout: 10000 });
+    const heard = await w.evaluate(() => window.__groupFrames.find((f) => f.what === 'channel'));
+    expect(heard.group === slug && heard.channel.made_by === MAKER, `the channel frame ${JSON.stringify(heard)}`);
+    const gone = await maker.delete(`/api/groups/${slug}/channels/clips`);
+    expect(gone.status() === 204, `deleting clips got ${gone.status()}`);
+    await w.waitForFunction(() => window.__groupFrames.some((f) => f.what === 'unchannel' && f.channel === 'clips'), null, { timeout: 10000 });
+    const frames = await w.evaluate(() => window.__groupFrames.map((f) => f.what));
+    await w.close();
+    return `heard ${frames.join(', ')}`;
+  });
+
+  await step('the server socket: every channel on one socket, a line with its channel, and the fill after since', async () => {
+    // the member's page is logged in: a raw /chat/<server>/* socket from it speaks as the member
+    const outcome = await p.evaluate(
+      ({ server, text }) =>
+        new Promise((resolve) => {
+          const ws = new WebSocket(`wss://${location.host}/chat/${server}/*`);
+          const seen = [];
+          ws.onopen = () => {
+            ws.send(JSON.stringify({ type: 'hello' }));
+            // no channel: refused with words that do not close the socket
+            ws.send(JSON.stringify({ type: 'say', text: 'where?' }));
+            ws.send(JSON.stringify({ type: 'say', text, channel: 'general' }));
+          };
+          ws.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            seen.push(msg);
+            if (msg.type === 'message' && msg.text === text) {
+              ws.close();
+              resolve({ line: msg, errors: seen.filter((m) => m.type === 'error').map((m) => m.error), history: seen.some((m) => m.type === 'history') });
+            }
+          };
+          setTimeout(() => resolve({ timeout: true, seen }), 8000);
+        }),
+      { server: slug, text: 'hello general ' + RUN }
+    );
+    expect(outcome.line, `the server socket: ${JSON.stringify(outcome)}`);
+    expect(outcome.line.channel === 'general' && outcome.line.from === MEMBER && outcome.line.verified === true, `the line ${JSON.stringify(outcome.line)}`);
+    expect(outcome.errors.includes('say which channel'), `a say with no channel got ${JSON.stringify(outcome.errors)}`);
+    expect(outcome.history === false, 'a server socket sent a history frame');
+    // a second socket says what it has (nothing: id 0-0) and is sent the line it missed
+    const filled = await p.evaluate(
+      ({ server, text }) =>
+        new Promise((resolve) => {
+          const ws = new WebSocket(`wss://${location.host}/chat/${server}/*`);
+          ws.onopen = () => {
+            ws.send(JSON.stringify({ type: 'hello' }));
+            ws.send(JSON.stringify({ type: 'since', since: { general: '0-0' } }));
+          };
+          ws.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'message' && msg.text === text) {
+              ws.close();
+              resolve({ line: msg });
+            }
+            if (msg.type === 'error') resolve({ error: msg.error });
+          };
+          setTimeout(() => resolve({ timeout: true }), 8000);
+        }),
+      { server: slug, text: 'hello general ' + RUN }
+    );
+    expect(filled.line && filled.line.channel === 'general', `the fill: ${JSON.stringify(filled)}`);
+    const lines = await body(await anon.get(`/api/groups/${slug}/messages`));
+    expect(lines.general.some((l) => l.text === 'hello general ' + RUN && l.from === MEMBER), `messages has it: ${JSON.stringify(lines.general)}`);
+    await p.close();
+    return `#general: "${outcome.line.text}", filled once`;
+  });
+
+  await step('the room page: channels with their cap, a pushed channel, a switch with no reload, refetch or socket, a line lands, a deleted channel is said', async () => {
+    const q = await fresh();
+    await q.goto(`${BASE}/login?next=/groups/${slug}`, { waitUntil: 'domcontentloaded' });
+    await q.fill('#auth-name', MEMBER);
+    await q.fill('#auth-password', PW);
+    await q.click('#auth-submit');
+    await q.waitForSelector('#group-channels', { timeout: 15000 });
+    await q.waitForSelector('#chat[data-phase="open"]', { timeout: 15000 });
+    const count = await q.textContent('#group-channels-count');
+    expect(/^1 of 20$/.test(count.trim()), `the channel count reads "${count}"`);
+    expect(await q.$('#group-members'), 'a member has no roster');
+    // the api's lines are on the page before anything else is said
+    await q.waitForFunction((t) => [...document.querySelectorAll('#chat-lines [data-id]')].some((l) => l.textContent.includes(t)), 'hello general ' + RUN, { timeout: 10000 });
+    // from here: no ask of the room, and no new chat socket, whatever the page does
+    let roomAsks = 0;
+    let sockets = 0;
+    q.on('request', (r) => {
+      if (new URL(r.url()).pathname === `/api/groups/${slug}`) roomAsks++;
+    });
+    q.on('websocket', (ws) => {
+      if (ws.url().includes('/chat/')) sockets++;
+    });
+    const added = await maker.post(`/api/groups/${slug}/channels`, { data: { name: 'clips' } });
+    expect(added.status() === 201, `adding clips got ${added.status()}`);
+    await q.waitForSelector('#group-channel-clips', { timeout: 10000 });
+    const after = await q.textContent('#group-channels-count');
+    expect(/^2 of 20$/.test(after.trim()), `after the push the count reads "${after}"`);
+    await q.click('#group-channel-clips');
+    await q.waitForURL((u) => u.pathname === `/groups/${slug}/clips`, { timeout: 10000 });
+    await q.waitForFunction(() => document.querySelector('#channel')?.textContent === '#clips', null, { timeout: 10000 });
+    const phase = await q.getAttribute('#chat', 'data-phase');
+    expect(phase === 'open', `the chat is ${phase} after the switch`);
+    expect(roomAsks === 0 && sockets === 0, `the switch asked the room ${roomAsks} time(s) and opened ${sockets} chat socket(s)`);
+    expect(!(await q.$(`#chat-lines [data-id]`)), '#clips shows another channel\'s lines');
+    await q.fill('#chat-text', 'first in clips');
+    await q.click('#chat-send');
+    await q.waitForFunction(() => [...document.querySelectorAll('#chat-lines [data-id]')].some((l) => l.textContent.includes('first in clips')), null, { timeout: 10000 });
+    // back to general: its lines, not these; and back again: the shelf kept them
+    await q.click('#group-channel-general');
+    await q.waitForFunction(() => document.querySelector('#channel')?.textContent === '#general', null, { timeout: 10000 });
+    await q.waitForFunction((t) => [...document.querySelectorAll('#chat-lines [data-id]')].some((l) => l.textContent.includes(t)), 'hello general ' + RUN, { timeout: 10000 });
+    expect(!(await q.$$eval('#chat-lines [data-id]', (els) => els.some((l) => l.textContent.includes('first in clips')))), '#general shows the clips line');
+    await q.click('#group-channel-clips');
+    await q.waitForFunction(() => [...document.querySelectorAll('#chat-lines [data-id]')].some((l) => l.textContent.includes('first in clips')), null, { timeout: 10000 });
+    expect(roomAsks === 0 && sockets === 0, `switching asked the room ${roomAsks} time(s) and opened ${sockets} chat socket(s)`);
+    // the maker deletes the channel under the page
+    const gone = await maker.delete(`/api/groups/${slug}/channels/clips`);
+    expect(gone.status() === 204, `deleting clips got ${gone.status()}`);
+    await q.waitForFunction(() => document.body.textContent.includes('no such channel'), null, { timeout: 10000 });
+    expect(!(await q.$('#group-channel-clips')), 'the deleted channel is still listed');
+    await q.close();
+    return 'switched twice, nothing asked, nothing opened';
   });
 
   await step('leave: the only owner stays while someone else is in; then 204, one member, again 204', async () => {

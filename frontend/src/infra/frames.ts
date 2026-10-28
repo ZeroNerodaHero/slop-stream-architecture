@@ -10,8 +10,48 @@ export type PresenceChoice = 'online' | 'dnd' | 'invisible';
 /** What can happen to a login (docs/notifications.md): someone they follow went live, someone followed them, a friend wrote. */
 export type NotificationKind = 'live' | 'follow' | 'dm';
 
-/** `watch` takes a name, or `*` for every name's `live`, `ended` and `viewers` (the home page's feed). */
+/** `watch` takes a name, `*` for every name's `live`, `ended` and `viewers` (the home page's feed), or `group:<name>` for a group's changes (a room's feed). */
 export type ClientFrame = { type: 'hello'; nick?: string } | { type: 'watch'; name: string } | { type: 'unwatch'; name: string };
+
+/** The `watch` that is one group's room: its `group` frames, and `live` / `ended` for its members. */
+export function groupTopic(name: string): string {
+  return `group:${name}`;
+}
+
+/** The roles a member holds, as a `group` frame and the roster name them. */
+export interface HeldRole {
+  id: number;
+  name: string;
+  color: string;
+}
+
+/**
+ * One change to a group (docs/groups.md), spread into a `group` frame beside `group` and `what`.
+ * `members` is the count after the change, so a room never counts on its own. `who` is a name
+ * as it is now. The room patches what it holds; a change about the login itself (its own
+ * membership, powers or roles) makes it ask the room again, since what it may see depends.
+ */
+export type GroupChange =
+  | { what: 'joined'; who: string; avatar: number | null; joined: number; members: number }
+  | { what: 'left'; who: string; by: 'leave' | 'kick'; members: number }
+  | { what: 'banned'; who: string; reason: string; members: number }
+  | { what: 'unbanned'; who: string }
+  | { what: 'channel'; channel: { name: string; about: string; made_by: string | null } }
+  | { what: 'unchannel'; channel: string }
+  | { what: 'about'; about: string }
+  | { what: 'access'; public: boolean }
+  | { what: 'order'; order: string }
+  | { what: 'icon'; icon: number | null }
+  | { what: 'banner'; banner: number | null }
+  | { what: 'role'; role: HeldRole & { perms: { appearance: boolean; roles: boolean; channels: boolean; kick: boolean; ban: boolean } } }
+  | { what: 'unrole'; id: number }
+  | { what: 'held'; who: string; role: HeldRole }
+  | { what: 'unheld'; who: string; id: number }
+  | { what: 'owner'; who: string; owner: boolean }
+  /** A member went live, or stopped: the room's faces. */
+  | { what: 'live'; who: string }
+  | { what: 'ended'; who: string }
+  | { what: 'deleted' };
 
 export type ServerFrame =
   | { type: 'me'; name: string | null; presence: Presence; status: PresenceChoice }
@@ -25,14 +65,15 @@ export type ServerFrame =
   | { type: 'renamed'; name: string; to: string }
   /** A direct message (docs/dms.md), to the sockets of both names: every device of either sees the same line. */
   | { type: 'dm'; id: number; from: string; to: string; text: string; at: number }
-  /** `name` read its thread with `peer` up to `id` on some device: the others drop their count. */
-  | { type: 'dm_read'; name: string; peer: string; id: number }
-  /** A row of the login's inbox (docs/notifications.md), to its own sockets. `name` is who did it; `at` unix ms; `text` a dm's words; `session` a go-live's. */
+  /** `name` read its thread with `peer` up to `id` on some device: the others drop their count. `peer_id` is that account; an older gateway leaves it off. */
+  | { type: 'dm_read'; name: string; peer: string; peer_id: string; id: number }
+  /** A row of the login's inbox (docs/notifications.md), to its own sockets. `name` is who did it, `actor` their id; `at` unix ms; `text` a dm's words; `session` a go-live's. An older gateway leaves `actor` off. */
   | {
       type: 'notification';
       id: number;
       kind: NotificationKind;
       name: string;
+      actor: string;
       verified: boolean;
       avatar: number | null;
       at: number;
@@ -41,6 +82,8 @@ export type ServerFrame =
     }
   /** `name` saw its inbox up to `id` on some device: the others drop their count. */
   | { type: 'notify_read'; name: string; id: number }
+  /** A group changed (docs/groups.md), to the sockets watching `group:<group>`. `what` says how; the rest is the change. */
+  | ({ type: 'group'; group: string } & GroupChange)
   | { type: 'error'; error: string };
 
 export type LinkPhase = 'off' | 'connecting' | 'open' | 'closed';

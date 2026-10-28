@@ -325,11 +325,14 @@ async fn pg_side(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, side: Sid
     Ok(lines)
 }
 
-/// `LINE_COLUMNS`, in order: `image` is the picture on the line, and the last is the speaker's face the join found.
+/// `LINE_COLUMNS`, in order: `image` is the picture ids on the line (one, or several joined by
+/// commas), and the last is the speaker's face the join found.
 type LineRow = (String, DateTime<Utc>, String, String, bool, bool, Value, Option<String>, Option<i64>);
 
 fn line_of((id, at, speaker, text, streamer, verified, badges, image, avatar): LineRow) -> Line {
     let groups = serde_json::from_value::<Vec<Badge>>(badges).unwrap_or_default();
+    let images = crate::chat::split_pictures(image);
+    let image = images.first().cloned();
     Line {
         id,
         from: speaker,
@@ -338,7 +341,8 @@ fn line_of((id, at, speaker, text, streamer, verified, badges, image, avatar): L
         verified,
         groups,
         avatar,
-        image: image.filter(|s| !s.is_empty()),
+        image,
+        images,
         at: at.timestamp_millis().max(0) as u64,
     }
 }

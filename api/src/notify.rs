@@ -157,7 +157,7 @@ async fn tell(s: &AppState, kind: Kind, actor: &Actor, made: &Made) {
         return;
     }
     let to = Value::Object(made.to.iter().map(|(name, id)| (name.clone(), json!(id))).collect());
-    presence::publish_notify(&mut s.redis.clone(), kind.as_str(), &actor.name, actor.verified, actor.avatar, &to, made.at_ms, &made.text, made.session).await;
+    presence::publish_notify(&mut s.redis.clone(), kind.as_str(), &actor.name, &actor.id.to_string(), actor.verified, actor.avatar, &to, made.at_ms, &made.text, made.session).await;
 }
 
 /// id, login name, user id, at (ms)
@@ -300,19 +300,19 @@ pub(crate) async fn dm_read(db: &PgPool, reader: Uuid, peer: Uuid) -> Result<(),
 
 // ---- the routes ------------------------------------------------------------------------------------
 
-/// id, kind, actor name, actor verified, actor avatar, at (ms), read, text, session
-type ItemRow = (i64, String, String, bool, Option<i64>, i64, bool, String, Option<i64>);
+/// id, kind, actor name, actor verified, actor avatar, at (ms), read, text, session, actor id
+type ItemRow = (i64, String, String, bool, Option<i64>, i64, bool, String, Option<i64>, Uuid);
 
 /// `GET /api/notifications`: `{ settings, items }`. The login's rows, newest first, the last
-/// KEEP, each with who did it as they are now and whether it has been read; and which kinds
-/// are kept. 401 for nobody.
+/// KEEP, each with who did it as they are now (`name`, and `actor`, the id) and whether it
+/// has been read; and which kinds are kept. 401 for nobody.
 async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let doc: Option<Value> = sqlx::query_scalar("SELECT notify FROM streamers WHERE id = $1").bind(me.id).fetch_optional(&s.db).await?;
     let settings = doc.as_ref().map(Settings::from_doc).unwrap_or_default();
     let rows: Vec<ItemRow> = sqlx::query_as(
         "SELECT n.id, n.kind, a.name, a.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM a.avatar_at))::bigint,
-                (EXTRACT(EPOCH FROM n.at) * 1000)::bigint, n.read_at IS NOT NULL, n.text, n.session
+                (EXTRACT(EPOCH FROM n.at) * 1000)::bigint, n.read_at IS NOT NULL, n.text, n.session, a.id
          FROM notifications n JOIN streamers a ON a.id = n.actor_id
          WHERE n.user_id = $1
          ORDER BY n.id DESC
@@ -324,8 +324,8 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     .await?;
     let items: Vec<Value> = rows
         .into_iter()
-        .map(|(id, kind, name, verified, avatar, at, read, text, session)| {
-            json!({ "id": id, "kind": kind, "name": name, "verified": verified, "avatar": avatar, "at": at, "read": read, "text": text, "session": session })
+        .map(|(id, kind, name, verified, avatar, at, read, text, session, actor)| {
+            json!({ "id": id, "kind": kind, "name": name, "verified": verified, "avatar": avatar, "at": at, "read": read, "text": text, "session": session, "actor": actor })
         })
         .collect();
     Ok(Json(json!({ "settings": settings, "items": items })))

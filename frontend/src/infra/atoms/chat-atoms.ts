@@ -1,6 +1,11 @@
 /**
- * The text chat next to a stream, and in a server's channel. One websocket at
- * /chat/<name> or /chat/<server>/<channel>; see docs/chat.md.
+ * The text chat next to a stream, and in a server's channels. One websocket at
+ * /chat/<name> for a stream, or /chat/<server>/* for a whole server: every channel's
+ * lines on the one socket, each tagged with its channel, so the room page switches
+ * channels on screen (`showChannel`) and opens nothing. The lines of the channels not
+ * on screen wait on a shelf; the api's last lines of every channel seed it
+ * (`seedChannels`), and the socket is told the newest id it has per channel (`since`)
+ * so nothing falls between the two. See docs/chat.md and docs/groups.md.
  * Same shape as the other atom modules: atoms for what renders, a module handle
  * for the socket, action functions for every transition.
  */
@@ -27,8 +32,10 @@ export interface ChatLine {
   /** the speaker's picture (its `?v=`, as everywhere in the api), or null for none. only a `verified` or `streamer` line can have one */
   avatar: number | null;
   at: number;
-  /** A picture on the line, the id from `POST /api/chat-images`. Null, or absent on an older chat, when there is none. */
+  /** The first picture on the line. Null, or absent on an older chat, when there is none. `images` is the whole set. */
   image?: string | null;
+  /** Every picture on the line, the ids from `POST /api/chat-images`. Empty when there are none. */
+  images: string[];
 }
 
 /** The automatic group a socket that says `bot: true` wears. The hide switch keys on it. */
@@ -48,6 +55,8 @@ const RECONNECT_MS = 3000;
 function chatPath(room: string): string {
   return room.split('/').map((part) => encodeURIComponent(part)).join('/');
 }
+/** The channel of `/chat/<server>/<channel>` that is every channel: the server socket's. Matches `EVERY_CHANNEL` in chat.rs. */
+const EVERY_CHANNEL = '*';
 const NICK_RE = /^[a-zA-Z0-9_-]{1,24}$/;
 
 /** Your name without an account. Remembered across pages and visits (localstorage). */
@@ -58,8 +67,9 @@ export const chatPhaseAtom = atom<ChatPhase>('off');
 export const chatLinesAtom = atom<ChatLine[]>([]);
 export const chatCountAtom = atom(0);
 export const chatDraftAtom = atom('');
-/** A picture waiting to go with the next line, the id `POST /api/chat-images` returned. */
-export const chatImageAtom = atom<string | null>(null);
+/** Pictures waiting to go with the next line, the ids `POST /api/chat-images` returned. Ten at most, the chat's cap. */
+export const MAX_CHAT_IMAGES = 10;
+export const chatImagesAtom = atom<string[]>([]);
 export const chatNoticeAtom = atom('');
 /** True while this socket speaks as the streamer. */
 export const chatAsStreamerAtom = atom(false);
@@ -103,12 +113,15 @@ export const nickIsValidAtom = atom((get) => NICK_RE.test(get(nickAtom).trim()))
 export const chatSpeakerAtom = atom((get) => get(meAtom) || get(nickAtom).trim());
 export const chatCanSendAtom = atom((get) => {
   const length = chars(get(chatDraftAtom).trim());
-  const picture = get(chatImageAtom) !== null;
+  const picture = get(chatImagesAtom).length > 0;
   return get(chatPhaseAtom) === 'open' && length <= MAX_CHAT_CHARS && (length > 0 || picture);
 });
 
 interface Session {
+  /** The room on the wire: a stream's name, or `<server>/*` for a server. */
   name: string;
+  /** The server, when this socket is every channel of one. */
+  server: string | null;
   owner: Owner | null;
   ws: WebSocket | null;
   timer: ReturnType<typeof setTimeout> | null;
@@ -116,6 +129,25 @@ interface Session {
 
 let session: Session | null = null;
 let notice: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * A server's channels, apart from the one on screen: each one's live tail (KEEP_LINES at most)
+ * and how many sockets are in it. The one on screen lives in the atoms like a stream's room,
+ * and goes back on the shelf when another is shown. Kept by server, not by socket: the api's
+ * lines may land before the socket opens, and stay through a reconnect.
+ */
+interface Shelf {
+  server: string;
+  tails: Map<string, ChatLine[]>;
+  counts: Map<string, number>;
+}
+
+let shelf: Shelf | null = null;
+/** The channel on screen, for a server session. '' until `showChannel`. */
+let channel = '';
+
+/** The channel the server session shows. '' for a stream's room. */
+export const chatChannelAtom = atom('');
 
 export function isValidNick(nick: string): boolean {
   return NICK_RE.test(nick.trim());
@@ -135,8 +167,15 @@ export function setChatDraft(raw: string) {
   store.set(chatDraftAtom, [...raw].slice(0, MAX_CHAT_CHARS + 50).join(''));
 }
 
-export function setChatImage(id: string | null) {
-  store.set(chatImageAtom, id);
+/** Another picture on the next line, ignored past the cap or when it is already there. */
+export function addChatImage(id: string) {
+  const now = store.get(chatImagesAtom);
+  if (!id || now.includes(id) || now.length >= MAX_CHAT_IMAGES) return;
+  store.set(chatImagesAtom, [...now, id]);
+}
+
+export function removeChatImage(id: string) {
+  store.set(chatImagesAtom, store.get(chatImagesAtom).filter((have) => have !== id));
 }
 
 /**
@@ -146,16 +185,99 @@ export function setChatImage(id: string | null) {
 export function openChat(name: string, owner: Owner | null = null) {
   if (session && session.name === name && sameOwner(session.owner, owner) && session.ws) return;
   closeChat(false);
-  session = { name, owner, ws: null, timer: null };
+  session = { name, server: null, owner, ws: null, timer: null };
   connect();
+}
+
+/**
+ * Join a server: every channel of it on one socket (docs/groups.md), with `show` the channel
+ * on screen to begin with. Calling it again for the same server only changes that; another
+ * server starts over, shelf and all. Later changes of channel are `showChannel`'s.
+ */
+export function openServerChat(server: string, show: string) {
+  if (session?.server === server && session.ws) {
+    showChannel(show);
+    return;
+  }
+  if (session?.server !== server) {
+    closeChat(true);
+    takeShelf(server);
+  } else closeChat(false);
+  session = { name: `${server}/${EVERY_CHANNEL}`, server, owner: null, ws: null, timer: null };
+  showChannel(show);
+  connect();
+}
+
+/** The shelf for this server, kept when it already is the one. */
+function takeShelf(server: string): Shelf {
+  if (shelf?.server !== server) {
+    shelf = { server, tails: new Map(), counts: new Map() };
+    channel = '';
+    store.set(chatChannelAtom, '');
+  }
+  return shelf;
+}
+
+/**
+ * The channel on screen, for a server session: the one shown goes back on the shelf as its
+ * live tail, and the next one's comes off it. Nothing is asked of anyone: the lines were
+ * loaded with the room, and the socket has kept every channel current since.
+ */
+export function showChannel(next: string) {
+  const current = shelf;
+  if (!current || next === channel) return;
+  if (channel) {
+    current.tails.set(channel, pinned && savedTail ? savedTail : store.get(chatLinesAtom));
+  }
+  channel = next;
+  store.set(chatChannelAtom, next);
+  resetHistory();
+  scrollPlan = 'bottom';
+  store.set(chatLinesAtom, current.tails.get(next) ?? []);
+  store.set(chatCountAtom, current.counts.get(next) ?? 0);
+}
+
+/**
+ * The api's last lines of every channel (`GET /api/groups/:group/messages`), onto the shelf,
+ * and onto the screen for the channel shown. Merged by id with what the socket has brought
+ * already, so whichever landed first, nothing is lost or drawn twice; then the socket is told
+ * the newest id of each, and sends what came after.
+ */
+export function seedChannels(server: string, lines: Record<string, ChatLine[]>) {
+  const current = takeShelf(server);
+  for (const [name, raw] of Object.entries(lines)) {
+    const fresh = Array.isArray(raw) ? raw.map(fromWire) : [];
+    if (session?.server === server && name === channel) {
+      if (pinned && savedTail) savedTail = mergeLines(savedTail, fresh);
+      else {
+        if (following) scrollPlan = 'bottom';
+        store.set(chatLinesAtom, mergeLines(store.get(chatLinesAtom), fresh));
+      }
+    } else current.tails.set(name, mergeLines(current.tails.get(name) ?? [], fresh));
+  }
+  sendSince();
+}
+
+/** A channel added to the server since the socket opened (the events socket said so): follow it too. */
+export function followChannel(name: string) {
+  if (!session?.server || !session.ws || session.ws.readyState !== WebSocket.OPEN) return;
+  const join = { type: 'join', channel: name };
+  record(`/chat/${session.name}`, 'out', join);
+  session.ws.send(JSON.stringify(join));
+}
+
+/** A channel deleted from the server: its lines go with it. */
+export function dropChannel(name: string) {
+  shelf?.tails.delete(name);
+  shelf?.counts.delete(name);
 }
 
 /** The name changed (nick edited, logged in or out), or its groups did: say hello again as the new one. */
 export function reconnectChat() {
   if (!session) return;
-  const { name, owner } = session;
+  const { name, server, owner } = session;
   closeChat(false);
-  session = { name, owner, ws: null, timer: null };
+  session = { name, server, owner, ws: null, timer: null };
   connect();
 }
 
@@ -166,6 +288,7 @@ export function closeChat(reset = true) {
     session.ws.onclose = null;
     session.ws.close();
   }
+  const wasServer = session.server !== null;
   session = null;
   inFlight.length = 0;
   resetHistory();
@@ -174,26 +297,35 @@ export function closeChat(reset = true) {
     store.set(chatCountAtom, 0);
     store.set(chatAsStreamerAtom, false);
     store.set(chatDraftAtom, '');
-    store.set(chatImageAtom, null);
+    store.set(chatImagesAtom, []);
     store.set(chatNoticeAtom, '');
+    if (wasServer) {
+      shelf = null;
+      channel = '';
+      store.set(chatChannelAtom, '');
+    }
   }
   store.set(chatPhaseAtom, 'off');
 }
 
 export function sendChat() {
   const text = store.get(chatDraftAtom).trim();
-  const image = store.get(chatImageAtom);
-  if (!session?.ws || session.ws.readyState !== WebSocket.OPEN || (!text && !image)) return;
+  const images = store.get(chatImagesAtom);
+  if (!session?.ws || session.ws.readyState !== WebSocket.OPEN || (!text && images.length === 0)) return;
   if (chars(text) > MAX_CHAT_CHARS) {
     showNotice('too long');
     return;
   }
-  const say = image ? { type: 'say', text, image } : { type: 'say', text };
+  if (session.server && !channel) return;
+  // `image` is the first, so a chat that only knows one picture still keeps that one
+  const say: Record<string, unknown> = images.length ? { type: 'say', text, image: images[0], images } : { type: 'say', text };
+  // a server socket is every channel: the line says which
+  if (session.server) say.channel = channel;
   record(`/chat/${session.name}`, 'out', say);
   session.ws.send(JSON.stringify(say));
-  inFlight.push({ text, image });
+  inFlight.push({ text, images });
   store.set(chatDraftAtom, '');
-  store.set(chatImageAtom, null);
+  store.set(chatImagesAtom, []);
 }
 
 /**
@@ -201,7 +333,7 @@ export function sendChat() {
  * frames in order, so a drop (`slow down`, chat busy or down) is of the oldest, and goes back
  * into the box; a line that comes back through the room is off the list.
  */
-const inFlight: { text: string; image: string | null }[] = [];
+const inFlight: { text: string; images: string[] }[] = [];
 
 function connect() {
   const current = session;
@@ -225,26 +357,36 @@ function connect() {
     ws.send(JSON.stringify(hello));
     store.set(chatPhaseAtom, 'open');
     store.set(chatAsStreamerAtom, current.owner !== null || me === current.name);
+    // a server socket sends no history: it is told what this page has, and sends what came after
+    if (current.server) sendSince();
   };
   ws.onmessage = (e) => {
-    let msg: { type?: string; messages?: ChatLine[]; count?: number; error?: string } & Partial<ChatLine>;
+    let msg: { type?: string; messages?: ChatLine[]; count?: number; error?: string; channel?: string } & Partial<ChatLine>;
     try {
       msg = JSON.parse(String(e.data));
     } catch {
       return;
     }
     record(`/chat/${current.name}`, 'in', msg);
+    const tagged = current.server && typeof msg.channel === 'string' ? msg.channel : null;
     if (msg.type === 'history' && msg.messages) {
       resetHistory();
       scrollPlan = 'bottom';
       store.set(chatLinesAtom, msg.messages.slice(-KEEP_LINES).map(fromWire));
     }
     else if (msg.type === 'message' && msg.id) {
-      const sent = inFlight.findIndex((p) => p.text === (msg.text ?? '') && p.image === (typeof msg.image === 'string' ? msg.image : null));
+      const sent = inFlight.findIndex((p) => p.text === (msg.text ?? '') && samePictures(p.images, picturesOf(msg)));
       if (sent >= 0) inFlight.splice(sent, 1);
-      appendLine(fromWire(msg as ChatLine));
-    } else if (msg.type === 'count' && typeof msg.count === 'number') store.set(chatCountAtom, msg.count);
-    else if (msg.type === 'error' && msg.error) {
+      const line = fromWire(msg as ChatLine);
+      // another channel's line waits on the shelf; the one on screen's goes up like a stream's
+      if (tagged !== null && tagged !== channel) shelfAppend(tagged, line);
+      else appendLine(line);
+    } else if (msg.type === 'count' && typeof msg.count === 'number') {
+      if (tagged !== null) {
+        shelf?.counts.set(tagged, msg.count);
+        if (tagged === channel) store.set(chatCountAtom, msg.count);
+      } else store.set(chatCountAtom, msg.count);
+    } else if (msg.type === 'error' && msg.error) {
       // a bad nick, or a channel that is not there: back out, and do not reconnect.
       // a channel that is not there is not a dead login.
       const refused = /nick|account/.test(msg.error);
@@ -254,7 +396,7 @@ function connect() {
       if (/slow down|chat is (busy|down)/.test(msg.error)) {
         const lost = inFlight.shift();
         if (lost?.text && !store.get(chatDraftAtom)) store.set(chatDraftAtom, lost.text);
-        if (lost?.image && !store.get(chatImageAtom)) store.set(chatImageAtom, lost.image);
+        if (lost && lost.images.length > 0 && store.get(chatImagesAtom).length === 0) store.set(chatImagesAtom, lost.images);
       }
       if ((refused || gone) && session === current) {
         closeChat(false);
@@ -271,14 +413,99 @@ function connect() {
   };
 }
 
-/** A line from a chat server older than the badges has no `groups`, one older than the faces no `avatar`: a line with none of either. */
+/** A line from a chat server older than the badges has no `groups`, one older than the faces no `avatar`, one older than several pictures no `images`: a line with none of each. */
 function fromWire(line: ChatLine): ChatLine {
+  const images = picturesOf(line);
   return {
     ...line,
     groups: Array.isArray(line.groups) ? line.groups : [],
     avatar: typeof line.avatar === 'number' ? line.avatar : null,
-    image: typeof line.image === 'string' && line.image ? line.image : null,
+    image: images[0] ?? null,
+    images,
   };
+}
+
+/** The pictures a line carries. `images` when the chat sent the set, otherwise the one `image`. */
+function picturesOf(line: { image?: string | null; images?: unknown }): string[] {
+  if (Array.isArray(line.images)) {
+    const ids = line.images.filter((id): id is string => typeof id === 'string' && id.length > 0);
+    if (ids.length > 0) return ids;
+  }
+  return typeof line.image === 'string' && line.image ? [line.image] : [];
+}
+
+/**
+ * The line that came back is the one we sent. A chat that only keeps one picture echoes
+ * that first id and nothing else: still this send, the rest did not travel.
+ */
+function samePictures(sent: string[], back: string[]): boolean {
+  if (sent.length === back.length) return sent.every((id, i) => id === back[i]);
+  return sent.length > 1 && back.length === 1 && back[0] === sent[0];
+}
+
+/** "1729000000000-3" -> [1729000000000, 3]: a redis stream id, ordered the way redis orders them. */
+function idParts(id: string): [number, number] {
+  const [ms, seq] = id.split('-');
+  return [Number(ms) || 0, Number(seq) || 0];
+}
+
+function compareIds(a: string, b: string): number {
+  const [ams, aseq] = idParts(a);
+  const [bms, bseq] = idParts(b);
+  return ams === bms ? aseq - bseq : ams - bms;
+}
+
+/** Two sets of a channel's lines as one: by id, in id order, the newest KEEP_LINES. */
+function mergeLines(have: ChatLine[], more: ChatLine[]): ChatLine[] {
+  if (more.length === 0) return have;
+  const byId = new Map<string, ChatLine>();
+  for (const line of have) byId.set(line.id, line);
+  for (const line of more) byId.set(line.id, line);
+  const all = [...byId.values()].sort((a, b) => compareIds(a.id, b.id));
+  return all.length > KEEP_LINES ? all.slice(all.length - KEEP_LINES) : all;
+}
+
+/** A line of a channel not on screen: onto its tail on the shelf, capped like the live tail. */
+function shelfAppend(name: string, line: ChatLine) {
+  if (!shelf) return;
+  const tail = shelf.tails.get(name) ?? [];
+  if (tail.length && tail[tail.length - 1]?.id === line.id) return;
+  const next = tail.length >= KEEP_LINES ? tail.slice(tail.length - KEEP_LINES + 1) : tail.slice();
+  next.push(line);
+  shelf.tails.set(name, next);
+}
+
+/** The newest line this page holds of each channel: the one on screen's live tail, and every tail on the shelf. */
+function sinceIds(): Record<string, string> {
+  const since: Record<string, string> = {};
+  if (!shelf) return since;
+  for (const [name, tail] of shelf.tails) {
+    const last = tail[tail.length - 1];
+    if (last && name !== channel) since[name] = last.id;
+  }
+  if (channel) {
+    const tail = pinned && savedTail ? savedTail : store.get(chatLinesAtom);
+    const last = tail[tail.length - 1];
+    if (last) since[channel] = last.id;
+  }
+  return since;
+}
+
+/** Tell the server socket what this page has, so it sends what came after. Nothing to say, nothing sent. */
+function sendSince() {
+  if (!session?.server || !session.ws || session.ws.readyState !== WebSocket.OPEN) return;
+  const since = sinceIds();
+  if (Object.keys(since).length === 0) return;
+  const frame = { type: 'since', since };
+  record(`/chat/${session.name}`, 'out', frame);
+  session.ws.send(JSON.stringify(frame));
+}
+
+/** The room the history routes read: a stream's name, or `server/<channel on screen>`. Null with no channel yet. */
+function httpRoom(): string | null {
+  if (!session) return null;
+  if (!session.server) return session.name;
+  return channel ? `${session.server}/${channel}` : null;
 }
 
 function resetHistory() {
@@ -319,13 +546,13 @@ export function takeScrollPlan(): 'bottom' | 'keep' | { id: string } | null {
 
 /** Older than the oldest line on screen. Redis while it still has them, postgres past that. */
 export async function loadOlder() {
-  const name = session?.name;
+  const name = httpRoom();
   const oldest = store.get(chatLinesAtom)[0];
   if (!name || !oldest || olderBusy || noMoreOlder || olderPaused) return;
   olderBusy = true;
   try {
     const lines = await chatGet(`/chat/${chatPath(name)}/before?id=${encodeURIComponent(oldest.id)}`);
-    if (session?.name !== name) return;
+    if (httpRoom() !== name) return;
     const have = new Set(store.get(chatLinesAtom).map((l) => l.id));
     const older = lines.filter((l) => !have.has(l.id));
     if (older.length === 0 || older.length < OLDER_PAGE) noMoreOlder = true;
@@ -342,12 +569,12 @@ export async function loadOlder() {
 
 /** Matches in this room, newest first. Off, the server says history is not kept. */
 export async function searchRoom(raw: string) {
-  const name = session?.name;
+  const name = httpRoom();
   const q = raw.trim();
   if (!name || !q) return;
   try {
     const lines = await chatGet(`/chat/${chatPath(name)}/search?q=${encodeURIComponent(q)}`);
-    if (session?.name !== name) return;
+    if (httpRoom() !== name) return;
     store.set(chatResultsAtom, lines);
     store.set(chatResultsForAtom, q);
   } catch (err) {
@@ -358,11 +585,11 @@ export async function searchRoom(raw: string) {
 
 /** One account's lines in this room, newest first. A nick with no account is not one. */
 export async function showSpeaker(speaker: string) {
-  const name = session?.name;
+  const name = httpRoom();
   if (!name) return;
   try {
     const lines = await chatGet(`/chat/${chatPath(name)}/by/${encodeURIComponent(speaker)}`);
-    if (session?.name !== name) return;
+    if (httpRoom() !== name) return;
     store.set(chatResultsAtom, lines);
     store.set(chatResultsForAtom, speaker);
   } catch (err) {
@@ -381,7 +608,7 @@ export function clearResults() {
  * and leave the live tail parked, so "latest" comes back to it.
  */
 export async function openLine(id: string) {
-  const name = session?.name;
+  const name = httpRoom();
   if (!name) return;
   if (store.get(chatLinesAtom).some((l) => l.id === id)) {
     scrollPlan = { id };
@@ -390,7 +617,7 @@ export async function openLine(id: string) {
   }
   try {
     const lines = await chatGet(`/chat/${chatPath(name)}/around/${encodeURIComponent(id)}`);
-    if (session?.name !== name) return;
+    if (httpRoom() !== name) return;
     if (!pinned) savedTail = store.get(chatLinesAtom).slice();
     pinned = true;
     following = false;

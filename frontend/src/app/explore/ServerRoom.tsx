@@ -1,13 +1,12 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import { api, groupImage, groupWords, messageOf, type GroupRoom, type RolePerms, type Server } from '@/infra/api';
+import { api, CHANNEL_CAP, groupImage, groupWords, messageOf, type GroupRoom, type RolePerms } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { reconnectChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
-import { onEvents, unwatchPresence, watchPresence } from '@/infra/events';
+import { enterRoom, leaveRoom, reloadRoom, roomAtom, roomErrorAtom, roomGoneAtom } from '@/infra/atoms/room-atoms';
 import { cleanName, isValidName } from '@/infra/names';
 import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
@@ -50,18 +49,15 @@ const POWERS: { key: keyof RolePerms; label: string }[] = [
 
 const NO_PERMS: RolePerms = { appearance: false, roles: false, channels: false, kick: false, ban: false };
 
-function liveOf(server: Server): string[] {
-  return server.live ?? [];
-}
-
 /** One member's camera, muted. Click opens their stream. */
 function LiveFace({ name, big }: { name: string; big: boolean }) {
   const stream = useAtomValue(previewStreamsAtom)[name] ?? null;
   const ref = useRef<HTMLVideoElement | null>(null);
-  const [playing, setPlaying] = useState(false);
+  // which stream the video got to play: a new stream is not playing until it says so
+  const [playingStream, setPlayingStream] = useState<MediaStream | null>(null);
+  const playing = stream !== null && playingStream === stream;
 
   useEffect(() => {
-    setPlaying(false);
     const el = ref.current;
     if (!el || el.srcObject === stream) return;
     el.srcObject = stream;
@@ -85,7 +81,7 @@ function LiveFace({ name, big }: { name: string; big: boolean }) {
           playsInline
           muted
           aria-hidden
-          onPlaying={() => setPlaying(true)}
+          onPlaying={() => setPlayingStream(stream)}
           className={cn('absolute inset-0 h-full w-full object-cover', !playing && 'opacity-0')}
         />
       </div>
@@ -94,11 +90,6 @@ function LiveFace({ name, big }: { name: string; big: boolean }) {
   );
 }
 
-/**
- * A group as a server. The banner and the picture sit over the channel list and a chat
- * that reads as a room, not as the stream's panel. An older api, with no room route, still
- * draws this from the explorer and hides the moderation.
- */
 function GroupName({ words }: { words: { title: string; tag: string | null } }) {
   return (
     <>
@@ -108,45 +99,44 @@ function GroupName({ words }: { words: { title: string; tag: string | null } }) 
   );
 }
 
-function ServerRoom({ channel, titleId }: { channel: string; titleId: string }) {
-  const params = useParams<{ server: string }>();
+/**
+ * A group as a server: `/groups/<server>` and `/groups/<server>/<channel>`, one page, keyed
+ * on the server by the router so a change of channel is a change of what is shown and nothing
+ * more. The room (the group, its channels, who is live, the roster and the bans this login may
+ * see) is asked once when the page arrives, with the last lines of every channel, and then the
+ * events socket keeps it: every change arrives as a `group` frame and lands in place
+ * (room-atoms). The chat is one socket for the whole server; the channel list swaps what the
+ * panel shows. The banner and the picture sit over the channel list and a chat that reads as
+ * a room, not as the stream's panel.
+ */
+export function ServerPage() {
+  const params = useParams<{ server: string; channel?: string }>();
   const server = cleanName(params.server);
+  const channel = params.channel === undefined ? 'general' : cleanName(params.channel);
   const channelOk = isValidName(channel) && !RESERVED.has(channel);
   const ok = isValidName(server) && server !== 'bot' && channelOk;
-  const query = useQuery({ queryKey: ['explore'], queryFn: api.explore, enabled: ok });
-  const room = useQuery({ queryKey: ['group', server], queryFn: () => api.group(server), enabled: ok, retry: false });
+  const titleId = channel === 'general' ? 'group-title' : 'channel-title';
   const me = useAtomValue(meAtom);
-  const qc = useQueryClient();
+  const room = useAtomValue(roomAtom);
+  const error = useAtomValue(roomErrorAtom);
+  const gone = useAtomValue(roomGoneAtom);
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
   const [leaving, setLeaving] = useState(false);
-  const listed = query.data ? [...query.data.yours, ...query.data.discover] : null;
-  const group = listed?.find((item) => item.name === server);
-  const detail = room.data;
-  const live = group ? liveOf(group) : [];
+  const live = room?.live ?? [];
   const shown = live.slice(0, FACES);
   const previewKey = shown.join(',');
-  const found = channel === 'general' || !!group?.channels.some((item) => item.name === channel);
+  const channels = room?.channels ?? [];
+  const found = channel === 'general' || channels.some((item) => item.name === channel);
 
+  // the room, once: asked when the page arrives (and again as another login), then the
+  // socket's. the channel is not an input here: changing it asks nothing
   useEffect(() => {
-    if (!ok) return;
-    watchPresence('*');
-    let timer: number | null = null;
-    const stop = onEvents((event) => {
-      if (event.type !== 'live' && event.type !== 'ended') return;
-      if (timer !== null) return;
-      timer = window.setTimeout(() => {
-        timer = null;
-        void qc.invalidateQueries({ queryKey: ['explore'] });
-      }, 300);
-    });
-    return () => {
-      stop();
-      unwatchPresence('*');
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [ok, qc]);
+    if (!ok || me === undefined) return;
+    enterRoom(server);
+    return leaveRoom;
+  }, [ok, server, me]);
 
   useEffect(() => {
     const names = previewKey ? previewKey.split(',') : [];
@@ -162,89 +152,81 @@ function ServerRoom({ channel, titleId }: { channel: string; titleId: string }) 
     );
   }
 
-  if (!query.data && !query.error) {
+  if (gone) {
     return (
-      <PageFrame title={server || 'group'} titleId={titleId}>
-        <p className="text-textSecondary">loading</p>
+      <PageFrame title={server} titleId={titleId}>
+        <p id="group-gone" className="text-textSecondary">
+          this group was deleted.{' '}
+          <Link to="/groups" className="text-primaryBlue hover:underline">
+            back to groups
+          </Link>
+        </p>
       </PageFrame>
     );
   }
 
-  if (query.error && !group) {
+  if (!room) {
     return (
       <PageFrame title={server || 'group'} titleId={titleId}>
-        <p className="text-textSecondary">{messageOf(query.error)}</p>
+        <p className="text-textSecondary">{error === 'no such group' ? 'no such group.' : error || 'loading'}</p>
       </PageFrame>
     );
-  }
-
-  async function refresh() {
-    await Promise.all([
-      qc.invalidateQueries({ queryKey: ['explore'] }),
-      qc.invalidateQueries({ queryKey: ['group', server] }),
-      qc.invalidateQueries({ queryKey: ['group-members', server] }),
-      qc.invalidateQueries({ queryKey: ['group-bans', server] })
-    ]);
-  }
-
-  async function setListed(isPublic: boolean) {
-    setError('');
-    try {
-      await api.setGroupPublic(server, isPublic);
-      await refresh();
-    } catch (err) {
-      setError(messageOf(err));
-    }
   }
 
   async function join() {
     setBusy(true);
-    setError('');
+    setActionError('');
     try {
       await api.joinGroup(server);
+      // the open chat says hello again, so my lines wear the badge; the room is asked again,
+      // since what a member may see (the roster) is not what a stranger may
       reconnectChat();
-      await refresh();
+      await reloadRoom();
     } catch (err) {
-      setError(messageOf(err));
+      setActionError(messageOf(err));
     } finally {
       setBusy(false);
     }
   }
 
   async function leave() {
-    const lastOne = (detail?.members ?? group?.members ?? 0) <= 1;
+    const lastOne = (room?.members ?? 0) <= 1;
     setBusy(true);
-    setError('');
+    setActionError('');
     try {
       await api.leaveGroup(server);
       reconnectChat();
-      await qc.invalidateQueries({ queryKey: ['explore'] });
       if (lastOne) {
         navigate('/groups');
         return;
       }
-      await refresh();
+      await reloadRoom();
       setLeaving(false);
     } catch (err) {
-      setError(messageOf(err));
+      setActionError(messageOf(err));
     } finally {
       setBusy(false);
     }
   }
 
-  const words = groupWords({ name: server, title: detail?.title ?? group?.title, tag: detail?.tag ?? group?.tag });
-  const color = detail?.color ?? group?.color ?? '#5865f2';
-  const icon = detail?.icon ?? group?.icon;
-  const banner = detail?.banner ?? group?.banner;
-  const bannerSrc = groupImage(server, 'banner', banner);
-  const about = detail?.about ?? group?.about ?? '';
-  const mine = detail?.mine ?? group?.mine ?? false;
-  const canChannels = detail ? detail.perms.channels : (group?.can_channels ?? !!group?.mine);
-  const missing = query.isSuccess && !group;
-  const noChannel = query.isSuccess && !!group && !found;
-  const power = !!detail && (detail.owner || POWERS.some((power) => detail.perms[power.key]));
-  const roster = !!detail && (mine || power);
-  const lastMember = mine && (detail?.members ?? group?.members ?? 0) <= 1;
+  /** One moderation call. Its outcome arrives on the socket, like everyone else's. */
+  async function act(work: () => Promise<unknown>) {
+    setActionError('');
+    try {
+      await work();
+    } catch (err) {
+      setActionError(messageOf(err));
+    }
+  }
+
+  const words = groupWords(room);
+  const color = room.color || '#5865f2';
+  const bannerSrc = groupImage(server, 'banner', room.banner);
+  const mine = room.mine;
+  const noChannel = !found;
+  const power = room.owner || POWERS.some((item) => room.perms[item.key]);
+  const roster = mine || power || !!room.roster;
+  const lastMember = mine && room.members <= 1;
 
   return (
     <PageFrame
@@ -252,7 +234,7 @@ function ServerRoom({ channel, titleId }: { channel: string; titleId: string }) 
       titleId={titleId}
       title={
         <span className="flex min-w-0 items-center gap-3">
-          {(detail || group) && <Badge group={{ name: server, badge: detail?.badge ?? group?.badge ?? '', color }} />}
+          <Badge group={{ name: server, badge: room.badge, color }} />
           <span className="truncate">
             {channel === 'general' ? (
               <GroupName words={words} />
@@ -268,10 +250,13 @@ function ServerRoom({ channel, titleId }: { channel: string; titleId: string }) 
         </span>
       }
     >
-      {missing ? (
-        <p className="text-textSecondary">no such group.</p>
-      ) : noChannel ? (
-        <p className="text-textSecondary">no such channel.</p>
+      {noChannel ? (
+        <p className="text-textSecondary">
+          no such channel.{' '}
+          <Link to={`/groups/${server}`} className="text-primaryBlue hover:underline">
+            back to #general
+          </Link>
+        </p>
       ) : (
         <>
           <div className="relative mb-16">
@@ -279,7 +264,7 @@ function ServerRoom({ channel, titleId }: { channel: string; titleId: string }) 
               {bannerSrc && <img src={bannerSrc} alt="" className="h-full w-full object-cover" />}
             </div>
             <div className="absolute -bottom-12 left-4 flex items-end gap-4">
-              <GroupMark id="group-icon" name={words.title} color={color} icon={icon} className="h-24 w-24 border-4 border-background text-3xl" />
+              <GroupMark id="group-icon" name={words.title} color={color} icon={room.icon} className="h-24 w-24 border-4 border-background text-3xl" />
             </div>
           </div>
           <div className="mb-6 flex flex-wrap items-start justify-between gap-3 pl-4">
@@ -287,24 +272,28 @@ function ServerRoom({ channel, titleId }: { channel: string; titleId: string }) 
               <h2 className="flex flex-wrap items-center gap-2 text-xl font-semibold">
                 {words.title}
                 {words.tag && <span className="text-base font-normal text-textTertiary">#{words.tag}</span>}
-                {detail?.owner && <span className="bg-primaryBlue/15 px-1.5 py-0.5 text-xs uppercase text-primaryBlue">owner</span>}
-                {detail?.public === false && <span className="bg-primaryStroke px-1.5 py-0.5 text-xs uppercase text-textSecondary">private</span>}
-                <span className="text-sm font-normal text-textTertiary">
-                  {(detail?.members ?? group?.members ?? 0) === 1 ? '1 member' : `${detail?.members ?? group?.members ?? 0} members`}
+                {room.owner && <span className="bg-primaryBlue/15 px-1.5 py-0.5 text-xs uppercase text-primaryBlue">owner</span>}
+                {room.public === false && <span className="bg-primaryStroke px-1.5 py-0.5 text-xs uppercase text-textSecondary">private</span>}
+                <span id="group-members-count" className="text-sm font-normal text-textTertiary">
+                  {room.members === 1 ? '1 member' : `${room.members} members`}
                 </span>
               </h2>
-              {about && <p className="mt-1 max-w-xl text-textSecondary">{about}</p>}
+              {room.about && (
+                <p id="group-about-line" className="mt-1 max-w-xl text-textSecondary">
+                  {room.about}
+                </p>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {detail?.perms?.appearance && (
+              {room.perms.appearance && (
                 <span className="flex flex-wrap items-center gap-2">
                   <button
                     id="room-public"
                     type="button"
                     title="on the lists"
-                    aria-pressed={detail.public !== false}
-                    className={cn('border px-3 py-1.5 text-sm', detail.public !== false ? 'border-primaryBlue text-primaryBlue' : 'border-primaryStroke text-textTertiary')}
-                    onClick={() => void setListed(true)}
+                    aria-pressed={room.public !== false}
+                    className={cn('text-sm font-semibold', room.public !== false ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
+                    onClick={() => void act(() => api.setGroupPublic(server, true))}
                   >
                     public
                   </button>
@@ -312,21 +301,21 @@ function ServerRoom({ channel, titleId }: { channel: string; titleId: string }) 
                     id="room-private"
                     type="button"
                     title="off the lists. anyone with the address can still open it and join"
-                    aria-pressed={detail.public === false}
-                    className={cn('border px-3 py-1.5 text-sm', detail.public === false ? 'border-primaryBlue text-primaryBlue' : 'border-primaryStroke text-textTertiary')}
-                    onClick={() => void setListed(false)}
+                    aria-pressed={room.public === false}
+                    className={cn('text-sm font-semibold', room.public === false ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
+                    onClick={() => void act(() => api.setGroupPublic(server, false))}
                   >
                     private
                   </button>
                 </span>
               )}
               {!mine && me && (
-                <Button id="group-join" variant="primary" className="px-3 py-1.5 text-sm" disabled={busy} onClick={() => void join()}>
+                <Button id="group-join" variant="primary" flat className="px-3 py-1.5 text-sm" disabled={busy} onClick={() => void join()}>
                   join
                 </Button>
               )}
               {!mine && me === null && (
-                <Link to="/login" className={buttonClassName('primary', 'px-3 py-1.5 text-sm')}>
+                <Link to="/login" className={buttonClassName('primary', 'px-3 py-1.5 text-sm', true)}>
                   log in to join
                 </Link>
               )}
@@ -345,23 +334,31 @@ function ServerRoom({ channel, titleId }: { channel: string; titleId: string }) 
               {mine && leaving && (
                 <span className="flex flex-wrap items-center gap-2">
                   <span className="text-sm text-textSecondary">{lastMember ? 'this deletes the group' : 'leave this group?'}</span>
-                  <button id="room-leave-yes" type="button" className="text-sm font-semibold text-decrease disabled:opacity-40" disabled={busy} onClick={() => void leave()}>
+                  <button
+                    id="room-leave-yes"
+                    type="button"
+                    className="text-sm font-semibold text-decrease disabled:opacity-40"
+                    disabled={busy}
+                    onClick={() => void leave()}
+                  >
                     sure
                   </button>
-                  <button type="button" className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline" onClick={() => setLeaving(false)}>
+                  <button
+                    type="button"
+                    className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline"
+                    onClick={() => setLeaving(false)}
+                  >
                     keep
                   </button>
                 </span>
               )}
             </div>
           </div>
-          {error && <p className="mb-4 text-sm text-decrease">{error}</p>}
+          {actionError && <p className="mb-4 text-sm text-decrease">{actionError}</p>}
           <div id="group-room" className={cn('grid items-start gap-4', roster ? 'lg:grid-cols-[200px_minmax(0,1fr)_280px]' : 'lg:grid-cols-[200px_minmax(0,1fr)]')}>
-            {group && (
-              <ChannelList server={server} channel={channel} group={group} canAdd={canChannels} onError={setError} />
-            )}
+            <ChannelList server={server} channel={channel} room={room} me={me ?? null} onError={setActionError} />
             <div className="min-w-0">
-              {query.isSuccess && shown.length === 0 && (
+              {shown.length === 0 && (
                 <p id="group-empty" className="mb-3 text-sm text-textSecondary">
                   nobody's camera is up.
                 </p>
@@ -375,10 +372,10 @@ function ServerRoom({ channel, titleId }: { channel: string; titleId: string }) 
               )}
               {live.length > FACES && <p className="mb-3 text-sm text-textTertiary">{live.length - FACES} more live</p>}
               <div className="h-[70vh] min-h-[420px]">
-                <ChatPanel server name={`${server}/${channel}`} className="h-full" />
+                <ChatPanel name={server} channel={channel} className="h-full" />
               </div>
             </div>
-            {roster && detail && <Moderation server={server} detail={detail} me={me ?? null} onDone={refresh} onError={setError} />}
+            {roster && <Moderation server={server} room={room} me={me ?? null} onError={setActionError} />}
           </div>
         </>
       )}
@@ -386,32 +383,27 @@ function ServerRoom({ channel, titleId }: { channel: string; titleId: string }) 
   );
 }
 
-function ChannelList({
-  server,
-  channel,
-  group,
-  canAdd,
-  onError
-}: {
-  server: string;
-  channel: string;
-  group: Server;
-  canAdd: boolean;
-  onError: (error: string) => void;
-}) {
-  const qc = useQueryClient();
+/**
+ * The channels, `general` first. Adding one takes the channels power, and stops at the cap
+ * (CHANNEL_CAP, the api's). Who made a channel, or anyone with the power, deletes it; `general`
+ * stays. A channel added or deleted anywhere arrives on the socket and the list follows.
+ */
+function ChannelList({ server, channel, room, me, onError }: { server: string; channel: string; room: GroupRoom; me: string | null; onError: (error: string) => void }) {
   const [name, setName] = useState('');
   const [sure, setSure] = useState<string | null>(null);
   const clean = cleanName(name);
+  const channels = room.channels ?? [];
+  const canAdd = room.perms.channels && room.mine;
+  const full = channels.length >= CHANNEL_CAP;
+  const valid = isValidName(clean) && !RESERVED.has(clean) && !channels.some((item) => item.name === clean);
 
   async function add(e: FormEvent) {
     e.preventDefault();
-    if (!isValidName(clean) || RESERVED.has(clean)) return;
+    if (!valid || full) return;
     onError('');
     try {
       await api.createChannel(server, clean);
       setName('');
-      await qc.invalidateQueries({ queryKey: ['explore'] });
     } catch (err) {
       onError(messageOf(err));
     }
@@ -422,7 +414,6 @@ function ChannelList({
     try {
       await api.deleteChannel(server, item);
       setSure(null);
-      await qc.invalidateQueries({ queryKey: ['explore'] });
     } catch (err) {
       onError(messageOf(err));
     }
@@ -430,10 +421,17 @@ function ChannelList({
 
   return (
     <nav aria-label="channels">
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">channels</h3>
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">
+        channels{' '}
+        <span id="group-channels-count" className="font-normal normal-case tracking-normal">
+          {channels.length} of {CHANNEL_CAP}
+        </span>
+      </h3>
       <ul id="group-channels" className="flex flex-col gap-0.5">
-        {group.channels.map((item) => {
+        {channels.map((item) => {
           const here = item.name === channel;
+          // who made it, or the channels power; never general. kept right here, as channels and powers come and go
+          const canDelete = item.name !== 'general' && ((item.made_by != null && item.made_by === me) || room.perms.channels || item.can_delete);
           return (
             <li key={item.name} className="flex items-center gap-1">
               {here ? (
@@ -449,7 +447,7 @@ function ChannelList({
                   #{item.name}
                 </Link>
               )}
-              {item.can_delete && (
+              {canDelete && (
                 <button type="button" className="px-1 text-xs text-textTertiary" onClick={() => setSure(item.name)}>
                   delete
                 </button>
@@ -458,7 +456,12 @@ function ChannelList({
           );
         })}
       </ul>
-      {canAdd && (
+      {canAdd && full && (
+        <p id="group-channels-full" className="mt-3 text-xs text-textTertiary">
+          {CHANNEL_CAP} channels is the cap. delete one to add another.
+        </p>
+      )}
+      {canAdd && !full && (
         <form onSubmit={(e) => void add(e)} className="mt-3 flex flex-col gap-2">
           <input
             id={`channel-name-${server}`}
@@ -469,7 +472,7 @@ function ChannelList({
             aria-label={`new channel in ${server}`}
             className={INPUT}
           />
-          <button id={`channel-create-${server}`} type="submit" className="self-start text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!isValidName(clean) || RESERVED.has(clean)}>
+          <button id={`channel-create-${server}`} type="submit" className="self-start text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!valid}>
             add
           </button>
         </form>
@@ -492,28 +495,20 @@ function ChannelList({
   );
 }
 
-function Moderation({
-  server,
-  detail,
-  me,
-  onDone,
-  onError
-}: {
-  server: string;
-  detail: GroupRoom;
-  me: string | null;
-  onDone: () => Promise<void>;
-  onError: (error: string) => void;
-}) {
-  const members = useQuery({ queryKey: ['group-members', server], queryFn: () => api.groupMembers(server), retry: false });
-  const bans = useQuery({
-    queryKey: ['group-bans', server],
-    queryFn: () => api.groupBans(server),
-    enabled: detail.perms.ban,
-    retry: false
-  });
+/**
+ * The right of the room, for a member: the roster (every member, their roles, who owns the
+ * group), and, by power, the look, the roles, the bans, the owners. Every call here lands
+ * through the socket, for this page and every other one with the room open.
+ */
+function Moderation({ server, room, me, onError }: { server: string; room: GroupRoom; me: string | null; onError: (error: string) => void }) {
   const navigate = useNavigate();
-  const [about, setAbout] = useState(detail.about);
+  const members = room.roster ?? [];
+  const bans = room.bans ?? [];
+  // the about box: what is typed, over the line it started from. the line changing under it
+  // (saved here, or by another owner, which the socket brings) starts the box over from the new one
+  const [aboutDraft, setAboutDraft] = useState({ base: room.about, text: room.about });
+  const about = aboutDraft.base === room.about ? aboutDraft.text : room.about;
+  const setAbout = (text: string) => setAboutDraft({ base: room.about, text });
   const [roleName, setRoleName] = useState('');
   const [roleColor, setRoleColor] = useState<string>(COLORS[0]);
   const [rolePerms, setRolePerms] = useState<RolePerms>(NO_PERMS);
@@ -522,17 +517,12 @@ function Moderation({
   const [banName, setBanName] = useState('');
   const [banReason, setBanReason] = useState('');
   const [sure, setSure] = useState(false);
-  const owners = members.data?.filter((member) => member.owner).length ?? 0;
-
-  useEffect(() => {
-    setAbout(detail.about);
-  }, [detail.about]);
+  const owners = members.filter((member) => member.owner).length;
 
   async function run(work: () => Promise<unknown>) {
     onError('');
     try {
       await work();
-      await onDone();
     } catch (err) {
       onError(messageOf(err));
     }
@@ -546,7 +536,7 @@ function Moderation({
   }
 
   function editRole(id: number) {
-    const role = detail.roles.find((item) => item.id === id);
+    const role = room.roles.find((item) => item.id === id);
     if (!role) return;
     setEditing(id);
     setRoleName(role.name);
@@ -568,7 +558,7 @@ function Moderation({
 
   return (
     <aside id="group-mod" className="flex max-h-[70vh] flex-col gap-6 overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-4 text-sm">
-      {detail.perms.appearance && (
+      {room.perms.appearance && (
         <section>
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">look</h3>
           <div className="flex flex-wrap gap-2">
@@ -598,12 +588,12 @@ function Moderation({
                 }}
               />
             </label>
-            {detail.icon !== null && (
+            {room.icon !== null && (
               <button type="button" className="text-textTertiary" onClick={() => void run(() => api.deleteGroupIcon(server))}>
                 remove picture
               </button>
             )}
-            {detail.banner !== null && (
+            {room.banner !== null && (
               <button type="button" className="text-textTertiary" onClick={() => void run(() => api.deleteGroupBanner(server))}>
                 remove banner
               </button>
@@ -627,10 +617,10 @@ function Moderation({
       <section>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-textTertiary">members</h3>
-          {detail.perms.appearance && detail.member_order !== undefined && (
+          {room.perms.appearance && room.member_order !== undefined && (
             <span className="flex flex-wrap gap-1">
               {ORDERS.map((order) => {
-                const on = (detail.member_order === 'newest' || detail.member_order === 'oldest' ? detail.member_order : 'name') === order.id;
+                const on = (room.member_order === 'newest' || room.member_order === 'oldest' ? room.member_order : 'name') === order.id;
                 return (
                   <button
                     key={order.id}
@@ -647,69 +637,79 @@ function Moderation({
             </span>
           )}
         </div>
-        {members.error && <p className="text-decrease">{messageOf(members.error)}</p>}
+        {room.roster === null && <p className="text-textTertiary">the roster is for members.</p>}
         <ul id="group-members" className="flex flex-col gap-2">
-          {members.data?.map((member) => (
-            <li key={member.name} className="flex items-start gap-2 border border-primaryStroke px-2 py-1.5">
+          {members.map((member) => (
+            <li
+              key={member.name}
+              data-member={member.name}
+              data-owner={member.owner || undefined}
+              className="flex items-start gap-2 border border-primaryStroke px-2 py-1.5"
+            >
               <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8" />
               <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold">{member.name}</span>
-                {member.owner && <span className="text-xs uppercase text-primaryBlue">owner</span>}
-                {member.roles.map((role) => (
-                  <span key={role.id} className="text-xs" style={{ color: role.color }}>
-                    {role.name}
-                    {detail.perms.roles && (
-                      <button type="button" className="ml-1 text-textTertiary" aria-label={`take ${role.name} from ${member.name}`} onClick={() => void run(() => api.takeRole(server, role.id, member.name))}>
-                        ×
-                      </button>
-                    )}
-                  </span>
-                ))}
-              </div>
-              <div className="mt-1 flex flex-wrap gap-2">
-                {detail.perms.roles && detail.roles.some((role) => !member.roles.some((held) => held.id === role.id)) && (
-                  <select
-                    aria-label={`role for ${member.name}`}
-                    defaultValue=""
-                    className="border border-primaryStroke bg-background px-1 py-0.5"
-                    onChange={(e) => {
-                      const id = Number(e.target.value);
-                      e.target.value = '';
-                      if (id) void run(() => api.giveRole(server, id, member.name));
-                    }}
-                  >
-                    <option value="">give a role</option>
-                    {detail.roles
-                      .filter((role) => !member.roles.some((held) => held.id === role.id))
-                      .map((role) => (
-                        <option key={role.id} value={role.id}>
-                          {role.name}
-                        </option>
-                      ))}
-                  </select>
-                )}
-                {detail.perms.kick && member.name !== me && (!member.owner || (detail.owner && owners > 1)) && (
-                  <button type="button" className="text-textTertiary" onClick={() => void run(() => api.kickMember(server, member.name))}>
-                    kick
-                  </button>
-                )}
-                {detail.perms.ban && member.name !== me && (!member.owner || (detail.owner && owners > 1)) && (
-                  <button type="button" className="text-decrease" onClick={() => void run(() => api.banMember(server, member.name, ''))}>
-                    ban
-                  </button>
-                )}
-                {detail.owner && member.owner && member.name !== me && owners > 1 && (
-                  <button type="button" className="text-textTertiary" onClick={() => void run(() => api.revokeOwner(server, member.name))}>
-                    remove owner
-                  </button>
-                )}
-              </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold">{member.name}</span>
+                  {member.owner && <span className="text-xs uppercase text-primaryBlue">owner</span>}
+                  {member.roles.map((role) => (
+                    <span key={role.id} className="text-xs" style={{ color: role.color }}>
+                      {role.name}
+                      {room.perms.roles && (
+                        <button
+                          type="button"
+                          className="ml-1 text-textTertiary"
+                          aria-label={`take ${role.name} from ${member.name}`}
+                          onClick={() => void run(() => api.takeRole(server, role.id, member.name))}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {room.perms.roles && room.roles.some((role) => !member.roles.some((held) => held.id === role.id)) && (
+                    <select
+                      aria-label={`role for ${member.name}`}
+                      defaultValue=""
+                      className="border border-primaryStroke bg-background px-1 py-0.5"
+                      onChange={(e) => {
+                        const id = Number(e.target.value);
+                        e.target.value = '';
+                        if (id) void run(() => api.giveRole(server, id, member.name));
+                      }}
+                    >
+                      <option value="">give a role</option>
+                      {room.roles
+                        .filter((role) => !member.roles.some((held) => held.id === role.id))
+                        .map((role) => (
+                          <option key={role.id} value={role.id}>
+                            {role.name}
+                          </option>
+                        ))}
+                    </select>
+                  )}
+                  {room.perms.kick && member.name !== me && (!member.owner || (room.owner && owners > 1)) && (
+                    <button type="button" className="text-textTertiary" onClick={() => void run(() => api.kickMember(server, member.name))}>
+                      kick
+                    </button>
+                  )}
+                  {room.perms.ban && member.name !== me && (!member.owner || (room.owner && owners > 1)) && (
+                    <button type="button" className="text-decrease" onClick={() => void run(() => api.banMember(server, member.name, ''))}>
+                      ban
+                    </button>
+                  )}
+                  {room.owner && member.owner && member.name !== me && owners > 1 && (
+                    <button type="button" className="text-textTertiary" onClick={() => void run(() => api.revokeOwner(server, member.name))}>
+                      remove owner
+                    </button>
+                  )}
+                </div>
               </div>
             </li>
           ))}
         </ul>
-        {detail.owner && (
+        {room.owner && (
           <form
             className="mt-3 flex gap-2"
             onSubmit={(e) => {
@@ -722,13 +722,20 @@ function Moderation({
               });
             }}
           >
-            <input id="owner-name" value={ownerName} onChange={(e) => setOwnerName(e.target.value)} placeholder="name an owner" aria-label="name an owner" className={INPUT} />
+            <input
+              id="owner-name"
+              value={ownerName}
+              onChange={(e) => setOwnerName(e.target.value)}
+              placeholder="name an owner"
+              aria-label="name an owner"
+              className={INPUT}
+            />
             <button id="owner-grant" type="submit" className="text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!ownerName.trim()}>
               owner
             </button>
           </form>
         )}
-        {detail.perms.ban && (
+        {room.perms.ban && (
           <form
             className="mt-3 flex flex-col gap-2"
             onSubmit={(e) => {
@@ -743,15 +750,22 @@ function Moderation({
             }}
           >
             <input id="ban-name" value={banName} onChange={(e) => setBanName(e.target.value)} placeholder="ban a name" aria-label="ban a name" className={INPUT} />
-            <input id="ban-reason" value={banReason} onChange={(e) => setBanReason(e.target.value)} placeholder="reason, optional" aria-label="ban reason" className={INPUT} />
+            <input
+              id="ban-reason"
+              value={banReason}
+              onChange={(e) => setBanReason(e.target.value)}
+              placeholder="reason, optional"
+              aria-label="ban reason"
+              className={INPUT}
+            />
             <button id="ban-submit" type="submit" className="self-start text-sm font-semibold text-decrease disabled:opacity-40" disabled={!banName.trim()}>
               ban
             </button>
           </form>
         )}
-        {detail.perms.ban && bans.data && bans.data.length > 0 && (
+        {room.perms.ban && bans.length > 0 && (
           <ul id="group-bans" className="mt-2 flex flex-col gap-1">
-            {bans.data.map((ban) => (
+            {bans.map((ban) => (
               <li key={ban.name} className="flex items-center gap-2">
                 <span className="font-semibold">{ban.name}</span>
                 {ban.reason && <span className="truncate text-textTertiary">{ban.reason}</span>}
@@ -764,78 +778,98 @@ function Moderation({
         )}
       </section>
 
-      {detail.perms.roles && (
+      {room.perms.roles && (
         <section>
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">
-            roles <span className="font-normal normal-case tracking-normal text-textTertiary">{detail.roles.length} of {ROLE_CAP}</span>
+            roles{' '}
+            <span className="font-normal normal-case tracking-normal text-textTertiary">
+              {room.roles.length} of {ROLE_CAP}
+            </span>
           </h3>
           <ul id="group-roles" className="mb-3 flex flex-col gap-1">
-            {detail.roles.map((role) => (
+            {room.roles.map((role) => (
               <li key={role.id} className="flex items-center gap-2">
                 <button type="button" className="font-semibold" style={{ color: role.color }} onClick={() => editRole(role.id)}>
                   {role.name}
                 </button>
-                <span className="truncate text-xs text-textTertiary">{POWERS.filter((power) => role.perms[power.key]).map((power) => power.label).join(', ') || 'no powers'}</span>
+                <span className="truncate text-xs text-textTertiary">
+                  {POWERS.filter((power) => role.perms[power.key])
+                    .map((power) => power.label)
+                    .join(', ') || 'no powers'}
+                </span>
                 <button type="button" className="ml-auto text-textTertiary" onClick={() => void run(() => api.deleteRole(server, role.id))}>
                   delete
                 </button>
               </li>
             ))}
           </ul>
-          {editing === null && detail.roles.length >= ROLE_CAP ? (
+          {editing === null && room.roles.length >= ROLE_CAP ? (
             <p className="text-textTertiary">{ROLE_CAP} roles is the cap.</p>
           ) : (
-          <form id="role-form" onSubmit={(e) => void saveRole(e)} className="flex flex-col gap-2">
-            <input id="role-name" value={roleName} onChange={(e) => setRoleName(e.target.value)} placeholder="role name" maxLength={32} aria-label="role name" className={INPUT} />
-            <div className="flex flex-wrap gap-1">
-              {COLORS.map((swatch) => (
-                <button
-                  key={swatch}
-                  type="button"
-                  aria-label={swatch}
-                  aria-pressed={swatch === roleColor}
-                  onClick={() => setRoleColor(swatch)}
-                  style={{ backgroundColor: swatch }}
-                  className={cn('h-6 w-6 border-2', swatch === roleColor ? 'border-textPrimary' : 'border-transparent')}
-                />
+            <form id="role-form" onSubmit={(e) => void saveRole(e)} className="flex flex-col gap-2">
+              <input
+                id="role-name"
+                value={roleName}
+                onChange={(e) => setRoleName(e.target.value)}
+                placeholder="role name"
+                maxLength={32}
+                aria-label="role name"
+                className={INPUT}
+              />
+              <div className="flex flex-wrap gap-1">
+                {COLORS.map((swatch) => (
+                  <button
+                    key={swatch}
+                    type="button"
+                    aria-label={swatch}
+                    aria-pressed={swatch === roleColor}
+                    onClick={() => setRoleColor(swatch)}
+                    style={{ backgroundColor: swatch }}
+                    className={cn('h-6 w-6 border-2', swatch === roleColor ? 'border-textPrimary' : 'border-transparent')}
+                  />
+                ))}
+              </div>
+              {POWERS.map((power) => (
+                <label key={power.key} className="flex items-center gap-2">
+                  <input
+                    id={`role-perm-${power.key}`}
+                    type="checkbox"
+                    checked={rolePerms[power.key]}
+                    onChange={(e) => setRolePerms({ ...rolePerms, [power.key]: e.target.checked })}
+                  />
+                  {power.label}
+                </label>
               ))}
-            </div>
-            {POWERS.map((power) => (
-              <label key={power.key} className="flex items-center gap-2">
-                <input
-                  id={`role-perm-${power.key}`}
-                  type="checkbox"
-                  checked={rolePerms[power.key]}
-                  onChange={(e) => setRolePerms({ ...rolePerms, [power.key]: e.target.checked })}
-                />
-                {power.label}
-              </label>
-            ))}
-            <div className="flex gap-2">
-              <button id="role-save" type="submit" className="text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!roleName.trim() || (editing === null && detail.roles.length >= ROLE_CAP)}>
-                {editing === null ? 'add role' : 'save role'}
-              </button>
-              {editing !== null && (
+              <div className="flex gap-2">
                 <button
-                  type="button"
-                  className="text-textTertiary"
-                  onClick={() => {
-                    setEditing(null);
-                    setRoleName('');
-                    setRolePerms(NO_PERMS);
-                  }}
+                  id="role-save"
+                  type="submit"
+                  className="text-sm font-semibold text-primaryBlue disabled:opacity-40"
+                  disabled={!roleName.trim() || (editing === null && room.roles.length >= ROLE_CAP)}
                 >
-                  cancel
+                  {editing === null ? 'add role' : 'save role'}
                 </button>
-              )}
-            </div>
-          </form>
+                {editing !== null && (
+                  <button
+                    type="button"
+                    className="text-textTertiary"
+                    onClick={() => {
+                      setEditing(null);
+                      setRoleName('');
+                      setRolePerms(NO_PERMS);
+                    }}
+                  >
+                    cancel
+                  </button>
+                )}
+              </div>
+            </form>
           )}
           <p className="mt-2 text-xs text-textTertiary">only an owner can name another owner.</p>
         </section>
       )}
 
-      {detail.owner && (
+      {room.owner && (
         <button type="button" className="self-start text-sm text-decrease" onClick={() => setSure(true)}>
           delete group
         </button>
@@ -858,15 +892,4 @@ function Moderation({
       )}
     </aside>
   );
-}
-
-/** The group, on `general`. */
-export function GroupPage() {
-  return <ServerRoom channel="general" titleId="group-title" />;
-}
-
-/** One channel's chat. Reading is open. Talking takes a login that has joined. */
-export function ChannelPage() {
-  const params = useParams<{ channel: string }>();
-  return <ServerRoom channel={cleanName(params.channel)} titleId="channel-title" />;
 }

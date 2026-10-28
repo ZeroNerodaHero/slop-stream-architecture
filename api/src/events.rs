@@ -19,7 +19,9 @@
 //! (the `live:` key, the set, the column), never carried in a fact, so two writers cannot race
 //! a stale word past a fresh one. The pages never write through this socket: the choice is an
 //! http PUT. A socket may also `watch` `*`: every name's `live`, `ended` and `viewers`, the
-//! home page's feed behind its one `GET /api/streams` (home.rs).
+//! home page's feed behind its one `GET /api/streams` (home.rs). And it may `watch`
+//! `group:<name>`: every change to that group (`group` facts from groups.rs, forwarded whole),
+//! plus `live` and `ended` for its members, so a room on screen follows without asking again.
 //!
 //! A `renamed` fact (docs/ids.md) re-keys the sockets of the old name to the new one: they
 //! leave `seen:<old>` at once and enter `seen:<new>`, and they, and the old name's watchers,
@@ -62,6 +64,18 @@ const REPLAY_MS: i64 = 10_000;
 const RECHECK_EVERY: Duration = Duration::from_secs(30);
 /// The `watch` that means every name: the home page's. Not a name (names are letters, digits, `_ -`).
 const EVERYONE: &str = "*";
+/// The `watch` that means one group's room: `group:<name>`. Not a name either (the colon).
+const GROUP_TOPIC: &str = "group:";
+
+/// `group:<name>` → the group, when the rest is a name. None for anything else.
+fn group_topic(watch: &str) -> Option<&str> {
+    watch.strip_prefix(GROUP_TOPIC).filter(|name| valid_name(name))
+}
+
+/// A `watch` that is a topic, not a name: no word to compute or recheck for it.
+fn is_topic(watch: &str) -> bool {
+    watch == EVERYONE || watch.starts_with(GROUP_TOPIC)
+}
 
 type SocketId = u64;
 
@@ -158,10 +172,18 @@ enum Out {
     /// A direct message (docs/dms.md), to the sockets of both names: every device of either sees the same line.
     Dm { id: i64, from: String, to: String, text: String, at: i64 },
     /// `name` read its thread with `peer` up to `id` on some device. To `name`'s sockets: the others drop their count.
+    /// `peer_id` is that account. Absent when an older api wrote the fact.
     #[serde(rename = "dm_read")]
-    DmRead { name: String, peer: String, id: i64 },
+    DmRead {
+        name: String,
+        peer: String,
+        id: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        peer_id: Option<String>,
+    },
     /// A row of the login's inbox (docs/notifications.md), to its own sockets: `name` is who did
-    /// it, as the list draws them; `id` the row, so a replayed fact is the same row.
+    /// it, as the list draws them; `actor` is that account's id (absent when an older api wrote
+    /// the fact); `id` the row, so a replayed fact is the same row.
     Notification {
         id: i64,
         kind: String,
@@ -171,10 +193,22 @@ enum Out {
         at: i64,
         text: String,
         session: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<String>,
     },
     /// `name` saw its inbox up to `id` on some device. To `name`'s sockets: the others drop their count.
     #[serde(rename = "notify_read")]
     NotifyRead { name: String, id: i64 },
+    /// A group changed (docs/groups.md), to the sockets watching `group:<group>`. `what` says
+    /// how; `data` is the change as the api wrote it, spread into the frame as it came
+    /// (`joined` carries `who`, `avatar`, `joined`, `members`; `channel` the channel; and so on).
+    /// This process knows no more about it than that, so a new kind of change is the api's alone.
+    Group {
+        group: String,
+        what: String,
+        #[serde(flatten)]
+        data: serde_json::Map<String, Value>,
+    },
     Error { error: &'static str },
 }
 
@@ -369,6 +403,54 @@ impl Gateway {
         }
     }
 
+    /// A frame to the sockets watching one topic (`group:<name>`), and nobody else: not the
+    /// home pages, a group's change is not a stream's.
+    async fn tell_topic(&self, topic: &str, out: Out) {
+        let s = self.registry.0.lock().await;
+        for id in s.watchers.get(topic).into_iter().flatten() {
+            if let Some(e) = s.by_id.get(id) {
+                let _ = e.tx.send(out.clone());
+            }
+        }
+    }
+
+    /// The groups of `name` that somebody here has the room of open. One query, and only when
+    /// some socket watches some group at all: a quiet gateway asks postgres nothing.
+    async fn watched_groups_of(&self, name: &str) -> Vec<String> {
+        let watched: Vec<String> = {
+            let s = self.registry.0.lock().await;
+            s.watchers.keys().filter_map(|k| group_topic(k)).map(str::to_owned).collect()
+        };
+        if watched.is_empty() {
+            return Vec::new();
+        }
+        let groups: Result<Vec<String>, sqlx::Error> = sqlx::query_scalar(
+            "SELECT m.group_name FROM memberships m JOIN streamers s ON s.id = m.user_id
+             WHERE s.name = $1 AND m.group_name = ANY($2)",
+        )
+        .bind(name)
+        .bind(&watched)
+        .fetch_all(&self.db)
+        .await;
+        match groups {
+            Ok(groups) => groups,
+            Err(e) => {
+                log::warn!("events: cannot read the groups of {name}: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// `name` went live or ended: the rooms of its groups show its face (or stop), so each
+    /// group's watchers hear it as a `group` frame, `what` `live` or `ended`, `who` the name.
+    async fn fan_groups(&self, name: &str, what: &str) {
+        for group in self.watched_groups_of(name).await {
+            let mut data = serde_json::Map::new();
+            data.insert("who".into(), Value::String(name.to_owned()));
+            self.tell_topic(&format!("{GROUP_TOPIC}{group}"), Out::Group { group, what: what.to_owned(), data }).await;
+        }
+    }
+
     // ---- the registry ------------------------------------------------------------------------
 
     async fn insert(&self, id: SocketId, tx: mpsc::UnboundedSender<Out>, name: Option<String>) {
@@ -447,6 +529,8 @@ impl Gateway {
     /// `watch`: from now on the word of `name` as it changes, and its word right now. `*` is
     /// the home page's topic: every name's `live`, `ended` and `viewers` from now on, no word
     /// (there is none for everyone; the list itself is `GET /api/streams`, the home service's).
+    /// `group:<name>` is a room's topic: that group's changes from now on, no word either (the
+    /// room itself is `GET /api/groups/:group`, asked once).
     async fn watch(&self, id: SocketId, name: &str) {
         {
             let mut s = self.registry.0.lock().await;
@@ -456,7 +540,7 @@ impl Gateway {
             }
             s.watchers.entry(name.to_owned()).or_default().insert(id);
         }
-        if name == EVERYONE {
+        if is_topic(name) {
             return;
         }
         let (word, _) = self.word(name, false).await;
@@ -515,10 +599,12 @@ impl Gateway {
                     .unwrap_or_default();
                 self.fan(&name, Out::Live { name: name.clone(), since, card }).await;
                 self.push(&name).await;
+                self.fan_groups(&name, "live").await;
             }
             "ended" => {
                 self.fan(&name, Out::Ended { name: name.clone() }).await;
                 self.push(&name).await;
+                self.fan_groups(&name, "ended").await;
             }
             "viewers" => {
                 if let Some(viewers) = entry.get::<usize>("viewers") {
@@ -541,7 +627,8 @@ impl Gateway {
             // `name` read a thread somewhere: its other devices drop their count
             "dm_read" => {
                 let (Some(peer), Some(id)): (Option<String>, Option<i64>) = (entry.get("peer"), entry.get("id")) else { return };
-                self.tell(&[&name], Out::DmRead { name: name.clone(), peer, id }).await;
+                let peer_id: Option<String> = entry.get("peer_id").filter(|id: &String| !id.is_empty());
+                self.tell(&[&name], Out::DmRead { name: name.clone(), peer, id, peer_id }).await;
             }
             // a notification (docs/notifications.md): `name` is who did it, `to` the logins it reached
             // and their row ids. one frame per login, to that login's own sockets
@@ -553,9 +640,10 @@ impl Gateway {
                 let verified = entry.get::<i64>("verified") == Some(1);
                 let avatar: Option<i64> = entry.get("avatar");
                 let session: Option<i64> = entry.get("session");
+                let actor: Option<String> = entry.get("actor").filter(|id: &String| !id.is_empty());
                 for (login, id) in to {
                     let Some(id) = id.as_i64() else { continue };
-                    let frame = Out::Notification { id, kind: kind.clone(), name: name.clone(), verified, avatar, at, text: text.clone(), session };
+                    let frame = Out::Notification { id, kind: kind.clone(), name: name.clone(), verified, avatar, at, text: text.clone(), session, actor: actor.clone() };
                     self.tell(&[&login], frame).await;
                 }
             }
@@ -563,6 +651,20 @@ impl Gateway {
             "notify_read" => {
                 let Some(id): Option<i64> = entry.get("id") else { return };
                 self.tell(&[&name], Out::NotifyRead { name: name.clone(), id }).await;
+            }
+            // a group changed (docs/groups.md): `name` is the group, `data` the change as json,
+            // forwarded whole to whoever has the room open
+            "group" => {
+                let Some(what): Option<String> = entry.get("what") else { return };
+                let data = entry
+                    .get::<String>("data")
+                    .and_then(|data| serde_json::from_str::<Value>(&data).ok())
+                    .and_then(|data| match data {
+                        Value::Object(map) => Some(map),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                self.tell_topic(&format!("{GROUP_TOPIC}{name}"), Out::Group { group: name.clone(), what, data }).await;
             }
             other => log::debug!("events: unknown entry type {other}"),
         }
@@ -696,7 +798,7 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
                 match serde_json::from_str::<In>(&text) {
                     Ok(In::Watch { name: n }) => {
                         let n = n.trim().to_lowercase();
-                        if n == EVERYONE || valid_name(&n) { g.watch(id, &n).await; }
+                        if n == EVERYONE || valid_name(&n) || group_topic(&n).is_some() { g.watch(id, &n).await; }
                     }
                     Ok(In::Unwatch { name: n }) => g.unwatch(id, &n.trim().to_lowercase()).await,
                     _ => {}
@@ -788,7 +890,7 @@ async fn recheck(g: Gateway) {
         }
         let names: Vec<String> = {
             let s = g.registry.0.lock().await;
-            s.watchers.keys().filter(|n| n.as_str() != EVERYONE).chain(s.own.keys()).cloned().collect::<HashSet<_>>().into_iter().collect()
+            s.watchers.keys().filter(|n| !is_topic(n)).chain(s.own.keys()).cloned().collect::<HashSet<_>>().into_iter().collect()
         };
         for name in names {
             g.push(&name).await;
@@ -819,5 +921,33 @@ mod tests {
         assert_eq!(named(Some("   ")), Ok(None));
         assert_eq!(named(None), Ok(None));
         assert_eq!(named(Some("Dummy-x")), Err("that nick belongs to the fake streams. pick another"));
+    }
+
+    /// A room watches `group:<name>`: a topic like `*`, never a name, never given a word.
+    #[test]
+    fn a_group_topic_is_not_a_name() {
+        assert_eq!(group_topic("group:gaming-0042"), Some("gaming-0042"));
+        assert_eq!(group_topic("group:"), None);
+        assert_eq!(group_topic("group:Has Space"), None);
+        assert_eq!(group_topic("gaming-0042"), None);
+        assert!(is_topic("*"));
+        assert!(is_topic("group:gaming-0042"));
+        assert!(!is_topic("billy"));
+        assert!(!valid_name("group:gaming-0042"));
+    }
+
+    /// The change rides whole: the api's json spread into the frame beside `group` and `what`.
+    #[test]
+    fn a_group_frame_spreads_the_change() {
+        let mut data = serde_json::Map::new();
+        data.insert("who".into(), Value::String("alice".into()));
+        data.insert("members".into(), Value::from(3));
+        let text = serde_json::to_string(&Out::Group { group: "vip-0001".into(), what: "joined".into(), data }).unwrap();
+        let back: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(back["type"], "group");
+        assert_eq!(back["group"], "vip-0001");
+        assert_eq!(back["what"], "joined");
+        assert_eq!(back["who"], "alice");
+        assert_eq!(back["members"], 3);
     }
 }

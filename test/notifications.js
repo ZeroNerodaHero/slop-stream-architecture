@@ -10,8 +10,10 @@
 // it did not show; the tab's inbox GET, held until a switch has saved, leaves that switch off
 // and the note still saying saved; a failed inbox GET stays unloaded, a follow pushed after
 // it is not the whole list, and opening the bell asks again and lists the older unread rows
-// before anything is marked read; a line that lands while its chat is on screen is read at
-// once, and the other tab's bell does not count it.
+// before anything is marked read; a follow that lands while the first inbox GET is in flight
+// is in the list when that GET lands; a line that lands while its chat is on screen is read at
+// once, and the other tab's bell does not count it; after the sender renames, the next line
+// replaces that unread dm on the open tab under the new name, and the bell does not go up.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node notifications.js
 const { chromium, request } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
@@ -592,6 +594,104 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     }
   });
 
+  await step('a follow that lands while the first inbox GET is in flight is in the list when that GET lands', async () => {
+    // its own page, closed at the end: `page` stays logged in as fan. pal already follows fan and that
+    // row was clipped by the 40 go-lives, so unfollow and follow again is a new row, and pal is left
+    // following. the follow is sent only after the login's inbox GET has been fetched, and the body
+    // is applied only after that frame has had time to arrive
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p = await ctx.newPage();
+    let release = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    let gets = 0;
+    let holding = false;
+    let fetched = 0;
+    let needFollow = false;
+    try {
+      await p.route(/\/api\/notifications$/, async (route) => {
+        if (route.request().method() !== 'GET') {
+          await route.continue();
+          return;
+        }
+        gets += 1;
+        if (holding) {
+          await route.continue();
+          return;
+        }
+        holding = true;
+        const response = await route.fetch();
+        fetched = response.status();
+        await gate;
+        await route.fulfill({ response });
+      });
+      await login(p, FAN);
+      const untilFetched = Date.now() + 10000;
+      while (!fetched) {
+        if (Date.now() > untilFetched) throw new Error('login sent no inbox GET');
+        await sleep(50);
+      }
+      expect(fetched === 200, `the held inbox GET got ${fetched}`);
+      await p.waitForSelector('#my-presence[data-presence="online"]', { timeout: 10000 });
+      const prior = new Set((await inbox(fan)).items.map((n) => n.id));
+      const off = await pal.post(`/api/streamers/${FAN}/unfollow`);
+      expect(off.status() === 204, `unfollow got ${off.status()}`);
+      needFollow = true;
+      const follow = await pal.post(`/api/streamers/${FAN}/follow`);
+      expect(follow.status() === 204, `pal following fan got ${follow.status()}`);
+      needFollow = false;
+      let row = null;
+      const untilRow = Date.now() + 10000;
+      while (!row) {
+        if (Date.now() > untilRow) throw new Error(`pal's follow wrote no new row: ${JSON.stringify((await inbox(fan)).items.filter((n) => n.kind === 'follow'))}`);
+        const { items } = await inbox(fan);
+        row = items.find((n) => n.kind === 'follow' && n.name === PAL && !n.read && !prior.has(n.id));
+        if (!row) await sleep(50);
+      }
+      // long enough for the frame to arrive while the list is still unloaded. a frame that landed
+      // after the body was applied would show up either way
+      await sleep(1000);
+      const during = await inbox(fan);
+      const still = during.items.find((n) => n.id === row.id);
+      expect(still && still.read === false, `the follow was marked read while the list was loading: ${JSON.stringify(still)}`);
+      expect(!(await p.$('#notifications-unread')), 'the bell counted a list that was still loading');
+      expect(gets === 1, `inbox GETs while the first was held: ${gets}`);
+      release();
+      const untilBell = Date.now() + 10000;
+      while (!(await p.$('#notifications-unread'))) {
+        if (Date.now() > untilBell) break;
+        await sleep(50);
+      }
+      const getsBeforeOpen = gets;
+      expect(getsBeforeOpen === 1, `inbox GETs before the list was opened: ${gets}`);
+      await p.click('#notifications');
+      await p.waitForSelector('#notifications-panel[open]', { timeout: 10000 });
+      let listed = false;
+      let lastText = '';
+      const untilShown = Date.now() + 10000;
+      while (Date.now() < untilShown) {
+        const el = await p.$(`#notification-${row.id}[data-kind="follow"]`);
+        if (el) {
+          lastText = (await el.textContent()) || '';
+          if (lastText.includes(PAL) && lastText.includes('followed you')) {
+            listed = true;
+            break;
+          }
+        }
+        await sleep(50);
+      }
+      expect(listed, `the panel does not list follow ${row.id} from ${PAL}: ${JSON.stringify(lastText)}`);
+      expect(gets === getsBeforeOpen, `opening the list sent another inbox GET (${gets})`);
+      return `follow ${row.id} listed`;
+    } finally {
+      release();
+      if (needFollow) await pal.post(`/api/streamers/${FAN}/follow`);
+      await p.close();
+      await ctx.close();
+    }
+  });
+
   await step("a line that arrives while its chat is on screen is read, and the other tab's bell does not count it", async () => {
     // its own pages, closed at the end: `page` stays logged in as fan. the inbox is whatever the
     // steps above left (not empty). a read dm row left here is the point; nothing else is marked read
@@ -669,6 +769,79 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       return `line ${sent.id} read while the chat was open`;
     } finally {
       await other.close();
+      await p.close();
+      await ctx.close();
+    }
+  });
+
+  await step('after a friend renames, the next line stays one unread dm under the new name and the bell does not go up', async () => {
+    // its own page, closed at the end: `page` stays logged in as fan. the inbox already holds the
+    // rows the steps above left, so the bell is not 1. one unread dm from pal is loaded with it.
+    // pal renames once (a name changes only every 30 days) and writes again. the old line goes.
+    const firstText = 'before rename';
+    const secondText = 'after rename';
+    const renamed = 'px' + RUN;
+    const first = await body(await pal.post(`/api/dm/${FAN}`, { data: { text: firstText } }));
+    expect(first && first.id, `pal's line: ${JSON.stringify(first)}`);
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p = await ctx.newPage();
+    const bell = async () => {
+      const el = await p.$('#notifications-unread');
+      return el ? (await el.textContent()) || '' : '';
+    };
+    try {
+      await login(p, FAN);
+      const loaded = await inbox(fan);
+      const unreadDm = loaded.items.filter((n) => n.kind === 'dm' && !n.read);
+      expect(unreadDm.length === 1 && unreadDm[0].name === PAL && unreadDm[0].text === firstText, `the loaded unread dm: ${JSON.stringify(unreadDm)}`);
+      const unread = loaded.items.filter((n) => !n.read).length;
+      const want = String(unread);
+      await p.waitForFunction((n) => document.querySelector('#notifications-unread')?.textContent === n, want, { timeout: 10000 });
+      // the socket is who delivers the next frame onto this loaded list
+      await p.waitForSelector('#my-presence[data-presence="online"]', { timeout: 10000 });
+      const bellBefore = await bell();
+      expect(bellBefore === want, `bell before the rename: ${JSON.stringify(bellBefore)} (want ${JSON.stringify(want)})`);
+      const nameRes = await pal.post('/api/name', { data: { name: renamed, password: PW } });
+      const nameBody = await body(nameRes);
+      expect(nameRes.status() === 200 && nameBody && nameBody.name === renamed, `rename got ${nameRes.status()} ${JSON.stringify(nameBody)}`);
+      const again = await body(await pal.post(`/api/dm/${FAN}`, { data: { text: secondText } }));
+      expect(again && again.id && again.id !== first.id, `pal's line after the rename: ${JSON.stringify(again)}`);
+      const untilBell = Date.now() + 3000;
+      let bellAfter = await bell();
+      while (Date.now() < untilBell) {
+        bellAfter = await bell();
+        if (bellAfter !== bellBefore) break;
+        await sleep(50);
+      }
+      expect(bellAfter === bellBefore, `the bell went from ${JSON.stringify(bellBefore)} to ${JSON.stringify(bellAfter)}`);
+      const after = await inbox(fan);
+      const apiUnreadDm = after.items.filter((n) => n.kind === 'dm' && !n.read);
+      expect(
+        apiUnreadDm.length === 1 && apiUnreadDm[0].name === renamed && apiUnreadDm[0].text === secondText,
+        `unread dms on the api: ${JSON.stringify(apiUnreadDm)}`
+      );
+      expect(!after.items.some((n) => n.text === firstText), `the old line is still in the inbox: ${JSON.stringify(after.items.filter((n) => n.kind === 'dm'))}`);
+      await p.click('#notifications');
+      await p.waitForSelector('#notifications-panel[open]', { timeout: 10000 });
+      let shown = [];
+      const untilRows = Date.now() + 5000;
+      while (Date.now() < untilRows) {
+        shown = await p.$$eval('#notifications-list [data-kind="dm"]', (els) => els.map((e) => ({ fresh: e.hasAttribute('data-fresh'), text: e.textContent || '' })));
+        const fresh = shown.filter((r) => r.fresh);
+        const one = fresh.length === 1 && fresh[0].text.includes(renamed) && fresh[0].text.includes(secondText);
+        const gone = !shown.some((r) => r.text.includes(firstText) || r.text.includes(PAL));
+        if (one && gone) break;
+        await sleep(50);
+      }
+      const fresh = shown.filter((r) => r.fresh);
+      expect(
+        fresh.length === 1 && fresh[0].text.includes(renamed) && fresh[0].text.includes(secondText) && !fresh[0].text.includes(firstText),
+        `unread dm rows: ${JSON.stringify(shown)}`
+      );
+      expect(!shown.some((r) => r.text.includes(firstText)), `the old line is still on screen: ${JSON.stringify(shown)}`);
+      expect(shown.every((r) => !r.text.includes(PAL)), `a dm row still shows ${PAL}: ${JSON.stringify(shown)}`);
+      return `bell stayed ${bellBefore}; ${renamed} once`;
+    } finally {
       await p.close();
       await ctx.close();
     }

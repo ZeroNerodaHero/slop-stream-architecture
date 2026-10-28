@@ -16,7 +16,7 @@ flowchart LR
 | where | the watch page, go live, the corner player | `/groups/<name>`, and each channel under it | the window beside the sidebar, on every page |
 | who may read | anyone | anyone, including the history | the two of them |
 | who may write | anyone: a login, or a nick | a login that has joined the group | a login, and only a friend (each follows the other) |
-| how a line goes out | a websocket for that room | the same websocket, a different room | `POST`, then the events socket tells both sides |
+| how a line goes out | a websocket for that room | one websocket for the whole server, the line naming its channel | `POST`, then the events socket tells both sides |
 | kept | the last 500 in redis; older ones in postgres only with `CHAT_PERSIST` | the same, its own room | every line, in postgres |
 | what is new | nothing counted | nothing counted; the header says how many sockets are in the room | a count per thread, on the sidebar, and a row under the bell |
 | the deep file | `chat.md` | `groups.md`, and `chat.md` for the socket | `dms.md` |
@@ -33,7 +33,7 @@ a line is 1 to 500 characters after cleaning, 5 at once and then 1 a second, 8 s
 
 ## a group's channel
 
-built. a group other than `bot` is a server (`groups.md`). it starts with one channel, `general`. a member can add more, 20 at most, and `general` cannot be deleted. each channel is its own room of the stream chat: the same panel, the same redis key shape, the same limits, the same badges. the room is `server/channel`, the socket `wss://<host>/chat/<server>/<channel>`.
+built. a group other than `bot` is a server (`groups.md`). it starts with one channel, `general`. a member can add more, 20 at most, and `general` cannot be deleted. each channel is its own room of the stream chat: the same panel, the same redis key shape, the same limits, the same badges. the room is `server/channel`; a single channel's socket is `wss://<host>/chat/<server>/<channel>`, and the room page opens `wss://<host>/chat/<server>/*`, every channel of the server on one socket, each line tagged with its channel (`chat.md`). the page loads the room and the last 100 lines of every channel once, from the api, and then follows the events socket; changing channels asks nothing of anyone.
 
 reading is open. a guest, and a login that has not joined, sees the lines and the history. a line is accepted only from a login that has joined that server; anyone else hears `join the server first` and the line is not kept. a channel that is not there says `no such channel` and the panel stops. the words `before`, `search`, `by` and `around` are not channel names, because those are the history routes.
 

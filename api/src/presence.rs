@@ -215,20 +215,22 @@ pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str
 }
 
 /// A login read a thread up to a line, on one device: its other devices drop their count.
-pub(crate) async fn publish_dm_read<C: AsyncCommands>(r: &mut C, reader: &str, peer: &str, id: i64) {
-    publish(r, &[("type", "dm_read".into()), ("name", reader.into()), ("peer", peer.into()), ("id", id.to_string())]).await;
+/// `peer_id` is the account they read, so a rename still matches the inbox row.
+pub(crate) async fn publish_dm_read<C: AsyncCommands>(r: &mut C, reader: &str, peer: &str, peer_id: &str, id: i64) {
+    publish(r, &[("type", "dm_read".into()), ("name", reader.into()), ("peer", peer.into()), ("peer_id", peer_id.into()), ("id", id.to_string())]).await;
 }
 
 /// A notification (docs/notifications.md), its rows written: `name` is who did it (the
-/// actor, with the ✓ and the picture the row is drawn with), `to` a json object of login
-/// name → that login's row id. One fact for a go-live with a hundred followers; the gateway
-/// pushes one frame per name in `to`, to that name's own sockets. The words of a direct
-/// message ride in it like a `dm`'s do.
+/// actor, with the ✓ and the picture the row is drawn with), `actor` that account's id,
+/// `to` a json object of login name → that login's row id. One fact for a go-live with a
+/// hundred followers; the gateway pushes one frame per name in `to`, to that name's own
+/// sockets. The words of a direct message ride in it like a `dm`'s do.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn publish_notify<C: AsyncCommands>(
     r: &mut C,
     kind: &str,
     actor: &str,
+    actor_id: &str,
     verified: bool,
     avatar: Option<i64>,
     to: &serde_json::Value,
@@ -239,6 +241,7 @@ pub(crate) async fn publish_notify<C: AsyncCommands>(
     let mut fields = vec![
         ("type", "notify".to_owned()),
         ("name", actor.to_owned()),
+        ("actor", actor_id.to_owned()),
         ("kind", kind.to_owned()),
         ("to", to.to_string()),
         ("at", at_ms.to_string()),
@@ -257,6 +260,14 @@ pub(crate) async fn publish_notify<C: AsyncCommands>(
 /// A login saw its notifications up to a row, on one device: its other devices drop their count.
 pub(crate) async fn publish_notify_read<C: AsyncCommands>(r: &mut C, reader: &str, id: i64) {
     publish(r, &[("type", "notify_read".into()), ("name", reader.into()), ("id", id.to_string())]).await;
+}
+
+/// A group changed (docs/groups.md): `name` is the group, `what` says how (`joined`, `left`,
+/// `channel`, `role`, `about`, `deleted`, …) and `data` is the change as json, carried whole so
+/// the gateway forwards it without knowing its shape. To the sockets watching `group:<name>`:
+/// a room on screen follows every change without asking the api again.
+pub(crate) async fn publish_group<C: AsyncCommands>(r: &mut C, group: &str, what: &str, data: &serde_json::Value) {
+    publish(r, &[("type", "group".into()), ("name", group.into()), ("what", what.into()), ("data", data.to_string())]).await;
 }
 
 #[derive(Deserialize)]

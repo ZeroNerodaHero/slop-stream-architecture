@@ -1,0 +1,18 @@
+---
+description: Do not use box-shadow anywhere on the site
+alwaysApply: true
+---
+
+# No box shadows
+
+This site does not use `box-shadow`. Not on hover, not on focus, not on a card, a dialog, a button, or a floating panel. A box is a 1px stroke. A hover is a colour or a border change.
+
+Do not add `shadow`, `shadow-*`, `hover:shadow-*`, `drop-shadow`, or a `box-shadow` in CSS. Do not copy `shadow-hard` or `shadow-hard-blue` from older screens. When you touch a component that still has one, take it off.
+
+```tsx
+// ❌ BAD
+<Link className="border border-transparent hover:border-primaryBlue hover:shadow-hard-blue">
+
+// ✅ GOOD
+<Link className="border border-transparent hover:border-primaryBlue">
+```

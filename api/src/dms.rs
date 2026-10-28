@@ -177,7 +177,7 @@ async fn read(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     let other = peer(&s.db, &me, name).await?;
     if mark_read(&s.db, me.id, other.id, body.id).await? {
         let mut r = s.redis.clone();
-        presence::publish_dm_read(&mut r, &me.name, &other.name, body.id).await;
+        presence::publish_dm_read(&mut r, &me.name, &other.name, &other.id.to_string(), body.id).await;
     }
     Ok(StatusCode::NO_CONTENT)
 }

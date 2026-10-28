@@ -12,6 +12,11 @@
 //!
 //! Badges travel on the chat line itself (`groups`: name, badge, colour, as they were when
 //! the line was said), so drawing a room needs no lookup here.
+//!
+//! Every change to a group is also a `group` fact on the `events` stream (presence.rs), which
+//! the gateway pushes to the sockets watching `group:<name>`: a room on screen loads once
+//! (`GET /api/groups/:group` with the roster and the channels, `GET .../messages` with the last
+//! lines of every channel) and then follows the facts, never asking again.
 
 use std::collections::HashMap;
 
@@ -20,13 +25,15 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use redis::streams::StreamRangeReply;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::Me;
-use crate::chat::clean_text;
+use crate::chat::{clean_text, line_from, room_key, Line};
+use crate::presence;
 use crate::{valid_name, ApiError, ApiResult, AppState};
 
 /// The automatic group. Seeded by the schema, joined by nobody, worn by a bot's socket.
@@ -37,8 +44,12 @@ const MAX_ABOUT_CHARS: usize = 200;
 /// Groups one login may make, and be in. Every badge goes on every line, so both are capped.
 const GROUPS_PER_MAKER: i64 = 10;
 const GROUPS_PER_MEMBER: i64 = 8;
-/// Channels on one server, `general` included.
+/// Channels on one server, `general` included. The pages hold the same number, so the add
+/// form goes at the cap; and it bounds what `GET .../messages` answers for one room.
 const CHANNELS_PER_SERVER: i64 = 20;
+/// Lines of each channel in `GET /api/groups/:group/messages`: what a room draws before its
+/// socket says more. The socket fills from the newest of these, so nothing falls between.
+const MESSAGES_PER_CHANNEL: usize = 100;
 /// The channel a group starts with. It is not deleted.
 const GENERAL: &str = "general";
 /// Words the chat history routes already use, so a channel cannot be one of them.
@@ -137,6 +148,18 @@ async fn member_of(db: &PgPool, user: Uuid) -> Result<i64, sqlx::Error> {
 
 fn too_many_groups() -> ApiError {
     ApiError::new(StatusCode::FORBIDDEN, format!("you are in {GROUPS_PER_MEMBER} groups already. leave one first"))
+}
+
+/// How many are in the group now: on every `joined`, `left` and `banned` fact, so a room
+/// never counts on its own.
+pub(crate) async fn member_count(db: &PgPool, group: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT count(*) FROM memberships WHERE group_name = $1").bind(group).fetch_one(db).await
+}
+
+/// One change of a group, to whoever has its room open (docs/groups.md). After the row is
+/// written, never before: a watcher patches what it has, and must not run ahead of the api.
+pub(crate) async fn tell(s: &AppState, group: &str, what: &str, data: Value) {
+    presence::publish_group(&mut s.redis.clone(), group, what, &data).await;
 }
 
 // ---- routes ----------------------------------------------------------------------------
@@ -298,6 +321,18 @@ async fn join(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) 
         .execute(&s.db)
         .await?;
     log::info!("{}: joined {group}", me.name);
+    // the row as the roster draws it, so a room adds it without asking
+    let row: Option<(Option<i64>, i64)> = sqlx::query_as(
+        "SELECT (EXTRACT(EPOCH FROM st.avatar_at))::bigint, (EXTRACT(EPOCH FROM m.joined_at))::bigint
+         FROM memberships m JOIN streamers st ON st.id = m.user_id WHERE m.user_id = $1 AND m.group_name = $2",
+    )
+    .bind(me.id)
+    .bind(&group)
+    .fetch_optional(&s.db)
+    .await?;
+    let (avatar, joined) = row.unwrap_or((None, 0));
+    let members = member_count(&s.db, &group).await?;
+    tell(&s, &group, "joined", json!({ "who": me.name, "avatar": avatar, "joined": joined, "members": members })).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -327,18 +362,20 @@ async fn leave(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me)
         .await?;
     if done.rows_affected() > 0 {
         log::info!("{}: left {group}", me.name);
+        let members = member_count(&s.db, &group).await?;
+        tell(&s, &group, "left", json!({ "who": me.name, "by": "leave", "members": members })).await;
     }
     delete_if_empty(&s, &group).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// A group with nobody in it is gone, pictures included. `bot` stays.
+/// A group with nobody in it is gone, pictures included. `bot` stays. Whoever still has
+/// the room open hears `deleted`.
 pub(crate) async fn delete_if_empty(s: &AppState, group: &str) -> Result<(), sqlx::Error> {
     if group == BOT_GROUP {
         return Ok(());
     }
-    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM memberships WHERE group_name = $1").bind(group).fetch_one(&s.db).await?;
-    if n > 0 {
+    if member_count(&s.db, group).await? > 0 {
         return Ok(());
     }
     let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM groups WHERE name = $1)").bind(group).fetch_one(&s.db).await?;
@@ -349,6 +386,7 @@ pub(crate) async fn delete_if_empty(s: &AppState, group: &str) -> Result<(), sql
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/banner.jpg")).await;
     sqlx::query("DELETE FROM groups WHERE name = $1").bind(group).execute(&s.db).await?;
     log::info!("deleted {group}: nobody left");
+    tell(s, group, "deleted", json!({})).await;
     Ok(())
 }
 
@@ -374,6 +412,7 @@ async fn remove(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/banner.jpg")).await;
     sqlx::query("DELETE FROM groups WHERE name = $1").bind(&group).execute(&s.db).await?;
     log::info!("{}: deleted the group {group}", who.name);
+    tell(&s, &group, "deleted", json!({})).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -416,10 +455,47 @@ pub(crate) async fn member(db: &PgPool, user: Uuid, group: &str) -> Result<bool,
 }
 
 #[derive(Serialize)]
-struct ChannelView {
+pub(crate) struct ChannelView {
     name: String,
     about: String,
+    /// The login may delete it: they made it, or they hold the channels power. Never `general`.
     can_delete: bool,
+    /// Who made it, by the name they have now. Null for `general` (made with the group) and
+    /// for a maker whose account is gone. A room keeps `can_delete` right as the facts come.
+    made_by: Option<String>,
+}
+
+/// The channels of one server, oldest first (`general` first, made with the group), as the
+/// room answers them for `user`. The same rule as the explorer's: `can_delete` is who made the
+/// channel, or anyone with the channels power (an owner, that role, a site admin).
+pub(crate) async fn channels_of(s: &AppState, server: &str, user: Option<Uuid>, admin: bool) -> Result<Vec<ChannelView>, sqlx::Error> {
+    let may_manage = match user {
+        Some(id) => crate::group_mod::allows(s, id, server, crate::group_mod::CHANNELS).await?,
+        None => false,
+    };
+    let rows: Vec<(String, String, Option<Uuid>, Option<String>)> = sqlx::query_as(
+        "SELECT c.name, c.about, c.created_by_id, maker.name FROM channels c
+         LEFT JOIN streamers maker ON maker.id = c.created_by_id
+         WHERE c.server = $1 ORDER BY c.created_at, c.name",
+    )
+    .bind(server)
+    .fetch_all(&s.db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(name, about, made_by_id, made_by)| {
+            let mine = user.is_some() && made_by_id == user;
+            let can_delete = name != GENERAL && (mine || may_manage || admin);
+            // `general` was made with the group: nobody's channel in particular
+            ChannelView { can_delete, made_by: made_by.filter(|_| name != GENERAL), name, about }
+        })
+        .collect())
+}
+
+/// The members of `group` who are streaming right now, by the name they have now.
+pub(crate) async fn live_in(s: &AppState, group: &str) -> Result<Vec<String>, ApiError> {
+    let mut living = live_members(&s.db, &live_names(s).await?).await?;
+    Ok(living.remove(group).unwrap_or_default())
 }
 
 #[derive(Serialize)]
@@ -491,8 +567,9 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let admin = me.as_ref().is_some_and(|a| s.admins.iter().any(|admin| admin.id == a.id));
     let mut living = live_members(&s.db, &live_names(&s).await?).await?;
     // name, badge, color, about, members, mine, public, title, tag, icon, banner,
-    // can add a channel, channel, channel about, can delete
-    let rows: Vec<(String, String, String, String, i64, bool, bool, Option<String>, Option<i32>, Option<i64>, Option<i64>, bool, Option<String>, Option<String>, bool)> = sqlx::query_as(
+    // can add a channel, channel, channel about, can delete, channel maker
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(String, String, String, String, i64, bool, bool, Option<String>, Option<i32>, Option<i64>, Option<i64>, bool, Option<String>, Option<String>, bool, Option<String>)> = sqlx::query_as(
         "SELECT g.name, g.badge, g.color, g.about,
                 (SELECT count(*) FROM memberships m WHERE m.group_name = g.name),
                 EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1),
@@ -515,9 +592,11 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
                         SELECT 1 FROM role_members rm JOIN roles r ON r.id = rm.role_id
                         WHERE r.group_name = g.name AND rm.user_id = $1 AND (r.perms & 4) <> 0
                     )
-                ), false)
+                ), false),
+                cm.name
          FROM groups g
          LEFT JOIN channels c ON c.server = g.name
+         LEFT JOIN streamers cm ON cm.id = c.created_by_id
          WHERE g.name <> $3
            AND (g.public OR EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1))
          ORDER BY g.created_at, g.name, c.created_at NULLS LAST, c.name",
@@ -528,13 +607,14 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     .fetch_all(&s.db)
     .await?;
     let mut servers: Vec<ServerView> = Vec::new();
-    for (name, badge, color, about, members, mine, public, title, tag, icon, banner, can_channels, channel, channel_about, can_delete) in rows {
+    for (name, badge, color, about, members, mine, public, title, tag, icon, banner, can_channels, channel, channel_about, can_delete, made_by) in rows {
         if servers.last().is_none_or(|server| server.name != name) {
             let live = living.remove(&name).unwrap_or_default();
             servers.push(ServerView { name, badge, color, about, members, mine, public, title, tag, icon, banner, can_channels, live, channels: Vec::new() });
         }
         if let Some(name) = channel {
-            servers.last_mut().unwrap().channels.push(ChannelView { name, about: channel_about.unwrap_or_default(), can_delete });
+            let made_by = made_by.filter(|_| name != GENERAL);
+            servers.last_mut().unwrap().channels.push(ChannelView { name, about: channel_about.unwrap_or_default(), can_delete, made_by });
         }
     }
     let (yours, discover): (Vec<ServerView>, Vec<ServerView>) = servers.into_iter().partition(|server| server.mine);
@@ -586,7 +666,8 @@ async fn create_channel(
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     }
     log::info!("{}: added #{channel} to {server}", who.name);
-    Ok((StatusCode::CREATED, Json(json!({ "name": channel, "about": about, "can_delete": channel != GENERAL }))))
+    tell(&s, &server, "channel", json!({ "channel": { "name": channel, "about": about, "made_by": who.name } })).await;
+    Ok((StatusCode::CREATED, Json(json!({ "name": channel, "about": about, "can_delete": channel != GENERAL, "made_by": who.name }))))
 }
 
 /// `DELETE /api/groups/:group/channels/:channel`: who made the channel, who made the server,
@@ -614,7 +695,38 @@ async fn delete_channel(State(s): State<AppState>, Path((group, channel)): Path<
     }
     sqlx::query("DELETE FROM channels WHERE server = $1 AND name = $2").bind(&server).bind(&channel).execute(&s.db).await?;
     log::info!("{}: removed #{channel} from {server}", who.name);
+    tell(&s, &server, "unchannel", json!({ "channel": channel })).await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /api/groups/:group/messages`: the last MESSAGES_PER_CHANNEL lines of every channel,
+/// oldest first, keyed by channel: `{ "general": [line, …], "clips": [...] }`. One answer for
+/// the whole server, so a room draws every channel at once and switching between them asks
+/// nothing. Redis only, like the socket's history: the room's stream holds the last 500 of
+/// each. Anyone may read a server (chat.md). 404 for `bot` and for no such group.
+async fn messages(State(s): State<AppState>, Path(group): Path<String>) -> ApiResult {
+    let server = group_name(&group)?;
+    if server == BOT_GROUP {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "bot is not a server"));
+    }
+    let channels: Vec<String> = sqlx::query_scalar("SELECT name FROM channels WHERE server = $1 ORDER BY created_at, name").bind(&server).fetch_all(&s.db).await?;
+    if channels.is_empty() {
+        // a group without `general` is no group: it was deleted (or never was)
+        return Err(no_such_group());
+    }
+    // every channel's newest page in one round trip
+    let mut pipe = redis::pipe();
+    for channel in &channels {
+        pipe.cmd("XREVRANGE").arg(room_key(&format!("{server}/{channel}"))).arg("+").arg("-").arg("COUNT").arg(MESSAGES_PER_CHANNEL);
+    }
+    let replies: Vec<StreamRangeReply> = pipe.query_async(&mut s.redis.clone()).await?;
+    let mut out = serde_json::Map::new();
+    for (channel, reply) in channels.into_iter().zip(replies) {
+        let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
+        lines.reverse();
+        out.insert(channel, json!(lines));
+    }
+    Ok(Json(Value::Object(out)))
 }
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -626,6 +738,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}/leave", post(leave))
         .route("/api/groups/{group}/channels", post(create_channel))
         .route("/api/groups/{group}/channels/{channel}", delete(delete_channel))
+        .route("/api/groups/{group}/messages", get(messages))
 }
 
 #[cfg(test)]

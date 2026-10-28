@@ -256,7 +256,11 @@ pub(crate) fn routes() -> Router<AppState> {
         .merge(pictures)
 }
 
-/// `GET /api/groups/:group`: the group, its roles, and what the login may do.
+/// `GET /api/groups/:group`: the whole room in one answer. The group, its roles, what the
+/// login may do, its channels, who in it is live, and (for a member or a site admin) the
+/// roster, and (for the ban power) the bans. `roster` and `bans` are null for someone who
+/// may not see them. The page loads this once and then follows the `group` facts on the
+/// events socket (docs/groups.md); nothing here is asked again on a channel change.
 pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
     let group = server(&s.db, &group).await?;
     let user = me.as_ref().map(|a| a.id);
@@ -285,6 +289,11 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, M
     let roles: Vec<(i64, String, String, i32)> =
         sqlx::query_as("SELECT id, name, color, perms FROM roles WHERE group_name = $1 ORDER BY id").bind(&group).fetch_all(&s.db).await?;
     let roles = roles.into_iter().map(|(id, name, color, perms)| json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms) }));
+    let channels = groups::channels_of(&s, &group, user, admin).await?;
+    let live = groups::live_in(&s, &group).await?;
+    // the roster is for members and site admins, the bans for the ban power: null otherwise
+    let roster = if mine || admin { Some(members_of(&s.db, &group, &member_order).await?) } else { None };
+    let bans = if powers & BAN != 0 { Some(bans_of(&s.db, &group).await?) } else { None };
     Ok(Json(json!({
         "name": group,
         "badge": badge,
@@ -293,6 +302,7 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, M
         "members": members,
         "mine": mine,
         "owner": held.owner,
+        "admin": admin,
         "public": public,
         "title": title,
         "tag": tag,
@@ -301,6 +311,10 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, M
         "banner": banner,
         "perms": perms_json(powers),
         "roles": roles.collect::<Vec<_>>(),
+        "channels": channels,
+        "live": live,
+        "roster": roster,
+        "bans": bans,
     })))
 }
 
@@ -318,6 +332,7 @@ async fn set_access(State(s): State<AppState>, Path(group): Path<String>, Me(me)
     let group = server(&s.db, &group).await?;
     need(&s, who.id, &group, APPEARANCE).await?;
     sqlx::query("UPDATE groups SET public = $2 WHERE name = $1").bind(&group).bind(body.public).execute(&s.db).await?;
+    groups::tell(&s, &group, "access", json!({ "public": body.public })).await;
     Ok(Json(json!({ "public": body.public })))
 }
 
@@ -329,6 +344,7 @@ async fn set_order(State(s): State<AppState>, Path(group): Path<String>, Me(me):
     need(&s, who.id, &group, APPEARANCE).await?;
     let order = member_order(&body.order)?;
     sqlx::query("UPDATE groups SET member_order = $2 WHERE name = $1").bind(&group).bind(order).execute(&s.db).await?;
+    groups::tell(&s, &group, "order", json!({ "order": order })).await;
     Ok(Json(json!({ "order": order })))
 }
 
@@ -339,6 +355,7 @@ async fn put_about(State(s): State<AppState>, Path(group): Path<String>, Me(me):
     need(&s, who.id, &group, APPEARANCE).await?;
     let about = groups::clean_about(&body.about);
     sqlx::query("UPDATE groups SET about = $2 WHERE name = $1").bind(&group).bind(&about).execute(&s.db).await?;
+    groups::tell(&s, &group, "about", json!({ "about": about })).await;
     Ok(Json(json!({ "about": about })))
 }
 
@@ -388,7 +405,9 @@ async fn create_role(
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     };
     log::info!("{}: role {name} in {group}", who.name);
-    Ok((StatusCode::CREATED, Json(json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms) }))))
+    let role = json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms) });
+    groups::tell(&s, &group, "role", json!({ "role": role })).await;
+    Ok((StatusCode::CREATED, Json(role)))
 }
 
 async fn update_role(
@@ -424,7 +443,9 @@ async fn update_role(
     if done.rows_affected() == 0 {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such role"));
     }
-    Ok(Json(json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms) })))
+    let role = json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms) });
+    groups::tell(&s, &group, "role", json!({ "role": role })).await;
+    Ok(Json(role))
 }
 
 async fn delete_role(State(s): State<AppState>, Path((group, id)): Path<(String, i64)>, Me(me): Me) -> Result<StatusCode, ApiError> {
@@ -436,6 +457,7 @@ async fn delete_role(State(s): State<AppState>, Path((group, id)): Path<(String,
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such role"));
     }
     log::info!("{}: removed a role from {group}", who.name);
+    groups::tell(&s, &group, "unrole", json!({ "id": id })).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -451,11 +473,14 @@ async fn give_role(
     need(&s, who.id, &group, ROLES).await?;
     let name = body.name.trim().to_lowercase();
     let (user, _) = member_id(&s.db, &group, &name).await?;
-    let role: Option<i64> = sqlx::query_scalar("SELECT id FROM roles WHERE id = $1 AND group_name = $2").bind(id).bind(&group).fetch_optional(&s.db).await?;
-    if role.is_none() {
+    let role: Option<(String, String)> = sqlx::query_as("SELECT name, color FROM roles WHERE id = $1 AND group_name = $2").bind(id).bind(&group).fetch_optional(&s.db).await?;
+    let Some((role_name, color)) = role else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such role"));
+    };
+    let given = sqlx::query("INSERT INTO role_members (role_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING").bind(id).bind(user).execute(&s.db).await?;
+    if given.rows_affected() > 0 {
+        groups::tell(&s, &group, "held", json!({ "who": name, "role": { "id": id, "name": role_name, "color": color } })).await;
     }
-    sqlx::query("INSERT INTO role_members (role_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING").bind(id).bind(user).execute(&s.db).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -465,7 +490,10 @@ async fn take_role(State(s): State<AppState>, Path((group, id, name)): Path<(Str
     need(&s, who.id, &group, ROLES).await?;
     let name = name.trim().to_lowercase();
     let (user, _) = member_id(&s.db, &group, &name).await?;
-    sqlx::query("DELETE FROM role_members WHERE role_id = $1 AND user_id = $2").bind(id).bind(user).execute(&s.db).await?;
+    let taken = sqlx::query("DELETE FROM role_members WHERE role_id = $1 AND user_id = $2").bind(id).bind(user).execute(&s.db).await?;
+    if taken.rows_affected() > 0 {
+        groups::tell(&s, &group, "unheld", json!({ "who": name, "id": id })).await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -482,9 +510,12 @@ async fn grant_owner(
         return Err(ApiError::new(StatusCode::FORBIDDEN, "only an owner can name another owner"));
     }
     let name = body.name.trim().to_lowercase();
-    let (user, _) = member_id(&s.db, &group, &name).await?;
+    let (user, already) = member_id(&s.db, &group, &name).await?;
     sqlx::query("UPDATE memberships SET owner = true WHERE user_id = $1 AND group_name = $2").bind(user).bind(&group).execute(&s.db).await?;
     log::info!("{}: named {name} an owner of {group}", who.name);
+    if !already {
+        groups::tell(&s, &group, "owner", json!({ "who": name, "owner": true })).await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -504,7 +535,45 @@ async fn revoke_owner(State(s): State<AppState>, Path((group, name)): Path<(Stri
     }
     sqlx::query("UPDATE memberships SET owner = false WHERE user_id = $1 AND group_name = $2").bind(user).bind(&group).execute(&s.db).await?;
     log::info!("{}: {name} is no longer an owner of {group}", who.name);
+    groups::tell(&s, &group, "owner", json!({ "who": name, "owner": false })).await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The roster: every member with their picture, when they joined (unix seconds, so a room
+/// keeps the order right as people come and go), whether they own the group, and the roles
+/// they hold. Owners first, then `order` (`name`, `newest`, `oldest`).
+async fn members_of(db: &sqlx::PgPool, group: &str, order: &str) -> Result<Vec<Value>, sqlx::Error> {
+    let rows: Vec<(String, bool, Option<i64>, Option<i64>)> = sqlx::query_as(
+        "SELECT s.name, m.owner, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, (EXTRACT(EPOCH FROM m.joined_at))::bigint
+         FROM memberships m JOIN streamers s ON s.id = m.user_id
+         WHERE m.group_name = $1
+         ORDER BY m.owner DESC,
+                  CASE WHEN $2 = 'newest' THEN m.joined_at END DESC NULLS LAST,
+                  CASE WHEN $2 = 'oldest' THEN m.joined_at END ASC NULLS LAST,
+                  s.name",
+    )
+    .bind(group)
+    .bind(order)
+    .fetch_all(db)
+    .await?;
+    let roles: Vec<(String, i64, String, String)> = sqlx::query_as(
+        "SELECT s.name, r.id, r.name, r.color FROM role_members rm
+         JOIN roles r ON r.id = rm.role_id
+         JOIN streamers s ON s.id = rm.user_id
+         WHERE r.group_name = $1 ORDER BY r.id",
+    )
+    .bind(group)
+    .fetch_all(db)
+    .await?;
+    let out = rows.into_iter().map(|(name, owner, avatar, joined)| {
+        let mine: Vec<Value> = roles
+            .iter()
+            .filter(|(n, _, _, _)| n == &name)
+            .map(|(_, id, role, color)| json!({ "id": id, "name": role, "color": color }))
+            .collect();
+        json!({ "name": name, "owner": owner, "avatar": avatar, "joined": joined.unwrap_or(0), "roles": mine })
+    });
+    Ok(out.collect())
 }
 
 async fn list_members(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
@@ -514,37 +583,7 @@ async fn list_members(State(s): State<AppState>, Path(group): Path<String>, Me(m
         return Err(ApiError::new(StatusCode::FORBIDDEN, "join the group first"));
     }
     let order: String = sqlx::query_scalar("SELECT member_order FROM groups WHERE name = $1").bind(&group).fetch_one(&s.db).await?;
-    let rows: Vec<(String, bool, Option<i64>)> = sqlx::query_as(
-        "SELECT s.name, m.owner, (EXTRACT(EPOCH FROM s.avatar_at))::bigint
-         FROM memberships m JOIN streamers s ON s.id = m.user_id
-         WHERE m.group_name = $1
-         ORDER BY m.owner DESC,
-                  CASE WHEN $2 = 'newest' THEN m.joined_at END DESC NULLS LAST,
-                  CASE WHEN $2 = 'oldest' THEN m.joined_at END ASC NULLS LAST,
-                  s.name",
-    )
-    .bind(&group)
-    .bind(&order)
-    .fetch_all(&s.db)
-    .await?;
-    let roles: Vec<(String, i64, String, String)> = sqlx::query_as(
-        "SELECT s.name, r.id, r.name, r.color FROM role_members rm
-         JOIN roles r ON r.id = rm.role_id
-         JOIN streamers s ON s.id = rm.user_id
-         WHERE r.group_name = $1 ORDER BY r.id",
-    )
-    .bind(&group)
-    .fetch_all(&s.db)
-    .await?;
-    let out = rows.into_iter().map(|(name, owner, avatar)| {
-        let mine: Vec<Value> = roles
-            .iter()
-            .filter(|(n, _, _, _)| n == &name)
-            .map(|(_, id, role, color)| json!({ "id": id, "name": role, "color": color }))
-            .collect();
-        json!({ "name": name, "owner": owner, "avatar": avatar, "roles": mine })
-    });
-    Ok(Json(Value::Array(out.collect())))
+    Ok(Json(Value::Array(members_of(&s.db, &group, &order).await?)))
 }
 
 pub(crate) async fn drop_roles(db: &sqlx::PgPool, group: &str, user: uuid::Uuid) -> Result<(), sqlx::Error> {
@@ -574,6 +613,8 @@ async fn kick(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, 
     }
     drop_roles(&s.db, &group, user).await?;
     sqlx::query("DELETE FROM memberships WHERE user_id = $1 AND group_name = $2").bind(user).bind(&group).execute(&s.db).await?;
+    let members = groups::member_count(&s.db, &group).await?;
+    groups::tell(&s, &group, "left", json!({ "who": name, "by": "kick", "members": members })).await;
     groups::delete_if_empty(&s, &group).await?;
     log::info!("{}: kicked {name} from {group}", who.name);
     Ok(StatusCode::NO_CONTENT)
@@ -609,23 +650,29 @@ async fn ban(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, b
     .bind(&reason)
     .execute(&s.db)
     .await?;
+    let members = groups::member_count(&s.db, &group).await?;
+    groups::tell(&s, &group, "banned", json!({ "who": name, "reason": reason, "members": members })).await;
     groups::delete_if_empty(&s, &group).await?;
     log::info!("{}: banned {name} from {group}", who.name);
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Who is banned, newest ban first, with the reason given.
+async fn bans_of(db: &sqlx::PgPool, group: &str) -> Result<Vec<Value>, sqlx::Error> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT s.name, b.reason FROM bans b JOIN streamers s ON s.id = b.user_id WHERE b.group_name = $1 ORDER BY b.banned_at DESC",
+    )
+    .bind(group)
+    .fetch_all(db)
+    .await?;
+    Ok(rows.into_iter().map(|(name, reason)| json!({ "name": name, "reason": reason })).collect())
 }
 
 async fn list_bans(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
     need(&s, who.id, &group, BAN).await?;
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT s.name, b.reason FROM bans b JOIN streamers s ON s.id = b.user_id WHERE b.group_name = $1 ORDER BY b.banned_at DESC",
-    )
-    .bind(&group)
-    .fetch_all(&s.db)
-    .await?;
-    let out = rows.into_iter().map(|(name, reason)| json!({ "name": name, "reason": reason }));
-    Ok(Json(Value::Array(out.collect())))
+    Ok(Json(Value::Array(bans_of(&s.db, &group).await?)))
 }
 
 async fn unban(State(s): State<AppState>, Path((group, name)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
@@ -634,7 +681,10 @@ async fn unban(State(s): State<AppState>, Path((group, name)): Path<(String, Str
     need(&s, who.id, &group, BAN).await?;
     let name = name.trim().to_lowercase();
     let user = account(&s.db, &name).await?;
-    sqlx::query("DELETE FROM bans WHERE group_name = $1 AND user_id = $2").bind(&group).bind(user).execute(&s.db).await?;
+    let lifted = sqlx::query("DELETE FROM bans WHERE group_name = $1 AND user_id = $2").bind(&group).bind(user).execute(&s.db).await?;
+    if lifted.rows_affected() > 0 {
+        groups::tell(&s, &group, "unbanned", json!({ "who": name })).await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -721,6 +771,7 @@ async fn put_icon(State(s): State<AppState>, Path(group): Path<String>, Me(me): 
     need(&s, who.id, &group, APPEARANCE).await?;
     let body = jpeg_in(body, MAX_ICON)?;
     let version = write_picture(&s, who, &group, &icon_key(&group), "icon_at", body).await?;
+    groups::tell(&s, &group, "icon", json!({ "icon": version })).await;
     Ok(Json(json!({ "icon": version })))
 }
 
@@ -729,6 +780,7 @@ async fn delete_icon(State(s): State<AppState>, Path(group): Path<String>, Me(me
     let group = server(&s.db, &group).await?;
     need(&s, who.id, &group, APPEARANCE).await?;
     clear_picture(&s, &group, &icon_key(&group), "icon_at").await?;
+    groups::tell(&s, &group, "icon", json!({ "icon": Value::Null })).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -743,6 +795,7 @@ async fn put_banner(State(s): State<AppState>, Path(group): Path<String>, Me(me)
     need(&s, who.id, &group, APPEARANCE).await?;
     let body = jpeg_in(body, MAX_BANNER)?;
     let version = write_picture(&s, who, &group, &banner_key(&group), "banner_at", body).await?;
+    groups::tell(&s, &group, "banner", json!({ "banner": version })).await;
     Ok(Json(json!({ "banner": version })))
 }
 
@@ -751,6 +804,7 @@ async fn delete_banner(State(s): State<AppState>, Path(group): Path<String>, Me(
     let group = server(&s.db, &group).await?;
     need(&s, who.id, &group, APPEARANCE).await?;
     clear_picture(&s, &group, &banner_key(&group), "banner_at").await?;
+    groups::tell(&s, &group, "banner", json!({ "banner": Value::Null })).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

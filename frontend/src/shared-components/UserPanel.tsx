@@ -31,9 +31,9 @@ const NAME_LINE = '-mx-1 block border border-transparent px-1 py-0.5 leading-tig
 /** The small links under the name: a remix icon and a word. */
 const ACTION = 'inline-flex shrink-0 items-center gap-1 text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline';
 const ICON = 14;
-/** Your picture: one box, blue when pointed at or focused. A flex box, so a link lays the picture out the way the button did (no line box under it). */
+/** Your picture: one box, a blue stroke when pointed at or focused. No shadow. A flex box, so a link lays the picture out the way the button did (no line box under it). */
 const YOU =
-  'relative inline-flex shrink-0 border border-transparent transition-[border-color,box-shadow] duration-150 hover:border-primaryBlue hover:shadow-hard-blue focus-visible:border-primaryBlue focus-visible:shadow-hard-blue focus-visible:outline-none';
+  'relative inline-flex shrink-0 border border-transparent transition-colors duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none';
 /** The dot between two actions. */
 function Dot() {
   return (

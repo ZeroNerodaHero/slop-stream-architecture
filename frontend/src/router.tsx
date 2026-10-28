@@ -7,7 +7,7 @@ import { AdminPage } from '@/app/admin/AdminPage';
 import { AuthPage } from '@/app/auth/AuthPage';
 import { HomePage } from '@/app/home/HomePage';
 import { ExplorePage } from '@/app/explore/ExplorePage';
-import { ChannelPage, GroupPage } from '@/app/explore/ServerRoom';
+import { ServerPage } from '@/app/explore/ServerRoom';
 import { LivePage } from '@/app/live/LivePage';
 import { WatchPage } from '@/app/watch/WatchPage';
 import { panelSideAtom } from '@/infra/atoms/settings-atoms';
@@ -58,16 +58,15 @@ function ExploreRedirect() {
   return <Navigate to={to} replace />;
 }
 
-/** Keyed on the server, so moving from one group to another starts that room. */
-function GroupRoute() {
+/**
+ * Keyed on the server, and only the server: moving from one group to another starts that room,
+ * while moving between its channels keeps the page, its room and its one chat socket, and
+ * only changes what is shown (docs/groups.md). One route for both, so a channel is never a
+ * different page.
+ */
+function ServerRoute() {
   const { server } = useParams<{ server: string }>();
-  return <GroupPage key={server} />;
-}
-
-/** Keyed on the channel, so moving from one room to another starts that room's chat. */
-function ChannelRoute() {
-  const { server, channel } = useParams<{ server: string; channel: string }>();
-  return <ChannelPage key={`${server}/${channel}`} />;
+  return <ServerPage key={server} />;
 }
 
 export const router = createBrowserRouter([
@@ -79,8 +78,7 @@ export const router = createBrowserRouter([
     children: [
       { path: '/', element: <HomePage /> },
       { path: '/groups', element: <ExplorePage /> },
-      { path: '/groups/:server', element: <GroupRoute /> },
-      { path: '/groups/:server/:channel', element: <ChannelRoute /> },
+      { path: '/groups/:server/:channel?', element: <ServerRoute /> },
       { path: '/explore', element: <Navigate to="/groups" replace /> },
       { path: '/explore/:server', element: <ExploreRedirect /> },
       { path: '/explore/:server/:channel', element: <ExploreRedirect /> },

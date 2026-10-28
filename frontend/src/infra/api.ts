@@ -1,5 +1,6 @@
 /** The json api behind /api. Same origin, so the dev server and caddy both forward it. */
 
+import type { ChatLine } from '@/infra/atoms/chat-atoms';
 import type { NotificationKind, Presence, PresenceChoice } from '@/infra/frames';
 import { report } from '@/infra/report';
 import type { Socials } from '@/infra/socials';
@@ -79,13 +80,15 @@ export interface DmThread {
 
 /**
  * One row of the login's inbox (docs/notifications.md), as `GET /api/notifications` lists them, newest first:
- * who did it (`name`, as they are now, with the ✓ and the picture), when (`at`, unix ms), whether it has been
- * seen. `text` is a dm's words (clipped); `session` a go-live's, null for the rest.
+ * who did it (`name`, as they are now, with the ✓ and the picture; `actor`, their id, which a rename does not
+ * change), when (`at`, unix ms), whether it has been seen. `text` is a dm's words (clipped); `session` a
+ * go-live's, null for the rest.
  */
 export interface Notification {
   id: number;
   kind: NotificationKind;
   name: string;
+  actor: string;
   verified: boolean;
   avatar: number | null;
   at: number;
@@ -189,7 +192,12 @@ export interface Channel {
   about: string;
   /** The login can delete it: they made it, or they may manage channels. Never `general`. */
   can_delete: boolean;
+  /** Who made it, as they are now. Null for `general`, and absent on an older api. A room keeps `can_delete` right as channels come and go. */
+  made_by?: string | null;
 }
+
+/** Channels on one server, `general` included. Matches `CHANNELS_PER_SERVER` in the api. */
+export const CHANNEL_CAP = 20;
 
 /** A group as a server: the explorer splits these into yours and the rest. */
 export interface Server {
@@ -231,7 +239,10 @@ export interface GroupRole {
   perms: RolePerms;
 }
 
-/** `GET /api/groups/:group`. Absent fields are an older api. */
+/**
+ * `GET /api/groups/:group`: the whole room in one answer, asked once when the page arrives
+ * and then kept current by the `group` frames (docs/groups.md). Absent fields are an older api.
+ */
 export interface GroupRoom {
   name: string;
   badge: string;
@@ -240,6 +251,8 @@ export interface GroupRoom {
   members: number;
   mine: boolean;
   owner: boolean;
+  /** A site admin: every power, whatever the roles say. Absent on an older api. */
+  admin?: boolean;
   /** Absent on an older api. */
   public?: boolean;
   /** The words they typed. Absent, or null, on a group made before the digits. */
@@ -252,6 +265,14 @@ export interface GroupRoom {
   banner: number | null;
   perms: RolePerms;
   roles: GroupRole[];
+  /** The channels, oldest first. Absent on an older api. */
+  channels?: Channel[];
+  /** Members streaming right now. Absent on an older api. */
+  live?: string[];
+  /** The roster, for a member or a site admin. Null for anyone else; absent on an older api. */
+  roster?: GroupMember[] | null;
+  /** Who is banned, for the ban power. Null for anyone else; absent on an older api. */
+  bans?: GroupBan[] | null;
 }
 
 export interface GroupMember {
@@ -259,6 +280,8 @@ export interface GroupMember {
   owner: boolean;
   /** Absent on an older api. */
   avatar?: number | null;
+  /** When they joined, unix seconds, so the room keeps the group's order as people come. Absent on an older api. */
+  joined?: number;
   roles: { id: number; name: string; color: string }[];
 }
 
@@ -445,8 +468,10 @@ export const api = {
   leaveGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/leave`),
   /** An owner, the one who made it, or an admin. Its members are out with it. */
   deleteGroup: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}`),
-  /** The group, its roles, and what this login may do. 404 on an api that has no room yet. */
+  /** The whole room: the group, its roles, what this login may do, the channels, who is live, and the roster and bans it may see. 404 for no such group. */
   group: (name: string) => request<GroupRoom>('GET', `/api/groups/${encodeURIComponent(name)}`),
+  /** The last 100 lines of every channel, oldest first, keyed by channel. What the room draws before its socket says more. */
+  groupMessages: (name: string) => request<Record<string, ChatLine[]>>('GET', `/api/groups/${encodeURIComponent(name)}/messages`),
   /** Servers you are in, then the ones you can find. `bot` is not a server. See docs/groups.md. */
   explore: () => request<Explore>('GET', '/api/explore'),
   /** Someone who may add a channel. 403 until they have joined, or without the power. */
