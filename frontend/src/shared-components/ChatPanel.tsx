@@ -67,9 +67,9 @@ interface ChatPanelProps {
   className?: string;
 }
 
-/** Enter sends, shift+enter is a new line. The enter that picks an ime candidate is neither (safari says it with keyCode 229). */
-function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
-  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+/** Enter sends. The enter that picks an ime candidate is not a send (safari says it with keyCode 229). */
+function onKey(e: KeyboardEvent<HTMLInputElement>) {
+  if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
     e.preventDefault();
     sendChat();
   }
@@ -443,14 +443,14 @@ export function ChatPanel({ name, owner = null, embedded = false, server = false
                 className="hidden"
                 onChange={(e) => void pickPicture(e.target.files?.[0])}
               />
-              <textarea
+              <input
                 id="chat-text"
                 value={draft}
                 onChange={(e) => setChatDraft(e.target.value)}
                 onKeyDown={onKey}
-                rows={1}
                 placeholder={`say something as ${asStreamer ? name : speaker}`}
-                className="block h-10 min-w-0 flex-1 resize-none border border-primaryStroke bg-background px-3 py-2 text-base"
+                autoComplete="off"
+                className="h-10 min-w-0 flex-1 border border-primaryStroke bg-background px-3 text-base"
               />
               <Button id="chat-send" variant="primary" flat className="h-10 shrink-0 px-4 text-base" disabled={!canSend} onClick={sendChat}>
                 send
