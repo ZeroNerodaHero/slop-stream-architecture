@@ -336,9 +336,9 @@ export function WatchPage() {
 
           {canRetry && (
             <div className="my-3">
-              <Button id="retry" onClick={retry}>
+              <button id="retry" type="button" className="text-base font-semibold text-primaryBlue" onClick={retry}>
                 retry
-              </Button>
+              </button>
             </div>
           )}
         </div>

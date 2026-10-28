@@ -6,14 +6,14 @@ three ways a person writes to other people. this file is the map: which chat is 
 flowchart LR
   person[a person]
   person -->|beside a stream| stream["stream chat<br/>/watch/name · chat.md"]
-  person -->|a room they joined| group["a group's channel<br/>/explore/server/channel · groups.md"]
+  person -->|a room they joined| group["a group's channel<br/>/groups/name/channel · groups.md"]
   person -->|one friend| dm["a direct message<br/>the window by the sidebar · dms.md"]
 ```
 
 | | stream | a group's channel | a direct message |
 |---|---|---|---|
 | what it is | the room of one name | one channel inside a group | one thread between two friends |
-| where | the watch page, go live, the corner player | `/explore/<server>`, and each channel under it | the window beside the sidebar, on every page |
+| where | the watch page, go live, the corner player | `/groups/<name>`, and each channel under it | the window beside the sidebar, on every page |
 | who may read | anyone | anyone, including the history | the two of them |
 | who may write | anyone: a login, or a nick | a login that has joined the group | a login, and only a friend (each follows the other) |
 | how a line goes out | a websocket for that room | the same websocket, a different room | `POST`, then the events socket tells both sides |
@@ -37,7 +37,7 @@ built. a group other than `bot` is a server (`groups.md`). it starts with one ch
 
 reading is open. a guest, and a login that has not joined, sees the lines and the history. a line is accepted only from a login that has joined that server; anyone else hears `join the server first` and the line is not kept. a channel that is not there says `no such channel` and the panel stops. the words `before`, `search`, `by` and `around` are not channel names, because those are the history routes.
 
-home's `servers` link (`#explore-link`) opens `/explore`: the servers this login is in, then the rest, someone live first inside each. the server's name opens `/explore/<server>`. that page is the room: members who are live, as tiles of the stream they already have (the first one big, four playing at most, muted, and not counted as viewers), and `general` beside them. other channels are links on that page, each `/explore/<server>/<channel>`. a member adds a channel from the server's card on the list; who made the channel, who made the server, or an admin deletes one, after a `sure?`. on the room and on a channel, a person who has not joined is told they can read it, with `join` (or `log in to join`).
+home shows them under recently offline as squares. a square opens that group; the heading opens `/groups`, which searches yours and the public ones and creates from a modal beside the search (`name`, `badge`, a colour, `about`, public or private). the same name can be made twice: four digits tell them apart, and the address is the name plus those digits. on the group, the owner switches public and private in the header. that page is a server: a banner and a picture, a channel list, and a chat of blocks (the face, the name, then the text) with the channel in the header. members who are live show as tiles of the stream they already have (four playing at most, muted, and not counted as viewers). other channels are `/groups/<name>/<channel>`. adding a channel takes the channels power; who made the channel, or someone with that power, deletes one, after a yes or no. deleting the group asks the same way. the maker is the owner. on the room and on a channel, a person who has not joined is told they can read it, with `join` (or `log in to join`). `/explore` still opens `/groups`.
 
 making the group, joining it, the badge and the colour are the groups api (`POST /api/groups`, `join`, `leave`, `DELETE`). the channels are three more routes on the same groups (`GET /api/explore`, `POST /api/groups/:group/channels`, `DELETE` one). `bot` is a badge, not a server: nobody joins it and it is not on the list.
 

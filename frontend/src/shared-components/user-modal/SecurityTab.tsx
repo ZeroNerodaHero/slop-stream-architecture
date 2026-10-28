@@ -21,7 +21,6 @@ import { cleanName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
 import { BUTTON, Field, INPUT, PasswordInput, Section, Status } from '@/shared-components/user-modal/parts';
-import { cn } from '@/utils/cn';
 
 /**
  * The account. Nobody has to have one; with one the name is yours. Logged out: log in or sign
@@ -160,9 +159,9 @@ function LoggedIn({ me }: { me: string }) {
             <PasswordInput id="sec-new" value={fresh} onChange={setFresh} autoComplete="new-password" minLength={8} />
           </Field>
           <div className="flex flex-wrap items-center gap-3">
-            <Button id="sec-change" type="submit" flat className={BUTTON} disabled={busy || !old || fresh.length < 8}>
+            <button id="sec-change" type="submit" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={busy || !old || fresh.length < 8}>
               change password
-            </Button>
+            </button>
             <Status id="sec-status" text={status} />
           </div>
         </form>
@@ -170,16 +169,16 @@ function LoggedIn({ me }: { me: string }) {
 
       <Section title="sessions" description="this browser, or every browser this account is logged in on.">
         <div className="flex flex-wrap items-center gap-3">
-          <Button
+          <button
             id="sec-logout"
-            flat
-            className={BUTTON}
+            type="button"
+            className="text-base font-semibold text-textTertiary"
             onClick={() => {
               void logout().then(() => identityChanged('login'));
             }}
           >
             log out
-          </Button>
+          </button>
           {sure ? (
             <>
               <Button
@@ -198,9 +197,9 @@ function LoggedIn({ me }: { me: string }) {
               </button>
             </>
           ) : (
-            <Button id="sec-logout-all" flat className={cn(BUTTON, 'text-decrease hover:border-decrease')} onClick={() => setSure(true)}>
+            <button id="sec-logout-all" type="button" className="text-base font-semibold text-decrease" onClick={() => setSure(true)}>
               log out everywhere
-            </Button>
+            </button>
           )}
         </div>
         <p className="text-sm text-textTertiary">everywhere ends every login of this account on every device, this one too.</p>

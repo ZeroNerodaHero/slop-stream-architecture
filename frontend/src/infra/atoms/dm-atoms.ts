@@ -258,13 +258,15 @@ export async function sendDm(name: string, raw: string): Promise<boolean> {
 
 /**
  * The thread with `name` is being looked at: nothing in it is new any more. Tells the api,
- * which tells this login's other devices. Nothing to say when nothing was new, or the thread
- * has not loaded yet (`loadThread` calls back here when it has).
+ * which tells this login's other devices. A thread on screen still tells the api when the
+ * local count is already 0, so a line that just arrived is read on the other devices too.
+ * Nothing to say when there is no thread, no last line, or nothing was new and the thread
+ * is not on screen (`loadThread` calls back here when the lines have arrived).
  */
 export function markRead(name: string) {
   const dm = find(name);
   const last = store.get(dmThreadsAtom)[name]?.lines.at(-1);
-  if (!dm || dm.unread === 0 || !last) return;
+  if (!dm || !last || (dm.unread === 0 && !viewing(name))) return;
   setUnread(name, 0);
   api.readDm(name, last.id).catch(() => undefined);
 }

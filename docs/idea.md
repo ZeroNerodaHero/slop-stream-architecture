@@ -48,7 +48,7 @@ a group is the place where people talk over each other, faces up. shared audio i
 
 the box copies packets, and a room of faces fits on the one machine (`architecture.md`'s call: everyone uploads once, the server copies, it does not decode). picture in picture while you are live is how you watch a friend with your own camera still up. accounts stay optional for watching and for a solo stream under a free name. joining a group still wants a login.
 
-the group's page runs, as far as those streams go. `/explore/<server>` shows whoever in the group is live, one of them big, and `general` beside them, including when every camera is off (`groups.md`). each tile is that person's own stream, the one on `/watch/<name>`, played muted. home still leads with every stream. a face that is up only in the group, and not also their own stream, is not this.
+the group's page runs, as far as those streams go. `/groups/<name>` shows whoever in the group is live, one of them big, and `general` beside them, including when every camera is off (`groups.md`). each tile is that person's own stream, the one on `/watch/<name>`, played muted. home still leads with every stream. a face that is up only in the group, and not also their own stream, is not this.
 
 one publisher per name is what runs today (`spec.md`), and the group page is several of those streams in one room. shared audio is the same path with a mic or a desktop and no camera, and that part is still this file.
 

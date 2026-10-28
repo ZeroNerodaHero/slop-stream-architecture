@@ -27,6 +27,8 @@ export interface ChatLine {
   /** the speaker's picture (its `?v=`, as everywhere in the api), or null for none. only a `verified` or `streamer` line can have one */
   avatar: number | null;
   at: number;
+  /** A picture on the line, the id from `POST /api/chat-images`. Null, or absent on an older chat, when there is none. */
+  image?: string | null;
 }
 
 /** The automatic group a socket that says `bot: true` wears. The hide switch keys on it. */
@@ -56,6 +58,8 @@ export const chatPhaseAtom = atom<ChatPhase>('off');
 export const chatLinesAtom = atom<ChatLine[]>([]);
 export const chatCountAtom = atom(0);
 export const chatDraftAtom = atom('');
+/** A picture waiting to go with the next line, the id `POST /api/chat-images` returned. */
+export const chatImageAtom = atom<string | null>(null);
 export const chatNoticeAtom = atom('');
 /** True while this socket speaks as the streamer. */
 export const chatAsStreamerAtom = atom(false);
@@ -99,7 +103,8 @@ export const nickIsValidAtom = atom((get) => NICK_RE.test(get(nickAtom).trim()))
 export const chatSpeakerAtom = atom((get) => get(meAtom) || get(nickAtom).trim());
 export const chatCanSendAtom = atom((get) => {
   const length = chars(get(chatDraftAtom).trim());
-  return get(chatPhaseAtom) === 'open' && length > 0 && length <= MAX_CHAT_CHARS;
+  const picture = get(chatImageAtom) !== null;
+  return get(chatPhaseAtom) === 'open' && length <= MAX_CHAT_CHARS && (length > 0 || picture);
 });
 
 interface Session {
@@ -128,6 +133,10 @@ export function setNick(raw: string) {
 export function setChatDraft(raw: string) {
   // a little slack so the counter can go red. cut between scalars, never through a surrogate pair
   store.set(chatDraftAtom, [...raw].slice(0, MAX_CHAT_CHARS + 50).join(''));
+}
+
+export function setChatImage(id: string | null) {
+  store.set(chatImageAtom, id);
 }
 
 /**
@@ -165,6 +174,7 @@ export function closeChat(reset = true) {
     store.set(chatCountAtom, 0);
     store.set(chatAsStreamerAtom, false);
     store.set(chatDraftAtom, '');
+    store.set(chatImageAtom, null);
     store.set(chatNoticeAtom, '');
   }
   store.set(chatPhaseAtom, 'off');
@@ -172,16 +182,18 @@ export function closeChat(reset = true) {
 
 export function sendChat() {
   const text = store.get(chatDraftAtom).trim();
-  if (!session?.ws || session.ws.readyState !== WebSocket.OPEN || !text) return;
+  const image = store.get(chatImageAtom);
+  if (!session?.ws || session.ws.readyState !== WebSocket.OPEN || (!text && !image)) return;
   if (chars(text) > MAX_CHAT_CHARS) {
     showNotice('too long');
     return;
   }
-  const say = { type: 'say', text };
+  const say = image ? { type: 'say', text, image } : { type: 'say', text };
   record(`/chat/${session.name}`, 'out', say);
   session.ws.send(JSON.stringify(say));
-  inFlight.push(text);
+  inFlight.push({ text, image });
   store.set(chatDraftAtom, '');
+  store.set(chatImageAtom, null);
 }
 
 /**
@@ -189,7 +201,7 @@ export function sendChat() {
  * frames in order, so a drop (`slow down`, chat busy or down) is of the oldest, and goes back
  * into the box; a line that comes back through the room is off the list.
  */
-const inFlight: string[] = [];
+const inFlight: { text: string; image: string | null }[] = [];
 
 function connect() {
   const current = session;
@@ -228,7 +240,7 @@ function connect() {
       store.set(chatLinesAtom, msg.messages.slice(-KEEP_LINES).map(fromWire));
     }
     else if (msg.type === 'message' && msg.id) {
-      const sent = inFlight.indexOf(msg.text ?? '');
+      const sent = inFlight.findIndex((p) => p.text === (msg.text ?? '') && p.image === (typeof msg.image === 'string' ? msg.image : null));
       if (sent >= 0) inFlight.splice(sent, 1);
       appendLine(fromWire(msg as ChatLine));
     } else if (msg.type === 'count' && typeof msg.count === 'number') store.set(chatCountAtom, msg.count);
@@ -241,7 +253,8 @@ function connect() {
       // the oldest line out was not taken: back into the box, unless something new is being typed
       if (/slow down|chat is (busy|down)/.test(msg.error)) {
         const lost = inFlight.shift();
-        if (lost && !store.get(chatDraftAtom)) store.set(chatDraftAtom, lost);
+        if (lost?.text && !store.get(chatDraftAtom)) store.set(chatDraftAtom, lost.text);
+        if (lost?.image && !store.get(chatImageAtom)) store.set(chatImageAtom, lost.image);
       }
       if ((refused || gone) && session === current) {
         closeChat(false);
@@ -260,7 +273,12 @@ function connect() {
 
 /** A line from a chat server older than the badges has no `groups`, one older than the faces no `avatar`: a line with none of either. */
 function fromWire(line: ChatLine): ChatLine {
-  return { ...line, groups: Array.isArray(line.groups) ? line.groups : [], avatar: typeof line.avatar === 'number' ? line.avatar : null };
+  return {
+    ...line,
+    groups: Array.isArray(line.groups) ? line.groups : [],
+    avatar: typeof line.avatar === 'number' ? line.avatar : null,
+    image: typeof line.image === 'string' && line.image ? line.image : null,
+  };
 }
 
 function resetHistory() {
@@ -429,7 +447,7 @@ function appendLine(line: ChatLine) {
   store.set(chatLinesAtom, next);
 }
 
-function showNotice(text: string, ms = 3000) {
+export function showNotice(text: string, ms = 3000) {
   store.set(chatNoticeAtom, text);
   if (notice) clearTimeout(notice);
   notice = setTimeout(() => store.set(chatNoticeAtom, ''), ms);

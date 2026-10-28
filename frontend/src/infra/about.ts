@@ -283,7 +283,7 @@ export function demoAbout(name: string, pictures: { offline: number | null; thum
     kind: 'links',
     links: [
       { label: 'home', href: '/' },
-      { label: 'explore', href: '/explore' },
+      { label: 'groups', href: '/groups' },
       { label: `/watch/${name}`, href: `/watch/${name}` }
     ]
   });

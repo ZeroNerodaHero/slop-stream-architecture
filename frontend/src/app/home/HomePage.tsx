@@ -1,15 +1,16 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { hoverPreview } from '@/app/home/hover';
 import { stillPictures } from '@/app/home/stills';
-import { api, type LiveStream, type Person, type Recent } from '@/infra/api';
+import { api, messageOf, type LiveStream, type Person, type Recent, type Server } from '@/infra/api';
 import { enterHome, homeErrorAtom, homeNowAtom, homeStreamsAtom, leaveHome } from '@/infra/atoms/home-atoms';
 import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { Avatar } from '@/shared-components/Avatar';
+import { GroupSquare } from '@/shared-components/GroupSquare';
 import { buttonClassName } from '@/shared-components/Button';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -31,12 +32,12 @@ const PEOPLE_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3'
 /** The recently offline: the same rectangle, the live cards' width, so "last live 12 min ago" has room beside the face and the button. */
 const RECENT_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3';
 /**
- * The heading over each part of the page: `active streams` in the top row, `recently offline`,
+ * The words of a part's heading (`Part`): `active streams`, `recently offline`, `groups`,
  * `people`. The words and the count over a fat line as wide as they are, the line's colour saying
- * what the part holds: green under the live, grey under the rest. 33px tall in all, so in the top
+ * what the part holds: green under the live, grey under the rest. 33px tall in all, so in the title
  * row it stays inside go live's 38.
  */
-const SECTION_TITLE = 'flex w-fit items-baseline gap-2 border-b-4 pb-1 text-xl font-semibold leading-tight';
+const SECTION_TITLE = 'flex items-baseline gap-2 border-b-4 pb-1 text-xl font-semibold leading-tight';
 const LIVE_LINE = 'border-increase';
 const OFFLINE_LINE = 'border-textTertiary';
 /** The number beside the words, a step quieter. */
@@ -208,6 +209,27 @@ function Card({
 }
 
 /**
+ * One part of the page under its heading (`#<id>`, `#<id>-title`). The heading is sticky and as
+ * tall as the title row (PageFrame.tsx, 4rem), whose left end it stands in: on home the row is only
+ * the bell and go live, and the page starts at its top, so `active streams` sits in the row at the
+ * top of the page, and once the live cards have scrolled away the recently offline's heading pushes
+ * it out and takes its place, then the groups', then the people's, the way a phone's contact list
+ * does its letters. The room under a part is padding inside it rather than a margin before the
+ * next, so the push comes exactly when the part ends and not a gap later. The same z as the row
+ * and later in the document, so the heading paints over it; the sidebar open (z-40) covers both.
+ */
+function Part({ id, line, heading, children }: { id: string; line: string; heading: ReactNode; children: ReactNode }) {
+  return (
+    <section id={id} aria-labelledby={`${id}-title`}>
+      <h2 id={`${id}-title`} className="sticky top-0 z-30 flex h-16 w-fit items-center">
+        <span className={cn(SECTION_TITLE, line)}>{heading}</span>
+      </h2>
+      <div className="pb-6">{children}</div>
+    </section>
+  );
+}
+
+/**
  * Everyone who is not live, under the streams (docs/follows.md): a rectangle each, the face, the
  * name with its marks, the word beside it, a line of the bio, and the follow button. Online
  * first, the api's order. The fake streams are people too when they are not on.
@@ -218,21 +240,26 @@ function People() {
   if (!people.data || list.length === 0) return null;
   const here = list.filter((p) => p.presence !== 'offline').length;
   return (
-    <section id="people" aria-labelledby="people-title" className="mt-10">
-      <h2 id="people-title" className={cn(SECTION_TITLE, OFFLINE_LINE, 'mb-4')}>
-        people
-        <span id="people-count" className={SECTION_COUNT}>
-          {list.length}
-        </span>
-        {here > 0 && (
-          <>
-            <span aria-hidden>·</span>
-            <span id="people-here" className="text-increase">
-              {here} here
-            </span>
-          </>
-        )}
-      </h2>
+    <Part
+      id="people"
+      line={OFFLINE_LINE}
+      heading={
+        <>
+          people
+          <span id="people-count" className={SECTION_COUNT}>
+            {list.length}
+          </span>
+          {here > 0 && (
+            <>
+              <span aria-hidden>·</span>
+              <span id="people-here" className="text-increase">
+                {here} here
+              </span>
+            </>
+          )}
+        </>
+      }
+    >
       <div className={PEOPLE_GRID}>
         {list.map((p) => (
           <article key={p.name} id={`person-${p.name}`} data-presence={p.presence} className={cn(CARD_LINK, 'flex items-center gap-2 p-3')}>
@@ -241,7 +268,7 @@ function People() {
           </article>
         ))}
       </div>
-    </section>
+    </Part>
   );
 }
 
@@ -262,13 +289,18 @@ function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
   const list: Recent[] = recent.data ?? [];
   if (!recent.data || list.length === 0) return null;
   return (
-    <section id="recent" aria-labelledby="recent-title" className="mt-10">
-      <h2 id="recent-title" className={cn(SECTION_TITLE, OFFLINE_LINE, 'mb-4')}>
-        recently offline
-        <span id="recent-count" className={SECTION_COUNT}>
-          {list.length}
-        </span>
-      </h2>
+    <Part
+      id="recent"
+      line={OFFLINE_LINE}
+      heading={
+        <>
+          recently offline
+          <span id="recent-count" className={SECTION_COUNT}>
+            {list.length}
+          </span>
+        </>
+      }
+    >
       <div className={RECENT_GRID}>
         {list.map((p) => (
           <article key={p.name} id={`recent-${p.name}`} data-presence={p.presence} className={cn(CARD_LINK, 'flex items-center gap-2 p-3')}>
@@ -290,7 +322,42 @@ function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
           </article>
         ))}
       </div>
-    </section>
+    </Part>
+  );
+}
+
+/** Every group but `bot`, under recently offline: yours and the public ones, as squares. The heading opens the list. */
+function Groups() {
+  const query = useQuery({ queryKey: ['explore'], queryFn: api.explore, refetchInterval: PEOPLE_POLL_MS, refetchOnWindowFocus: false });
+  const groups: Server[] = query.data ? [...query.data.yours, ...query.data.discover].filter((group) => group.mine || group.public !== false) : [];
+  if (!query.data && !query.error) return null;
+  return (
+    <Part
+      id="home-groups"
+      line={OFFLINE_LINE}
+      heading={
+        <>
+          <Link id="groups-home" to="/groups" className="hover:text-primaryBlue">
+            groups
+          </Link>
+          {query.data && (
+            <span id="groups-count" className={SECTION_COUNT}>
+              {groups.length}
+            </span>
+          )}
+        </>
+      }
+    >
+      {query.error && <p className="text-textSecondary">{messageOf(query.error)}</p>}
+      {query.data && groups.length === 0 && <p className="text-textSecondary">no groups yet.</p>}
+      {groups.length > 0 && (
+        <ul className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3">
+          {groups.map((group) => (
+            <GroupSquare key={group.name} server={group} id={`home-group-${group.name}`} />
+          ))}
+        </ul>
+      )}
+    </Part>
   );
 }
 
@@ -351,66 +418,66 @@ export function HomePage() {
     []
   );
 
-  // no title: the row is the `active streams` label with its count, the servers link, then go live, and the cards are the page.
-  // search is the sidebar's. the empty state has go live again.
+  // no title: the row is the bell and go live, `active streams` with its count is the first part's
+  // heading standing in it (Part), and the cards are the page. search is the sidebar's. the empty
+  // state has go live again.
   return (
-    <PageFrame
-      wide
-      label={
-        <>
-          <h2 id="live-title" className={cn(SECTION_TITLE, LIVE_LINE)}>
+    <PageFrame wide>
+      <Part
+        id="live"
+        line={LIVE_LINE}
+        heading={
+          <>
             active streams
             {list && (
               <span id="live-count" className={SECTION_COUNT}>
                 {list.length}
               </span>
             )}
-          </h2>
-          <Link id="explore-link" to="/explore" className={buttonClassName('secondary', 'px-3 py-1.5 text-sm', true)}>
-            servers
-          </Link>
-        </>
-      }
-    >
-      {error && (
-        <p className="border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
-          api is down: {error}
-        </p>
-      )}
-      {!error && !streams && <Skeleton />}
-      {list?.length === 0 && (
-        <div id="empty" className="border border-dashed border-secondaryStroke px-6 py-16 text-center" aria-live="polite">
-          <p className="text-textSecondary">nobody is live. you could be.</p>
-          <Link to="/live" className={buttonClassName('primary', 'mt-5')}>
-            go live
-          </Link>
+          </>
+        }
+      >
+        {error && (
+          <p className="border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
+            api is down: {error}
+          </p>
+        )}
+        {!error && !streams && <Skeleton />}
+        {list?.length === 0 && (
+          <div id="empty" className="border border-dashed border-secondaryStroke px-6 py-16 text-center" aria-live="polite">
+            <p className="text-textSecondary">nobody is live. you could be.</p>
+            <Link to="/live" className={buttonClassName('primary', 'mt-5')}>
+              go live
+            </Link>
+          </div>
+        )}
+        <div id="list" className={cn(!list?.length && 'hidden')}>
+          {featured.length > 0 && (
+            <div id="featured" className={cn('grid grid-cols-1 gap-6 lg:grid-cols-2', rest.length > 0 && 'mb-6')}>
+              {featured.map((stream) => (
+                <Card key={stream.name} stream={stream} now={now} featured playing onEnter={() => undefined} onLeave={() => undefined} />
+              ))}
+            </div>
+          )}
+          {rest.length > 0 && (
+            <div className={GRID}>
+              {rest.map((stream) => (
+                <Card
+                  key={stream.name}
+                  stream={stream}
+                  now={now}
+                  featured={false}
+                  playing={hover === stream.name}
+                  onEnter={(pointer) => cardHover.enter(stream.name, pointer, hover)}
+                  onLeave={() => cardHover.leave(stream.name)}
+                />
+              ))}
+            </div>
+          )}
         </div>
-      )}
-      <div id="list" className={cn(!list?.length && 'hidden')}>
-        {featured.length > 0 && (
-          <div id="featured" className={cn('grid grid-cols-1 gap-6 lg:grid-cols-2', rest.length > 0 && 'mb-6')}>
-            {featured.map((stream) => (
-              <Card key={stream.name} stream={stream} now={now} featured playing onEnter={() => undefined} onLeave={() => undefined} />
-            ))}
-          </div>
-        )}
-        {rest.length > 0 && (
-          <div className={GRID}>
-            {rest.map((stream) => (
-              <Card
-                key={stream.name}
-                stream={stream}
-                now={now}
-                featured={false}
-                playing={hover === stream.name}
-                onEnter={(pointer) => cardHover.enter(stream.name, pointer, hover)}
-                onLeave={() => cardHover.leave(stream.name)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
+      </Part>
       {!error && <RecentlyOffline liveKey={namesKey} now={now} />}
+      {!error && <Groups />}
       {!error && <People />}
     </PageFrame>
   );

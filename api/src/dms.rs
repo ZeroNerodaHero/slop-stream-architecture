@@ -135,10 +135,10 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     .await?;
     // the writer has read their own thread this far: a line of yours is never "new" to you
     mark_read(&s.db, me.id, other.id, id).await?;
+    // the inbox row before the frame: the open thread's read must find it already there
+    notify::messaged(&s, &other, &me, &text).await;
     let mut r = s.redis.clone();
     presence::publish_dm(&mut r, &me.name, &other.name, id, &text, at).await;
-    // the reader's inbox (docs/notifications.md): the newest line from a friend, one row
-    notify::messaged(&s, &other, &me, &text).await;
     log::info!("{}: dm to {} ({} chars)", me.name, other.name, text.chars().count());
     Ok((StatusCode::CREATED, Json(json!({ "id": id, "from": me.name, "to": other.name, "text": text, "at": at }))))
 }

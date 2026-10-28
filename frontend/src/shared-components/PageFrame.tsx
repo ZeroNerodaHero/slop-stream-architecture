@@ -7,11 +7,9 @@ import { NotificationsBell } from '@/shared-components/Notifications';
 import { cn } from '@/utils/cn';
 
 interface PageFrameProps {
-  /** Without one (and without `aside`) the row is just go live: home is the cards. */
+  /** Without one (and without `aside`) the row is just the bell and go live, and the page starts at its top: home, whose part headings stand in it. */
   title?: ReactNode;
   titleId?: string;
-  /** A section label at the left end of the row on a page without a title (home's `active streams`): no back, no rule under the row. */
-  label?: ReactNode;
   aside?: ReactNode;
   /** Room for a side panel next to the video. */
   wide?: boolean;
@@ -53,18 +51,22 @@ function TopActions() {
 }
 
 /**
- * The page's title row and its width. One row: back and the title (or home's label) on the left,
- * the bell and go live on the right. Sticky: the row stays at the top of the window while
- * the page scrolls under it (the page's own colour, so what scrolls under is hidden), and
- * globals.css keeps scrolled-to things from landing under its first 4rem. Who you are is not
- * here: the sidebar is mounted once by the router's Shell, beside this column.
+ * The page's title row and its width. One row: back and the title on the left, the bell and
+ * go live on the right. Sticky: the row stays at the top of the window while the page scrolls
+ * under it (the page's own colour, so what scrolls under is hidden), and globals.css keeps
+ * scrolled-to things from landing under its first 4rem. Without a title (home) the row is the
+ * bell and go live alone, exactly 4rem, and the page starts at the row's top rather than under
+ * it: home's part headings are sticky and 4rem tall too (HomePage.tsx), so the one for the part
+ * you are in stands at the row's left end, and the next part's pushes it out. Who you are is
+ * not here: the sidebar is mounted once by the router's Shell, beside this column.
  */
-export function PageFrame({ title, titleId, label, aside, wide = false, children }: PageFrameProps) {
+export function PageFrame({ title, titleId, aside, wide = false, children }: PageFrameProps) {
   const titled = Boolean(title || aside);
   return (
     <main className={cn('mx-auto px-5 pb-10', wide ? 'max-w-[1360px]' : 'max-w-[960px]')}>
-      <header className={cn('sticky top-0 z-30 flex min-h-16 flex-wrap items-center gap-4 bg-background py-3', titled && 'mb-6 border-b border-primaryStroke')}>
-        {label && !title && <div className="flex min-w-0 items-center">{label}</div>}
+      <header
+        className={cn('sticky top-0 z-30 flex items-center gap-4 bg-background py-3', titled ? 'mb-6 min-h-16 flex-wrap border-b border-primaryStroke' : 'h-16 -mb-16')}
+      >
         {title && (
           <div className="flex min-w-0 items-center gap-4">
             <HomeLink />

@@ -10,3 +10,4 @@ frontend/dist/
 
 # seed.sh: the names and passwords it made (local only)
 .seeded-users
+.seeded-groups

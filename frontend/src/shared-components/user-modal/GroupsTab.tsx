@@ -1,7 +1,7 @@
 import { useAtomValue } from 'jotai';
 import { type FormEvent, useEffect, useState } from 'react';
 
-import type { Group } from '@/infra/api';
+import { groupWords, type Group } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
   clearGroupsStatus,
@@ -14,12 +14,14 @@ import {
   joinGroup,
   leaveGroup,
   loadGroups,
+  setGroupListed,
   myGroupsAtom
 } from '@/infra/atoms/groups-atoms';
 import { pickTab } from '@/infra/atoms/user-modal-atoms';
 import { isValidName } from '@/infra/names';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
+import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { BUTTON, Field, INPUT, Section, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -87,9 +89,9 @@ export function GroupsTab() {
       >
         {loaded === undefined && <p className="text-textTertiary">loading</p>}
         {loaded === false && (
-          <Button id="group-reload" flat className={BUTTON} onClick={() => void loadGroups()}>
+          <button id="group-reload" type="button" className="self-start text-base font-semibold text-primaryBlue" onClick={() => void loadGroups()}>
             try again
-          </Button>
+          </button>
         )}
         {groups.length > 0 && (
           <ul id="group-list" className="divide-y divide-primaryStroke border border-primaryStroke bg-background">
@@ -108,14 +110,17 @@ export function GroupsTab() {
 
 function GroupRow({ group, me, busy }: { group: Group; me: string | null; busy: boolean }) {
   const [sure, setSure] = useState(false);
+  const [leaveSure, setLeaveSure] = useState(false);
   // the one who made it deletes it. an admin may too, through the api; the page does not know who those are
   const canDelete = me !== null && group.made_by === me;
+  const words = groupWords(group);
   return (
-    <li id={`group-${group.name}`} data-mine={group.mine || undefined} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+    <li id={`group-${group.name}`} data-title={words.title} data-mine={group.mine || undefined} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
       <Badge group={group} className="shrink-0" />
       <span className="min-w-0 flex-1 basis-48">
         <span className="flex flex-wrap items-baseline gap-x-2">
-          <span className="font-semibold">{group.name}</span>
+          <span className="font-semibold">{words.title}</span>
+          {words.tag && <span className="text-sm text-textTertiary">#{words.tag}</span>}
           <span className="text-sm tabular-nums text-textTertiary">
             {group.members} {group.members === 1 ? 'member' : 'members'}
           </span>
@@ -126,30 +131,47 @@ function GroupRow({ group, me, busy }: { group: Group; me: string | null; busy: 
       <span className="flex flex-wrap items-center gap-2">
         {group.automatic ? (
           <span className="text-sm text-textTertiary">automatic</span>
-        ) : me === null ? null : group.mine ? (
-          <Button id={`group-leave-${group.name}`} flat className={SMALL} disabled={busy} onClick={() => void leaveGroup(group.name)}>
+        ) : me === null ? null : group.mine && leaveSure ? (
+          <>
+            <Button id={`group-leave-${group.name}`} variant="danger" flat className={SMALL} disabled={busy} onClick={() => void leaveGroup(group.name)}>
+              {group.members <= 1 ? 'sure? deletes it' : 'sure?'}
+            </Button>
+            <button type="button" onClick={() => setLeaveSure(false)} className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline">
+              keep
+            </button>
+          </>
+        ) : group.mine ? (
+          <button id={`group-leave-${group.name}`} type="button" className="text-sm font-semibold text-textTertiary disabled:opacity-40" disabled={busy} onClick={() => setLeaveSure(true)}>
             leave
-          </Button>
+          </button>
         ) : (
           <Button id={`group-join-${group.name}`} variant="primary" flat className={SMALL} disabled={busy} onClick={() => void joinGroup(group.name)}>
             join
           </Button>
         )}
-        {canDelete &&
-          (sure ? (
-            <>
-              <Button id={`group-delete-${group.name}`} variant="danger" flat className={SMALL} disabled={busy} onClick={() => void deleteGroup(group.name, group.mine)}>
-                sure? delete
-              </Button>
-              <button type="button" onClick={() => setSure(false)} className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline">
-                keep
-              </button>
-            </>
-          ) : (
-            <Button id={`group-delete-${group.name}`} flat className={cn(SMALL, 'text-decrease hover:border-decrease')} disabled={busy} onClick={() => setSure(true)}>
-              delete
-            </Button>
-          ))}
+        {canDelete && group.public !== undefined && (
+          <button id={`group-access-${group.name}`} type="button" className="text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={busy} onClick={() => void setGroupListed(group.name, group.public === false, words.title)}>
+            {group.public === false ? 'make public' : 'make private'}
+          </button>
+        )}
+        {canDelete && (
+          <button id={`group-delete-${group.name}`} type="button" className="text-sm font-semibold text-decrease disabled:opacity-40" disabled={busy} onClick={() => setSure(true)}>
+            delete
+          </button>
+        )}
+        {sure && (
+          <ConfirmDialog
+            id={`group-delete-${group.name}-confirm`}
+            title={`delete ${words.title}?`}
+            message="the group goes, and everyone in it is out."
+            yes="yes, delete"
+            onYes={() => {
+              setSure(false);
+              void deleteGroup(group.name, group.mine);
+            }}
+            onNo={() => setSure(false)}
+          />
+        )}
       </span>
     </li>
   );
@@ -160,28 +182,30 @@ function MakeGroup({ me, busy }: { me: string; busy: boolean }) {
   const [badge, setBadge] = useState('');
   const [color, setColor] = useState<string>(SWATCHES[0]);
   const [about, setAbout] = useState('');
+  const [isPublic, setPublic] = useState(true);
   const badgeChars = [...badge.trim()].length;
   const ok = isValidName(name) && badgeChars >= 1 && badgeChars <= MAX_BADGE_CHARS;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!ok) return;
-    if (await createGroup({ name, badge: badge.trim(), color, about: about.trim() })) {
+    if (await createGroup({ name, badge: badge.trim(), color, about: about.trim(), public: isPublic })) {
       setName('');
       setBadge('');
       setAbout('');
+      setPublic(true);
     }
   }
 
   return (
     <Section
       title="make a group"
-      description="a name, the word on the badge, a colour, a line about it. you are in it from the start. up to 10 of your own; anyone can join."
+      description="a name, the word on the badge, a colour, a line about it. you are in it from the start. four digits are added, so the same name can be made twice. a private one is left off the lists, and you can switch that later. up to 10 of your own."
     >
       {/* no method="dialog": a submit would close the modal. onSubmit owns enter */}
       <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field id="group-name" label="name" hint="a-z 0-9 _ -, up to 32.">
+          <Field id="group-name" label="name" hint="a-z 0-9 _ -, up to 32. four digits are added, so two groups can share it.">
             <input
               id="group-name"
               value={name}
@@ -256,6 +280,26 @@ function MakeGroup({ me, busy }: { me: string; busy: boolean }) {
             className={INPUT}
           />
         </Field>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            id="group-public"
+            type="button"
+            aria-pressed={isPublic}
+            onClick={() => setPublic(true)}
+            className={cn('text-sm font-semibold', isPublic ? 'text-primaryBlue' : 'text-textTertiary')}
+          >
+            public
+          </button>
+          <button
+            id="group-private"
+            type="button"
+            aria-pressed={!isPublic}
+            onClick={() => setPublic(false)}
+            className={cn('text-sm font-semibold', !isPublic ? 'text-primaryBlue' : 'text-textTertiary')}
+          >
+            private
+          </button>
+        </div>
         <div className="flex flex-wrap items-center gap-4">
           <Button id="group-create" type="submit" variant="primary" flat className={BUTTON} disabled={busy || !ok}>
             make it

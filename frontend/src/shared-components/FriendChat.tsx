@@ -563,7 +563,7 @@ export function FriendChat() {
                   autoComplete="off"
                   className={cn(INPUT, 'py-1.5 text-sm')}
                 />
-                <Button id="friend-chat-send" type="submit" className="px-3 py-1.5 text-sm" disabled={!draft.trim() || left < 0 || sending}>
+                <Button id="friend-chat-send" type="submit" variant="primary" flat className="px-3 py-1.5 text-sm" disabled={!draft.trim() || left < 0 || sending}>
                   send
                 </Button>
               </div>

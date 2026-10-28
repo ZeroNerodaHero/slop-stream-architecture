@@ -334,9 +334,9 @@ function CropBox({ request }: { request: CropRequest }) {
         <span id="crop-status" className="mr-auto text-sm text-decrease" aria-live="polite">
           {loaded ? error : ''}
         </span>
-        <Button id="crop-cancel" className="px-4 py-2" onClick={close}>
+        <button id="crop-cancel" type="button" className="text-base font-semibold text-textTertiary" onClick={close}>
           cancel
-        </Button>
+        </button>
         <Button id="crop-use" variant="primary" className="px-4 py-2" disabled={!loaded || !rect || busy} onClick={() => void use()}>
           {busy ? 'cutting…' : 'use it'}
         </Button>

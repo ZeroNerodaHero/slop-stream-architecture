@@ -38,7 +38,7 @@ import {
   whyNotEditAtom
 } from '@/infra/atoms/profile-atoms';
 import { closeUserModal, pickTab } from '@/infra/atoms/user-modal-atoms';
-import { api } from '@/infra/api';
+import { api, groupWords } from '@/infra/api';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
@@ -109,9 +109,15 @@ function Rename({ me }: { me: string }) {
         </Field>
       </fieldset>
       <div className="flex flex-wrap items-center gap-3">
-        <Button id="profile-rename" type="submit" variant={sure ? 'danger' : undefined} flat className={BUTTON} disabled={!ready}>
-          {sure ? `sure? /watch/${me} becomes /watch/${wanted}` : 'change name'}
-        </Button>
+        {sure ? (
+          <Button id="profile-rename" type="submit" variant="danger" flat className={BUTTON} disabled={!ready}>
+            {`sure? /watch/${me} becomes /watch/${wanted}`}
+          </Button>
+        ) : (
+          <button id="profile-rename" type="submit" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={!ready}>
+            change name
+          </button>
+        )}
         {sure && (
           <button type="button" onClick={() => setSure(false)} className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline">
             keep {me}
@@ -212,17 +218,20 @@ export function ProfileTab() {
               )}
               {/* the badges my chat lines wear: my groups, in the order joined. the groups tab changes them */}
               {me &&
-                badges.map((group) => (
+                badges.map((group) => {
+                  const words = groupWords(group);
+                  return (
                   <button
                     key={group.name}
                     type="button"
                     onClick={() => pickTab('groups')}
                     className="shrink-0"
-                    title={`in the group ${group.name}. groups are in the next tab`}
+                    title={`in the group ${words.title}${words.tag ? ` #${words.tag}` : ''}. groups are in the next tab`}
                   >
                     <Badge group={group} />
                   </button>
-                ))}
+                  );
+                })}
             </p>
             <p className="mt-1 text-sm text-textSecondary">
               {me ? 'your account. only you can go live, edit this or talk as it.' : 'a free name, kept in this browser. sign up to make it yours.'}
@@ -241,13 +250,13 @@ export function ProfileTab() {
                 if (file) void saveMyAvatar(file);
               }}
             />
-            <Button id="profile-avatar-pick" flat className={BUTTON} disabled={!canEdit} onClick={() => fileRef.current?.click()}>
+            <button id="profile-avatar-pick" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={!canEdit} onClick={() => fileRef.current?.click()}>
               {avatar === null ? 'choose picture' : 'change picture'}
-            </Button>
+            </button>
             {avatar !== null && (
-              <Button id="profile-avatar-remove" flat className={BUTTON} disabled={!canEdit} onClick={() => void removeMyAvatar()}>
+              <button id="profile-avatar-remove" type="button" className="text-base font-semibold text-textTertiary disabled:opacity-40" disabled={!canEdit} onClick={() => void removeMyAvatar()}>
                 remove
-              </Button>
+              </button>
             )}
           </div>
           <Status
@@ -360,9 +369,9 @@ export function ProfileTab() {
           />
         </Field>
         <div className="flex flex-wrap items-center gap-3">
-          <Button id="profile-save-bio" variant="primary" flat className={BUTTON} disabled={!canEdit} onClick={() => void saveMyBio()}>
+          <button id="profile-save-bio" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={!canEdit} onClick={() => void saveMyBio()}>
             save status
-          </Button>
+          </button>
           <span id="profile-bio-count" className={cn('text-sm tabular-nums text-textTertiary', left < 20 && 'text-decrease')}>
             {left}
           </span>
@@ -421,13 +430,13 @@ export function ProfileTab() {
                 if (file) void saveMyOffline(file);
               }}
             />
-            <Button id="profile-offline-pick" flat className={BUTTON} disabled={!canEdit} onClick={() => offlineFileRef.current?.click()}>
+            <button id="profile-offline-pick" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={!canEdit} onClick={() => offlineFileRef.current?.click()}>
               {offline === null ? 'choose picture' : 'change picture'}
-            </Button>
+            </button>
             {offline !== null && (
-              <Button id="profile-offline-remove" flat className={BUTTON} disabled={!canEdit} onClick={() => void removeMyOffline()}>
+              <button id="profile-offline-remove" type="button" className="text-base font-semibold text-textTertiary disabled:opacity-40" disabled={!canEdit} onClick={() => void removeMyOffline()}>
                 remove
-              </Button>
+              </button>
             )}
           </div>
           <Status id="profile-offline-status" text={offlineStatus || (canEdit ? 'a wide jpeg, 1280×720: the 16:9 you cut out of your picture.' : whyNot)} />
@@ -456,9 +465,9 @@ export function ProfileTab() {
           />
         </Field>
         <div className="flex flex-wrap items-center gap-3">
-          <Button id="profile-save-offline-note" variant="primary" flat className={BUTTON} disabled={!canEdit} onClick={() => void saveMyOfflineNote()}>
+          <button id="profile-save-offline-note" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={!canEdit} onClick={() => void saveMyOfflineNote()}>
             save line
-          </Button>
+          </button>
           <Status id="profile-offline-note-status" text={offlineNoteStatus || (canEdit ? '' : whyNot)} />
         </div>
       </Section>

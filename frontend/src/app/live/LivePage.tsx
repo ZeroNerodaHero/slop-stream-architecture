@@ -230,15 +230,16 @@ export function LivePage() {
             {/* one screen (or window, or tab) per press, up to SCREEN_SLOTS at once; the same as the sources' +.
                 not on phones: no screen capture there */}
             {publishing && screenShareSupported && (
-              <Button
+              <button
                 id="share-screen"
-                flat
+                type="button"
                 disabled={!canShare}
                 title={screens.length >= SCREEN_SLOTS ? `${SCREEN_SLOTS} screens at most` : undefined}
+                className="text-base font-semibold text-primaryBlue disabled:opacity-40"
                 onClick={() => void shareScreen()}
               >
                 share screen
-              </Button>
+              </button>
             )}
           </div>
 
@@ -248,9 +249,9 @@ export function LivePage() {
               <a id="watchurl" href={watchUrl} target="_blank" rel="noopener">
                 {watchUrl}
               </a>{' '}
-              <Button id="copy" flat className="ml-2 px-4 py-2" onClick={copyWatchUrl}>
+              <button id="copy" type="button" className="ml-2 text-base font-semibold text-primaryBlue" onClick={copyWatchUrl}>
                 copy
-              </Button>
+              </button>
             </p>
           )}
         </div>
@@ -290,9 +291,9 @@ export function LivePage() {
               className="mt-2 w-full border border-primaryStroke bg-background px-4 py-3 text-textPrimary"
             />
             <div className="mt-3 flex flex-wrap items-center gap-3">
-              <Button id="savebio" flat onClick={() => void saveBio()}>
+              <button id="savebio" type="button" className="text-base font-semibold text-primaryBlue" onClick={() => void saveBio()}>
                 save status
-              </Button>
+              </button>
               <span id="biostatus" className="text-textSecondary" aria-live="polite">
                 {bioStatus}
               </span>
@@ -323,13 +324,13 @@ export function LivePage() {
                   if (file) void saveAvatar(file);
                 }}
               />
-              <Button id="avatar-pick" flat onClick={() => fileRef.current?.click()}>
+              <button id="avatar-pick" type="button" className="text-base font-semibold text-primaryBlue" onClick={() => fileRef.current?.click()}>
                 {avatar === null ? 'choose picture' : 'change picture'}
-              </Button>
+              </button>
               {avatar !== null && (
-                <Button id="avatar-remove" flat onClick={() => void removeAvatar()}>
+                <button id="avatar-remove" type="button" className="text-base font-semibold text-textTertiary" onClick={() => void removeAvatar()}>
                   remove
-                </Button>
+                </button>
               )}
               <span id="avatarstatus" className="text-textSecondary" aria-live="polite">
                 {avatarStatus}
@@ -347,9 +348,9 @@ export function LivePage() {
                   {thumbs.map((id) => (
                     <li key={id} className="w-36">
                       <img src={api.streamThumbUrl(name, id)} alt="" draggable={false} className="aspect-video w-full border border-primaryStroke object-cover" />
-                      <Button id={`thumb-remove-${id}`} flat className="mt-2 w-full px-3 py-2 text-sm" onClick={() => void removeStreamThumb(id)}>
+                      <button id={`thumb-remove-${id}`} type="button" className="mt-2 text-sm font-semibold text-textTertiary" onClick={() => void removeStreamThumb(id)}>
                         remove
-                      </Button>
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -367,9 +368,9 @@ export function LivePage() {
                     if (file) void addStreamThumb(file);
                   }}
                 />
-                <Button id="thumb-add" flat disabled={thumbs.length >= 6 || thumbStatus === 'saving'} onClick={() => thumbFileRef.current?.click()}>
+                <button id="thumb-add" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={thumbs.length >= 6 || thumbStatus === 'saving'} onClick={() => thumbFileRef.current?.click()}>
                   add a thumbnail
-                </Button>
+                </button>
                 <span id="thumbstatus" className="text-textSecondary" aria-live="polite">
                   {thumbStatus}
                 </span>

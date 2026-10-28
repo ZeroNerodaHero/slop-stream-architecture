@@ -1,54 +1,124 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent, type PointerEvent } from 'react';
+import { Link } from 'react-router-dom';
 
-import { api, messageOf, type Server } from '@/infra/api';
+import { api, messageOf, type SearchHit, type Server } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { reconnectChat } from '@/infra/atoms/chat-atoms';
-import { onEvents, unwatchPresence, watchPresence } from '@/infra/events';
+import { createGroup, groupsBusyAtom, groupsStatusAtom } from '@/infra/atoms/groups-atoms';
 import { cleanName, isValidName } from '@/infra/names';
-import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { Badge } from '@/shared-components/Badge';
 import { Button, buttonClassName } from '@/shared-components/Button';
-import { ChatPanel } from '@/shared-components/ChatPanel';
+import { GroupSquare } from '@/shared-components/GroupSquare';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { PersonRow } from '@/shared-components/PersonRow';
 import { cn } from '@/utils/cn';
-
-/** Cameras played on the group page. The same peers home uses, muted, and not viewers. */
-const FACES = 4;
-
-const TILE = 'block overflow-hidden border border-primaryStroke bg-backgroundSecondary transition-[border-color] duration-150 hover:border-primaryBlue';
-
-function liveOf(server: Server): string[] {
-  return server.live ?? [];
-}
-
-/** Words the chat history routes already use, so a channel cannot be one of them. */
-const RESERVED = new Set(['before', 'search', 'by', 'around']);
 
 const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary';
 
-async function joinServer(name: string) {
-  await api.joinGroup(name);
-  reconnectChat();
+const SQUARES = 'grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3';
+
+/** The colours a new group starts from. The colour box takes any other. Same eight as the groups tab. */
+const SWATCHES = ['#5865f2', '#f85149', '#3fb950', '#f2cc60', '#bc8cff', '#ff9f43', '#39d2c0', '#ff6bcb'] as const;
+
+function matches(server: Server, query: string): boolean {
+  if (!query) return true;
+  const tag = server.tag == null ? '' : String(server.tag).padStart(4, '0');
+  return `${server.title || ''} ${tag} ${tag ? `#${tag}` : ''} ${server.name} ${server.badge} ${server.about}`.toLowerCase().includes(query);
 }
 
-/** The servers you are in, then the ones you can find. A group is a server; `bot` is not. */
+/** The groups you are in, then the public ones you are not. `bot` is a badge, not one of these. */
 export function ExplorePage() {
   const query = useQuery({ queryKey: ['explore'], queryFn: api.explore });
+  const me = useAtomValue(meAtom);
+  const [text, setText] = useState('');
+  const [making, setMaking] = useState(false);
+  // the letters the lists and the people query actually use: a beat after the last key
+  const [q, setQ] = useState('');
+  const [people, setPeople] = useState<SearchHit[] | null>([]);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setQ(text.trim().toLowerCase()), 200);
+    return () => window.clearTimeout(t);
+  }, [text]);
+
+  useEffect(() => {
+    if (!q) {
+      setPeople([]);
+      return;
+    }
+    let gone = false;
+    setPeople(null);
+    api
+      .search(q)
+      .then((hits) => {
+        if (!gone) setPeople(hits);
+      })
+      .catch(() => {
+        if (!gone) setPeople([]);
+      });
+    return () => {
+      gone = true;
+    };
+  }, [q]);
+  const yours = (query.data?.yours ?? []).filter((server) => matches(server, q));
+  const listed = (query.data?.discover ?? []).filter((server) => server.public !== false && matches(server, q));
+
   return (
-    <PageFrame title="servers" titleId="explore-title">
+    <PageFrame title="groups" titleId="groups-title">
+      <div className="mb-8 flex items-center gap-3">
+        <label htmlFor="groups-search" className="sr-only">
+          search groups
+        </label>
+        <input
+          id="groups-search"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="search groups and people"
+          autoComplete="off"
+          className={INPUT}
+        />
+        {me ? (
+          <Button id="groups-create" variant="primary" className="shrink-0 px-4 py-2 text-sm" onClick={() => setMaking(true)}>
+            create
+          </Button>
+        ) : (
+          me === null && (
+            <Link id="groups-create" to="/login" className={buttonClassName('primary', 'shrink-0 px-4 py-2 text-sm')}>
+              log in to create
+            </Link>
+          )
+        )}
+      </div>
+      {making && <MakeGroup onClose={() => setMaking(false)} />}
       {query.error && (
         <p className="border border-decrease/40 bg-decrease/10 px-5 py-4 text-textSecondary" aria-live="polite">
           {messageOf(query.error)}
         </p>
       )}
       {!query.data && !query.error && <p className="text-textSecondary">loading</p>}
+      {q && (
+        <section id="people" aria-label="people" className="mb-10">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-textTertiary">people</h2>
+          {people === null ? (
+            <p className="text-textSecondary">looking</p>
+          ) : people.length === 0 ? (
+            <p className="text-textSecondary">nobody</p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {people.map((hit) => (
+                <li key={hit.name}>
+                  <PersonRow id={`person-${hit.name}`} name={hit.name} verified={hit.verified} avatar={hit.avatar} bio={hit.bio} presence={hit.presence} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
       {query.data && (
-        <div id="servers" className="flex flex-col gap-10">
-          <Section id="yours" title="yours" empty="you are not in a server yet" servers={query.data.yours} />
-          <Section id="discover" title="discover" empty="nothing else to find" servers={query.data.discover} />
+        <div id="groups" className="flex flex-col gap-10">
+          <Section id="yours" title="yours" empty={q ? 'nothing in yours matches' : 'you are not in a group yet'} servers={yours} />
+          <Section id="public" title="public" empty={q ? 'nothing public matches' : 'no public groups to find'} servers={listed} />
         </div>
       )}
     </PageFrame>
@@ -62,9 +132,9 @@ function Section({ id, title, empty, servers }: { id: string; title: string; emp
       {servers.length === 0 ? (
         <p className="text-textSecondary">{empty}</p>
       ) : (
-        <ul className="flex flex-col gap-4">
+        <ul className={SQUARES}>
           {servers.map((server) => (
-            <ServerCard key={server.name} server={server} />
+            <GroupSquare key={server.name} server={server} id={`server-open-${server.name}`} />
           ))}
         </ul>
       )}
@@ -72,383 +142,152 @@ function Section({ id, title, empty, servers }: { id: string; title: string; emp
   );
 }
 
-function ServerCard({ server }: { server: Server }) {
+function MakeGroup({ onClose }: { onClose: () => void }) {
+  const busy = useAtomValue(groupsBusyAtom);
+  const status = useAtomValue(groupsStatusAtom);
   const qc = useQueryClient();
-  const me = useAtomValue(meAtom);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [sure, setSure] = useState<string | null>(null);
-
-  async function join() {
-    setBusy(true);
-    setError('');
-    try {
-      await joinServer(server.name);
-      await qc.invalidateQueries({ queryKey: ['explore'] });
-    } catch (err) {
-      setError(messageOf(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function remove(channel: string) {
-    setError('');
-    try {
-      await api.deleteChannel(server.name, channel);
-      setSure(null);
-      await qc.invalidateQueries({ queryKey: ['explore'] });
-    } catch (err) {
-      setError(messageOf(err));
-    }
-  }
-
-  return (
-    <li id={`server-${server.name}`} className="border border-primaryStroke bg-backgroundSecondary px-5 py-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <Badge group={server} />
-        <Link id={`server-open-${server.name}`} to={`/explore/${server.name}`} className="font-semibold hover:text-primaryBlue">
-          {server.name}
-        </Link>
-        <span className="text-sm text-textTertiary">
-          {server.members} {server.members === 1 ? 'member' : 'members'}
-        </span>
-        {liveOf(server).length > 0 && <span className="text-sm text-increase">{liveOf(server).length} live</span>}
-        {!server.mine && me && (
-          <Button id={`server-join-${server.name}`} className="ml-auto px-3 py-1.5 text-sm" disabled={busy} onClick={() => void join()}>
-            join
-          </Button>
-        )}
-        {!server.mine && me === null && (
-          <Link to="/login" className={buttonClassName('secondary', 'ml-auto px-3 py-1.5 text-sm')}>
-            log in to join
-          </Link>
-        )}
-      </div>
-      {server.about && <p className="mt-2 text-textSecondary">{server.about}</p>}
-      <ul className="mt-3 flex flex-col gap-1">
-        {server.channels.map((channel) => (
-          <li key={channel.name} className="flex items-center gap-3">
-            <Link
-              id={`channel-${server.name}-${channel.name}`}
-              to={`/explore/${server.name}/${channel.name}`}
-              className="font-semibold text-primaryBlue"
-            >
-              #{channel.name}
-            </Link>
-            {channel.about && <span className="truncate text-sm text-textTertiary">{channel.about}</span>}
-            {channel.can_delete && sure !== channel.name && (
-              <button type="button" className="ml-auto text-sm text-textTertiary" onClick={() => setSure(channel.name)}>
-                delete
-              </button>
-            )}
-            {channel.can_delete && sure === channel.name && (
-              <button
-                type="button"
-                id={`channel-delete-${server.name}-${channel.name}`}
-                className="ml-auto text-sm text-decrease"
-                onClick={() => void remove(channel.name)}
-              >
-                sure?
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
-      {server.mine && <AddChannel server={server.name} />}
-      {error && <p className="mt-2 text-sm text-decrease">{error}</p>}
-    </li>
-  );
-}
-
-function AddChannel({ server }: { server: string }) {
-  const qc = useQueryClient();
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const pressedBackdrop = useRef(false);
   const [name, setName] = useState('');
-  const [error, setError] = useState('');
+  const [badge, setBadge] = useState('');
+  const [color, setColor] = useState<string>(SWATCHES[0]);
+  const [about, setAbout] = useState('');
+  const [isPublic, setPublic] = useState(true);
+  const [spoke, setSpoke] = useState(false);
   const clean = cleanName(name);
+  const badgeChars = [...badge.trim()].length;
+  const ok = isValidName(clean) && badgeChars >= 1 && badgeChars <= 12;
+
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog || dialog.open) return;
+    dialog.showModal();
+    dialog.querySelector<HTMLElement>('#groups-make-name')?.focus();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, []);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (!isValidName(clean) || RESERVED.has(clean)) return;
-    setError('');
-    try {
-      await api.createChannel(server, clean);
-      setName('');
-      await qc.invalidateQueries({ queryKey: ['explore'] });
-    } catch (err) {
-      setError(messageOf(err));
-    }
+    if (!ok || busy) return;
+    setSpoke(true);
+    const made = await createGroup({ name: clean, badge: badge.trim(), color, about: about.trim(), public: isPublic });
+    if (!made) return;
+    await qc.invalidateQueries({ queryKey: ['explore'] });
+    onClose();
   }
+
+  const onPointerDown = (e: PointerEvent<HTMLDialogElement>) => {
+    pressedBackdrop.current = e.target === e.currentTarget;
+  };
+  const onClick = (e: MouseEvent<HTMLDialogElement>) => {
+    if (pressedBackdrop.current && e.target === e.currentTarget) onClose();
+  };
 
   return (
-    <form onSubmit={(e) => void submit(e)} className="mt-3 flex flex-wrap items-center gap-2">
-      <input
-        id={`channel-name-${server}`}
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder="new channel"
-        maxLength={32}
-        className={INPUT}
-        aria-label={`new channel in ${server}`}
-      />
-      <Button id={`channel-create-${server}`} type="submit" className="px-3 py-1.5 text-sm" disabled={!isValidName(clean) || RESERVED.has(clean)}>
-        add
-      </Button>
-      {error && <p className="w-full text-sm text-decrease">{error}</p>}
-    </form>
-  );
-}
-
-/** One channel's chat. Reading is open. Talking takes a login that has joined the server. */
-export function ChannelPage() {
-  const params = useParams<{ server: string; channel: string }>();
-  const server = cleanName(params.server);
-  const channel = cleanName(params.channel);
-  const ok = isValidName(server) && server !== 'bot' && isValidName(channel) && !RESERVED.has(channel);
-  const query = useQuery({ queryKey: ['explore'], queryFn: api.explore, enabled: ok });
-  const me = useAtomValue(meAtom);
-  const qc = useQueryClient();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const listed = query.data ? [...query.data.yours, ...query.data.discover] : null;
-  const group = listed?.find((item) => item.name === server);
-  const found = !!group?.channels.some((item) => item.name === channel);
-
-  if (!ok) {
-    return (
-      <PageFrame title="no such channel">
-        <p className="text-textSecondary">that is not a channel.</p>
-      </PageFrame>
-    );
-  }
-
-  async function join() {
-    setBusy(true);
-    setError('');
-    try {
-      await joinServer(server);
-      await qc.invalidateQueries({ queryKey: ['explore'] });
-    } catch (err) {
-      setError(messageOf(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <PageFrame
-      wide
-      titleId="channel-title"
-      title={
-        <span className="flex min-w-0 items-center gap-3">
-          {group && <Badge group={group} />}
-          <span className="truncate">
-            <Link to={`/explore/${server}`} className="hover:text-primaryBlue">
-              {server}
-            </Link>
-            <span className="text-textTertiary"> / {channel}</span>
-          </span>
-        </span>
-      }
+    <dialog
+      ref={dialogRef}
+      id="groups-make"
+      aria-labelledby="groups-make-title"
+      onPointerDown={onPointerDown}
+      onClick={onClick}
+      onClose={onClose}
+      className="m-auto w-[min(520px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60"
     >
-      {query.isSuccess && !found ? (
-        <p className="text-textSecondary">no such channel.</p>
-      ) : (
-        <>
-          {group && !group.mine && (
-            <div className="mb-4 flex flex-wrap items-center gap-3">
-              <p className="text-textSecondary">you can read this. join to talk.</p>
-              {me && (
-                <Button id="channel-join" className="px-3 py-1.5 text-sm" disabled={busy} onClick={() => void join()}>
-                  join
-                </Button>
-              )}
-              {me === null && (
-                <Link to="/login" className={buttonClassName('primary', 'px-3 py-1.5 text-sm')}>
-                  log in to join
-                </Link>
-              )}
-              {error && <p className="text-sm text-decrease">{error}</p>}
-            </div>
-          )}
-          <div className={cn('h-[70vh] min-h-[420px]')}>
-            <ChatPanel name={`${server}/${channel}`} className="h-full" />
-          </div>
-        </>
-      )}
-    </PageFrame>
-  );
-}
-
-/** One member's camera, muted, the same preview home plays. Click opens their stream. */
-function LiveFace({ name, big }: { name: string; big: boolean }) {
-  const stream = useAtomValue(previewStreamsAtom)[name] ?? null;
-  const ref = useRef<HTMLVideoElement | null>(null);
-  const [playing, setPlaying] = useState(false);
-
-  useEffect(() => {
-    setPlaying(false);
-    const el = ref.current;
-    if (!el || el.srcObject === stream) return;
-    el.srcObject = stream;
-    if (stream) void el.play().catch(() => undefined);
-  }, [stream]);
-
-  return (
-    <Link id={`group-live-${name}`} to={`/watch/${encodeURIComponent(name)}`} className={cn(TILE, big && 'sm:col-span-2')}>
-      <div className="relative aspect-video bg-black">
-        <img
-          src={`/thumb/${encodeURIComponent(name)}.jpg`}
-          alt=""
-          className={cn('absolute inset-0 h-full w-full object-cover', playing && 'opacity-0')}
-          onError={(event) => {
-            event.currentTarget.style.display = 'none';
-          }}
+      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
+        <h2 id="groups-make-title" className="text-sm font-semibold uppercase tracking-wider text-textTertiary">
+          make a group
+        </h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            id="groups-make-name"
+            value={name}
+            onChange={(e) =>
+              setName(
+                e.target.value
+                  .toLowerCase()
+                  .replace(/[^a-z0-9_-]/g, '')
+                  .slice(0, 32)
+              )
+            }
+            placeholder="name"
+            maxLength={32}
+            autoComplete="off"
+            aria-label="group name"
+            className={INPUT}
+          />
+          <input
+            id="groups-make-badge"
+            value={badge}
+            onChange={(e) => setBadge(e.target.value)}
+            placeholder="badge"
+            maxLength={12}
+            autoComplete="off"
+            aria-label="badge"
+            className={cn(INPUT, 'max-w-40')}
+          />
+        </div>
+        <input
+          id="groups-make-about"
+          value={about}
+          onChange={(e) => setAbout(e.target.value)}
+          placeholder="about, optional"
+          maxLength={200}
+          autoComplete="off"
+          aria-label="about"
+          className={INPUT}
         />
-        <video
-          ref={ref}
-          autoPlay
-          playsInline
-          muted
-          aria-hidden
-          onPlaying={() => setPlaying(true)}
-          className={cn('absolute inset-0 h-full w-full object-cover', !playing && 'opacity-0')}
-        />
-      </div>
-      <div className="truncate px-3 py-2 font-semibold">{name}</div>
-    </Link>
-  );
-}
-
-/**
- * The group as a room. Whoever in it is live shows as a tile, the first one big, and `general`
- * is the chat beside them. A night with every camera off is still the room. Reading is open.
- */
-export function GroupPage() {
-  const params = useParams<{ server: string }>();
-  const server = cleanName(params.server);
-  const ok = isValidName(server) && server !== 'bot';
-  const query = useQuery({ queryKey: ['explore'], queryFn: api.explore, enabled: ok });
-  const me = useAtomValue(meAtom);
-  const qc = useQueryClient();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const listed = query.data ? [...query.data.yours, ...query.data.discover] : null;
-  const group = listed?.find((item) => item.name === server);
-  const live = group ? liveOf(group) : [];
-  const shown = live.slice(0, FACES);
-  const previewKey = shown.join(',');
-
-  useEffect(() => {
-    if (!ok) return;
-    watchPresence('*');
-    let timer: number | null = null;
-    const stop = onEvents((event) => {
-      if (event.type !== 'live' && event.type !== 'ended') return;
-      if (timer !== null) return;
-      timer = window.setTimeout(() => {
-        timer = null;
-        void qc.invalidateQueries({ queryKey: ['explore'] });
-      }, 300);
-    });
-    return () => {
-      stop();
-      unwatchPresence('*');
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [ok, qc]);
-
-  useEffect(() => {
-    const names = previewKey ? previewKey.split(',') : [];
-    setHomePreviews(names);
-    return () => setHomePreviews([]);
-  }, [previewKey]);
-
-  if (!ok) {
-    return (
-      <PageFrame title="no such server">
-        <p className="text-textSecondary">that is not a server.</p>
-      </PageFrame>
-    );
-  }
-
-  async function join() {
-    setBusy(true);
-    setError('');
-    try {
-      await joinServer(server);
-      await qc.invalidateQueries({ queryKey: ['explore'] });
-    } catch (err) {
-      setError(messageOf(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <PageFrame
-      wide
-      titleId="group-title"
-      title={
-        <span className="flex min-w-0 items-center gap-3">
-          {group && <Badge group={group} />}
-          <span className="truncate">{server}</span>
-        </span>
-      }
-    >
-      {query.isSuccess && !group ? (
-        <p className="text-textSecondary">no such server.</p>
-      ) : (
-        <>
-          {group && !group.mine && (
-            <div className="mb-4 flex flex-wrap items-center gap-3">
-              <p className="text-textSecondary">you can read this. join to talk.</p>
-              {me && (
-                <Button id="group-join" className="px-3 py-1.5 text-sm" disabled={busy} onClick={() => void join()}>
-                  join
-                </Button>
-              )}
-              {me === null && (
-                <Link to="/login" className={buttonClassName('primary', 'px-3 py-1.5 text-sm')}>
-                  log in to join
-                </Link>
-              )}
-              {error && <p className="text-sm text-decrease">{error}</p>}
-            </div>
-          )}
-          <div id="group-room" className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div>
-              {query.isSuccess && group && shown.length === 0 && <p id="group-empty" className="text-textSecondary">nobody's camera is up.</p>}
-              {shown.length > 0 && (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {shown.map((name, i) => (
-                    <LiveFace key={name} name={name} big={i === 0 && shown.length > 1} />
-                  ))}
-                </div>
-              )}
-              {live.length > FACES && <p className="mt-3 text-sm text-textTertiary">{live.length - FACES} more live</p>}
-              {group && group.channels.length > 0 && (
-                <ul id="group-channels" className="mt-4 flex flex-wrap gap-x-4 gap-y-1">
-                  {group.channels.map((item) => (
-                    <li key={item.name}>
-                      {item.name === 'general' ? (
-                        <span className="font-semibold">#general</span>
-                      ) : (
-                        <Link id={`group-channel-${item.name}`} to={`/explore/${server}/${item.name}`} className="font-semibold text-primaryBlue">
-                          #{item.name}
-                        </Link>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div className="h-[70vh] min-h-[420px]">
-              <ChatPanel name={`${server}/general`} className="h-full" />
-            </div>
-          </div>
-        </>
-      )}
-    </PageFrame>
+        <div className="flex flex-wrap items-center gap-2">
+          {SWATCHES.map((swatch) => (
+            <button
+              key={swatch}
+              type="button"
+              aria-label={swatch}
+              aria-pressed={swatch === color}
+              onClick={() => setColor(swatch)}
+              style={{ backgroundColor: swatch }}
+              className={cn('h-8 w-8 border-2', swatch === color ? 'border-textPrimary' : 'border-transparent')}
+            />
+          ))}
+          <input id="groups-make-color" type="color" value={color} onChange={(e) => setColor(e.target.value)} aria-label="any other colour" className="h-8 w-12 cursor-pointer border border-primaryStroke bg-background p-0.5" />
+          <Badge group={{ name: clean || 'new', badge: badge.trim() || 'badge', color }} />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            id="groups-make-public"
+            type="button"
+            aria-pressed={isPublic}
+            onClick={() => setPublic(true)}
+            className={cn('text-sm font-semibold', isPublic ? 'text-primaryBlue' : 'text-textTertiary')}
+          >
+            public
+          </button>
+          <button
+            id="groups-make-private"
+            type="button"
+            aria-pressed={!isPublic}
+            onClick={() => setPublic(false)}
+            className={cn('text-sm font-semibold', !isPublic ? 'text-primaryBlue' : 'text-textTertiary')}
+          >
+            private
+          </button>
+          <p className="text-sm text-textTertiary">a private group is left off the lists. someone with the address can still open it and join. four digits are added, so the same name can be made twice. the owner can switch this later, on the group.</p>
+        </div>
+        <div className="flex items-center justify-end gap-3">
+          <button type="button" className="text-sm text-textTertiary" onClick={onClose}>
+            cancel
+          </button>
+          <Button id="groups-make-submit" type="submit" variant="primary" className="px-3 py-1.5 text-sm" disabled={!ok || busy}>
+            make it
+          </Button>
+        </div>
+        {spoke && status && (
+          <p id="groups-make-status" className="text-sm text-textSecondary">
+            {status}
+          </p>
+        )}
+      </form>
+    </dialog>
   );
 }

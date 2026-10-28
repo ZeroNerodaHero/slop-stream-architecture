@@ -4,7 +4,6 @@ import { useState } from 'react';
 
 import { applyPresetNamed, forgetPreset, livePanelsAtom, savedPresetsAtom, savePreset, setLivePanel, sourcesAtom } from '@/infra/atoms/publish-atoms';
 import { type Preset, PRESETS, rolesOf } from '@/infra/scene';
-import { Button } from '@/shared-components/Button';
 import { Collapsible } from '@/shared-components/live/Collapsible';
 import { cn } from '@/utils/cn';
 
@@ -18,15 +17,15 @@ export const presetId = (name: string) =>
 function Chip({ preset, whole, saved }: { preset: Preset; whole: boolean; saved: boolean }) {
   return (
     <span className="group/chip relative inline-flex">
-      <Button
+      <button
         id={presetId(preset.name)}
-        flat
+        type="button"
         title={whole ? undefined : 'not every picture this one places is here yet'}
-        className={cn('px-3 py-1.5 text-sm', !whole && 'opacity-60')}
+        className={cn('text-sm font-semibold text-primaryBlue', !whole && 'opacity-60')}
         onClick={() => applyPresetNamed(preset.name)}
       >
         {preset.name}
-      </Button>
+      </button>
       {saved && (
         <button
           id={`${presetId(preset.name)}-forget`}
@@ -86,14 +85,14 @@ export function Presets() {
               }}
               className="h-8 w-36 border border-primaryStroke bg-background px-2 text-sm text-textPrimary"
             />
-            <Button id="preset-save" flat variant="primary" className="px-3 py-1.5 text-sm" onClick={save}>
+            <button id="preset-save" type="button" className="text-sm font-semibold text-primaryBlue" onClick={save}>
               save
-            </Button>
+            </button>
           </span>
         ) : (
-          <Button id="save-preset" flat className="px-3 py-1.5 text-sm" onClick={() => setNaming(true)}>
+          <button id="save-preset" type="button" className="text-sm font-semibold text-primaryBlue" onClick={() => setNaming(true)}>
             save as preset
-          </Button>
+          </button>
         )}
         <span className="text-xs text-textTertiary">kept in this browser</span>
       </div>

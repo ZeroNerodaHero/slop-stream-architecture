@@ -38,10 +38,12 @@
 
 mod auth;
 mod chat;
+mod chat_images;
 mod debug;
 mod dms;
 mod events;
 mod follows;
+mod group_mod;
 mod groups;
 mod history;
 mod home;
@@ -893,8 +895,10 @@ fn router(state: AppState) -> Router {
         .merge(auth::routes())
         .merge(profile::routes())
         .merge(groups::routes())
+        .merge(group_mod::routes())
         .merge(follows::routes())
         .merge(dms::routes())
+        .merge(chat_images::routes())
         .merge(notify::routes())
         .merge(presence::routes())
         .merge(debug::routes())

@@ -1,0 +1,23 @@
+---
+description: Small actions are text, not a bordered box
+globs: frontend/**/*.tsx
+alwaysApply: false
+---
+
+# Buttons
+
+`Button` always draws a border, a fill, and a hard shadow. That is a commit: make it, go live, log in, the yes on a dialog. A button in the title bar uses `flat` so it does not grow a second shadow.
+
+A small action is not that. Add, delete, kick, leave, cancel, the no on a confirm, save on a line already in the page: words only, no border, no box, no `Button`. The yes stays a `Button`. This is every screen, including ones already shipped.
+
+```tsx
+// ❌ BAD — "add" becomes a bordered box
+<Button className="px-3 py-1.5 text-sm" type="submit">add</Button>
+<button className="border px-3 py-1.5 text-sm">add role</button>
+
+// ✅ GOOD
+<button type="submit" className="text-sm font-semibold text-primaryBlue disabled:opacity-40">add</button>
+<button type="button" className="text-sm text-textTertiary">delete</button>
+```
+
+Do not invent a one-off bordered chip for a new control. A pressed state is colour (`text-primaryBlue`), not a new outline.

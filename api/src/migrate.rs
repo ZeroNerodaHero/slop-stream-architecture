@@ -119,6 +119,46 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/migrate-14.sql"),
         present: "SELECT to_regclass('public.notifications') IS NOT NULL",
     },
+    Migration {
+        version: 15,
+        name: "migrate-15.sql",
+        sql: include_str!("../migrations/migrate-15.sql"),
+        present: "SELECT to_regclass('public.roles') IS NOT NULL
+            AND to_regclass('public.bans') IS NOT NULL
+            AND EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'memberships' AND column_name = 'owner')",
+    },
+    Migration {
+        version: 16,
+        name: "migrate-16.sql",
+        sql: include_str!("../migrations/migrate-16.sql"),
+        present: "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'groups' AND column_name = 'public')",
+    },
+    Migration {
+        version: 17,
+        name: "migrate-17.sql",
+        sql: include_str!("../migrations/migrate-17.sql"),
+        present: "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'groups' AND column_name = 'title')
+            AND EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'groups' AND column_name = 'tag')",
+    },
+    Migration {
+        version: 18,
+        name: "migrate-18.sql",
+        sql: include_str!("../migrations/migrate-18.sql"),
+        present: "SELECT to_regclass('public.chat_images') IS NOT NULL
+            AND EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'chat_lines' AND column_name = 'image')",
+    },
+    Migration {
+        version: 19,
+        name: "migrate-19.sql",
+        sql: include_str!("../migrations/migrate-19.sql"),
+        present: "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'groups' AND column_name = 'member_order')",
+    },
 ];
 
 /// Apply every migration that has not run. The chat process does not call this.

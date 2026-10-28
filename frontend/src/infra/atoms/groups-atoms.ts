@@ -57,6 +57,11 @@ export function createGroup(group: NewGroup): Promise<boolean> {
   return act('made', () => api.createGroup(group), `made ${group.name}. you are in it`, true);
 }
 
+/** Public is on the lists. Private is on the lists only for someone in it. */
+export function setGroupListed(name: string, isPublic: boolean, label: string): Promise<boolean> {
+  return act(isPublic ? 'public' : 'private', () => api.setGroupPublic(name, isPublic), isPublic ? `${label} is public` : `${label} is private`, false);
+}
+
 export function joinGroup(name: string): Promise<boolean> {
   return act('joined', () => api.joinGroup(name), `joined ${name}`, true);
 }

@@ -1,17 +1,18 @@
-import { RiRobot2Line } from '@remixicon/react';
+import { RiImageAddLine, RiRobot2Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type FormEvent, type KeyboardEvent, type UIEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
-import type { Owner } from '@/infra/api';
+import { api, messageOf, type Owner } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
-  MAX_CHAT_CHARS,
+  type ChatLine,
   backToLatest,
   chatAsStreamerAtom,
   chatBehindAtom,
   chatCanSendAtom,
   chatCountAtom,
   chatDraftAtom,
+  chatImageAtom,
   chatLinesAtom,
   chatNoticeAtom,
   chatPhaseAtom,
@@ -20,7 +21,6 @@ import {
   chatResultsForAtom,
   chatScrollAtom,
   chatSpeakerAtom,
-  chars,
   clearResults,
   closeChat,
   hiddenBotLinesAtom,
@@ -34,8 +34,10 @@ import {
   searchRoom,
   sendChat,
   setChatDraft,
+  setChatImage,
   setChatFollowing,
   setNick,
+  showNotice,
   showSpeaker,
   takeScrollPlan,
   visibleChatLinesAtom
@@ -45,6 +47,7 @@ import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { panelClassName } from '@/shared-components/Panel';
+import { compressChatImage } from '@/infra/picture';
 import { cn } from '@/utils/cn';
 
 /** Within this many px of the newest line counts as "at the bottom", so a one-line gap after a font swap does not unstick the view. */
@@ -56,6 +59,11 @@ interface ChatPanelProps {
   owner?: Owner | null;
   /** Inside another box (the corner player): no stroke, shadow or minimum height of its own, and no header or search box, which a panel this small has no room for. The lines and the text box alone. */
   embedded?: boolean;
+  /**
+   * A group's channel: the header is the channel, and a line is a block (the face, the name
+   * above the text) instead of one paragraph. The ids and the data attributes stay.
+   */
+  server?: boolean;
   className?: string;
 }
 
@@ -69,7 +77,7 @@ function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
 
 /**
  * The chat next to the video. Lines newest at the bottom, a nick box until you
- * have one (or a login), a text box with a 500 countdown. Each line wears its
+ * have one (or a login), then one row: a picture, the text, send. Each line wears its
  * speaker's group badges, and starts with their face (a setting of this browser,
  * on unless the settings tab turned it off: the picture when the line is a login's
  * or the streamer's, the letter their name makes otherwise); the robot in the
@@ -78,7 +86,93 @@ function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
  * through `openChat`. One at a time: the chat atoms hold one room, and the ids
  * here are the ones the tests key on.
  */
-export function ChatPanel({ name, owner = null, embedded = false, className }: ChatPanelProps) {
+/** Unix ms on the line, drawn as a clock. A line with no time says nothing. */
+function saidAt(at: number): string {
+  if (!at) return '';
+  const when = new Date(at);
+  if (Number.isNaN(when.getTime())) return '';
+  return when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function Speaker({ line }: { line: ChatLine }) {
+  const className = cn('cursor-pointer font-semibold', line.streamer ? 'text-increase' : 'text-primaryBlue');
+  if (!line.verified) return <span className={cn('font-semibold', line.streamer ? 'text-increase' : 'text-primaryBlue')}>{line.from}</span>;
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      data-from={line.from}
+      title={`${line.from}'s lines`}
+      onClick={() => void showSpeaker(line.from)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          void showSpeaker(line.from);
+        }
+      }}
+      className={className}
+    >
+      {line.from}
+    </span>
+  );
+}
+
+function Marks({ line, mine }: { line: ChatLine; mine: boolean }) {
+  return (
+    <>
+      {line.verified && (
+        <span className="text-increase" title="logged in as this name">
+          ✓
+        </span>
+      )}
+      {line.groups.map((group) => (
+        <Badge key={group.name} group={group} />
+      ))}
+      {line.streamer && <span className="bg-increase/15 px-1 text-xs uppercase text-increase">streamer</span>}
+      {mine && <span className="bg-primaryBlue/15 px-1 text-xs uppercase text-primaryBlue">you</span>}
+    </>
+  );
+}
+
+/** A group's line: the face beside a block, the name on its own row, the text under it. */
+/** Five lines of the panel's text. A chat picture is never taller than that. */
+function ChatImage({ id }: { id: string }) {
+  const src = `/api/chat-images/${encodeURIComponent(id)}`;
+  return (
+    <a href={src} target="_blank" rel="noreferrer" className="mt-1 block w-fit max-w-full">
+      <img src={src} alt="" className="max-h-[7.5rem] max-w-full object-contain" />
+    </a>
+  );
+}
+
+function ServerLine({ line, mine, faces }: { line: ChatLine; mine: boolean; faces: boolean }) {
+  return (
+    <div
+      data-id={line.id}
+      data-streamer={line.streamer || undefined}
+      data-verified={line.verified || undefined}
+      data-bot={isBotLine(line) || undefined}
+      data-groups={line.groups.length ? line.groups.map((g) => g.name).join(' ') : undefined}
+      data-mine={mine || undefined}
+      className="my-3 flex gap-3 [overflow-wrap:anywhere]"
+    >
+      {faces && <Face name={line.from} version={line.avatar} className="h-10 w-10 text-sm" />}
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+          <Speaker line={line} />
+          <Marks line={line} mine={mine} />
+          <time className="text-xs text-textTertiary" dateTime={line.at ? new Date(line.at).toISOString() : undefined}>
+            {saidAt(line.at)}
+          </time>
+        </div>
+        {line.text && <p className="mt-0.5 whitespace-pre-wrap">{line.text}</p>}
+        {line.image && <ChatImage id={line.image} />}
+      </div>
+    </div>
+  );
+}
+
+export function ChatPanel({ name, owner = null, embedded = false, server = false, className }: ChatPanelProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   // height before the last paint, so prepending older lines can put the same pixels back
   const hold = useRef(0);
@@ -86,6 +180,8 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
   const stuck = useRef(true);
   const shown = useRef(0);
   const [query, setQuery] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
   const lines = useAtomValue(visibleChatLinesAtom);
   const loaded = useAtomValue(chatLinesAtom).length;
   const hideBots = useAtomValue(hideBotsAtom);
@@ -94,6 +190,7 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
   const count = useAtomValue(chatCountAtom);
   const phase = useAtomValue(chatPhaseAtom);
   const draft = useAtomValue(chatDraftAtom);
+  const imageId = useAtomValue(chatImageAtom);
   const notice = useAtomValue(chatNoticeAtom);
   const nick = useAtomValue(nickAtom);
   const nickOk = useAtomValue(nickIsValidAtom);
@@ -146,12 +243,26 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
     if (el.scrollTop < 48) void loadOlder();
   }
 
+  async function pickPicture(file: File | undefined) {
+    if (!file || uploading) return;
+    setUploading(true);
+    try {
+      const blob = await compressChatImage(file);
+      const saved = await api.uploadChatImage(blob);
+      setChatImage(saved.id);
+    } catch (err) {
+      showNotice(messageOf(err));
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
   function onSearch(e: FormEvent) {
     e.preventDefault();
     void searchRoom(query);
   }
 
-  const left = MAX_CHAT_CHARS - chars(draft.trim());
   // the nick box stays until "join" actually opened the socket. a login never needs one.
   const needsNick = !owner && !me && phase === 'off';
   // the name the server echoes our own lines under: the stream's when we are the streamer, else the login or nick
@@ -161,7 +272,9 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
     <aside id="chat" data-phase={phase} className={embedded ? cn('flex flex-col', className) : panelClassName(cn('flex min-h-[320px] flex-col', className))}>
       {!embedded && (
         <header className="flex items-center justify-between gap-3 border-b border-primaryStroke px-4 py-2 text-base">
-          <span className="font-semibold">chat</span>
+          <span id={server ? 'channel' : undefined} className="truncate font-semibold">
+            {server ? `#${name.split('/').pop()}` : 'chat'}
+          </span>
           <span className="flex min-w-0 items-center gap-3">
             <span id="chat-count" className="truncate text-textSecondary">
               {count} here · {phase === 'open' ? 'live' : phase}
@@ -244,6 +357,7 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
         {lines.length === 0 && <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>}
         {lines.map((line) => {
           const mine = line.from === myName;
+          if (server) return <ServerLine key={line.id} line={line} mine={mine} faces={faces} />;
           return (
             <p
               key={line.id}
@@ -257,38 +371,13 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
             >
               {/* the face: inline, one line tall, so the row stays one paragraph of text and a long line wraps under it */}
               {faces && <Face name={line.from} version={line.avatar} className="mr-1.5 inline-flex h-5 w-5 align-middle text-[11px]" />}
-              {line.verified ? (
-                <span
-                  role="button"
-                  tabIndex={0}
-                  data-from={line.from}
-                  title={`${line.from}'s lines`}
-                  onClick={() => void showSpeaker(line.from)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      void showSpeaker(line.from);
-                    }
-                  }}
-                  className={cn('cursor-pointer font-semibold', line.streamer ? 'text-increase' : 'text-primaryBlue')}
-                >
-                  {line.from}
-                </span>
-              ) : (
-                <span className={cn('font-semibold', line.streamer ? 'text-increase' : 'text-primaryBlue')}>{line.from}</span>
-              )}
-              {line.verified && (
-                <span className="ml-0.5 text-increase" title="logged in as this name">
-                  ✓
-                </span>
-              )}
-              {line.groups.map((group) => (
-                <Badge key={group.name} group={group} className="ml-1" />
-              ))}
-              {line.streamer && <span className="ml-1 bg-increase/15 px-1 text-xs uppercase text-increase">streamer</span>}
-              {mine && <span className="ml-1 bg-primaryBlue/15 px-1 text-xs uppercase text-primaryBlue">you</span>}
+              <Speaker line={line} />
+              <span className="ml-0.5 inline-flex items-center gap-1 align-middle">
+                <Marks line={line} mine={mine} />
+              </span>
               <span className="text-textSecondary">: </span>
               <span className="whitespace-pre-wrap">{line.text}</span>
+              {line.image && <ChatImage id={line.image} />}
             </p>
           );
         })}
@@ -327,28 +416,45 @@ export function ChatPanel({ name, owner = null, embedded = false, className }: C
             <label htmlFor="chat-text" className="sr-only">
               your message
             </label>
-            <textarea
-              id="chat-text"
-              value={draft}
-              onChange={(e) => setChatDraft(e.target.value)}
-              onKeyDown={onKey}
-              rows={1}
-              placeholder={`say something as ${asStreamer ? name : speaker}`}
-              // block: an inline textarea sits on the text baseline and leaves descender space under itself, a gap on top of the margin
-              className="block w-full resize-none border border-primaryStroke bg-background px-3 py-2 text-base"
-            />
-            <div className="mt-1 flex items-center justify-between gap-2 text-sm">
-              <span id="chat-notice" className="text-decrease" aria-live="polite">
-                {notice}
-              </span>
-              <span className="flex items-center gap-3">
-                <span id="chat-left" className={cn('text-textTertiary', left < 0 && 'font-semibold text-decrease')}>
-                  {left}
-                </span>
-                <Button id="chat-send" variant="primary" flat className="px-4 py-2 text-base" disabled={!canSend} onClick={sendChat}>
-                  send
-                </Button>
-              </span>
+            <span id="chat-notice" className={cn('text-sm text-decrease', notice ? 'mb-1 block' : 'sr-only')} aria-live="polite">
+              {notice}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                id="chat-picture"
+                aria-label={imageId ? 'remove picture' : 'picture'}
+                title={imageId ? 'remove picture' : 'picture'}
+                className="flex h-10 w-10 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
+                disabled={uploading}
+                onClick={() => (imageId ? setChatImage(null) : fileRef.current?.click())}
+              >
+                {imageId ? (
+                  <img id="chat-picture-preview" src={`/api/chat-images/${encodeURIComponent(imageId)}`} alt="" className="h-10 w-10 object-cover" />
+                ) : (
+                  <RiImageAddLine size={20} aria-hidden />
+                )}
+              </button>
+              <input
+                ref={fileRef}
+                id="chat-picture-file"
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => void pickPicture(e.target.files?.[0])}
+              />
+              <textarea
+                id="chat-text"
+                value={draft}
+                onChange={(e) => setChatDraft(e.target.value)}
+                onKeyDown={onKey}
+                rows={1}
+                placeholder={`say something as ${asStreamer ? name : speaker}`}
+                className="block h-10 min-w-0 flex-1 resize-none border border-primaryStroke bg-background px-3 py-2 text-base"
+              />
+              <Button id="chat-send" variant="primary" flat className="h-10 shrink-0 px-4 text-base" disabled={!canSend} onClick={sendChat}>
+                send
+              </Button>
             </div>
           </>
         )}

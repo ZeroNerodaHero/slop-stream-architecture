@@ -5,8 +5,10 @@
 //! Nobody joins it; a chat socket whose hello says `bot: true` wears it (chat.rs), so the
 //! pretend chatters of the fake streams can be told apart, and hidden, in the panel.
 //!
-//! Every other group is also a server. It starts with a channel called `general`, and a
-//! member can add more. The explorer lists them; the room is `/chat/<server>/<channel>`.
+//! Every other group is also a server. It starts with a channel called `general`. The
+//! maker is its owner and can do everything, including name another owner. A custom role
+//! (group_mod.rs) is a name, a colour and some of those powers, never owner itself.
+//! The explorer lists them; the room is `/chat/<server>/<channel>`.
 //!
 //! Badges travel on the chat line itself (`groups`: name, badge, colour, as they were when
 //! the line was said), so drawing a room needs no lookup here.
@@ -78,13 +80,28 @@ fn no_such_group() -> ApiError {
 }
 
 /// A group's name follows the name rule, from the path or the body.
-fn group_name(raw: &str) -> Result<String, ApiError> {
+pub(crate) fn group_name(raw: &str) -> Result<String, ApiError> {
     let name = raw.trim().to_lowercase();
     if valid_name(&name) {
         Ok(name)
     } else {
         Err(ApiError::bad_name())
     }
+}
+
+/// The address: the title, then `-` and four digits. A long title is cut so the whole
+/// thing still fits the name rule (32).
+fn tagged(title: &str, tag: i32) -> String {
+    let suffix = format!("-{tag:04}");
+    let keep = 32usize.saturating_sub(suffix.len());
+    let head: String = title.chars().take(keep).collect();
+    format!("{head}{suffix}")
+}
+
+fn random_tag() -> i32 {
+    let mut buf = [0u8; 2];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut buf);
+    i32::from(u16::from_le_bytes(buf) % 10_000)
 }
 
 /// Cleaned like a chat line (no control or invisible characters, no zalgo), on one line,
@@ -99,7 +116,7 @@ fn clean_badge(raw: &str) -> Result<String, ApiError> {
 }
 
 /// `#rrggbb`, lowercased.
-fn clean_color(raw: &str) -> Result<String, ApiError> {
+pub(crate) fn clean_color(raw: &str) -> Result<String, ApiError> {
     let color = raw.trim().to_lowercase();
     let hex = color.strip_prefix('#').unwrap_or("");
     if hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -109,7 +126,7 @@ fn clean_color(raw: &str) -> Result<String, ApiError> {
     }
 }
 
-fn clean_about(raw: &str) -> String {
+pub(crate) fn clean_about(raw: &str) -> String {
     clean_text(raw).chars().take(MAX_ABOUT_CHARS).collect()
 }
 
@@ -124,10 +141,10 @@ fn too_many_groups() -> ApiError {
 
 // ---- routes ----------------------------------------------------------------------------
 
-/// name, badge, color, about, made_by, members, mine
-type GroupRow = (String, String, String, String, Option<String>, i64, bool);
+/// name, badge, color, about, made_by, members, mine, public, title, tag
+type GroupRow = (String, String, String, String, Option<String>, i64, bool, bool, Option<String>, Option<i32>);
 
-fn group_json((name, badge, color, about, made_by, members, mine): GroupRow) -> Value {
+fn group_json((name, badge, color, about, made_by, members, mine, public, title, tag): GroupRow) -> Value {
     json!({
         "name": name,
         "badge": badge,
@@ -136,20 +153,26 @@ fn group_json((name, badge, color, about, made_by, members, mine): GroupRow) -> 
         "made_by": made_by,
         "members": members,
         "mine": mine,
+        "public": public,
+        "title": title,
+        "tag": tag,
         "automatic": name == BOT_GROUP,
     })
 }
 
-/// `GET /api/groups`: every group, `bot` first, then oldest first; how many are in each
-/// and, for a login, whether it is one of them. `made_by` is the maker's name as it is
-/// now, by the id: a renamed maker reads right everywhere.
+/// `GET /api/groups`: every group a stranger may see, `bot` first, then oldest first.
+/// A private group is here only for someone in it (and `bot` always). `made_by` is the
+/// maker's name as it is now, by the id: a renamed maker reads right everywhere.
 async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let rows: Vec<GroupRow> = sqlx::query_as(
         "SELECT g.name, g.badge, g.color, g.about, maker.name,
                 (SELECT count(*) FROM memberships m WHERE m.group_name = g.name),
-                EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1)
+                EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1),
+                g.public, g.title, g.tag
          FROM groups g
          LEFT JOIN streamers maker ON maker.id = g.created_by_id
+         WHERE g.public OR g.name = $2
+            OR EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1)
          ORDER BY g.name = $2 DESC, g.created_at, g.name",
     )
     .bind(me.as_ref().map(|a| a.id))
@@ -166,17 +189,29 @@ struct NewGroup {
     color: String,
     #[serde(default)]
     about: String,
+    /// Left off the lists when false. Absent means public, so an older page still makes one.
+    #[serde(default = "default_public")]
+    public: bool,
+}
+
+fn default_public() -> bool {
+    true
 }
 
 /// `POST /api/groups`: a login makes a group and is in it. 201 with the group as the list
-/// shows it. 400 for a bad name, badge or colour; 409 `name taken` (`bot` included).
+/// shows it. The body's `name` is the title. The stored `name` is that title plus `-` and
+/// four random digits, so the same title can be made again. 400 for a bad name, badge or
+/// colour; 409 `name taken` for `bot`, or when eight draws of the digits were all taken.
 async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGroup>, JsonRejection>) -> Result<(StatusCode, Json<Value>), ApiError> {
     let maker = me.ok_or_else(not_logged_in)?;
     let Json(body) = body?;
-    let name = group_name(&body.name)?;
+    let title = group_name(&body.name)?;
     let badge = clean_badge(&body.badge)?;
     let color = clean_color(&body.color)?;
     let about = clean_about(&body.about);
+    if title == BOT_GROUP {
+        return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
+    }
     let made: i64 = sqlx::query_scalar("SELECT count(*) FROM groups WHERE created_by_id = $1").bind(maker.id).fetch_one(&s.db).await?;
     if made >= GROUPS_PER_MAKER {
         return Err(ApiError::new(StatusCode::FORBIDDEN, format!("you have made {GROUPS_PER_MAKER} groups already. delete one first")));
@@ -186,32 +221,48 @@ async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGrou
     }
     // the group, its first member, and its first channel in one statement: no server
     // without `general`, and no group without its maker in it.
-    // the id is the key; the name columns are written while they exist (docs/ids.md)
-    let made: Option<String> = sqlx::query_scalar(
-        "WITH g AS (
-            INSERT INTO groups (name, badge, color, about, created_by, created_by_id) VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (name) DO NOTHING RETURNING name
-         ),
-         c AS (
-            INSERT INTO channels (server, name, about, created_by_id)
-            SELECT name, 'general', '', $6 FROM g RETURNING server
-         )
-         INSERT INTO memberships (name, group_name, user_id)
-         SELECT $5, g.name, $6 FROM g JOIN c ON c.server = g.name RETURNING group_name",
-    )
-    .bind(&name)
-    .bind(&badge)
-    .bind(&color)
-    .bind(&about)
-    .bind(&maker.name)
-    .bind(maker.id)
-    .fetch_optional(&s.db)
-    .await?;
-    if made.is_none() {
+    // the id is the key; the name columns are written while they exist (docs/ids.md).
+    // a taken address (the digits collided) inserts nothing, and we draw again.
+    let mut slug = String::new();
+    let mut tag = 0i32;
+    let mut inserted = false;
+    for _ in 0..8 {
+        tag = random_tag();
+        slug = tagged(&title, tag);
+        let made: Option<String> = sqlx::query_scalar(
+            "WITH g AS (
+                INSERT INTO groups (name, badge, color, about, created_by, created_by_id, public, title, tag)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (name) DO NOTHING RETURNING name
+             ),
+             c AS (
+                INSERT INTO channels (server, name, about, created_by_id)
+                SELECT name, 'general', '', $6 FROM g RETURNING server
+             )
+             INSERT INTO memberships (name, group_name, user_id, owner)
+             SELECT $5, g.name, $6, true FROM g JOIN c ON c.server = g.name RETURNING group_name",
+        )
+        .bind(&slug)
+        .bind(&badge)
+        .bind(&color)
+        .bind(&about)
+        .bind(&maker.name)
+        .bind(maker.id)
+        .bind(body.public)
+        .bind(&title)
+        .bind(tag)
+        .fetch_optional(&s.db)
+        .await?;
+        if made.is_some() {
+            inserted = true;
+            break;
+        }
+    }
+    if !inserted {
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     }
-    log::info!("{}: made the group {name} ({badge})", maker.name);
-    Ok((StatusCode::CREATED, Json(group_json((name, badge, color, about, Some(maker.name), 1, true)))))
+    log::info!("{}: made the group {slug} ({badge})", maker.name);
+    Ok((StatusCode::CREATED, Json(group_json((slug, badge, color, about, Some(maker.name.clone()), 1, true, body.public, Some(title), Some(tag))))))
 }
 
 /// `POST /api/groups/:group/join`: 204, also when already in it. 401 for nobody, 404 for no
@@ -234,6 +285,9 @@ async fn join(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) 
     if already {
         return Ok(StatusCode::NO_CONTENT);
     }
+    if crate::group_mod::banned(&s.db, me.id, &group).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "you are banned"));
+    }
     if member_of(&s.db, me.id).await? >= GROUPS_PER_MEMBER {
         return Err(too_many_groups());
     }
@@ -247,10 +301,25 @@ async fn join(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) 
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/groups/:group/leave`: 204, also when not in it. 401 for nobody.
+/// `POST /api/groups/:group/leave`: 204, also when not in it. 401 for nobody. 403 when this
+/// login is the only owner and someone else is still in it: name another one first. The last
+/// person out deletes the group. Their roles in this group go with them.
 async fn leave(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let me = me.ok_or_else(not_logged_in)?;
     let group = group_name(&group)?;
+    let owner: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1 AND group_name = $2 AND owner)")
+        .bind(me.id)
+        .bind(&group)
+        .fetch_one(&s.db)
+        .await?;
+    if owner {
+        let owners: i64 = sqlx::query_scalar("SELECT count(*) FROM memberships WHERE group_name = $1 AND owner").bind(&group).fetch_one(&s.db).await?;
+        let members: i64 = sqlx::query_scalar("SELECT count(*) FROM memberships WHERE group_name = $1").bind(&group).fetch_one(&s.db).await?;
+        if owners <= 1 && members > 1 {
+            return Err(ApiError::new(StatusCode::FORBIDDEN, "name another owner first"));
+        }
+    }
+    crate::group_mod::drop_roles(&s.db, &group, me.id).await?;
     let done = sqlx::query("DELETE FROM memberships WHERE user_id = $1 AND group_name = $2")
         .bind(me.id)
         .bind(&group)
@@ -259,11 +328,32 @@ async fn leave(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me)
     if done.rows_affected() > 0 {
         log::info!("{}: left {group}", me.name);
     }
+    delete_if_empty(&s, &group).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/groups/:group`: the one who made it, or an admin (`ADMIN_NAMES`). 204; its
-/// members are out with it. 401 for nobody, 403 `not your group` and for `bot`, 404.
+/// A group with nobody in it is gone, pictures included. `bot` stays.
+pub(crate) async fn delete_if_empty(s: &AppState, group: &str) -> Result<(), sqlx::Error> {
+    if group == BOT_GROUP {
+        return Ok(());
+    }
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM memberships WHERE group_name = $1").bind(group).fetch_one(&s.db).await?;
+    if n > 0 {
+        return Ok(());
+    }
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM groups WHERE name = $1)").bind(group).fetch_one(&s.db).await?;
+    if !exists {
+        return Ok(());
+    }
+    let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/icon.jpg")).await;
+    let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/banner.jpg")).await;
+    sqlx::query("DELETE FROM groups WHERE name = $1").bind(group).execute(&s.db).await?;
+    log::info!("deleted {group}: nobody left");
+    Ok(())
+}
+
+/// `DELETE /api/groups/:group`: an owner, the one who made it, or an admin (`ADMIN_NAMES`).
+/// 204; its members are out with it. 401 for nobody, 403 `not your group` and for `bot`, 404.
 async fn remove(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let who = me.ok_or_else(not_logged_in)?;
     let group = group_name(&group)?;
@@ -272,9 +362,16 @@ async fn remove(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
     }
     let made_by: Option<Option<Uuid>> = sqlx::query_scalar("SELECT created_by_id FROM groups WHERE name = $1").bind(&group).fetch_optional(&s.db).await?;
     let Some(made_by) = made_by else { return Err(no_such_group()) };
-    if made_by != Some(who.id) && !s.admins.iter().any(|a| a.id == who.id) {
+    let owner: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1 AND group_name = $2 AND owner)")
+        .bind(who.id)
+        .bind(&group)
+        .fetch_one(&s.db)
+        .await?;
+    if made_by != Some(who.id) && !owner && !s.admins.iter().any(|a| a.id == who.id) {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "not your group"));
     }
+    let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/icon.jpg")).await;
+    let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/banner.jpg")).await;
     sqlx::query("DELETE FROM groups WHERE name = $1").bind(&group).execute(&s.db).await?;
     log::info!("{}: deleted the group {group}", who.name);
     Ok(StatusCode::NO_CONTENT)
@@ -333,6 +430,17 @@ struct ServerView {
     about: String,
     members: i64,
     mine: bool,
+    /// On the lists for someone who has not joined. A private group is only in `yours`.
+    public: bool,
+    /// The words they typed. Null for a group made before the digits.
+    title: Option<String>,
+    /// Four digits, 0 to 9999. Null for a group made before the digits.
+    tag: Option<i32>,
+    /// Unix seconds, the `?v=` of the picture. Null: none.
+    icon: Option<i64>,
+    banner: Option<i64>,
+    /// This login may add a channel: an owner, the channels bit, or a site admin.
+    can_channels: bool,
     /// Members streaming right now, by the name they have now. Not the roster.
     live: Vec<String>,
     channels: Vec<ChannelView>,
@@ -374,24 +482,44 @@ fn live_first(mut servers: Vec<ServerView>) -> Vec<ServerView> {
     servers
 }
 
-/// `GET /api/explore`: every server (not `bot`), split into the ones this login is in and
-/// the rest. Inside each, a server with someone live comes first. `live` is those members'
+/// `GET /api/explore`: every server (not `bot`) this login may see, split into the ones
+/// it is in and the public ones it is not. A private group it has not joined is left out.
+/// Inside each, a server with someone live comes first. `live` is those members'
 /// names. Channels oldest first, `general` first because it was made with the group.
 async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let user = me.as_ref().map(|a| a.id);
     let admin = me.as_ref().is_some_and(|a| s.admins.iter().any(|admin| admin.id == a.id));
     let mut living = live_members(&s.db, &live_names(&s).await?).await?;
-    // name, badge, color, about, members, mine, channel, channel about, can delete
-    let rows: Vec<(String, String, String, String, i64, bool, Option<String>, Option<String>, bool)> = sqlx::query_as(
+    // name, badge, color, about, members, mine, public, title, tag, icon, banner,
+    // can add a channel, channel, channel about, can delete
+    let rows: Vec<(String, String, String, String, i64, bool, bool, Option<String>, Option<i32>, Option<i64>, Option<i64>, bool, Option<String>, Option<String>, bool)> = sqlx::query_as(
         "SELECT g.name, g.badge, g.color, g.about,
                 (SELECT count(*) FROM memberships m WHERE m.group_name = g.name),
                 EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1),
+                g.public, g.title, g.tag,
+                (EXTRACT(EPOCH FROM g.icon_at))::bigint,
+                (EXTRACT(EPOCH FROM g.banner_at))::bigint,
+                (
+                    EXISTS (SELECT 1 FROM memberships om WHERE om.group_name = g.name AND om.user_id = $1 AND om.owner)
+                    OR $2
+                    OR EXISTS (
+                        SELECT 1 FROM role_members rm JOIN roles r ON r.id = rm.role_id
+                        WHERE r.group_name = g.name AND rm.user_id = $1 AND (r.perms & 4) <> 0
+                    )
+                ),
                 c.name, c.about,
-                COALESCE(c.name IS NOT NULL AND c.name <> 'general'
-                    AND (c.created_by_id = $1 OR g.created_by_id = $1 OR $2), false)
+                COALESCE(c.name IS NOT NULL AND c.name <> 'general' AND (
+                    c.created_by_id = $1 OR $2
+                    OR EXISTS (SELECT 1 FROM memberships om WHERE om.group_name = g.name AND om.user_id = $1 AND om.owner)
+                    OR EXISTS (
+                        SELECT 1 FROM role_members rm JOIN roles r ON r.id = rm.role_id
+                        WHERE r.group_name = g.name AND rm.user_id = $1 AND (r.perms & 4) <> 0
+                    )
+                ), false)
          FROM groups g
          LEFT JOIN channels c ON c.server = g.name
          WHERE g.name <> $3
+           AND (g.public OR EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1))
          ORDER BY g.created_at, g.name, c.created_at NULLS LAST, c.name",
     )
     .bind(user)
@@ -400,10 +528,10 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     .fetch_all(&s.db)
     .await?;
     let mut servers: Vec<ServerView> = Vec::new();
-    for (name, badge, color, about, members, mine, channel, channel_about, can_delete) in rows {
+    for (name, badge, color, about, members, mine, public, title, tag, icon, banner, can_channels, channel, channel_about, can_delete) in rows {
         if servers.last().is_none_or(|server| server.name != name) {
             let live = living.remove(&name).unwrap_or_default();
-            servers.push(ServerView { name, badge, color, about, members, mine, live, channels: Vec::new() });
+            servers.push(ServerView { name, badge, color, about, members, mine, public, title, tag, icon, banner, can_channels, live, channels: Vec::new() });
         }
         if let Some(name) = channel {
             servers.last_mut().unwrap().channels.push(ChannelView { name, about: channel_about.unwrap_or_default(), can_delete });
@@ -437,6 +565,9 @@ async fn create_channel(
     }
     if !member(&s.db, who.id, &server).await? {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "join the server first"));
+    }
+    if !crate::group_mod::allows(&s, who.id, &server, crate::group_mod::CHANNELS).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "you can't add a channel"));
     }
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM channels WHERE server = $1").bind(&server).fetch_one(&s.db).await?;
     if n >= CHANNELS_PER_SERVER {
@@ -474,11 +605,11 @@ async fn delete_channel(State(s): State<AppState>, Path((group, channel)): Path<
     .bind(&channel)
     .fetch_optional(&s.db)
     .await?;
-    let Some((made_channel, made_server)) = row else {
+    let Some((made_channel, _)) = row else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel"));
     };
-    let admin = s.admins.iter().any(|a| a.id == who.id);
-    if made_channel != Some(who.id) && made_server != Some(who.id) && !admin {
+    // who made the channel, or anyone with the channels bit: an owner, that role, a site admin
+    if made_channel != Some(who.id) && !crate::group_mod::allows(&s, who.id, &server, crate::group_mod::CHANNELS).await? {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "not your channel"));
     }
     sqlx::query("DELETE FROM channels WHERE server = $1 AND name = $2").bind(&server).bind(&channel).execute(&s.db).await?;
@@ -490,7 +621,7 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/explore", get(explore))
         .route("/api/groups", get(list).post(create))
-        .route("/api/groups/{group}", delete(remove))
+        .route("/api/groups/{group}", get(crate::group_mod::room).delete(remove))
         .route("/api/groups/{group}/join", post(join))
         .route("/api/groups/{group}/leave", post(leave))
         .route("/api/groups/{group}/channels", post(create_channel))
@@ -528,6 +659,15 @@ mod tests {
         assert!(group_name("").is_err());
         assert!(group_name("a b").is_err());
         assert!(group_name(&"a".repeat(33)).is_err());
+    }
+
+    #[test]
+    fn the_digits_fit_the_name() {
+        assert_eq!(tagged("gaming", 42), "gaming-0042");
+        let slug = tagged(&"a".repeat(32), 7);
+        assert_eq!(slug.len(), 32);
+        assert!(slug.ends_with("-0007"));
+        assert!(valid_name(&slug));
     }
 
     #[test]

@@ -1,4 +1,5 @@
-import { type MouseEvent, type PointerEvent, useLayoutEffect, useRef } from 'react';
+import { type MouseEvent, type PointerEvent, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { Button } from '@/shared-components/Button';
 
@@ -21,11 +22,28 @@ interface ConfirmDialogProps {
  * player). Mounted = asked, the way UserModal is mounted = shown: a native <dialog> opened
  * modal on mount, so the browser keeps focus in it, closes it on escape and hands focus back
  * to the button that asked. Every way out goes through the element's `close`, which says
- * which answer it was. It lives wherever it is rendered, so inside the popped out player it
- * is the player's own window that asks, not a page behind other apps. "no" has focus to
- * begin with: a stray enter changes nothing.
+ * which answer it was. It is asked in its own window, the page's or the popped-out player's,
+ * and not inside another dialog: a modal inside a modal closes the outer one with it. "no"
+ * has focus to begin with: a stray enter changes nothing.
  */
-export function ConfirmDialog({ id, title, message, yes, onYes, onNo }: ConfirmDialogProps) {
+export function ConfirmDialog(props: ConfirmDialogProps) {
+  const anchor = useRef<HTMLSpanElement>(null);
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  // On the page, not inside whatever dialog asked: a modal inside a modal closes the outer one
+  // with it. The anchor's document is the popped-out player's own window when the question is
+  // asked there.
+  useLayoutEffect(() => {
+    setHost(anchor.current?.ownerDocument.body ?? null);
+  }, []);
+  return (
+    <>
+      <span ref={anchor} hidden />
+      {host && createPortal(<ConfirmBox {...props} />, host)}
+    </>
+  );
+}
+
+function ConfirmBox({ id, title, message, yes, onYes, onNo }: ConfirmDialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   /** Yes was pressed: the `close` that follows is a yes. Anything else is a no. */
   const saidYes = useRef(false);
@@ -63,7 +81,11 @@ export function ConfirmDialog({ id, title, message, yes, onYes, onNo }: ConfirmD
       aria-describedby={`${id}-message`}
       onPointerDown={onPointerDown}
       onClick={onClick}
-      onClose={() => (saidYes.current ? onYes() : onNo())}
+      onClose={(event) => {
+        event.stopPropagation();
+        if (saidYes.current) onYes();
+        else onNo();
+      }}
       // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
       className="m-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60"
     >
@@ -73,10 +95,10 @@ export function ConfirmDialog({ id, title, message, yes, onYes, onNo }: ConfirmD
       <p id={`${id}-message`} className="mt-4 text-textSecondary">
         {message}
       </p>
-      <div className="mt-6 flex justify-end gap-3">
-        <Button id={`${id}-no`} className="px-4 py-2" onClick={close}>
+      <div className="mt-6 flex items-center justify-end gap-3">
+        <button id={`${id}-no`} type="button" className="text-base font-semibold text-textTertiary" onClick={close}>
           no
-        </Button>
+        </button>
         <Button
           id={`${id}-yes`}
           variant="danger"

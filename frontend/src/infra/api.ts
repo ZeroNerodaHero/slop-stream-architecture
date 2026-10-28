@@ -164,6 +164,12 @@ export interface Group extends GroupBadge {
   members: number;
   /** The login this list was asked with is in it. Always false for nobody. */
   mine: boolean;
+  /** On the lists for someone who has not joined. Absent on an older api: treated as public. */
+  public?: boolean;
+  /** The words they typed. Absent, or null, on a group made before the digits: the name is the words. */
+  title?: string | null;
+  /** Four digits so two groups can share a title. Absent, or null, when there are none. */
+  tag?: number | null;
   /** `bot`: nobody joins it, a chat socket that says `bot: true` wears it. */
   automatic: boolean;
 }
@@ -173,13 +179,15 @@ export interface NewGroup {
   badge: string;
   color: string;
   about: string;
+  /** Left off the lists when false. Omitted means public. */
+  public?: boolean;
 }
 
 /** One room inside a server. `general` is the one a group starts with. */
 export interface Channel {
   name: string;
   about: string;
-  /** The login can delete it: they made it, they made the server, or they are an admin. Never `general`. */
+  /** The login can delete it: they made it, or they may manage channels. Never `general`. */
   can_delete: boolean;
 }
 
@@ -191,9 +199,85 @@ export interface Server {
   about: string;
   members: number;
   mine: boolean;
+  /** On the lists for someone who has not joined. Absent on an older api: treated as public. */
+  public?: boolean;
+  /** The words they typed. Absent, or null, on a group made before the digits. */
+  title?: string | null;
+  /** Four digits. Absent, or null, when there are none. */
+  tag?: number | null;
+  /** Unix seconds, the `?v=` of the picture. Null, or absent on an older api: none. */
+  icon?: number | null;
+  banner?: number | null;
+  /** This login may add a channel. Absent on an older api, which let any member. */
+  can_channels?: boolean;
   /** Members streaming now. Empty when nobody is, and on an older api that does not say. */
   live?: string[];
   channels: Channel[];
+}
+
+/** The five powers a custom role can hold. An owner has every one. Owner itself is not one of them. */
+export interface RolePerms {
+  appearance: boolean;
+  roles: boolean;
+  channels: boolean;
+  kick: boolean;
+  ban: boolean;
+}
+
+export interface GroupRole {
+  id: number;
+  name: string;
+  color: string;
+  perms: RolePerms;
+}
+
+/** `GET /api/groups/:group`. Absent fields are an older api. */
+export interface GroupRoom {
+  name: string;
+  badge: string;
+  color: string;
+  about: string;
+  members: number;
+  mine: boolean;
+  owner: boolean;
+  /** Absent on an older api. */
+  public?: boolean;
+  /** The words they typed. Absent, or null, on a group made before the digits. */
+  title?: string | null;
+  /** Four digits. Absent, or null, when there are none. */
+  tag?: number | null;
+  /** `name`, `newest`, or `oldest`. Absent on an older api. Owners stay first. */
+  member_order?: string;
+  icon: number | null;
+  banner: number | null;
+  perms: RolePerms;
+  roles: GroupRole[];
+}
+
+export interface GroupMember {
+  name: string;
+  owner: boolean;
+  /** Absent on an older api. */
+  avatar?: number | null;
+  roles: { id: number; name: string; color: string }[];
+}
+
+export interface GroupBan {
+  name: string;
+  reason: string;
+}
+
+/** The words on the square, and the four digits when the group has them. */
+export function groupWords(group: { name: string; title?: string | null; tag?: number | null }): { title: string; tag: string | null } {
+  const title = group.title && group.title.length > 0 ? group.title : group.name;
+  const tag = group.tag == null ? null : String(group.tag).padStart(4, '0');
+  return { title, tag };
+}
+
+/** The picture or the banner, cache-busted. Null when the group has none. */
+export function groupImage(name: string, kind: 'icon' | 'banner', version?: number | null): string | null {
+  if (version == null) return null;
+  return `/api/groups/${encodeURIComponent(name)}/${kind}?v=${version}`;
 }
 
 export interface Explore {
@@ -359,14 +443,41 @@ export const api = {
   createGroup: (group: NewGroup) => request<Group>('POST', '/api/groups', group),
   joinGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/join`),
   leaveGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/leave`),
-  /** The one who made it (or an admin). Its members are out with it. */
+  /** An owner, the one who made it, or an admin. Its members are out with it. */
   deleteGroup: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}`),
+  /** The group, its roles, and what this login may do. 404 on an api that has no room yet. */
+  group: (name: string) => request<GroupRoom>('GET', `/api/groups/${encodeURIComponent(name)}`),
   /** Servers you are in, then the ones you can find. `bot` is not a server. See docs/groups.md. */
   explore: () => request<Explore>('GET', '/api/explore'),
-  /** A member adds a channel. 403 until they have joined, 409 when the name is taken. */
+  /** Someone who may add a channel. 403 until they have joined, or without the power. */
   createChannel: (server: string, name: string) => request<Channel>('POST', `/api/groups/${encodeURIComponent(server)}/channels`, { name }),
-  /** Who made the channel, who made the server, or an admin. `general` stays. */
+  /** Who made the channel, or someone who may manage channels. `general` stays. */
   deleteChannel: (server: string, channel: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`),
+  saveGroupAbout: (name: string, about: string) => request<{ about: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/about`, { about }),
+  /** Appearance. A private group stays off the lists. */
+  setGroupPublic: (name: string, isPublic: boolean) => request<{ public: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/access`, { public: isPublic }),
+  /** Appearance. Owners stay first; this is the order after them. */
+  setMemberOrder: (name: string, order: 'name' | 'newest' | 'oldest') =>
+    request<{ order: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/order`, { order }),
+  saveGroupIcon: (name: string, jpeg: Blob) => request<{ icon: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/icon`, jpeg),
+  deleteGroupIcon: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}/icon`),
+  saveGroupBanner: (name: string, jpeg: Blob) => request<{ banner: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/banner`, jpeg),
+  deleteGroupBanner: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}/banner`),
+  groupMembers: (name: string) => request<GroupMember[]>('GET', `/api/groups/${encodeURIComponent(name)}/members`),
+  groupBans: (name: string) => request<GroupBan[]>('GET', `/api/groups/${encodeURIComponent(name)}/bans`),
+  createRole: (group: string, role: { name: string; color: string; perms: RolePerms }) =>
+    request<GroupRole>('POST', `/api/groups/${encodeURIComponent(group)}/roles`, role),
+  saveRole: (group: string, id: number, role: { name: string; color: string; perms: RolePerms }) =>
+    request<GroupRole>('PUT', `/api/groups/${encodeURIComponent(group)}/roles/${id}`, role),
+  deleteRole: (group: string, id: number) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/roles/${id}`),
+  giveRole: (group: string, id: number, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/roles/${id}/members`, { name }),
+  takeRole: (group: string, id: number, name: string) =>
+    request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/roles/${id}/members/${encodeURIComponent(name)}`),
+  grantOwner: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/owners`, { name }),
+  revokeOwner: (group: string, name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/owners/${encodeURIComponent(name)}`),
+  kickMember: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/kick`, { name }),
+  banMember: (group: string, name: string, reason: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/ban`, { name, reason }),
+  unbanMember: (group: string, name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/bans/${encodeURIComponent(name)}`),
   streams: () => request<LiveStream[]>('GET', '/api/streams'),
   streamer: (name: string) => request<Streamer>('GET', `/api/streamers/${name}`),
   /** The name's sessions overlapping `[from, to)`, oldest first: the calendar's blocks. At most 93 days a request, 1000 rows an answer. */
@@ -382,6 +493,8 @@ export const api = {
   unfollow: (name: string) => request<null>('POST', `/api/streamers/${encodeURIComponent(name)}/unfollow`),
   /** Names holding the letters, the exact one first, 20 at most. Works for nobody too. */
   search: (q: string) => request<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
+  /** A picture for a chat line, already shrunk. Webp, or jpeg when the browser cannot write webp. */
+  uploadChatImage: (picture: Blob) => request<{ id: string }>('POST', '/api/chat-images', picture),
   /** Everyone with a row who is not live: home's second half, online first. 100 at most. */
   people: () => request<Person[]>('GET', '/api/people'),
   /** The names whose last stream ended most recently and who are not live again, newest end first, 12 at most: home's recently offline. */

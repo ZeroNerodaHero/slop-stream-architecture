@@ -1,12 +1,13 @@
 import { useAtomValue } from 'jotai';
-import { Outlet, createBrowserRouter, useParams } from 'react-router-dom';
+import { Navigate, Outlet, createBrowserRouter, useParams } from 'react-router-dom';
 
 import { CrashPage } from '@/app/CrashPage';
 import { NotFoundPage } from '@/app/NotFoundPage';
 import { AdminPage } from '@/app/admin/AdminPage';
 import { AuthPage } from '@/app/auth/AuthPage';
 import { HomePage } from '@/app/home/HomePage';
-import { ChannelPage, ExplorePage, GroupPage } from '@/app/explore/ExplorePage';
+import { ExplorePage } from '@/app/explore/ExplorePage';
+import { ChannelPage, GroupPage } from '@/app/explore/ServerRoom';
 import { LivePage } from '@/app/live/LivePage';
 import { WatchPage } from '@/app/watch/WatchPage';
 import { panelSideAtom } from '@/infra/atoms/settings-atoms';
@@ -50,6 +51,13 @@ function WatchRoute() {
   return <WatchPage key={name} />;
 }
 
+/** An old `/explore` link. The page is `/groups` now. */
+function ExploreRedirect() {
+  const { server, channel } = useParams<{ server?: string; channel?: string }>();
+  const to = channel ? `/groups/${server}/${channel}` : server ? `/groups/${server}` : '/groups';
+  return <Navigate to={to} replace />;
+}
+
 /** Keyed on the server, so moving from one group to another starts that room. */
 function GroupRoute() {
   const { server } = useParams<{ server: string }>();
@@ -70,9 +78,12 @@ export const router = createBrowserRouter([
     errorElement: <CrashPage />,
     children: [
       { path: '/', element: <HomePage /> },
-      { path: '/explore', element: <ExplorePage /> },
-      { path: '/explore/:server', element: <GroupRoute /> },
-      { path: '/explore/:server/:channel', element: <ChannelRoute /> },
+      { path: '/groups', element: <ExplorePage /> },
+      { path: '/groups/:server', element: <GroupRoute /> },
+      { path: '/groups/:server/:channel', element: <ChannelRoute /> },
+      { path: '/explore', element: <Navigate to="/groups" replace /> },
+      { path: '/explore/:server', element: <ExploreRedirect /> },
+      { path: '/explore/:server/:channel', element: <ExploreRedirect /> },
       { path: '/live', element: <LivePage /> },
       { path: '/watch/:name', element: <WatchRoute /> },
       { path: '/login', element: <AuthPage mode="login" /> },

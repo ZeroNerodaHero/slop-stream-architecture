@@ -36,6 +36,24 @@ export interface PictureSpec {
   max: number;
 }
 
+/** 256x256 at `groups/<name>/icon.jpg`. The group's picture, square, like an avatar. */
+export const GROUP_ICON: PictureSpec = {
+  title: "the group's picture",
+  where: 'on the group, its card, and the list on home',
+  size: { width: 256, height: 256 },
+  qualities: [0.85],
+  max: 256 * 1024
+};
+
+/** 1280x320 at `groups/<name>/banner.jpg`. A wide strip across the top of the group. */
+export const GROUP_BANNER: PictureSpec = {
+  title: "the group's banner",
+  where: 'across the top of the group',
+  size: { width: 1280, height: 320 },
+  qualities: [0.8, 0.7, 0.6, 0.5],
+  max: 512 * 1024
+};
+
 /** 256x256 at `avatars/<id>.jpg`. The page shows it at 40px, the preview card of a link bigger. */
 export const AVATAR_PICTURE: PictureSpec = {
   title: 'your picture',
@@ -226,4 +244,54 @@ export async function pictureFor(spec: PictureSpec, file: Blob, picture: ImageBi
     if (cut.size <= spec.max) return cut;
   }
   throw new Error(`over ${kb(spec.max)} as a ${formatWord(type)}. try a smaller part`);
+}
+
+/** How tall a chat picture is drawn: five lines of the panel's text. The file is twice that, for a sharp screen. */
+const CHAT_LINE_PX = 24;
+const CHAT_LINES = 5;
+const CHAT_MAX_H = CHAT_LINE_PX * CHAT_LINES * 2;
+const CHAT_MAX_W = 640;
+const CHAT_MAX_BYTES = 256 * 1024;
+
+/**
+ * A picture for a chat line: shrunk so it is about five lines tall, then webp, softer until it
+ * fits. Jpeg when the browser cannot write webp. Profile pictures, group pictures, thumbnails
+ * and the offline picture stay jpeg and do not come through here.
+ */
+export async function compressChatImage(file: Blob): Promise<Blob> {
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    throw new Error('not a picture');
+  }
+  try {
+    const scale = Math.min(1, CHAT_MAX_W / bitmap.width, CHAT_MAX_H / bitmap.height);
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const rect = { x: 0, y: 0, w: bitmap.width, h: bitmap.height };
+    const webp = await chatWebp(bitmap, rect, width, height);
+    if (webp) return webp;
+    for (const quality of [0.8, 0.6, 0.45]) {
+      const jpeg = await cutPicture(bitmap, rect, width, height, 'image/jpeg', quality);
+      if (jpeg.size <= CHAT_MAX_BYTES) return jpeg;
+    }
+    throw new Error('that picture is too big');
+  } finally {
+    bitmap.close();
+  }
+}
+
+/** Webp under the ceiling, or null when this browser will not write one (or none of the tries fit). */
+async function chatWebp(bitmap: ImageBitmap, rect: Rect, width: number, height: number): Promise<Blob | null> {
+  try {
+    for (const quality of [0.8, 0.66, 0.5, 0.35]) {
+      const blob = await cutPicture(bitmap, rect, width, height, 'image/webp', quality);
+      if (blob.type && blob.type !== 'image/webp') return null;
+      if (blob.size <= CHAT_MAX_BYTES) return blob.type === 'image/webp' ? blob : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }

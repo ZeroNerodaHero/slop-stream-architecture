@@ -4,8 +4,8 @@ import { useState } from 'react';
 import { chars } from '@/infra/atoms/chat-atoms';
 import { canEditProfileAtom, loadMyProfile, MAX_ABOUT_CHARS, profileAboutAtom, profileAboutStatusAtom, saveMyAbout, whyNotEditAtom } from '@/infra/atoms/profile-atoms';
 import { store } from '@/infra/store';
-import { Button, buttonClassName } from '@/shared-components/Button';
-import { BUTTON, INPUT, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
+import { buttonClassName } from '@/shared-components/Button';
+import { INPUT, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 interface AboutMeProps {
@@ -63,12 +63,12 @@ export function AboutMe({ text, mine }: AboutMeProps) {
         </fieldset>
         {/* outside the fieldset: `done` works whether or not the box is on */}
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <Button id="about-me-save" variant="primary" flat className={BUTTON} disabled={!canEdit} onClick={() => void saveMyAbout()}>
+          <button id="about-me-save" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={!canEdit} onClick={() => void saveMyAbout()}>
             save
-          </Button>
-          <Button id="about-me-done" flat className={BUTTON} onClick={() => setOpened(false)}>
+          </button>
+          <button id="about-me-done" type="button" className="text-base font-semibold text-textTertiary" onClick={() => setOpened(false)}>
             done
-          </Button>
+          </button>
           <span id="about-me-count" className={cn('text-sm tabular-nums text-textTertiary', left < 100 && 'text-decrease')}>
             {left}
           </span>

@@ -62,7 +62,8 @@ export function FollowButton({ id, name, small, flat, className, onChange }: Fol
       onBlur={() => setHover(false)}
       className={cn(
         small ? 'px-2.5 py-1 text-sm shadow-none' : 'px-3 py-1.5 text-sm',
-        following && hover && 'text-decrease hover:border-decrease',
+        following && 'border-transparent bg-transparent text-primaryBlue shadow-none hover:border-transparent hover:bg-transparent',
+        following && hover && 'text-decrease',
         busy && 'opacity-40',
         className
       )}

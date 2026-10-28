@@ -239,8 +239,8 @@ async fn follow_row(s: &AppState, followed: Uuid, followed_name: &str, follower:
 
 /// `from` wrote `text` to `to` (dms.rs, once the line is kept): the newest line from a friend
 /// is the one unread row from them, so a conversation is one line of the list that says what
-/// they said last, not thirty. An unread row from them goes as the new one comes; a read one
-/// stays, it is history.
+/// they said last, not thirty. An unread row from them goes as the new one comes, including
+/// when two messages land at once; a read one stays, it is history.
 pub(crate) async fn messaged(s: &AppState, to: &Account, from: &Account, text: &str) {
     if let Err(e) = dm_row(s, to, from, text).await {
         log::warn!("notify: {} wrote to {}: {}", from.name, to.name, e.message());
@@ -250,20 +250,36 @@ pub(crate) async fn messaged(s: &AppState, to: &Account, from: &Account, text: &
 async fn dm_row(s: &AppState, to: &Account, from: &Account, text: &str) -> Result<(), ApiError> {
     let Some(actor) = actor_by_id(&s.db, from.id).await? else { return Ok(()) };
     let words: String = text.chars().take(TEXT_CHARS).collect();
+    // Lock the recipient before replacing the unread row. Two messages at once queue on this
+    // statement, and the one that waited reads the row the first one committed. The delete and
+    // the insert lock that row too; their statement keeps the snapshot it started with, which
+    // is from before that wait, so this statement is what lets the second delete land.
+    let mut tx = s.db.begin().await?;
+    let _held: Option<Uuid> = sqlx::query_scalar("SELECT id FROM streamers WHERE id = $1 FOR UPDATE").bind(to.id).fetch_optional(&mut *tx).await?;
     let row: Option<(i64, i64)> = sqlx::query_as(
-        "WITH gone AS (
+        "WITH locked AS (
+            SELECT id FROM streamers WHERE id = $1 FOR UPDATE
+         ),
+         gone AS (
             DELETE FROM notifications WHERE user_id = $1 AND kind = 'dm' AND actor_id = $2 AND read_at IS NULL
+              AND EXISTS (SELECT 1 FROM locked)
+              AND EXISTS (
+                SELECT 1 FROM streamers u
+                WHERE u.id = $1 AND COALESCE((u.notify->>'dm')::boolean, true)
+              )
          )
          INSERT INTO notifications (user_id, kind, actor_id, text)
          SELECT u.id, 'dm', $2, $3 FROM streamers u
          WHERE u.id = $1 AND COALESCE((u.notify->>'dm')::boolean, true)
+           AND EXISTS (SELECT 1 FROM locked)
          RETURNING id, (EXTRACT(EPOCH FROM at) * 1000)::bigint",
     )
     .bind(to.id)
     .bind(actor.id)
     .bind(&words)
-    .fetch_optional(&s.db)
+    .fetch_optional(&mut *tx)
     .await?;
+    tx.commit().await?;
     let Some((id, at_ms)) = row else { return Ok(()) };
     clip(&s.db, &[to.id]).await?;
     let made = Made { to: HashMap::from([(to.name.clone(), id)]), at_ms, text: words, session: None };

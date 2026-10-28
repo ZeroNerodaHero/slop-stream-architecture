@@ -20,7 +20,6 @@ import {
   setPanelSide,
   setPipChatPlace
 } from '@/infra/atoms/settings-atoms';
-import { Button } from '@/shared-components/Button';
 import { GeneratedAvatar } from '@/shared-components/GeneratedAvatar';
 import { OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
@@ -307,9 +306,9 @@ export function SettingsTab() {
             keep the messages
           </label>
           {inspectorOn && (
-            <Button id="inspector-open-settings" flat className="px-4 py-2 text-base" onClick={openInspector}>
+            <button id="inspector-open-settings" type="button" className="text-base font-semibold text-primaryBlue" onClick={openInspector}>
               open messages
-            </Button>
+            </button>
           )}
         </div>
         <p className="mt-4 text-sm text-textTertiary">

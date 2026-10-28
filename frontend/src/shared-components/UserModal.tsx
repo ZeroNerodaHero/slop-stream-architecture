@@ -99,7 +99,12 @@ function UserDialog() {
       onClick={(e) => {
         if (pressedBackdrop.current && e.target === e.currentTarget) close();
       }}
-      onClose={closeUserModal}
+      onClose={(event) => {
+        // a question asked from inside here (delete a group) closes itself. that close walks the
+        // react tree and would shut this too.
+        if (event.target !== event.currentTarget) return;
+        closeUserModal();
+      }}
       className={cn(
         // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
         'overflow-hidden bg-backgroundSecondary p-0 text-base text-textPrimary',

@@ -46,7 +46,7 @@ const SEARCH_LIMIT: i64 = 50;
 /// picture: a read joins `streamers` for it, by account for a verified line (so a rename
 /// keeps it) and by name for the streamer's. A nick's line joins nothing: it is nobody's
 /// picture, whoever holds that name later.
-const LINE_COLUMNS: &str = "l.id, l.at, l.speaker, l.\"text\", l.streamer, l.verified, l.badges,
+const LINE_COLUMNS: &str = "l.id, l.at, l.speaker, l.\"text\", l.streamer, l.verified, l.badges, l.image,
                             (EXTRACT(EPOCH FROM COALESCE(u.avatar_at, r.avatar_at)))::bigint";
 const LINE_TABLES: &str = "chat_lines l
                            LEFT JOIN streamers u ON l.verified AND u.id = l.user_id
@@ -113,6 +113,7 @@ pub(crate) async fn store(
     speaker: &str,
     user_id: Option<Uuid>,
     text: &str,
+    image: Option<&str>,
     streamer: bool,
     verified: bool,
     groups: &[Badge],
@@ -126,8 +127,8 @@ pub(crate) async fn store(
     let user_id = user_id.filter(|_| verified);
     let badges = serde_json::to_value(groups).unwrap_or_else(|_| json!([]));
     sqlx::query(
-        "INSERT INTO chat_lines (room, id, at, seq, speaker, user_id, \"text\", streamer, verified, badges)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        "INSERT INTO chat_lines (room, id, at, seq, speaker, user_id, \"text\", streamer, verified, badges, image)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (room, id) DO NOTHING",
     )
     .bind(room)
@@ -140,6 +141,7 @@ pub(crate) async fn store(
     .bind(streamer)
     .bind(verified)
     .bind(badges)
+    .bind(image)
     .execute(db)
     .await?;
     Ok(())
@@ -323,10 +325,10 @@ async fn pg_side(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, side: Sid
     Ok(lines)
 }
 
-/// `LINE_COLUMNS`, in order: the last is the picture the join found, if any.
-type LineRow = (String, DateTime<Utc>, String, String, bool, bool, Value, Option<i64>);
+/// `LINE_COLUMNS`, in order: `image` is the picture on the line, and the last is the speaker's face the join found.
+type LineRow = (String, DateTime<Utc>, String, String, bool, bool, Value, Option<String>, Option<i64>);
 
-fn line_of((id, at, speaker, text, streamer, verified, badges, avatar): LineRow) -> Line {
+fn line_of((id, at, speaker, text, streamer, verified, badges, image, avatar): LineRow) -> Line {
     let groups = serde_json::from_value::<Vec<Badge>>(badges).unwrap_or_default();
     Line {
         id,
@@ -336,6 +338,7 @@ fn line_of((id, at, speaker, text, streamer, verified, badges, avatar): LineRow)
         verified,
         groups,
         avatar,
+        image: image.filter(|s| !s.is_empty()),
         at: at.timestamp_millis().max(0) as u64,
     }
 }

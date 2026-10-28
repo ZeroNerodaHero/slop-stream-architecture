@@ -106,13 +106,21 @@ pub(crate) struct Line {
     pub(crate) avatar: Option<i64>,
     /// unix ms, from the stream id
     pub(crate) at: u64,
+    /// a picture on the line, the id `POST /api/chat-images` handed back. absent when there is none
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) image: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum In {
     Hello(Hello),
-    Say { text: String },
+    Say {
+        text: String,
+        /// The id from `POST /api/chat-images`. A line may be a picture with no words.
+        #[serde(default)]
+        image: Option<String>,
+    },
 }
 
 /// The first frame: a nick for a viewer, the go-live grant for the streamer. Kept for the
@@ -419,10 +427,20 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                     _ => continue,
                 };
-                let Ok(In::Say { text }) = serde_json::from_str::<In>(&text) else { continue };
+                let Ok(In::Say { text, image }) = serde_json::from_str::<In>(&text) else { continue };
                 let text = clean_text(&text);
+                let image = match image {
+                    Some(raw) if !raw.trim().is_empty() => match Uuid::parse_str(raw.trim()) {
+                        Ok(id) => Some(id.to_string()),
+                        Err(_) => {
+                            let _ = send(&mut socket, &Out::Error { error: "bad picture" }).await;
+                            continue;
+                        }
+                    },
+                    _ => None,
+                };
                 let chars = text.chars().count();
-                if chars == 0 { continue; }
+                if chars == 0 && image.is_none() { continue; }
                 if chars > MAX_TEXT_CHARS {
                     let _ = send(&mut socket, &Out::Error { error: "too long" }).await;
                     continue;
@@ -474,6 +492,20 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                         continue;
                     }
                 }
+                if let Some(id) = &image {
+                    match crate::chat_images::exists(&s.db, id).await {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            let _ = send(&mut socket, &Out::Error { error: "no such picture" }).await;
+                            continue;
+                        }
+                        Err(e) => {
+                            log::warn!("{name}: picture: {e}");
+                            let _ = send(&mut socket, &Out::Error { error: "chat is busy, try again" }).await;
+                            continue;
+                        }
+                    }
+                }
                 let mut r = s.redis.clone();
                 // the badges as json and the picture's version as text, and no field at
                 // all for the common case of neither
@@ -490,6 +522,9 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                 }
                 if let Some(avatar) = &avatar {
                     fields.push(("a", avatar.as_str()));
+                }
+                if let Some(image) = &image {
+                    fields.push(("img", image.as_str()));
                 }
                 // the line and the room's ttl in one atomic round trip: a room whose first
                 // line landed but whose expire did not would otherwise live forever
@@ -511,7 +546,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                 // follows on its own, so a slow database does not hold this socket.
                 if s.persist {
                     if let Some(id) = id {
-                        remember(&s, &name, &id, w, &text);
+                        remember(&s, &name, &id, w, &text, image.as_deref());
                     }
                 }
             }
@@ -523,20 +558,21 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
 }
 
 /// The row for a line redis already accepted. Its own task: the socket goes back to the room.
-fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str) {
+fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, image: Option<&str>) {
     let db = s.db.clone();
     let room = room.to_owned();
     let id = id.to_owned();
     let speaker = w.from.clone();
     let user_id = w.user_id;
     let text = text.to_owned();
+    let image = image.map(str::to_owned);
     let streamer = w.streamer;
     let verified = w.verified;
     let groups = w.groups.clone();
     tokio::spawn(async move {
         let inserted = tokio::time::timeout(
             Duration::from_secs(2),
-            history::store(&db, &room, &id, &speaker, user_id, &text, streamer, verified, &groups),
+            history::store(&db, &room, &id, &speaker, user_id, &text, image.as_deref(), streamer, verified, &groups),
         )
         .await;
         match inserted {
@@ -679,6 +715,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
     let groups: Vec<Badge> = entry.get::<String>("g").and_then(|g| serde_json::from_str(&g).ok()).unwrap_or_default();
     // no `a` field is a line with no picture
     let avatar: Option<i64> = entry.get::<String>("a").and_then(|a| a.parse().ok());
+    let image: Option<String> = entry.get::<String>("img").filter(|s| !s.is_empty());
     Some(Line {
         at: id_parts(&entry.id).0,
         id: entry.id,
@@ -688,6 +725,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         verified: verified == "1",
         groups,
         avatar,
+        image,
     })
 }
 

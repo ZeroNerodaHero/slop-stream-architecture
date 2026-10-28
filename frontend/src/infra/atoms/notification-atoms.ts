@@ -34,33 +34,43 @@ export const notifySettingsAtom = atom<NotifySettings>(ALL_ON);
 /** What the last save of the settings did: `saving`, `saved`, `not saved: <why>`. */
 export const notifySettingsNoteAtom = atom('');
 
-let asking: Promise<void> | null = null;
+/** The in-flight inbox ask, and the login it belongs to. A second caller for that login waits; any other login starts its own. */
+let asking: { me: string; promise: Promise<void> } | null = null;
 
-/** The list and the settings again. One ask at a time; a second caller waits for the first. Nobody: an empty list, no request. */
+/** Saves started on this page. An inbox ask applies its settings only when this is still the value from when that ask was sent. */
+let settingsGen = 0;
+
+/** The list and the settings again. One ask at a time for the login that started it; a second caller for that login waits. Logout drops the ask, and a late answer is kept only if that login is still the one here. Its rows are applied then; its settings only when no save has started since the ask. Nobody: an empty list, no request. */
 export function loadNotifications(): Promise<void> {
-  if (!store.get(meAtom)) {
+  const me = store.get(meAtom);
+  if (!me) {
     store.set(notificationsAtom, []);
     return Promise.resolve();
   }
-  if (!asking) {
-    asking = api
-      .notifications()
-      .then(({ settings, items }) => {
-        store.set(notifySettingsAtom, settings);
-        store.set(notificationsAtom, items.slice(0, KEEP));
-      })
-      .catch(() => {
-        // the api is away, or the login died: what is shown stays, the next open asks again
-      })
-      .finally(() => {
-        asking = null;
-      });
-  }
-  return asking;
+  if (asking?.me === me) return asking.promise;
+  const asked = settingsGen;
+  const promise = api
+    .notifications()
+    .then(({ settings, items }) => {
+      // this answer belongs to the login that asked: once that login has gone, leave the store alone
+      if (store.get(meAtom) !== me) return;
+      // a save started since this ask: its document and its note stay. the rows are still this login's
+      if (asked === settingsGen) store.set(notifySettingsAtom, settings);
+      store.set(notificationsAtom, items.slice(0, KEEP));
+    })
+    .catch(() => {
+      // the api is away, or the login died: what is shown stays, the next open asks again
+    })
+    .finally(() => {
+      if (asking?.promise === promise) asking = null;
+    });
+  asking = { me, promise };
+  return promise;
 }
 
-/** The login changed (in, out, renamed): another person's inbox is not this one's. */
+/** The login changed (in, out, renamed): another person's inbox is not this one's. The ask in flight is dropped, so the next login fetches its own. */
 export function forgetNotifications() {
+  asking = null;
   store.set(notificationsAtom, undefined);
   store.set(notificationsOpenAtom, false);
   store.set(notifySettingsAtom, ALL_ON);
@@ -94,9 +104,12 @@ export function markNotificationsRead() {
 /**
  * One kind on or off, from the notifications tab: `PUT /api/notifications/settings` with the
  * whole document. The switch moves on the click; the api's answer, or the one before on a
- * refusal, is what it settles on. What is already in the inbox stays either way.
+ * refusal, is what it settles on. What is already in the inbox stays either way. An inbox
+ * ask already sent does not put its settings back over this save.
  */
 export async function setNotifySetting(kind: NotificationKind, on: boolean): Promise<void> {
+  // counted at the start, so an ask sent before this click leaves the saved document in place
+  settingsGen += 1;
   const before = store.get(notifySettingsAtom);
   const wanted = { ...before, [kind]: on };
   store.set(notifySettingsAtom, wanted);
@@ -126,7 +139,8 @@ function viewingDm(name: string): boolean {
  * A `notification` frame: a row of this login's inbox, from the api (it reaches every device
  * of the login). To the top of the list; a row already there (the ten-second replay of a
  * gateway restart) is one row. A dm from somebody replaces the unread dm from them, the
- * api's rule. With the list open it is seen at once.
+ * api's rule. With the list open it is seen at once. Nothing is written when this page has
+ * no list yet: a failed ask stays failed, and the next open asks again.
  */
 function arrived(frame: {
   id: number;
@@ -139,7 +153,10 @@ function arrived(frame: {
   session: number | null;
 }) {
   if (!store.get(meAtom)) return;
-  const list = store.get(notificationsAtom) ?? [];
+  const list = store.get(notificationsAtom);
+  // not loaded yet (the ask failed, or it has not come back): not an empty inbox. one pushed
+  // row must not become the list, and must not be marked read. the next open asks again.
+  if (list === undefined) return;
   if (list.some((n) => n.id === frame.id)) return;
   const rest = frame.kind === 'dm' ? list.filter((n) => !(n.kind === 'dm' && n.name === frame.name && !n.read)) : list;
   const read = frame.kind === 'dm' && viewingDm(frame.name);
