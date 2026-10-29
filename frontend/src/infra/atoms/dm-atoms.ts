@@ -17,8 +17,9 @@ import type { Presence } from '@/infra/atoms/presence-atoms';
 import { onEvents } from '@/infra/events';
 import { store } from '@/infra/store';
 
-/** Who a tab is with, as the api or the sidebar had them, and how many of their lines are new. */
+/** Who a tab is with, as the api or the sidebar had them, and how many of their lines are new. `id` is that account; empty when the tab was opened before the list said which one. A rename does not change it. */
 export interface Dm {
+  id: string;
   name: string;
   avatar: number | null;
   verified: boolean;
@@ -64,14 +65,14 @@ function find(name: string): Dm | undefined {
   return store.get(dmsAtom).find((d) => d.name === name);
 }
 
-/** A tab for `person`: new at the end, or theirs with the newer words. `unread` is kept unless given. */
+/** A tab for `person`: new at the end, or theirs with the newer words. `unread` is kept unless given. An empty `id` does not forget one the list already gave this tab. */
 function upsert(person: Person, unread?: number) {
   const dms = store.get(dmsAtom);
   const there = dms.find((d) => d.name === person.name);
   if (there)
     store.set(
       dmsAtom,
-      dms.map((d) => (d.name === person.name ? { ...d, ...person, unread: unread ?? d.unread } : d))
+      dms.map((d) => (d.name === person.name ? { ...d, ...person, id: person.id || d.id, unread: unread ?? d.unread } : d))
     );
   else store.set(dmsAtom, [...dms, { ...person, unread: unread ?? 0 }]);
 }
@@ -89,8 +90,8 @@ function setUnread(name: string, unread: number) {
 function personFor(name: string): Person {
   const row = store.get(followingAtom)?.find((f) => f.name === name);
   return row
-    ? { name, avatar: row.avatar, verified: row.verified, bio: row.bio, presence: row.presence }
-    : { name, avatar: null, verified: true, bio: '', presence: 'offline' };
+    ? { id: '', name, avatar: row.avatar, verified: row.verified, bio: row.bio, presence: row.presence }
+    : { id: '', name, avatar: null, verified: true, bio: '', presence: 'offline' };
 }
 
 /** The thread with `name` is on screen, in a tab the person is looking at. */
@@ -180,7 +181,7 @@ export async function loadDms(): Promise<void> {
   const fresh: Dm[] = list.map((t) => {
     const here = have.find((d) => d.name === t.name);
     // a line counted new since the list was asked for stays counted: the api's number is the floor
-    return { name: t.name, avatar: t.avatar, verified: t.verified, bio: t.bio, presence: t.presence, unread: Math.max(t.unread, here?.unread ?? 0) };
+    return { id: t.id, name: t.name, avatar: t.avatar, verified: t.verified, bio: t.bio, presence: t.presence, unread: Math.max(t.unread, here?.unread ?? 0) };
   });
   const names = new Set(fresh.map((d) => d.name));
   store.set(dmsAtom, [...fresh, ...have.filter((d) => !names.has(d.name))]);
@@ -199,12 +200,15 @@ function merge(a: DmLine[], b: DmLine[]): DmLine[] {
   return [...byId.values()].sort((x, y) => x.id - y.id);
 }
 
-/** The newest page of the thread with `name`, once. Looked at, it is read. */
+/** The newest page of the thread with `name`, once. Looked at, it is read. The page belongs to the login that asked: one that arrives after that login has gone is not this chat, and is not marked read. */
 export async function loadThread(name: string): Promise<void> {
   if (store.get(dmThreadsAtom)[name]?.loaded || loading.has(name)) return;
+  const me = store.get(meAtom);
   loading.add(name);
   try {
     const { lines } = await api.dmThread(name);
+    // logout cleared the threads. writing this page now would be the next login's chat, and `loaded` would keep their own open from asking
+    if (store.get(meAtom) !== me) return;
     setThread(name, (prev) => ({ lines: merge(prev?.lines ?? [], lines), loaded: true, start: lines.length < PAGE }));
     if (viewing(name)) markRead(name);
   } catch (err) {
@@ -214,14 +218,17 @@ export async function loadThread(name: string): Promise<void> {
   }
 }
 
-/** The page before the oldest line on screen. True when lines came. */
+/** The page before the oldest line on screen. True when lines came. The page belongs to the login that asked: one that arrives after that login has gone is not this chat. */
 export async function loadOlderDm(name: string): Promise<boolean> {
   const thread = store.get(dmThreadsAtom)[name];
   const oldest = thread?.lines[0];
   if (!thread?.loaded || thread.start || !oldest || loading.has(name)) return false;
+  const me = store.get(meAtom);
   loading.add(name);
   try {
     const { lines } = await api.dmThread(name, oldest.id);
+    // logout cleared the threads. writing this page now would be the next login's chat, and `loaded` would keep their own open from asking
+    if (store.get(meAtom) !== me) return false;
     setThread(name, (prev) => ({ lines: merge(lines, prev?.lines ?? []), loaded: true, start: lines.length < PAGE }));
     return lines.length > 0;
   } catch (err) {
@@ -280,14 +287,51 @@ function notice(text: string) {
 // ---- the socket --------------------------------------------------------------------------------
 
 /**
+ * The account `fromId` already has a tab under another name. That tab becomes `peer` and its
+ * lines go with it: one tab. If that chat was the one on screen, it still is, under the new
+ * name, before the line is counted or read.
+ */
+function retarget(fromId: string, peer: string) {
+  const dms = store.get(dmsAtom);
+  const prior = dms.find((d) => d.id === fromId && d.name !== peer);
+  if (!prior) return;
+  const old = prior.name;
+  const threads = store.get(dmThreadsAtom);
+  const moved = threads[old];
+  if (moved) {
+    const next = { ...threads };
+    delete next[old];
+    const there = next[peer];
+    next[peer] = there
+      ? { lines: merge(there.lines, moved.lines), loaded: there.loaded || moved.loaded, start: there.start && moved.start }
+      : moved;
+    store.set(dmThreadsAtom, next);
+  }
+  // the old tab becomes the new name, where it sat. a tab already wearing the new name goes, so this account is one tab
+  store.set(
+    dmsAtom,
+    dms.flatMap((d) => {
+      if (d === prior) return [{ ...prior, name: peer }];
+      if (d.name === peer || d.name === old) return [];
+      return [d];
+    })
+  );
+  if (store.get(dmActiveAtom) === old) store.set(dmActiveAtom, peer);
+}
+
+/**
  * A `dm` frame: a line between this login and somebody, from either side (the gateway sends it
  * to both names' sockets). Into the thread; a tab for them if there is none; counted as new
- * unless it is ours or the thread is on screen.
+ * unless it is ours or the thread is on screen. A rename is not delivered to the other person:
+ * `from_id` is the account the open tab already has, so the line, the tab, and the chat on
+ * screen follow the new name before the read is decided. A frame with no `from_id` matches
+ * the name, as before.
  */
-function arrived(frame: { id: number; from: string; to: string; text: string; at: number }) {
+function arrived(frame: { id: number; from: string; to: string; text: string; at: number; from_id?: string }) {
   const me = store.get(meAtom);
   if (!me || (frame.from !== me && frame.to !== me)) return;
   const peer = frame.from === me ? frame.to : frame.from;
+  if (frame.from_id) retarget(frame.from_id, peer);
   if (!find(peer)) {
     upsert(personFor(peer));
     // the api's words for them (the picture, the bio), behind the line

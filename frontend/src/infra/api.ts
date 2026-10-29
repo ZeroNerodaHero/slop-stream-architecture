@@ -66,8 +66,9 @@ export interface DmLine {
   at: number;
 }
 
-/** A thread the login is in, as `GET /api/dms` lists them, newest line first: the other side as the sidebar has people, the last line, and how many of theirs are new. */
+/** A thread the login is in, as `GET /api/dms` lists them, newest line first: the other side as the sidebar has people (`id` is that account), the last line, and how many of theirs are new. */
 export interface DmThread {
+  id: string;
   name: string;
   verified: boolean;
   avatar: number | null;

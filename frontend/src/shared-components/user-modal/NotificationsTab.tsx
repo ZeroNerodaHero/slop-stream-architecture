@@ -3,7 +3,7 @@ import { useAtomValue } from 'jotai';
 import { type ReactNode, useEffect } from 'react';
 
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { clearNotifySettingsNote, KEEP, loadNotifications, notifySettingsAtom, notifySettingsNoteAtom, setNotifySetting } from '@/infra/atoms/notification-atoms';
+import { clearNotifySettingsNote, KEEP, loadNotifications, notifySettingsAtom, notifySettingsLoadedAtom, notifySettingsNoteAtom, setNotifySetting } from '@/infra/atoms/notification-atoms';
 import { pickTab } from '@/infra/atoms/user-modal-atoms';
 import type { NotificationKind } from '@/infra/frames';
 import { SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
@@ -35,10 +35,13 @@ const KINDS: readonly { kind: NotificationKind; label: string; detail: string; i
  * Which kinds go in the inbox (docs/notifications.md): three switches, kept with the account
  * through the api, so every device agrees. The bell at the top right of every page is the
  * inbox itself; this tab is only what is put in it. Nobody sees the pointer to an account.
+ * A switch stays disabled until this login's settings have been applied, so a click cannot
+ * save the default.
  */
 export function NotificationsTab() {
   const me = useAtomValue(meAtom);
   const settings = useAtomValue(notifySettingsAtom);
+  const loaded = useAtomValue(notifySettingsLoadedAtom);
   const note = useAtomValue(notifySettingsNoteAtom);
 
   // the settings as the api has them, for the login this is about; a stale `saved` goes with the tab
@@ -75,7 +78,8 @@ export function NotificationsTab() {
                 <label
                   htmlFor={`notify-${kind}`}
                   className={cn(
-                    'flex cursor-pointer items-center gap-4 border bg-background p-4 transition-[border-color,color] duration-150',
+                    'flex items-center gap-4 border bg-background p-4 transition-[border-color,color] duration-150',
+                    loaded ? 'cursor-pointer' : 'cursor-default',
                     on ? 'border-primaryBlue' : 'border-primaryStroke hover:border-secondaryStroke',
                     'has-[:focus-visible]:border-primaryBlue'
                   )}
@@ -92,8 +96,9 @@ export function NotificationsTab() {
                     id={`notify-${kind}`}
                     type="checkbox"
                     checked={on}
+                    disabled={!loaded}
                     onChange={(e) => void setNotifySetting(kind, e.target.checked)}
-                    className="h-4 w-4 shrink-0 appearance-none border border-primaryStroke bg-background checked:border-primaryBlue checked:bg-primaryBlue"
+                    className="h-4 w-4 shrink-0 appearance-none border border-primaryStroke bg-background checked:border-primaryBlue checked:bg-primaryBlue disabled:opacity-40"
                   />
                 </label>
               </li>

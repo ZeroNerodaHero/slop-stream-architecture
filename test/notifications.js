@@ -13,7 +13,18 @@
 // before anything is marked read; a follow that lands while the first inbox GET is in flight
 // is in the list when that GET lands; a line that lands while its chat is on screen is read at
 // once, and the other tab's bell does not count it; after the sender renames, the next line
-// replaces that unread dm on the open tab under the new name, and the bell does not go up.
+// replaces that unread dm on the open tab under the new name, and the bell does not go up;
+// a dm that lands while a second inbox GET is in flight stays on the bell and in the list
+// when that GET lands. a switch clicked before the inbox GET has applied this login's
+// settings does not save the default, so a kind that was off stays off. a line that arrives
+// after a friend renames, while that chat is on screen, is in the open log under one tab,
+// and the inbox row is read. an older settings PUT, held until a newer save says saved,
+// leaves both switches off and the note still saying saved. a read PUT that answers 500
+// leaves that row unread, and opening the list again sends it again. a thread GET held
+// across logout and a client-side login is not the next account's chat: opening that
+// friend shows their lines, and the previous login's line ids are absent. the same hold
+// after the renames, with the friend's name from GET /api/me, still opens the next
+// login's own lines and asks for them again.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node notifications.js
 const { chromium, request } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
@@ -774,6 +785,123 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     }
   });
 
+  await step("a held thread, released after logout and a client-side login, is not the next account's open chat", async () => {
+    // before either rename, so pal and star still wear the names this file signed them up with.
+    // its own page, closed at the end: `page` stays logged in as fan. star and pal are friends
+    // only for this step, and that is undone before return, so the rename steps still see them apart
+    const aText = `secret-for-${FAN}-only`;
+    const bText = `${STAR} can see this`;
+    const starFollows = await star.post(`/api/streamers/${PAL}/follow`);
+    expect(starFollows.status() === 204, `star following pal got ${starFollows.status()}`);
+    const palFollows = await pal.post(`/api/streamers/${STAR}/follow`);
+    expect(palFollows.status() === 204, `pal following star got ${palFollows.status()}`);
+    let linked = true;
+    const aSent = await body(await pal.post(`/api/dm/${FAN}`, { data: { text: aText } }));
+    const bSent = await body(await pal.post(`/api/dm/${STAR}`, { data: { text: bText } }));
+    expect(aSent && aSent.id && bSent && bSent.id && aSent.id !== bSent.id, `the two lines: ${JSON.stringify(aSent)} and ${JSON.stringify(bSent)}`);
+    const aThread = await body(await fan.get(`/api/dm/${PAL}`));
+    const bThread = await body(await star.get(`/api/dm/${PAL}`));
+    const aIds = new Set((aThread?.lines || []).map((l) => String(l.id)));
+    const bIds = new Set((bThread?.lines || []).map((l) => String(l.id)));
+    expect(aIds.has(String(aSent.id)) && bIds.has(String(bSent.id)), `threads: ${JSON.stringify(aThread?.lines)} / ${JSON.stringify(bThread?.lines)}`);
+    expect(!bIds.has(String(aSent.id)) && ![...aIds].some((id) => bIds.has(id)), `the threads share a line: ${JSON.stringify([...aIds].filter((id) => bIds.has(id)))}`);
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p = await ctx.newPage();
+    let release = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    let holding = false;
+    let held = 0;
+    let gets = 0;
+    const openFriend = async (name) => {
+      await p.hover('#user-panel');
+      await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+      await p.waitForSelector(`#friend-chat-${name}`, { state: 'visible', timeout: 10000 });
+      await p.click(`#friend-chat-${name}`);
+      await p.mouse.move(700, 300);
+      await p.waitForSelector('#friend-chat', { timeout: 10000 });
+      await p.waitForSelector(`#friend-chat-tab-${name}[aria-selected="true"]`, { timeout: 10000 });
+    };
+    try {
+      await login(p, FAN);
+      await p.evaluate(() => {
+        window.__threadPage = 1;
+      });
+      // fan's thread GET stays unanswered across logout and star's login on this same page
+      await p.route(new RegExp(`/api/dm/${PAL}$`), async (route) => {
+        if (route.request().method() !== 'GET') {
+          await route.continue();
+          return;
+        }
+        gets += 1;
+        if (!holding) {
+          holding = true;
+          const response = await route.fetch();
+          held = response.status();
+          await gate;
+          await route.fulfill({ response });
+          return;
+        }
+        await route.continue();
+      });
+      await openFriend(PAL);
+      const untilHeld = Date.now() + 10000;
+      while (!held) {
+        if (Date.now() > untilHeld) throw new Error(`opening ${PAL}'s chat sent no thread GET`);
+        await sleep(50);
+      }
+      expect(held === 200, `the held thread GET got ${held}`);
+      expect(gets === 1, `thread GETs while ${FAN} was opening: ${gets}`);
+      await p.hover('#user-panel');
+      await p.waitForSelector('#logout', { timeout: 10000 });
+      await p.click('#logout');
+      await p.hover('#user-panel');
+      await p.waitForSelector('#login-link', { timeout: 10000 });
+      await p.click('#login-link');
+      await p.waitForSelector('#auth-name', { timeout: 10000 });
+      await p.fill('#auth-name', STAR);
+      await p.fill('#auth-password', PW);
+      await p.click('#auth-submit');
+      await p.waitForFunction((n) => document.querySelector('#me')?.textContent === n, STAR, { timeout: 10000 });
+      expect((await p.evaluate(() => window.__threadPage)) === 1, 'the second login reloaded the page');
+      expect(gets === 1, `the next login fetched the thread before the held body was released (${gets})`);
+      release();
+      // long enough for the held page to have been applied, if it were still this login's
+      await sleep(300);
+      expect(gets === 1, `releasing the held thread GET sent another (${gets})`);
+      await openFriend(PAL);
+      let ids = [];
+      const untilLines = Date.now() + 10000;
+      while (Date.now() < untilLines) {
+        ids = await p.$$eval('#friend-chat-log p[data-id]', (els) => els.map((e) => e.getAttribute('data-id')));
+        if (ids.includes(String(bSent.id)) || ids.some((id) => aIds.has(id))) break;
+        await sleep(50);
+      }
+      const me = await p.textContent('#me');
+      const withName = await p.getAttribute('#friend-chat', 'data-with');
+      expect(me === STAR && withName === PAL, `the open chat is ${JSON.stringify(withName)} while #me is ${JSON.stringify(me)}`);
+      expect(ids.includes(String(bSent.id)), `${STAR}'s line ${bSent.id} is not in the log: ${JSON.stringify(ids)}`);
+      expect(!ids.some((id) => aIds.has(id)), `${FAN}'s line ids are in the log: ${JSON.stringify(ids)}`);
+      const log = await p.textContent('#friend-chat-log');
+      expect(log.includes(bText) && !log.includes(aText), `the log text: ${JSON.stringify(log)}`);
+      expect(gets === 2, `opening as ${STAR} sent no thread GET of their own (${gets})`);
+      return `${FAN}'s line ${aSent.id} held across login as ${STAR}; the log is ${bSent.id}`;
+    } finally {
+      release();
+      try {
+        if (linked) {
+          const undoStar = await star.post(`/api/streamers/${PAL}/unfollow`);
+          const undoPal = await pal.post(`/api/streamers/${STAR}/unfollow`);
+          expect(undoStar.status() === 204 && undoPal.status() === 204, `unfollowing got ${undoStar.status()} and ${undoPal.status()}`);
+        }
+      } finally {
+        await p.close();
+        await ctx.close();
+      }
+    }
+  });
+
   await step('after a friend renames, the next line stays one unread dm under the new name and the bell does not go up', async () => {
     // its own page, closed at the end: `page` stays logged in as fan. the inbox already holds the
     // rows the steps above left, so the bell is not 1. one unread dm from pal is loaded with it.
@@ -844,6 +972,573 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     } finally {
       await p.close();
       await ctx.close();
+    }
+  });
+
+  await step('a dm that lands while a second inbox GET is in flight stays on the bell and in the list', async () => {
+    // its own page, closed at the end: `page` stays logged in as fan. the inbox is already loaded.
+    // the login's rows are read first, so the snapshot the notifications tab fetches has nothing
+    // new: the line is the one the bell counts, and that snapshot applied alone would clear it.
+    // pal may have been renamed; the row wears the name the api has now
+    const who = await body(await pal.get('/api/me'));
+    expect(who && who.name, `pal's name: ${JSON.stringify(who)}`);
+    const palName = who.name;
+    // the steps above leave the inbox read. opening the list marks whatever is unread, so this
+    // step needs one unread row of its own first. pal may already have been renamed.
+    const seeded = await body(await pal.post(`/api/dm/${FAN}`, { data: { text: `unread from ${palName}` } }));
+    expect(seeded && seeded.id, `a line from ${palName}: ${JSON.stringify(seeded)}`);
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p = await ctx.newPage();
+    const bell = async () => {
+      const el = await p.$('#notifications-unread');
+      return el ? (await el.textContent()) || '' : '';
+    };
+    let release = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    let arm = false;
+    let holding = false;
+    let fetched = 0;
+    let gets = 0;
+    try {
+      await login(p, FAN);
+      await p.waitForSelector('#my-presence[data-presence="online"]', { timeout: 10000 });
+      const loaded = await inbox(fan);
+      const unread = loaded.items.filter((n) => !n.read).length;
+      expect(unread >= 1, `fan has nothing unread, so the bell cannot show the inbox loaded: ${JSON.stringify(loaded.items.map((n) => [n.kind, n.read]))}`);
+      await p.waitForFunction((n) => document.querySelector('#notifications-unread')?.textContent === String(n), unread, { timeout: 10000 });
+      await p.click('#notifications');
+      await p.waitForSelector('#notifications-panel[open]', { timeout: 10000 });
+      await p.waitForFunction(() => !document.querySelector('#notifications-unread'), null, { timeout: 10000 });
+      await p.keyboard.press('Escape');
+      await p.waitForFunction(() => !document.querySelector('#notifications-panel'), null, { timeout: 5000 });
+      let cleared = false;
+      const untilClear = Date.now() + 10000;
+      while (!cleared) {
+        if (Date.now() > untilClear) throw new Error('the inbox did not read');
+        cleared = (await inbox(fan)).items.every((n) => n.read);
+        if (!cleared) await sleep(50);
+      }
+      expect((await bell()) === '', `the bell still counts after the list was read: ${JSON.stringify(await bell())}`);
+      // the next GET is the tab's, held until the line has been pushed onto the loaded list
+      await p.route(/\/api\/notifications$/, async (route) => {
+        if (route.request().method() !== 'GET' || !arm) {
+          await route.continue();
+          return;
+        }
+        gets += 1;
+        if (holding) {
+          await route.continue();
+          return;
+        }
+        holding = true;
+        const response = await route.fetch();
+        fetched = response.status();
+        await gate;
+        await route.fulfill({ response });
+      });
+      arm = true;
+      await p.hover('#user-panel');
+      await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+      await p.click('#settings');
+      await p.waitForSelector('#user-modal[open]', { timeout: 5000 });
+      await p.click('#tab-notifications');
+      expect((await p.getAttribute('#tab-notifications', 'aria-selected')) === 'true', 'the notifications tab is the open one');
+      const untilFetched = Date.now() + 10000;
+      while (!fetched) {
+        if (Date.now() > untilFetched) throw new Error('the notifications tab sent no inbox GET');
+        await sleep(50);
+      }
+      expect(fetched === 200, `the held inbox GET got ${fetched}`);
+      expect(gets === 1, `inbox GETs while the refresh was held: ${gets}`);
+      expect((await bell()) === '', `the bell counted something before the line: ${JSON.stringify(await bell())}`);
+      const text = 'while the list reloads';
+      const sent = await body(await pal.post(`/api/dm/${FAN}`, { data: { text } }));
+      expect(sent && sent.id, `pal's line: ${JSON.stringify(sent)}`);
+      const untilBell = Date.now() + 10000;
+      let during = '';
+      while (Date.now() < untilBell) {
+        during = await bell();
+        if (during === '1') break;
+        await sleep(50);
+      }
+      expect(during === '1', `the bell while the refresh was held: ${JSON.stringify(during)}`);
+      let row = null;
+      const untilRow = Date.now() + 10000;
+      while (!row) {
+        if (Date.now() > untilRow) throw new Error(`the line wrote no unread dm: ${JSON.stringify((await inbox(fan)).items.filter((n) => n.kind === 'dm'))}`);
+        row = (await inbox(fan)).items.find((n) => n.kind === 'dm' && n.name === palName && n.text === text && !n.read);
+        if (!row) await sleep(50);
+      }
+      expect(gets === 1, `a second inbox GET landed before the held body was applied (${gets})`);
+      release();
+      // long enough for the held body to have been applied. a body that dropped the line clears the bell
+      await sleep(300);
+      const after = await bell();
+      expect(after === '1', `the bell after the held inbox GET: ${JSON.stringify(after)}`);
+      await p.click('#user-modal-close');
+      await p.waitForFunction(() => !document.querySelector('#user-modal'), null, { timeout: 5000 });
+      await p.click('#notifications');
+      await p.waitForSelector('#notifications-panel[open]', { timeout: 10000 });
+      let listed = false;
+      let lastText = '';
+      const untilShown = Date.now() + 10000;
+      while (Date.now() < untilShown) {
+        const el = await p.$(`#notification-${row.id}[data-kind="dm"]`);
+        if (el) {
+          lastText = (await el.textContent()) || '';
+          if (lastText.includes(palName) && lastText.includes(text)) {
+            listed = true;
+            break;
+          }
+        }
+        await sleep(50);
+      }
+      expect(listed, `the panel does not list dm ${row.id} from ${palName}: ${JSON.stringify(lastText)}`);
+      return `line ${row.id} stayed`;
+    } finally {
+      release();
+      await p.close();
+      await ctx.close();
+    }
+  });
+
+  await step('a switch clicked before settings have loaded does not turn the other kinds on', async () => {
+    // its own page, closed at the end: `page` stays logged in as fan. dm is saved off, then the
+    // login's inbox GET is held, so the switches are still the default. turning live off must
+    // not PUT that default with dm on. settings go back to all on before this returns
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p = await ctx.newPage();
+    let release = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    let holding = false;
+    let fetched = 0;
+    let puts = 0;
+    try {
+      const off = await body(await fan.put('/api/notifications/settings', { data: { dm: false } }));
+      expect(off && off.dm === false && off.live === true && off.follow === true, `saving dm off: ${JSON.stringify(off)}`);
+      await p.route(/\/api\/notifications$/, async (route) => {
+        if (route.request().method() !== 'GET') {
+          await route.continue();
+          return;
+        }
+        if (holding) {
+          await route.continue();
+          return;
+        }
+        holding = true;
+        const response = await route.fetch();
+        fetched = response.status();
+        await gate;
+        await route.fulfill({ response });
+      });
+      await p.route(/\/api\/notifications\/settings$/, async (route) => {
+        if (route.request().method() === 'PUT') puts += 1;
+        await route.continue();
+      });
+      await login(p, FAN);
+      const untilFetched = Date.now() + 10000;
+      while (!fetched) {
+        if (Date.now() > untilFetched) throw new Error('login sent no inbox GET');
+        await sleep(50);
+      }
+      expect(fetched === 200, `the held inbox GET got ${fetched}`);
+      await p.hover('#user-panel');
+      await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+      await p.click('#settings');
+      await p.waitForSelector('#user-modal[open]', { timeout: 5000 });
+      await p.click('#tab-notifications');
+      expect((await p.getAttribute('#tab-notifications', 'aria-selected')) === 'true', 'the notifications tab is the open one');
+      await p.waitForSelector('#notify-live', { timeout: 5000 });
+      const liveDisabled = await p.isDisabled('#notify-live');
+      if (liveDisabled) {
+        expect(await p.isDisabled('#notify-dm'), 'the dm switch is disabled while the inbox GET is held');
+        expect(await p.isDisabled('#notify-follow'), 'the follow switch is disabled while the inbox GET is held');
+        // a disabled box takes no click. a change event, as a script would send, must not PUT the default
+        await p.$eval('#notify-live', (el) => {
+          el.checked = false;
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+      } else {
+        await p.click('#notify-live');
+      }
+      // long enough for a PUT of the default to have landed and the note to say saved
+      await sleep(300);
+      expect(puts === 0, `a settings PUT landed while the inbox GET was held (${puts})`);
+      const during = await inbox(fan);
+      expect(
+        during.settings && during.settings.dm === false && during.settings.live === true && during.settings.follow === true,
+        `the api while the GET is held: ${JSON.stringify(during.settings)}`
+      );
+      const noteHeld = await p.textContent('#notify-settings-note');
+      expect(noteHeld === '', `the note while the GET is held: ${JSON.stringify(noteHeld)}`);
+      release();
+      await p.waitForFunction(
+        () => {
+          const dm = document.querySelector('#notify-dm');
+          return !!dm && dm.disabled === false && dm.checked === false;
+        },
+        null,
+        { timeout: 10000 }
+      );
+      expect((await p.isChecked('#notify-dm')) === false, 'dm stays off after the held inbox GET');
+      expect(await p.isChecked('#notify-live'), 'live stays on after the held inbox GET');
+      expect(await p.isChecked('#notify-follow'), 'follow stays on after the held inbox GET');
+      const note = await p.textContent('#notify-settings-note');
+      expect(note === '', `the note after the held inbox GET: ${JSON.stringify(note)}`);
+      const after = await inbox(fan);
+      expect(
+        after.settings && after.settings.dm === false && after.settings.live === true && after.settings.follow === true,
+        `the api after the held GET: ${JSON.stringify(after.settings)}`
+      );
+      expect(puts === 0, `a settings PUT landed after the GET (${puts})`);
+      return 'dm stayed off';
+    } finally {
+      release();
+      try {
+        const back = await body(await fan.put('/api/notifications/settings', { data: { live: true, follow: true, dm: true } }));
+        expect(back && back.dm === true && back.live === true && back.follow === true, `settings back to all on: ${JSON.stringify(back)}`);
+      } finally {
+        await p.close();
+        await ctx.close();
+      }
+    }
+  });
+
+  await step('a line after a friend renames is in the open chat, one tab, and the inbox row is read', async () => {
+    // its own page, closed at the end: `page` stays logged in as fan. pal already renamed once this
+    // run (a name changes only every 30 days), so the friend is star, who has not. the chat is
+    // selected and the page is visible before the rename; the line after it is in that log
+    const who = await body(await star.get('/api/me'));
+    expect(who && who.name === STAR && !who.renamed_at, `star has not been renamed: ${JSON.stringify(who)}`);
+    const firstText = 'open this chat';
+    const text = 'on the open chat';
+    const renamed = 'sx' + RUN;
+    const first = await body(await star.post(`/api/dm/${FAN}`, { data: { text: firstText } }));
+    expect(first && first.id, `star's line: ${JSON.stringify(first)}`);
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p = await ctx.newPage();
+    try {
+      await login(p, FAN);
+      await p.waitForSelector('#my-presence[data-presence="online"]', { timeout: 10000 });
+      await p.hover('#user-panel');
+      await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+      await p.waitForSelector(`#friend-chat-${STAR}`, { state: 'visible', timeout: 10000 });
+      await p.click(`#friend-chat-${STAR}`);
+      await p.mouse.move(700, 300);
+      await p.waitForSelector('#friend-chat', { timeout: 10000 });
+      await p.waitForSelector(`#friend-chat-tab-${STAR}[aria-selected="true"]`, { timeout: 10000 });
+      await p.waitForSelector(`#friend-chat-log p[data-id="${first.id}"]`, { timeout: 10000 });
+      await p.bringToFront();
+      const visible = await p.evaluate(() => document.visibilityState);
+      expect(visible === 'visible', `visibility is ${visible}`);
+      const nameRes = await star.post('/api/name', { data: { name: renamed, password: PW } });
+      const nameBody = await body(nameRes);
+      expect(nameRes.status() === 200 && nameBody && nameBody.name === renamed, `rename got ${nameRes.status()} ${JSON.stringify(nameBody)}`);
+      const sent = await body(await star.post(`/api/dm/${FAN}`, { data: { text } }));
+      expect(sent && sent.id && sent.id !== first.id, `star's line after the rename: ${JSON.stringify(sent)}`);
+      await p.waitForSelector(`#friend-chat-log p[data-id="${sent.id}"]`, { timeout: 10000 });
+      await p.waitForSelector(`#friend-chat-tab-${renamed}[aria-selected="true"]`, { timeout: 10000 });
+      expect(await p.$(`#friend-chat-log p[data-id="${first.id}"]`), 'the lines that were open left with the old name');
+      const tabs = await p.$$eval('#friend-chat-tabs [role="tab"]', (els) => els.map((e) => ({ id: e.id, selected: e.getAttribute('aria-selected') })));
+      const theirs = tabs.filter((t) => t.id === `friend-chat-tab-${STAR}` || t.id === `friend-chat-tab-${renamed}`);
+      expect(
+        theirs.length === 1 && theirs[0].id === `friend-chat-tab-${renamed}` && theirs[0].selected === 'true',
+        `tabs for star: ${JSON.stringify(theirs)} (all ${JSON.stringify(tabs)})`
+      );
+      let row = null;
+      const untilRead = Date.now() + 5000;
+      while (Date.now() < untilRead) {
+        const { items } = await inbox(fan);
+        row = items.find((n) => n.kind === 'dm' && n.name === renamed && n.text === text);
+        if (row && row.read === true) break;
+        await sleep(50);
+      }
+      expect(row && row.read === true, `the dm on the api: ${JSON.stringify(row)}`);
+      return `line ${sent.id} in ${renamed}'s open chat, read`;
+    } finally {
+      await p.close();
+      await ctx.close();
+    }
+  });
+
+  await step('an older settings response, released after a newer save, leaves both switches off and the note saved', async () => {
+    // its own page, closed at the end: `page` stays logged in as fan. dm is turned off and that
+    // PUT is held; follow is turned off and that save says saved; the older response must not
+    // turn follow back on. settings go back to all on before this returns
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p = await ctx.newPage();
+    let release = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    let holding = false;
+    let held = 0;
+    try {
+      await login(p, FAN);
+      await p.hover('#user-panel');
+      await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+      await p.click('#settings');
+      await p.waitForSelector('#user-modal[open]', { timeout: 5000 });
+      await p.click('#tab-notifications');
+      expect((await p.getAttribute('#tab-notifications', 'aria-selected')) === 'true', 'the notifications tab is the open one');
+      await p.waitForFunction(
+        () => {
+          const dm = document.querySelector('#notify-dm');
+          const follow = document.querySelector('#notify-follow');
+          return !!dm && !!follow && dm.disabled === false && follow.disabled === false && dm.checked === true && follow.checked === true;
+        },
+        null,
+        { timeout: 10000 }
+      );
+      await p.route(/\/api\/notifications\/settings$/, async (route) => {
+        if (route.request().method() !== 'PUT' || holding) {
+          await route.continue();
+          return;
+        }
+        holding = true;
+        const response = await route.fetch();
+        held = response.status();
+        await gate;
+        await route.fulfill({ response });
+      });
+      await p.click('#notify-dm');
+      const untilHeld = Date.now() + 10000;
+      while (!held) {
+        if (Date.now() > untilHeld) throw new Error('turning dm off sent no settings PUT');
+        await sleep(50);
+      }
+      expect(held === 200, `the held settings PUT got ${held}`);
+      await p.click('#notify-follow');
+      await p.waitForFunction(() => document.querySelector('#notify-settings-note')?.textContent === 'saved', null, { timeout: 5000 });
+      expect((await p.isChecked('#notify-dm')) === false, 'dm reads off once follow has saved');
+      expect((await p.isChecked('#notify-follow')) === false, 'follow reads off once saved');
+      const during = await inbox(fan);
+      expect(
+        during.settings && during.settings.dm === false && during.settings.follow === false && during.settings.live === true,
+        `the api after the second save: ${JSON.stringify(during.settings)}`
+      );
+      release();
+      // the held document was saved before follow went off, so it still says follow on. long enough for it to have been applied
+      await sleep(300);
+      expect((await p.isChecked('#notify-dm')) === false, 'dm stays off after the older settings response');
+      expect((await p.isChecked('#notify-follow')) === false, 'follow stays off after the older settings response');
+      const note = await p.textContent('#notify-settings-note');
+      expect(note === 'saved', `the note after the older settings response: ${JSON.stringify(note)}`);
+      const after = await inbox(fan);
+      expect(
+        after.settings && after.settings.dm === false && after.settings.follow === false && after.settings.live === true,
+        `the api after the older response: ${JSON.stringify(after.settings)}`
+      );
+      return 'both switches stayed off, note saved';
+    } finally {
+      release();
+      try {
+        const back = await body(await fan.put('/api/notifications/settings', { data: { live: true, follow: true, dm: true } }));
+        expect(back && back.dm === true && back.live === true && back.follow === true, `settings back to all on: ${JSON.stringify(back)}`);
+      } finally {
+        await p.close();
+        await ctx.close();
+      }
+    }
+  });
+
+  await step('a failed read is sent again when the list is opened again', async () => {
+    // its own page, closed at the end: `page` stays logged in as fan. the inbox is read through
+    // the api first, so pal's line is the one unread row. the read PUT answers 500. opening the
+    // list, closing it, and opening it again sends a second one. the route dies with the page
+    const prior = await inbox(fan);
+    if (prior.items.some((n) => !n.read)) {
+      const cleared = await fan.put('/api/notifications/read', { data: { id: prior.items[0].id } });
+      expect(cleared.status() === 204, `reading the inbox got ${cleared.status()}`);
+    }
+    const who = await body(await pal.get('/api/me'));
+    expect(who && who.name, `pal's name: ${JSON.stringify(who)}`);
+    const text = 'read me twice';
+    const sent = await body(await pal.post(`/api/dm/${FAN}`, { data: { text } }));
+    expect(sent && sent.id, `pal's line: ${JSON.stringify(sent)}`);
+    let row = null;
+    const untilRow = Date.now() + 10000;
+    while (!row) {
+      if (Date.now() > untilRow) throw new Error(`the line is not the one unread row: ${JSON.stringify((await inbox(fan)).items.filter((n) => !n.read))}`);
+      const unread = (await inbox(fan)).items.filter((n) => !n.read);
+      if (unread.length === 1 && unread[0].kind === 'dm' && unread[0].name === who.name && unread[0].text === text) row = unread[0];
+      else await sleep(50);
+    }
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p = await ctx.newPage();
+    const bell = async () => {
+      const el = await p.$('#notifications-unread');
+      return el ? (await el.textContent()) || '' : '';
+    };
+    let reads = 0;
+    try {
+      await login(p, FAN);
+      await p.waitForFunction(() => document.querySelector('#notifications-unread')?.textContent === '1', null, { timeout: 10000 });
+      await p.route(/\/api\/notifications\/read$/, async (route) => {
+        if (route.request().method() !== 'PUT') {
+          await route.continue();
+          return;
+        }
+        reads += 1;
+        await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'down' }) });
+      });
+      await p.click('#notifications');
+      await p.waitForSelector('#notifications-panel[open]', { timeout: 10000 });
+      const untilBack = Date.now() + 10000;
+      let back = '';
+      while (Date.now() < untilBack) {
+        back = await bell();
+        if (reads === 1 && back === '1') break;
+        await sleep(50);
+      }
+      expect(reads === 1, `reads before the list was closed: ${reads}`);
+      expect(back === '1', `the bell after the refused read: ${JSON.stringify(back)}`);
+      await p.keyboard.press('Escape');
+      await p.waitForFunction(() => !document.querySelector('#notifications-panel'), null, { timeout: 5000 });
+      await p.click('#notifications');
+      await p.waitForSelector('#notifications-panel[open]', { timeout: 10000 });
+      const untilSecond = Date.now() + 10000;
+      while (reads < 2) {
+        if (Date.now() > untilSecond) throw new Error(`opening the list again sent no second read (${reads})`);
+        await sleep(50);
+      }
+      expect(reads === 2, `reads after opening again: ${reads}`);
+      const still = (await inbox(fan)).items.find((n) => n.id === row.id);
+      expect(still && still.read === false, `the row on the api: ${JSON.stringify(still)}`);
+      return `row ${row.id} refused, then sent again`;
+    } finally {
+      await p.close();
+      await ctx.close();
+    }
+  });
+
+  await step('after the renames, a held thread released across logout and a client-side login is the next account\'s own lines', async () => {
+    // immediately before cleanup. pal and star may already wear new names, so both come from
+    // GET /api/me. its own page, closed at the end: `page` stays logged in as fan. star and pal
+    // are friends only when this step makes them so, and that is undone before return
+    const palWho = await body(await pal.get('/api/me'));
+    const starWho = await body(await star.get('/api/me'));
+    expect(palWho && palWho.name && starWho && starWho.name, `names now: ${JSON.stringify(palWho)} ${JSON.stringify(starWho)}`);
+    const friend = palWho.name;
+    const other = starWho.name;
+    const starList = await body(await star.get('/api/following'));
+    const already = Array.isArray(starList) && starList.some((f) => f.name === friend && f.mutual === true);
+    let linked = false;
+    if (!already) {
+      const starFollows = await star.post(`/api/streamers/${friend}/follow`);
+      const palFollows = await pal.post(`/api/streamers/${other}/follow`);
+      expect(starFollows.status() === 204 && palFollows.status() === 204, `making them friends got ${starFollows.status()} and ${palFollows.status()}`);
+      linked = true;
+    }
+    const aText = `only-${FAN}-after-rename`;
+    const bText = `only-${other}-after-rename`;
+    const aSent = await body(await pal.post(`/api/dm/${FAN}`, { data: { text: aText } }));
+    const bSent = await body(await pal.post(`/api/dm/${other}`, { data: { text: bText } }));
+    expect(aSent && aSent.id && bSent && bSent.id && aSent.id !== bSent.id, `the two lines: ${JSON.stringify(aSent)} and ${JSON.stringify(bSent)}`);
+    const aThread = await body(await fan.get(`/api/dm/${friend}`));
+    const bThread = await body(await star.get(`/api/dm/${friend}`));
+    const aIds = new Set((aThread?.lines || []).map((l) => String(l.id)));
+    const bIds = new Set((bThread?.lines || []).map((l) => String(l.id)));
+    expect(aIds.has(String(aSent.id)) && bIds.has(String(bSent.id)), `threads: ${JSON.stringify(aThread?.lines)} / ${JSON.stringify(bThread?.lines)}`);
+    expect(!bIds.has(String(aSent.id)) && ![...aIds].some((id) => bIds.has(id)), `the threads share a line: ${JSON.stringify([...aIds].filter((id) => bIds.has(id)))}`);
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p = await ctx.newPage();
+    let release = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    let holding = false;
+    let held = 0;
+    let gets = 0;
+    const openFriend = async () => {
+      await p.hover('#user-panel');
+      await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+      await p.waitForSelector(`#friend-chat-${friend}`, { state: 'visible', timeout: 10000 });
+      await p.click(`#friend-chat-${friend}`);
+      await p.mouse.move(700, 300);
+      await p.waitForSelector('#friend-chat', { timeout: 10000 });
+      await p.waitForSelector(`#friend-chat-tab-${friend}[aria-selected="true"]`, { timeout: 10000 });
+    };
+    try {
+      await login(p, FAN);
+      await p.evaluate(() => {
+        window.__threadPage = 1;
+      });
+      // the newest page only: a `?before=` query is a later page and is not this hold
+      await p.route(new RegExp(`/api/dm/${friend}$`), async (route) => {
+        if (route.request().method() !== 'GET') {
+          await route.continue();
+          return;
+        }
+        gets += 1;
+        if (!holding) {
+          holding = true;
+          const response = await route.fetch();
+          held = response.status();
+          await gate;
+          await route.fulfill({ response });
+          return;
+        }
+        await route.continue();
+      });
+      await openFriend();
+      const untilHeld = Date.now() + 10000;
+      while (!held) {
+        if (Date.now() > untilHeld) throw new Error(`opening ${friend}'s chat sent no thread GET`);
+        await sleep(50);
+      }
+      expect(held === 200, `the held thread GET got ${held}`);
+      expect(gets === 1, `thread GETs while ${FAN} was opening: ${gets}`);
+      await p.hover('#user-panel');
+      await p.waitForSelector('#logout', { timeout: 10000 });
+      await p.click('#logout');
+      await p.hover('#user-panel');
+      await p.waitForSelector('#login-link', { timeout: 10000 });
+      await p.click('#login-link');
+      await p.waitForSelector('#auth-name', { timeout: 10000 });
+      await p.fill('#auth-name', other);
+      await p.fill('#auth-password', PW);
+      await p.click('#auth-submit');
+      await p.waitForFunction((n) => document.querySelector('#me')?.textContent === n, other, { timeout: 10000 });
+      expect((await p.evaluate(() => window.__threadPage)) === 1, 'the second login reloaded the page');
+      expect(gets === 1, `the next login fetched the thread before the held body was released (${gets})`);
+      release();
+      // long enough for the held page to have been applied, if it were still this login's
+      await sleep(300);
+      expect(gets === 1, `releasing the held thread GET sent another (${gets})`);
+      await openFriend();
+      let ids = [];
+      const untilLines = Date.now() + 10000;
+      while (Date.now() < untilLines) {
+        ids = await p.$$eval('#friend-chat-log p[data-id]', (els) => els.map((e) => e.getAttribute('data-id')));
+        if (ids.includes(String(bSent.id)) || ids.some((id) => aIds.has(id))) break;
+        await sleep(50);
+      }
+      const me = await p.textContent('#me');
+      const withName = await p.getAttribute('#friend-chat', 'data-with');
+      expect(me === other && withName === friend, `the open chat is ${JSON.stringify(withName)} while #me is ${JSON.stringify(me)}`);
+      expect(ids.includes(String(bSent.id)), `${other}'s line ${bSent.id} is not in the log: ${JSON.stringify(ids)}`);
+      expect(!ids.some((id) => aIds.has(id)), `${FAN}'s line ids are in the log: ${JSON.stringify(ids)}`);
+      const log = await p.textContent('#friend-chat-log');
+      expect(log.includes(bText) && !log.includes(aText), `the log text: ${JSON.stringify(log)}`);
+      expect(gets === 2, `opening as ${other} sent no thread GET of their own (${gets})`);
+      return `${FAN}'s line ${aSent.id} held across login as ${other}; the log is ${bSent.id}`;
+    } finally {
+      release();
+      try {
+        if (linked) {
+          const undoStar = await star.post(`/api/streamers/${friend}/unfollow`);
+          const undoPal = await pal.post(`/api/streamers/${other}/unfollow`);
+          expect(undoStar.status() === 204 && undoPal.status() === 204, `unfollowing got ${undoStar.status()} and ${undoPal.status()}`);
+        }
+      } finally {
+        await p.close();
+        await ctx.close();
+      }
     }
   });
 

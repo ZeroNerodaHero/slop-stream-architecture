@@ -86,10 +86,10 @@ export function Notifications() {
 /** The person a dm row opens a chat with: as the chat window or the sidebar has them now, else what the row knows. */
 function personOf(n: Notification) {
   const dm = store.get(dmsAtom).find((d) => d.name === n.name);
-  if (dm) return { name: dm.name, avatar: dm.avatar, verified: dm.verified, bio: dm.bio, presence: dm.presence };
+  if (dm) return { id: dm.id, name: dm.name, avatar: dm.avatar, verified: dm.verified, bio: dm.bio, presence: dm.presence };
   const f = store.get(followingAtom)?.find((p) => p.name === n.name);
-  if (f) return { name: f.name, avatar: f.avatar, verified: f.verified, bio: f.bio, presence: f.presence };
-  return { name: n.name, avatar: n.avatar, verified: n.verified, bio: '', presence: 'offline' as const };
+  if (f) return { id: '', name: f.name, avatar: f.avatar, verified: f.verified, bio: f.bio, presence: f.presence };
+  return { id: '', name: n.name, avatar: n.avatar, verified: n.verified, bio: '', presence: 'offline' as const };
 }
 
 interface RowProps {

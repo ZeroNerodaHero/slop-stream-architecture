@@ -63,8 +63,8 @@ export type ServerFrame =
   | { type: 'viewers'; name: string; viewers: number }
   /** `name` became `to` (docs/ids.md): to the account's own sockets and to `name`'s watchers. */
   | { type: 'renamed'; name: string; to: string }
-  /** A direct message (docs/dms.md), to the sockets of both names: every device of either sees the same line. */
-  | { type: 'dm'; id: number; from: string; to: string; text: string; at: number }
+  /** A direct message (docs/dms.md), to the sockets of both names: every device of either sees the same line. `from_id` is the writer's account; an older gateway leaves it off. */
+  | { type: 'dm'; id: number; from: string; to: string; text: string; at: number; from_id?: string }
   /** `name` read its thread with `peer` up to `id` on some device: the others drop their count. `peer_id` is that account; an older gateway leaves it off. */
   | { type: 'dm_read'; name: string; peer: string; peer_id: string; id: number }
   /** A row of the login's inbox (docs/notifications.md), to its own sockets. `name` is who did it, `actor` their id; `at` unix ms; `text` a dm's words; `session` a go-live's. An older gateway leaves `actor` off. */

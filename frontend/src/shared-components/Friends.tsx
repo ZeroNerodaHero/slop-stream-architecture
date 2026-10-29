@@ -234,7 +234,7 @@ function Chat({ id, person }: { id: string; person: Person }) {
         id={id}
         type="button"
         aria-label={`chat with ${person.name}`}
-        onClick={() => openDm({ name: person.name, avatar: person.avatar, verified: person.verified, bio: person.bio, presence: person.presence })}
+        onClick={() => openDm({ id: '', name: person.name, avatar: person.avatar, verified: person.verified, bio: person.bio, presence: person.presence })}
         className={cn(ICON_BUTTON, 'hover:text-textPrimary')}
       >
         <RiChat3Line aria-hidden size={16} />

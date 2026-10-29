@@ -138,7 +138,7 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     // the inbox row before the frame: the open thread's read must find it already there
     notify::messaged(&s, &other, &me, &text).await;
     let mut r = s.redis.clone();
-    presence::publish_dm(&mut r, &me.name, &other.name, id, &text, at).await;
+    presence::publish_dm(&mut r, &me.name, &other.name, id, &text, at, &me.id.to_string()).await;
     log::info!("{}: dm to {} ({} chars)", me.name, other.name, text.chars().count());
     Ok((StatusCode::CREATED, Json(json!({ "id": id, "from": me.name, "to": other.name, "text": text, "at": at }))))
 }
@@ -182,12 +182,13 @@ async fn read(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// name, verified, avatar, bio, status, last id, last from, last text, last at (ms), unread
-type ThreadRow = (String, bool, Option<i64>, String, String, i64, String, String, i64, i64);
+/// peer id, name, verified, avatar, bio, status, last id, last from, last text, last at (ms), unread
+type ThreadRow = (Uuid, String, bool, Option<i64>, String, String, i64, String, String, i64, i64);
 
 /// `GET /api/dms`: every thread the login is in, the one with the newest line first, with the
-/// other side as the sidebar lists people (face, ✓, bio, how they are), the last line, and how
-/// many of their lines are past what the login has read. 100 at most. 401 for nobody.
+/// other side as the sidebar lists people (face, ✓, bio, how they are), their account `id`,
+/// the last line, and how many of their lines are past what the login has read. 100 at most.
+/// 401 for nobody.
 async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let rows: Vec<ThreadRow> = sqlx::query_as(
@@ -196,7 +197,7 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
             FROM dms WHERE from_id = $1 OR to_id = $1
             GROUP BY 1
          )
-         SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio, s.status,
+         SELECT s.id, s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio, s.status,
                 d.id, f.name, d.text, (EXTRACT(EPOCH FROM d.sent_at) * 1000)::bigint,
                 (SELECT count(*) FROM dms u
                   WHERE u.from_id = m.peer_id AND u.to_id = $1
@@ -212,11 +213,12 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     .bind(THREADS)
     .fetch_all(&s.db)
     .await?;
-    let people: Vec<_> = rows.iter().map(|r| follows::choice(&r.0, &r.4)).collect();
+    let people: Vec<_> = rows.iter().map(|r| follows::choice(&r.1, &r.5)).collect();
     let words = follows::words(&s, &people).await?;
-    let out = rows.iter().map(|(name, verified, avatar, bio, _, id, from, text, at, unread)| {
+    let out = rows.iter().map(|(peer, name, verified, avatar, bio, _, id, from, text, at, unread)| {
         let (live, word) = words.get(name).copied().unwrap_or((false, Presence::Offline));
         json!({
+            "id": peer.to_string(),
             "name": name, "verified": verified, "avatar": avatar, "bio": bio, "live": live, "presence": word,
             "last": { "id": id, "from": from, "text": text, "at": at }, "unread": unread,
         })

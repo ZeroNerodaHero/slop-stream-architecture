@@ -29,25 +29,30 @@ export const notificationsAtom = atom<Notification[] | undefined>(undefined);
 export const unreadNotificationsAtom = atom((get) => (get(notificationsAtom) ?? []).filter((n) => !n.read).length);
 /** The list is open under the bell. */
 export const notificationsOpenAtom = atom(false);
-/** Which kinds the login keeps, as the api last said. */
+/** Which kinds the login keeps, as the api last said. The default until this login's GET applies them. */
 export const notifySettingsAtom = atom<NotifySettings>(ALL_ON);
+/** That GET has applied this login's document. Until then a switch does not PUT, and the boxes stay disabled. Cleared with the login. */
+export const notifySettingsLoadedAtom = atom(false);
 /** What the last save of the settings did: `saving`, `saved`, `not saved: <why>`. */
 export const notifySettingsNoteAtom = atom('');
 
 /** The in-flight inbox ask, and the login it belongs to. A second caller for that login waits; any other login starts its own. */
 let asking: { me: string; promise: Promise<void> } | null = null;
 
-/** Saves started on this page. An inbox ask applies its settings only when this is still the value from when that ask was sent. */
+/** Saves started on this page. An inbox ask applies its settings only when this is still the value from when that ask was sent. A save applies its answer, and the `saved` note, only when this is still the value that save bumped to. */
 let settingsGen = 0;
 
 /**
- * Rows that arrived while this page had no list yet. Not the list: nothing is written until an
- * ask applies, so one pushed row cannot become the whole inbox and cannot be marked read. A
- * failed ask leaves them here for the next apply. `forgetNotifications` drops them.
+ * Rows that arrived during an inbox ask. While this page has no list yet they are not the list:
+ * nothing is written until an ask applies, so one pushed row cannot become the whole inbox and
+ * cannot be marked read. While a reload is in flight and the list is already showing, the row is
+ * here and on the list, so the bell counts it and the older snapshot does not drop it. An id
+ * already here is not added again. A failed ask leaves them here for the next apply.
+ * `forgetNotifications` drops them.
  */
 let pending: Notification[] = [];
 
-/** The list and the settings again. One ask at a time for the login that started it; a second caller for that login waits. Logout drops the ask, and a late answer is kept only if that login is still the one here. Its rows are applied then, with any row that arrived while this page had no list yet; its settings only when no save has started since the ask. A failed ask leaves the list unloaded and keeps those rows for the next one. Nobody: an empty list, no request. */
+/** The list and the settings again. One ask at a time for the login that started it; a second caller for that login waits. Logout drops the ask, and a late answer is kept only if that login is still the one here and this ask is still in flight. Its rows are applied then, with any row that arrived during the ask; its settings only when no save has started since the ask. A dropped ask writes no list and no settings, and leaves those rows. A failed ask leaves the list unloaded and keeps those rows for the next one. Nobody: an empty list, no request. */
 export function loadNotifications(): Promise<void> {
   const me = store.get(meAtom);
   if (!me) {
@@ -61,17 +66,23 @@ export function loadNotifications(): Promise<void> {
     .then(({ settings, items }) => {
       // this answer belongs to the login that asked: once that login has gone, leave the store alone
       if (store.get(meAtom) !== me) return;
-      // a save started since this ask: its document and its note stay. the rows are still this login's
-      if (asked === settingsGen) store.set(notifySettingsAtom, settings);
-      // a dropped ask must not take rows the next login remembered while its own list was still unloaded
-      const current = asking?.promise === promise;
-      const remembered = current ? pending : [];
-      if (current) pending = [];
+      // dropped (logout, or this name logged in again): the snapshot is not the list on screen.
+      // rows remembered since belong to the ask still in flight, so they stay. the document stays
+      // too: a dropped ask must not write its settings over the login now here
+      if (asking?.promise !== promise) return;
+      // a save started since this ask: its document and its note stay. the rows are still this login's.
+      // applying the document is what lets a switch PUT. until then the atom is the default
+      if (asked === settingsGen) {
+        store.set(notifySettingsAtom, settings);
+        store.set(notifySettingsLoadedAtom, true);
+      }
+      const remembered = pending;
+      pending = [];
       store.set(notificationsAtom, foldIn(items, remembered));
     })
     .catch(() => {
-      // the api is away, or the login died: what is shown stays, and a row remembered while
-      // nothing was loaded stays for the next apply. the next open asks again
+      // the api is away, or the login died: what is shown stays, and a row remembered during
+      // this ask stays for the next apply. a list that never loaded is asked again on open
     })
     .finally(() => {
       if (asking?.promise === promise) asking = null;
@@ -80,13 +91,14 @@ export function loadNotifications(): Promise<void> {
   return promise;
 }
 
-/** The login changed (in, out, renamed): another person's inbox is not this one's. The ask in flight is dropped, so the next login fetches its own, and rows remembered while the list was not loaded are dropped with it. */
+/** The login changed (in, out, renamed): another person's inbox is not this one's. The ask in flight is dropped, so the next login fetches its own, and rows remembered during an ask are dropped with it. The settings are the default again, and a switch does not PUT until that login's GET applies them. */
 export function forgetNotifications() {
   asking = null;
   pending = [];
   store.set(notificationsAtom, undefined);
   store.set(notificationsOpenAtom, false);
   store.set(notifySettingsAtom, ALL_ON);
+  store.set(notifySettingsLoadedAtom, false);
   store.set(notifySettingsNoteAtom, '');
 }
 
@@ -99,39 +111,75 @@ export function toggleNotifications() {
 }
 
 /**
+ * This open's read was refused, and those rows are unread again. The list is still open, so
+ * the effect would ask, be refused, and ask forever. Closing the list clears it; the next
+ * open asks again.
+ */
+let readHeld = false;
+
+store.sub(notificationsOpenAtom, () => {
+  if (!store.get(notificationsOpenAtom)) readHeld = false;
+});
+
+/**
  * Everything on the list has been seen: the rows read here (the number on the bell goes), and
  * the api told up to the newest row, which tells this login's other devices. Nothing to say
- * when nothing was new.
+ * when nothing was new. A refusal marks those rows unread again when they are still on the
+ * list now, so the next open tells the api again. A list that has since been replaced is
+ * left as it is.
  */
 export function markNotificationsRead() {
+  if (readHeld) return;
   const list = store.get(notificationsAtom);
   const newest = list?.[0];
   if (!list || !newest || !list.some((n) => !n.read)) return;
+  const unreadIds = new Set(list.filter((n) => !n.read).map((n) => n.id));
   store.set(
     notificationsAtom,
     list.map((n) => (n.read ? n : { ...n, read: true }))
   );
-  api.readNotifications(newest.id).catch(() => undefined);
+  api.readNotifications(newest.id).catch(() => {
+    const current = store.get(notificationsAtom);
+    // gone, or a list that no longer has these rows: do not put the old list back
+    if (!current || !current.some((n) => unreadIds.has(n.id))) return;
+    // still open: the rows going back to unread would ask again, and the refusal again
+    if (store.get(notificationsOpenAtom)) readHeld = true;
+    store.set(
+      notificationsAtom,
+      current.map((n) => (unreadIds.has(n.id) ? { ...n, read: false } : n))
+    );
+  });
 }
 
 /**
  * One kind on or off, from the notifications tab: `PUT /api/notifications/settings` with the
  * whole document. The switch moves on the click; the api's answer, or the one before on a
- * refusal, is what it settles on. What is already in the inbox stays either way. An inbox
- * ask already sent does not put its settings back over this save.
+ * refusal, is what it settles on, and only when no later save has started. What is already in
+ * the inbox stays either way. An inbox ask already sent does not put its settings back over
+ * this save. Until a GET has applied this login's document, it returns without a PUT: the atom
+ * is still the default.
  */
 export async function setNotifySetting(kind: NotificationKind, on: boolean): Promise<void> {
-  // counted at the start, so an ask sent before this click leaves the saved document in place
+  // the atom is still the default: this login's document has not been applied. a PUT would save
+  // that default with one key changed, and counting it would throw the real document away
+  if (!store.get(notifySettingsLoadedAtom)) return;
+  // counted at the start, so an ask sent before this click leaves the saved document in place.
+  // the answer settles the switch only while the count is still this one
   settingsGen += 1;
+  const bumped = settingsGen;
   const before = store.get(notifySettingsAtom);
   const wanted = { ...before, [kind]: on };
   store.set(notifySettingsAtom, wanted);
   store.set(notifySettingsNoteAtom, 'saving');
   try {
     const saved = await api.saveNotifySettings(wanted);
+    // a later save has started: its document and its note stay. this answer is the older one
+    if (settingsGen !== bumped) return;
     store.set(notifySettingsAtom, saved);
     store.set(notifySettingsNoteAtom, 'saved');
   } catch (err) {
+    // the same for a refusal: `before` must not go back over the later save
+    if (settingsGen !== bumped) return;
     store.set(notifySettingsAtom, before);
     store.set(notifySettingsNoteAtom, `not saved: ${messageOf(err)}`);
   }
@@ -156,7 +204,8 @@ function viewingDm(name: string): boolean {
  * no actor (an older gateway) still matches that unread dm by name. With the list open it is
  * seen at once. While this page has no list yet the row is remembered and not written: a
  * failed ask stays failed, one pushed row does not become the list, and it is not marked
- * read. The apply folds it in; a failed ask keeps it for the next one.
+ * read. While a reload is already in flight it is remembered as well as written, so the
+ * apply keeps it. The apply folds it in; a failed ask keeps it for the next one.
  */
 function arrived(frame: {
   id: number;
@@ -179,6 +228,8 @@ function arrived(frame: {
     return;
   }
   if (list.some((n) => n.id === row.id)) return;
+  // a reload already in flight may have snapshotted before this row. remember it, and show it now
+  if (asking && !pending.some((n) => n.id === row.id)) pending.push(row);
   store.set(notificationsAtom, place(list, row));
   if (store.get(notificationsOpenAtom)) markNotificationsRead();
 }

@@ -204,12 +204,21 @@ pub(crate) async fn publish_renamed<C: AsyncCommands>(r: &mut C, old: &str, new:
 
 /// A direct message (docs/dms.md), its row written. `name` is who it is to, the gateway's
 /// key; it goes to the sockets of both names, so the writer's other devices see it too.
+/// `from_id` is the writer's account, so the open thread still matches after a rename.
 /// The text rides in the fact: the stream is the one road to every gateway, and a thousand
 /// entries deep it is gone.
-pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, text: &str, at_ms: i64) {
+pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, text: &str, at_ms: i64, from_id: &str) {
     publish(
         r,
-        &[("type", "dm".into()), ("name", to.into()), ("from", from.into()), ("id", id.to_string()), ("text", text.into()), ("at", at_ms.to_string())],
+        &[
+            ("type", "dm".into()),
+            ("name", to.into()),
+            ("from", from.into()),
+            ("from_id", from_id.into()),
+            ("id", id.to_string()),
+            ("text", text.into()),
+            ("at", at_ms.to_string()),
+        ],
     )
     .await;
 }

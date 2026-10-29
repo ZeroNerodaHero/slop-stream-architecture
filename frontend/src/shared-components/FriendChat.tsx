@@ -284,7 +284,7 @@ function Picker({ dms }: { dms: Dm[] }) {
                   type="button"
                   aria-label={`chat with ${f.name}`}
                   title={f.bio || f.name}
-                  onClick={() => openDm({ name: f.name, avatar: f.avatar, verified: f.verified, bio: f.bio, presence: f.presence })}
+                  onClick={() => openDm({ id: '', name: f.name, avatar: f.avatar, verified: f.verified, bio: f.bio, presence: f.presence })}
                   className={cn(SQUARE, 'flex w-full flex-col items-center gap-1.5 p-2', open.has(f.name) ? SQUARE_ON : SQUARE_OFF)}
                 >
                   <span className="relative block">
