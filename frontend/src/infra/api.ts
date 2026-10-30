@@ -82,8 +82,9 @@ export interface DmThread {
 /**
  * One row of the login's inbox (docs/notifications.md), as `GET /api/notifications` lists them, newest first:
  * who did it (`name`, as they are now, with the ✓ and the picture; `actor`, their id, which a rename does not
- * change), when (`at`, unix ms), whether it has been seen. `text` is a dm's words (clipped); `session` a
- * go-live's, null for the rest.
+ * change), when (`at`, unix ms), whether it has been seen. `text` is a dm's or a channel line's words (clipped);
+ * `session` a go-live's, null for the rest; `room` a `chat` row's `<server>/<channel>`, null for the rest
+ * (absent on an older api).
  */
 export interface Notification {
   id: number;
@@ -96,13 +97,23 @@ export interface Notification {
   read: boolean;
   text: string;
   session: number | null;
+  room?: string | null;
 }
 
-/** Which kinds the login keeps, the notifications tab's switches. Kept with the account. */
+/** A `chat` row's room, split: the server and the channel. Null for a row that is not one. */
+export function roomOf(n: { kind: NotificationKind; room?: string | null }): { server: string; channel: string } | null {
+  if (n.kind !== 'chat' || !n.room) return null;
+  const slash = n.room.indexOf('/');
+  if (slash <= 0 || slash === n.room.length - 1) return null;
+  return { server: n.room.slice(0, slash), channel: n.room.slice(slash + 1) };
+}
+
+/** Which kinds the login keeps, the notifications tab's switches. Kept with the account. `chat` is absent on an older api, which means on. */
 export interface NotifySettings {
   live: boolean;
   follow: boolean;
   dm: boolean;
+  chat: boolean;
 }
 
 /** Somebody the login follows, as `GET /api/following` lists them: streaming first. See docs/follows.md. */
@@ -208,6 +219,8 @@ export interface Server {
   about: string;
   members: number;
   mine: boolean;
+  /** This login owns it. One each: a page with one of these in `yours` offers no `create`. Absent on an older api. */
+  owner?: boolean;
   /** On the lists for someone who has not joined. Absent on an older api: treated as public. */
   public?: boolean;
   /** The words they typed. Absent, or null, on a group made before the digits. */
@@ -268,6 +281,8 @@ export interface GroupRoom {
   roles: GroupRole[];
   /** The channels, oldest first. Absent on an older api. */
   channels?: Channel[];
+  /** The channels this login has muted (docs/notifications.md): no inbox row for their lines. Empty for nobody; absent on an older api. */
+  muted?: string[];
   /** Members streaming right now. Absent on an older api. */
   live?: string[];
   /** The roster, for a member or a site admin. Null for anyone else; absent on an older api. */
@@ -483,7 +498,7 @@ export const api = {
   rename: (name: string, password: string) => request<{ id: string; name: string; renamed_at: string }>('POST', '/api/name', { name, password }),
   /** Every group, `bot` first; `mine` says which the login is in. See docs/groups.md. */
   groups: () => request<Group[]>('GET', '/api/groups'),
-  /** A login makes a group and is in it. 400 bad name/badge/colour, 409 `name taken`. */
+  /** A login makes a group and is in it, as its owner. 400 bad name/badge/colour, 403 while they own one already (one each), 409 `name taken`. */
   createGroup: (group: NewGroup) => request<Group>('POST', '/api/groups', group),
   joinGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/join`),
   leaveGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/leave`),
@@ -499,6 +514,12 @@ export const api = {
   createChannel: (server: string, name: string) => request<Channel>('POST', `/api/groups/${encodeURIComponent(server)}/channels`, { name }),
   /** Who made the channel, or someone who may manage channels. `general` stays. */
   deleteChannel: (server: string, channel: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`),
+  /** No inbox row for this channel's lines from now on, for this login (docs/notifications.md). 204, also when already muted. */
+  muteChannel: (server: string, channel: string) => request<null>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/mute`),
+  /** The channel's lines reach the bell again. 204, also when it was not muted. */
+  unmuteChannel: (server: string, channel: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/mute`),
+  /** The login has the channel on screen: its inbox rows for it are read. Its other devices hear it on the socket. */
+  readChannel: (server: string, channel: string) => request<null>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/read`),
   saveGroupAbout: (name: string, about: string) => request<{ about: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/about`, { about }),
   /** Appearance. A private group stays off the lists. */
   setGroupPublic: (name: string, isPublic: boolean) => request<{ public: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/access`, { public: isPublic }),
@@ -518,6 +539,7 @@ export const api = {
   giveRole: (group: string, id: number, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/roles/${id}/members`, { name }),
   takeRole: (group: string, id: number, name: string) =>
     request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/roles/${id}/members/${encodeURIComponent(name)}`),
+  /** An owner names a member an owner. 403 for anyone else, and for a member who owns a group already (one each). */
   grantOwner: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/owners`, { name }),
   revokeOwner: (group: string, name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/owners/${encodeURIComponent(name)}`),
   kickMember: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/kick`, { name }),

@@ -12,8 +12,9 @@
 //!
 //! Facts come from one redis stream, `events`, written by the api (`live`, `ended`, `viewers`,
 //! `status`, `renamed`, and `dm` / `dm_read` for the direct messages of docs/dms.md and
-//! `notify` / `notify_read` for the inbox of docs/notifications.md, which go to the sockets
-//! that *are* a name rather than to its watchers) and by this module (`seen`).
+//! `notify` / `notify_read` / `chat_read` for the inbox of docs/notifications.md, which go to
+//! the sockets that *are* a name rather than to its watchers; the chat process writes `notify`
+//! too, for a line in a channel) and by this module (`seen`).
 //! One task per process tails it and routes
 //! each entry to the sockets that care; the word is derived here, on delivery, from the inputs
 //! (the `live:` key, the set, the column), never carried in a fact, so two writers cannot race
@@ -192,7 +193,8 @@ enum Out {
     },
     /// A row of the login's inbox (docs/notifications.md), to its own sockets: `name` is who did
     /// it, as the list draws them; `actor` is that account's id (absent when an older api wrote
-    /// the fact); `id` the row, so a replayed fact is the same row.
+    /// the fact); `id` the row, so a replayed fact is the same row; `room` a `chat` row's
+    /// `<server>/<channel>`, absent on the other kinds.
     Notification {
         id: i64,
         kind: String,
@@ -204,10 +206,15 @@ enum Out {
         session: Option<i64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        room: Option<String>,
     },
     /// `name` saw its inbox up to `id` on some device. To `name`'s sockets: the others drop their count.
     #[serde(rename = "notify_read")]
     NotifyRead { name: String, id: i64 },
+    /// `name` had the channel `room` on screen on some device: its `chat` rows for it are read. To `name`'s sockets.
+    #[serde(rename = "chat_read")]
+    ChatRead { name: String, room: String },
     /// A group changed (docs/groups.md), to the sockets watching `group:<group>`. `what` says
     /// how; `data` is the change as the api wrote it, spread into the frame as it came
     /// (`joined` carries `who`, `avatar`, `joined`, `members`; `channel` the channel; and so on).
@@ -651,9 +658,21 @@ impl Gateway {
                 let avatar: Option<i64> = entry.get("avatar");
                 let session: Option<i64> = entry.get("session");
                 let actor: Option<String> = entry.get("actor").filter(|id: &String| !id.is_empty());
+                let room: Option<String> = entry.get("room").filter(|room: &String| !room.is_empty());
                 for (login, id) in to {
                     let Some(id) = id.as_i64() else { continue };
-                    let frame = Out::Notification { id, kind: kind.clone(), name: name.clone(), verified, avatar, at, text: text.clone(), session, actor: actor.clone() };
+                    let frame = Out::Notification {
+                        id,
+                        kind: kind.clone(),
+                        name: name.clone(),
+                        verified,
+                        avatar,
+                        at,
+                        text: text.clone(),
+                        session,
+                        actor: actor.clone(),
+                        room: room.clone(),
+                    };
                     self.tell(&[&login], frame).await;
                 }
             }
@@ -661,6 +680,11 @@ impl Gateway {
             "notify_read" => {
                 let Some(id): Option<i64> = entry.get("id") else { return };
                 self.tell(&[&name], Out::NotifyRead { name: name.clone(), id }).await;
+            }
+            // `name` had a channel on screen somewhere: its other devices read that channel's rows
+            "chat_read" => {
+                let Some(room): Option<String> = entry.get("room") else { return };
+                self.tell(&[&name], Out::ChatRead { name: name.clone(), room }).await;
             }
             // a group changed (docs/groups.md): `name` is the group, `data` the change as json,
             // forwarded whole to whoever has the room open

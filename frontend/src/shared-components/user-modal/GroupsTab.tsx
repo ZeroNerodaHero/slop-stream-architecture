@@ -1,11 +1,11 @@
 import { useAtomValue } from 'jotai';
-import { type FormEvent, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import { groupWords, type Group } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
   clearGroupsStatus,
-  createGroup,
   deleteGroup,
   groupsAtom,
   groupsBusyAtom,
@@ -17,27 +17,22 @@ import {
   setGroupListed,
   myGroupsAtom
 } from '@/infra/atoms/groups-atoms';
-import { pickTab } from '@/infra/atoms/user-modal-atoms';
-import { isValidName } from '@/infra/names';
+import { closeUserModal, pickTab } from '@/infra/atoms/user-modal-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
-import { BUTTON, Field, INPUT, Section, Status } from '@/shared-components/user-modal/parts';
-import { cn } from '@/utils/cn';
+import { Section, Status } from '@/shared-components/user-modal/parts';
 
-/** The api's caps, as the boxes know them. */
-const MAX_BADGE_CHARS = 12;
-const MAX_ABOUT_CHARS = 200;
-/** The colours to start from: discord's blurple, then the fake streams' box colours. The colour box takes any other. */
-const SWATCHES = ['#5865f2', '#f85149', '#3fb950', '#f2cc60', '#bc8cff', '#ff9f43', '#39d2c0', '#ff6bcb'] as const;
 /** The buttons in a row of the list: a size down from the pane's. */
 const SMALL = 'px-3 py-1.5 text-sm';
 
 /**
  * Groups: the badges a name wears in chat. Everyone sees the list; a login joins and leaves,
- * makes groups of its own and deletes those. `bot` is automatic (a bot's socket says so), so
- * it has no join. Every change says hello to the open chat again, so the badges follow at once.
+ * and deletes the one it owns. Making one is the groups page's and home's (MakeGroupDialog.tsx),
+ * where the banner and the picture go on with it; this tab only points there. `bot` is
+ * automatic (a bot's socket says so), so it has no join. Every change says hello to the open
+ * chat again, so the badges follow at once.
  */
 export function GroupsTab() {
   const me = useAtomValue(meAtom);
@@ -86,7 +81,15 @@ export function GroupsTab() {
 
       <Section
         title="groups"
-        description="join one and its badge goes on your lines. bot is automatic: the fake streams' chatters wear it, nobody joins it, and the chat can hide those lines."
+        description={
+          <>
+            join one and its badge goes on your lines. to make one, with a picture and a banner, go to{' '}
+            <Link id="group-make-there" to="/groups" onClick={closeUserModal} className="text-primaryBlue underline-offset-2 hover:underline">
+              the groups page
+            </Link>
+            : one each. bot is automatic: the fake streams&apos; chatters wear it, nobody joins it, and the chat can hide those lines.
+          </>
+        }
       >
         {/* before the list has answered: the list's box with a few rows' worth of grey in it, the badge and the words */}
         {loaded === undefined && (
@@ -113,8 +116,6 @@ export function GroupsTab() {
         )}
         <Status id="group-status" text={status} />
       </Section>
-
-      {me && <MakeGroup me={me} busy={busy} />}
     </div>
   );
 }
@@ -203,143 +204,5 @@ function GroupRow({ group, me, busy }: { group: Group; me: string | null; busy: 
         )}
       </span>
     </li>
-  );
-}
-
-function MakeGroup({ me, busy }: { me: string; busy: boolean }) {
-  const [name, setName] = useState('');
-  const [badge, setBadge] = useState('');
-  const [color, setColor] = useState<string>(SWATCHES[0]);
-  const [about, setAbout] = useState('');
-  const [isPublic, setPublic] = useState(true);
-  const badgeChars = [...badge.trim()].length;
-  const ok = isValidName(name) && badgeChars >= 1 && badgeChars <= MAX_BADGE_CHARS;
-
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    if (!ok) return;
-    if (await createGroup({ name, badge: badge.trim(), color, about: about.trim(), public: isPublic })) {
-      setName('');
-      setBadge('');
-      setAbout('');
-      setPublic(true);
-    }
-  }
-
-  return (
-    <Section
-      title="make a group"
-      description="a name, the word on the badge, a colour, a line about it. you are in it from the start. four digits are added, so the same name can be made twice. a private one is left off the lists, and you can switch that later. up to 10 of your own."
-    >
-      {/* no method="dialog": a submit would close the modal. onSubmit owns enter */}
-      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field id="group-name" label="name" hint="a-z 0-9 _ -, up to 32. four digits are added, so two groups can share it.">
-            <input
-              id="group-name"
-              value={name}
-              onChange={(e) =>
-                setName(
-                  e.target.value
-                    .toLowerCase()
-                    .replace(/[^a-z0-9_-]/g, '')
-                    .slice(0, 32)
-                )
-              }
-              placeholder="night-owls"
-              autoComplete="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              maxLength={32}
-              required
-              aria-describedby="group-name-hint"
-              className={INPUT}
-            />
-          </Field>
-          <Field id="group-badge" label="badge" hint={`1 to ${MAX_BADGE_CHARS} characters. shown in capitals, like BOT.`}>
-            <input
-              id="group-badge"
-              value={badge}
-              onChange={(e) => setBadge(e.target.value)}
-              placeholder="owl"
-              autoComplete="off"
-              maxLength={MAX_BADGE_CHARS}
-              required
-              aria-describedby="group-badge-hint"
-              className={INPUT}
-            />
-          </Field>
-        </div>
-        <Field id="group-color" label="colour">
-          <div className="flex flex-wrap items-center gap-2">
-            {SWATCHES.map((c) => (
-              <button
-                key={c}
-                type="button"
-                aria-label={c}
-                aria-pressed={c === color}
-                onClick={() => setColor(c)}
-                style={{ backgroundColor: c }}
-                className={cn(
-                  'h-8 w-8 border-2 transition-[border-color] duration-150',
-                  c === color ? 'border-textPrimary' : 'border-transparent hover:border-secondaryStroke'
-                )}
-              />
-            ))}
-            <input
-              id="group-color"
-              type="color"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              aria-label="any other colour"
-              title="any other colour"
-              className="h-8 w-12 cursor-pointer border border-primaryStroke bg-background p-0.5"
-            />
-          </div>
-        </Field>
-        <Field id="group-about" label="about" hint={`optional. up to ${MAX_ABOUT_CHARS} characters.`}>
-          <input
-            id="group-about"
-            value={about}
-            onChange={(e) => setAbout(e.target.value)}
-            placeholder="who this is for"
-            autoComplete="off"
-            maxLength={MAX_ABOUT_CHARS}
-            aria-describedby="group-about-hint"
-            className={INPUT}
-          />
-        </Field>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            id="group-public"
-            type="button"
-            aria-pressed={isPublic}
-            onClick={() => setPublic(true)}
-            className={cn('text-sm font-semibold', isPublic ? 'text-primaryBlue' : 'text-textTertiary')}
-          >
-            public
-          </button>
-          <button
-            id="group-private"
-            type="button"
-            aria-pressed={!isPublic}
-            onClick={() => setPublic(false)}
-            className={cn('text-sm font-semibold', !isPublic ? 'text-primaryBlue' : 'text-textTertiary')}
-          >
-            private
-          </button>
-        </div>
-        <div className="flex flex-wrap items-center gap-4">
-          <Button id="group-create" type="submit" variant="primary" className={BUTTON} disabled={busy || !ok}>
-            make it
-          </Button>
-          {/* the badge as a chat line will show it, live as you type */}
-          <span id="group-preview" className="text-sm text-textSecondary">
-            in chat: <span className="font-semibold text-primaryBlue">{me}</span>
-            <Badge group={{ name: name || 'new', badge: badge.trim() || 'badge', color }} className="ml-1" />
-          </span>
-        </div>
-      </form>
-    </Section>
   );
 }

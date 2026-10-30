@@ -1,7 +1,7 @@
 //! Groups: a login joins one, and its chat lines wear the group's badge. See docs/groups.md.
 //!
-//! A group is a name, a short badge, a colour and a line about it. Any login may make a
-//! few, be in a few, and delete the ones it made. One is built in and automatic: `bot`.
+//! A group is a name, a short badge, a colour and a line about it. A login owns one group at
+//! a time, is in a few, and deletes the one it owns. One is built in and automatic: `bot`.
 //! Nobody joins it; a chat socket whose hello says `bot: true` wears it (chat.rs), so the
 //! pretend chatters of the fake streams can be told apart, and hidden, in the panel.
 //!
@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use redis::streams::StreamRangeReply;
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,7 @@ use uuid::Uuid;
 
 use crate::auth::Me;
 use crate::chat::{clean_text, line_from, room_key, with_faces, Line};
+use crate::notify;
 use crate::presence;
 use crate::{valid_name, ApiError, ApiResult, AppState};
 
@@ -41,8 +42,8 @@ pub(crate) const BOT_GROUP: &str = "bot";
 /// A badge is a word, not a sentence: `BOT`, `VIP`, `mod`. The panel shows it in capitals.
 const MAX_BADGE_CHARS: usize = 12;
 const MAX_ABOUT_CHARS: usize = 200;
-/// Groups one login may make, and be in. Every badge goes on every line, so both are capped.
-const GROUPS_PER_MAKER: i64 = 10;
+/// Groups one login may be in. Every badge goes on every line, so it is capped. Owning is one
+/// each (`owns_a_group`), not a count.
 const GROUPS_PER_MEMBER: i64 = 8;
 /// Channels on one server, `general` included. The pages hold the same number, so the add
 /// form goes at the cap; and it bounds what `GET .../messages` answers for one room.
@@ -150,6 +151,12 @@ fn too_many_groups() -> ApiError {
     ApiError::new(StatusCode::FORBIDDEN, format!("you are in {GROUPS_PER_MEMBER} groups already. leave one first"))
 }
 
+/// Whether this account owns a group: the one it made, or one it was named owner of. One
+/// each: making another, or being named owner of another, is refused while this is true.
+pub(crate) async fn owns_a_group(db: &PgPool, user: Uuid) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1 AND owner)").bind(user).fetch_one(db).await
+}
+
 /// How many are in the group now: on every `joined`, `left` and `banned` fact, so a room
 /// never counts on its own.
 pub(crate) async fn member_count(db: &PgPool, group: &str) -> Result<i64, sqlx::Error> {
@@ -221,10 +228,11 @@ fn default_public() -> bool {
     true
 }
 
-/// `POST /api/groups`: a login makes a group and is in it. 201 with the group as the list
-/// shows it. The body's `name` is the title. The stored `name` is that title plus `-` and
-/// four random digits, so the same title can be made again. 400 for a bad name, badge or
-/// colour; 409 `name taken` for `bot`, or when eight draws of the digits were all taken.
+/// `POST /api/groups`: a login makes a group and is in it, as its owner. 201 with the group as
+/// the list shows it. The body's `name` is the title. The stored `name` is that title plus `-`
+/// and four random digits, so the same title can be made again. 400 for a bad name, badge or
+/// colour; 403 while the login owns a group already (one each); 409 `name taken` for `bot`,
+/// or when eight draws of the digits were all taken.
 async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGroup>, JsonRejection>) -> Result<(StatusCode, Json<Value>), ApiError> {
     let maker = me.ok_or_else(not_logged_in)?;
     let Json(body) = body?;
@@ -235,9 +243,8 @@ async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGrou
     if title == BOT_GROUP {
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     }
-    let made: i64 = sqlx::query_scalar("SELECT count(*) FROM groups WHERE created_by_id = $1").bind(maker.id).fetch_one(&s.db).await?;
-    if made >= GROUPS_PER_MAKER {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, format!("you have made {GROUPS_PER_MAKER} groups already. delete one first")));
+    if owns_a_group(&s.db, maker.id).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "you own a group already. one each: delete it, or name another owner and step down first"));
     }
     if member_of(&s.db, maker.id).await? >= GROUPS_PER_MEMBER {
         return Err(too_many_groups());
@@ -506,6 +513,8 @@ struct ServerView {
     about: String,
     members: i64,
     mine: bool,
+    /// This login owns it. One each, so a page knows whether to offer `create`.
+    owner: bool,
     /// On the lists for someone who has not joined. A private group is only in `yours`.
     public: bool,
     /// The words they typed. Null for a group made before the digits.
@@ -566,6 +575,8 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let user = me.as_ref().map(|a| a.id);
     let admin = me.as_ref().is_some_and(|a| s.admins.iter().any(|admin| admin.id == a.id));
     let mut living = live_members(&s.db, &live_names(&s).await?).await?;
+    // the groups this login owns (one, by the rule; the set keeps an older database honest)
+    let owned: Vec<String> = sqlx::query_scalar("SELECT group_name FROM memberships WHERE user_id = $1 AND owner").bind(user).fetch_all(&s.db).await?;
     // name, badge, color, about, members, mine, public, title, tag, icon, banner,
     // can add a channel, channel, channel about, can delete, channel maker
     #[allow(clippy::type_complexity)]
@@ -610,7 +621,8 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     for (name, badge, color, about, members, mine, public, title, tag, icon, banner, can_channels, channel, channel_about, can_delete, made_by) in rows {
         if servers.last().is_none_or(|server| server.name != name) {
             let live = living.remove(&name).unwrap_or_default();
-            servers.push(ServerView { name, badge, color, about, members, mine, public, title, tag, icon, banner, can_channels, live, channels: Vec::new() });
+            let owner = owned.contains(&name);
+            servers.push(ServerView { name, badge, color, about, members, mine, owner, public, title, tag, icon, banner, can_channels, live, channels: Vec::new() });
         }
         if let Some(name) = channel {
             let made_by = made_by.filter(|_| name != GENERAL);
@@ -699,6 +711,67 @@ async fn delete_channel(State(s): State<AppState>, Path((group, channel)): Path<
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// The channels of `server` this account has muted (docs/notifications.md): none of their
+/// lines is a row in its inbox. In the room's answer, so the list can say so. Empty for nobody.
+pub(crate) async fn muted_in(db: &PgPool, user: Option<Uuid>, server: &str) -> Result<Vec<String>, sqlx::Error> {
+    let Some(user) = user else { return Ok(Vec::new()) };
+    sqlx::query_scalar("SELECT channel FROM channel_mutes WHERE user_id = $1 AND server = $2 ORDER BY channel")
+        .bind(user)
+        .bind(server)
+        .fetch_all(db)
+        .await
+}
+
+/// `PUT /api/groups/:group/channels/:channel/mute`: no inbox row for this channel's lines, for
+/// this login, from now on. 204, also when it already was. What is in the inbox stays, the way
+/// a kind switched off leaves it. 401 for nobody, 404 `no such channel`. Not only a member's:
+/// a mute outlives a leave, so joining again finds the channel as it was left.
+async fn mute_channel(State(s): State<AppState>, Path((group, channel)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
+    let me = me.ok_or_else(not_logged_in)?;
+    let (server, channel) = channel_names(&group, &channel)?;
+    channel_room(&s.db, &server, &channel).await?;
+    sqlx::query("INSERT INTO channel_mutes (user_id, server, channel) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING")
+        .bind(me.id)
+        .bind(&server)
+        .bind(&channel)
+        .execute(&s.db)
+        .await?;
+    log::info!("{}: muted #{channel} in {server}", me.name);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `DELETE /api/groups/:group/channels/:channel/mute`: the channel's lines reach this login's
+/// bell again. 204, also when it was not muted. 401 for nobody, 404 `no such channel`.
+async fn unmute_channel(State(s): State<AppState>, Path((group, channel)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
+    let me = me.ok_or_else(not_logged_in)?;
+    let (server, channel) = channel_names(&group, &channel)?;
+    channel_room(&s.db, &server, &channel).await?;
+    let lifted = sqlx::query("DELETE FROM channel_mutes WHERE user_id = $1 AND server = $2 AND channel = $3")
+        .bind(me.id)
+        .bind(&server)
+        .bind(&channel)
+        .execute(&s.db)
+        .await?;
+    if lifted.rows_affected() > 0 {
+        log::info!("{}: unmuted #{channel} in {server}", me.name);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `PUT /api/groups/:group/channels/:channel/read`: the login has the channel on screen, so
+/// what was said in it is not news any more: its `chat` rows for the room are read. 204. A
+/// `chat_read` fact tells the login's other devices when anything was still unread. No check
+/// that the channel is still there: a row for one since deleted is read the same.
+async fn read_channel(State(s): State<AppState>, Path((group, channel)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
+    let me = me.ok_or_else(not_logged_in)?;
+    let (server, channel) = channel_names(&group, &channel)?;
+    let room = notify::room_of(&server, &channel);
+    if notify::channel_read(&s.db, me.id, &room).await? {
+        presence::publish_chat_read(&mut s.redis.clone(), &me.name, &room).await;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// `GET /api/groups/:group/messages`: the last MESSAGES_PER_CHANNEL lines of every channel,
 /// oldest first, keyed by channel: `{ "general": [line, …], "clips": [...] }`. One answer for
 /// the whole server, so a room draws every channel at once and switching between them asks
@@ -744,6 +817,8 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}/leave", post(leave))
         .route("/api/groups/{group}/channels", post(create_channel))
         .route("/api/groups/{group}/channels/{channel}", delete(delete_channel))
+        .route("/api/groups/{group}/channels/{channel}/mute", put(mute_channel).delete(unmute_channel))
+        .route("/api/groups/{group}/channels/{channel}/read", put(read_channel))
         .route("/api/groups/{group}/messages", get(messages))
 }
 

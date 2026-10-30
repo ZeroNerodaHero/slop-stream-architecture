@@ -1,9 +1,9 @@
-import { RiBroadcastLine, RiChat3Line, RiCloseLine, RiNotification3Line, RiSettings3Line, RiUserFollowLine } from '@remixicon/react';
+import { RiBroadcastLine, RiChat3Line, RiCloseLine, RiHashtag, RiNotification3Line, RiSettings3Line, RiUserFollowLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
-import type { Notification } from '@/infra/api';
+import { type Notification, roomOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { dmsAtom, openDm } from '@/infra/atoms/dm-atoms';
 import { followingAtom } from '@/infra/atoms/follow-atoms';
@@ -45,9 +45,15 @@ const COUNT =
   'absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background';
 
 /** The small mark in the corner of the face: what kind of thing this is. */
-const KIND_ICON: Record<NotificationKind, typeof RiBroadcastLine> = { live: RiBroadcastLine, follow: RiUserFollowLine, dm: RiChat3Line };
-/** The words after the name. A dm's are its own text. */
-const KIND_WORDS: Record<NotificationKind, string> = { live: 'went live', follow: 'followed you', dm: '' };
+const KIND_ICON: Record<NotificationKind, typeof RiBroadcastLine> = { live: RiBroadcastLine, follow: RiUserFollowLine, dm: RiChat3Line, chat: RiHashtag };
+/** The words after the name. A dm's are its own text; a channel line's say where, then its text. */
+const KIND_WORDS: Record<NotificationKind, string> = { live: 'went live', follow: 'followed you', dm: '', chat: '' };
+
+/** Where a channel's row leads: the room page, on that channel (`general` is the room itself). */
+function channelPath(at: { server: string; channel: string }): string {
+  const server = encodeURIComponent(at.server);
+  return at.channel === 'general' ? `/groups/${server}` : `/groups/${server}/${encodeURIComponent(at.channel)}`;
+}
 
 /**
  * The bell at the right end of every page's title row, before go live: the login's inbox
@@ -105,11 +111,13 @@ interface RowProps {
 
 /**
  * One row: the face with the kind in its corner, the name and what happened, when. A go-live
- * and a follow are links to the person's page; a dm opens the chat with them.
+ * and a follow are links to the person's page; a dm opens the chat with them; a channel's
+ * line is a link to that channel of the room.
  */
 function Row({ n, fresh, now, onPick }: RowProps) {
   const Icon = KIND_ICON[n.kind];
   const when = new Date(n.at);
+  const at = roomOf(n);
   const className = cn(
     'flex w-full items-start gap-3 border border-transparent px-3 py-2 text-left transition-colors duration-150',
     'hover:border-primaryStroke hover:bg-backgroundTertiary/60 focus-visible:border-primaryBlue focus-visible:outline-none'
@@ -131,9 +139,17 @@ function Row({ n, fresh, now, onPick }: RowProps) {
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 leading-tight">
         <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-sm">
           <Who name={n.name} verified={n.verified} className="max-w-full" />
-          {n.kind !== 'dm' && <span className="text-textSecondary">{KIND_WORDS[n.kind]}</span>}
+          {n.kind === 'chat' && at && (
+            <span className="truncate text-textSecondary">
+              in #{at.channel} of {at.server}
+            </span>
+          )}
+          {n.kind !== 'dm' && n.kind !== 'chat' && <span className="text-textSecondary">{KIND_WORDS[n.kind]}</span>}
         </span>
-        {n.kind === 'dm' && <span className="truncate text-sm text-textSecondary [overflow-wrap:anywhere]">{n.text}</span>}
+        {(n.kind === 'dm' || n.kind === 'chat') && (
+          // a line of pictures alone has no words: say so, rather than draw an empty line
+          <span className="truncate text-sm text-textSecondary [overflow-wrap:anywhere]">{n.text || (n.kind === 'chat' ? 'a picture' : '')}</span>
+        )}
         <span className="text-xs text-textTertiary" title={when.toLocaleString()}>
           {ago(when.toISOString(), now)}
         </span>
@@ -142,6 +158,22 @@ function Row({ n, fresh, now, onPick }: RowProps) {
       {fresh && <span aria-label="new" className="mt-2 h-2 w-2 shrink-0 bg-primaryBlue" />}
     </>
   );
+  if (n.kind === 'chat' && at) {
+    return (
+      <Link
+        id={`notification-${n.id}`}
+        to={channelPath(at)}
+        data-kind={n.kind}
+        data-fresh={fresh || undefined}
+        data-room={n.room ?? undefined}
+        title={`open #${at.channel} in ${at.server}`}
+        onClick={onPick}
+        className={className}
+      >
+        {inner}
+      </Link>
+    );
+  }
   if (n.kind === 'dm') {
     return (
       <button
@@ -304,7 +336,7 @@ function NotificationsList() {
 
       {!me ? (
         <p id="notifications-nobody" className="px-4 py-4 text-sm text-textSecondary">
-          notifications are for accounts: someone you follow going live, a new follower, a friend&apos;s line, here and on your phone.{' '}
+          notifications are for accounts: someone you follow going live, a new follower, a friend&apos;s line, a line in a group you are in, here and on your phone.{' '}
           <button
             type="button"
             onClick={() => {
@@ -332,7 +364,7 @@ function NotificationsList() {
         </Skeleton>
       ) : list.length === 0 ? (
         <p id="notifications-empty" className="px-4 py-4 text-sm text-textSecondary">
-          nothing yet. when someone you follow goes live, someone follows you, or a friend writes, it shows up here.
+          nothing yet. when someone you follow goes live, someone follows you, a friend writes, or someone writes in a group you are in, it shows up here.
         </p>
       ) : (
         <>

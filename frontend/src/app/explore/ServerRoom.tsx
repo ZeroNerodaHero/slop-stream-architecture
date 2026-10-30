@@ -1,4 +1,4 @@
-import { RiCloseLine, RiSettings3Line } from '@remixicon/react';
+import { RiCloseLine, RiNotificationOffLine, RiSettings3Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -7,7 +7,7 @@ import { api, CHANNEL_CAP, groupImage, groupWords, messageOf, type GroupRoom, ty
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { reconnectChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
-import { enterRoom, leaveRoom, reloadRoom, roomAtom, roomErrorAtom, roomGoneAtom } from '@/infra/atoms/room-atoms';
+import { enterRoom, leaveRoom, reloadRoom, roomAtom, roomErrorAtom, roomGoneAtom, setChannelMuted } from '@/infra/atoms/room-atoms';
 import { cleanName, isValidName } from '@/infra/names';
 import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
@@ -489,16 +489,30 @@ export function ServerPage() {
 /**
  * The channels, `general` first. Adding one takes the channels power, and stops at the cap
  * (CHANNEL_CAP, the api's). Who made a channel, or anyone with the power, deletes it; `general`
- * stays. A channel added or deleted anywhere arrives on the socket and the list follows.
+ * stays. A channel added or deleted anywhere arrives on the socket and the list follows. A
+ * member mutes a channel here (docs/notifications.md): its lines stop reaching their bell, and
+ * the bell-off mark sits by its name until they unmute it.
  */
 function ChannelList({ server, channel, room, me, onError }: { server: string; channel: string; room: GroupRoom; me: string | null; onError: (error: string) => void }) {
   const [name, setName] = useState('');
   const [sure, setSure] = useState<string | null>(null);
   const clean = cleanName(name);
   const channels = room.channels ?? [];
+  const muted = room.muted ?? [];
   const canAdd = room.perms.channels && room.mine;
+  // the mute is a member's: a stranger gets no row to mute
+  const canMute = room.mine && me !== null;
   const full = channels.length >= CHANNEL_CAP;
   const valid = isValidName(clean) && !RESERVED.has(clean) && !channels.some((item) => item.name === clean);
+
+  async function mute(item: string, on: boolean) {
+    onError('');
+    try {
+      await setChannelMuted(server, item, on);
+    } catch (err) {
+      onError(messageOf(err));
+    }
+  }
 
   async function add(e: FormEvent) {
     e.preventDefault();
@@ -533,13 +547,17 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
       <ul id="group-channels" className="flex flex-col gap-0.5">
         {channels.map((item) => {
           const here = item.name === channel;
+          const isMuted = muted.includes(item.name);
           // who made it, or the channels power; never general. kept right here, as channels and powers come and go
           const canDelete = item.name !== 'general' && ((item.made_by != null && item.made_by === me) || room.perms.channels || item.can_delete);
+          // the bell-off mark by a muted channel's name: this login hears nothing from it
+          const mark = isMuted && <RiNotificationOffLine aria-label="muted" size={12} className="ml-1 inline-block shrink-0 align-[-1px] text-textTertiary" />;
           return (
-            <li key={item.name} className="flex items-center gap-1">
+            <li key={item.name} data-muted={isMuted || undefined} className="flex items-center gap-1">
               {here ? (
                 <span aria-current="page" className="min-w-0 flex-1 truncate bg-primaryStroke/40 px-2 py-1 font-semibold">
                   #{item.name}
+                  {mark}
                 </span>
               ) : (
                 <Link
@@ -548,7 +566,20 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
                   className="min-w-0 flex-1 truncate px-2 py-1 text-textSecondary hover:bg-primaryStroke/20 hover:text-textPrimary"
                 >
                   #{item.name}
+                  {mark}
                 </Link>
+              )}
+              {canMute && (
+                <button
+                  id={`channel-mute-${item.name}`}
+                  type="button"
+                  aria-pressed={isMuted}
+                  title={isMuted ? 'muted: its lines do not reach your bell. unmute to hear it again' : 'mute: its lines stop reaching your bell. the chat itself is not touched'}
+                  className={cn('px-1 text-xs', isMuted ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
+                  onClick={() => void mute(item.name, !isMuted)}
+                >
+                  {isMuted ? 'unmute' : 'mute'}
+                </button>
               )}
               {canDelete && (
                 <button type="button" className="px-1 text-xs text-textTertiary" onClick={() => setSure(item.name)}>

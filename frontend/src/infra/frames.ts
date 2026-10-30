@@ -7,8 +7,8 @@
 export type Presence = 'offline' | 'online' | 'dnd' | 'streaming';
 /** The one you pick. `invisible` shows as `offline` to everyone else. */
 export type PresenceChoice = 'online' | 'dnd' | 'invisible';
-/** What can happen to a login (docs/notifications.md): someone they follow went live, someone followed them, a friend wrote. */
-export type NotificationKind = 'live' | 'follow' | 'dm';
+/** What can happen to a login (docs/notifications.md): someone they follow went live, someone followed them, a friend wrote, someone wrote in a channel of a group they are in. */
+export type NotificationKind = 'live' | 'follow' | 'dm' | 'chat';
 
 /** `watch` takes a name, `*` for every name's `live`, `ended` and `viewers` (the home page's feed), or `group:<name>` for a group's changes (a room's feed). */
 export type ClientFrame = { type: 'hello'; nick?: string } | { type: 'watch'; name: string } | { type: 'unwatch'; name: string };
@@ -67,7 +67,7 @@ export type ServerFrame =
   | { type: 'dm'; id: number; from: string; to: string; text: string; at: number; from_id?: string }
   /** `name` read its thread with `peer` up to `id` on some device: the others drop their count. `peer_id` is that account; an older gateway leaves it off. */
   | { type: 'dm_read'; name: string; peer: string; peer_id: string; id: number }
-  /** A row of the login's inbox (docs/notifications.md), to its own sockets. `name` is who did it, `actor` their id; `at` unix ms; `text` a dm's words; `session` a go-live's. An older gateway leaves `actor` off. */
+  /** A row of the login's inbox (docs/notifications.md), to its own sockets. `name` is who did it, `actor` their id; `at` unix ms; `text` a dm's or a channel line's words; `session` a go-live's; `room` a `chat` row's `<server>/<channel>`. An older gateway leaves `actor` and `room` off. */
   | {
       type: 'notification';
       id: number;
@@ -79,9 +79,12 @@ export type ServerFrame =
       at: number;
       text: string;
       session: number | null;
+      room?: string;
     }
   /** `name` saw its inbox up to `id` on some device: the others drop their count. */
   | { type: 'notify_read'; name: string; id: number }
+  /** `name` had the channel `room` (`<server>/<channel>`) on screen on some device: its `chat` rows for it are read there too. */
+  | { type: 'chat_read'; name: string; room: string }
   /** A group changed (docs/groups.md), to the sockets watching `group:<group>`. `what` says how; the rest is the change. */
   | ({ type: 'group'; group: string } & GroupChange)
   | { type: 'error'; error: string };

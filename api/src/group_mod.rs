@@ -349,6 +349,8 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, M
     let roles = roles.into_iter().map(|(id, name, color, perms)| json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms) }));
     let channels = groups::channels_of(&s, &group, user, admin).await?;
     let live = groups::live_in(&s, &group).await?;
+    // the channels this login has muted (docs/notifications.md): its own, so the list can say so
+    let muted = groups::muted_in(&s.db, user, &group).await?;
     // the roster is for members and site admins, the bans for the ban power: null otherwise
     let roster = if mine || admin { Some(members_of(&s.db, &group, &member_order).await?) } else { None };
     let bans = if powers & BAN != 0 { Some(bans_of(&s.db, &group).await?) } else { None };
@@ -370,6 +372,7 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, M
         "perms": perms_json(powers),
         "roles": roles.collect::<Vec<_>>(),
         "channels": channels,
+        "muted": muted,
         "live": live,
         "roster": roster,
         "bans": bans,
@@ -588,11 +591,16 @@ async fn grant_owner(
     }
     let name = body.name.trim().to_lowercase();
     let (user, already) = member_id(&s.db, &group, &name).await?;
+    if already {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    // one each: an owner of some other group is not named an owner of this one
+    if groups::owns_a_group(&s.db, user).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, format!("{name} owns a group already. one each")));
+    }
     sqlx::query("UPDATE memberships SET owner = true WHERE user_id = $1 AND group_name = $2").bind(user).bind(&group).execute(&s.db).await?;
     log::info!("{}: named {name} an owner of {group}", who.name);
-    if !already {
-        groups::tell(&s, &group, "owner", json!({ "who": name, "owner": true })).await;
-    }
+    groups::tell(&s, &group, "owner", json!({ "who": name, "owner": true })).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

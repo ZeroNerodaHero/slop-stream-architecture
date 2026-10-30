@@ -10,6 +10,8 @@
 //! Anyone may read it. Speaking takes a login that has joined the server. The room
 //! page opens `/chat/<server>/*` instead: every channel of the server on one socket,
 //! each line tagged with its channel, so switching channels opens nothing (`handle_server`).
+//! A line in a channel is also a row in the other members' inboxes (notify.rs
+//! `channel_line`, docs/notifications.md), written from here on a task of its own.
 //! The database is asked two things: is this socket really the streamer, and
 //! who does its login cookie say it is (auth.rs). A login names you; without
 //! one you pick a nick, as long as nobody owns that name. A login's groups
@@ -830,7 +832,34 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
             remember(s, room, &id, w, text, images);
         }
     }
+    // a channel's line is news to the server's other members (docs/notifications.md): their
+    // inbox rows, on a task of their own like the row above. the speaker is a member, so a login
+    if let (Some(server), Some(actor)) = (server, w.user_id) {
+        notify_members(s, server, room, actor, text);
+    }
     Ok(())
+}
+
+/// The inbox rows for a channel's line are written within this long, or not at all.
+const NOTIFY_LIMIT: Duration = Duration::from_secs(5);
+
+/// The inbox rows for a line in a server's channel (notify.rs `channel_line`), once redis has it:
+/// one unread row a channel for every other member who keeps the kind and has not muted the
+/// channel, and the fact that pushes them. Its own task, bounded like `remember`'s insert: a
+/// database that is slow or away costs the members a row, never the room its line.
+fn notify_members(s: &ChatState, server: &str, room: &str, actor: Uuid, text: &str) {
+    // the room is `<server>/<channel>` (groups.rs `channel_room`); the writer wants the two apart
+    let Some(channel) = room.strip_prefix(server).and_then(|rest| rest.strip_prefix('/')) else { return };
+    let db = s.db.clone();
+    let redis = s.redis.clone();
+    let server = server.to_owned();
+    let channel = channel.to_owned();
+    let text = text.to_owned();
+    tokio::spawn(async move {
+        if tokio::time::timeout(NOTIFY_LIMIT, crate::notify::channel_line(&db, &redis, &server, &channel, actor, &text)).await.is_err() {
+            log::warn!("{server}/{channel}: the inbox rows for a line timed out");
+        }
+    });
 }
 
 /// What one of a server socket's channels says, tagged with the channel, into the socket's one

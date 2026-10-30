@@ -1,4 +1,4 @@
-import { RiBroadcastLine, RiChat3Line, RiUserFollowLine } from '@remixicon/react';
+import { RiBroadcastLine, RiChat3Line, RiHashtag, RiUserFollowLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type ReactNode, useEffect } from 'react';
 
@@ -9,7 +9,7 @@ import type { NotificationKind } from '@/infra/frames';
 import { SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
-/** The three kinds, as switches. The words say what a row of that kind reads. */
+/** The four kinds, as switches. The words say what a row of that kind reads. */
 const KINDS: readonly { kind: NotificationKind; label: string; detail: string; icon: ReactNode }[] = [
   {
     kind: 'live',
@@ -28,15 +28,22 @@ const KINDS: readonly { kind: NotificationKind; label: string; detail: string; i
     label: 'a friend messages you',
     detail: 'the newest line from each friend, one row a friend. reading the chat reads it',
     icon: <RiChat3Line aria-hidden size={24} />
+  },
+  {
+    kind: 'chat',
+    label: 'someone writes in a group you are in',
+    detail: 'the newest line in each channel, one row a channel. opening the channel reads it. a channel too noisy for this is muted on its own page, in the channel list',
+    icon: <RiHashtag aria-hidden size={24} />
   }
 ];
 
 /**
- * Which kinds go in the inbox (docs/notifications.md): three switches, kept with the account
+ * Which kinds go in the inbox (docs/notifications.md): four switches, kept with the account
  * through the api, so every device agrees. The bell at the top right of every page is the
  * inbox itself; this tab is only what is put in it. Nobody sees the pointer to an account.
  * A switch stays disabled until this login's settings have been applied, so a click cannot
- * save the default.
+ * save the default. A channel is muted one at a time on the room page; the switch here is
+ * every group's channels at once.
  */
 export function NotificationsTab() {
   const me = useAtomValue(meAtom);
@@ -53,8 +60,8 @@ export function NotificationsTab() {
   if (!me) {
     return (
       <p id="notify-nobody" className="text-textSecondary">
-        notifications are for accounts: someone you follow going live, a new follower, a friend&apos;s line, kept for you and pushed to every device you are logged in
-        on.{' '}
+        notifications are for accounts: someone you follow going live, a new follower, a friend&apos;s line, a line in a group you are in, kept for you and pushed to
+        every device you are logged in on.{' '}
         <button type="button" onClick={() => pickTab('security')} className="text-primaryBlue underline-offset-2 hover:underline">
           sign up or log in
         </button>

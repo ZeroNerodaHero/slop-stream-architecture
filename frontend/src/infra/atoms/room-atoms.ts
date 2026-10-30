@@ -63,6 +63,28 @@ export function reloadRoom(): Promise<void> {
   return open ? loadRoom() : Promise.resolve();
 }
 
+/**
+ * This login mutes `channel`, or unmutes it (docs/notifications.md): no inbox row for its lines,
+ * or rows again. The list says so at once; the api is told, and a refusal puts it back and
+ * throws, for the page to say why. A mute is one login's and rides on no `group` fact: another
+ * device of the login sees it on its next load of the room.
+ */
+export async function setChannelMuted(server: string, channel: string, muted: boolean): Promise<void> {
+  const room = store.get(roomAtom);
+  if (!room || room.name !== server) return;
+  const was = room.muted ?? [];
+  const now = muted ? (was.includes(channel) ? was : [...was, channel].sort()) : was.filter((c) => c !== channel);
+  store.set(roomAtom, { ...room, muted: now });
+  try {
+    if (muted) await api.muteChannel(server, channel);
+    else await api.unmuteChannel(server, channel);
+  } catch (err) {
+    const current = store.get(roomAtom);
+    if (current && current.name === server) store.set(roomAtom, { ...current, muted: was });
+    throw err;
+  }
+}
+
 /** The room as the api has it. The one pull behind the push, for what the socket cannot carry per viewer. */
 async function loadRoom(): Promise<void> {
   const server = open;
@@ -141,7 +163,12 @@ function apply(change: GroupChange): void {
       return;
     }
     case 'unchannel':
-      store.set(roomAtom, { ...room, channels: (room.channels ?? []).filter((c) => c.name !== change.channel) });
+      // the mute went with the channel (the api's table says so): a channel made again under the name starts unmuted
+      store.set(roomAtom, {
+        ...room,
+        channels: (room.channels ?? []).filter((c) => c.name !== change.channel),
+        muted: room.muted?.filter((c) => c !== change.channel) ?? room.muted
+      });
       dropChannel(change.channel);
       return;
     case 'about':

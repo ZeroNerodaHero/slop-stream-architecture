@@ -29,7 +29,9 @@
 #              read marks, paging at 50, the window gets a line pushed and sends one back, a hidden window counts on the sidebar and a second tab agrees
 #   notifications  the inbox under the bell: nobody 401, the settings save, a follow is a row in the followed inbox (once), a go-live over the api is one
 #              live row per follower who keeps it, a friend's newest line is the one unread dm row and reading the thread reads it, the bell counts
-#              on two tabs and opening the list reads everything (the other tab drops by push), a pushed row is read at once, the tab's switch, 30 kept
+#              on two tabs and opening the list reads everything (the other tab drops by push), a pushed row is read at once, the tab's switch, 30 kept;
+#              a line in a group's channel is one chat row per other member (the newest line, replaced; read by opening the channel), a muted
+#              channel writes none for who muted it, the room page's mute button, the row under the bell links to the channel
 #   preview    /watch/<name> html: title + og tags offline, with a picture, with the offline picture, live with the thumbnail; the pictures round-trip,
 #              the offline picture and the line under the word show on the page and in the profile tab
 #   errors     /api/health has the monitor fields, a page's error report lands (204, log, debug db), bad ones 400, /admin renders

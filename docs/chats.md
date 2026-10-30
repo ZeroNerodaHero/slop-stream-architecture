@@ -18,7 +18,7 @@ flowchart LR
 | who may write | anyone: a login, or a nick | a login that has joined the group | a login, and only a friend (each follows the other) |
 | how a line goes out | a websocket for that room | one websocket for the whole server, the line naming its channel | `POST`, then the events socket tells both sides |
 | kept | the last 500 in redis; older ones in postgres only with `CHAT_PERSIST` | the same, its own room | every line, in postgres |
-| what is new | nothing counted | nothing counted; the header says how many sockets are in the room | a count per thread, on the sidebar, and a row under the bell |
+| what is new | nothing counted | nothing counted in the room (the header says how many sockets are in it); the newest line in each channel is a row under each other member's bell, unless they muted the channel | a count per thread, on the sidebar, and a row under the bell |
 | the deep file | `chat.md` | `groups.md`, and `chat.md` for the socket | `dms.md` |
 
 ## stream chat
@@ -41,7 +41,7 @@ home shows them under recently offline as squares. a square opens that group; th
 
 making the group, joining it, the badge and the colour are the groups api (`POST /api/groups`, `join`, `leave`, `DELETE`). the channels are three more routes on the same groups (`GET /api/explore`, `POST /api/groups/:group/channels`, `DELETE` one). `bot` is a badge, not a server: nobody joins it and it is not on the list.
 
-what a channel is not: a second copy of a stream's chat, and not a thread. there is no streamer mark that means the room, no unread count, and no friends check. leaving the group stops you writing; the lines stay, and you can still read them.
+what a channel is not: a second copy of a stream's chat, and not a thread. there is no streamer mark that means the room, no unread count in the room (the bell holds one row a channel for the newest line, read by opening the channel, and a channel can be muted: `notifications.md`), and no friends check. leaving the group stops you writing; the lines stay, and you can still read them.
 
 the room uses the streams people already have. a camera that exists only inside the group, and home leading with groups instead of the stream wall, are still `idea.md`.
 
@@ -65,6 +65,6 @@ a logout drops the direct-message window. a stream or a channel keeps going: the
 
 ## not a chat
 
-- **the bell.** an inbox of the last 30 things (`notifications.md`): someone you follow went live, a new follower, a friend's line. the line is a copy for the list. the thread is still the direct message.
+- **the bell.** an inbox of the last 30 things (`notifications.md`): someone you follow went live, a new follower, a friend's line, the newest line in a channel of a group you are in. the line is a copy for the list. the thread is still the direct message, and the room is still the channel.
 - **posts.** a plan (`posts.md`). a short post on a feed, not a room and not a thread.
 - **a camera that exists only in the group.** the room shows the streams people already have. a face that is not also their own stream, and one shared audio, are still `idea.md`.

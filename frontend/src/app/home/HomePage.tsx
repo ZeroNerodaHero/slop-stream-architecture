@@ -13,8 +13,9 @@ import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { Avatar } from '@/shared-components/Avatar';
 import { GroupSquare } from '@/shared-components/GroupSquare';
-import { buttonClassName } from '@/shared-components/Button';
+import { Button, buttonClassName } from '@/shared-components/Button';
 import { FollowButton } from '@/shared-components/FollowButton';
+import { MakeGroupDialog } from '@/shared-components/MakeGroupDialog';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { PersonRow } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
@@ -233,11 +234,15 @@ function Card({
  * next, so the push comes exactly when the part ends and not a gap later. The same z as the row
  * and later in the document, so the heading paints over it; the sidebar open (z-40) covers both.
  */
-function Part({ id, line, heading, children }: { id: string; line: string; heading: ReactNode; children: ReactNode }) {
+/** `aside`: a control beside the words (groups' `create group`), riding along in the sticky row. The section is named by the words alone. */
+function Part({ id, line, heading, aside, children }: { id: string; line: string; heading: ReactNode; aside?: ReactNode; children: ReactNode }) {
   return (
     <section id={id} aria-labelledby={`${id}-title`}>
-      <h2 id={`${id}-title`} className="sticky top-0 z-30 flex h-16 w-fit items-center">
-        <span className={cn(SECTION_TITLE, line)}>{heading}</span>
+      <h2 className="sticky top-0 z-30 flex h-16 w-fit items-center gap-4">
+        <span id={`${id}-title`} className={cn(SECTION_TITLE, line)}>
+          {heading}
+        </span>
+        {aside}
       </h2>
       <div className="pb-6">{children}</div>
     </section>
@@ -423,11 +428,18 @@ function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
   );
 }
 
-/** Every group but `bot`, under recently offline: yours and the public ones, as squares. The heading opens the list. */
+/**
+ * Every group but `bot`, under recently offline: yours and the public ones, as squares. The
+ * heading opens the list; beside it, `create group` for a login that owns no group yet (one
+ * each), which opens the same dialog `/groups` has and ends on the new room.
+ */
 function Groups() {
+  const me = useAtomValue(meAtom);
+  const [making, setMaking] = useState(false);
   const query = useQuery({ queryKey: ['explore'], queryFn: api.explore, refetchInterval: PEOPLE_POLL_MS, refetchOnWindowFocus: false });
   const groups: Server[] = query.data ? [...query.data.yours, ...query.data.discover].filter((group) => group.mine || group.public !== false) : [];
   const loading = !query.data && !query.error;
+  const canMake = !!me && !!query.data && !query.data.yours.some((group) => group.owner === true);
   return (
     <Part
       id="home-groups"
@@ -444,7 +456,15 @@ function Groups() {
           )}
         </>
       }
+      aside={
+        canMake && (
+          <Button id="home-groups-create" variant="primary" className="px-3 py-1.5 text-sm" onClick={() => setMaking(true)}>
+            create group
+          </Button>
+        )
+      }
     >
+      {making && <MakeGroupDialog onClose={() => setMaking(false)} />}
       {/* before the first answer: a row of grey squares, the groups' shape. the part always shows once asked (`no groups yet.` for none), so the grey never comes to nothing */}
       {loading && (
         <Skeleton id="home-groups-loading" className={GROUPS_GRID}>

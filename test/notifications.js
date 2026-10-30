@@ -30,6 +30,12 @@
 // read when that GET lands. a dm list GET held across logout and a
 // client-side login is not the next account's tabs.
 // two pages of one login: dm off on the first, then live off on the second, leaves dm off, follow on, and live off.
+// a group's channels: a line said over the server socket is one `chat` row (its room and words) in each other
+// member's inbox and none in the speaker's, the next line replaces it, the read route reads it; a channel one
+// member muted writes that member no row while the other still gets one, unmuted it lands again, chat switched
+// off keeps none and leaves what is there; the mute and read routes are 401 for nobody and 404 for no such
+// channel; in a browser the row under the bell names the channel and links to it, the room page's mute button
+// moves the api and marks the channel, and a line that lands on the channel on screen is read at once.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node notifications.js
 const { chromium, request } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
@@ -1915,14 +1921,251 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     }
   });
 
+  // ---- a group's channels under the bell (the `chat` kind), with three accounts of their own ----
+  // the accounts above have renamed by now, so these are fresh: a maker and two members. a line
+  // is said over a raw /chat/<server>/* socket from a page logged in as the speaker (the cookie
+  // goes with the handshake), the way groups.js does it.
+  const GM = 'gm' + RUN;
+  const GA = 'ga' + RUN;
+  const GB = 'gb' + RUN;
+  const gm = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
+  const ga = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
+  const gb = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
+  let slug = '';
+  let gaCtx;
+  let gaPage;
+  let gbCtx;
+  let gbPage;
+  /** Polls `fn` until it returns something truthy, or `ms` have passed: the rows are written after the line, on a task of their own. */
+  const until = async (fn, ms = 8000, every = 100) => {
+    const end = Date.now() + ms;
+    let last;
+    while (Date.now() < end) {
+      last = await fn();
+      if (last) return last;
+      await sleep(every);
+    }
+    return last;
+  };
+  /**
+   * A line into a channel over the server socket, from a page logged in as the speaker. Resolves
+   * with the line as the room echoed it. The speaker says several lines in a row here, past the
+   * chat's burst (three, then one every 3⅓ s): a `slow down` is waited out for as long as the chat
+   * says, then the line goes again, the way the page's send button does.
+   */
+  const sayInChannel = (p, server, channel, text) =>
+    p.evaluate(
+      ({ server, channel, text }) =>
+        new Promise((resolve) => {
+          const ws = new WebSocket(`wss://${location.host}/chat/${server}/*`);
+          const errors = [];
+          const say = () => ws.send(JSON.stringify({ type: 'say', text, channel }));
+          ws.onopen = () => {
+            ws.send(JSON.stringify({ type: 'hello' }));
+            say();
+          };
+          ws.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'error') {
+              errors.push(msg.error);
+              if (msg.error === 'slow down') setTimeout(say, (typeof msg.wait === 'number' ? msg.wait : 3400) + 100);
+            }
+            if (msg.type === 'message' && msg.text === text) {
+              ws.close();
+              resolve({ ok: true, line: msg });
+            }
+          };
+          setTimeout(() => {
+            ws.close();
+            resolve({ ok: false, errors });
+          }, 15000);
+        }),
+      { server, channel, text }
+    );
+  const chatRows = (items, room) => items.filter((n) => n.kind === 'chat' && n.room === room);
+
+  await step("a line in a channel is one chat row in each other member's inbox, none in the speaker's; the next line replaces it; the read route reads it", async () => {
+    for (const [ctx, name] of [
+      [gm, GM],
+      [ga, GA],
+      [gb, GB]
+    ]) {
+      const up = await ctx.post('/api/signup', { data: { name, password: PW } });
+      expect(up.status() === 201, `signup of ${name} got ${up.status()}`);
+    }
+    const fresh = await inbox(gb);
+    expect(fresh.settings && fresh.settings.chat === true, `a new account keeps chat: ${JSON.stringify(fresh.settings)}`);
+    const made = await gm.post('/api/groups', { data: { name: 'nt' + RUN, badge: 'NT', color: '#5865f2' } });
+    const group = await body(made);
+    expect(made.status() === 201 && group && group.name, `making the group got ${made.status()} ${JSON.stringify(group)}`);
+    slug = group.name;
+    for (const [ctx, name] of [
+      [ga, GA],
+      [gb, GB]
+    ]) {
+      const joined = await ctx.post(`/api/groups/${slug}/join`);
+      expect(joined.status() === 204, `${name} joining got ${joined.status()}`);
+    }
+    gaCtx = await browser.newContext({ ignoreHTTPSErrors: true });
+    gaPage = await gaCtx.newPage();
+    await login(gaPage, GA);
+    const room = `${slug}/general`;
+    const first = 'first in general ' + RUN;
+    const said = await sayInChannel(gaPage, slug, 'general', first);
+    expect(said.ok, `the line: ${JSON.stringify(said)}`);
+    const gbRow = await until(async () => chatRows((await inbox(gb)).items, room).find((n) => n.text === first));
+    expect(gbRow, `${GB}'s inbox has no chat row for the line: ${JSON.stringify((await inbox(gb)).items)}`);
+    expect(
+      gbRow.name === GA && gbRow.verified === true && gbRow.read === false && gbRow.session === null && gbRow.room === room,
+      `the chat row: ${JSON.stringify(gbRow)}`
+    );
+    const gmRow = await until(async () => chatRows((await inbox(gm)).items, room).find((n) => n.text === first));
+    expect(gmRow && gmRow.name === GA, `the maker's inbox: ${JSON.stringify((await inbox(gm)).items)}`);
+    const own = await inbox(ga);
+    expect(own.items.every((n) => n.kind !== 'chat'), `the speaker's own inbox has a chat row: ${JSON.stringify(own.items)}`);
+    // the next line replaces the unread one: one row a channel, the newest words
+    const second = 'second in general ' + RUN;
+    const again = await sayInChannel(gaPage, slug, 'general', second);
+    expect(again.ok, `the second line: ${JSON.stringify(again)}`);
+    const replaced = await until(async () => {
+      const rows = chatRows((await inbox(gb)).items, room);
+      return rows.some((n) => n.text === second) ? rows : null;
+    });
+    expect(replaced && replaced.length === 1 && replaced[0].text === second && replaced[0].id !== gbRow.id && replaced[0].read === false, `after a second line: ${JSON.stringify(replaced)}`);
+    // the read route: the channel on screen reads its rows
+    const read = await gb.put(`/api/groups/${slug}/channels/general/read`);
+    expect(read.status() === 204, `reading the channel got ${read.status()}`);
+    const afterRead = chatRows((await inbox(gb)).items, room);
+    expect(afterRead.length === 1 && afterRead[0].read === true, `after the read: ${JSON.stringify(afterRead)}`);
+    // nobody, and a channel that is not there
+    const anonRead = await anon.put(`/api/groups/${slug}/channels/general/read`);
+    const anonMute = await anon.put(`/api/groups/${slug}/channels/general/mute`);
+    const noChannel = await gb.put(`/api/groups/${slug}/channels/nowhere/mute`);
+    expect(anonRead.status() === 401 && anonMute.status() === 401 && noChannel.status() === 404, `nobody got ${anonRead.status()}, ${anonMute.status()}; a missing channel ${noChannel.status()}`);
+    return `row ${gbRow.id} then ${replaced[0].id} in ${GB}'s inbox`;
+  });
+
+  await step('a muted channel writes no row for the one who muted it while the other member still gets one; unmuted it lands again; chat off keeps none', async () => {
+    const room = `${slug}/general`;
+    const mute = await gb.put(`/api/groups/${slug}/channels/general/mute`);
+    expect(mute.status() === 204, `muting got ${mute.status()}`);
+    const twice = await gb.put(`/api/groups/${slug}/channels/general/mute`);
+    expect(twice.status() === 204, `muting again got ${twice.status()}`);
+    const gbRoom = await body(await gb.get(`/api/groups/${slug}`));
+    expect(gbRoom && Array.isArray(gbRoom.muted) && gbRoom.muted.includes('general'), `the room for ${GB}: muted ${JSON.stringify(gbRoom && gbRoom.muted)}`);
+    const gmRoom = await body(await gm.get(`/api/groups/${slug}`));
+    expect(gmRoom && Array.isArray(gmRoom.muted) && gmRoom.muted.length === 0, `the room for ${GM}: muted ${JSON.stringify(gmRoom && gmRoom.muted)}`);
+    const third = 'third, muted for gb ' + RUN;
+    const said = await sayInChannel(gaPage, slug, 'general', third);
+    expect(said.ok, `the line: ${JSON.stringify(said)}`);
+    // the maker's row is the sign the write has happened; then gb's inbox must not have it
+    const gmRow = await until(async () => chatRows((await inbox(gm)).items, room).find((n) => n.text === third));
+    expect(gmRow && gmRow.read === false, `the maker's row: ${JSON.stringify(gmRow)}`);
+    await sleep(500);
+    const gbRows = chatRows((await inbox(gb)).items, room);
+    expect(!gbRows.some((n) => n.text === third), `a muted channel wrote a row: ${JSON.stringify(gbRows)}`);
+    expect(gbRows.length === 1 && gbRows[0].read === true, `the row already there stayed as it was: ${JSON.stringify(gbRows)}`);
+    const unmute = await gb.delete(`/api/groups/${slug}/channels/general/mute`);
+    expect(unmute.status() === 204, `unmuting got ${unmute.status()}`);
+    const roomAfter = await body(await gb.get(`/api/groups/${slug}`));
+    expect(roomAfter && roomAfter.muted.length === 0, `after the unmute: muted ${JSON.stringify(roomAfter && roomAfter.muted)}`);
+    const fourth = 'fourth, heard again ' + RUN;
+    const heard = await sayInChannel(gaPage, slug, 'general', fourth);
+    expect(heard.ok, `the line: ${JSON.stringify(heard)}`);
+    const back = await until(async () => chatRows((await inbox(gb)).items, room).find((n) => n.text === fourth));
+    expect(back && back.read === false, `unmuted, the row did not land: ${JSON.stringify((await inbox(gb)).items)}`);
+    // the kind switched off: nothing of it from then on, and what is in the inbox stays
+    const off = await body(await gb.put('/api/notifications/settings', { data: { chat: false } }));
+    expect(off && off.chat === false && off.dm === true, `chat off: ${JSON.stringify(off)}`);
+    const fifth = 'fifth, chat off for gb ' + RUN;
+    const quiet = await sayInChannel(gaPage, slug, 'general', fifth);
+    expect(quiet.ok, `the line: ${JSON.stringify(quiet)}`);
+    const gmFifth = await until(async () => chatRows((await inbox(gm)).items, room).find((n) => n.text === fifth));
+    expect(gmFifth, `the maker's row for the fifth line: ${JSON.stringify((await inbox(gm)).items)}`);
+    await sleep(500);
+    const gbAfterOff = chatRows((await inbox(gb)).items, room);
+    expect(!gbAfterOff.some((n) => n.text === fifth), `chat off still wrote a row: ${JSON.stringify(gbAfterOff)}`);
+    const kept = gbAfterOff.find((n) => n.id === back.id);
+    expect(kept && kept.read === false && kept.text === fourth, `the unread row stayed while chat was off: ${JSON.stringify(gbAfterOff)}`);
+    const on = await body(await gb.put('/api/notifications/settings', { data: { live: true, follow: true, dm: true, chat: true } }));
+    expect(on && on.chat === true, `chat back on: ${JSON.stringify(on)}`);
+    return `row ${back.id} unread for the browser`;
+  });
+
+  await step("under the bell the row names the channel and links to it; the room page's mute button moves the api; a line that lands on the open channel is read at once", async () => {
+    const room = `${slug}/general`;
+    gbCtx = await browser.newContext({ ignoreHTTPSErrors: true });
+    gbPage = await gbCtx.newPage();
+    await login(gbPage, GB);
+    const loaded = await inbox(gb);
+    const unread = loaded.items.filter((n) => !n.read).length;
+    expect(unread >= 1, `${GB} has nothing unread: ${JSON.stringify(loaded.items)}`);
+    await gbPage.waitForFunction((n) => document.querySelector('#notifications-unread')?.textContent === String(n), unread, { timeout: 10000 });
+    await gbPage.click('#notifications');
+    await gbPage.waitForSelector('#notifications-list [data-kind="chat"]', { timeout: 10000 });
+    const rows = await gbPage.$$eval('#notifications-list [data-kind="chat"]', (els) =>
+      els.map((e) => ({ href: e.getAttribute('href'), room: e.dataset.room, fresh: e.hasAttribute('data-fresh'), text: e.textContent || '' }))
+    );
+    const row = rows.find((r) => r.fresh);
+    expect(row, `no fresh chat row on screen: ${JSON.stringify(rows)}`);
+    expect(row.href === `/groups/${slug}` && row.room === room, `the chat row leads to ${row.href} (${row.room})`);
+    expect(row.text.includes(GA) && row.text.includes('#general') && row.text.includes('fourth, heard again'), `the chat row reads: ${JSON.stringify(row.text)}`);
+    // opening the list read everything: the api agrees
+    await gbPage.waitForFunction(() => !document.querySelector('#notifications-unread'), null, { timeout: 10000 });
+    const readAll = await until(async () => ((await inbox(gb)).items.every((n) => n.read) ? true : null), 5000);
+    expect(readAll, `the api after opening the list: ${JSON.stringify((await inbox(gb)).items.map((n) => [n.kind, n.read]))}`);
+    await gbPage.keyboard.press('Escape');
+    await gbPage.waitForFunction(() => !document.querySelector('#notifications-panel'), null, { timeout: 5000 });
+    // the room page: mute in the channel list
+    await gbPage.goto(`${BASE}/groups/${slug}`, { waitUntil: 'domcontentloaded' });
+    await gbPage.waitForSelector('#group-channels', { timeout: 10000 });
+    await gbPage.waitForFunction(() => document.querySelector('#channel-mute-general')?.textContent === 'mute', null, { timeout: 10000 });
+    expect(!(await gbPage.$('#group-channels li[data-muted]')), 'a channel reads muted before any click');
+    await gbPage.click('#channel-mute-general');
+    await gbPage.waitForFunction(() => document.querySelector('#channel-mute-general')?.textContent === 'unmute', null, { timeout: 5000 });
+    expect(await gbPage.$('#group-channels li[data-muted]'), 'the muted channel wears no mark');
+    const mutedRoom = await until(async () => {
+      const r = await body(await gb.get(`/api/groups/${slug}`));
+      return r && r.muted.includes('general') ? r : null;
+    }, 5000);
+    expect(mutedRoom, 'the api does not say general is muted after the click');
+    await gbPage.click('#channel-mute-general');
+    await gbPage.waitForFunction(() => document.querySelector('#channel-mute-general')?.textContent === 'mute', null, { timeout: 5000 });
+    const unmutedRoom = await until(async () => {
+      const r = await body(await gb.get(`/api/groups/${slug}`));
+      return r && r.muted.length === 0 ? r : null;
+    }, 5000);
+    expect(unmutedRoom, 'the api still says general is muted after the second click');
+    expect(!(await gbPage.$('#group-channels li[data-muted]')), 'the mark stayed after the unmute');
+    // the channel is on screen: a line that lands now is seen, here and on the api, and the bell stays quiet
+    await gbPage.waitForSelector('#my-presence[data-presence="online"]', { timeout: 10000 });
+    const sixth = 'sixth, on screen ' + RUN;
+    const said = await sayInChannel(gaPage, slug, 'general', sixth);
+    expect(said.ok, `the line: ${JSON.stringify(said)}`);
+    const seen = await until(async () => {
+      const found = chatRows((await inbox(gb)).items, room).find((n) => n.text === sixth);
+      return found && found.read ? found : null;
+    });
+    expect(seen, `the line on the open channel is not read on the api: ${JSON.stringify(chatRows((await inbox(gb)).items, room))}`);
+    await sleep(300);
+    expect(!(await gbPage.$('#notifications-unread')), 'the bell counted a line said in the channel on screen');
+    return `row ${seen.id} read on arrival`;
+  });
+
   await step('cleanup', async () => {
     await fan.post(`/api/streamers/${STAR}/unfollow`);
     await fan.post(`/api/streamers/${PAL}/unfollow`);
     await pal.post(`/api/streamers/${FAN}/unfollow`);
     await star.post(`/api/streamers/${FAN}/unfollow`);
+    if (slug) {
+      const gone = await gm.delete(`/api/groups/${slug}`);
+      expect(gone.status() === 204, `deleting the group got ${gone.status()}`);
+    }
+    for (const p of [gaPage, gbPage]) if (p) await p.close();
+    for (const c of [gaCtx, gbCtx]) if (c) await c.close();
     await browser.close();
-    for (const ctx of [star, fan, pal, anon]) await ctx.dispose();
-    return 'unfollowed';
+    for (const ctx of [star, fan, pal, anon, gm, ga, gb]) await ctx.dispose();
+    return 'unfollowed, the group deleted';
   });
 
   const passed = results.filter(Boolean).length;

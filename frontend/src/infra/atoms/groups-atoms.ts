@@ -95,8 +95,18 @@ async function act(doing: string, call: () => Promise<unknown>, done: string, we
   }
 }
 
-export function createGroup(group: NewGroup): Promise<boolean> {
-  return act('made', () => api.createGroup(group), `made ${group.name}. you are in it`, true);
+/** The group as made, its `name` the address with the digits, or null when the api refused (the status says why). */
+export async function createGroup(group: NewGroup): Promise<Group | null> {
+  let made = null as Group | null;
+  const ok = await act(
+    'made',
+    async () => {
+      made = await api.createGroup(group);
+    },
+    `made ${group.name}. you are in it`,
+    true
+  );
+  return ok ? made : null;
 }
 
 /** Public is on the lists. Private is on the lists only for someone in it. */

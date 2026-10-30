@@ -1,20 +1,23 @@
 //! Notifications: a login's inbox of the last 30 things that happened to them. See
 //! docs/notifications.md.
 //!
-//! Three kinds. `live`: someone they follow went live (one row per session: video retries
+//! Four kinds. `live`: someone they follow went live (one row per session: video retries
 //! `attached`, and a heartbeat that takes a lapsed key back is the same stream). `follow`:
 //! someone followed them (one row per follower among the rows kept: a follow, unfollow,
 //! follow loop is one line). `dm`: a friend wrote (the newest line from them is the one
-//! unread row; reading the thread reads it). Which kinds are kept is the login's own,
-//! `streamers.notify`, a json document of the kinds turned off; a kind not in it is on.
+//! unread row; reading the thread reads it). `chat`: someone wrote in a channel of a group
+//! they are in (the newest line in the channel is the one unread row for it; opening the
+//! channel reads it; a channel can be muted, `channel_mutes`, and then writes none). Which
+//! kinds are kept is the login's own, `streamers.notify`, a json document of the kinds
+//! turned off; a kind not in it is on.
 //!
 //! One table of rows, `notifications (user_id, kind, actor_id, ...)`, both ids (docs/ids.md),
 //! so a rename keeps the inbox and the actor shows under the name they have now. The api is
-//! the one writer: a row, then a `notify` fact on the `events` stream naming every login it
-//! reached and their row ids, and the gateway (events.rs) pushes the same row to each one's
-//! own sockets, the way a direct message reaches every device of its reader. Reading is
-//! http. Every write clips the login's rows to the last KEEP: an inbox is a short memory,
-//! not a log.
+//! the writer of three kinds and the chat process (chat.rs, the same binary) of `chat`: a
+//! row, then a `notify` fact on the `events` stream naming every login it reached and their
+//! row ids, and the gateway (events.rs) pushes the same row to each one's own sockets, the way
+//! a direct message reaches every device of its reader. Reading is http. Every write clips
+//! the login's rows to the last KEEP: an inbox is a short memory, not a log.
 
 use std::collections::HashMap;
 
@@ -23,6 +26,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::{get, put};
 use axum::{Json, Router};
+use redis::aio::ConnectionManager;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -34,7 +38,7 @@ use crate::{ApiError, ApiResult, AppState};
 
 /// Rows kept per login. Older ones go with every write.
 pub(crate) const KEEP: i64 = 30;
-/// A direct message's words in its row: one line of the list, not the whole message.
+/// A direct message's, or a channel line's, words in its row: one line of the list, not the whole message.
 const TEXT_CHARS: usize = 140;
 
 fn not_logged_in() -> ApiError {
@@ -49,6 +53,7 @@ pub(crate) enum Kind {
     Live,
     Follow,
     Dm,
+    Chat,
 }
 
 impl Kind {
@@ -57,22 +62,24 @@ impl Kind {
             Kind::Live => "live",
             Kind::Follow => "follow",
             Kind::Dm => "dm",
+            Kind::Chat => "chat",
         }
     }
 }
 
 /// Which kinds a login keeps, as the row's `notify` document reads: every kind on unless the
-/// document says `false` for it. The settings tab's three switches, and the json of the api.
+/// document says `false` for it. The settings tab's four switches, and the json of the api.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub(crate) struct Settings {
     pub(crate) live: bool,
     pub(crate) follow: bool,
     pub(crate) dm: bool,
+    pub(crate) chat: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { live: true, follow: true, dm: true }
+        Settings { live: true, follow: true, dm: true, chat: true }
     }
 }
 
@@ -80,13 +87,13 @@ impl Settings {
     /// From the row's document. A key that is not `false` (missing, or anything else) is on.
     pub(crate) fn from_doc(doc: &Value) -> Settings {
         let on = |key: &str| doc.get(key).and_then(Value::as_bool).unwrap_or(true);
-        Settings { live: on("live"), follow: on("follow"), dm: on("dm") }
+        Settings { live: on("live"), follow: on("follow"), dm: on("dm"), chat: on("chat") }
     }
 
     /// The document the row keeps: only what is off, so a row never written reads as all on.
     pub(crate) fn to_doc(self) -> Value {
         let mut doc = serde_json::Map::new();
-        for (kind, on) in [(Kind::Live, self.live), (Kind::Follow, self.follow), (Kind::Dm, self.dm)] {
+        for (kind, on) in [(Kind::Live, self.live), (Kind::Follow, self.follow), (Kind::Dm, self.dm), (Kind::Chat, self.chat)] {
             if !on {
                 doc.insert(kind.as_str().to_owned(), Value::Bool(false));
             }
@@ -132,6 +139,8 @@ struct Made {
     at_ms: i64,
     text: String,
     session: Option<i64>,
+    /// A `chat` row's channel, `<server>/<channel>`: the chat's room key, and where the row leads.
+    room: Option<String>,
 }
 
 /// Every login's rows past the newest KEEP go. One statement for any number of logins.
@@ -151,13 +160,27 @@ async fn clip(db: &PgPool, users: &[Uuid]) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-/// The fact, once per write: the gateway pushes a frame per login named in `to`.
-async fn tell(s: &AppState, kind: Kind, actor: &Actor, made: &Made) {
+/// The fact, once per write: the gateway pushes a frame per login named in `to`. The redis
+/// handle, not the api's state: the chat process writes a kind of its own (`channel_line`).
+async fn tell(redis: &ConnectionManager, kind: Kind, actor: &Actor, made: &Made) {
     if made.to.is_empty() {
         return;
     }
     let to = Value::Object(made.to.iter().map(|(name, id)| (name.clone(), json!(id))).collect());
-    presence::publish_notify(&mut s.redis.clone(), kind.as_str(), &actor.name, &actor.id.to_string(), actor.verified, actor.avatar, &to, made.at_ms, &made.text, made.session).await;
+    presence::publish_notify(
+        &mut redis.clone(),
+        kind.as_str(),
+        &actor.name,
+        &actor.id.to_string(),
+        actor.verified,
+        actor.avatar,
+        &to,
+        made.at_ms,
+        &made.text,
+        made.session,
+        made.room.as_deref(),
+    )
+    .await;
 }
 
 /// id, login name, user id, at (ms)
@@ -202,9 +225,10 @@ async fn live_rows(s: &AppState, name: &str, session: i64) -> Result<(), ApiErro
         at_ms: rows.first().map_or_else(presence::now_ms, |r| r.3),
         text: String::new(),
         session: Some(session),
+        room: None,
     };
     log::info!("notify: {name} live, {} told", rows.len());
-    tell(s, Kind::Live, &actor, &made).await;
+    tell(&s.redis, Kind::Live, &actor, &made).await;
     Ok(())
 }
 
@@ -232,8 +256,8 @@ async fn follow_row(s: &AppState, followed: Uuid, followed_name: &str, follower:
     .await?;
     let Some((id, at_ms)) = row else { return Ok(()) };
     clip(&s.db, &[followed]).await?;
-    let made = Made { to: HashMap::from([(followed_name.to_owned(), id)]), at_ms, text: String::new(), session: None };
-    tell(s, Kind::Follow, &actor, &made).await;
+    let made = Made { to: HashMap::from([(followed_name.to_owned(), id)]), at_ms, text: String::new(), session: None, room: None };
+    tell(&s.redis, Kind::Follow, &actor, &made).await;
     Ok(())
 }
 
@@ -282,8 +306,8 @@ async fn dm_row(s: &AppState, to: &Account, from: &Account, text: &str) -> Resul
     tx.commit().await?;
     let Some((id, at_ms)) = row else { return Ok(()) };
     clip(&s.db, &[to.id]).await?;
-    let made = Made { to: HashMap::from([(to.name.clone(), id)]), at_ms, text: words, session: None };
-    tell(s, Kind::Dm, &actor, &made).await;
+    let made = Made { to: HashMap::from([(to.name.clone(), id)]), at_ms, text: words, session: None, room: None };
+    tell(&s.redis, Kind::Dm, &actor, &made).await;
     Ok(())
 }
 
@@ -298,21 +322,109 @@ pub(crate) async fn dm_read(db: &PgPool, reader: Uuid, peer: Uuid) -> Result<(),
     Ok(())
 }
 
+/// The chat's room key for a channel, the one on the row and in the fact (chat.rs `room_key`
+/// without the prefix): `<server>/<channel>`.
+pub(crate) fn room_of(server: &str, channel: &str) -> String {
+    format!("{server}/{channel}")
+}
+
+/// `actor` said `text` in `channel` of `server` (chat.rs `accept`, once redis has the line, on
+/// a task of its own so the socket does not wait): a row for every member of the server but the
+/// speaker who keeps `chat` and has not muted that channel. The newest line in a channel is the
+/// one unread row for it, the dm rule per room rather than per writer: a busy channel is one
+/// line of the list that says who spoke last and what they said, not thirty; the unread row for
+/// the room goes as the new one comes, a read one stays. Never fails the line: it is in the room
+/// already; a miss is logged. The chat process has no `AppState`, so this takes the two handles.
+pub(crate) async fn channel_line(db: &PgPool, redis: &ConnectionManager, server: &str, channel: &str, actor: Uuid, text: &str) {
+    if let Err(e) = chat_rows(db, redis, server, channel, actor, text).await {
+        log::warn!("notify: a line in {}: {}", room_of(server, channel), e.message());
+    }
+}
+
+async fn chat_rows(db: &PgPool, redis: &ConnectionManager, server: &str, channel: &str, actor: Uuid, text: &str) -> Result<(), ApiError> {
+    let Some(actor) = actor_by_id(db, actor).await? else { return Ok(()) };
+    let room = room_of(server, channel);
+    let words: String = text.chars().take(TEXT_CHARS).collect();
+    // Lock the channel before replacing the unread rows: two lines at once in one channel queue
+    // on this statement, and the one that waited sees the rows the first one committed, so a
+    // channel is never two unread rows in one inbox (the dm writer locks the recipient the same
+    // way). One row to lock, however many members: the channel's, not each reader's.
+    let mut tx = db.begin().await?;
+    let held: Option<i32> = sqlx::query_scalar("SELECT 1 FROM channels WHERE server = $1 AND name = $2 FOR UPDATE").bind(server).bind(channel).fetch_optional(&mut *tx).await?;
+    if held.is_none() {
+        // the channel went between the line and this: nobody's inbox to write
+        return Ok(());
+    }
+    let rows: Vec<LiveRow> = sqlx::query_as(
+        "WITH recipients AS (
+            SELECT m.user_id FROM memberships m JOIN streamers u ON u.id = m.user_id
+            WHERE m.group_name = $1 AND m.user_id <> $3 AND u.password_hash IS NOT NULL
+              AND COALESCE((u.notify->>'chat')::boolean, true)
+              AND NOT EXISTS (SELECT 1 FROM channel_mutes cm WHERE cm.user_id = m.user_id AND cm.server = $1 AND cm.channel = $2)
+         ),
+         gone AS (
+            DELETE FROM notifications n USING recipients r
+            WHERE n.user_id = r.user_id AND n.kind = 'chat' AND n.room = $4 AND n.read_at IS NULL
+         ),
+         made AS (
+            INSERT INTO notifications (user_id, kind, actor_id, text, room)
+            SELECT r.user_id, 'chat', $3, $5, $4 FROM recipients r
+            RETURNING id, user_id, at
+         )
+         SELECT m.id, u.name, m.user_id, (EXTRACT(EPOCH FROM m.at) * 1000)::bigint
+         FROM made m JOIN streamers u ON u.id = m.user_id",
+    )
+    .bind(server)
+    .bind(channel)
+    .bind(actor.id)
+    .bind(&room)
+    .bind(&words)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let users: Vec<Uuid> = rows.iter().map(|r| r.2).collect();
+    clip(db, &users).await?;
+    let made = Made {
+        to: rows.iter().map(|(id, login, _, _)| (login.clone(), *id)).collect(),
+        at_ms: rows.first().map_or_else(presence::now_ms, |r| r.3),
+        text: words,
+        session: None,
+        room: Some(room),
+    };
+    tell(redis, Kind::Chat, &actor, &made).await;
+    Ok(())
+}
+
+/// `reader` has `room` (`<server>/<channel>`) on screen (`PUT /api/groups/:group/channels/:channel/read`):
+/// what was said there is not news any more. True when a row was still unread; the `chat_read`
+/// fact the caller publishes then tells the reader's other devices.
+pub(crate) async fn channel_read(db: &PgPool, reader: Uuid, room: &str) -> Result<bool, sqlx::Error> {
+    let done = sqlx::query("UPDATE notifications SET read_at = now() WHERE user_id = $1 AND kind = 'chat' AND room = $2 AND read_at IS NULL")
+        .bind(reader)
+        .bind(room)
+        .execute(db)
+        .await?;
+    Ok(done.rows_affected() > 0)
+}
+
 // ---- the routes ------------------------------------------------------------------------------------
 
-/// id, kind, actor name, actor verified, actor avatar, at (ms), read, text, session, actor id
-type ItemRow = (i64, String, String, bool, Option<i64>, i64, bool, String, Option<i64>, Uuid);
+/// id, kind, actor name, actor verified, actor avatar, at (ms), read, text, session, actor id, room
+type ItemRow = (i64, String, String, bool, Option<i64>, i64, bool, String, Option<i64>, Uuid, Option<String>);
 
 /// `GET /api/notifications`: `{ settings, items }`. The login's rows, newest first, the last
-/// KEEP, each with who did it as they are now (`name`, and `actor`, the id) and whether it
-/// has been read; and which kinds are kept. 401 for nobody.
+/// KEEP, each with who did it as they are now (`name`, and `actor`, the id), whether it has
+/// been read, and a `chat` row's `room`; and which kinds are kept. 401 for nobody.
 async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let doc: Option<Value> = sqlx::query_scalar("SELECT notify FROM streamers WHERE id = $1").bind(me.id).fetch_optional(&s.db).await?;
     let settings = doc.as_ref().map(Settings::from_doc).unwrap_or_default();
     let rows: Vec<ItemRow> = sqlx::query_as(
         "SELECT n.id, n.kind, a.name, a.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM a.avatar_at))::bigint,
-                (EXTRACT(EPOCH FROM n.at) * 1000)::bigint, n.read_at IS NOT NULL, n.text, n.session, a.id
+                (EXTRACT(EPOCH FROM n.at) * 1000)::bigint, n.read_at IS NOT NULL, n.text, n.session, a.id, n.room
          FROM notifications n JOIN streamers a ON a.id = n.actor_id
          WHERE n.user_id = $1
          ORDER BY n.id DESC
@@ -324,8 +436,8 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     .await?;
     let items: Vec<Value> = rows
         .into_iter()
-        .map(|(id, kind, name, verified, avatar, at, read, text, session, actor)| {
-            json!({ "id": id, "kind": kind, "name": name, "verified": verified, "avatar": avatar, "at": at, "read": read, "text": text, "session": session, "actor": actor })
+        .map(|(id, kind, name, verified, avatar, at, read, text, session, actor, room)| {
+            json!({ "id": id, "kind": kind, "name": name, "verified": verified, "avatar": avatar, "at": at, "read": read, "text": text, "session": session, "actor": actor, "room": room })
         })
         .collect();
     Ok(Json(json!({ "settings": settings, "items": items })))
@@ -362,19 +474,21 @@ struct SettingsBody {
     follow: bool,
     #[serde(default = "on")]
     dm: bool,
+    #[serde(default = "on")]
+    chat: bool,
 }
 
 fn on() -> bool {
     true
 }
 
-/// `PUT /api/notifications/settings` with `{ live, follow, dm }`: which kinds the login keeps
-/// from now on, replaced whole. 200 with the settings as kept. What is already in the inbox
-/// stays. 401 for nobody.
+/// `PUT /api/notifications/settings` with `{ live, follow, dm, chat }`: which kinds the login
+/// keeps from now on, replaced whole. 200 with the settings as kept. What is already in the
+/// inbox stays. 401 for nobody.
 async fn settings(State(s): State<AppState>, Me(me): Me, body: Result<Json<SettingsBody>, JsonRejection>) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let Json(body) = body?;
-    let wanted = Settings { live: body.live, follow: body.follow, dm: body.dm };
+    let wanted = Settings { live: body.live, follow: body.follow, dm: body.dm, chat: body.chat };
     sqlx::query("UPDATE streamers SET notify = $2 WHERE id = $1").bind(me.id).bind(wanted.to_doc()).execute(&s.db).await?;
     log::info!("{}: notifications {}", me.name, wanted.to_doc());
     Ok(Json(json!(wanted)))
@@ -399,15 +513,25 @@ mod tests {
 
     #[test]
     fn only_what_is_off_is_written() {
-        let s = Settings { live: true, follow: false, dm: false };
+        let s = Settings { live: true, follow: false, dm: false, chat: true };
         assert_eq!(s.to_doc(), json!({ "follow": false, "dm": false }));
         assert_eq!(Settings::from_doc(&s.to_doc()), s);
         // anything that is not `false` is on: a stray value cannot turn a kind off by accident
         assert_eq!(Settings::from_doc(&json!({ "live": "no", "dm": 0 })), Settings::default());
+        // a document written before the kind existed keeps it on: the day a kind exists it is on for everyone
+        assert!(Settings::from_doc(&json!({ "dm": false })).chat);
+        assert_eq!(Settings { chat: false, ..Settings::default() }.to_doc(), json!({ "chat": false }));
     }
 
     #[test]
     fn the_json_names_every_kind() {
-        assert_eq!(serde_json::to_value(Settings::default()).unwrap(), json!({ "live": true, "follow": true, "dm": true }));
+        assert_eq!(serde_json::to_value(Settings::default()).unwrap(), json!({ "live": true, "follow": true, "dm": true, "chat": true }));
+    }
+
+    /// The room on a `chat` row is the chat's key without its prefix, so the two agree by construction.
+    #[test]
+    fn a_chat_rows_room_is_the_chats_key() {
+        assert_eq!(room_of("gaming-0042", "clips"), "gaming-0042/clips");
+        assert_eq!(crate::chat::room_key(&room_of("gaming-0042", "clips")), "chat:gaming-0042/clips");
     }
 }

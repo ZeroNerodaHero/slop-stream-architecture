@@ -1,5 +1,6 @@
-// Groups: the list (bot built in), a login makes one, another joins and leaves, badges on chat
-// lines, a bot's lines wear BOT and the panel hides them, only the maker deletes, the groups tab.
+// Groups: the list (bot built in), a login makes one (and no second: one each), another joins
+// and leaves, badges on chat lines, a bot's lines wear BOT and the panel hides them, only the
+// maker deletes, the create dialog on /groups and the groups tab.
 // The pictures are the owner's whatever the roles say (no remove), and a role reaches only the
 // powers its holder has.
 // The room: one answer with the channels, who is live, the roster (members only) and the bans,
@@ -65,7 +66,7 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     return `${list.length} group(s), bot "${bot.badge}" ${bot.color}`;
   });
 
-  await step('a login makes a group: bad badge 400, bad colour 400, bot 409, good one 201 and mine', async () => {
+  await step('a login makes a group: bad badge 400, bad colour 400, bot 409, good one 201 and mine; a second 403, one each', async () => {
     const up = await maker.post('/api/signup', { data: { name: MAKER, password: PW } });
     expect(up.status() === 201, `signup got ${up.status()} ${JSON.stringify(await body(up))}`);
     const noBadge = await maker.post('/api/groups', { data: { name: GROUP, badge: '  ', color: '#f2cc60' } });
@@ -81,39 +82,48 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     const digits = String(made.tag).padStart(4, '0');
     expect(made.title === GROUP && made.tag === Number(digits) && made.name === `${GROUP}-${digits}` && made.badge === 'vip' && made.color === '#f2cc60' && made.about === 'the test group' && made.made_by === MAKER && made.members === 1 && made.mine === true && made.automatic === false && made.public === true, `made = ${JSON.stringify(made)}`);
     slug = made.name;
-    const again = await maker.post('/api/groups', { data: { name: GROUP, badge: 'vip', color: '#f2cc60' } });
-    const other = await body(again);
-    expect(again.status() === 201 && other.title === GROUP && other.name !== slug && other.tag !== made.tag, `the same name again got ${again.status()} ${JSON.stringify(other)}`);
-    const dropped = await maker.delete(`/api/groups/${other.name}`);
-    expect(dropped.status() === 204, `dropping the second got ${dropped.status()}`);
+    // one each: an owner is not given a second, whatever the name
+    const again = await maker.post('/api/groups', { data: { name: 'another' + RUN, badge: 'two', color: '#f2cc60' } });
+    const refused = await body(again);
+    expect(again.status() === 403 && /own a group already/.test(refused && refused.error), `a second group got ${again.status()} ${JSON.stringify(refused)}`);
     const mine = find(await body(await maker.get('/api/groups')), slug);
     const theirs = find(await body(await anon.get('/api/groups')), slug);
     expect(mine && mine.mine === true && theirs && theirs.mine === false && theirs.members === 1, `listed as ${JSON.stringify(mine)} / ${JSON.stringify(theirs)}`);
-    return `${slug}: badge trimmed, colour lowercased, same title twice`;
+    return `${slug}: badge trimmed, colour lowercased, a second refused`;
   });
 
-  await step('explore: the maker has it in yours, with general and a live list', async () => {
+  await step('explore: the maker has it in yours, as owner, with general and a live list', async () => {
     const res = await maker.get('/api/explore');
     const data = await body(res);
     expect(res.status() === 200 && data && Array.isArray(data.yours) && Array.isArray(data.discover), `explore got ${res.status()} ${JSON.stringify(data)}`);
     const server = data.yours.find((s) => s.name === slug);
     const elsewhere = data.discover.find((s) => s.name === slug);
     expect(server && !elsewhere, `placed ${JSON.stringify(server)}`);
+    expect(server.owner === true, `owner ${JSON.stringify(server.owner)}`);
     expect(server.channels.some((c) => c.name === 'general' && c.can_delete === false), `channels ${JSON.stringify(server.channels)}`);
     expect(Array.isArray(server.live), `live ${JSON.stringify(server.live)}`);
     const guest = await body(await anon.get('/api/explore'));
     const seen = [...guest.yours, ...guest.discover].find((s) => s.name === slug);
-    expect(seen && seen.mine === false && Array.isArray(seen.live), `a guest sees ${JSON.stringify(seen)}`);
+    expect(seen && seen.mine === false && seen.owner === false && Array.isArray(seen.live), `a guest sees ${JSON.stringify(seen)}`);
     return `${server.channels.length} channel(s), ${server.live.length} live`;
   });
 
-  await step('another login joins: 204, two members, again 204; bot 403, no such group 404', async () => {
+  await step('another login makes the same title (another address), joins: 204, two members, again 204; bot 403, no such group 404', async () => {
     const up = await member.post('/api/signup', { data: { name: MEMBER, password: PW } });
     expect(up.status() === 201, `signup got ${up.status()}`);
+    // the same title from somebody else is another group, with other digits
+    const same = await member.post('/api/groups', { data: { name: GROUP, badge: 'vip', color: '#f2cc60' } });
+    const other = await body(same);
+    expect(same.status() === 201 && other.title === GROUP && other.name !== slug && other.name.startsWith(`${GROUP}-`), `the same title again got ${same.status()} ${JSON.stringify(other)}`);
     const join = await member.post(`/api/groups/${slug}/join`);
     expect(join.status() === 204, `join got ${join.status()} ${JSON.stringify(await body(join))}`);
     const listed = find(await body(await member.get('/api/groups')), slug);
     expect(listed && listed.mine === true && listed.members === 2, `after join: ${JSON.stringify(listed)}`);
+    // one each the other way too: while they own theirs, they cannot be named an owner here
+    const named = await maker.post(`/api/groups/${slug}/owners`, { data: { name: MEMBER } });
+    expect(named.status() === 403 && /owns a group already/.test((await body(named)).error), `naming an owner of another group got ${named.status()} ${JSON.stringify(await body(named))}`);
+    const dropped = await member.delete(`/api/groups/${other.name}`);
+    expect(dropped.status() === 204, `dropping theirs got ${dropped.status()}`);
     const twice = await member.post(`/api/groups/${slug}/join`);
     const bot = await member.post('/api/groups/bot/join');
     const none = await member.post(`/api/groups/nosuch${RUN}/join`);
@@ -486,35 +496,44 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     return 'gone';
   });
 
-  await step('the groups tab: make one, it is listed with leave and on the card, delete it', async () => {
+  await step('home and /groups offer create to a login without a group; the dialog makes one and lands on it; the tab lists it with leave and on the card, delete it', async () => {
     const q = await fresh();
     await q.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
     await q.fill('#auth-name', MAKER);
     await q.fill('#auth-password', PW);
     await q.click('#auth-submit');
     await q.waitForSelector('#you', { timeout: 10000 });
-    // the login page moves to home, and a page change closes the panel: wait for the move, then the gear at the
-    // end of your line in the panel opens the modal (the picture is your page now)
+    // the login page moves to home. the maker owns nothing now (the group went when they left), so
+    // home offers create beside the groups heading, and the heading itself opens /groups
     await q.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 10000 });
-    await q.waitForSelector('#groups-home', { timeout: 10000 });
+    await q.waitForSelector('#home-groups-create', { timeout: 10000 });
     await q.click('#groups-home');
     await q.waitForSelector('#groups-title', { timeout: 10000 });
     expect(new URL(q.url()).pathname === '/groups', q.url());
+    await q.waitForSelector('#groups-create', { timeout: 10000 });
+    await q.click('#groups-create');
+    await q.waitForSelector('#groups-make[open]', { timeout: 5000 });
+    const name = 'ui' + RUN;
+    await q.fill('#groups-make-name', name);
+    await q.fill('#groups-make-badge', 'ui');
+    await q.click('#groups-make-submit');
+    // made: the page is the new room, its address the title and four digits
+    await q.waitForURL((u) => u.pathname.startsWith(`/groups/${name}-`), { timeout: 10000 });
+    const madeName = decodeURIComponent(new URL(q.url()).pathname.split('/')[2]);
+    expect(new RegExp(`^${name}-\\d{4}$`).test(madeName), `landed on ${q.url()}`);
+    await q.waitForSelector('#group-banner', { timeout: 10000 });
+    // one each: home no longer offers create to this login
     await q.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await q.waitForSelector('#groups-count', { timeout: 10000 });
+    expect(!(await q.$('#home-groups-create')), 'home still offers create to an owner');
+    // the gear at the end of your line in the panel opens the modal; the tab lists the group as yours
     await q.hover('#user-panel');
     await q.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
     await q.click('#settings');
     await q.waitForSelector('#user-modal[open]', { timeout: 5000 });
     await q.click('#tab-groups');
-    await q.waitForSelector('#group-list #group-bot', { timeout: 10000 });
-    const name = 'ui' + RUN;
-    await q.fill('#group-name', name);
-    await q.fill('#group-badge', 'ui');
-    await q.click('#group-create');
-    await q.waitForFunction((n) => document.querySelector('#group-status')?.textContent.includes(`made ${n}`), name, { timeout: 10000 });
-    await q.waitForSelector(`#group-list [data-title="${name}"]`, { timeout: 10000 });
-    const madeName = await q.$eval(`#group-list [data-title="${name}"]`, (el) => el.id.replace(/^group-/, ''));
-    await q.waitForSelector(`#group-${madeName} #group-leave-${madeName}`, { timeout: 10000 });
+    await q.waitForSelector(`#group-list #group-${madeName} #group-leave-${madeName}`, { timeout: 10000 });
+    expect(!(await q.$('#group-create')), 'the tab still has a make form');
     expect(await q.$(`#my-badges [data-group="${madeName}"]`), 'the badge is not on your badges');
     const row = await q.textContent(`#group-${madeName}`);
     expect(/1 member/.test(row) && new RegExp(`by ${MAKER}`).test(row) && row.includes(name), `the row reads "${row}"`);
@@ -529,7 +548,7 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     await q.waitForFunction((n) => !document.querySelector(`#group-${n}`), madeName, { timeout: 10000 });
     expect(find(await body(await anon.get('/api/groups')), madeName) === undefined, 'the api still lists it');
     await q.close();
-    return `${name} made and deleted from the tab`;
+    return `${madeName} made from /groups, landed on its room, deleted from the tab`;
   });
 
   if (LOCAL) {

@@ -80,6 +80,8 @@ the room page (`groups.md`) opens `wss://<host>/chat/<server>/*` instead of one 
 
 every `message` and `count` carries `channel`. a `say` must name a channel the socket follows, or hears `say which channel`. `since` sends up to 100 lines after each id, oldest first, and may be sent again at any time (the page does, when the api's lines land after the socket opened); a line already sent is not sent twice. `not a server` closes the socket, like `no such channel`. everything else (the limits, the badges, the pictures, `join the server first`, the count per ip per room) is as above, per channel: the socket counts as one in every channel's room.
 
+a line accepted into a server's channel (on either socket shape) is also a row under the other members' bells (`notifications.md`, the `chat` kind): this process writes it once redis has the line, on a task of its own with a 5s bound, so the inbox never holds the room. a member who muted the channel, or switched the kind off, gets none; the speaker never does. a stream's room writes nothing: it has no members.
+
 ## rules
 
 - text: 1 to 500 characters after cleaning. longer is `too long`, empty is dropped unless the line has a picture. cleaning: trim; control characters other than newline are stripped; so are the invisible format characters (soft hyphen, zero-width space, bidi marks, embeddings, overrides and isolates, word joiner, byte order mark; not the zero-width joiners, emoji and some scripts need them); at most two newlines between visible characters; a run of combining marks is cut at four.

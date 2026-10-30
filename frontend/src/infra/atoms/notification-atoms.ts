@@ -1,20 +1,23 @@
 /**
  * The login's inbox (docs/notifications.md): the last 30 things that happened to them, as the
- * api keeps them. Someone they follow went live, someone followed them, a friend wrote. The
- * list comes from `GET /api/notifications` once the login is known; new rows arrive on the
- * events socket (to every device of the login, so a phone and a laptop hold the same list);
- * opening the bell's list reads everything on it, here and through the api, which tells the
- * other devices. Which kinds are kept is the account's, saved through the api from the user
- * modal's notifications tab. A click reads the server's settings and changes only that kind, so
- * a save from another page is not turned back on. Same shape as the other atom modules: atoms
- * for what renders, action functions for every transition.
+ * api keeps them. Someone they follow went live, someone followed them, a friend wrote, someone
+ * wrote in a channel of a group they are in. The list comes from `GET /api/notifications` once
+ * the login is known; new rows arrive on the events socket (to every device of the login, so a
+ * phone and a laptop hold the same list); opening the bell's list reads everything on it, here
+ * and through the api, which tells the other devices. A channel's row is read by having the
+ * channel on screen, the way a friend's is by the thread. Which kinds are kept is the account's,
+ * saved through the api from the user modal's notifications tab. A click reads the server's
+ * settings and changes only that kind, so a save from another page is not turned back on. Same
+ * shape as the other atom modules: atoms for what renders, action functions for every transition.
  */
 
 import { atom } from 'jotai';
 
-import { api, messageOf, type Notification, type NotifySettings } from '@/infra/api';
+import { api, messageOf, type Notification, type NotifySettings, roomOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
+import { chatChannelAtom } from '@/infra/atoms/chat-atoms';
 import { dmActiveAtom, dmOpenAtom } from '@/infra/atoms/dm-atoms';
+import { roomAtom } from '@/infra/atoms/room-atoms';
 import { onEvents } from '@/infra/events';
 import type { NotificationKind } from '@/infra/frames';
 import { store } from '@/infra/store';
@@ -22,7 +25,12 @@ import { store } from '@/infra/store';
 /** The api keeps this many a login; the list shows the same. */
 export const KEEP = 30;
 
-const ALL_ON: NotifySettings = { live: true, follow: true, dm: true };
+const ALL_ON: NotifySettings = { live: true, follow: true, dm: true, chat: true };
+
+/** The api's document with every kind named: an older api leaves a newer kind off, and off the wire is on. */
+function withEveryKind(settings: Partial<NotifySettings>): NotifySettings {
+  return { ...ALL_ON, ...settings };
+}
 
 /** `undefined` until asked once this page load; `[]` for nobody, or nothing yet. Newest first. */
 export const notificationsAtom = atom<Notification[] | undefined>(undefined);
@@ -82,12 +90,15 @@ export function loadNotifications(): Promise<void> {
       // a save started since this ask: its document and its note stay. the rows are still this login's.
       // applying the document is what lets a switch PUT. until then the atom is the default
       if (asked === settingsGen) {
-        store.set(notifySettingsAtom, settings);
+        store.set(notifySettingsAtom, withEveryKind(settings));
         store.set(notifySettingsLoadedAtom, true);
       }
       const remembered = pending;
       pending = [];
       store.set(notificationsAtom, foldIn(items, remembered));
+      // a channel on screen while the ask was out: what the snapshot says is new there is not
+      const viewed = viewedRoom();
+      if (viewed) readChannelNotifications(viewed.server, viewed.channel);
     })
     .catch(() => {
       // the api is away, or the login died: what is shown stays, and a row remembered during
@@ -197,10 +208,10 @@ export async function setNotifySetting(kind: NotificationKind, on: boolean): Pro
     if (settingsGen !== bumped) return;
     // the login changed: this answer is not theirs. the document and the note stay
     if (store.get(meAtom) !== me) return;
-    const saved = await api.saveNotifySettings({ ...settings, [kind]: on });
+    const saved = await api.saveNotifySettings({ ...withEveryKind(settings), [kind]: on });
     if (settingsGen !== bumped) return;
     if (store.get(meAtom) !== me) return;
-    store.set(notifySettingsAtom, saved);
+    store.set(notifySettingsAtom, withEveryKind(saved));
     store.set(notifySettingsNoteAtom, 'saved');
   } catch (err) {
     // the same for a refusal: `before` must not go back over the later save
@@ -216,6 +227,65 @@ export function clearNotifySettingsNote() {
   store.set(notifySettingsNoteAtom, '');
 }
 
+// ---- a channel on screen -----------------------------------------------------------------------
+
+/** The channel the room page has on screen, in a tab the person is looking at: a line said there is not news. Null for none. */
+function viewedRoom(): { server: string; channel: string } | null {
+  const room = store.get(roomAtom);
+  const channel = store.get(chatChannelAtom);
+  if (!room || !channel || document.visibilityState !== 'visible') return null;
+  return { server: room.name, channel };
+}
+
+/** A `chat` row for the channel on screen. */
+function viewingRoom(n: Pick<Notification, 'kind' | 'room'>): boolean {
+  const viewed = viewedRoom();
+  return viewed !== null && n.kind === 'chat' && n.room === `${viewed.server}/${viewed.channel}`;
+}
+
+/**
+ * The login has `channel` of `server` on screen (the room page arriving there, a channel
+ * picked, the tab shown again): what was said there is not news any more. The `chat` rows for
+ * the room are read here (the bell drops) and the api is told, which tells the login's other
+ * devices through `chat_read`. Nothing to say when none was unread. A refusal marks those rows
+ * unread again when they are still on the list, so the next look tells the api again.
+ */
+function readChannelNotifications(server: string, channel: string) {
+  if (!store.get(meAtom)) return;
+  const list = store.get(notificationsAtom);
+  const room = `${server}/${channel}`;
+  const hit = (n: Notification) => n.kind === 'chat' && n.room === room && !n.read;
+  if (!list?.some(hit)) return;
+  const ids = new Set(list.filter(hit).map((n) => n.id));
+  store.set(
+    notificationsAtom,
+    list.map((n) => (ids.has(n.id) ? { ...n, read: true } : n))
+  );
+  api.readChannel(server, channel).catch(() => {
+    const current = store.get(notificationsAtom);
+    if (!current?.some((n) => ids.has(n.id))) return;
+    store.set(
+      notificationsAtom,
+      current.map((n) => (ids.has(n.id) ? { ...n, read: false } : n))
+    );
+  });
+}
+
+/** The channel on screen, whenever it changes: what the list says is new there is seen. The room page arriving on a channel sets it too. */
+store.sub(chatChannelAtom, () => {
+  const viewed = viewedRoom();
+  if (viewed) readChannelNotifications(viewed.server, viewed.channel);
+});
+
+// the tab shown again with a channel on screen: what landed there while it was hidden is seen now
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    const viewed = viewedRoom();
+    if (viewed) readChannelNotifications(viewed.server, viewed.channel);
+  });
+}
+
 // ---- the socket --------------------------------------------------------------------------------
 
 /** The thread with `name` is on screen in the chat window: a line from them is not news. */
@@ -228,11 +298,13 @@ function viewingDm(name: string): boolean {
  * of the login). To the top of the list; a row already there (the ten-second replay of a
  * gateway restart) is one row. A dm replaces the unread dm from that account (`actor`), the
  * api's rule, and a new name for them is written onto the rows already stored. A frame with
- * no actor (an older gateway) still matches that unread dm by name. With the list open it is
- * seen at once. While this page has no list yet the row is remembered and not written: a
- * failed ask stays failed, one pushed row does not become the list, and it is not marked
- * read. While a reload is already in flight it is remembered as well as written, so the
- * apply keeps it. The apply folds it in; a failed ask keeps it for the next one.
+ * no actor (an older gateway) still matches that unread dm by name. A channel's line replaces
+ * the unread one for that channel. With the list open it is seen at once; so is a channel's
+ * line while that channel is on screen, and the api is told so (a dm's thread tells it on its
+ * own). While this page has no list yet the row is remembered and not written: a failed ask
+ * stays failed, one pushed row does not become the list, and it is not marked read. While a
+ * reload is already in flight it is remembered as well as written, so the apply keeps it. The
+ * apply folds it in; a failed ask keeps it for the next one.
  */
 function arrived(frame: {
   id: number;
@@ -244,10 +316,17 @@ function arrived(frame: {
   text: string;
   session: number | null;
   actor?: string;
+  room?: string;
 }) {
   if (!store.get(meAtom)) return;
   const list = store.get(notificationsAtom);
   const row = rowOf(frame);
+  // a channel's line while that channel is on screen: seen already, here and through the api,
+  // whose `chat_read` reads it on the other devices. the row is there: the fact came after it
+  if (row.kind === 'chat' && row.read) {
+    const at = roomOf(row);
+    if (at) api.readChannel(at.server, at.channel).catch(() => undefined);
+  }
   // not loaded yet (the ask failed, or it has not come back): not an empty inbox. remember the
   // row and do not write it, so it does not become the list and is not marked read.
   if (list === undefined) {
@@ -261,7 +340,7 @@ function arrived(frame: {
   if (store.get(notificationsOpenAtom)) markNotificationsRead();
 }
 
-/** The frame as a row. A dm whose thread is on screen is already seen; nothing else is. */
+/** The frame as a row. A dm whose thread is on screen is already seen, and so is a channel's line while that channel is; nothing else is. */
 function rowOf(frame: {
   id: number;
   kind: NotificationKind;
@@ -272,7 +351,9 @@ function rowOf(frame: {
   text: string;
   session: number | null;
   actor?: string;
+  room?: string;
 }): Notification {
+  const room = frame.room ?? null;
   return {
     id: frame.id,
     kind: frame.kind,
@@ -281,16 +362,18 @@ function rowOf(frame: {
     verified: frame.verified,
     avatar: frame.avatar,
     at: frame.at,
-    read: frame.kind === 'dm' && viewingDm(frame.name),
+    read: (frame.kind === 'dm' && viewingDm(frame.name)) || viewingRoom({ kind: frame.kind, room }),
     text: frame.text,
-    session: frame.session
+    session: frame.session,
+    room
   };
 }
 
 /**
  * One row onto a list. An id already there stays that row. A dm replaces the unread dm from
  * that actor (`actor`, or the name when an older gateway sent none), and that actor's rows
- * take the name on this one. Newest first, clipped to `KEEP`.
+ * take the name on this one. A channel's line replaces the unread row for that channel,
+ * whoever spoke. Newest first, clipped to `KEEP`.
  */
 function place(list: Notification[], row: Notification): Notification[] {
   if (list.some((n) => n.id === row.id)) return list;
@@ -299,6 +382,8 @@ function place(list: Notification[], row: Notification): Notification[] {
   if (actor) rest = rest.map((n) => (n.actor === actor && n.name !== row.name ? { ...n, name: row.name } : n));
   if (row.kind === 'dm') {
     rest = rest.filter((n) => !(n.kind === 'dm' && !n.read && (actor ? n.actor === actor : n.name === row.name)));
+  } else if (row.kind === 'chat' && row.room) {
+    rest = rest.filter((n) => !(n.kind === 'chat' && !n.read && n.room === row.room));
   }
   return [row, ...rest].slice(0, KEEP);
 }
@@ -343,11 +428,24 @@ function dmReadElsewhere(frame: { name: string; peer: string; peer_id?: string }
   );
 }
 
+/** A `chat_read` frame: this login had the channel `room` on screen somewhere. What was said there is not news any more. */
+function chatReadElsewhere(frame: { name: string; room: string }) {
+  if (frame.name !== store.get(meAtom)) return;
+  const list = store.get(notificationsAtom);
+  const hit = (n: Notification) => n.kind === 'chat' && !n.read && n.room === frame.room;
+  if (!list?.some(hit)) return;
+  store.set(
+    notificationsAtom,
+    list.map((n) => (hit(n) ? { ...n, read: true } : n))
+  );
+}
+
 let linkWasOpen = false;
 onEvents((event) => {
   if (event.type === 'notification') arrived(event);
   else if (event.type === 'notify_read') readElsewhere(event);
   else if (event.type === 'dm_read') dmReadElsewhere(event);
+  else if (event.type === 'chat_read') chatReadElsewhere(event);
   else if (event.type === 'link') {
     if (event.phase !== 'open') return;
     // the socket is back after a drop: rows may have come meanwhile. the list again
