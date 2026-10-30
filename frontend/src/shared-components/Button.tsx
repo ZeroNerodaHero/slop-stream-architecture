@@ -11,15 +11,15 @@ const VARIANTS: Record<ButtonVariant, string> = {
 };
 
 /**
- * Shared classes so a router Link can look like a button. A square with a hard shadow; pressing
- * it moves it onto the shadow. `flat`: no shadow and no press, for a button that sits over the
- * page (back, go live and settings in the title row) rather than in it. Disabled: flat and dim.
+ * Shared classes so a router Link can look like a button: a border and a fill, and a hover that
+ * changes a colour. No shadow and no press movement (no-box-shadow.mdc). Disabled: dim, and
+ * hovering changes nothing. `flat` used to turn the shadow off; it is accepted and ignored so the
+ * call sites that still pass it compile.
  */
-export function buttonClassName(variant: ButtonVariant = 'secondary', className?: string, flat = false): string {
+export function buttonClassName(variant: ButtonVariant = 'secondary', className?: string, _flat?: boolean): string {
   return cn(
-    'inline-flex items-center justify-center border px-5 py-3 font-semibold transition-[color,background-color,border-color,box-shadow,transform] duration-100',
-    !flat && 'shadow-hard active:translate-x-1 active:translate-y-1 active:shadow-none',
-    'disabled:cursor-default disabled:opacity-40 disabled:shadow-none disabled:hover:border-primaryStroke disabled:hover:bg-backgroundSecondary disabled:active:translate-x-0 disabled:active:translate-y-0',
+    'inline-flex items-center justify-center border px-5 py-3 font-semibold transition-colors duration-100',
+    'disabled:cursor-default disabled:opacity-40 disabled:hover:border-primaryStroke disabled:hover:bg-backgroundSecondary',
     VARIANTS[variant],
     className
   );
@@ -27,6 +27,7 @@ export function buttonClassName(variant: ButtonVariant = 'secondary', className?
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
+  /** Does nothing now (see `buttonClassName`); still taken off the props so it does not reach the DOM. */
   flat?: boolean;
 }
 

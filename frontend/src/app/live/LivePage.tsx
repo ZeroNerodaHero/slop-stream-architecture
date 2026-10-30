@@ -62,15 +62,16 @@ import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/C
 import { isValidName } from '@/infra/names';
 import { SCREEN_SLOTS } from '@/infra/relay';
 import { store } from '@/infra/store';
-import { Avatar } from '@/shared-components/Avatar';
 import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
+import { Face } from '@/shared-components/Face';
 import { Mixer } from '@/shared-components/live/Mixer';
 import { Presets } from '@/shared-components/live/Presets';
 import { Sources } from '@/shared-components/live/Sources';
 import { MicMeter } from '@/shared-components/MicMeter';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { panelClassName } from '@/shared-components/Panel';
+import { PicturePick } from '@/shared-components/PicturePick';
 import { type SceneEdit, SceneView } from '@/shared-components/SceneView';
 import { StatusLine } from '@/shared-components/StatusLine';
 import { ViewerCount } from '@/shared-components/ViewerCount';
@@ -111,7 +112,6 @@ export function LivePage() {
   const previewSlot = useAtomValue(previewSlotAtom);
   const selected = useAtomValue(selectedSourceAtom);
   const mixerOpen = useAtomValue(mixerOpenAtom);
-  const fileRef = useRef<HTMLInputElement | null>(null);
   const thumbFileRef = useRef<HTMLInputElement | null>(null);
 
   // the editor's hooks on the preview: a drag, a corner, the keys. delete takes a picture out and
@@ -307,25 +307,20 @@ export function LivePage() {
               </p>
             )}
 
-            {/* the picture: on the watch page next to your name, and in the preview card of a shared link */}
+            {/* the picture: on the watch page next to your name, and in the preview card of a shared link. the face
+                itself is the way to a new one, as a group's picture is: the pointer over it puts a camera on it */}
             <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-primaryStroke pt-4">
-              <Avatar name={name} version={avatar} className="mr-0 h-16 w-16" />
-              <span className="text-textSecondary">your picture</span>
-              <input
-                ref={fileRef}
-                id="avatar-file"
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = '';
-                  if (file) void saveAvatar(file);
-                }}
-              />
-              <button id="avatar-pick" type="button" className="text-base font-semibold text-primaryBlue" onClick={() => fileRef.current?.click()}>
-                {avatar === null ? 'choose picture' : 'change picture'}
-              </button>
+              <div className="group/avatar relative flex">
+                <Face name={name} version={avatar} className="h-16 w-16 text-2xl" />
+                <PicturePick
+                  id="avatar-file"
+                  label={avatar === null ? 'choose picture' : 'change picture'}
+                  reveal="group-hover/avatar:opacity-100"
+                  className="inset-0"
+                  onPick={(file) => void saveAvatar(file)}
+                />
+              </div>
+              <span className="text-textSecondary">your picture. click it to change it.</span>
               {avatar !== null && (
                 <button id="avatar-remove" type="button" className="text-base font-semibold text-textTertiary" onClick={() => void removeAvatar()}>
                   remove

@@ -44,6 +44,7 @@ import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
+import { PicturePick } from '@/shared-components/PicturePick';
 import { BUTTON, Field, INPUT, OptionCard, PasswordInput, SECTION_TITLE, Section, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -180,8 +181,6 @@ export function ProfileTab() {
   const offlineStatus = useAtomValue(profileOfflineStatusAtom);
   const offlineNote = useAtomValue(profileOfflineNoteAtom);
   const offlineNoteStatus = useAtomValue(profileOfflineNoteStatusAtom);
-  const fileRef = useRef<HTMLInputElement | null>(null);
-  const offlineFileRef = useRef<HTMLInputElement | null>(null);
   // the nick as it was when its box got focus: leaving the box tells the chat only on a real change
   const nickAtFocus = useRef('');
 
@@ -202,9 +201,21 @@ export function ProfileTab() {
 
   return (
     <div className="divide-y divide-primaryStroke">
-      {/* the card: the face, the name, how I am here, and the picture's buttons */}
+      {/* the card: the face, the name, how I am here. the face itself is the way to a new picture, as a
+          group's picture is: the pointer over it puts a camera on it, and the crop dialog takes it from there */}
       <div className="flex flex-wrap items-start gap-5 border border-primaryStroke bg-background p-5">
-        <Face name={name} version={avatar} className="h-24 w-24 text-4xl" />
+        <div className="group/avatar relative flex">
+          <Face name={name} version={avatar} className="h-24 w-24 text-4xl" />
+          {canEdit && (
+            <PicturePick
+              id="profile-avatar-file"
+              label={avatar === null ? 'choose picture' : 'change picture'}
+              reveal="group-hover/avatar:opacity-100"
+              className="inset-0"
+              onPick={(file) => void saveMyAvatar(file)}
+            />
+          )}
+        </div>
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="min-w-0">
             <p className="flex items-center gap-2 text-xl font-semibold leading-tight">
@@ -238,31 +249,19 @@ export function ProfileTab() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <input
-              ref={fileRef}
-              id="profile-avatar-file"
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                e.target.value = '';
-                if (file) void saveMyAvatar(file);
-              }}
-            />
-            <button id="profile-avatar-pick" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={!canEdit} onClick={() => fileRef.current?.click()}>
-              {avatar === null ? 'choose picture' : 'change picture'}
-            </button>
             {avatar !== null && (
               <button id="profile-avatar-remove" type="button" className="text-base font-semibold text-textTertiary disabled:opacity-40" disabled={!canEdit} onClick={() => void removeMyAvatar()}>
-                remove
+                remove picture
               </button>
             )}
+            <Status
+              id="profile-avatar-status"
+              text={
+                avatarStatus ||
+                (canEdit ? 'click the picture to change it: a square you cut out of any picture, 256px. on your stream and in the preview of its link.' : whyNot)
+              }
+            />
           </div>
-          <Status
-            id="profile-avatar-status"
-            text={avatarStatus || (canEdit ? 'a square you cut out of any picture, 256px. on your stream and in the preview of its link.' : whyNot)}
-          />
         </div>
       </div>
 
@@ -404,42 +403,42 @@ export function ProfileTab() {
         description="your stream's page has no player then: a picture goes where it would be, and a line of yours under the word. the picture is the preview of your link too."
       >
         <div className="flex flex-col gap-3">
-          {offline !== null ? (
-            <img
-              id="profile-offline-preview"
-              src={api.offlineUrl(name, offline)}
-              alt=""
-              draggable={false}
-              className="aspect-video w-full max-w-[480px] border border-primaryStroke bg-black object-cover"
-            />
-          ) : (
-            <div className="flex aspect-video w-full max-w-[480px] items-center justify-center border border-dashed border-secondaryStroke p-4 text-center text-sm text-textTertiary">
-              no picture yet. the page shows your face and the word, which it does anyway.
-            </div>
-          )}
-          <div className="flex flex-wrap items-center gap-3">
-            <input
-              ref={offlineFileRef}
-              id="profile-offline-file"
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                e.target.value = '';
-                if (file) void saveMyOffline(file);
-              }}
-            />
-            <button id="profile-offline-pick" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={!canEdit} onClick={() => offlineFileRef.current?.click()}>
-              {offline === null ? 'choose picture' : 'change picture'}
-            </button>
-            {offline !== null && (
-              <button id="profile-offline-remove" type="button" className="text-base font-semibold text-textTertiary disabled:opacity-40" disabled={!canEdit} onClick={() => void removeMyOffline()}>
-                remove
-              </button>
+          {/* the picture, or the dashed box where it would go, is the click for a new one, the way a group's banner is */}
+          <div className="group/offline relative w-full max-w-[480px]">
+            {offline !== null ? (
+              <img
+                id="profile-offline-preview"
+                src={api.offlineUrl(name, offline)}
+                alt=""
+                draggable={false}
+                className="aspect-video w-full border border-primaryStroke bg-black object-cover"
+              />
+            ) : (
+              <div className="flex aspect-video w-full items-center justify-center border border-dashed border-secondaryStroke p-4 text-center text-sm text-textTertiary">
+                no picture yet. the page shows your face and the word, which it does anyway.
+              </div>
+            )}
+            {canEdit && (
+              <PicturePick
+                id="profile-offline-file"
+                label={offline === null ? 'choose picture' : 'change picture'}
+                reveal="group-hover/offline:opacity-100"
+                className="inset-0"
+                onPick={(file) => void saveMyOffline(file)}
+              />
             )}
           </div>
-          <Status id="profile-offline-status" text={offlineStatus || (canEdit ? 'a wide jpeg, 1280×720: the 16:9 you cut out of your picture.' : whyNot)} />
+          <div className="flex flex-wrap items-center gap-3">
+            {offline !== null && (
+              <button id="profile-offline-remove" type="button" className="text-base font-semibold text-textTertiary disabled:opacity-40" disabled={!canEdit} onClick={() => void removeMyOffline()}>
+                remove picture
+              </button>
+            )}
+            <Status
+              id="profile-offline-status"
+              text={offlineStatus || (canEdit ? 'click the picture to change it. a wide jpeg, 1280×720: the 16:9 you cut out of yours.' : whyNot)}
+            />
+          </div>
         </div>
         <Field
           id="profile-offline-note"

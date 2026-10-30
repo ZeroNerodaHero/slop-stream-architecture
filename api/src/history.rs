@@ -29,7 +29,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::chat::{line_from, room_key, ChatState, Line};
+use crate::chat::{line_from, room_key, with_faces, ChatState, Line};
 use crate::groups::Badge;
 use crate::socket::id_parts;
 use crate::{valid_name, ApiError, Name};
@@ -45,8 +45,9 @@ const SEARCH_LIMIT: i64 = 50;
 /// A line's columns, with its speaker's picture as it is now (`LineRow`). The row keeps no
 /// picture: a read joins `streamers` for it, by account for a verified line (so a rename
 /// keeps it) and by name for the streamer's. A nick's line joins nothing: it is nobody's
-/// picture, whoever holds that name later.
-const LINE_COLUMNS: &str = "l.id, l.at, l.speaker, l.\"text\", l.streamer, l.verified, l.badges, l.image,
+/// picture, whoever holds that name later. A line out of redis gets the same from
+/// `chat::with_faces`, so the two sides of the window agree.
+const LINE_COLUMNS: &str = "l.id, l.at, l.speaker, l.user_id, l.\"text\", l.streamer, l.verified, l.badges, l.image,
                             (EXTRACT(EPOCH FROM COALESCE(u.avatar_at, r.avatar_at)))::bigint";
 const LINE_TABLES: &str = "chat_lines l
                            LEFT JOIN streamers u ON l.verified AND u.id = l.user_id
@@ -271,7 +272,9 @@ async fn redis_older(s: &ChatState, room: &str, id: &str, limit: usize) -> Resul
     let mut r = s.redis.clone();
     // `(` is exclusive. XREVRANGE's first bound is the newest end.
     let reply: StreamRangeReply = r.xrevrange_count(room_key(room), format!("({id}"), "-", limit).await?;
-    Ok(reply.ids.into_iter().filter_map(line_from).collect())
+    let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
+    with_faces(&s.db, &mut lines).await;
+    Ok(lines)
 }
 
 /// The window from redis when `id` is still in the stream. None when it has been trimmed.
@@ -288,6 +291,7 @@ async fn redis_window(s: &ChatState, room: &str, id: &str) -> Result<Option<Vec<
     lines.reverse();
     lines.push(line);
     lines.extend(newer.ids.into_iter().filter_map(line_from));
+    with_faces(&s.db, &mut lines).await;
     Ok(Some(lines))
 }
 
@@ -327,9 +331,9 @@ async fn pg_side(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, side: Sid
 
 /// `LINE_COLUMNS`, in order: `image` is the picture ids on the line (one, or several joined by
 /// commas), and the last is the speaker's face the join found.
-type LineRow = (String, DateTime<Utc>, String, String, bool, bool, Value, Option<String>, Option<i64>);
+type LineRow = (String, DateTime<Utc>, String, Option<Uuid>, String, bool, bool, Value, Option<String>, Option<i64>);
 
-fn line_of((id, at, speaker, text, streamer, verified, badges, image, avatar): LineRow) -> Line {
+fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, avatar): LineRow) -> Line {
     let groups = serde_json::from_value::<Vec<Badge>>(badges).unwrap_or_default();
     let images = crate::chat::split_pictures(image);
     let image = images.first().cloned();
@@ -341,6 +345,7 @@ fn line_of((id, at, speaker, text, streamer, verified, badges, image, avatar): L
         verified,
         groups,
         avatar,
+        user_id,
         image,
         images,
         at: at.timestamp_millis().max(0) as u64,

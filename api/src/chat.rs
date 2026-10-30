@@ -16,7 +16,10 @@
 //! (groups.rs) ride on its lines as badges; a hello that says `bot: true` wears
 //! the `bot` badge, whoever it is, so the panel can hide those lines. The picture
 //! of a login, or of the streamer, rides along too (`avatar`, its upload time),
-//! so the panel can draw a face by each line.
+//! so the panel can draw a face by each line: the picture the row has *now*, read
+//! at the say and again whenever lines come back out of redis (`with_faces`), the
+//! way history.rs joins it for a line from postgres. A login's line carries its
+//! account (`uid`), so the face follows a rename the way the badges do not.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -111,8 +114,13 @@ pub(crate) struct Line {
     /// the speaker's groups as badges, `bot` first when it is one. empty for most lines
     pub(crate) groups: Vec<Badge>,
     /// the speaker's picture: its upload time (the `?v=` the pages fetch it by), the same
-    /// `avatar` as everywhere in the api. only a `verified` or `streamer` line can have one
+    /// `avatar` as everywhere in the api. only a `verified` or `streamer` line can have one.
+    /// as it is now, not as it was when the line was said: `with_faces` on the way out of redis
     pub(crate) avatar: Option<i64>,
+    /// the account behind a `verified` line (`uid` in the stream, `user_id` on the row): what its
+    /// face is looked up by, so a rename keeps it. not on the wire: no page reads an id (docs/ids.md)
+    #[serde(skip)]
+    pub(crate) user_id: Option<Uuid>,
     /// unix ms, from the stream id
     pub(crate) at: u64,
     /// the first picture on the line. absent when there is none. `images` is the whole set
@@ -226,7 +234,8 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
 
 /// The browser sends the login cookie with the websocket handshake; `handle` reads it from
 /// the headers when it needs it. Not through the `Me` extractor: that turns a database
-/// error into a 500 before the upgrade, and reading a room needs no database at all.
+/// error into a 500 before the upgrade, and reading a room does not need the database (the
+/// faces on its history are looked up there, and stay as written when it does not answer).
 async fn ws(State(s): State<ChatState>, Name(name): Name, headers: HeaderMap, upgrade: WebSocketUpgrade) -> impl IntoResponse {
     let ip = client_ip(&headers);
     upgrade
@@ -282,10 +291,8 @@ struct Who {
     /// The account's groups (only when `verified`: the badges belong to the name on the
     /// line, not to whoever holds the socket), plus `bot` when the hello said so.
     groups: Vec<Badge>,
-    /// The picture of the name on the line (only when `verified` or `streamer`, for the
-    /// same reason as the badges), as its upload time. None for a name without one.
-    avatar: Option<i64>,
-    /// The account, when `verified`. Null on the row otherwise.
+    /// The account, when `verified`. Null on the row otherwise. The picture is not here: it
+    /// is read at each say (`face_now`), so one changed mid-chat is on the next line.
     user_id: Option<Uuid>,
 }
 
@@ -369,31 +376,87 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
     } else {
         Vec::new()
     };
-    // the face: the picture of the name on the line, when the line is really that name's
-    // (a login's, or the room's for the streamer). an anonymous nick is nobody's picture,
-    // whoever's name it happens to be. read once, like the badges
-    let avatar = if verified || streamer {
-        match avatar_of(&s.db, &from).await {
-            Ok(avatar) => avatar,
-            Err(e) => {
-                log::warn!("{room}: cannot read the picture of {from}: {e}");
-                return Err(Unknown::Busy);
-            }
-        }
-    } else {
-        None
-    };
     let user_id = if verified { me.as_ref().map(|a| a.id) } else { None };
-    Ok(Who { from, streamer, verified, groups, avatar, user_id })
+    Ok(Who { from, streamer, verified, groups, user_id })
 }
 
-/// When a name's picture was saved (the `?v=` the pages fetch it by). None without one, or without a row.
-async fn avatar_of(db: &PgPool, name: &str) -> Result<Option<i64>, sqlx::Error> {
-    let version: Option<Option<i64>> = sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE name = $1")
-        .bind(name)
-        .fetch_optional(db)
-        .await?;
-    Ok(version.flatten())
+/// The picture of the name on the line, as it is now (its upload time, the `?v=`): the account's
+/// for a login (by id, so a rename keeps it), the room's for its streamer, nobody's for a nick,
+/// whoever's name it happens to be. Read at the say, not the hello, so a picture changed
+/// mid-chat is on the next line. The database not answering is a line with no face until it
+/// is read back (`with_faces`): a say does not fail for a picture.
+async fn face_now(db: &PgPool, room: &str, w: &Who) -> Option<i64> {
+    let looked: Result<Option<Option<i64>>, sqlx::Error> = match (w.user_id, w.streamer) {
+        (Some(id), _) => sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE id = $1").bind(id).fetch_optional(db).await,
+        (None, true) => sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE name = $1").bind(&w.from).fetch_optional(db).await,
+        (None, false) => return None,
+    };
+    match looked {
+        Ok(version) => version.flatten(),
+        Err(e) => {
+            log::warn!("{room}: cannot read the picture of {}: {e}", w.from);
+            None
+        }
+    }
+}
+
+/// Whose picture a line wears: the account's for a login, the name's for the room's streamer
+/// (and for a login's line from before `uid` rode along, as it was written), nobody's for a nick.
+enum FaceKey<'a> {
+    Id(Uuid),
+    Name(&'a str),
+}
+
+fn face_key(line: &Line) -> Option<FaceKey<'_>> {
+    match (line.verified, line.user_id, line.streamer) {
+        (true, Some(id), _) => Some(FaceKey::Id(id)),
+        (true, None, _) | (false, _, true) => Some(FaceKey::Name(&line.from)),
+        _ => None,
+    }
+}
+
+/// The faces on lines read back out of redis, as they are now. A line keeps who said it, not
+/// what they looked like: the picture is the row's today, the way history.rs joins `streamers`
+/// for a line from postgres, so a new picture shows on every old line and a rename keeps a
+/// login's. One query for the batch, none for a batch of nicks. A row that is gone is no face,
+/// as the join would have it. The database not answering leaves what each line was written
+/// with: faces a little behind, and the history still comes with the database down.
+pub(crate) async fn with_faces<'a>(db: &PgPool, lines: impl IntoIterator<Item = &'a mut Line>) {
+    let lines: Vec<&mut Line> = lines.into_iter().collect();
+    let mut ids: Vec<Uuid> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    for line in &lines {
+        match face_key(line) {
+            Some(FaceKey::Id(id)) if !ids.contains(&id) => ids.push(id),
+            Some(FaceKey::Name(name)) if !names.iter().any(|n| n == name) => names.push(name.to_owned()),
+            _ => {}
+        }
+    }
+    if ids.is_empty() && names.is_empty() {
+        return;
+    }
+    let rows: Vec<(Uuid, String, Option<i64>)> = match sqlx::query_as(
+        "SELECT id, name, (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE id = ANY($1::uuid[]) OR name = ANY($2::text[])",
+    )
+    .bind(&ids)
+    .bind(&names)
+    .fetch_all(db)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            log::warn!("cannot read the pictures for {} lines: {e}", lines.len());
+            return;
+        }
+    };
+    for line in lines {
+        let face = match face_key(line) {
+            Some(FaceKey::Id(id)) => rows.iter().find(|(row, _, _)| *row == id).and_then(|(_, _, v)| *v),
+            Some(FaceKey::Name(name)) => rows.iter().find(|(_, row, _)| row == name).and_then(|(_, _, v)| *v),
+            None => continue,
+        };
+        line.avatar = face;
+    }
 }
 
 async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, headers: HeaderMap, mut socket: WebSocket) {
@@ -586,17 +649,22 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
         }
     }
     pictures_exist(&s.db, room, images).await?;
+    // the face as the row has it this moment, so the line fanned out now wears the right one
+    let avatar = face_now(&s.db, room, w).await.map(|v| v.to_string());
     let mut r = s.redis.clone();
-    // the badges as json and the picture's version as text, and no field at
-    // all for the common case of neither
+    // the badges as json, the picture's version and the account as text, and no field at
+    // all for the common case of none
     let groups = if w.groups.is_empty() { String::new() } else { serde_json::to_string(&w.groups).unwrap_or_default() };
-    let avatar = w.avatar.map(|v| v.to_string());
+    let uid = w.user_id.map(|id| id.to_string());
     let mut fields = vec![("from", w.from.as_str()), ("text", text), ("streamer", if w.streamer { "1" } else { "0" }), ("v", if w.verified { "1" } else { "0" })];
     if !groups.is_empty() {
         fields.push(("g", groups.as_str()));
     }
     if let Some(avatar) = &avatar {
         fields.push(("a", avatar.as_str()));
+    }
+    if let Some(uid) = &uid {
+        fields.push(("uid", uid.as_str()));
     }
     if let Some(image) = images.first() {
         fields.push(("img", image.as_str()));
@@ -677,7 +745,11 @@ async fn after(s: &ChatState, room: &str, id: &str) -> Vec<Line> {
     let mut r = s.redis.clone();
     let reply: Result<StreamRangeReply, _> = r.xrange_count(room_key(room), format!("({id}"), "+", FILL_LIMIT).await;
     match reply {
-        Ok(reply) => reply.ids.into_iter().filter_map(line_from).collect(),
+        Ok(reply) => {
+            let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
+            with_faces(&s.db, &mut lines).await;
+            lines
+        }
         Err(e) => {
             log::warn!("{room}: xrange: {e}");
             Vec::new()
@@ -1008,12 +1080,13 @@ async fn reader(client: redis::Client, name: String, start: Option<String>, tx: 
     log::info!("{name}: room empty, reader done");
 }
 
-/// The last lines of a room, oldest first.
+/// The last lines of a room, oldest first, with the faces as they are now.
 async fn history(s: &ChatState, name: &str) -> Result<Vec<Line>, redis::RedisError> {
     let mut r = s.redis.clone();
     let reply: StreamRangeReply = r.xrevrange_count(room_key(name), "+", "-", HISTORY_LINES).await?;
     let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
     lines.reverse();
+    with_faces(&s.db, &mut lines).await;
     Ok(lines)
 }
 
@@ -1064,8 +1137,10 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
     let verified: String = entry.get("v").unwrap_or_else(|| "0".to_owned());
     // no `g` field, or one this build cannot read, is a line with no badges
     let groups: Vec<Badge> = entry.get::<String>("g").and_then(|g| serde_json::from_str(&g).ok()).unwrap_or_default();
-    // no `a` field is a line with no picture
+    // no `a` field is a line with no picture (as written; `with_faces` has the last word)
     let avatar: Option<i64> = entry.get::<String>("a").and_then(|a| a.parse().ok());
+    // no `uid` field is a login's line from before it rode along: its face is looked up by name
+    let user_id: Option<Uuid> = entry.get::<String>("uid").and_then(|u| Uuid::parse_str(&u).ok());
     let images = {
         let mut images = split_pictures(entry.get::<String>("img"));
         for part in split_pictures(entry.get::<String>("imgs")) {
@@ -1085,6 +1160,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         verified: verified == "1",
         groups,
         avatar,
+        user_id,
         image,
         images,
     })
@@ -1179,6 +1255,7 @@ mod tests {
             verified: true,
             groups: Vec::new(),
             avatar: None,
+            user_id: Some(Uuid::nil()),
             at: 1729000000000,
             image: None,
             images: Vec::new(),
@@ -1190,6 +1267,8 @@ mod tests {
         assert_eq!(frame["id"], "1729000000000-0");
         assert_eq!(frame["from"], "bob");
         assert_eq!(frame["verified"], true);
+        // the account is the face's key, not a thing a page reads
+        assert!(frame.get("user_id").is_none());
         assert_eq!(serde_json::to_string(&Out::ChannelCount { channel: "general", count: 3 }).unwrap(), r#"{"type":"count","channel":"general","count":3}"#);
         // the channel of `*` is no channel: the name rule keeps it free
         assert!(!crate::valid_name(EVERY_CHANNEL));

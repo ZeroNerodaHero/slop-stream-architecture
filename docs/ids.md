@@ -36,7 +36,7 @@ flowchart LR
 - **the old name is held for you for 30 days.** nobody else can sign up as it or rename onto it; you can rename back (which is a rename, and waits its 30 days like any other). after the hold it is a free name like any other.
 - **a free name's row under the new name goes.** its bio and picture were anyone's and yours arrive with you; its followers become yours, exactly as signup claiming a free name keeps that name's followers (`follows.md`): they followed the word, and the word is now you.
 - **links follow for the hold's length.** `GET /watch/<old>` is a 302 to `/watch/<new>` (the preview bots follow redirects). `POST /api/streams/<old>/watch` answers with the *new* name's grant outright, and the grant now carries `name`: a page that asked for one name and was granted another moves to it (`replace`, so back does not bounce). no 308: the page learns the name from the body, which it needs anyway.
-- **what does not follow**: chat lines already said (a line keeps the name it was said under, as it keeps its badges), past sessions (`sessions.name` was the url that night; the row gains `user_id`, backfilled for the sessions the account started, so its history is still one list), and the `verified` of a running stream (there is none: not while live). `stream_thumbs` *does* follow: it has no key to cascade, so the rename updates its `name` in the same transaction.
+- **what does not follow**: chat lines already said (a line keeps the name it was said under, as it keeps its badges; its face does follow, since a login's line carries `uid` and the picture is looked up when the line is read, `chat.md`), past sessions (`sessions.name` was the url that night; the row gains `user_id`, backfilled for the sessions the account started, so its history is still one list), and the `verified` of a running stream (there is none: not while live). `stream_thumbs` *does* follow: it has no key to cascade, so the rename updates its `name` in the same transaction.
 - **`ADMIN_NAMES`** is still names in `.env` (it is how a person writes it), resolved to accounts at boot and compared by id. a renamed admin stays admin until the next restart, when the boot log says the name matches no account, as it does today for a name without one.
 - **`api passwd <old>`** refuses a held name like signup does: a reset on it would make a stranger's account on a name that is somebody's for 30 more days.
 
@@ -122,7 +122,7 @@ the login that asked stays logged in, and so does every other device: `logins` p
 | key | change |
 |---|---|
 | `events` | one more fact: `XADD events MAXLEN ~ 1000 * type renamed name billy to bobby`. the gateway re-keys its registry (`own`: the sockets that said `billy` now say `bobby`; `watchers` of `billy` stay, those pages are leaving) and pushes `{"type":"renamed","name":"billy","to":"bobby"}` to billy's own sockets and to `billy`'s watchers. each moved socket leaves `seen:billy` and enters `seen:bobby` at once (the two EVALs, not the 90s lapse): `billy` reads `offline` the moment it is nobody's, `bobby` `online`. then a `me` with the new name |
-| `live:`, `seen:`, `chat:` | names, as today. nothing in redis carries an id |
+| `live:`, `seen:`, `chat:` | names, as today. the keys carry no id; a login's line in a `chat:` stream carries its account as `uid` (since faces are looked up at read: `chat.md`), the one id in redis |
 
 ## api
 

@@ -32,7 +32,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::Me;
-use crate::chat::{clean_text, line_from, room_key, Line};
+use crate::chat::{clean_text, line_from, room_key, with_faces, Line};
 use crate::presence;
 use crate::{valid_name, ApiError, ApiResult, AppState};
 
@@ -720,12 +720,18 @@ async fn messages(State(s): State<AppState>, Path(group): Path<String>) -> ApiRe
         pipe.cmd("XREVRANGE").arg(room_key(&format!("{server}/{channel}"))).arg("+").arg("-").arg("COUNT").arg(MESSAGES_PER_CHANNEL);
     }
     let replies: Vec<StreamRangeReply> = pipe.query_async(&mut s.redis.clone()).await?;
-    let mut out = serde_json::Map::new();
-    for (channel, reply) in channels.into_iter().zip(replies) {
-        let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
-        lines.reverse();
-        out.insert(channel, json!(lines));
-    }
+    let mut pages: Vec<(String, Vec<Line>)> = channels
+        .into_iter()
+        .zip(replies)
+        .map(|(channel, reply)| {
+            let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
+            lines.reverse();
+            (channel, lines)
+        })
+        .collect();
+    // the faces as they are now, every channel's in the one query
+    with_faces(&s.db, pages.iter_mut().flat_map(|(_, lines)| lines.iter_mut())).await;
+    let out: serde_json::Map<String, Value> = pages.into_iter().map(|(channel, lines)| (channel, json!(lines))).collect();
     Ok(Json(Value::Object(out)))
 }
 

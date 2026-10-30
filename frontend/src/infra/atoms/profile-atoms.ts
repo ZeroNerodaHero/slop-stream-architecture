@@ -15,7 +15,7 @@ import { atom } from 'jotai';
 
 import { api, messageOf } from '@/infra/api';
 import { meAtom, reloadMe } from '@/infra/atoms/auth-atoms';
-import { nickAtom, reconnectChat } from '@/infra/atoms/chat-atoms';
+import { nickAtom, reconnectChat, refaceLines } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { followIdentityOnLivePage, myAvatarAtom, streamNameAtom } from '@/infra/atoms/publish-atoms';
 import { socialsAtom, watchNameAtom } from '@/infra/atoms/watch-atoms';
@@ -186,6 +186,7 @@ export async function saveMyAvatar(file: File): Promise<void> {
     store.set(profileAvatarAtom, saved.avatar);
     store.set(profileAvatarStatusAtom, 'saved');
     alsoOnLivePage(name, saved.avatar);
+    refaceLines(name, saved.avatar);
   } catch (err) {
     store.set(profileAvatarStatusAtom, `not saved: ${messageOf(err)}`);
   }
@@ -199,6 +200,7 @@ export async function removeMyAvatar(): Promise<void> {
     store.set(profileAvatarAtom, null);
     store.set(profileAvatarStatusAtom, 'removed');
     alsoOnLivePage(name, null);
+    refaceLines(name, null);
   } catch (err) {
     store.set(profileAvatarStatusAtom, `not removed: ${messageOf(err)}`);
   }

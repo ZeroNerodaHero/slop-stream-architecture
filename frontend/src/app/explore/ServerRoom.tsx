@@ -1,4 +1,3 @@
-import { RiCameraLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -18,6 +17,7 @@ import { Face } from '@/shared-components/Face';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { PicturePick } from '@/shared-components/PicturePick';
 import { cn } from '@/utils/cn';
 
 /** Cameras played in the room. The same peers home uses, muted, and not counted as viewers. */
@@ -57,46 +57,6 @@ const NO_PERMS: RolePerms = { appearance: false, roles: false, channels: false, 
  */
 function reaches(room: GroupRoom, perms: RolePerms): boolean {
   return room.owner || room.admin === true || POWERS.every((power) => !perms[power.key] || room.perms[power.key]);
-}
-
-/**
- * The way to a new picture, on the picture itself, for an owner: the whole picture is the
- * click. With the pointer over it (`reveal`: the parent's `group-hover`), or the input in
- * keyboard focus, the picture greys and a camera sits in the middle of it. A screen with no
- * hover gets the camera small in the corner instead, all the time, and no grey. `label` is the
- * input's name and the tooltip. The crop dialog takes the file from here. There is no remove:
- * a group with a picture keeps one.
- */
-function PicturePick({ id, label, reveal, className, onPick }: { id: string; label: string; reveal: string; className?: string; onPick: (file: File) => void }) {
-  return (
-    <label className="group/pick absolute inset-0 cursor-pointer" title={label}>
-      <span
-        aria-hidden
-        className={cn(
-          'absolute flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/pick:opacity-100',
-          '[@media(hover:none)]:items-end [@media(hover:none)]:justify-end [@media(hover:none)]:bg-transparent [@media(hover:none)]:p-1 [@media(hover:none)]:opacity-100',
-          reveal,
-          className
-        )}
-      >
-        <span className="flex [@media(hover:none)]:bg-black/60 [@media(hover:none)]:p-1">
-          <RiCameraLine size={28} />
-        </span>
-      </span>
-      <input
-        id={id}
-        type="file"
-        accept="image/*"
-        aria-label={label}
-        className="sr-only"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          e.target.value = '';
-          if (file) onPick(file);
-        }}
-      />
-    </label>
-  );
 }
 
 /** One member's camera, muted. Click opens their stream. */

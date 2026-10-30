@@ -272,6 +272,22 @@ export function dropChannel(name: string) {
   shelf?.counts.delete(name);
 }
 
+/**
+ * My picture changed: every line of mine already on screen wears the new one, on the tail, the
+ * shelf and a search. The server gives a line its speaker's picture as it is now (chat.rs
+ * `with_faces`), so anything loaded from here on is right on its own; this is the tab that
+ * was open. A line is mine when it is `name`'s as a login or as the room's streamer: a nick's
+ * line is nobody's picture, so it is left alone.
+ */
+export function refaceLines(name: string, avatar: number | null) {
+  const wear = (lines: ChatLine[]) => lines.map((line) => (line.from === name && (line.verified || line.streamer) ? { ...line, avatar } : line));
+  store.set(chatLinesAtom, wear(store.get(chatLinesAtom)));
+  const results = store.get(chatResultsAtom);
+  if (results) store.set(chatResultsAtom, wear(results));
+  if (savedTail) savedTail = wear(savedTail);
+  if (shelf) for (const [key, tail] of shelf.tails) shelf.tails.set(key, wear(tail));
+}
+
 /** The name changed (nick edited, logged in or out), or its groups did: say hello again as the new one. */
 export function reconnectChat() {
   if (!session) return;

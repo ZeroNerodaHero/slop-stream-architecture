@@ -54,6 +54,7 @@ import { Face } from '@/shared-components/Face';
 import { LiveMark } from '@/shared-components/LiveMark';
 import { panelClassName } from '@/shared-components/Panel';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { CHIP_BUTTON } from '@/shared-components/VideoControls';
 import { compressChatImage } from '@/infra/picture';
 import { cn } from '@/utils/cn';
 
@@ -155,131 +156,139 @@ function pictureSrc(id: string): string {
 
 /**
  * The pictures on a line, under the words. One is as tall as five lines; several sit in a row.
- * Pointing at one pops a larger one beside it. Several on the line get arrows to move through them.
+ * A click on one puts it over the whole page (`PictureView`), in the window the chat is in: the
+ * page's, or the popped-out player's own.
  */
 function ChatImages({ ids }: { ids: string[] }) {
-  const thumbs = useRef<Array<HTMLButtonElement | null>>([]);
-  const pop = useRef<HTMLDivElement | null>(null);
-  const hide = useRef<number | null>(null);
-  // `at` is the one the pointer is on, so the pop stays put. `view` is the one it shows.
-  const [open, setOpen] = useState<{ at: number; view: number } | null>(null);
-  const [sized, setSized] = useState(0);
-
-  function stay() {
-    if (hide.current) window.clearTimeout(hide.current);
-  }
-  function hideSoon() {
-    stay();
-    hide.current = window.setTimeout(() => {
-      const box = pop.current;
-      if (box && (box.matches(':hover') || box.contains(document.activeElement))) return;
-      setOpen(null);
-    }, 160);
-  }
-  function show(i: number) {
-    stay();
-    setOpen({ at: i, view: i });
-  }
-  function step(by: number) {
-    stay();
-    setOpen((cur) => (cur ? { ...cur, view: (cur.view + by + ids.length) % ids.length } : cur));
-  }
-
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === 'Escape') setOpen(null);
-      if (ids.length < 2) return;
-      if (e.key === 'ArrowLeft') step(-1);
-      if (e.key === 'ArrowRight') step(1);
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, ids.length]);
-
-  useLayoutEffect(() => {
-    if (!open) return;
-    const anchor = thumbs.current[open.at];
-    const box = pop.current;
-    if (!anchor || !box) return;
-    const place = () => {
-      const a = anchor.getBoundingClientRect();
-      const p = box.getBoundingClientRect();
-      const gap = 8;
-      let left = a.left - gap - p.width;
-      if (left < 8) left = Math.min(a.right + gap, window.innerWidth - 8 - p.width);
-      let top = a.top + (a.height - p.height) / 2;
-      top = Math.max(8, Math.min(top, window.innerHeight - 8 - p.height));
-      box.style.left = `${Math.max(8, left)}px`;
-      box.style.top = `${top}px`;
-      box.style.visibility = 'visible';
-    };
-    place();
-    window.addEventListener('scroll', place, true);
-    window.addEventListener('resize', place);
-    return () => {
-      window.removeEventListener('scroll', place, true);
-      window.removeEventListener('resize', place);
-    };
-  }, [open, sized]);
+  const [view, setView] = useState<{ at: number; host: HTMLElement } | null>(null);
 
   if (ids.length === 0) return null;
   const many = ids.length > 1;
-  const shown = open ? ids[open.view] : undefined;
-  const host = open ? (thumbs.current[open.at]?.closest('dialog:modal') ?? document.body) : null;
   return (
     <span className="mt-1 flex max-w-full flex-wrap gap-1">
       {ids.map((id, i) => (
         <button
           key={id}
           type="button"
-          ref={(el) => {
-            thumbs.current[i] = el;
-          }}
+          aria-label={many ? `picture ${i + 1} of ${ids.length}` : 'picture'}
+          title="see it full size"
           className="block max-w-full"
-          onMouseEnter={() => show(i)}
-          onMouseLeave={hideSoon}
-          onFocus={() => show(i)}
-          onBlur={hideSoon}
+          onClick={(e) => setView({ at: i, host: e.currentTarget.ownerDocument.body })}
         >
           <img src={pictureSrc(id)} alt="" className="max-h-[7.5rem] max-w-full object-contain" />
         </button>
       ))}
-      {open &&
-        host &&
+      {view &&
         createPortal(
-          <div
-            id="chat-picture-pop"
-            ref={pop}
-            role="dialog"
-            aria-label="picture"
-            onMouseEnter={stay}
-            onMouseLeave={hideSoon}
-            className="invisible fixed left-0 top-0 z-[60] flex items-center border border-primaryStroke bg-background"
-          >
-            {many && (
-              <button type="button" id="chat-picture-prev" aria-label="previous picture" className="px-1 text-textSecondary" onClick={() => step(-1)}>
-                <RiArrowLeftSLine aria-hidden size={28} />
-              </button>
-            )}
-            {shown && (
-              <img
-                src={pictureSrc(shown)}
-                alt=""
-                onLoad={() => setSized((n) => n + 1)}
-                className="max-h-[70vh] max-w-[min(32rem,70vw)] object-contain"
-              />
-            )}
-            {many && (
-              <button type="button" id="chat-picture-next" aria-label="next picture" className="px-1 text-textSecondary" onClick={() => step(1)}>
-                <RiArrowRightSLine aria-hidden size={28} />
-              </button>
-            )}
-          </div>,
-          host
+          <PictureView
+            ids={ids}
+            at={view.at}
+            onStep={(by) => setView((cur) => (cur ? { ...cur, at: (cur.at + by + ids.length) % ids.length } : cur))}
+            onClose={() => setView(null)}
+          />,
+          view.host
         )}
     </span>
+  );
+}
+
+interface PictureViewProps {
+  ids: string[];
+  /** Which of `ids` is up. */
+  at: number;
+  /** The arrows and the arrow keys: one on, or one back, round the end. */
+  onStep: (by: number) => void;
+  onClose: () => void;
+}
+
+/**
+ * A chat picture over the whole page: the page dimmed grey behind it, the picture as tall or as
+ * wide as the window allows (scaled up as well as down). A native <dialog> opened modal on mount,
+ * the way ConfirmDialog is: the browser keeps focus in it, closes it on escape and hands focus
+ * back to the thumbnail. The × closes it too, and so does a click on the grey beside the picture.
+ * Several on the line get arrows at the edges, and the arrow keys.
+ */
+function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const img = useRef<HTMLImageElement | null>(null);
+  /** The press that began this click was beside the picture too: a drag off the picture is not a close. */
+  const pressedBeside = useRef(false);
+  const many = ids.length > 1;
+
+  // A layout effect: its cleanup runs while the node is still in the document, which is when close() hands focus back.
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog || dialog.open) return;
+    dialog.showModal();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, []);
+
+  const close = () => dialogRef.current?.close();
+  const shown = ids[at];
+
+  /** The point is on the grey, not on a button or the picture. The <img> box is the whole window; the picture is letterboxed in it, so its drawn edges are worked out. */
+  function beside(e: { target: EventTarget; clientX: number; clientY: number }): boolean {
+    if (e.target instanceof Element && e.target.closest('button')) return false;
+    const el = img.current;
+    if (!el || !el.naturalWidth || !el.naturalHeight) return true;
+    const box = el.getBoundingClientRect();
+    const k = Math.min(box.width / el.naturalWidth, box.height / el.naturalHeight);
+    const w = el.naturalWidth * k;
+    const h = el.naturalHeight * k;
+    const left = box.left + (box.width - w) / 2;
+    const top = box.top + (box.height - h) / 2;
+    return e.clientX < left || e.clientX > left + w || e.clientY < top || e.clientY > top + h;
+  }
+
+  return (
+    <dialog
+      ref={dialogRef}
+      id="chat-picture-view"
+      aria-label={many ? `picture ${at + 1} of ${ids.length}` : 'picture'}
+      onClose={onClose}
+      onPointerDown={(e) => {
+        pressedBeside.current = beside(e);
+      }}
+      onClick={(e) => {
+        if (pressedBeside.current && beside(e)) close();
+      }}
+      onKeyDown={(e) => {
+        if (!many || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+        e.preventDefault();
+        onStep(e.key === 'ArrowLeft' ? -1 : 1);
+      }}
+      // the whole window, the grey on the dialog itself (the backdrop would not see the theme's variables everywhere)
+      className="fixed inset-0 m-0 h-auto w-auto max-h-none max-w-none overflow-hidden border-0 bg-backgroundTertiary/80 p-0 backdrop:bg-transparent"
+    >
+      {shown && <img ref={img} src={pictureSrc(shown)} alt="" draggable={false} className="h-full w-full object-contain" />}
+      <button type="button" id="chat-picture-close" aria-label="close" className={cn(CHIP_BUTTON, 'absolute right-3 top-3 h-10 w-10 justify-center')} onClick={close}>
+        <RiCloseLine aria-hidden size={24} />
+      </button>
+      {many && (
+        <>
+          <button
+            type="button"
+            id="chat-picture-prev"
+            aria-label="previous picture"
+            className={cn(CHIP_BUTTON, 'absolute left-3 top-1/2 h-12 w-12 -translate-y-1/2 justify-center')}
+            onClick={() => onStep(-1)}
+          >
+            <RiArrowLeftSLine aria-hidden size={32} />
+          </button>
+          <button
+            type="button"
+            id="chat-picture-next"
+            aria-label="next picture"
+            className={cn(CHIP_BUTTON, 'absolute right-3 top-1/2 h-12 w-12 -translate-y-1/2 justify-center')}
+            onClick={() => onStep(1)}
+          >
+            <RiArrowRightSLine aria-hidden size={32} />
+          </button>
+        </>
+      )}
+    </dialog>
   );
 }
 
