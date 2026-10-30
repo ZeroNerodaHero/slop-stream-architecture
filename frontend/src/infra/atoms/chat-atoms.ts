@@ -65,6 +65,13 @@ const NICK_RE = /^[a-zA-Z0-9_-]{1,24}$/;
 export const nickAtom = atomWithStorage<string>('nick', '', undefined, { getOnInit: true });
 export const chatPhaseAtom = atom<ChatPhase>('off');
 export const chatLinesAtom = atom<ChatLine[]>([]);
+/**
+ * The room's past has landed: a stream's with the socket's `history` frame, a server's with the
+ * api's last lines (`seedChannels`, had it any or not). Until then an empty tail is not "nothing
+ * yet", and the panel stands grey lines in its place. Off with the room (`closeChat`), and with
+ * a shelf started over for another server.
+ */
+export const chatLoadedAtom = atom(false);
 export const chatCountAtom = atom(0);
 export const chatDraftAtom = atom('');
 /** Pictures waiting to go with the next line, the ids `POST /api/chat-images` returned. Ten at most, the chat's cap. */
@@ -276,6 +283,7 @@ function takeShelf(server: string): Shelf {
     shelf = { server, tails: new Map(), counts: new Map() };
     channel = '';
     store.set(chatChannelAtom, '');
+    store.set(chatLoadedAtom, false);
   }
   return shelf;
 }
@@ -317,6 +325,7 @@ export function seedChannels(server: string, lines: Record<string, ChatLine[]>) 
       }
     } else current.tails.set(name, mergeLines(current.tails.get(name) ?? [], fresh));
   }
+  store.set(chatLoadedAtom, true);
   sendSince();
 }
 
@@ -372,6 +381,7 @@ export function closeChat(reset = true) {
   resetHistory();
   if (reset) {
     store.set(chatLinesAtom, []);
+    store.set(chatLoadedAtom, false);
     store.set(chatCountAtom, 0);
     store.set(chatAsStreamerAtom, false);
     store.set(chatDraftAtom, '');
@@ -458,6 +468,7 @@ function connect() {
       resetHistory();
       scrollPlan = 'bottom';
       store.set(chatLinesAtom, msg.messages.slice(-KEEP_LINES).map(fromWire));
+      store.set(chatLoadedAtom, true);
     }
     else if (msg.type === 'message' && msg.id) {
       const sent = inFlight.findIndex((p) => p.text === (msg.text ?? '') && samePictures(p.images, picturesOf(msg)));

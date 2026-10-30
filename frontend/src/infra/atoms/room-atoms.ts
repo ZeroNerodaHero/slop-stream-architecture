@@ -109,7 +109,9 @@ async function loadLines(): Promise<void> {
     if (mine !== attempt) return;
     seedChannels(server, lines);
   } catch {
-    // older lines still scroll in from the history routes; nothing to say here
+    if (mine !== attempt) return;
+    // nothing to say here: older lines still scroll in from the history routes. seeded with nothing, so the panel stops standing grey lines for an answer that is not coming
+    seedChannels(server, {});
   }
 }
 

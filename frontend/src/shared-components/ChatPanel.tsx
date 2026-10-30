@@ -16,6 +16,7 @@ import {
   chatDraftAtom,
   chatImagesAtom,
   chatLinesAtom,
+  chatLoadedAtom,
   chatNoticeAtom,
   chatPhaseAtom,
   chatPinnedAtom,
@@ -57,6 +58,7 @@ import { Face } from '@/shared-components/Face';
 import { LiveMark } from '@/shared-components/LiveMark';
 import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
+import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { CHIP_BUTTON } from '@/shared-components/VideoControls';
 import { compressChatImage } from '@/infra/picture';
@@ -66,6 +68,19 @@ import { cn } from '@/utils/cn';
 const STUCK_PX = 40;
 /** How long the pointer rests on a name before the speaker's card shows: a pause, not a pass over the names while reading. */
 const PEEK_MS = 300;
+/** How many grey lines stand in the room before its past has landed: enough to fill the panel, the rest clipped. A server's blocks are twice as tall, so half as many. */
+const LINES_GUESS = 16;
+/** The grey lines' shapes, cycled: the name's width, then the words'. Uneven, so the grey reads as talk and not as a table. */
+const LINE_SHAPES: readonly (readonly [name: string, words: string])[] = [
+  ['w-16', 'w-1/2'],
+  ['w-12', 'w-3/4'],
+  ['w-20', 'w-1/3'],
+  ['w-14', 'w-2/3'],
+  ['w-16', 'w-5/12'],
+  ['w-10', 'w-7/12'],
+  ['w-24', 'w-1/4'],
+  ['w-14', 'w-4/5']
+];
 
 interface ChatPanelProps {
   /** A stream's room, or, with `channel`, the server. */
@@ -396,6 +411,43 @@ function ServerLine({ line, mine, faces }: { line: ChatLine; mine: boolean; face
   );
 }
 
+/**
+ * What stands in the lines' place while the room's past is on its way: grey lines in their
+ * shape, so the panel reads as a chat that has not arrived and not as one with nothing in it.
+ * A stream's are one line each, the face, a name, some words; a server's are the block (the
+ * face beside the name over the words). Clipped to the panel, never scrolled, and no <p>, so
+ * nothing that keys on `#chat-lines p` takes a grey line for a said one.
+ */
+function ChatSkeleton({ server, faces }: { server: boolean; faces: boolean }) {
+  const rows = server ? LINES_GUESS / 2 : LINES_GUESS;
+  return (
+    <Skeleton id="chat-loading" label="loading the chat" className="h-full overflow-hidden">
+      {Array.from({ length: rows }, (_, i) => {
+        const [name, words] = LINE_SHAPES[i % LINE_SHAPES.length] ?? ['w-16', 'w-1/2'];
+        if (server) {
+          return (
+            <div key={i} className="my-3 flex gap-3">
+              {faces && <Bone className="h-10 w-10 shrink-0" />}
+              <div className="flex min-w-0 flex-1 flex-col gap-2 py-1">
+                <Bone className={cn('h-3.5', name)} />
+                <Bone className={cn('h-3.5', words)} />
+              </div>
+            </div>
+          );
+        }
+        // one line of text-base leading-snug tall, the way a said line is
+        return (
+          <div key={i} className="my-1 flex h-[1.375rem] items-center gap-1.5">
+            {faces && <Bone className="h-5 w-5 shrink-0" />}
+            <Bone className={cn('h-3.5 shrink-0', name)} />
+            <Bone className={cn('h-3.5', words)} />
+          </div>
+        );
+      })}
+    </Skeleton>
+  );
+}
+
 export function ChatPanel({ name, owner = null, embedded = false, channel, className }: ChatPanelProps) {
   const server = channel !== undefined;
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -408,7 +460,8 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const lines = useAtomValue(visibleChatLinesAtom);
-  const loaded = useAtomValue(chatLinesAtom).length;
+  const total = useAtomValue(chatLinesAtom).length;
+  const loaded = useAtomValue(chatLoadedAtom);
   const hideBots = useAtomValue(hideBotsAtom);
   const hiddenBots = useAtomValue(hiddenBotLinesAtom);
   const faces = useAtomValue(chatFacesAtom);
@@ -471,7 +524,7 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
     }
     shown.current = lines.length;
     hold.current = el.scrollHeight;
-  }, [lines, loaded, scrollTick]);
+  }, [lines, total, scrollTick]);
 
   function onScroll(e: UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;
@@ -511,6 +564,10 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
 
   // the nick box stays until "join" actually opened the socket. a login never needs one.
   const needsNick = !owner && !me && phase === 'off';
+  // the room's past is still on its way, and nothing of it has come: a server's lines are asked of the api as its page
+  // arrives; a stream's come down the socket, which opens once /api/me has answered and, without a login, once a nick
+  // is picked (the nick box waits on nobody, so there the room is as empty as it says)
+  const waiting = !loaded && total === 0 && (server || me === undefined || phase !== 'off');
   // the name the server echoes our own lines under: the stream's when we are the streamer, else the login or nick
   const myName = asStreamer ? name : speaker;
 
@@ -600,7 +657,10 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
         data-faces={faces || undefined}
         className="min-h-0 flex-1 overflow-y-auto px-4 py-2 text-base leading-snug"
       >
-        {lines.length === 0 && <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>}
+        {waiting && <ChatSkeleton server={server} faces={faces} />}
+        {!waiting && lines.length === 0 && (
+          <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>
+        )}
         {lines.map((line) => {
           // ours by name and by kind, since a nick may wear a free room's name: the streamer's lines wear `streamer`, a login's `verified`, a nick's neither
           const mine = line.from === myName && (asStreamer ? line.streamer : me ? line.verified : !line.verified && !line.streamer);

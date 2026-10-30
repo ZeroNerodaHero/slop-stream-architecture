@@ -1,4 +1,4 @@
-import { RiChat3Line, RiCloseLine, RiGroupLine, RiSearchLine, RiUserFollowLine, RiUserHeartLine } from '@remixicon/react';
+import { RiArrowDownSLine, RiArrowRightSLine, RiChat3Line, RiCloseLine, RiGroupLine, RiSearchLine, RiUserFollowLine, RiUserHeartLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { Fragment, type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -9,7 +9,17 @@ import { dmUnreadAtom, openDm, showDms } from '@/infra/atoms/dm-atoms';
 import { followNoteAtom, followingAtom, loadFollowing, search, searchBusyAtom, searchQueryAtom, searchResultsAtom, unfollow } from '@/infra/atoms/follow-atoms';
 import { loadMyServers, myServersAtom } from '@/infra/atoms/groups-atoms';
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
-import { type PanelSide, setSidebarShares, type SidebarList, sidebarListsAtom, type SidebarShares, sidebarSharesAtom } from '@/infra/atoms/settings-atoms';
+import {
+  type PanelSide,
+  setSidebarFolded,
+  setSidebarShares,
+  type SidebarFolds,
+  sidebarFoldsAtom,
+  type SidebarList,
+  sidebarListsAtom,
+  type SidebarShares,
+  sidebarSharesAtom
+} from '@/infra/atoms/settings-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { store } from '@/infra/store';
 import { Face } from '@/shared-components/Face';
@@ -292,54 +302,86 @@ interface ListProps {
   onPick: () => void;
 }
 
-/** The icon over a list, and open, the word and how many, with `action` at the far end of the line. Closed, the icon alone; no list, no icon. `below`: the gap under it. */
-function Head({
-  icon: Icon,
-  word,
-  count,
-  open,
-  side,
-  below,
-  action,
-  mark
-}: {
+/**
+ * The fold button's reach into the panel's edge inset, where the caret goes: the caret's 16px
+ * and 2px to the face column. The button's box reaches that far and pads the same back, so the
+ * icon stands where the closed column has it and the caret sits before it, on the edge side.
+ */
+const CARET_ROOM: Record<PanelSide, string> = { left: '-ml-[18px] pl-[18px]', right: '-mr-[18px] pr-[18px]' };
+/** The fold button: caret, icon and word in one, the far end of the line left to the action. Hover and focus are a colour, like the line between two lists. */
+const FOLD = 'relative flex min-w-0 flex-1 items-center gap-2 outline-none transition-colors duration-150 hover:text-textPrimary focus-visible:text-primaryBlue';
+
+interface HeadProps {
   icon: typeof RiUserHeartLine;
   word: string;
+  /** How many the list holds, folded or not. */
   count: number;
+  /** The list's own `id`, which the fold button says it controls. */
+  listId: string;
+  kind: SidebarList;
   open: boolean;
   side: PanelSide;
+  /** The gap under it. */
   below: number;
+  /** Folded to this line: no rows under it. */
+  folded: boolean;
   /** A button at the end of the line, away from the icon. Open only, like the word. */
   action?: ReactNode;
   /** A number on the icon's corner, closed or open: the lines new in the chats (docs/dms.md). 0 for none. */
   mark?: number;
-}) {
+}
+
+/**
+ * The icon over a list; open, the caret before it, the word and how many after it, and `action`
+ * at the far end of the line. Caret, icon and word are one button (`#sidebar-fold-<list>`,
+ * `aria-expanded`) that folds the list to this line and unfolds it, kept per browser
+ * (settings.sidebarFolds). Closed, the icon alone, where it always is; no list, no icon.
+ */
+function Head({ icon: Icon, word, count, listId, kind, open, side, below, folded, action, mark }: HeadProps) {
+  const mirrored = side === 'right';
+  const Caret = folded ? RiArrowRightSLine : RiArrowDownSLine;
+  // the icon says what the word says, and the number what the chat button's title says, so readers skip them
+  const icon = (
+    <span aria-hidden className="relative flex w-[42px] shrink-0 justify-center">
+      <Icon size={16} />
+      {/* the number stands with the closed column too, where the chat button has no room: the one sign something came */}
+      {mark !== undefined && mark > 0 && (
+        <span
+          id="friends-unread"
+          className="absolute -top-1.5 right-1 flex h-4 min-w-4 items-center justify-center border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background"
+        >
+          {mark > 99 ? '99+' : mark}
+        </span>
+      )}
+    </span>
+  );
   return (
     <div
-      className={cn('flex shrink-0 items-center gap-2 text-textTertiary', side === 'right' && 'flex-row-reverse', INSET[side])}
+      className={cn('flex shrink-0 items-center gap-2 text-textTertiary', mirrored && 'flex-row-reverse', INSET[side])}
       style={{ height: HEAD_PX, marginBottom: below }}
     >
-      {/* the icon and the word say what the list's own label says, so readers skip them; the button they do not */}
-      <span aria-hidden className="relative flex w-[42px] shrink-0 justify-center">
-        <Icon size={16} />
-        {/* the number stands with the closed column too, where the chat button has no room: the one sign something came */}
-        {mark !== undefined && mark > 0 && (
-          <span
-            id="friends-unread"
-            className="absolute -top-1.5 right-1 flex h-4 min-w-4 items-center justify-center border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background"
-          >
-            {mark > 99 ? '99+' : mark}
-          </span>
-        )}
-      </span>
-      {open && (
+      {open ? (
         <>
-          {/* the word takes the room, so the action sits at the far end on either side */}
-          <span aria-hidden className={cn('min-w-0 flex-1 truncate text-xs font-semibold uppercase leading-none tracking-wider', side === 'right' && 'text-right')}>
-            {word} {count}
-          </span>
+          <button
+            id={`sidebar-fold-${kind}`}
+            type="button"
+            aria-expanded={!folded}
+            aria-controls={listId}
+            title={folded ? `unfold ${word}` : `fold ${word}`}
+            onClick={() => setSidebarFolded(kind, !folded)}
+            className={cn(FOLD, CARET_ROOM[side], mirrored && 'flex-row-reverse')}
+          >
+            <Caret aria-hidden size={16} className={cn('absolute top-0', mirrored ? 'right-0' : 'left-0')} />
+            {icon}
+            {/* the word takes the room, so the action sits at the far end on either side */}
+            <span className={cn('min-w-0 flex-1 truncate text-xs font-semibold uppercase leading-none tracking-wider', mirrored && 'text-right')}>
+              {word} {count}
+            </span>
+          </button>
           {action}
         </>
+      ) : (
+        icon
       )}
     </div>
   );
@@ -531,11 +573,13 @@ const LIST_WORDS: Record<SidebarList, { icon: typeof RiUserHeartLine; word: stri
 interface ListsProps extends ListProps {
   /** The lists shown, top to bottom: the ones settings switched on that hold something, in the order it put them. */
   stack: Block[];
-  /** The rows each has, in the same order. */
+  /** The rows each has, in the same order. A folded list has none. */
   rows: number[];
   spacing: Spacing;
   /** The weights the rows were shared by, which the lines between the lists move. */
   shares: SidebarShares;
+  /** Which lists are folded to their icon line. */
+  folds: SidebarFolds;
 }
 
 /**
@@ -546,15 +590,21 @@ interface ListsProps extends ListProps {
  * group's row is the way to its page. Each list is cut at whole rows (`rows`) and scrolls inside,
  * at the pitch `spacing` worked out for the room; the line between two lists says how the rows
  * are shared, and dragging it trades a row between them, keeping every list's weight as the rows
- * then stand (as fractions of the room, so a taller window keeps the proportion). A list nobody
+ * then stand (as fractions of the room, so a taller window keeps the proportion). The caret
+ * before an icon folds its list to the icon line (settings.sidebarFolds): the word keeps its
+ * count, the rows go to the other lists, and the line beside it stands still. A list nobody
  * is in has no icon either. Closed, the words have no room: only the faces.
  */
-function Lists({ side, open, onPick, stack, rows, spacing, shares }: ListsProps) {
+function Lists({ side, open, onPick, stack, rows, spacing, shares, folds }: ListsProps) {
   const unread = useAtomValue(dmUnreadAtom);
   const { gaps } = spacing;
   const all = rows.reduce((sum, r) => sum + r, 0);
-  // each list with its numbers, so a place in the stack is read once
-  const laid = stack.map((block, i) => ({ block, length: lengthOf(block), rows: rows[i] ?? 0, gap: spacing.lists[i] ?? MIN_GAP }));
+  // each list with its numbers, so a place in the stack is read once: what it holds, the rows it may show (none, folded), the rows it has
+  const laid = stack.map((block, i) => {
+    const folded = folds[block.kind];
+    const held = lengthOf(block);
+    return { block, folded, held, length: folded ? 0 : held, rows: rows[i] ?? 0, gap: spacing.lists[i] ?? MIN_GAP };
+  });
 
   // the line under list i dragged to `want` rows for it: the pair trades rows, the others keep theirs
   const moveLine = (i: number, want: number) => {
@@ -574,18 +624,20 @@ function Lists({ side, open, onPick, stack, rows, spacing, shares }: ListsProps)
 
   return (
     <>
-      {laid.map(({ block, length, rows: count, gap }, i) => {
+      {laid.map(({ block, folded, held, length, rows: count, gap }, i) => {
         const { icon, word, id } = LIST_WORDS[block.kind];
         const pitch = FACE_PX + gap;
         const before = laid[i - 1];
         const pair = before ? before.rows + count : 0;
+        // a folded list on either side of the line has no rows to trade: the line stands where it is
+        const fixed = before !== undefined && (before.folded || folded);
         return (
           <Fragment key={block.kind}>
             {before && (
               <Divider
                 value={before.rows}
-                min={Math.max(1, pair - length)}
-                max={Math.min(before.length, pair - 1)}
+                min={fixed ? before.rows : Math.max(1, pair - length)}
+                max={fixed ? before.rows : Math.min(before.length, pair - 1)}
                 above={LIST_WORDS[before.block.kind].word}
                 below={word}
                 onMove={(want) => moveLine(i - 1, want)}
@@ -598,23 +650,28 @@ function Lists({ side, open, onPick, stack, rows, spacing, shares }: ListsProps)
             <Head
               icon={icon}
               word={word}
-              count={length}
+              count={held}
+              listId={id}
+              kind={block.kind}
               open={open}
               side={side}
               below={gaps[`head-${i}`] ?? MIN_GAP}
+              folded={folded}
               action={block.kind === 'friends' ? <ChatsOpener /> : undefined}
               mark={block.kind === 'friends' ? unread : undefined}
             />
-            <ul id={id} aria-label={word} className={LIST} style={{ height: count * pitch, gap }}>
-              {block.kind === 'groups'
-                ? block.servers.map((server) => <GroupRow key={server.name} server={server} side={side} open={open} onPick={onPick} />)
-                : block.people.map((f) => (
-                    <Row key={f.name} id={`friend-${f.name}`} person={f} side={side} open={open} onPick={onPick}>
-                      {block.kind === 'friends' && <Chat id={`friend-chat-${f.name}`} person={f} />}
-                      <Unfollow id={`friend-unfollow-${f.name}`} name={f.name} />
-                    </Row>
-                  ))}
-            </ul>
+            {!folded && (
+              <ul id={id} aria-label={word} className={LIST} style={{ height: count * pitch, gap }}>
+                {block.kind === 'groups'
+                  ? block.servers.map((server) => <GroupRow key={server.name} server={server} side={side} open={open} onPick={onPick} />)
+                  : block.people.map((f) => (
+                      <Row key={f.name} id={`friend-${f.name}`} person={f} side={side} open={open} onPick={onPick}>
+                        {block.kind === 'friends' && <Chat id={`friend-chat-${f.name}`} person={f} />}
+                        <Unfollow id={`friend-unfollow-${f.name}`} name={f.name} />
+                      </Row>
+                    ))}
+              </ul>
+            )}
           </Fragment>
         );
       })}
@@ -689,7 +746,8 @@ interface FriendsProps {
  * come out beside them, so what you were pointing at is still under the pointer. The whole
  * column is one stack with one gap between everything, sized (`measure`) so that the lists,
  * cut at whole rows, spend the room exactly; the lines between them, which drag, say how the
- * rows are shared. The site's one search: letters in the box put what they find where the
+ * rows are shared, and the caret before each icon folds its list to the icon line, this
+ * browser's choice (settings.sidebarFolds). The site's one search: letters in the box put what they find where the
  * lists were, each row with the buttons its list would give it, a follow button for a name you
  * do not follow; closing the panel empties it. Every open asks `GET /api/following` again, and
  * `GET /api/explore` for the groups while they are shown, so the words are now.
@@ -700,6 +758,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
   const servers = useAtomValue(myServersAtom);
   const choices = useAtomValue(sidebarListsAtom);
   const shares = useAtomValue(sidebarSharesAtom);
+  const folds = useAtomValue(sidebarFoldsAtom);
   const query = useAtomValue(searchQueryAtom);
   const note = useAtomValue(followNoteAtom);
   const stack = useRef<HTMLDivElement | null>(null);
@@ -745,7 +804,8 @@ export function Friends({ open, side, onPick }: FriendsProps) {
   const faces = searching || blocks.length > 0;
   const fit = measure(room, searching ? 0 : blocks.length, faces);
   const rows = splitRows(
-    blocks.map(lengthOf),
+    // a folded list shows no rows: its share of the room goes to the others
+    blocks.map((block) => (folds[block.kind] ? 0 : lengthOf(block))),
     blocks.map((block) => shares[block.kind]),
     room > 0 ? fit.rows : null
   );
@@ -824,7 +884,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
         ) : words ? (
           open && words
         ) : (
-          <Lists side={side} open={open} onPick={onPick} stack={blocks} rows={rows} spacing={spacing} shares={shares} />
+          <Lists side={side} open={open} onPick={onPick} stack={blocks} rows={rows} spacing={spacing} shares={shares} folds={folds} />
         )}
       </div>
       {open && note && (

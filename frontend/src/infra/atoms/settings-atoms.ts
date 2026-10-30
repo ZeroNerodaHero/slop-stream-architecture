@@ -1,8 +1,8 @@
 /**
  * The preferences this browser keeps (localstorage, like the nick): where the chat sits on a
- * page, where it sits on the corner player, which corner the you panel sits in and which lists
- * it shows in what order, whether the bots' lines show, whether the lines wear faces, and the
- * theme. Not part of the account: a
+ * page, where it sits on the corner player, which corner the you panel sits in, which lists
+ * it shows in what order and which of them are folded, whether the bots' lines show, whether
+ * the lines wear faces, and the theme. Not part of the account: a
  * laptop and a phone can each have their own. Same shape as the other
  * atom modules: atoms for what renders, action functions to change it. The modal that edits
  * them is user-modal-atoms.ts.
@@ -188,6 +188,31 @@ export const sidebarSharesAtom = atom((get): SidebarShares => {
 /** The weights given, over the kept ones. */
 export function setSidebarShares(shares: Partial<SidebarShares>) {
   store.set(storedSidebarSharesAtom, { ...store.get(sidebarSharesAtom), ...shares });
+}
+
+/**
+ * Which of the sidebar's lists are folded to their icon line (docs/follows.md): the caret before
+ * each icon, while the panel is open, folds that list and unfolds it. Folded, the icon keeps its
+ * place in the stack and the word its count, and the rows under it go to the other lists. This
+ * browser's; none folded to start.
+ */
+export type SidebarFolds = Record<SidebarList, boolean>;
+
+const DEFAULT_SIDEBAR_FOLDS: SidebarFolds = { friends: false, following: false, groups: false };
+
+const storedSidebarFoldsAtom = atomWithStorage<unknown>('settings.sidebarFolds', DEFAULT_SIDEBAR_FOLDS, undefined, { getOnInit: true });
+/** Read: a boolean per list, whatever localstorage holds. Anything but a stored `true` is unfolded. */
+export const sidebarFoldsAtom = atom((get): SidebarFolds => {
+  const raw = get(storedSidebarFoldsAtom);
+  const kept = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const out = { ...DEFAULT_SIDEBAR_FOLDS };
+  for (const list of SIDEBAR_LISTS) out[list] = kept[list] === true;
+  return out;
+});
+
+/** One list folded or unfolded. */
+export function setSidebarFolded(list: SidebarList, folded: boolean) {
+  store.set(storedSidebarFoldsAtom, { ...store.get(sidebarFoldsAtom), [list]: folded });
 }
 
 // ---- debugging -------------------------------------------------------------------------------
