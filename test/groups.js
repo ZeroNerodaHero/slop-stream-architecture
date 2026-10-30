@@ -1,5 +1,7 @@
 // Groups: the list (bot built in), a login makes one, another joins and leaves, badges on chat
 // lines, a bot's lines wear BOT and the panel hides them, only the maker deletes, the groups tab.
+// The pictures are the owner's whatever the roles say (no remove), and a role reaches only the
+// powers its holder has.
 // The room: one answer with the channels, who is live, the roster (members only) and the bans,
 // and the last lines of every channel; a watcher of `group:<name>` on the events socket hears a
 // channel added and deleted; the `*` chat socket carries every channel's lines with the channel
@@ -149,6 +151,54 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     const back = await maker.put(`/api/groups/${slug}/order`, { data: { order: 'name' } });
     expect(back.status() === 200, `name again got ${back.status()}`);
     return 'owner, a mod role, and private';
+  });
+
+  await step('the pictures are the owner\'s whatever the roles say; a role reaches only the powers its holder has', async () => {
+    // a jpeg by its first bytes: the api checks the magic and the size, nothing more
+    const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xd9]);
+    const put = (ctx, kind, data) => ctx.put(`/api/groups/${slug}/${kind}`, { data, headers: { 'content-type': 'image/jpeg' } });
+    const role = (ctx, perms, name) => ctx.post(`/api/groups/${slug}/roles`, { data: { name, color: '#3fb950', perms } });
+    // every power there is, on the member: still not the pictures
+    const everything = await body(await role(maker, { appearance: true, roles: true, channels: true, kick: true, ban: true }, 'everything'));
+    expect(everything && everything.id, `the everything role ${JSON.stringify(everything)}`);
+    const given = await maker.post(`/api/groups/${slug}/roles/${everything.id}/members`, { data: { name: MEMBER } });
+    expect(given.status() === 204, `giving everything got ${given.status()}`);
+    const theirIcon = await put(member, 'icon', JPEG);
+    const theirBanner = await put(member, 'banner', JPEG);
+    const nobody = await put(anon, 'icon', JPEG);
+    expect(theirIcon.status() === 403 && theirBanner.status() === 403 && nobody.status() === 401, `the member's pictures got ${theirIcon.status()} and ${theirBanner.status()}, nobody's ${nobody.status()}`);
+    const icon = await put(maker, 'icon', JPEG);
+    const banner = await put(maker, 'banner', JPEG);
+    expect(icon.status() === 200 && Number.isInteger((await body(icon)).icon) && banner.status() === 200 && Number.isInteger((await body(banner)).banner), `the owner's pictures got ${icon.status()} and ${banner.status()}`);
+    const notJpeg = await put(maker, 'icon', Buffer.from('not a picture'));
+    const remove = await maker.delete(`/api/groups/${slug}/icon`);
+    expect(notJpeg.status() === 400 && remove.status() === 405, `not a jpeg ${notJpeg.status()}, remove ${remove.status()} (there is no remove)`);
+    const room = await body(await anon.get(`/api/groups/${slug}`));
+    expect(Number.isInteger(room.icon) && Number.isInteger(room.banner), `the room's versions ${JSON.stringify([room.icon, room.banner])}`);
+    // the member holds the roles power and nothing else: a role that carries more is out of reach
+    const took = await maker.delete(`/api/groups/${slug}/roles/${everything.id}/members/${MEMBER}`);
+    const roler = await body(await role(maker, { roles: true }, 'roler'));
+    const held = await maker.post(`/api/groups/${slug}/roles/${roler.id}/members`, { data: { name: MEMBER } });
+    expect(took.status() === 204 && roler.id && held.status() === 204, `swapping to roler: ${took.status()} ${JSON.stringify(roler)} ${held.status()}`);
+    const over = await role(member, { roles: true, ban: true }, 'sneaky');
+    const within = await role(member, { roles: true }, 'helper');
+    const helper = await body(within);
+    expect(over.status() === 403 && within.status() === 201, `a role with ban got ${over.status()}, with roles alone ${within.status()}`);
+    const grab = await member.post(`/api/groups/${slug}/roles/${everything.id}/members`, { data: { name: MEMBER } });
+    const reshape = await member.put(`/api/groups/${slug}/roles/${everything.id}`, { data: { name: 'everything', color: '#3fb950', perms: { roles: true } } });
+    const drop = await member.delete(`/api/groups/${slug}/roles/${everything.id}`);
+    expect(grab.status() === 403 && reshape.status() === 403 && drop.status() === 403, `everything, from the member: give ${grab.status()}, change ${reshape.status()}, delete ${drop.status()}`);
+    const touch = await member.post(`/api/groups/${slug}/roles/${helper.id}/members`, { data: { name: MAKER } });
+    expect(touch.status() === 403 && /owner/.test((await body(touch)).error), `giving the owner a role got ${touch.status()} ${JSON.stringify(await body(touch))}`);
+    const ok = await member.put(`/api/groups/${slug}/roles/${helper.id}`, { data: { name: 'helper', color: '#f85149', perms: { roles: true } } });
+    const gone = await member.delete(`/api/groups/${slug}/roles/${helper.id}`);
+    expect(ok.status() === 200 && gone.status() === 204, `the member's own role: change ${ok.status()}, delete ${gone.status()}`);
+    // the member as they were, with no roles, for the steps after
+    for (const id of [everything.id, roler.id]) {
+      const cleared = await maker.delete(`/api/groups/${slug}/roles/${id}`);
+      expect(cleared.status() === 204, `clearing role ${id} got ${cleared.status()}`);
+    }
+    return `owner 200, member 403, remove ${remove.status()}; ban out of reach, the owner untouched`;
   });
 
   await step('the room is one answer: channels, live, the roster for a member, null for a guest; messages has every channel', async () => {

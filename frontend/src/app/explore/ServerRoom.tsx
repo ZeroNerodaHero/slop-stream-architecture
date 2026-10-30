@@ -1,3 +1,4 @@
+import { RiCameraLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -40,7 +41,7 @@ const ORDERS = [
 ] as const;
 
 const POWERS: { key: keyof RolePerms; label: string }[] = [
-  { key: 'appearance', label: 'picture and about' },
+  { key: 'appearance', label: 'about and public' },
   { key: 'roles', label: 'roles' },
   { key: 'channels', label: 'channels' },
   { key: 'kick', label: 'kick' },
@@ -48,6 +49,55 @@ const POWERS: { key: keyof RolePerms; label: string }[] = [
 ];
 
 const NO_PERMS: RolePerms = { appearance: false, roles: false, channels: false, kick: false, ban: false };
+
+/**
+ * Whether this login may make, change, delete, give or take a role with these powers: an owner
+ * and a site admin may any; anyone else only one whose every power they hold themselves. The
+ * api's rule, so the page offers nothing the api refuses.
+ */
+function reaches(room: GroupRoom, perms: RolePerms): boolean {
+  return room.owner || room.admin === true || POWERS.every((power) => !perms[power.key] || room.perms[power.key]);
+}
+
+/**
+ * The way to a new picture, on the picture itself, for an owner: the whole picture is the
+ * click. With the pointer over it (`reveal`: the parent's `group-hover`), or the input in
+ * keyboard focus, the picture greys and a camera sits in the middle of it. A screen with no
+ * hover gets the camera small in the corner instead, all the time, and no grey. `label` is the
+ * input's name and the tooltip. The crop dialog takes the file from here. There is no remove:
+ * a group with a picture keeps one.
+ */
+function PicturePick({ id, label, reveal, className, onPick }: { id: string; label: string; reveal: string; className?: string; onPick: (file: File) => void }) {
+  return (
+    <label className="group/pick absolute inset-0 cursor-pointer" title={label}>
+      <span
+        aria-hidden
+        className={cn(
+          'absolute flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/pick:opacity-100',
+          '[@media(hover:none)]:items-end [@media(hover:none)]:justify-end [@media(hover:none)]:bg-transparent [@media(hover:none)]:p-1 [@media(hover:none)]:opacity-100',
+          reveal,
+          className
+        )}
+      >
+        <span className="flex [@media(hover:none)]:bg-black/60 [@media(hover:none)]:p-1">
+          <RiCameraLine size={28} />
+        </span>
+      </span>
+      <input
+        id={id}
+        type="file"
+        accept="image/*"
+        aria-label={label}
+        className="sr-only"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) onPick(file);
+        }}
+      />
+    </label>
+  );
+}
 
 /** One member's camera, muted. Click opens their stream. */
 function LiveFace({ name, big }: { name: string; big: boolean }) {
@@ -219,6 +269,13 @@ export function ServerPage() {
     }
   }
 
+  /** A new picture or banner: cropped to its size here, then put. The new version comes back on the socket. */
+  async function pick(file: File, kind: 'icon' | 'banner') {
+    const jpeg = await cropPicture(file, kind === 'icon' ? GROUP_ICON : GROUP_BANNER);
+    if (!jpeg) return;
+    await act(() => (kind === 'icon' ? api.saveGroupIcon(server, jpeg) : api.saveGroupBanner(server, jpeg)));
+  }
+
   const words = groupWords(room);
   const color = room.color || '#5865f2';
   const bannerSrc = groupImage(server, 'banner', room.banner);
@@ -227,6 +284,8 @@ export function ServerPage() {
   const power = room.owner || POWERS.some((item) => room.perms[item.key]);
   const roster = mine || power || !!room.roster;
   const lastMember = mine && room.members <= 1;
+  // the pictures are the owner's: no role carries them. a site admin may, as with every power but naming an owner
+  const canPicture = room.owner || room.admin === true;
 
   return (
     <PageFrame
@@ -260,11 +319,31 @@ export function ServerPage() {
       ) : (
         <>
           <div className="relative mb-16">
-            <div id="group-banner" className="h-36 overflow-hidden border border-primaryStroke" style={{ backgroundColor: color }}>
+            <div id="group-banner" className="group/banner relative h-36 overflow-hidden border border-primaryStroke" style={{ backgroundColor: color }}>
               {bannerSrc && <img src={bannerSrc} alt="" className="h-full w-full object-cover" />}
+              {canPicture && (
+                <PicturePick
+                  id="group-banner-pick"
+                  label={room.banner === null ? 'add a banner' : 'change banner'}
+                  reveal="group-hover/banner:opacity-100"
+                  className="inset-0"
+                  onPick={(file) => void pick(file, 'banner')}
+                />
+              )}
             </div>
             <div className="absolute -bottom-12 left-4 flex items-end gap-4">
-              <GroupMark id="group-icon" name={words.title} color={color} icon={room.icon} className="h-24 w-24 border-4 border-background text-3xl" />
+              <div className="group/icon relative flex">
+                <GroupMark id="group-icon" name={server} color={color} icon={room.icon} className="h-24 w-24 border-4 border-background text-3xl" />
+                {canPicture && (
+                  <PicturePick
+                    id="group-icon-pick"
+                    label={room.icon === null ? 'add a picture' : 'change picture'}
+                    reveal="group-hover/icon:opacity-100"
+                    className="inset-1"
+                    onPick={(file) => void pick(file, 'icon')}
+                  />
+                )}
+              </div>
             </div>
           </div>
           <div className="mb-6 flex flex-wrap items-start justify-between gap-3 pl-4">
@@ -497,8 +576,9 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
 
 /**
  * The right of the room, for a member: the roster (every member, their roles, who owns the
- * group), and, by power, the look, the roles, the bans, the owners. Every call here lands
- * through the socket, for this page and every other one with the room open.
+ * group), and, by power, the about line, the roles, the bans, the owners. The pictures are not
+ * here: an owner changes them on the pictures themselves, at the top of the page. Every call
+ * here lands through the socket, for this page and every other one with the room open.
  */
 function Moderation({ server, room, me, onError }: { server: string; room: GroupRoom; me: string | null; onError: (error: string) => void }) {
   const navigate = useNavigate();
@@ -528,12 +608,10 @@ function Moderation({ server, room, me, onError }: { server: string; room: Group
     }
   }
 
-  async function pick(file: File | undefined, kind: 'icon' | 'banner') {
-    if (!file) return;
-    const jpeg = await cropPicture(file, kind === 'icon' ? GROUP_ICON : GROUP_BANNER);
-    if (!jpeg) return;
-    await run(() => (kind === 'icon' ? api.saveGroupIcon(server, jpeg) : api.saveGroupBanner(server, jpeg)));
-  }
+  /** The powers a role carries, by id: what the roster's held roles do not say. */
+  const permsOf = (id: number) => room.roles.find((role) => role.id === id)?.perms ?? NO_PERMS;
+  // a power this login lacks is one it cannot put on a role; an owner and a site admin lack none
+  const short = POWERS.filter((power) => !room.perms[power.key]);
 
   function editRole(id: number) {
     const role = room.roles.find((item) => item.id === id);
@@ -560,47 +638,9 @@ function Moderation({ server, room, me, onError }: { server: string; room: Group
     <aside id="group-mod" className="flex max-h-[70vh] flex-col gap-6 overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-4 text-sm">
       {room.perms.appearance && (
         <section>
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">look</h3>
-          <div className="flex flex-wrap gap-2">
-            <label className="cursor-pointer text-sm font-semibold text-primaryBlue">
-              picture
-              <input
-                type="file"
-                accept="image/*"
-                className="sr-only"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = '';
-                  void pick(file, 'icon');
-                }}
-              />
-            </label>
-            <label className="cursor-pointer text-sm font-semibold text-primaryBlue">
-              banner
-              <input
-                type="file"
-                accept="image/*"
-                className="sr-only"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = '';
-                  void pick(file, 'banner');
-                }}
-              />
-            </label>
-            {room.icon !== null && (
-              <button type="button" className="text-textTertiary" onClick={() => void run(() => api.deleteGroupIcon(server))}>
-                remove picture
-              </button>
-            )}
-            {room.banner !== null && (
-              <button type="button" className="text-textTertiary" onClick={() => void run(() => api.deleteGroupBanner(server))}>
-                remove banner
-              </button>
-            )}
-          </div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">about</h3>
           <form
-            className="mt-3 flex gap-2"
+            className="flex gap-2"
             onSubmit={(e) => {
               e.preventDefault();
               void run(() => api.saveGroupAbout(server, about.trim()));
@@ -639,75 +679,78 @@ function Moderation({ server, room, me, onError }: { server: string; room: Group
         </div>
         {room.roster === null && <p className="text-textTertiary">the roster is for members.</p>}
         <ul id="group-members" className="flex flex-col gap-2">
-          {members.map((member) => (
-            <li
-              key={member.name}
-              data-member={member.name}
-              data-owner={member.owner || undefined}
-              className="flex items-start gap-2 border border-primaryStroke px-2 py-1.5"
-            >
-              <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8" />
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-semibold">{member.name}</span>
-                  {member.owner && <span className="text-xs uppercase text-primaryBlue">owner</span>}
-                  {member.roles.map((role) => (
-                    <span key={role.id} className="text-xs" style={{ color: role.color }}>
-                      {role.name}
-                      {room.perms.roles && (
-                        <button
-                          type="button"
-                          className="ml-1 text-textTertiary"
-                          aria-label={`take ${role.name} from ${member.name}`}
-                          onClick={() => void run(() => api.takeRole(server, role.id, member.name))}
-                        >
-                          ×
-                        </button>
-                      )}
-                    </span>
-                  ))}
-                </div>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  {room.perms.roles && room.roles.some((role) => !member.roles.some((held) => held.id === role.id)) && (
-                    <select
-                      aria-label={`role for ${member.name}`}
-                      defaultValue=""
-                      className="border border-primaryStroke bg-background px-1 py-0.5"
-                      onChange={(e) => {
-                        const id = Number(e.target.value);
-                        e.target.value = '';
-                        if (id) void run(() => api.giveRole(server, id, member.name));
-                      }}
-                    >
-                      <option value="">give a role</option>
-                      {room.roles
-                        .filter((role) => !member.roles.some((held) => held.id === role.id))
-                        .map((role) => (
+          {members.map((member) => {
+            // a role cannot touch an owner, unless an owner is the one giving or taking
+            const touch = room.perms.roles && (!member.owner || room.owner);
+            const offer = touch ? room.roles.filter((role) => !member.roles.some((held) => held.id === role.id) && reaches(room, role.perms)) : [];
+            return (
+              <li
+                key={member.name}
+                data-member={member.name}
+                data-owner={member.owner || undefined}
+                className="flex items-start gap-2 border border-primaryStroke px-2 py-1.5"
+              >
+                <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold">{member.name}</span>
+                    {member.owner && <span className="text-xs uppercase text-primaryBlue">owner</span>}
+                    {member.roles.map((role) => (
+                      <span key={role.id} className="text-xs" style={{ color: role.color }}>
+                        {role.name}
+                        {touch && reaches(room, permsOf(role.id)) && (
+                          <button
+                            type="button"
+                            className="ml-1 text-textTertiary"
+                            aria-label={`take ${role.name} from ${member.name}`}
+                            onClick={() => void run(() => api.takeRole(server, role.id, member.name))}
+                          >
+                            ×
+                          </button>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    {offer.length > 0 && (
+                      <select
+                        aria-label={`role for ${member.name}`}
+                        defaultValue=""
+                        className="border border-primaryStroke bg-background px-1 py-0.5"
+                        onChange={(e) => {
+                          const id = Number(e.target.value);
+                          e.target.value = '';
+                          if (id) void run(() => api.giveRole(server, id, member.name));
+                        }}
+                      >
+                        <option value="">give a role</option>
+                        {offer.map((role) => (
                           <option key={role.id} value={role.id}>
                             {role.name}
                           </option>
                         ))}
-                    </select>
-                  )}
-                  {room.perms.kick && member.name !== me && (!member.owner || (room.owner && owners > 1)) && (
-                    <button type="button" className="text-textTertiary" onClick={() => void run(() => api.kickMember(server, member.name))}>
-                      kick
-                    </button>
-                  )}
-                  {room.perms.ban && member.name !== me && (!member.owner || (room.owner && owners > 1)) && (
-                    <button type="button" className="text-decrease" onClick={() => void run(() => api.banMember(server, member.name, ''))}>
-                      ban
-                    </button>
-                  )}
-                  {room.owner && member.owner && member.name !== me && owners > 1 && (
-                    <button type="button" className="text-textTertiary" onClick={() => void run(() => api.revokeOwner(server, member.name))}>
-                      remove owner
-                    </button>
-                  )}
+                      </select>
+                    )}
+                    {room.perms.kick && member.name !== me && (!member.owner || (room.owner && owners > 1)) && (
+                      <button type="button" className="text-textTertiary" onClick={() => void run(() => api.kickMember(server, member.name))}>
+                        kick
+                      </button>
+                    )}
+                    {room.perms.ban && member.name !== me && (!member.owner || (room.owner && owners > 1)) && (
+                      <button type="button" className="text-decrease" onClick={() => void run(() => api.banMember(server, member.name, ''))}>
+                        ban
+                      </button>
+                    )}
+                    {room.owner && member.owner && member.name !== me && owners > 1 && (
+                      <button type="button" className="text-textTertiary" onClick={() => void run(() => api.revokeOwner(server, member.name))}>
+                        remove owner
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
         {room.owner && (
           <form
@@ -787,21 +830,33 @@ function Moderation({ server, room, me, onError }: { server: string; room: Group
             </span>
           </h3>
           <ul id="group-roles" className="mb-3 flex flex-col gap-1">
-            {room.roles.map((role) => (
-              <li key={role.id} className="flex items-center gap-2">
-                <button type="button" className="font-semibold" style={{ color: role.color }} onClick={() => editRole(role.id)}>
-                  {role.name}
-                </button>
-                <span className="truncate text-xs text-textTertiary">
-                  {POWERS.filter((power) => role.perms[power.key])
-                    .map((power) => power.label)
-                    .join(', ') || 'no powers'}
-                </span>
-                <button type="button" className="ml-auto text-textTertiary" onClick={() => void run(() => api.deleteRole(server, role.id))}>
-                  delete
-                </button>
-              </li>
-            ))}
+            {room.roles.map((role) => {
+              // a role past this login's reach is read, not changed
+              const within = reaches(room, role.perms);
+              return (
+                <li key={role.id} data-role={role.name} data-reach={within || undefined} className="flex items-center gap-2">
+                  {within ? (
+                    <button type="button" className="font-semibold" style={{ color: role.color }} onClick={() => editRole(role.id)}>
+                      {role.name}
+                    </button>
+                  ) : (
+                    <span className="font-semibold" style={{ color: role.color }}>
+                      {role.name}
+                    </span>
+                  )}
+                  <span className="truncate text-xs text-textTertiary">
+                    {POWERS.filter((power) => role.perms[power.key])
+                      .map((power) => power.label)
+                      .join(', ') || 'no powers'}
+                  </span>
+                  {within && (
+                    <button type="button" className="ml-auto text-textTertiary" onClick={() => void run(() => api.deleteRole(server, role.id))}>
+                      delete
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
           {editing === null && room.roles.length >= ROLE_CAP ? (
             <p className="text-textTertiary">{ROLE_CAP} roles is the cap.</p>
@@ -830,11 +885,12 @@ function Moderation({ server, room, me, onError }: { server: string; room: Group
                 ))}
               </div>
               {POWERS.map((power) => (
-                <label key={power.key} className="flex items-center gap-2">
+                <label key={power.key} className={cn('flex items-center gap-2', !room.perms[power.key] && 'text-textTertiary')}>
                   <input
                     id={`role-perm-${power.key}`}
                     type="checkbox"
                     checked={rolePerms[power.key]}
+                    disabled={!room.perms[power.key]}
                     onChange={(e) => setRolePerms({ ...rolePerms, [power.key]: e.target.checked })}
                   />
                   {power.label}
@@ -865,7 +921,9 @@ function Moderation({ server, room, me, onError }: { server: string; room: Group
               </div>
             </form>
           )}
-          <p className="mt-2 text-xs text-textTertiary">only an owner can name another owner.</p>
+          <p className="mt-2 text-xs text-textTertiary">
+            {short.length > 0 && 'a role carries only the powers you hold. '}only an owner can name another owner, or change the pictures.
+          </p>
         </section>
       )}
 

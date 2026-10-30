@@ -298,10 +298,9 @@ export function LivePage() {
                 {bioStatus}
               </span>
             </div>
-            {/* the longer piece and the links are written on the page itself, where they show (AboutMe.tsx, SocialsEditor.tsx) */}
             {isValidName(name) && (
               <p className="mt-3 text-sm text-textTertiary">
-                the longer piece about you and your links are written on your page, under the player:{' '}
+                your links are written on your page, under the player:{' '}
                 <Link id="your-page" to={`/watch/${name}`} className="text-primaryBlue underline-offset-2 hover:underline">
                   /watch/{name}
                 </Link>

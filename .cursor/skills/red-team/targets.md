@@ -59,7 +59,7 @@ guessable. The token is not.").
 ## 3. Injection — SQL, redis, shell
 
 - **SQL**: `grep "format!(" api/src -A1 | grep -i select/insert/update/delete`. Current hits —
-  `group_mod.rs` (`read/write/clear_picture`, `{column}`), `notify.rs` (`ACTOR_COLUMNS`),
+  `group_mod.rs` (`read/write_picture`, `{column}`), `notify.rs` (`ACTOR_COLUMNS`),
   `history.rs` (`LINE_COLUMNS`/`LINE_TABLES`) — all interpolate **constants**; the request-derived
   values (`group`, `name`, `room`, `id`, `user_id`) are `.bind()` params. These are **safe today**
   (Info-level watch-points). A finding requires an interpolated identifier whose value reaches the

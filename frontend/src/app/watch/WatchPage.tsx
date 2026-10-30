@@ -3,7 +3,6 @@ import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom';
 
 import {
-  aboutAtom,
   avatarAtom,
   bioAtom,
   canHearAtom,
@@ -50,7 +49,6 @@ import { api } from '@/infra/api';
 import { cleanName, isDummyName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { About } from '@/shared-components/About';
-import { AboutMe } from '@/shared-components/AboutMe';
 import { Calendar } from '@/shared-components/Calendar';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { Button } from '@/shared-components/Button';
@@ -104,7 +102,6 @@ export function WatchPage() {
   const message = useAtomValue(watchMessageAtom);
   const tone = useAtomValue(watchToneAtom);
   const bio = useAtomValue(bioAtom);
-  const aboutMe = useAtomValue(aboutAtom);
   const canRetry = useAtomValue(canRetryAtom);
   const canHear = useAtomValue(canHearAtom);
   const needsTap = useAtomValue(needsTapAtom);
@@ -117,7 +114,7 @@ export function WatchPage() {
   const offlineNote = useAtomValue(offlineNoteAtom);
   const followers = useAtomValue(followersAtom);
   const socials = useAtomValue(socialsAtom);
-  // my own page: the about tab and the socials tab edit their words and links in place (AboutMe.tsx, SocialsEditor.tsx)
+  // my own page: the socials tab edits the links in place (SocialsEditor.tsx)
   const mine = useAtomValue(myNameAtom) === name;
   const phase = useAtomValue(watchPhaseAtom);
   const presence = useAtomValue(presenceOfAtom(name));
@@ -352,10 +349,10 @@ export function WatchPage() {
           </ChatSlot>
         )}
 
-        {/* under the player: the about tab (the about me first, then the page of their own, docs/about.md),
-            the calendar (when they stream, docs/calendar.md) and the socials (where else to find them,
-            docs/socials.md). the grant brought the about me and the links, no request; on my own page
-            both tabs edit theirs in place. a tab's content is only in the page while it is open */}
+        {/* under the player: the about tab (the page of their own, docs/about.md), the calendar
+            (when they stream, docs/calendar.md) and the socials (where else to find them,
+            docs/socials.md). the grant brought the links, no request; on my own page the socials
+            tab edits them in place. a tab's content is only in the page while it is open */}
         {name && phase !== 'bad-name' && (
           <div
             id="watch-tabs"
@@ -388,10 +385,7 @@ export function WatchPage() {
             </div>
             <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} className="pt-4">
               {tab === 'about' ? (
-                <>
-                  <AboutMe text={aboutMe} mine={mine} />
-                  <About name={name} doc={about} edit={mine} sample={!isDummyName(name)} />
-                </>
+                <About name={name} doc={about} edit={mine} sample={!isDummyName(name)} />
               ) : tab === 'calendar' ? (
                 <Calendar name={name} />
               ) : (

@@ -159,8 +159,8 @@ const PRESENCE_OPTIONS: readonly { choice: PresenceChoice; label: string; detail
  * account's and fixed; for a guest it is the nick, kept in this browser, and changing it is
  * becoming somebody else (the old name keeps its status and picture). Everything saves under the
  * name I am now, through the api's one rule: a free name is anyone's, a claimed one its login's.
- * The about me and the links are not here: they are edited on my own page, where they show
- * (AboutMe.tsx, SocialsEditor.tsx); this tab points there.
+ * The links are not here: they are edited on my own page, where they show
+ * (SocialsEditor.tsx); this tab points there.
  */
 export function ProfileTab() {
   const me = useAtomValue(meAtom);

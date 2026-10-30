@@ -58,8 +58,6 @@ export const watchPhaseAtom = atom<WatchPhase>('loading');
 export const watchMessageAtom = atom('loading');
 /** Their status: the one line under the name. `bio` on the wire. */
 export const bioAtom = atom('');
-/** About me (docs/about.md): the words first on the about tab, as the grant said. '' for none, and on an older api. */
-export const aboutAtom = atom('');
 /** The name has an account, so this really is them. */
 export const verifiedAtom = atom(false);
 /** Their picture's upload time (the `?v=` of its url). `null`: none. */
@@ -366,7 +364,6 @@ async function start(name: string): Promise<void> {
   store.set(offlineNoteAtom, grant.offline_note ?? '');
   store.set(followersAtom, typeof grant.followers === 'number' ? grant.followers : null);
   store.set(socialsAtom, cleanSocials(grant.socials));
-  store.set(aboutAtom, typeof grant.about === 'string' ? grant.about : '');
   // the word beside the name: the socket's while it is open (it is told on `watch` and on every
   // change, and a grant answered a beat behind a push must not undo the push); the grant's otherwise
   if (grant.presence && store.get(eventsPhaseAtom) !== 'open') presenceChanged(name, grant.presence);
@@ -611,6 +608,5 @@ export function endWatch() {
   store.set(offlineNoteAtom, '');
   store.set(followersAtom, null);
   store.set(socialsAtom, EMPTY_SOCIALS);
-  store.set(aboutAtom, '');
   setPhase('loading', 'loading');
 }

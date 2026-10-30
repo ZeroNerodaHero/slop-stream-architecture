@@ -1,7 +1,7 @@
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { type AboutBlock, type AboutDoc, CSS_MAX, type PageBlock, isSameOrigin, linkHref, mediaPath, safeCss } from '@/infra/about';
+import { type AboutBlock, type AboutDoc, type PageBlock, isSameOrigin, linkHref, mediaPath, safeCss } from '@/infra/about';
 import { api } from '@/infra/api';
 import { buttonClassName } from '@/shared-components/Button';
 import { AboutCanvas } from '@/shared-components/AboutCanvas';
@@ -275,13 +275,7 @@ interface AboutProps {
  */
 export function About({ name, doc, edit = false, sample = true }: AboutProps) {
   const scope = `about-${name}`;
-  const [css, setCss] = useState(doc.css);
-  const [typed, setTyped] = useState(doc.css);
   const [remote, setRemote] = useState<PageBlock[] | null>(null);
-  useEffect(() => {
-    const t = setTimeout(() => setCss(typed), 150);
-    return () => clearTimeout(t);
-  }, [typed]);
   useEffect(() => {
     if (edit || !sample) return;
     let dead = false;
@@ -297,19 +291,18 @@ export function About({ name, doc, edit = false, sample = true }: AboutProps) {
       dead = true;
     };
   }, [edit, name, sample]);
-  const safe = useMemo(() => safeCss(css, scope), [css, scope]);
-  const editorId = `${scope}-css`;
+  const safe = useMemo(() => safeCss(doc.css, scope), [doc.css, scope]);
   const saved = remote !== null && remote.length > 0;
 
   return (
     <div>
       {edit || saved ? (
-        <AboutCanvas name={name} edit={edit} scope={scope} css={safe.css} boxClass={BOX} initial={edit ? null : remote} />
+        <AboutCanvas name={name} edit={edit} scope={scope} css="" boxClass={BOX} initial={edit ? null : remote} />
       ) : (
         <>
           {sample && (
             <p className="text-sm text-textTertiary">
-              a sample of what this tab can hold: pictures, a clip, a few tracks, links, and your own css over them. nothing here is saved.
+              a sample of what this tab can hold: pictures, a clip, a few tracks, and links. nothing here is saved.
             </p>
           )}
           <section id={scope} className={BOX} aria-label={`about ${name}`}>
@@ -320,27 +313,6 @@ export function About({ name, doc, edit = false, sample = true }: AboutProps) {
           </section>
         </>
       )}
-
-      <label htmlFor={editorId} className="mt-4 block text-sm font-semibold text-textSecondary">
-        the css over the box
-      </label>
-      <textarea
-        id={editorId}
-        value={typed}
-        maxLength={CSS_MAX}
-        spellCheck={false}
-        rows={8}
-        onChange={(e) => setTyped(e.target.value)}
-        className="mt-1 w-full resize-y border border-primaryStroke bg-background p-2 font-mono text-sm text-textPrimary"
-      />
-      <p id={`${editorId}-note`} className="mt-1 text-xs text-textTertiary">
-        {safe.kept} {safe.kept === 1 ? 'declaration' : 'declarations'} on · {safe.dropped} dropped. selectors stay inside the box; anything that loads, runs or leaves it
-        is taken out. try{' '}
-        <code>
-          body {'{'} display: none {'}'}
-        </code>{' '}
-        or <code>background: url(x)</code>.
-      </p>
     </div>
   );
 }

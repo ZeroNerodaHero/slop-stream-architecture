@@ -1,3 +1,4 @@
+import { RiPencilLine } from '@remixicon/react';
 import { type CSSProperties, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 
 import { BLOCKS_MAX, FONT_STACK, PAGE_FONTS, POS_MAX, type PageBlock, type PageType, TEXT_MAX, Z_MAX, sanitizeHtml } from '@/infra/about';
@@ -187,6 +188,32 @@ function snapEdge(edge: number, lines: number[], min: number, max: number): { at
     }
   }
   return { at: Math.round(best), guide };
+}
+
+function overlaps(block: { x: number; y: number; w: number; h: number }, box: { x: number; y: number; w: number; h: number }): boolean {
+  return block.x < box.x + box.w && block.x + block.w > box.x && block.y < box.y + box.h && block.y + block.h > box.y;
+}
+
+/** The leader's snapped delta, held back so the whole group stays on the page. */
+function groupShift(starts: { x: number; y: number; w: number; h: number }[], dx: number, dy: number, width: number): { dx: number; dy: number } {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxR = -Infinity;
+  let maxB = -Infinity;
+  for (const block of starts) {
+    minX = Math.min(minX, block.x);
+    minY = Math.min(minY, block.y);
+    maxR = Math.max(maxR, block.x + block.w);
+    maxB = Math.max(maxB, block.y + block.h);
+  }
+  return {
+    dx: Math.max(-minX, Math.min(width - maxR, dx)),
+    dy: Math.max(-minY, Math.min(POS_MAX - maxB, dy))
+  };
+}
+
+function sameKeys(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((key, i) => key === b[i]);
 }
 
 function Rich({ html, style }: { html: string; style?: CSSProperties }) {
@@ -437,10 +464,13 @@ function ColumnSketch({ n }: { n: 1 | 2 | 3 }) {
 
 export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }: AboutCanvasProps) {
   const [items, setItems] = useState<Item[]>([]);
+  const [loaded, setLoaded] = useState(initial !== null);
   const [status, setStatus] = useState('');
   const [editing, setEditing] = useState(false);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const ready = useRef(false);
   const dirty = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -511,17 +541,28 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
     };
     if (initial) {
       apply(initial);
+      setLoaded(true);
       return () => {
         dead = true;
       };
     }
-    if (!edit) return;
+    if (!edit) {
+      setLoaded(true);
+      return;
+    }
+    setLoaded(false);
     setItems([]);
     api
       .aboutPage(name)
-      .then((page) => apply(page.blocks))
+      .then((page) => {
+        apply(page.blocks);
+        if (!dead) setLoaded(true);
+      })
       .catch(() => {
-        if (!dead) ready.current = true;
+        if (!dead) {
+          ready.current = true;
+          setLoaded(true);
+        }
       });
     return () => {
       dead = true;
@@ -618,6 +659,7 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
     if (!first) return;
     setFocusKey(first.key);
     setPicked(first.key);
+    setSelected(made.map((block) => block.key));
     touch((list) => {
       let z = list.reduce((max, block) => Math.max(max, block.z), 0);
       return [
@@ -639,6 +681,7 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
     const key = `text-new-${Math.random().toString(36).slice(2, 8)}`;
     const size = usualSize('text');
     setFocusKey(key);
+    setSelected([key]);
     const y = nextY(items);
     const width = Math.min(size.w, Math.max(minBox('text').w, pageWidth() - GRID));
     touch((list) => [...list, { key, type: 'text', id: 0, x: GRID, y, z: nextZ(list), w: width, h: size.h, ...blankLook(), html: '', src: '' }]);
@@ -667,6 +710,7 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
       look.strokeColor = '#d4d7de';
     }
     setPicked(key);
+    setSelected([key]);
     touch((list) => [...list, { key, type, id: 0, x: GRID, y, z: nextZ(list), w: width, h: size.h, ...look, html: '', src: '' }]);
     reveal(y);
   };
@@ -750,6 +794,26 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
     });
   };
 
+  /** Move a group from the positions it had when the drag started, so the pieces stay put relative to each other. */
+  const placeGroup = (starts: { key: string; x: number; y: number }[], dx: number, dy: number) => {
+    setItems((list) => {
+      const by = new Map(starts.map((start) => [start.key, start]));
+      let changed = false;
+      const next = list.map((block) => {
+        const start = by.get(block.key);
+        if (!start) return block;
+        const x = start.x + dx;
+        const y = start.y + dy;
+        if (block.x === x && block.y === y) return block;
+        changed = true;
+        return { ...block, x, y };
+      });
+      if (!changed) return list;
+      dirty.current = true;
+      return next;
+    });
+  };
+
   const sizeBlock = (key: string, w: number, h: number) => {
     setItems((list) => {
       const item = list.find((block) => block.key === key);
@@ -815,6 +879,7 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
 
   const remove = (key: string) => {
     if (picked === key) setPicked(null);
+    setSelected((keys) => keys.filter((item) => item !== key));
     touch((list) => {
       const gone = list.find((item) => item.key === key);
       if (gone?.src.startsWith('blob:')) URL.revokeObjectURL(gone.src);
@@ -828,11 +893,9 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
   };
 
   const saveNow = () => {
-    if (!dirty.current) {
-      setStatus(itemsRef.current.length === 0 ? '' : 'saved');
-      return;
-    }
-    persistRef.current(itemsRef.current);
+    if (dirty.current) persistRef.current(itemsRef.current);
+    else if (itemsRef.current.length > 0) setStatus('saved');
+    setEditing(false);
   };
 
   const chosen = items.find((block) => block.key === picked) ?? null;
@@ -841,7 +904,7 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
     <>
       {editing && (
         <>
-          <p className="text-sm text-textTertiary">drag the tab to move a block. it snaps to the grid and to the others. rotate turns text, a picture, or a shape. a preset lays columns, text over a picture in each. the page is as wide as this column, up to the chat.</p>
+          <p className="text-sm text-textTertiary">drag the tab to move a block. it snaps to the grid and to the others. drag across the page to select a group, then move that group from any of its tabs. rotate turns text, a picture, or a shape. a preset lays columns, text over a picture in each. the page is as wide as this column, up to the chat.</p>
           <div className="mt-2 flex flex-wrap items-end gap-2">
             <span className="pb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">preset</span>
             {([1, 2, 3] as const).map((n) => (
@@ -899,30 +962,82 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
                 e.preventDefault();
               }}
               onDrop={onDrop}
+              onPointerDown={(e) => {
+                if (e.target !== e.currentTarget || e.button !== 0) return;
+                const page = pageRef.current;
+                if (!page) return;
+                const rect = page.getBoundingClientRect();
+                const x0 = e.clientX - rect.left;
+                const y0 = e.clientY - rect.top;
+                let drew = false;
+                dragOnPage(
+                  e,
+                  (x, y) => {
+                    const box = { x: Math.min(x0, x), y: Math.min(y0, y), w: Math.abs(x - x0), h: Math.abs(y - y0) };
+                    setMarquee(box);
+                    if (box.w < 4 && box.h < 4) return;
+                    drew = true;
+                    const keys = itemsRef.current.filter((block) => overlaps(block, box)).map((block) => block.key);
+                    setSelected((cur) => (sameKeys(cur, keys) ? cur : keys));
+                    setPicked(keys.length === 1 ? (keys[0] ?? null) : null);
+                  },
+                  () => {
+                    setMarquee(null);
+                    if (!drew) {
+                      setSelected([]);
+                      setPicked(null);
+                    }
+                  }
+                );
+              }}
             >
               {lines.x !== null && <div className="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-primaryBlue" style={{ left: lines.x }} />}
               {lines.y !== null && <div className="pointer-events-none absolute left-0 right-0 z-30 h-px bg-primaryBlue" style={{ top: lines.y }} />}
+              {marquee && marquee.w + marquee.h > 0 && (
+                <div className="pointer-events-none absolute z-30 border border-primaryBlue bg-primaryBlue/10" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />
+              )}
               {items.map((block) => (
-                <div key={block.key} className="absolute" style={{ left: block.x, top: block.y, width: block.w, height: block.h, zIndex: block.z + 1 }}>
+                <div
+                  key={block.key}
+                  data-selected={selected.includes(block.key) ? 'true' : undefined}
+                  className={cn('absolute', selected.includes(block.key) && 'outline outline-1 outline-primaryBlue')}
+                  style={{ left: block.x, top: block.y, width: block.w, height: block.h, zIndex: block.z + 1 }}
+                >
                   <div
-                    className="absolute bottom-full left-0 z-10 flex h-6 cursor-grab touch-none select-none items-center gap-2 whitespace-nowrap border border-b-0 border-primaryStroke bg-background px-2"
+                    className={cn(
+                      'absolute bottom-full left-0 z-10 flex h-6 cursor-grab touch-none select-none items-center gap-2 whitespace-nowrap border border-b-0 bg-background px-2',
+                      selected.includes(block.key) ? 'border-primaryBlue' : 'border-primaryStroke'
+                    )}
                     aria-label="drag to move"
                     onPointerDown={(e) => {
                       setPicked(block.key);
+                      const inGroup = selected.includes(block.key) && selected.length > 1;
+                      const keys = inGroup ? selected : [block.key];
+                      if (!inGroup) setSelected([block.key]);
+                      const starts = itemsRef.current
+                        .filter((item) => keys.includes(item.key))
+                        .map((item) => ({ key: item.key, x: item.x, y: item.y, w: item.w, h: item.h }));
                       const page = pageRef.current;
                       if (!page) return;
                       const rect = page.getBoundingClientRect();
                       const grabX = e.clientX - rect.left - block.x;
                       const grabY = e.clientY - rect.top - block.y;
+                      const leader = { x: block.x, y: block.y, w: block.w, h: block.h };
                       dragOnPage(
                         e,
                         (x, y) => {
-                          const others = itemsRef.current.filter((item) => item.key !== block.key);
+                          const rest = itemsRef.current.filter((item) => !keys.includes(item.key));
                           const width = pageWidth();
-                          const sx = snapSpan(x - grabX, block.w, edgeLines(others, 'x', width), width);
-                          const sy = snapSpan(y - grabY, block.h, edgeLines(others, 'y', POS_MAX), POS_MAX);
-                          setLines((cur) => (cur.x === sx.guide && cur.y === sy.guide ? cur : { x: sx.guide, y: sy.guide }));
-                          placeBlock(block.key, sx.at, sy.at);
+                          const sx = snapSpan(x - grabX, leader.w, edgeLines(rest, 'x', width), width);
+                          const sy = snapSpan(y - grabY, leader.h, edgeLines(rest, 'y', POS_MAX), POS_MAX);
+                          const shift = groupShift(starts, sx.at - leader.x, sy.at - leader.y, width);
+                          const landed = shift.dx === sx.at - leader.x && shift.dy === sy.at - leader.y;
+                          setLines((cur) => {
+                            const next = landed ? { x: sx.guide, y: sy.guide } : { x: null, y: null };
+                            return cur.x === next.x && cur.y === next.y ? cur : next;
+                          });
+                          if (keys.length > 1) placeGroup(starts, shift.dx, shift.dy);
+                          else placeBlock(block.key, leader.x + shift.dx, leader.y + shift.dy);
                         },
                         () => setLines({ x: null, y: null })
                       );
@@ -1112,8 +1227,13 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
       )}
       <section id={scope} className={cn(boxClass, 'h-[32rem] min-w-0 p-0')} aria-label={`about ${name}`}>
         {css && <style>{css}</style>}
+        {edit && loaded && !editing && items.length === 0 ? (
+          <button type="button" className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-3 text-textTertiary hover:text-primaryBlue" onClick={() => setEditing(true)}>
+            <RiPencilLine size={36} aria-hidden />
+            <span className="text-sm">edit this. make it yours</span>
+          </button>
+        ) : (
         <div ref={previewPageRef} className="relative w-full shrink-0" style={{ height: POS_MAX }}>
-          {items.length === 0 && <p className="p-4 text-sm text-textTertiary">nothing on the page yet.</p>}
           {items.map((block) => (
             <div
               key={block.key}
@@ -1130,6 +1250,7 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
             </div>
           ))}
         </div>
+        )}
       </section>
     </>
   );

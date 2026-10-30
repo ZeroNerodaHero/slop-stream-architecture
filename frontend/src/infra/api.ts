@@ -505,10 +505,9 @@ export const api = {
   /** Appearance. Owners stay first; this is the order after them. */
   setMemberOrder: (name: string, order: 'name' | 'newest' | 'oldest') =>
     request<{ order: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/order`, { order }),
+  /** An owner (or a site admin), 403 for anyone else. The crop dialog made the jpeg. There is no remove: a group with a picture keeps one. */
   saveGroupIcon: (name: string, jpeg: Blob) => request<{ icon: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/icon`, jpeg),
-  deleteGroupIcon: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}/icon`),
   saveGroupBanner: (name: string, jpeg: Blob) => request<{ banner: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/banner`, jpeg),
-  deleteGroupBanner: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}/banner`),
   groupMembers: (name: string) => request<GroupMember[]>('GET', `/api/groups/${encodeURIComponent(name)}/members`),
   groupBans: (name: string) => request<GroupBan[]>('GET', `/api/groups/${encodeURIComponent(name)}/bans`),
   createRole: (group: string, role: { name: string; color: string; perms: RolePerms }) =>
@@ -562,8 +561,6 @@ export const api = {
   saveNotifySettings: (settings: NotifySettings) => request<NotifySettings>('PUT', '/api/notifications/settings', settings),
   /** The status, one line beside the name: runs of whitespace become one space, 500 characters at most. `bio` on the wire. */
   saveBio: (name: string, bio: string) => request<{ name: string; bio: string }>('PUT', `/api/streamers/${name}`, { bio }),
-  /** About me, the words first on the about tab (docs/about.md): paragraphs kept, 2000 characters at most, empty clears it. */
-  saveAbout: (name: string, about: string) => request<{ name: string; about: string }>('PUT', `/api/streamers/${name}/about`, { about }),
   /** The page under that: `{ blocks: [{ type, id, x, y, z, w, h, r?, font?, size?, color?, bg?, stroke?, strokeColor?, align?, html? }] }`. Text html is written to the bucket. A line, a box, and a border have no file. */
   aboutPage: (name: string) =>
     request<{ blocks: PageWire[] }>('GET', `/api/streamers/${encodeURIComponent(name)}/about-page`),

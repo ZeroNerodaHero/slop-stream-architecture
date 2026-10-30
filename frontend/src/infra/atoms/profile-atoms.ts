@@ -1,15 +1,14 @@
 /**
  * My profile, from anywhere: the status (one line beside the name; `bio` on the wire, since
  * `status` is the presence choice's word, docs/status.md), the picture, what my stream's page
- * shows while I am not live (the offline picture and the line under the word), and the two
- * things my own page edits in place, under the player: the about me (docs/about.md) and where
- * else to find me (the links, docs/socials.md). All saved under the name I am, which is the
- * login, else the nick lowercased (every valid nick is a valid name). The user modal's profile
- * tab edits the first three and the corner panel shows the picture. Its own atoms, not the go
- * live page's: those follow the name box there and are reset when that page is left, which
- * would blank a status being typed in the modal. The one thing the two share is the picture's
- * version, bridged below; the about me and the links are bridged to the watch page the same
- * way, so my own page follows a save.
+ * shows while I am not live (the offline picture and the line under the word), and where
+ * else to find me (the links, docs/socials.md), edited on my own page under the player. All saved under the name I am, which is the login, else the nick
+ * lowercased (every valid nick is a valid name). The user modal's profile tab edits the
+ * first three and the corner panel shows the picture. Its own atoms, not the go live page's:
+ * those follow the name box there and are reset when that page is left, which would blank a
+ * status being typed in the modal. The one thing the two share is the picture's version,
+ * bridged below; the links are bridged to the watch page the same way, so my own page
+ * follows a save.
  */
 
 import { atom } from 'jotai';
@@ -19,7 +18,7 @@ import { meAtom, reloadMe } from '@/infra/atoms/auth-atoms';
 import { nickAtom, reconnectChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { followIdentityOnLivePage, myAvatarAtom, streamNameAtom } from '@/infra/atoms/publish-atoms';
-import { aboutAtom, socialsAtom, watchNameAtom } from '@/infra/atoms/watch-atoms';
+import { socialsAtom, watchNameAtom } from '@/infra/atoms/watch-atoms';
 import { onEvents, reconnectEvents } from '@/infra/events';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
 import { AVATAR_PICTURE, OFFLINE_PICTURE } from '@/infra/picture';
@@ -46,9 +45,6 @@ export const profileForAtom = atom('');
 /** The status as typed in the box: one line about me. `bio` on the wire. */
 export const profileBioAtom = atom('');
 export const profileBioStatusAtom = atom('');
-/** The about me as typed (docs/about.md): the words first on my page's about tab, edited there. */
-export const profileAboutAtom = atom('');
-export const profileAboutStatusAtom = atom('');
 /** The picture's upload time (the `?v=` of its url). null: none. */
 export const profileAvatarAtom = atom<number | null>(null);
 export const profileAvatarStatusAtom = atom('');
@@ -70,8 +66,6 @@ export const profileSocialsDirtyAtom = atom((get) => socialsKey(get(profileSocia
 
 /** The api keeps this many characters of the line, one line. The box stops there too. */
 export const MAX_OFFLINE_NOTE_CHARS = 140;
-/** The api keeps this many characters of the about me. The box stops there too. */
-export const MAX_ABOUT_CHARS = 2000;
 
 /** The picture to show for me, if it has been loaded for the name I am now. */
 export const myAvatarVersionAtom = atom((get) => (get(profileForAtom) === get(myNameAtom) ? get(profileAvatarAtom) : null));
@@ -98,26 +92,22 @@ export const whyNotEditAtom = atom((get) => {
 });
 
 let loadedBio = '';
-let loadedAbout = '';
 let loadedNote = '';
 let generation = 0;
 
 /**
- * The status, about me, pictures, offline line and links of the name I am now. Another name
- * than last time starts clean (its saved status, about me, pictures, line and links go, so they
- * cannot be saved under the new one; text being typed stays); the same name again keeps what
- * was loaded.
+ * The status, pictures, offline line and links of the name I am now. Another name than last
+ * time starts clean (its saved status, pictures, line and links go, so they cannot be saved
+ * under the new one; text being typed stays); the same name again keeps what was loaded.
  */
 export async function loadMyProfile(): Promise<void> {
   const name = store.get(myNameAtom);
   const mine = ++generation;
   if (store.get(profileForAtom) !== name) {
     if (store.get(profileBioAtom).trim() === loadedBio) store.set(profileBioAtom, '');
-    if (store.get(profileAboutAtom).trim() === loadedAbout) store.set(profileAboutAtom, '');
     if (store.get(profileOfflineNoteAtom).trim() === loadedNote) store.set(profileOfflineNoteAtom, '');
     if (socialsKey(store.get(profileSocialsAtom)) === store.get(loadedSocialsAtom)) store.set(profileSocialsAtom, EMPTY_SOCIALS);
     store.set(profileBioStatusAtom, '');
-    store.set(profileAboutStatusAtom, '');
     store.set(profileAvatarStatusAtom, '');
     store.set(profileAvatarAtom, null);
     store.set(profileOfflineStatusAtom, '');
@@ -127,7 +117,7 @@ export async function loadMyProfile(): Promise<void> {
     store.set(loadedSocialsAtom, socialsKey(EMPTY_SOCIALS));
     store.set(profileVerifiedAtom, false);
     store.set(profileForAtom, name);
-    loadedBio = loadedAbout = loadedNote = '';
+    loadedBio = loadedNote = '';
   }
   if (!isValidName(name)) return;
   try {
@@ -135,8 +125,6 @@ export async function loadMyProfile(): Promise<void> {
     if (mine !== generation) return; // the name moved on while the api was answering
     loadedBio = p.bio ?? '';
     if (!store.get(profileBioAtom)) store.set(profileBioAtom, loadedBio);
-    loadedAbout = p.about ?? '';
-    if (!store.get(profileAboutAtom)) store.set(profileAboutAtom, loadedAbout);
     loadedNote = p.offline_note ?? '';
     if (!store.get(profileOfflineNoteAtom)) store.set(profileOfflineNoteAtom, loadedNote);
     // the links: the api's, unless a row was added while it was answering (an untouched draft is the empty document)
@@ -156,11 +144,10 @@ function alsoOnLivePage(name: string, version: number | null) {
   if (store.get(streamNameAtom) === name) store.set(myAvatarAtom, version);
 }
 
-/** My own page open in this tab shows the about me and the links from its grant: a save shows there at once, no reload. */
-function alsoOnWatchPage(name: string, saved: { socials?: Socials; about?: string }) {
+/** My own page open in this tab shows the links from its grant: a save shows there at once, no reload. */
+function alsoOnWatchPage(name: string, saved: { socials?: Socials }) {
   if (store.get(watchNameAtom) !== name) return;
   if (saved.socials) store.set(socialsAtom, saved.socials);
-  if (saved.about !== undefined) store.set(aboutAtom, saved.about);
 }
 
 /** The status, as typed; the api keeps it as one line, and the box shows that if nothing was typed meanwhile. */
@@ -181,32 +168,6 @@ export async function saveMyBio(): Promise<void> {
     store.set(profileBioStatusAtom, saved.bio ? 'saved' : 'cleared');
   } catch (err) {
     store.set(profileBioStatusAtom, `not saved: ${messageOf(err)}`);
-  }
-}
-
-/**
- * The about me, as typed on my page's about tab (docs/about.md). What comes back is what the
- * api kept (trimmed, cut at the cap) and the box shows that, unless something was typed
- * meanwhile. The page under the editor is my own, so it follows at once.
- */
-export async function saveMyAbout(): Promise<void> {
-  const name = store.get(myNameAtom);
-  if (!isValidName(name)) {
-    store.set(profileAboutStatusAtom, 'pick a name first');
-    return;
-  }
-  store.set(profileAboutStatusAtom, 'saving');
-  const typed = store.get(profileAboutAtom);
-  try {
-    const saved = await api.saveAbout(name, typed);
-    if (store.get(profileForAtom) === name) {
-      loadedAbout = saved.about;
-      if (store.get(profileAboutAtom) === typed) store.set(profileAboutAtom, saved.about);
-    }
-    store.set(profileAboutStatusAtom, saved.about ? 'saved' : 'cleared');
-    alsoOnWatchPage(name, { about: saved.about });
-  } catch (err) {
-    store.set(profileAboutStatusAtom, `not saved: ${messageOf(err)}`);
   }
 }
 

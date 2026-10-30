@@ -1,8 +1,10 @@
 //! An owner's powers, and the custom roles under them. See docs/groups.md.
 //!
 //! The maker of a group is an owner. An owner can do everything, including name another owner.
-//! Only an owner can do that. A custom role is a name, a colour and a set of the powers below.
-//! It cannot grant owner, and it cannot touch an owner.
+//! Only an owner can do that. The picture and the banner are the owner's too: no role carries
+//! them. A custom role is a name, a colour and a set of the powers below. It cannot grant
+//! owner, it cannot touch an owner, and it reaches only the powers its holder has: whoever
+//! makes, changes, deletes, gives or takes a role must hold every power on it.
 
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody, JsonRejection};
@@ -20,7 +22,7 @@ use crate::groups::{self, BOT_GROUP};
 use crate::s3;
 use crate::{ApiError, ApiResult, AppState};
 
-/// Edit the picture, the banner and the about line.
+/// Edit the about line, public or private, and the member order. Not the pictures: those are the owner's.
 pub(crate) const APPEARANCE: i32 = 1;
 /// Make, edit, delete and hand out custom roles. Not owner.
 pub(crate) const ROLES: i32 = 2;
@@ -108,6 +110,61 @@ async fn is_owner(db: &sqlx::PgPool, user: uuid::Uuid, group: &str) -> Result<bo
 
 async fn owner_count(db: &sqlx::PgPool, group: &str) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar("SELECT count(*) FROM memberships WHERE group_name = $1 AND owner").bind(group).fetch_one(db).await
+}
+
+/// Who is shaping a role, and what they hold. See `shaper`.
+struct Shaper {
+    owner: bool,
+    admin: bool,
+    perms: i32,
+}
+
+impl Shaper {
+    /// Whether a role with these powers is within reach. An owner and a site admin reach every
+    /// power. Anyone else reaches the powers they hold: the roles power makes, changes, deletes,
+    /// gives and takes roles that carry nothing more than the shaper has, so nobody writes
+    /// themselves a power they were not given.
+    fn reaches(&self, bits: i32) -> bool {
+        self.owner || self.admin || bits & !self.perms == 0
+    }
+}
+
+/// The login shaping a role: an owner, a site admin, or the roles power. 403 for anyone else.
+async fn shaper(s: &AppState, who: uuid::Uuid, group: &str) -> Result<Shaper, ApiError> {
+    let held = held(&s.db, who, group).await?;
+    let admin = s.admins.iter().any(|a| a.id == who);
+    if !(held.owner || admin || held.perms & ROLES != 0) {
+        return Err(no_power());
+    }
+    Ok(Shaper { owner: held.owner, admin, perms: held.perms })
+}
+
+fn out_of_reach() -> ApiError {
+    ApiError::new(StatusCode::FORBIDDEN, "that role carries a power you don't hold")
+}
+
+/// A role cannot touch an owner: only an owner gives one a role, or takes one back.
+fn not_an_owner(me: &Shaper, target_is_owner: bool) -> Result<(), ApiError> {
+    if target_is_owner && !me.owner {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "a role can't touch an owner"));
+    }
+    Ok(())
+}
+
+/// A role's powers, by id, in this group. 404 `no such role`.
+async fn role_perms(db: &sqlx::PgPool, group: &str, id: i64) -> Result<i32, ApiError> {
+    let perms: Option<i32> = sqlx::query_scalar("SELECT perms FROM roles WHERE id = $1 AND group_name = $2").bind(id).bind(group).fetch_optional(db).await?;
+    perms.ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such role"))
+}
+
+/// The picture and the banner are the owner's: no role carries them. A site admin may too,
+/// as with everything here but naming an owner.
+async fn need_owner(s: &AppState, who: uuid::Uuid, group: &str) -> Result<(), ApiError> {
+    if is_owner(&s.db, who, group).await? || s.admins.iter().any(|a| a.id == who) {
+        Ok(())
+    } else {
+        Err(ApiError::new(StatusCode::FORBIDDEN, "only an owner changes the pictures"))
+    }
 }
 
 fn login() -> ApiError {
@@ -234,9 +291,10 @@ fn member_order(raw: &str) -> Result<&'static str, ApiError> {
 }
 
 pub(crate) fn routes() -> Router<AppState> {
+    // no DELETE: there is no remove. a group with a picture keeps one, or changes it for another
     let pictures = Router::new()
-        .route("/api/groups/{group}/icon", get(get_icon).put(put_icon).delete(delete_icon))
-        .route("/api/groups/{group}/banner", get(get_banner).put(put_banner).delete(delete_banner))
+        .route("/api/groups/{group}/icon", get(get_icon).put(put_icon))
+        .route("/api/groups/{group}/banner", get(get_banner).put(put_banner))
         .layer(DefaultBodyLimit::max(MAX_BANNER));
     Router::new()
         .route("/api/groups/{group}/about", axum::routing::put(put_about))
@@ -376,10 +434,13 @@ async fn create_role(
     let who = me.ok_or_else(login)?;
     let Json(body) = body?;
     let group = server(&s.db, &group).await?;
-    need(&s, who.id, &group, ROLES).await?;
+    let me = shaper(&s, who.id, &group).await?;
     let name = role_name(&body.name)?;
     let color = groups::clean_color(&body.color)?;
     let perms = body.perms.bits();
+    if !me.reaches(perms) {
+        return Err(out_of_reach());
+    }
     let taken: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM roles WHERE group_name = $1 AND lower(name) = lower($2))")
         .bind(&group)
         .bind(&name)
@@ -419,10 +480,14 @@ async fn update_role(
     let who = me.ok_or_else(login)?;
     let Json(body) = body?;
     let group = server(&s.db, &group).await?;
-    need(&s, who.id, &group, ROLES).await?;
+    let me = shaper(&s, who.id, &group).await?;
     let name = role_name(&body.name)?;
     let color = groups::clean_color(&body.color)?;
     let perms = body.perms.bits();
+    // the role as it is, and as it would be: both within reach
+    if !me.reaches(role_perms(&s.db, &group, id).await?) || !me.reaches(perms) {
+        return Err(out_of_reach());
+    }
     let taken: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM roles WHERE group_name = $1 AND lower(name) = lower($2) AND id <> $3)")
         .bind(&group)
         .bind(&name)
@@ -451,7 +516,10 @@ async fn update_role(
 async fn delete_role(State(s): State<AppState>, Path((group, id)): Path<(String, i64)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
-    need(&s, who.id, &group, ROLES).await?;
+    let me = shaper(&s, who.id, &group).await?;
+    if !me.reaches(role_perms(&s.db, &group, id).await?) {
+        return Err(out_of_reach());
+    }
     let done = sqlx::query("DELETE FROM roles WHERE id = $1 AND group_name = $2").bind(id).bind(&group).execute(&s.db).await?;
     if done.rows_affected() == 0 {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such role"));
@@ -470,13 +538,18 @@ async fn give_role(
     let who = me.ok_or_else(login)?;
     let Json(body) = body?;
     let group = server(&s.db, &group).await?;
-    need(&s, who.id, &group, ROLES).await?;
+    let me = shaper(&s, who.id, &group).await?;
     let name = body.name.trim().to_lowercase();
-    let (user, _) = member_id(&s.db, &group, &name).await?;
-    let role: Option<(String, String)> = sqlx::query_as("SELECT name, color FROM roles WHERE id = $1 AND group_name = $2").bind(id).bind(&group).fetch_optional(&s.db).await?;
-    let Some((role_name, color)) = role else {
+    let (user, owner) = member_id(&s.db, &group, &name).await?;
+    not_an_owner(&me, owner)?;
+    let role: Option<(String, String, i32)> =
+        sqlx::query_as("SELECT name, color, perms FROM roles WHERE id = $1 AND group_name = $2").bind(id).bind(&group).fetch_optional(&s.db).await?;
+    let Some((role_name, color, perms)) = role else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such role"));
     };
+    if !me.reaches(perms) {
+        return Err(out_of_reach());
+    }
     let given = sqlx::query("INSERT INTO role_members (role_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING").bind(id).bind(user).execute(&s.db).await?;
     if given.rows_affected() > 0 {
         groups::tell(&s, &group, "held", json!({ "who": name, "role": { "id": id, "name": role_name, "color": color } })).await;
@@ -487,9 +560,13 @@ async fn give_role(
 async fn take_role(State(s): State<AppState>, Path((group, id, name)): Path<(String, i64, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
-    need(&s, who.id, &group, ROLES).await?;
+    let me = shaper(&s, who.id, &group).await?;
     let name = name.trim().to_lowercase();
-    let (user, _) = member_id(&s.db, &group, &name).await?;
+    let (user, owner) = member_id(&s.db, &group, &name).await?;
+    not_an_owner(&me, owner)?;
+    if !me.reaches(role_perms(&s.db, &group, id).await?) {
+        return Err(out_of_reach());
+    }
     let taken = sqlx::query("DELETE FROM role_members WHERE role_id = $1 AND user_id = $2").bind(id).bind(user).execute(&s.db).await?;
     if taken.rows_affected() > 0 {
         groups::tell(&s, &group, "unheld", json!({ "who": name, "id": id })).await;
@@ -751,37 +828,20 @@ async fn write_picture(s: &AppState, who: crate::auth::Account, group: &str, key
     Ok(version)
 }
 
-async fn clear_picture(s: &AppState, group: &str, key: &str, column: &str) -> Result<(), ApiError> {
-    if let Err(e) = s3::delete(&s.s3, key).await {
-        log::error!("s3 group picture {group}: {e}");
-        return Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not remove the picture"));
-    }
-    sqlx::query(&format!("UPDATE groups SET {column} = NULL WHERE name = $1")).bind(group).execute(&s.db).await?;
-    Ok(())
-}
-
 async fn get_icon(State(s): State<AppState>, Path(group): Path<String>) -> Result<Response, ApiError> {
     let group = server(&s.db, &group).await?;
     read_picture(&s, &group, &icon_key(&group), "icon_at").await
 }
 
+/// `PUT /api/groups/:group/icon`: a jpeg, from an owner. The new version goes out as `icon`.
 async fn put_icon(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Bytes, BytesRejection>) -> ApiResult {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
-    need(&s, who.id, &group, APPEARANCE).await?;
+    need_owner(&s, who.id, &group).await?;
     let body = jpeg_in(body, MAX_ICON)?;
     let version = write_picture(&s, who, &group, &icon_key(&group), "icon_at", body).await?;
     groups::tell(&s, &group, "icon", json!({ "icon": version })).await;
     Ok(Json(json!({ "icon": version })))
-}
-
-async fn delete_icon(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
-    let who = me.ok_or_else(login)?;
-    let group = server(&s.db, &group).await?;
-    need(&s, who.id, &group, APPEARANCE).await?;
-    clear_picture(&s, &group, &icon_key(&group), "icon_at").await?;
-    groups::tell(&s, &group, "icon", json!({ "icon": Value::Null })).await;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_banner(State(s): State<AppState>, Path(group): Path<String>) -> Result<Response, ApiError> {
@@ -789,23 +849,15 @@ async fn get_banner(State(s): State<AppState>, Path(group): Path<String>) -> Res
     read_picture(&s, &group, &banner_key(&group), "banner_at").await
 }
 
+/// `PUT /api/groups/:group/banner`: the same, 512kb, as `banner`.
 async fn put_banner(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Bytes, BytesRejection>) -> ApiResult {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
-    need(&s, who.id, &group, APPEARANCE).await?;
+    need_owner(&s, who.id, &group).await?;
     let body = jpeg_in(body, MAX_BANNER)?;
     let version = write_picture(&s, who, &group, &banner_key(&group), "banner_at", body).await?;
     groups::tell(&s, &group, "banner", json!({ "banner": version })).await;
     Ok(Json(json!({ "banner": version })))
-}
-
-async fn delete_banner(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
-    let who = me.ok_or_else(login)?;
-    let group = server(&s.db, &group).await?;
-    need(&s, who.id, &group, APPEARANCE).await?;
-    clear_picture(&s, &group, &banner_key(&group), "banner_at").await?;
-    groups::tell(&s, &group, "banner", json!({ "banner": Value::Null })).await;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
@@ -816,7 +868,19 @@ mod tests {
     fn powers_pack() {
         assert_eq!(bits_of(true, false, true, false, false), APPEARANCE | CHANNELS);
         assert_eq!(PermsIn { kick: true, ban: true, ..PermsIn::default() }.bits(), KICK | BAN);
-    assert_eq!(perms_json(ROLES)["roles"], json!(true));
-    assert_eq!(perms_json(ROLES)["kick"], json!(false));
+        assert_eq!(perms_json(ROLES)["roles"], json!(true));
+        assert_eq!(perms_json(ROLES)["kick"], json!(false));
+    }
+
+    #[test]
+    fn a_role_reaches_what_its_shaper_holds() {
+        let shaper = Shaper { owner: false, admin: false, perms: ROLES | KICK };
+        assert!(shaper.reaches(0));
+        assert!(shaper.reaches(ROLES));
+        assert!(shaper.reaches(ROLES | KICK));
+        assert!(!shaper.reaches(BAN));
+        assert!(!shaper.reaches(ROLES | KICK | APPEARANCE));
+        assert!(Shaper { owner: true, admin: false, perms: 0 }.reaches(ALL));
+        assert!(Shaper { owner: false, admin: true, perms: 0 }.reaches(ALL));
     }
 }

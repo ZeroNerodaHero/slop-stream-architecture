@@ -41,8 +41,8 @@ export type GroupChange =
   | { what: 'about'; about: string }
   | { what: 'access'; public: boolean }
   | { what: 'order'; order: string }
-  | { what: 'icon'; icon: number | null }
-  | { what: 'banner'; banner: number | null }
+  | { what: 'icon'; icon: number }
+  | { what: 'banner'; banner: number }
   | { what: 'role'; role: HeldRole & { perms: { appearance: boolean; roles: boolean; channels: boolean; kick: boolean; ban: boolean } } }
   | { what: 'unrole'; id: number }
   | { what: 'held'; who: string; role: HeldRole }
