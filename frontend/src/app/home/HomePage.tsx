@@ -6,6 +6,8 @@ import { Link } from 'react-router-dom';
 import { hoverPreview } from '@/app/home/hover';
 import { stillPictures } from '@/app/home/stills';
 import { api, messageOf, type LiveStream, type Person, type Recent, type Server } from '@/infra/api';
+import { meAtom } from '@/infra/atoms/auth-atoms';
+import { followingAtom, followingNamesAtom } from '@/infra/atoms/follow-atoms';
 import { enterHome, homeErrorAtom, homeNowAtom, homeStreamsAtom, leaveHome } from '@/infra/atoms/home-atoms';
 import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
@@ -155,7 +157,8 @@ function Card({
   featured,
   playing,
   onEnter,
-  onLeave
+  onLeave,
+  idPrefix = ''
 }: {
   stream: LiveStream;
   now: number;
@@ -164,6 +167,8 @@ function Card({
   /** A mouse or keyboard arrival. Touch is passed through and ignored: a tap is the click. */
   onEnter: (pointer: string) => void;
   onLeave: () => void;
+  /** Before the ids on the card (`viewers-<name>`), for a card that is on the page a second time (the following part). */
+  idPrefix?: string;
 }) {
   const age = since(stream.since, now);
   return (
@@ -190,7 +195,7 @@ function Card({
           {/* bottom right, "3 watching": null when video did not answer (the list came from redis), absent on an older api. a chip only when there is a number to show */}
           {typeof stream.viewers === 'number' && (
             <span className="absolute bottom-3 right-3 z-10 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold text-white backdrop-blur-sm">
-              <ViewerCount id={`viewers-${stream.name}`} count={stream.viewers} />
+              <ViewerCount id={`${idPrefix}viewers-${stream.name}`} count={stream.viewers} />
             </span>
           )}
         </div>
@@ -222,9 +227,9 @@ function Card({
  * One part of the page under its heading (`#<id>`, `#<id>-title`). The heading is sticky and as
  * tall as the title row (PageFrame.tsx, 4rem), whose left end it stands in: on home the row is only
  * the bell and go live, and the page starts at its top, so `active streams` sits in the row at the
- * top of the page, and once the live cards have scrolled away the recently offline's heading pushes
- * it out and takes its place, then the groups', then the people's, the way a phone's contact list
- * does its letters. The room under a part is padding inside it rather than a margin before the
+ * top of the page, and once the live cards have scrolled away the next part's heading pushes it out
+ * and takes its place (a login's following, then the recently offline, the groups, the people), the
+ * way a phone's contact list does its letters. The room under a part is padding inside it rather than a margin before the
  * next, so the push comes exactly when the part ends and not a gap later. The same z as the row
  * and later in the document, so the heading paints over it; the sidebar open (z-40) covers both.
  */
@@ -236,6 +241,69 @@ function Part({ id, line, heading, children }: { id: string; line: string; headi
       </h2>
       <div className="pb-6">{children}</div>
     </section>
+  );
+}
+
+/**
+ * The streams of who you follow (docs/follows.md), under the active streams: their cards again,
+ * so yours are found without reading the whole grid (a stream in both places is in both; that
+ * is the point). For a login who follows someone; the count is how many of them are live, and
+ * with none it says so. Who you follow is the sidebar's list, asked at login and on every open
+ * of the panel; who is live is the page's own list, so a card here goes the moment the stream
+ * ends, with its card above. A card plays on hover like the grid's; one whose stream is already
+ * playing at the top plays here too, since that preview is up anyway.
+ */
+function Followed({
+  streams,
+  now,
+  featuredNames,
+  hover,
+  onEnter,
+  onLeave
+}: {
+  streams: LiveStream[];
+  now: number;
+  featuredNames: string[];
+  hover: string | null;
+  onEnter: (name: string, pointer: string) => void;
+  onLeave: (name: string) => void;
+}) {
+  const me = useAtomValue(meAtom);
+  const following = useAtomValue(followingAtom);
+  const names = useAtomValue(followingNamesAtom);
+  if (!me || !following || following.length === 0) return null;
+  const list = streams.filter((stream) => names.has(stream.name));
+  return (
+    <Part
+      id="followed"
+      line={LIVE_LINE}
+      heading={
+        <>
+          following
+          <span id="followed-count" className={SECTION_COUNT}>
+            {list.length}
+          </span>
+        </>
+      }
+    >
+      {list.length === 0 && <p className="text-textSecondary">nobody you follow is live right now.</p>}
+      {list.length > 0 && (
+        <div id="followed-list" className={GRID}>
+          {list.map((stream) => (
+            <Card
+              key={stream.name}
+              stream={stream}
+              now={now}
+              featured={false}
+              playing={featuredNames.includes(stream.name) || hover === stream.name}
+              onEnter={(pointer) => onEnter(stream.name, pointer)}
+              onLeave={() => onLeave(stream.name)}
+              idPrefix="followed-"
+            />
+          ))}
+        </div>
+      )}
+    </Part>
   );
 }
 
@@ -518,6 +586,16 @@ export function HomePage() {
           )}
         </div>
       </Part>
+      {list && (
+        <Followed
+          streams={list}
+          now={now}
+          featuredNames={featured.map((stream) => stream.name)}
+          hover={hover}
+          onEnter={(name, pointer) => cardHover.enter(name, pointer, hover)}
+          onLeave={(name) => cardHover.leave(name)}
+        />
+      )}
       {!error && <RecentlyOffline liveKey={namesKey} now={now} />}
       {!error && <Groups />}
       {!error && <People />}

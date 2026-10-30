@@ -1,6 +1,6 @@
 import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine, RiRobot2Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type UIEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type SyntheticEvent, type UIEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { api, messageOf, type Owner } from '@/infra/api';
@@ -53,6 +53,7 @@ import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { LiveMark } from '@/shared-components/LiveMark';
 import { panelClassName } from '@/shared-components/Panel';
+import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { CHIP_BUTTON } from '@/shared-components/VideoControls';
 import { compressChatImage } from '@/infra/picture';
@@ -60,6 +61,8 @@ import { cn } from '@/utils/cn';
 
 /** Within this many px of the newest line counts as "at the bottom", so a one-line gap after a font swap does not unstick the view. */
 const STUCK_PX = 40;
+/** How long the pointer rests on a name before the speaker's card shows: a pause, not a pass over the names while reading. */
+const PEEK_MS = 300;
 
 interface ChatPanelProps {
   /** A stream's room, or, with `channel`, the server. */
@@ -105,26 +108,47 @@ function saidAt(at: number): string {
   return when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
+/**
+ * The speaker's name. A login's opens that account's lines. When the line is really that
+ * name's (a login's, or the streamer's; an anonymous nick is nobody), the pointer resting on
+ * the name, or the focus landing on it, puts the person's card (PersonCard.tsx, the sidebar's)
+ * beside the chat: the face with the word on it, the name, their status. No `title` beside
+ * it: two boxes for one name is one too many.
+ */
 function Speaker({ line }: { line: ChatLine }) {
-  const className = cn('cursor-pointer font-semibold', line.streamer ? 'text-increase' : 'text-primaryBlue');
-  if (!line.verified) return <span className={cn('font-semibold', line.streamer ? 'text-increase' : 'text-primaryBlue')}>{line.from}</span>;
+  const peek = usePeek(PEEK_MS);
+  const someone = line.verified || line.streamer;
+  const show = (e: SyntheticEvent<HTMLElement>) => peek.show(e.currentTarget, e.currentTarget.closest('#chat'));
+  const watched = someone
+    ? { onPointerEnter: show, onPointerLeave: (e: SyntheticEvent<HTMLElement>) => peek.leave(e.currentTarget), onFocus: show, onBlur: peek.blur }
+    : {};
+  const color = line.streamer ? 'text-increase' : 'text-primaryBlue';
   return (
-    <span
-      role="button"
-      tabIndex={0}
-      data-from={line.from}
-      title={`${line.from}'s lines`}
-      onClick={() => void showSpeaker(line.from)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          void showSpeaker(line.from);
-        }
-      }}
-      className={className}
-    >
-      {line.from}
-    </span>
+    <>
+      {line.verified ? (
+        <span
+          {...watched}
+          role="button"
+          tabIndex={0}
+          data-from={line.from}
+          onClick={() => void showSpeaker(line.from)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              void showSpeaker(line.from);
+            }
+          }}
+          className={cn('cursor-pointer font-semibold', color)}
+        >
+          {line.from}
+        </span>
+      ) : (
+        <span {...watched} data-from={line.from} className={cn('font-semibold', color)}>
+          {line.from}
+        </span>
+      )}
+      {someone && peek.at && <PersonCard id={`chat-peek-${line.from}`} person={{ name: line.from, verified: line.verified, avatar: line.avatar }} at={peek.at} />}
+    </>
   );
 }
 

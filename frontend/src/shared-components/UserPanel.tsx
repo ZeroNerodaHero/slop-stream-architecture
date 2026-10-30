@@ -7,6 +7,7 @@ import { loadMe, logout, meAtom } from '@/infra/atoms/auth-atoms';
 import { nickAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { closeAllDms, loadDms } from '@/infra/atoms/dm-atoms';
 import { forgetFollowing, friendsOpenAtom, loadFollowing, streamingFriendsAtom } from '@/infra/atoms/follow-atoms';
+import { forgetMyServers, loadMyServers } from '@/infra/atoms/groups-atoms';
 import { openInspector } from '@/infra/atoms/inspector-atoms';
 import { forgetNotifications, loadNotifications } from '@/infra/atoms/notification-atoms';
 import { myPresenceAtom, PRESENCE_SQUARE, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
@@ -87,8 +88,9 @@ function SettingsOpener({ className }: { className?: string }) {
 
 /**
  * A column beside every page (left, or the right from settings). Collapsed it is only as wide as
- * the pictures, and the streams use the rest: the search box as its icon, then friends, a line,
- * then the rest of who you follow (Friends.tsx), you at the bottom. Hover or focus widens it
+ * the pictures, and the streams use the rest: the search box as its icon, then friends, the rest
+ * of who you follow, and the groups you are in, a line between each, in the order settings put
+ * them (Friends.tsx), you at the bottom. Hover or focus widens it
  * over the streams (the page does not move, and neither do the pictures): the box, and beside
  * each picture the name, how they are, unfollow, chat for a friend, and your actions. Logged
  * in: your account name, a ✓, and log out under it. Not logged in: a name box (localstorage,
@@ -124,16 +126,18 @@ export function UserPanel() {
     void loadMe().then(loadMyProfile);
   }, []);
 
-  // who I follow, my chats and my inbox: a login's, once the login is known and whenever it changes (in,
-  // out, a rename). the watch page's follow button and the number on the corner read the first; the chat
-  // window the second; the bell at the top right the third. another login's are not this one's, and a
-  // guest has none.
+  // who I follow, the groups I am in, my chats and my inbox: a login's, once the login is known and whenever
+  // it changes (in, out, a rename). the watch page's follow button and the number on the corner read the
+  // first; the sidebar's groups list the second; the chat window the third; the bell at the top right the
+  // fourth. another login's are not this one's, and a guest has none.
   useEffect(() => {
     forgetFollowing();
+    forgetMyServers();
     closeAllDms();
     forgetNotifications();
     if (me) {
       void loadFollowing();
+      void loadMyServers();
       void loadDms();
       void loadNotifications();
     }

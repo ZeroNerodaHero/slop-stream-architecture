@@ -16,6 +16,8 @@ interface CollapsibleProps {
   onToggle: () => void;
   /** At the header's right end, outside the toggle (a button in a button is no button): the sources' +. */
   aside?: ReactNode;
+  /** The panel's foot, under the body and there when it is folded too: the sources' start and stop. */
+  footer?: ReactNode;
   className?: string;
   children: ReactNode;
 }
@@ -24,8 +26,10 @@ interface CollapsibleProps {
  * A panel of the go live page that folds to its header: the sources, the presets, the sound.
  * The body is there or not (no height to animate, the lists vary), the way every panel in the
  * app shows and hides. Which are open is kept per browser (publish-atoms' `livePanelsAtom`).
+ * A footer does not fold with it: what sits there (start, stop) must not go with a click on
+ * the header.
  */
-export function Collapsible({ id, title, open, onToggle, aside, className, children }: CollapsibleProps) {
+export function Collapsible({ id, title, open, onToggle, aside, footer, className, children }: CollapsibleProps) {
   return (
     <section id={id} className={cn(panelClassName('flex min-h-0 flex-col'), className)}>
       <h2 className={cn('flex items-center', open && 'border-b border-primaryStroke')}>
@@ -40,6 +44,7 @@ export function Collapsible({ id, title, open, onToggle, aside, className, child
           {children}
         </div>
       )}
+      {footer && <div className="border-t border-primaryStroke">{footer}</div>}
     </section>
   );
 }

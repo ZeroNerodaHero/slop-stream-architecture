@@ -117,7 +117,6 @@ export async function follow(name: string): Promise<boolean> {
     ]);
   }
   markSearch(name, true);
-  markPeek(name, true);
   void loadFollowing();
   return true;
 }
@@ -136,7 +135,6 @@ export async function unfollow(name: string): Promise<boolean> {
     (store.get(followingAtom) ?? []).filter((f) => f.name !== name)
   );
   markSearch(name, false);
-  markPeek(name, false);
   return true;
 }
 

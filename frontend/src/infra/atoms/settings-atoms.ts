@@ -1,7 +1,8 @@
 /**
  * The preferences this browser keeps (localstorage, like the nick): where the chat sits on a
- * page, where it sits on the corner player, which corner the you panel sits in, whether the
- * bots' lines show, whether the lines wear faces, and the theme. Not part of the account: a
+ * page, where it sits on the corner player, which corner the you panel sits in and which lists
+ * it shows in what order, whether the bots' lines show, whether the lines wear faces, and the
+ * theme. Not part of the account: a
  * laptop and a phone can each have their own. Same shape as the other
  * atom modules: atoms for what renders, action functions to change it. The modal that edits
  * them is user-modal-atoms.ts.
@@ -101,20 +102,92 @@ export function setPanelSide(side: PanelSide) {
 }
 
 /**
- * How the sidebar's rows are shared between friends and the rest of who you follow when both
- * lists are longer than the room (docs/follows.md): the friends' part of the rows, 0..1, half
- * to start. The line between the lists is dragged to change it, one row at a time. Kept as a
- * share, not a number of rows, so a taller window keeps the same proportion.
+ * The sidebar's lists (docs/follows.md): friends (they follow you back), the rest of who you
+ * follow, and the groups you are in. Which of them the column shows, and in what order top to
+ * bottom, is this browser's: the settings tab drags them into an order and switches each on or
+ * off. One stays on, whatever is asked.
  */
-const storedFriendsShareAtom = atomWithStorage<unknown>('settings.friendsShare', 0.5, undefined, { getOnInit: true });
-/** Read: a number in 0..1, whatever localstorage holds. */
-export const friendsShareAtom = atom((get) => {
-  const share = get(storedFriendsShareAtom);
-  return typeof share === 'number' && Number.isFinite(share) ? Math.min(1, Math.max(0, share)) : 0.5;
+export type SidebarList = 'friends' | 'following' | 'groups';
+
+export const SIDEBAR_LISTS: readonly SidebarList[] = ['friends', 'following', 'groups'];
+
+export interface SidebarListChoice {
+  list: SidebarList;
+  on: boolean;
+}
+
+const DEFAULT_SIDEBAR_LISTS: readonly SidebarListChoice[] = SIDEBAR_LISTS.map((list) => ({ list, on: true }));
+
+const storedSidebarListsAtom = atomWithStorage<unknown>('settings.sidebarLists', DEFAULT_SIDEBAR_LISTS, undefined, { getOnInit: true });
+/** Read: every list once, in the kept order, each on or off, at least one on; whatever localstorage holds. */
+export const sidebarListsAtom = atom((get) => validSidebarLists(get(storedSidebarListsAtom)));
+
+function validSidebarLists(raw: unknown): SidebarListChoice[] {
+  const out: SidebarListChoice[] = [];
+  const seen = new Set<SidebarList>();
+  for (const item of Array.isArray(raw) ? raw : []) {
+    if (!item || typeof item !== 'object') continue;
+    const { list, on } = item as Record<string, unknown>;
+    if (typeof list !== 'string' || !(SIDEBAR_LISTS as readonly string[]).includes(list) || seen.has(list as SidebarList)) continue;
+    seen.add(list as SidebarList);
+    out.push({ list: list as SidebarList, on: on !== false });
+  }
+  // a list the kept order does not name (a browser from before it existed): at the end, on
+  for (const list of SIDEBAR_LISTS) if (!seen.has(list)) out.push({ list, on: true });
+  // none on: the first is, so the column is never empty by setting
+  return out.some((c) => c.on) ? out : out.map((c, i) => (i === 0 ? { ...c, on: true } : c));
+}
+
+/** The list named, moved to that place in the order (0 is the top). The others keep their order around it. */
+export function moveSidebarList(list: SidebarList, to: number) {
+  const current = store.get(sidebarListsAtom);
+  const from = current.findIndex((c) => c.list === list);
+  const at = Math.min(current.length - 1, Math.max(0, to));
+  if (from < 0 || from === at) return;
+  const next = [...current];
+  const [moved] = next.splice(from, 1);
+  if (moved) next.splice(at, 0, moved);
+  store.set(storedSidebarListsAtom, next);
+}
+
+/** One list on or off. Off is refused for the last one on. */
+export function setSidebarListOn(list: SidebarList, on: boolean) {
+  const current = store.get(sidebarListsAtom);
+  if (!on && current.filter((c) => c.on).length <= 1 && current.some((c) => c.list === list && c.on)) return;
+  store.set(
+    storedSidebarListsAtom,
+    current.map((c) => (c.list === list ? { ...c, on } : c))
+  );
+}
+
+/**
+ * How the sidebar's rows are shared when the lists shown are longer than the room together
+ * (docs/follows.md): a weight per list, equal to start, so two lists split the rows half and
+ * half (30 rows: 15 and 15) and three in thirds; a list shorter than its share takes what it
+ * has, and the rows it leaves go to the others by the same weights. Dragging the line between
+ * two lists moves a row from one to the other, and the weights are then kept as the rows
+ * stood, as fractions of the room, so a taller window keeps the proportion.
+ */
+export type SidebarShares = Record<SidebarList, number>;
+
+const DEFAULT_SIDEBAR_SHARES: SidebarShares = { friends: 1, following: 1, groups: 1 };
+
+const storedSidebarSharesAtom = atomWithStorage<unknown>('settings.sidebarShares', DEFAULT_SIDEBAR_SHARES, undefined, { getOnInit: true });
+/** Read: a positive number per list, whatever localstorage holds. */
+export const sidebarSharesAtom = atom((get): SidebarShares => {
+  const raw = get(storedSidebarSharesAtom);
+  const kept = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const out = { ...DEFAULT_SIDEBAR_SHARES };
+  for (const list of SIDEBAR_LISTS) {
+    const w = kept[list];
+    if (typeof w === 'number' && Number.isFinite(w) && w > 0) out[list] = w;
+  }
+  return out;
 });
 
-export function setFriendsShare(share: number) {
-  store.set(storedFriendsShareAtom, Math.min(1, Math.max(0, share)));
+/** The weights given, over the kept ones. */
+export function setSidebarShares(shares: Partial<SidebarShares>) {
+  store.set(storedSidebarSharesAtom, { ...store.get(sidebarSharesAtom), ...shares });
 }
 
 // ---- debugging -------------------------------------------------------------------------------

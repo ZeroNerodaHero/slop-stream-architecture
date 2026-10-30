@@ -30,13 +30,12 @@ import {
   sendDm
 } from '@/infra/atoms/dm-atoms';
 import { followingAtom } from '@/infra/atoms/follow-atoms';
-import { type Presence, PRESENCE_SQUARE } from '@/infra/atoms/presence-atoms';
 import { type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
-import { Who, Word } from '@/shared-components/PersonRow';
+import { PresenceSquare, Who, Word } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { INPUT } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
@@ -124,16 +123,8 @@ const CORNERS = [
 
 const tabId = (name: string) => `friend-chat-tab-${name}`;
 
-/** The presence square in the corner of a face, the sidebar's colours (docs/status.md), ringed in the window's background. */
-function PresenceSquare({ presence }: { presence: Presence }) {
-  return (
-    <span
-      aria-hidden
-      data-presence={presence}
-      className={cn('absolute -bottom-1 -right-1 h-3.5 w-3.5 border-2 border-backgroundSecondary', PRESENCE_SQUARE[presence])}
-    />
-  );
-}
+/** The presence square on a face's corner (PersonRow.tsx), ringed in the window's background. */
+const RING = 'border-backgroundSecondary';
 
 interface TabProps {
   dm: Dm;
@@ -177,7 +168,7 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
         className={cn(SQUARE, selected ? SQUARE_ON : SQUARE_OFF)}
       >
         <Face name={dm.name} version={dm.avatar} />
-        <PresenceSquare presence={dm.presence} />
+        <PresenceSquare presence={dm.presence} className={RING} />
         {/* how many of their lines came while this was not on screen: the sidebar's number, in the other corner */}
         {dm.unread > 0 && (
           <span
@@ -298,7 +289,7 @@ function Picker({ dms }: { dms: Dm[] }) {
                 >
                   <span className="relative block">
                     <Face name={f.name} version={f.avatar} />
-                    <PresenceSquare presence={f.presence} />
+                    <PresenceSquare presence={f.presence} className={RING} />
                   </span>
                   <span className="w-full truncate text-center text-xs">{f.name}</span>
                 </button>

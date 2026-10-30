@@ -1,16 +1,18 @@
-import { RiEyeOffLine, RiRobot2Line } from '@remixicon/react';
+import { RiDraggable, RiEyeOffLine, RiGroupLine, RiRobot2Line, RiUserFollowLine, RiUserHeartLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import type { ReactNode } from 'react';
+import { type KeyboardEvent, type PointerEvent, type ReactNode, useRef, useState } from 'react';
 
 import { openInspector } from '@/infra/atoms/inspector-atoms';
 import {
   type ChatSide,
   type PanelSide,
   type PipChatPlace,
+  type SidebarList,
   chatFacesAtom,
   chatSideAtom,
   hideBotsAtom,
   inspectorEnabledAtom,
+  moveSidebarList,
   panelSideAtom,
   pipChatPlaceAtom,
   setChatFaces,
@@ -18,11 +20,18 @@ import {
   setHideBots,
   setInspectorEnabled,
   setPanelSide,
-  setPipChatPlace
+  setPipChatPlace,
+  setSidebarListOn,
+  sidebarListsAtom
 } from '@/infra/atoms/settings-atoms';
 import { GeneratedAvatar } from '@/shared-components/GeneratedAvatar';
 import { OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
+
+/** A square to tick: the theme's box, blue when on. */
+const CHECKBOX = 'h-4 w-4 shrink-0 appearance-none border border-primaryStroke bg-background checked:border-primaryBlue checked:bg-primaryBlue disabled:opacity-40';
+/** A word that does something on a row: up, down. No box (the buttons rule). */
+const ROW_WORD = 'text-sm font-semibold text-textSecondary hover:text-textPrimary disabled:text-textTertiary disabled:opacity-40 disabled:hover:text-textTertiary';
 
 /** The places the stream's chat can sit. The card's picture is the page. */
 const CHAT_SIDE_OPTIONS: readonly { side: ChatSide; label: string; detail: string }[] = [
@@ -53,6 +62,127 @@ function YouPreview({ side }: { side: PanelSide }) {
         </span>
       </span>
     </span>
+  );
+}
+
+/** The column's three lists (Friends.tsx), each with the icon it stands under there and a line on what it holds. */
+const SIDEBAR_LIST_WORDS: Record<SidebarList, { icon: typeof RiUserHeartLine; label: string; detail: string }> = {
+  friends: { icon: RiUserHeartLine, label: 'friends', detail: 'who you follow that follows you back. the chat button is on this line' },
+  following: { icon: RiUserFollowLine, label: 'following', detail: 'the rest of who you follow, streaming first' },
+  groups: { icon: RiGroupLine, label: 'groups', detail: 'the groups you are in, and how many in each are live' }
+};
+
+/**
+ * The column's lists, top to bottom, each with a switch (`settings.sidebarLists`). A row is
+ * dragged by its handle (the arrow keys on the handle do the same, a row a press; `up` and
+ * `down` are the words for it), and the column behind follows at once. The last switch on is
+ * disabled: one list stays, so the column is never empty by setting.
+ */
+function SidebarLists() {
+  const choices = useAtomValue(sidebarListsAtom);
+  const shown = choices.filter((c) => c.on).length;
+  const rows = useRef<HTMLUListElement | null>(null);
+  const drag = useRef<{ list: SidebarList; y: number; from: number; pitch: number } | null>(null);
+  const [dragging, setDragging] = useState<SidebarList | null>(null);
+
+  function startDrag(e: PointerEvent<HTMLButtonElement>, list: SidebarList, from: number) {
+    const items = rows.current ? Array.from(rows.current.children) : [];
+    const first = items[0]?.getBoundingClientRect();
+    const second = items[1]?.getBoundingClientRect();
+    if (!first) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    // a row and the gap after it: the distance between two rows' tops, or the one row's height when there is one
+    drag.current = { list, y: e.clientY, from, pitch: second ? second.top - first.top : first.height };
+    setDragging(list);
+  }
+  function moveDrag(e: PointerEvent<HTMLButtonElement>) {
+    const d = drag.current;
+    if (d) moveSidebarList(d.list, d.from + Math.round((e.clientY - d.y) / d.pitch));
+  }
+  function endDrag() {
+    drag.current = null;
+    setDragging(null);
+  }
+  function keyMove(e: KeyboardEvent<HTMLButtonElement>, list: SidebarList, at: number) {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    moveSidebarList(list, at + (e.key === 'ArrowUp' ? -1 : 1));
+  }
+
+  return (
+    <ul id="sidebar-lists" ref={rows} className="flex flex-col gap-2">
+      {choices.map(({ list, on }, i) => {
+        const { icon: Icon, label, detail } = SIDEBAR_LIST_WORDS[list];
+        const last = on && shown <= 1;
+        return (
+          <li
+            key={list}
+            id={`sidebar-list-${list}`}
+            data-on={on}
+            className={cn(
+              'flex items-center gap-3 border bg-background p-3 transition-[border-color] duration-150',
+              dragging === list ? 'border-primaryBlue' : 'border-primaryStroke',
+              !on && 'text-textTertiary'
+            )}
+          >
+            <button
+              id={`sidebar-list-${list}-drag`}
+              type="button"
+              aria-label={`move ${label}: drag, or the arrow keys`}
+              aria-keyshortcuts="ArrowUp ArrowDown"
+              title="drag to move"
+              onPointerDown={(e) => startDrag(e, list, i)}
+              onPointerMove={moveDrag}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+              onKeyDown={(e) => keyMove(e, list, i)}
+              className={cn(
+                'shrink-0 touch-none select-none border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke hover:text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none',
+                dragging === list ? 'cursor-grabbing' : 'cursor-grab'
+              )}
+            >
+              <RiDraggable aria-hidden size={18} />
+            </button>
+            <span className={cn('shrink-0', on ? 'text-primaryBlue' : 'text-textTertiary')}>
+              <Icon aria-hidden size={24} />
+            </span>
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className={cn('font-semibold leading-tight', on ? 'text-textPrimary' : 'text-textTertiary')}>{label}</span>
+              <span className={cn('text-sm', on ? 'text-textSecondary' : 'text-textTertiary')}>{detail}</span>
+            </span>
+            <span className="flex shrink-0 items-center gap-3">
+              <button id={`sidebar-list-${list}-up`} type="button" disabled={i === 0} onClick={() => moveSidebarList(list, i - 1)} className={ROW_WORD}>
+                up
+              </button>
+              <button
+                id={`sidebar-list-${list}-down`}
+                type="button"
+                disabled={i === choices.length - 1}
+                onClick={() => moveSidebarList(list, i + 1)}
+                className={ROW_WORD}
+              >
+                down
+              </button>
+              <label
+                className={cn('flex items-center gap-2 text-xs font-semibold uppercase tracking-wider', on ? 'text-primaryBlue' : 'text-textTertiary', last ? 'cursor-default' : 'cursor-pointer')}
+                title={last ? 'one list stays' : undefined}
+              >
+                <input
+                  id={`sidebar-list-${list}-on`}
+                  type="checkbox"
+                  checked={on}
+                  disabled={last}
+                  onChange={(e) => setSidebarListOn(list, e.target.checked)}
+                  className={CHECKBOX}
+                />
+                {on ? 'shown' : 'hidden'}
+              </label>
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -233,6 +363,18 @@ export function SettingsTab() {
       </fieldset>
 
       <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+        <legend className={SECTION_TITLE}>lists in the column</legend>
+        <p className="mt-1 text-textSecondary">
+          what the column shows under the search box, top to bottom: friends, the rest of who you follow, the groups you are in. drag a row to move it, or switch it off
+          and the column skips it. one stays on.
+        </p>
+        <div className="mt-4">
+          <SidebarLists />
+        </div>
+        <p className="mt-4 text-sm text-textTertiary">kept in this browser. the column follows as you pick; a list nobody is in is skipped anyway.</p>
+      </fieldset>
+
+      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
         <legend className={SECTION_TITLE}>picture in picture</legend>
         <p className="mt-1 text-textSecondary">where the chat opens on the corner player. each card is the player with the chat in that place.</p>
         <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -301,7 +443,7 @@ export function SettingsTab() {
               type="checkbox"
               checked={inspectorOn}
               onChange={(e) => setInspectorEnabled(e.target.checked)}
-              className="h-4 w-4 appearance-none border border-primaryStroke bg-background checked:border-primaryBlue checked:bg-primaryBlue"
+              className={CHECKBOX}
             />
             keep the messages
           </label>
