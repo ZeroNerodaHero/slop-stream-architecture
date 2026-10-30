@@ -116,6 +116,18 @@ async function say(page, text) {
     return 'marked on a viewer\'s screen';
   });
 
+  await step('the pointer resting on the streamer\'s name shows their card beside the chat', async () => {
+    // the line is really the room's, so the name wears the card: the face with the word on it (from one profile read), the name
+    await a.hover(`#chat-lines p[data-streamer="true"] [data-from="${ROOM}"]`);
+    await a.waitForSelector(`#chat-peek-${ROOM}[data-presence]`, { timeout: 10000 });
+    const text = (await a.textContent(`#chat-peek-${ROOM}`)) || '';
+    expect(text.includes(ROOM), `the card says "${text}"`);
+    // off the name: the card goes
+    await a.mouse.move(5, 5);
+    await a.waitForSelector(`#chat-peek-${ROOM}`, { state: 'detached', timeout: 5000 });
+    return `"${text}"`;
+  });
+
   await browser.close();
   const failed = results.filter((r) => !r).length;
   console.log(`\n${failed ? 'FAIL' : 'PASS'}  ${results.length - failed}/${results.length}`);

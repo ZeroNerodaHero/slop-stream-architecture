@@ -19,9 +19,12 @@ import {
   addImage,
   cameraAtom,
   canShareScreenAtom,
+  canStartAtom,
   deleteImage,
   fitSourceTo,
+  goLive,
   imageStatusAtom,
+  isPublishingAtom,
   libraryAtom,
   livePanelsAtom,
   placeImage,
@@ -35,10 +38,15 @@ import {
   setSourceFit,
   shareScreen,
   sourcesAtom,
+  stopLive,
   streamNameAtom,
   toggleSource
 } from '@/infra/atoms/publish-atoms';
+import { openUserModal } from '@/infra/atoms/user-modal-atoms';
+import { isValidName } from '@/infra/names';
+import { SCREEN_SLOTS } from '@/infra/relay';
 import type { Source } from '@/infra/scene';
+import { Button } from '@/shared-components/Button';
 import { Collapsible, ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { VideoFrame } from '@/shared-components/VideoFrame';
