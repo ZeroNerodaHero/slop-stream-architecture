@@ -465,7 +465,7 @@ interface PageWire {
   bg?: string;
   stroke?: number;
   strokeColor?: string;
-  align?: string;
+  align?: 'left' | 'center' | 'right' | '';
   html?: string;
   src?: string;
 }

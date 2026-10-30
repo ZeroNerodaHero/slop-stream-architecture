@@ -614,8 +614,10 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
         src: ''
       });
     }
-    setFocusKey(made[0].key);
-    setPicked(made[0].key);
+    const first = made[0];
+    if (!first) return;
+    setFocusKey(first.key);
+    setPicked(first.key);
     touch((list) => {
       let z = list.reduce((max, block) => Math.max(max, block.z), 0);
       return [
@@ -762,7 +764,7 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
   const dragOnPage = (e: ReactPointerEvent, apply: (x: number, y: number, clientX: number, clientY: number) => void, done: () => void) => {
     e.preventDefault();
     e.stopPropagation();
-    const handle = e.currentTarget;
+    const handle = e.currentTarget as HTMLElement;
     handle.setPointerCapture(e.pointerId);
     let lastX = e.clientX;
     let lastY = e.clientY;
@@ -794,7 +796,7 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
-    const move = (ev: PointerEvent) => {
+    const move = (ev: globalThis.PointerEvent) => {
       lastX = ev.clientX;
       lastY = ev.clientY;
       applyNow();
