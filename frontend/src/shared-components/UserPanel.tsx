@@ -238,7 +238,7 @@ export function UserPanel() {
         className={cn(
           'absolute top-0 flex h-full flex-col overflow-hidden bg-background text-base transition-[width] duration-150',
           side === 'right' ? 'right-0 border-l border-primaryStroke' : 'left-0 border-r border-primaryStroke',
-          friendsOpen ? cn(EXPANDED, 'shadow-hard') : COLLAPSED
+          friendsOpen ? EXPANDED : COLLAPSED
         )}
       >
         <div className="flex min-h-0 flex-1 flex-col">

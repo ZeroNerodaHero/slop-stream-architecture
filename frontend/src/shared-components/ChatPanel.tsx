@@ -66,7 +66,7 @@ interface ChatPanelProps {
   name: string;
   /** The streamer's own grant. With it, our lines are marked. */
   owner?: Owner | null;
-  /** Inside another box (the corner player): no stroke, shadow or minimum height of its own, and no header or search box, which a panel this small has no room for. The lines and the text box alone. */
+  /** Inside another box (the corner player): no stroke or minimum height of its own, and no header or search box, which a panel this small has no room for. The lines and the text box alone. */
   embedded?: boolean;
   /**
    * A group's channel: `name` is the server, this the channel on screen. One socket for every
@@ -155,28 +155,41 @@ function pictureSrc(id: string): string {
 }
 
 /**
- * The pictures on a line, under the words. One is as tall as five lines; several sit in a row.
- * A click on one puts it over the whole page (`PictureView`), in the window the chat is in: the
- * page's, or the popped-out player's own.
+ * The pictures on a line, under the words. One is drawn as it is, at most five lines tall. Two
+ * sit side by side. More make two rows, the first with the odd one out, and the pictures of a
+ * row share its width, cropped to fill their cells: three are two over one across the whole row,
+ * five are three over two, eight are four over four. A click on any puts it over the whole page
+ * (`PictureView`), in the window the chat is in: the page's, or the popped-out player's own.
  */
 function ChatImages({ ids }: { ids: string[] }) {
   const [view, setView] = useState<{ at: number; host: HTMLElement } | null>(null);
 
   if (ids.length === 0) return null;
   const many = ids.length > 1;
+  // one or two pictures are one row; more are two, the first with the odd one out
+  const first = ids.length <= 2 ? ids.length : Math.ceil(ids.length / 2);
+  const rows = [ids.slice(0, first), ids.slice(first)].filter((row) => row.length > 0);
   return (
-    <span className="mt-1 flex max-w-full flex-wrap gap-1">
-      {ids.map((id, i) => (
-        <button
-          key={id}
-          type="button"
-          aria-label={many ? `picture ${i + 1} of ${ids.length}` : 'picture'}
-          title="see it full size"
-          className="block max-w-full"
-          onClick={(e) => setView({ at: i, host: e.currentTarget.ownerDocument.body })}
-        >
-          <img src={pictureSrc(id)} alt="" className="max-h-[7.5rem] max-w-full object-contain" />
-        </button>
+    // the grid asks for 28rem and takes what the line has: inside a block, and inside the server line's shrink-to-fit column alike
+    <span className={cn('mt-1 flex max-w-full flex-col gap-1', many && 'w-[28rem]')}>
+      {rows.map((row, r) => (
+        <span key={r} className={cn('flex gap-1', many && 'h-24')}>
+          {row.map((id, j) => {
+            const i = r * first + j;
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-label={many ? `picture ${i + 1} of ${ids.length}` : 'picture'}
+                title="see it full size"
+                className={many ? 'min-w-0 flex-1' : 'block max-w-full'}
+                onClick={(e) => setView({ at: i, host: e.currentTarget.ownerDocument.body })}
+              >
+                <img src={pictureSrc(id)} alt="" className={many ? 'h-full w-full object-cover' : 'max-h-[7.5rem] max-w-full object-contain'} />
+              </button>
+            );
+          })}
+        </span>
       ))}
       {view &&
         createPortal(
@@ -201,19 +214,26 @@ interface PictureViewProps {
   onClose: () => void;
 }
 
+/** The picture stops this far from the window's edges, in percent of the window, on the two sides it reaches. */
+const PICTURE_EDGE = 3;
+
 /**
- * A chat picture over the whole page: the page dimmed grey behind it, the picture as tall or as
- * wide as the window allows (scaled up as well as down). A native <dialog> opened modal on mount,
- * the way ConfirmDialog is: the browser keeps focus in it, closes it on escape and hands focus
- * back to the thumbnail. The × closes it too, and so does a click on the grey beside the picture.
- * Several on the line get arrows at the edges, and the arrow keys.
+ * A chat picture over the whole page: the page dimmed dark grey behind it, the picture as tall or
+ * as wide as the window allows less a small edge (scaled up as well as down), and a little blue
+ * in the grey under it. A native <dialog> opened modal on mount, the way ConfirmDialog is: the
+ * browser keeps focus in it, closes it on escape and hands focus back to the thumbnail. The ×
+ * closes it too, and so does a click on the grey beside the picture. Several on the line get
+ * arrows at the edges, and the arrow keys.
  */
 function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
-  const img = useRef<HTMLImageElement | null>(null);
   /** The press that began this click was beside the picture too: a drag off the picture is not a close. */
   const pressedBeside = useRef(false);
+  /** Width over height of each picture seen so far, read when it loads: its drawn size comes from it. */
+  const [ratios, setRatios] = useState<Record<string, number>>({});
   const many = ids.length > 1;
+  const shown = ids[at];
+  const ratio = shown === undefined ? undefined : ratios[shown];
 
   // A layout effect: its cleanup runs while the node is still in the document, which is when close() hands focus back.
   useLayoutEffect(() => {
@@ -226,21 +246,9 @@ function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
   }, []);
 
   const close = () => dialogRef.current?.close();
-  const shown = ids[at];
-
-  /** The point is on the grey, not on a button or the picture. The <img> box is the whole window; the picture is letterboxed in it, so its drawn edges are worked out. */
-  function beside(e: { target: EventTarget; clientX: number; clientY: number }): boolean {
-    if (e.target instanceof Element && e.target.closest('button')) return false;
-    const el = img.current;
-    if (!el || !el.naturalWidth || !el.naturalHeight) return true;
-    const box = el.getBoundingClientRect();
-    const k = Math.min(box.width / el.naturalWidth, box.height / el.naturalHeight);
-    const w = el.naturalWidth * k;
-    const h = el.naturalHeight * k;
-    const left = box.left + (box.width - w) / 2;
-    const top = box.top + (box.height - h) / 2;
-    return e.clientX < left || e.clientX > left + w || e.clientY < top || e.clientY > top + h;
-  }
+  /** On the grey: not on a button, and not on the picture (the <img> is drawn at exactly the picture's size). */
+  const beside = (target: EventTarget) => target instanceof Element && !target.closest('button, img');
+  const span = 100 - 2 * PICTURE_EDGE;
 
   return (
     <dialog
@@ -249,20 +257,38 @@ function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
       aria-label={many ? `picture ${at + 1} of ${ids.length}` : 'picture'}
       onClose={onClose}
       onPointerDown={(e) => {
-        pressedBeside.current = beside(e);
+        pressedBeside.current = beside(e.target);
       }}
       onClick={(e) => {
-        if (pressedBeside.current && beside(e)) close();
+        if (pressedBeside.current && beside(e.target)) close();
       }}
       onKeyDown={(e) => {
         if (!many || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
         e.preventDefault();
         onStep(e.key === 'ArrowLeft' ? -1 : 1);
       }}
-      // the whole window, the grey on the dialog itself (the backdrop would not see the theme's variables everywhere)
-      className="fixed inset-0 m-0 h-auto w-auto max-h-none max-w-none overflow-hidden border-0 bg-backgroundTertiary/80 p-0 backdrop:bg-transparent"
+      // the whole window, a column: the room over the picture, the picture, the room under it. a size container, so
+      // the picture's width can be put in terms of the window's height (`cqh`) without the scrollbar gutter in the way
+      className="fixed inset-0 m-0 hidden h-auto w-auto max-h-none max-w-none flex-col overflow-hidden border-0 bg-neutral-700/85 p-0 backdrop:bg-transparent open:flex [container-type:size]"
     >
-      {shown && <img ref={img} src={pictureSrc(shown)} alt="" draggable={false} className="h-full w-full object-contain" />}
+      <div className="flex-1" />
+      {shown && (
+        <img
+          key={shown}
+          src={pictureSrc(shown)}
+          alt=""
+          draggable={false}
+          onLoad={(e) => {
+            const { naturalWidth, naturalHeight } = e.currentTarget;
+            if (naturalWidth && naturalHeight) setRatios((all) => ({ ...all, [shown]: naturalWidth / naturalHeight }));
+          }}
+          // as wide as the window less the edge, or as tall as that, whichever comes first; the height follows from the ratio. unseen until the ratio is known
+          style={ratio === undefined ? undefined : { width: `min(${span}cqw, calc(${span}cqh * ${ratio}))` }}
+          className={cn('shrink-0 self-center', ratio === undefined && 'invisible')}
+        />
+      )}
+      {/* everything under the picture: the grey with a little of the blue in it */}
+      <div className="flex-1 bg-primaryBlue/10" />
       <button type="button" id="chat-picture-close" aria-label="close" className={cn(CHIP_BUTTON, 'absolute right-3 top-3 h-10 w-10 justify-center')} onClick={close}>
         <RiCloseLine aria-hidden size={24} />
       </button>
@@ -566,7 +592,7 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
               autoComplete="off"
               className="min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base"
             />
-            <Button id="chat-join" variant="primary" flat className="px-4 py-2 text-base" disabled={!nickOk} onClick={open}>
+            <Button id="chat-join" variant="primary" className="px-4 py-2 text-base" disabled={!nickOk} onClick={open}>
               join
             </Button>
             {/* "that name has an account": the refusal that sent you back here */}
@@ -631,7 +657,7 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
                 autoComplete="off"
                 className="h-10 min-w-0 flex-1 border border-primaryStroke bg-background px-3 text-base"
               />
-              <Button id="chat-send" variant="primary" flat className="h-10 shrink-0 px-4 text-base" disabled={!canSend} onClick={sendChat}>
+              <Button id="chat-send" variant="primary" className="h-10 shrink-0 px-4 text-base" disabled={!canSend} onClick={sendChat}>
                 send
               </Button>
             </div>

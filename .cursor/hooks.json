@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": ".cursor/hooks/no-box-shadow.sh",
+        "matcher": "Write|StrReplace|Edit"
+      }
+    ]
+  }
+}

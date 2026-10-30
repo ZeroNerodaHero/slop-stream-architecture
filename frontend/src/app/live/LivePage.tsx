@@ -1,14 +1,11 @@
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 
 import { api } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
   addStreamThumb,
-  avatarStatusAtom,
-  bioDraftAtom,
-  bioStatusAtom,
   cameraAtom,
   canShareScreenAtom,
   canStartAtom,
@@ -27,17 +24,13 @@ import {
   previewStreamAtom,
   publishPhaseAtom,
   publishStatsAtom,
-  myAvatarAtom,
   ownerAtom,
   publishMessageAtom,
   publishToneAtom,
-  removeAvatar,
   removeSource,
   removeStreamThumb,
   reorderSource,
   resizeSource,
-  saveAvatar,
-  saveBio,
   sceneAtom,
   screenShareSupported,
   screensAtom,
@@ -59,19 +52,15 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
-import { isValidName } from '@/infra/names';
 import { SCREEN_SLOTS } from '@/infra/relay';
-import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
-import { Face } from '@/shared-components/Face';
 import { Mixer } from '@/shared-components/live/Mixer';
 import { Presets } from '@/shared-components/live/Presets';
 import { Sources } from '@/shared-components/live/Sources';
 import { MicMeter } from '@/shared-components/MicMeter';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { panelClassName } from '@/shared-components/Panel';
-import { PicturePick } from '@/shared-components/PicturePick';
 import { type SceneEdit, SceneView } from '@/shared-components/SceneView';
 import { StatusLine } from '@/shared-components/StatusLine';
 import { ViewerCount } from '@/shared-components/ViewerCount';
@@ -94,10 +83,6 @@ export function LivePage() {
   const phase = useAtomValue(publishPhaseAtom);
   const stats = useAtomValue(publishStatsAtom);
   const watchUrl = useAtomValue(watchUrlAtom);
-  const bioDraft = useAtomValue(bioDraftAtom);
-  const bioStatus = useAtomValue(bioStatusAtom);
-  const avatar = useAtomValue(myAvatarAtom);
-  const avatarStatus = useAtomValue(avatarStatusAtom);
   const thumbs = useAtomValue(streamThumbsAtom);
   const thumbStatus = useAtomValue(thumbStatusAtom);
   const owner = useAtomValue(ownerAtom);
@@ -218,12 +203,12 @@ export function LivePage() {
               className="w-full max-w-[320px] border border-primaryStroke bg-backgroundSecondary px-4 py-3 text-textPrimary disabled:opacity-60"
             />
             {!publishing && (
-              <Button id="start" variant="primary" flat disabled={!canStart} onClick={() => void goLive()}>
+              <Button id="start" variant="primary" disabled={!canStart} onClick={() => void goLive()}>
                 start
               </Button>
             )}
             {publishing && (
-              <Button id="stop" variant="danger" flat onClick={() => stopLive()}>
+              <Button id="stop" variant="danger" onClick={() => stopLive()}>
                 stop
               </Button>
             )}
@@ -259,7 +244,7 @@ export function LivePage() {
         {/* the streamer's own chat, in the room of the settled name. once live, `owner` makes its lines marked */}
         <ChatSlot>
           {chatRoom ? (
-            <ChatPanel name={chatRoom} owner={owner} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0 shadow-none')} />
+            <ChatPanel name={chatRoom} owner={owner} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
           ) : (
             <aside
               id="chat"
@@ -271,104 +256,44 @@ export function LivePage() {
         </ChatSlot>
 
         <div className={cn('min-w-0', chatSide === 'right' && 'lg:col-start-1', chatSide === 'left' && 'lg:col-start-2 lg:row-start-2')}>
+          {/* pictures for the card on home. none, and that card shows the camera. the status and the picture are
+              not here: the profile tab (the user modal) is where they are set */}
           <section className={panelClassName('my-5 px-5 py-4')}>
-            {/* the status: one line about you, under your name on your page and beside it on home. `bio` on the
-                wire (the word `status` is the presence choice's, docs/status.md). the profile tab has the same box */}
-            <label htmlFor="bio" className="text-textSecondary">
-              your status
-            </label>
-            <p className="mt-1 text-sm text-textSecondary">one line: what you are up to, what this stream is. under your name on your page, on your card on home.</p>
-            <input
-              id="bio"
-              value={bioDraft}
-              onChange={(e) => store.set(bioDraftAtom, e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void saveBio();
-              }}
-              placeholder="what are you up to. what is this stream."
-              maxLength={500}
-              autoComplete="off"
-              className="mt-2 w-full border border-primaryStroke bg-background px-4 py-3 text-textPrimary"
-            />
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <button id="savebio" type="button" className="text-base font-semibold text-primaryBlue" onClick={() => void saveBio()}>
-                save status
-              </button>
-              <span id="biostatus" className="text-textSecondary" aria-live="polite">
-                {bioStatus}
-              </span>
-            </div>
-            {isValidName(name) && (
-              <p className="mt-3 text-sm text-textTertiary">
-                your links are written on your page, under the player:{' '}
-                <Link id="your-page" to={`/watch/${name}`} className="text-primaryBlue underline-offset-2 hover:underline">
-                  /watch/{name}
-                </Link>
-              </p>
+            <p className="text-textSecondary">thumbnails</p>
+            <p className="mt-1 text-sm text-textSecondary">
+              one picture on your card on home, until that page is refreshed. with none, home shows one frame of the camera.
+            </p>
+            {thumbs.length > 0 && (
+              <ul className="mt-3 flex list-none flex-wrap gap-3 p-0">
+                {thumbs.map((id) => (
+                  <li key={id} className="w-36">
+                    <img src={api.streamThumbUrl(name, id)} alt="" draggable={false} className="aspect-video w-full border border-primaryStroke object-cover" />
+                    <button id={`thumb-remove-${id}`} type="button" className="mt-2 text-sm font-semibold text-textTertiary" onClick={() => void removeStreamThumb(id)}>
+                      remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
-
-            {/* the picture: on the watch page next to your name, and in the preview card of a shared link. the face
-                itself is the way to a new one, as a group's picture is: the pointer over it puts a camera on it */}
-            <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-primaryStroke pt-4">
-              <div className="group/avatar relative flex">
-                <Face name={name} version={avatar} className="h-16 w-16 text-2xl" />
-                <PicturePick
-                  id="avatar-file"
-                  label={avatar === null ? 'choose picture' : 'change picture'}
-                  reveal="group-hover/avatar:opacity-100"
-                  className="inset-0"
-                  onPick={(file) => void saveAvatar(file)}
-                />
-              </div>
-              <span className="text-textSecondary">your picture. click it to change it.</span>
-              {avatar !== null && (
-                <button id="avatar-remove" type="button" className="text-base font-semibold text-textTertiary" onClick={() => void removeAvatar()}>
-                  remove
-                </button>
-              )}
-              <span id="avatarstatus" className="text-textSecondary" aria-live="polite">
-                {avatarStatus}
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <input
+                ref={thumbFileRef}
+                id="thumb-file"
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (file) void addStreamThumb(file);
+                }}
+              />
+              <button id="thumb-add" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={thumbs.length >= 6 || thumbStatus === 'saving'} onClick={() => thumbFileRef.current?.click()}>
+                add a thumbnail
+              </button>
+              <span id="thumbstatus" className="text-textSecondary" aria-live="polite">
+                {thumbStatus}
               </span>
-            </div>
-
-            {/* pictures for the card on home. none, and that card shows the camera */}
-            <div className="mt-4 border-t border-primaryStroke pt-4">
-              <p className="text-textSecondary">thumbnails</p>
-              <p className="mt-1 text-sm text-textSecondary">
-                one picture on your card on home, until that page is refreshed. with none, home shows one frame of the camera.
-              </p>
-              {thumbs.length > 0 && (
-                <ul className="mt-3 flex list-none flex-wrap gap-3 p-0">
-                  {thumbs.map((id) => (
-                    <li key={id} className="w-36">
-                      <img src={api.streamThumbUrl(name, id)} alt="" draggable={false} className="aspect-video w-full border border-primaryStroke object-cover" />
-                      <button id={`thumb-remove-${id}`} type="button" className="mt-2 text-sm font-semibold text-textTertiary" onClick={() => void removeStreamThumb(id)}>
-                        remove
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="mt-3 flex flex-wrap items-center gap-3">
-                <input
-                  ref={thumbFileRef}
-                  id="thumb-file"
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = '';
-                    if (file) void addStreamThumb(file);
-                  }}
-                />
-                <button id="thumb-add" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={thumbs.length >= 6 || thumbStatus === 'saving'} onClick={() => thumbFileRef.current?.click()}>
-                  add a thumbnail
-                </button>
-                <span id="thumbstatus" className="text-textSecondary" aria-live="polite">
-                  {thumbStatus}
-                </span>
-              </div>
             </div>
           </section>
         </div>

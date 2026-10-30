@@ -21,7 +21,7 @@ export function CrashPage() {
       <pre id="crash" className="mt-3 whitespace-pre-wrap text-sm text-textTertiary [overflow-wrap:anywhere]">
         {message}
       </pre>
-      <Button variant="primary" flat className="mt-5" onClick={() => location.reload()}>
+      <Button variant="primary" className="mt-5" onClick={() => location.reload()}>
         reload
       </Button>
     </main>

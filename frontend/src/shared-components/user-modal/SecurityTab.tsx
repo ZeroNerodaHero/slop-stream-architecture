@@ -95,7 +95,7 @@ function LoggedOut() {
           />
         </Field>
         <div className="flex flex-wrap items-center gap-4">
-          <Button id="sec-submit" type="submit" variant="primary" flat className={BUTTON} disabled={busy || !name || !password}>
+          <Button id="sec-submit" type="submit" variant="primary" className={BUTTON} disabled={busy || !name || !password}>
             {signingUp ? 'sign up' : 'log in'}
           </Button>
           <button
@@ -184,7 +184,6 @@ function LoggedIn({ me }: { me: string }) {
               <Button
                 id="sec-logout-all"
                 variant="danger"
-                flat
                 className={BUTTON}
                 onClick={() => {
                   void logoutAll().then(() => identityChanged('login'));

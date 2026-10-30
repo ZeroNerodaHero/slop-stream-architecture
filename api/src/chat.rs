@@ -400,8 +400,9 @@ async fn face_now(db: &PgPool, room: &str, w: &Who) -> Option<i64> {
     }
 }
 
-/// Whose picture a line wears: the account's for a login, the name's for the room's streamer
-/// (and for a login's line from before `uid` rode along, as it was written), nobody's for a nick.
+/// Whose picture a line wears: the account's for a login (`uid`, which every login's line in
+/// every stream has: scripts/migrate-scripts/migrate-1.sh filled the ones from before), the
+/// name's for the room's streamer, nobody's for a nick.
 enum FaceKey<'a> {
     Id(Uuid),
     Name(&'a str),
@@ -410,7 +411,7 @@ enum FaceKey<'a> {
 fn face_key(line: &Line) -> Option<FaceKey<'_>> {
     match (line.verified, line.user_id, line.streamer) {
         (true, Some(id), _) => Some(FaceKey::Id(id)),
-        (true, None, _) | (false, _, true) => Some(FaceKey::Name(&line.from)),
+        (false, _, true) => Some(FaceKey::Name(&line.from)),
         _ => None,
     }
 }
@@ -1139,7 +1140,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
     let groups: Vec<Badge> = entry.get::<String>("g").and_then(|g| serde_json::from_str(&g).ok()).unwrap_or_default();
     // no `a` field is a line with no picture (as written; `with_faces` has the last word)
     let avatar: Option<i64> = entry.get::<String>("a").and_then(|a| a.parse().ok());
-    // no `uid` field is a login's line from before it rode along: its face is looked up by name
+    // the account behind a login's line: what its face is looked up by
     let user_id: Option<Uuid> = entry.get::<String>("uid").and_then(|u| Uuid::parse_str(&u).ok());
     let images = {
         let mut images = split_pictures(entry.get::<String>("img"));

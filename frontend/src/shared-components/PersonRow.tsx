@@ -57,6 +57,8 @@ export function PersonRow({ id, name, verified, avatar, bio, presence, onPick, s
     <Link
       id={id}
       to={`/watch/${encodeURIComponent(name)}`}
+      // streaming: the page holds the player's box from its first paint (WatchPage.tsx)
+      state={presence === 'streaming' ? { live: true } : undefined}
       onClick={onPick}
       title={bio || name}
       className={cn(

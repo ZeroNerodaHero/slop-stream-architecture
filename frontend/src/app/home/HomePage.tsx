@@ -15,6 +15,7 @@ import { buttonClassName } from '@/shared-components/Button';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { PersonRow } from '@/shared-components/PersonRow';
+import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { TestBadge } from '@/shared-components/TestBadge';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { cn } from '@/utils/cn';
@@ -31,6 +32,13 @@ const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-6';
 const PEOPLE_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3';
 /** The recently offline: the same rectangle, the live cards' width, so "last live 12 min ago" has room beside the face and the button. */
 const RECENT_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3';
+/** The groups as squares, as many as fit. */
+const GROUPS_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3';
+/** The two cards played live at the top, side by side at lg and up. */
+const FEATURED_GRID = 'grid grid-cols-1 gap-6 lg:grid-cols-2';
+/** How many grey squares and rectangles stand in for the groups and the people before they have answered. */
+const GROUPS_GUESS = 6;
+const PEOPLE_GUESS = 8;
 /**
  * The words of a part's heading (`Part`): `active streams`, `recently offline`, `groups`,
  * `people`. The words and the count over a fat line as wide as they are, the line's colour saying
@@ -162,6 +170,8 @@ function Card({
     <article className={CARD_LINK} data-featured={featured ? stream.name : undefined} onPointerEnter={(event) => onEnter(event.pointerType)} onPointerLeave={onLeave}>
       <Link
         to={`/watch/${encodeURIComponent(stream.name)}`}
+        // a card is a stream: the page holds the player's box from its first paint (WatchPage.tsx)
+        state={{ live: true }}
         aria-label={`watch ${stream.name}`}
         className="block outline-none"
         onFocus={() => onEnter('keyboard')}
@@ -237,6 +247,25 @@ function Part({ id, line, heading, children }: { id: string; line: string; headi
 function People() {
   const people = useQuery({ queryKey: ['people'], queryFn: api.people, refetchInterval: PEOPLE_POLL_MS, refetchOnWindowFocus: false });
   const list: Person[] = people.data ?? [];
+  // before the first answer: the heading and a row of grey rectangles, the people's shape, so the part is
+  // there from the first paint instead of arriving under the groups
+  if (people.isPending) {
+    return (
+      <Part id="people" line={OFFLINE_LINE} heading="people">
+        <Skeleton id="people-loading" className={PEOPLE_GRID}>
+          {Array.from({ length: PEOPLE_GUESS }, (_, i) => (
+            <div key={i} className={cn(CARD, 'flex items-center gap-3 p-3')}>
+              <Bone className="h-12 w-12 shrink-0" />
+              <div className="flex flex-1 flex-col gap-1.5">
+                <Bone className="h-4 w-1/2" />
+                <Bone className="h-3 w-1/3" />
+              </div>
+            </div>
+          ))}
+        </Skeleton>
+      </Part>
+    );
+  }
   if (!people.data || list.length === 0) return null;
   const here = list.filter((p) => p.presence !== 'offline').length;
   return (
@@ -330,7 +359,7 @@ function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
 function Groups() {
   const query = useQuery({ queryKey: ['explore'], queryFn: api.explore, refetchInterval: PEOPLE_POLL_MS, refetchOnWindowFocus: false });
   const groups: Server[] = query.data ? [...query.data.yours, ...query.data.discover].filter((group) => group.mine || group.public !== false) : [];
-  if (!query.data && !query.error) return null;
+  const loading = !query.data && !query.error;
   return (
     <Part
       id="home-groups"
@@ -348,10 +377,18 @@ function Groups() {
         </>
       }
     >
+      {/* before the first answer: a row of grey squares, the groups' shape. the part always shows once asked (`no groups yet.` for none), so the grey never comes to nothing */}
+      {loading && (
+        <Skeleton id="home-groups-loading" className={GROUPS_GRID}>
+          {Array.from({ length: GROUPS_GUESS }, (_, i) => (
+            <Bone key={i} className="aspect-square" />
+          ))}
+        </Skeleton>
+      )}
       {query.error && <p className="text-textSecondary">{messageOf(query.error)}</p>}
       {query.data && groups.length === 0 && <p className="text-textSecondary">no groups yet.</p>}
       {groups.length > 0 && (
-        <ul className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3">
+        <ul className={GROUPS_GRID}>
           {groups.map((group) => (
             <GroupSquare key={group.name} server={group} id={`home-group-${group.name}`} />
           ))}
@@ -361,23 +398,26 @@ function Groups() {
   );
 }
 
-/** Three cards' worth of grey, for the moment before the first answer. */
-function Skeleton() {
+/**
+ * The featured cards' worth of grey, in their grid, for the moment before the first answer: the
+ * top of the page as it is on a day with streams, so the two that come land where the grey was.
+ */
+function StreamsSkeleton() {
   return (
-    <div id="loading" className={GRID} aria-busy="true" aria-label="loading">
-      {[0, 1, 2].map((i) => (
-        <div key={i} className={cn(CARD, 'animate-pulse')}>
-          <div className="aspect-video border-b border-primaryStroke bg-backgroundTertiary" />
+    <Skeleton id="loading" className={FEATURED_GRID}>
+      {Array.from({ length: FEATURED }, (_, i) => (
+        <div key={i} className={CARD}>
+          <Bone className="aspect-video border-b border-primaryStroke" />
           <div className="flex items-start gap-3 p-4">
-            <span className="h-11 w-11 shrink-0 bg-backgroundTertiary" />
-            <div className="flex-1 space-y-2 py-1">
-              <div className="h-4 w-1/2 bg-backgroundTertiary" />
-              <div className="h-3 w-5/6 bg-backgroundTertiary" />
+            <Bone className="h-11 w-11 shrink-0" />
+            <div className="flex flex-1 flex-col gap-2 py-1">
+              <Bone className="h-5 w-1/2" />
+              <Bone className="h-4 w-5/6" />
             </div>
           </div>
         </div>
       ))}
-    </div>
+    </Skeleton>
   );
 }
 
@@ -442,7 +482,7 @@ export function HomePage() {
             api is down: {error}
           </p>
         )}
-        {!error && !streams && <Skeleton />}
+        {!error && !streams && <StreamsSkeleton />}
         {list?.length === 0 && (
           <div id="empty" className="border border-dashed border-secondaryStroke px-6 py-16 text-center" aria-live="polite">
             <p className="text-textSecondary">nobody is live. you could be.</p>
@@ -453,7 +493,7 @@ export function HomePage() {
         )}
         <div id="list" className={cn(!list?.length && 'hidden')}>
           {featured.length > 0 && (
-            <div id="featured" className={cn('grid grid-cols-1 gap-6 lg:grid-cols-2', rest.length > 0 && 'mb-6')}>
+            <div id="featured" className={cn(FEATURED_GRID, rest.length > 0 && 'mb-6')}>
               {featured.map((stream) => (
                 <Card key={stream.name} stream={stream} now={now} featured playing onEnter={() => undefined} onLeave={() => undefined} />
               ))}

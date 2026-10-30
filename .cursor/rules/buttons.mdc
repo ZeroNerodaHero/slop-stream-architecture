@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Buttons
 
-`Button` always draws a border and a fill. That is a commit: make it, go live, log in, the yes on a dialog. A button in the title bar uses `flat`. No box-shadow, on `Button` or anywhere else.
+`Button` always draws a border and a fill, and nothing else: no shadow, no press movement, and no `flat` prop (there is nothing left for one to turn off). That is a commit: make it, go live, log in, the yes on a dialog. No box-shadow, on `Button` or anywhere else.
 
 A small action is not that. Add, delete, kick, leave, cancel, the no on a confirm, save on a line already in the page: words only, no border, no box, no `Button`. The yes stays a `Button`. This is every screen, including ones already shipped.
 

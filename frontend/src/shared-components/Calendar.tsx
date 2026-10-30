@@ -9,7 +9,7 @@ import { cn } from '@/utils/cn';
 
 /** The day labels' column, px. The hour lines and the scale start after it. */
 const LABEL_W = 58;
-const NAV = buttonClassName('secondary', 'px-2 py-0.5 text-xs', true);
+const NAV = buttonClassName('secondary', 'px-2 py-0.5 text-xs');
 const HOURS: [number, string][] = [
   [0, '12am'],
   [25, '6am'],

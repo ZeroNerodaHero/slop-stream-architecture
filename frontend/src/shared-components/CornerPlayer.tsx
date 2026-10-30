@@ -28,10 +28,7 @@ import { cn } from '@/utils/cn';
 /** The parts of the player you take hold of to move it: no text selection, no page scroll on touch, no long-press menu. */
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
 
-/**
- * The panel look without its offset shadow: a floating box over a page of boxes with shadows
- * of their own would read as one more block behind it. The stroke alone marks its edge.
- */
+/** The box look: a stroke on the box colour. The stroke alone marks its edge (no-box-shadow.mdc). */
 const FRAME = 'border border-primaryStroke bg-backgroundSecondary';
 
 /**

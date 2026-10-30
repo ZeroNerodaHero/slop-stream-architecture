@@ -6,7 +6,7 @@ import { cn } from '@/utils/cn';
 export const SECTION_TITLE = 'text-xs font-semibold uppercase tracking-wider text-textTertiary';
 /** A box to type in, on the page colour so it stands off the pane. */
 export const INPUT = 'w-full border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary disabled:opacity-40';
-/** The buttons in a pane: a size down from the page's, and `flat` with it (an outline, no hard shadow: the shadow is the page's, not a form's). */
+/** The buttons in a pane: a size down from the page's. */
 export const BUTTON = 'px-4 py-2 text-base';
 
 /** One block of a pane. The parent is `divide-y divide-primaryStroke`, which draws the rule between blocks. */

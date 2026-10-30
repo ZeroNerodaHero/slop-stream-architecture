@@ -351,10 +351,12 @@ Use the browser `RTCPeerConnection` directly, no iceServers. `<video>` elements 
 
 ```text
 docker-compose.yml   certs, pages, frontend, api, chat, database, redis, video, dummy
-scripts/             the commands you run, from the repo root: deploy.sh, ship.sh, test.sh, seed.sh, manage.sh
+scripts/             the commands you run, from the repo root: deploy.sh, ship.sh, test.sh, seed.sh, manage.sh, migrate.sh
+scripts/migrate-scripts/  the data migrations that are not the schema's: migrate-<n>.sh, run once each in order by migrate.sh (deploy.sh calls it after the health check), each looking before it acts. lib.sh is what they share
 .env                 PUBLIC_IP, CARGO_BUILD_JOBS, ENV_NAME (written by deploy.sh), ADMIN_NAMES, OPS_TOKEN, DUMMY_* (.env.example to start by hand)
 .deployed            the commit the last deploy.sh run that ended well deployed (gitignored). --pull diffs from it
-.dockerignore        keeps target/, frontend, docs, .env and .deployed out of the rust images
+.migrated            the migrate-<n>.sh that have run on this machine, one line each (gitignored). migrate.sh skips those
+.dockerignore        keeps target/, frontend, docs, .env, .deployed and .migrated out of the rust images
 Cargo.toml           workspace: video, api. one Cargo.lock (commit it: the images build with --locked)
 video/               rust sfu. ws 7880 internal, media udp 7882. Dockerfile with ARG CARGO_BUILD_JOBS
 video/src/dummy.rs   `video dummy`, the fake streams. video/Dockerfile.dummy adds a font
@@ -389,7 +391,7 @@ random-media/        the dummy's gifs (in its image) and the seed script's pictu
 
 Same stack and conventions as Axiom-Frontend, scaled down: Vite 8 + React 19 + TypeScript (strict) + Tailwind 3 with the same token names (`background`, `textPrimary`, `primaryBlue`, `primaryStroke`, `increase`, `decrease`…) fed by css variables, Jotai 2 atoms, React Router 7, TanStack Query for the home poll, `clsx` + `tailwind-merge`, Geist, oxlint + oxfmt (`printWidth` 169, single quotes, no trailing commas).
 
-The look: hard edges. The tailwind theme has no border radius at all (`borderRadius: { none }`, so a `rounded-xl` typed out of habit produces no css), every box is a 1px stroke on the secondary background with a solid offset shadow (`shadow-hard`; `shadow-hard-blue` on hover and focus for boxes that are links, `shadow-hard-lg` for the corner player), buttons move onto their shadow when pressed, inputs turn their border blue on focus instead of a ring, avatars and the live dots are squares, page titles carry a 4px blue bar on the left and the header a rule underneath. `panelClassName()` in `shared-components/Panel.tsx` is the one place the box look lives. The api's pre-react watch card (`api/src/profile.rs`, `index.html`'s template) follows the same rules by hand, in the same token classes, so it takes the theme too; the monitor's page (`api/src/monitor.html`) copies the dark values by hand and stays dark (another box, another origin).
+The look: hard edges. The tailwind theme has no border radius at all (`borderRadius: { none }`, so a `rounded-xl` typed out of habit produces no css) and no box shadow at all (`boxShadow: {}`, so a `shadow-md` produces none either; `.cursor/rules/no-box-shadow.mdc`, and `frontend/scripts/no-box-shadow.sh` fails `npm run build` on a `shadow-*` class or a `box-shadow`), every box is a 1px stroke on the secondary background and nothing more, a hover or a press is a colour or a border change, inputs turn their border blue on focus instead of a ring, avatars and the live dots are squares, page titles carry a 4px blue bar on the left and the header a rule underneath. `panelClassName()` in `shared-components/Panel.tsx` is the one place the box look lives. The api's pre-react watch card (`api/src/profile.rs`, `index.html`'s template) follows the same rules by hand, in the same token classes, so it takes the theme too; the monitor's page (`api/src/monitor.html`) copies the dark values by hand and stays dark (another box, another origin).
 
 Conventions kept from `frontend-conventions.mdc`:
 

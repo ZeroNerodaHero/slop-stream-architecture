@@ -30,7 +30,7 @@ const MAX_BADGE_CHARS = 12;
 const MAX_ABOUT_CHARS = 200;
 /** The colours to start from: discord's blurple, then the fake streams' box colours. The colour box takes any other. */
 const SWATCHES = ['#5865f2', '#f85149', '#3fb950', '#f2cc60', '#bc8cff', '#ff9f43', '#39d2c0', '#ff6bcb'] as const;
-/** The buttons in a row of the list: a size down from the pane's, and `flat` like them. */
+/** The buttons in a row of the list: a size down from the pane's. */
 const SMALL = 'px-3 py-1.5 text-sm';
 
 /**
@@ -133,7 +133,7 @@ function GroupRow({ group, me, busy }: { group: Group; me: string | null; busy: 
           <span className="text-sm text-textTertiary">automatic</span>
         ) : me === null ? null : group.mine && leaveSure ? (
           <>
-            <Button id={`group-leave-${group.name}`} variant="danger" flat className={SMALL} disabled={busy} onClick={() => void leaveGroup(group.name)}>
+            <Button id={`group-leave-${group.name}`} variant="danger" className={SMALL} disabled={busy} onClick={() => void leaveGroup(group.name)}>
               {group.members <= 1 ? 'sure? deletes it' : 'sure?'}
             </Button>
             <button type="button" onClick={() => setLeaveSure(false)} className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline">
@@ -145,7 +145,7 @@ function GroupRow({ group, me, busy }: { group: Group; me: string | null; busy: 
             leave
           </button>
         ) : (
-          <Button id={`group-join-${group.name}`} variant="primary" flat className={SMALL} disabled={busy} onClick={() => void joinGroup(group.name)}>
+          <Button id={`group-join-${group.name}`} variant="primary" className={SMALL} disabled={busy} onClick={() => void joinGroup(group.name)}>
             join
           </Button>
         )}
@@ -301,7 +301,7 @@ function MakeGroup({ me, busy }: { me: string; busy: boolean }) {
           </button>
         </div>
         <div className="flex flex-wrap items-center gap-4">
-          <Button id="group-create" type="submit" variant="primary" flat className={BUTTON} disabled={busy || !ok}>
+          <Button id="group-create" type="submit" variant="primary" className={BUTTON} disabled={busy || !ok}>
             make it
           </Button>
           {/* the badge as a chat line will show it, live as you type */}

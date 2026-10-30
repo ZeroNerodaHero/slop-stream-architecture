@@ -23,7 +23,7 @@ interface PageFrameProps {
  */
 export function HomeLink({ reload = false }: { reload?: boolean }) {
   return (
-    <Link id="home" to="/" reloadDocument={reload || undefined} className={buttonClassName('secondary', 'shrink-0 gap-1 px-3 py-1.5 text-sm', true)}>
+    <Link id="home" to="/" reloadDocument={reload || undefined} className={buttonClassName('secondary', 'shrink-0 gap-1 px-3 py-1.5 text-sm')}>
       <RiArrowLeftSLine aria-hidden size={18} />
     </Link>
   );
@@ -31,9 +31,8 @@ export function HomeLink({ reload = false }: { reload?: boolean }) {
 
 /**
  * The right end of every page's title row: the notifications bell (Notifications.tsx, the
- * inbox opens under it), then go live, absent on its own page. Flat: they sit in a bar over
- * the page, and a shadow there read as one more box. Search is the sidebar's (Friends.tsx),
- * and so is the settings gear, at the far end of your line in it (UserPanel.tsx).
+ * inbox opens under it), then go live, absent on its own page. Search is the sidebar's
+ * (Friends.tsx), and so is the settings gear, at the far end of your line in it (UserPanel.tsx).
  */
 function TopActions() {
   const { pathname } = useLocation();
@@ -42,7 +41,7 @@ function TopActions() {
     <div className="ml-auto flex shrink-0 items-center gap-2">
       <NotificationsBell />
       {!onLivePage && (
-        <Link id="go-live" to="/live" className={buttonClassName('primary', 'px-3 py-2 text-sm', true)}>
+        <Link id="go-live" to="/live" className={buttonClassName('primary', 'px-3 py-2 text-sm')}>
           go live
         </Link>
       )}

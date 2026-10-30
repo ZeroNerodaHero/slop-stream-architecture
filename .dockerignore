@@ -16,6 +16,7 @@ node_modules
 .env
 .env.*
 .deployed
+.migrated
 .seeded-users
 
 # the seed script's pictures (seed.sh). random-media/gifs stays: the dummy image copies it

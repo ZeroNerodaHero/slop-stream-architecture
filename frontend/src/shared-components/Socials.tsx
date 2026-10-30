@@ -96,7 +96,7 @@ export function Socials({ name, doc, onEdit, id = 'socials', className }: Social
       <div id={id} data-layout={doc.layout} data-size={doc.size} data-empty className={cn('flex flex-wrap items-center gap-3 text-textSecondary', className)}>
         <p>{onEdit ? 'nowhere else yet. put your links here: where you post, where to find you between streams.' : `${name} has not put any links here yet.`}</p>
         {onEdit && (
-          <button id="socials-edit" type="button" onClick={onEdit} className={buttonClassName('primary', 'px-3 py-1.5 text-sm', true)}>
+          <button id="socials-edit" type="button" onClick={onEdit} className={buttonClassName('primary', 'px-3 py-1.5 text-sm')}>
             add links
           </button>
         )}

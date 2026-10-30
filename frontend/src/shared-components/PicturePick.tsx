@@ -7,12 +7,26 @@ import { cn } from '@/utils/cn';
  * picture in a `relative` parent with a named group (`group/x`). With the pointer over it
  * (`reveal`: the parent's `group-hover/x:opacity-100`), or the input in keyboard focus, the
  * picture greys and a camera sits in the middle of it. A screen with no hover gets the camera
- * small in the corner instead, all the time, and no grey. `label` is the input's name and the
- * tooltip. The crop dialog takes the file from here. The group's pictures, your own picture
- * and the offline picture are all changed this way; a remove, where there is one, is a word
- * beside the picture.
+ * small in the corner instead, all the time, and no grey (`icon` is the camera's size: smaller
+ * on a small face, so it does not cover it). `label` is the input's name and the tooltip. The
+ * crop dialog takes the file from here. The group's pictures, your own picture and the offline
+ * picture are all changed this way; a remove, where there is one, is a word beside the picture.
  */
-export function PicturePick({ id, label, reveal, className, onPick }: { id: string; label: string; reveal: string; className?: string; onPick: (file: File) => void }) {
+export function PicturePick({
+  id,
+  label,
+  reveal,
+  className,
+  icon = 28,
+  onPick
+}: {
+  id: string;
+  label: string;
+  reveal: string;
+  className?: string;
+  icon?: number;
+  onPick: (file: File) => void;
+}) {
   return (
     <label className="group/pick absolute inset-0 cursor-pointer" title={label}>
       <span
@@ -25,7 +39,7 @@ export function PicturePick({ id, label, reveal, className, onPick }: { id: stri
         )}
       >
         <span className="flex [@media(hover:none)]:bg-black/60 [@media(hover:none)]:p-1">
-          <RiCameraLine size={28} />
+          <RiCameraLine size={icon} />
         </span>
       </span>
       <input

@@ -16,7 +16,7 @@ const GALLERY_MAX = 12;
 const TRACKS_MAX = 20;
 const LINKS_MAX = 20;
 
-const SMALL = buttonClassName('secondary', 'px-2.5 py-1 text-sm', true);
+const SMALL = buttonClassName('secondary', 'px-2.5 py-1 text-sm');
 
 function words(text: unknown, max: number): string {
   return typeof text === 'string' ? text.slice(0, max) : '';

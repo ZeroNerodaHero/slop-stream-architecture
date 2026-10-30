@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "sh scripts/no-box-shadow.sh && tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint --quiet",
+    "lint": "sh scripts/no-box-shadow.sh && oxlint --quiet",
     "format": "oxfmt ./src",
     "format:check": "oxfmt --check ./src"
   },

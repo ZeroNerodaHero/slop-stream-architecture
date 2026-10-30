@@ -12,8 +12,6 @@ interface FollowButtonProps {
   name: string;
   /** The small size, for a row in a list. */
   small?: boolean;
-  /** No shadow and no press, `Button`'s `flat`. */
-  flat?: boolean;
   className?: string;
   /** Told after a follow or unfollow landed, with the new state. For a count beside the button. */
   onChange?: (following: boolean) => void;
@@ -24,7 +22,7 @@ interface FollowButtonProps {
  * word says what the click does). For nobody it opens the security tab: an account is what a
  * follow hangs off. See docs/follows.md.
  */
-export function FollowButton({ id, name, small, flat, className, onChange }: FollowButtonProps) {
+export function FollowButton({ id, name, small, className, onChange }: FollowButtonProps) {
   const me = useAtomValue(meAtom);
   const following = useAtomValue(followingNamesAtom).has(name);
   const [busy, setBusy] = useState(false);
@@ -51,7 +49,6 @@ export function FollowButton({ id, name, small, flat, className, onChange }: Fol
     <Button
       id={id}
       variant={following ? 'secondary' : 'primary'}
-      flat={flat}
       aria-busy={busy}
       aria-pressed={following}
       data-following={following}
@@ -61,8 +58,8 @@ export function FollowButton({ id, name, small, flat, className, onChange }: Fol
       onMouseLeave={() => setHover(false)}
       onBlur={() => setHover(false)}
       className={cn(
-        small ? 'px-2.5 py-1 text-sm shadow-none' : 'px-3 py-1.5 text-sm',
-        following && 'border-transparent bg-transparent text-primaryBlue shadow-none hover:border-transparent hover:bg-transparent',
+        small ? 'px-2.5 py-1 text-sm' : 'px-3 py-1.5 text-sm',
+        following && 'border-transparent bg-transparent text-primaryBlue hover:border-transparent hover:bg-transparent',
         following && hover && 'text-decrease',
         busy && 'opacity-40',
         className

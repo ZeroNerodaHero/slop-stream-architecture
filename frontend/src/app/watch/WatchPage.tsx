@@ -1,6 +1,6 @@
 import { useAtomValue } from 'jotai';
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
 import {
   avatarAtom,
@@ -57,6 +57,7 @@ import { Face } from '@/shared-components/Face';
 import { panelClassName } from '@/shared-components/Panel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { SceneView } from '@/shared-components/SceneView';
+import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SocialsTab } from '@/shared-components/SocialsEditor';
 import { StatusLine } from '@/shared-components/StatusLine';
 import { ViewerCount } from '@/shared-components/ViewerCount';
@@ -79,6 +80,19 @@ type WatchTab = 'about' | 'calendar' | 'socials';
 const WATCH_TABS: readonly WatchTab[] = ['about', 'calendar', 'socials'];
 const TAB_STEP: Record<string, number | undefined> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
+/**
+ * The document itself was served for a stream's page: the api put its card inside `#root`, a
+ * black 16:9 box standing where the player goes, before react booted (api/src/profile.rs). The
+ * first watch page of this document keeps that box through its ask instead of collapsing it to
+ * the profile and growing it back for the player. True once; a later page here came by a click.
+ */
+let servedWithCard = /^\/watch\//.test(location.pathname);
+
+/** The `state` a link to a stream's page may carry: `live`, the card or row that was clicked said they are streaming. */
+function hintedLive(state: unknown): boolean {
+  return typeof state === 'object' && state !== null && (state as { live?: unknown }).live === true;
+}
+
 /** Arrows move the focus along the tabs and open the one landed on; Home and End go to the ends. The user modal's tabs do the same. */
 function roveTabs(e: KeyboardEvent<HTMLDivElement>) {
   const tabs = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
@@ -97,7 +111,19 @@ export function WatchPage() {
   const [tab, setTab] = useState<WatchTab>('about');
   const params = useParams<{ name: string }>();
   const navigate = useNavigate();
+  const { state } = useLocation();
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  // the player's box is held through the first ask when there is reason to expect a stream
+  // before the socket has said the word: the card or row that was clicked said they are
+  // streaming (`state.live`), or the api's card already stood the box there (`servedWithCard`).
+  // the ask decides: a grant that says not live drops the hold, and it never comes back for
+  // a re-ask (the socket's word is what holds the box from then on)
+  const [held, setHeld] = useState(() => {
+    const hold = hintedLive(state) || servedWithCard;
+    servedWithCard = false;
+    return hold;
+  });
+  const asked = useRef(false);
   const name = useAtomValue(watchNameAtom);
   const message = useAtomValue(watchMessageAtom);
   const tone = useAtomValue(watchToneAtom);
@@ -159,6 +185,18 @@ export function WatchPage() {
     navigate(`/watch/${renamedTo}`, { replace: true });
   }, [renamedTo]);
 
+  // The hold lasts for this page's first ask: once that ask has been made (`loading`) and
+  // answered (anything else), the word on the socket is the only reason to hold the box.
+  useEffect(() => {
+    if (phase === 'loading') asked.current = true;
+    else if (asked.current && held) setHeld(false);
+  }, [phase, held]);
+
+  // The stream is expected and not here yet: they are streaming, as the word says (or as the
+  // hold assumes, until the ask has answered), and the page is asking or waiting to be told.
+  // Then the player's box stands grey where the player will, so nothing moves when it does.
+  const expecting = phase === 'loading' ? presence === 'streaming' || held : phase === 'waiting' && presence === 'streaming';
+
   // The picture in picture button is a home click that keeps the stream: on, then away, and
   // the MiniPlayer has it in the corner by the time the home page shows.
   const toCorner = () => {
@@ -219,8 +257,21 @@ export function WatchPage() {
               the player appears when they start (`live` pushed on the events socket, docs/status.md), so
               there is nothing to press and no black box, not even for the ask: a player with no stream
               would be one. a streamer who put an offline picture gets it where the player goes, the
-              profile under it, and the line they wrote (if any) above the sentence */}
+              profile under it, and the line they wrote (if any) above the sentence.
+              the one exception is a stream that is expected: they are streaming and the page is still
+              asking (or video is a beat behind the word). then the player's box stands grey where the
+              player goes, so the page has its shape and nothing moves down when the picture lands.
+              never a <video>, never for a name that is not streaming: nothing flashes on an offline
+              profile. the chat's button sits on it where the player's does */}
           {phase === 'waiting' || phase === 'loading' ? (
+            expecting ? (
+              <Skeleton id="player-loading" label="loading the stream" className="relative aspect-video w-full border border-primaryStroke bg-backgroundSecondary">
+                <Bone className="absolute inset-0" />
+                <div className="absolute inset-x-0 bottom-0 flex items-center p-3">
+                  <ChatOpenButton className="ml-auto" />
+                </div>
+              </Skeleton>
+            ) : (
             <>
               {offline !== null && (
                 <img
@@ -249,6 +300,7 @@ export function WatchPage() {
                 <ChatOpenButton className="self-start" />
               </div>
             </>
+            )
           ) : (
             <div className="group relative">
               {/* the streamer's frame as they laid it out (docs/screen.md): `#video`, the one with the sound,
@@ -270,6 +322,10 @@ export function WatchPage() {
                 }}
                 onPick={pickSlot}
               />
+              {/* the same grey over the frame until frames play (`playing` on #video, markPlaying): the box
+                  that was loading goes on loading, instead of turning black for the connection. inside the
+                  stroke, under the controls and tap to play, and no pointer of its own */}
+              {(phase === 'connecting' || phase === 'connected') && <Bone className="pointer-events-none absolute inset-px" />}
               {needsTap && (
                 <Button
                   id="tap-to-play"
@@ -329,7 +385,7 @@ export function WatchPage() {
                     {followers} {followers === 1 ? 'follower' : 'followers'}
                   </span>
                 )}
-                <FollowButton id="follow" name={name} flat onChange={(now) => store.set(followersAtom, (followers ?? 0) + (now ? 1 : -1))} />
+                <FollowButton id="follow" name={name} onChange={(now) => store.set(followersAtom, (followers ?? 0) + (now ? 1 : -1))} />
               </span>
             )}
           </div>
@@ -345,7 +401,7 @@ export function WatchPage() {
 
         {name && (
           <ChatSlot>
-            <ChatPanel name={name} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0 shadow-none')} />
+            <ChatPanel name={name} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
           </ChatSlot>
         )}
 

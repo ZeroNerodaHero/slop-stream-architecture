@@ -111,7 +111,7 @@ function Rename({ me }: { me: string }) {
       </fieldset>
       <div className="flex flex-wrap items-center gap-3">
         {sure ? (
-          <Button id="profile-rename" type="submit" variant="danger" flat className={BUTTON} disabled={!ready}>
+          <Button id="profile-rename" type="submit" variant="danger" className={BUTTON} disabled={!ready}>
             {`sure? /watch/${me} becomes /watch/${wanted}`}
           </Button>
         ) : (

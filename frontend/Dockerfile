@@ -4,6 +4,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY index.html vite.config.mts tsconfig.json tailwind.config.ts postcss.config.mjs ./
+# the build's own checks (no-box-shadow.sh)
+COPY scripts ./scripts
 COPY src ./src
 # served as they are, under their own names: the about tab's sample media (docs/about.md)
 COPY public ./public

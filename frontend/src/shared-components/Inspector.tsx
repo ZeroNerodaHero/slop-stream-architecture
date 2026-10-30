@@ -22,7 +22,7 @@ import { eventsPhaseAtom, eventsTransportAtom } from '@/infra/events';
 import type { FrameEntry } from '@/infra/frames';
 import { cn } from '@/utils/cn';
 
-/** The panel look without its offset shadow, the corner player's rule for a floating box. */
+/** The box look, the corner player's FRAME: a stroke on the box colour. */
 const FRAME = 'border border-primaryStroke bg-backgroundSecondary';
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
 const MIN_W = 320;

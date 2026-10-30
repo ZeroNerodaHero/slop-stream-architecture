@@ -120,7 +120,7 @@ export function ChatSlot({ children }: { children: ReactNode }) {
   const leaving = useRef(false);
   /** Ends the press in progress: its window listeners go. `null` between presses. */
   const stop = useRef<(() => void) | null>(null);
-  /** The first time a column is shown it is already open: clipping it would hide the shadow for no slide. */
+  /** The first time a column is shown it is already open: there is no slide to clip for. */
   const skipOpenClip = useRef(true);
   const modal = side === 'modal';
   const [box, setBox] = useState<Box | null>(parked);
@@ -128,7 +128,7 @@ export function ChatSlot({ children }: { children: ReactNode }) {
   const [shown, setShown] = useState(false);
   /** The column keeps its height through the slide, then drops it, so the page below does not jump while the panel is still on screen. */
   const [held, setHeld] = useState(open);
-  /** Clip the column while it slides, so a fixed-width panel is revealed by the growing cell. Settled, the shadow needs to spill. */
+  /** Clip the column while it slides, so a fixed-width panel is revealed by the growing cell. Settled, the clip comes off. */
   const [clip, setClip] = useState(false);
 
   useEffect(() => {
@@ -317,14 +317,14 @@ export function ChatSlot({ children }: { children: ReactNode }) {
       className={cn(
         modal
           ? cn(
-              // no offset shadow: a floating box over a page of shadowed boxes would read as one more block. the stroke marks the edge
+              // the stroke marks the edge: no shadow, here or anywhere (no-box-shadow.mdc)
       'group fixed z-40 m-0 hidden max-h-none max-w-none flex-col overflow-hidden border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary open:flex',
               'origin-center transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none',
               shown ? 'translate-x-0 scale-100 opacity-100' : cn('pointer-events-none scale-[0.98] opacity-0', fromLeft ? '-translate-x-3' : 'translate-x-3'),
               !box && 'left-auto right-6 top-20 h-[min(720px,calc(100dvh-6rem))] w-[min(420px,calc(100vw-3rem))]'
             )
           : cn(
-              'static m-0 flex w-full min-h-0 min-w-0 max-w-none flex-col border-0 bg-transparent p-0 text-textPrimary shadow-none [&:not([open])]:flex',
+              'static m-0 flex w-full min-h-0 min-w-0 max-w-none flex-col border-0 bg-transparent p-0 text-textPrimary [&:not([open])]:flex',
               'transition-[height,margin-top,opacity] duration-300 ease-out motion-reduce:transition-none lg:relative lg:transition-none',
               'lg:row-span-2',
               side === 'left' && 'lg:col-start-1 lg:row-start-1',

@@ -24,11 +24,14 @@ import { buttonClassName } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { panelClassName } from '@/shared-components/Panel';
 import { Who } from '@/shared-components/PersonRow';
+import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { cn } from '@/utils/cn';
 import { ago } from '@/utils/since';
 
 /** The list is this wide at most, and at least this far from the window's edge. */
 const WIDTH = 400;
+/** How many grey rows stand in the list before the inbox has answered. */
+const ROWS_GUESS = 4;
 const EDGE = 8;
 /** Between the bell and the list. */
 const GAP = 8;
@@ -65,7 +68,7 @@ export function NotificationsBell() {
       title={unread > 0 ? `notifications: ${unread} new` : 'notifications'}
       data-unread={unread || undefined}
       onClick={toggleNotifications}
-      className={cn(buttonClassName('secondary', 'relative px-2.5 py-2', true), open && 'border-primaryBlue text-primaryBlue')}
+      className={cn(buttonClassName('secondary', 'relative px-2.5 py-2'), open && 'border-primaryBlue text-primaryBlue')}
     >
       <RiNotification3Line aria-hidden size={18} />
       {unread > 0 && (
@@ -315,7 +318,18 @@ function NotificationsList() {
           .
         </p>
       ) : list === undefined ? (
-        <p className="px-4 py-4 text-sm text-textTertiary">loading</p>
+        // a few rows' worth of grey, the rows' shape: the face, the name and what happened, when
+        <Skeleton id="notifications-loading" className="py-1">
+          {Array.from({ length: ROWS_GUESS }, (_, i) => (
+            <div key={i} className="flex items-start gap-3 px-3 py-2">
+              <Bone className="mt-0.5 h-9 w-9 shrink-0" />
+              <div className="flex flex-1 flex-col gap-1.5 py-0.5">
+                <Bone className="h-3.5 w-2/3" />
+                <Bone className="h-3 w-1/4" />
+              </div>
+            </div>
+          ))}
+        </Skeleton>
       ) : list.length === 0 ? (
         <p id="notifications-empty" className="px-4 py-4 text-sm text-textSecondary">
           nothing yet. when someone you follow goes live, someone follows you, or a friend writes, it shows up here.

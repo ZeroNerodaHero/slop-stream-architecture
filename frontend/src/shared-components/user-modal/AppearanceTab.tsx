@@ -22,7 +22,7 @@ const TOKEN_LABEL: Record<TokenName, string> = {
   primaryColor: 'accent',
   primaryColorHover: 'accent hover',
   primaryStroke: 'stroke',
-  secondaryStroke: 'shadow',
+  secondaryStroke: 'stroke 2',
   increase: 'live',
   decrease: 'danger'
 };
@@ -41,7 +41,6 @@ function Swatch({ palette }: { palette: Palette }) {
         className="flex h-full flex-1 items-center gap-2 px-2"
         style={{
           backgroundColor: css(palette.backgroundSecondary),
-          boxShadow: `3px 3px 0 0 ${css(palette.secondaryStroke)}`,
           border: `1px solid ${css(palette.primaryStroke)}`
         }}
       >

@@ -7,7 +7,9 @@ alwaysApply: true
 
 This site does not use `box-shadow`. Not on hover, not on focus, not on a card, a dialog, a button, or a floating panel. A box is a 1px stroke. A hover is a colour or a border change.
 
-Do not add `shadow`, `shadow-*`, `hover:shadow-*`, `drop-shadow`, or a `box-shadow` in CSS. Do not copy `shadow-hard` or `shadow-hard-blue` from older screens. When you touch a component that still has one, take it off.
+Do not add `shadow`, `shadow-*`, `hover:shadow-*`, `drop-shadow`, or a `box-shadow` in CSS. There are none left to copy: the theme has no shadow scale (`boxShadow: {}` in `tailwind.config.ts`), `frontend/scripts/no-box-shadow.sh` fails `npm run lint` and `npm run build` on one, and a hook (`.cursor/hooks.json`) refuses the edit.
+
+The one exception is not a box: the speaker glyph and the volume dial sit straight on the video with a `drop-shadow` under them so they read over a bright frame (`VideoControls.tsx`). Leave it.
 
 ```tsx
 // ❌ BAD

@@ -66,7 +66,7 @@ function HealthCard({ health, error }: { health: Health | undefined; error: unkn
       </p>
     );
   return (
-    <section id="admin-health" className="flex flex-wrap items-center gap-x-5 gap-y-2 border border-primaryStroke bg-backgroundSecondary px-5 py-4 shadow-hard">
+    <section id="admin-health" className="flex flex-wrap items-center gap-x-5 gap-y-2 border border-primaryStroke bg-backgroundSecondary px-5 py-4">
       <span className="text-xl font-semibold">{health.env}</span>
       {health.version && (
         <span className="font-semibold" title={health.deployed_at ? `deployed ${new Date(health.deployed_at).toLocaleString()}` : 'the release deploy.sh put up'}>
@@ -230,7 +230,7 @@ export function AdminPage() {
         </p>
       ) : null}
       {rows.length > 0 && (
-        <ul id="admin-errors" className="border border-primaryStroke bg-backgroundSecondary px-4 shadow-hard">
+        <ul id="admin-errors" className="border border-primaryStroke bg-backgroundSecondary px-4">
           {rows.map((e) => (
             <Row key={e.id} e={e} now={errors.dataUpdatedAt} />
           ))}

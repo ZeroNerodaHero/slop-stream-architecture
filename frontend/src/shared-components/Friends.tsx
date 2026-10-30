@@ -202,6 +202,8 @@ function Row({ id, person, side, open, onPick, children }: RowProps) {
       <Link
         id={id}
         to={`/watch/${encodeURIComponent(person.name)}`}
+        // streaming: the page holds the player's box from its first paint (WatchPage.tsx)
+        state={person.presence === 'streaming' ? { live: true } : undefined}
         onClick={onPick}
         // not draggable: the face must not lift off the row as a ghost link
         draggable={false}

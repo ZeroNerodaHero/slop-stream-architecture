@@ -137,7 +137,7 @@ export function Mixer() {
           {!running && (
             <div className="flex items-center gap-3 border-b border-primaryStroke px-3 py-2 text-sm text-decrease">
               the browser paused the sound: the stream is silent
-              <Button id="mixer-resume" flat variant="primary" className="px-3 py-1.5 text-sm" onClick={() => void resumeMixer()}>
+              <Button id="mixer-resume" variant="primary" className="px-3 py-1.5 text-sm" onClick={() => void resumeMixer()}>
                 sound on
               </Button>
             </div>

@@ -28,6 +28,15 @@ const ARROWS: Record<string, readonly [number, number]> = { ArrowLeft: [-1, 0], 
 const STEP = 1.1;
 /** The parts you take hold of: no text selection, no page scroll on touch, no long-press menu. */
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
+/**
+ * The pane that dims everything but the box at x, y, w, h: the picture's edge, then the box's edge
+ * wound the other way, which the nonzero rule makes a hole. A spread shadow would do it in one
+ * class; the site has none (no-box-shadow.mdc).
+ */
+function cutOut(x: number, y: number, w: number, h: number): string {
+  const [l, t, r, b] = [`${x}px`, `${y}px`, `${x + w}px`, `${y + h}px`];
+  return `polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${l} ${t}, ${l} ${b}, ${r} ${b}, ${r} ${t}, ${l} ${t})`;
+}
 /** The corner handles, the scene editor's. `sx`/`sy`: which way the box grows when that corner is pulled outward. */
 const CORNERS = [
   { id: 'nw', sx: -1, sy: -1, className: '-left-px -top-px cursor-nwse-resize border-l-2 border-t-2' },
@@ -260,6 +269,8 @@ function CropBox({ request }: { request: CropRequest }) {
         {loaded && rect && k > 0 ? (
           <div className="relative overflow-hidden" style={{ width: loaded.picture.width * k, height: loaded.picture.height * k }}>
             <img src={loaded.url} alt="" draggable={false} className="block h-full w-full" />
+            {/* the dimming of everything outside the box: one pane over the picture with the box cut out of it */}
+            <div aria-hidden className="pointer-events-none absolute inset-0 bg-black/60" style={{ clipPath: cutOut(rect.x * k, rect.y * k, rect.w * k, rect.h * k) }} />
             <div
               ref={boxRef}
               id="crop-box"
@@ -270,11 +281,7 @@ function CropBox({ request }: { request: CropRequest }) {
               onPointerDown={(e) => press(e, 'move')}
               onKeyDown={keys}
               onDragStart={(e) => e.preventDefault()}
-              // the shadow is the dimming of everything outside the box; the wrapper clips it to the picture
-              className={cn(
-                'absolute cursor-move outline outline-2 -outline-offset-2 outline-primaryBlue shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] focus-visible:outline-white',
-                GRIP
-              )}
+              className={cn('absolute cursor-move outline outline-2 -outline-offset-2 outline-primaryBlue focus-visible:outline-white', GRIP)}
             >
               {CORNERS.map((c) => (
                 <div

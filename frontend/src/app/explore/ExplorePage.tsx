@@ -12,11 +12,15 @@ import { Button, buttonClassName } from '@/shared-components/Button';
 import { GroupSquare } from '@/shared-components/GroupSquare';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { PersonRow } from '@/shared-components/PersonRow';
+import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { cn } from '@/utils/cn';
 
 const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary';
 
 const SQUARES = 'grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3';
+const SECTION_TITLE = 'mb-4 text-sm font-semibold uppercase tracking-wider text-textTertiary';
+/** How many grey squares stand under each heading before the lists have answered. */
+const SQUARES_GUESS = 4;
 
 /** The colours a new group starts from. The colour box takes any other. Same eight as the groups tab. */
 const SWATCHES = ['#5865f2', '#f85149', '#3fb950', '#f2cc60', '#bc8cff', '#ff9f43', '#39d2c0', '#ff6bcb'] as const;
@@ -96,10 +100,24 @@ export function ExplorePage() {
           {messageOf(query.error)}
         </p>
       )}
-      {!query.data && !query.error && <p className="text-textSecondary">loading</p>}
+      {/* before the first answer: both headings, each over a row of grey squares, so the page has its shape and the squares land where the grey was */}
+      {!query.data && !query.error && (
+        <Skeleton id="groups-loading" className="flex flex-col gap-10">
+          {['yours', 'public'].map((title) => (
+            <section key={title}>
+              <h2 className={SECTION_TITLE}>{title}</h2>
+              <div className={SQUARES}>
+                {Array.from({ length: SQUARES_GUESS }, (_, i) => (
+                  <Bone key={i} className="aspect-square" />
+                ))}
+              </div>
+            </section>
+          ))}
+        </Skeleton>
+      )}
       {q && (
         <section id="people" aria-label="people" className="mb-10">
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-textTertiary">people</h2>
+          <h2 className={SECTION_TITLE}>people</h2>
           {people === null ? (
             <p className="text-textSecondary">looking</p>
           ) : people.length === 0 ? (
@@ -128,7 +146,7 @@ export function ExplorePage() {
 function Section({ id, title, empty, servers }: { id: string; title: string; empty: string; servers: Server[] }) {
   return (
     <section id={id} aria-label={title}>
-      <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-textTertiary">{title}</h2>
+      <h2 className={SECTION_TITLE}>{title}</h2>
       {servers.length === 0 ? (
         <p className="text-textSecondary">{empty}</p>
       ) : (

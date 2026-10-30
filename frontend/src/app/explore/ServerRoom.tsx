@@ -1,5 +1,6 @@
+import { RiCloseLine, RiSettings3Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { api, CHANNEL_CAP, groupImage, groupWords, messageOf, type GroupRoom, type RolePerms } from '@/infra/api';
@@ -18,6 +19,8 @@ import { GroupMark } from '@/shared-components/GroupMark';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { PicturePick } from '@/shared-components/PicturePick';
+import { Bone, Skeleton } from '@/shared-components/Skeleton';
+import { Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 /** Cameras played in the room. The same peers home uses, muted, and not counted as viewers. */
@@ -59,6 +62,14 @@ function reaches(room: GroupRoom, perms: RolePerms): boolean {
   return room.owner || room.admin === true || POWERS.every((power) => !perms[power.key] || room.perms[power.key]);
 }
 
+/** Whether this login has anything to manage: a power the dialog holds. Channels are the list's own, on the left. */
+function manages(room: GroupRoom): boolean {
+  return room.owner || room.perms.appearance || room.perms.roles || room.perms.kick || room.perms.ban;
+}
+
+/** One moderation call, with its refusal said where the caller shows it. The outcome arrives on the socket, like everyone else's. */
+type Run = (work: () => Promise<unknown>) => Promise<void>;
+
 /** One member's camera, muted. Click opens their stream. */
 function LiveFace({ name, big }: { name: string; big: boolean }) {
   const stream = useAtomValue(previewStreamsAtom)[name] ?? null;
@@ -75,7 +86,7 @@ function LiveFace({ name, big }: { name: string; big: boolean }) {
   }, [stream]);
 
   return (
-    <Link id={`group-live-${name}`} to={`/watch/${encodeURIComponent(name)}`} className={cn(TILE, big && 'sm:col-span-2')}>
+    <Link id={`group-live-${name}`} to={`/watch/${encodeURIComponent(name)}`} state={{ live: true }} className={cn(TILE, big && 'sm:col-span-2')}>
       <div className="relative aspect-video bg-black">
         <img
           src={`/thumb/${encodeURIComponent(name)}.jpg`}
@@ -110,6 +121,45 @@ function GroupName({ words }: { words: { title: string; tag: string | null } }) 
 }
 
 /**
+ * The room's shape in grey while it is asked for: the banner with the picture over its foot,
+ * the title and the line about it, then the channels beside the chat (the roster's column is
+ * not guessed at: it is a member's, and the chat only narrows when it comes). The answer lands
+ * on top of this instead of under a word.
+ */
+function RoomSkeleton() {
+  return (
+    <Skeleton id="group-loading" label="loading the group">
+      <div className="relative mb-16">
+        <div className="relative h-36 border border-primaryStroke">
+          <Bone className="absolute inset-0" />
+        </div>
+        <div className="absolute -bottom-12 left-4 h-24 w-24 border-4 border-background">
+          <Bone className="h-full" />
+        </div>
+      </div>
+      <div className="mb-6 flex flex-col gap-2 pl-4">
+        <Bone className="h-6 w-56 max-w-full" />
+        <Bone className="h-4 w-80 max-w-full" />
+      </div>
+      <div className="grid items-start gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
+        <div className="flex flex-col gap-1.5">
+          <Bone className="mb-1 h-3 w-24" />
+          {Array.from({ length: 3 }, (_, i) => (
+            <Bone key={i} className="h-7" />
+          ))}
+        </div>
+        <div className="flex h-[70vh] min-h-[420px] flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3">
+          <Bone className="h-4 w-2/3" />
+          <Bone className="h-4 w-1/2" />
+          <Bone className="h-4 w-3/4" />
+          <Bone className="mt-auto h-10" />
+        </div>
+      </div>
+    </Skeleton>
+  );
+}
+
+/**
  * A group as a server: `/groups/<server>` and `/groups/<server>/<channel>`, one page, keyed
  * on the server by the router so a change of channel is a change of what is shown and nothing
  * more. The room (the group, its channels, who is live, the roster and the bans this login may
@@ -134,6 +184,7 @@ export function ServerPage() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState('');
   const [leaving, setLeaving] = useState(false);
+  const [managing, setManaging] = useState(false);
   const live = room?.live ?? [];
   const shown = live.slice(0, FACES);
   const previewKey = shown.join(',');
@@ -177,8 +228,8 @@ export function ServerPage() {
 
   if (!room) {
     return (
-      <PageFrame title={server || 'group'} titleId={titleId}>
-        <p className="text-textSecondary">{error === 'no such group' ? 'no such group.' : error || 'loading'}</p>
+      <PageFrame wide title={server || 'group'} titleId={titleId}>
+        {error ? <p className="text-textSecondary">{error === 'no such group' ? 'no such group.' : error}</p> : <RoomSkeleton />}
       </PageFrame>
     );
   }
@@ -243,6 +294,7 @@ export function ServerPage() {
   const noChannel = !found;
   const power = room.owner || POWERS.some((item) => room.perms[item.key]);
   const roster = mine || power || !!room.roster;
+  const canManage = manages(room);
   const lastMember = mine && room.members <= 1;
   // the pictures are the owner's: no role carries them. a site admin may, as with every power but naming an owner
   const canPicture = room.owner || room.admin === true;
@@ -348,13 +400,24 @@ export function ServerPage() {
                   </button>
                 </span>
               )}
+              {canManage && (
+                <button
+                  id="group-manage-open"
+                  type="button"
+                  className="flex items-center gap-1 text-sm font-semibold text-textSecondary hover:text-textPrimary"
+                  onClick={() => setManaging(true)}
+                >
+                  <RiSettings3Line aria-hidden size={16} />
+                  manage
+                </button>
+              )}
               {!mine && me && (
-                <Button id="group-join" variant="primary" flat className="px-3 py-1.5 text-sm" disabled={busy} onClick={() => void join()}>
+                <Button id="group-join" variant="primary" className="px-3 py-1.5 text-sm" disabled={busy} onClick={() => void join()}>
                   join
                 </Button>
               )}
               {!mine && me === null && (
-                <Link to="/login" className={buttonClassName('primary', 'px-3 py-1.5 text-sm', true)}>
+                <Link to="/login" className={buttonClassName('primary', 'px-3 py-1.5 text-sm')}>
                   log in to join
                 </Link>
               )}
@@ -394,7 +457,7 @@ export function ServerPage() {
             </div>
           </div>
           {actionError && <p className="mb-4 text-sm text-decrease">{actionError}</p>}
-          <div id="group-room" className={cn('grid items-start gap-4', roster ? 'lg:grid-cols-[200px_minmax(0,1fr)_280px]' : 'lg:grid-cols-[200px_minmax(0,1fr)]')}>
+          <div id="group-room" className={cn('grid items-start gap-4', roster ? 'lg:grid-cols-[200px_minmax(0,1fr)_240px]' : 'lg:grid-cols-[200px_minmax(0,1fr)]')}>
             <ChannelList server={server} channel={channel} room={room} me={me ?? null} onError={setActionError} />
             <div className="min-w-0">
               {shown.length === 0 && (
@@ -414,8 +477,9 @@ export function ServerPage() {
                 <ChatPanel name={server} channel={channel} className="h-full" />
               </div>
             </div>
-            {roster && <Moderation server={server} room={room} me={me ?? null} onError={setActionError} />}
+            {roster && <Roster room={room} />}
           </div>
+          {managing && <ManageDialog server={server} room={room} me={me ?? null} onClose={() => setManaging(false)} />}
         </>
       )}
     </PageFrame>
