@@ -9,25 +9,32 @@ import {
   RiEyeOffLine,
   RiFocus3Line,
   RiImageLine,
+  RiUserVoiceLine,
   RiVidiconLine
 } from '@remixicon/react';
 import { type Atom, useAtomValue } from 'jotai';
 import { useEffect, useRef, useState } from 'react';
 
 import { api } from '@/infra/api';
+import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import {
+  addAvatar,
   addImage,
   cameraAtom,
+  cameraOn,
   canShareScreenAtom,
   canStartAtom,
   deleteImage,
   fitSourceTo,
   goLive,
-  imageStatusAtom,
+  hasAvatarAtom,
+  hasCameraAtom,
+  hasMicAtom,
   isPublishingAtom,
   libraryAtom,
   livePanelsAtom,
   placeImage,
+  publishPhaseAtom,
   removeSource,
   reorderSource,
   screenShareSupported,
@@ -37,7 +44,9 @@ import {
   setLivePanel,
   setSourceFit,
   shareScreen,
+  sourceStatusAtom,
   sourcesAtom,
+  startMic,
   stopLive,
   streamNameAtom,
   toggleSource
@@ -47,6 +56,7 @@ import { isValidName } from '@/infra/names';
 import { SCREEN_SLOTS } from '@/infra/relay';
 import type { Source } from '@/infra/scene';
 import { Button } from '@/shared-components/Button';
+import { Face } from '@/shared-components/Face';
 import { Collapsible, ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { VideoFrame } from '@/shared-components/VideoFrame';
@@ -66,15 +76,18 @@ function Thumb({ id, streamAtom }: { id: string; streamAtom: Atom<MediaStream | 
 }
 
 /**
- * The `+`: a menu with what can be added, before start or live. A screen or window (three at
- * most), a picture, and the pictures this name put up before, offered again under the upload.
- * Escape and a press outside close it.
+ * The `+`: a menu with what can be added, before start or live. The camera, while it is off
+ * (mic only); the avatar (the streamer's picture, moving with their voice; one), a screen or
+ * window (three at most), a picture, and the pictures this name put up before, offered again
+ * under the upload. Escape and a press outside close it.
  */
 function AddMenu() {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const canShare = useAtomValue(canShareScreenAtom);
+  const hasCamera = useAtomValue(hasCameraAtom);
+  const hasAvatar = useAtomValue(hasAvatarAtom);
   const library = useAtomValue(libraryAtom);
   const name = useAtomValue(streamNameAtom);
 
@@ -115,6 +128,34 @@ function AddMenu() {
           aria-label="add a source"
           className="absolute right-0 top-full z-20 mt-1 w-56 border border-primaryStroke bg-backgroundSecondary py-1"
         >
+          {!hasCamera && (
+            <button
+              id="add-camera"
+              role="menuitem"
+              type="button"
+              className={MENU_ITEM}
+              onClick={() => {
+                setOpen(false);
+                void cameraOn();
+              }}
+            >
+              <RiVidiconLine aria-hidden size={16} /> camera
+            </button>
+          )}
+          <button
+            id="add-avatar"
+            role="menuitem"
+            type="button"
+            disabled={hasAvatar}
+            title={hasAvatar ? 'already a source' : 'your picture, moving with your voice'}
+            className={MENU_ITEM}
+            onClick={() => {
+              setOpen(false);
+              addAvatar();
+            }}
+          >
+            <RiUserVoiceLine aria-hidden size={16} /> avatar
+          </button>
           {screenShareSupported && (
             <button
               id="add-screen"
@@ -193,12 +234,28 @@ function AddMenu() {
   );
 }
 
+const ICONS = { camera: RiVidiconLine, screen: RiComputerLine, image: RiImageLine, avatar: RiUserVoiceLine } as const;
+
 function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
   const selected = useAtomValue(selectedSourceAtom) === source.id;
   const streamAtom = source.kind === 'camera' ? cameraAtom : screenStreamAtom((source.slot ?? 1) - 1);
   const name = useAtomValue(streamNameAtom);
-  const Icon = source.kind === 'camera' ? RiVidiconLine : source.kind === 'screen' ? RiComputerLine : RiImageLine;
+  const avatar = useAtomValue(myAvatarVersionAtom);
+  const hasMic = useAtomValue(hasMicAtom);
+  const Icon = ICONS[source.kind];
   const fill = source.fit ? source.fit === 'cover' : source.kind === 'camera';
+  // the camera's × turns it off (mic only); not without a mic, since nothing would be left to stream
+  const canRemove = source.kind !== 'camera' || hasMic;
+  const removeWords =
+    source.kind === 'screen'
+      ? 'stop sharing'
+      : source.kind === 'image'
+        ? 'remove (the upload stays in your pictures)'
+        : source.kind === 'avatar'
+          ? 'remove (the + brings it back)'
+          : hasMic
+            ? 'turn the camera off: mic only, your avatar stands in'
+            : 'no mic: the camera is all there is';
   return (
     <li className={cn(ROW, selected ? ROW_ON : ROW_OFF)}>
       <button
@@ -210,6 +267,10 @@ function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
       >
         {source.kind === 'image' ? (
           <img src={api.assetUrl(name, source.asset ?? 0)} alt="" draggable={false} className="h-7 w-12 shrink-0 border border-primaryStroke bg-black object-contain" />
+        ) : source.kind === 'avatar' ? (
+          <span className="flex h-7 w-12 shrink-0 items-center justify-center border border-primaryStroke bg-black">
+            <Face name={name} version={avatar} className="h-6 w-6 text-xs" />
+          </span>
         ) : (
           <Thumb id={`source-${source.id}-video`} streamAtom={streamAtom} />
         )}
@@ -234,7 +295,7 @@ function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
         </button>
       </Tooltip>
       <span className="flex shrink-0 items-center opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/row:opacity-100">
-        {source.kind !== 'image' && (
+        {(source.kind === 'camera' || source.kind === 'screen') && (
           <Tooltip content={fill ? 'fills its box. click to show the whole picture' : 'the whole picture. click to fill its box'}>
             <button
               id={`source-fit-${source.id}`}
@@ -270,19 +331,18 @@ function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
             <RiArrowDownLine aria-hidden size={16} />
           </button>
         </Tooltip>
-        {source.kind !== 'camera' && (
-          <Tooltip content={source.kind === 'screen' ? 'stop sharing' : 'remove (the upload stays in your pictures)'}>
-            <button
-              id={`source-remove-${source.id}`}
-              type="button"
-              aria-label={source.kind === 'screen' ? 'stop sharing' : 'remove'}
-              onClick={() => removeSource(source.id)}
-              className={cn(ICON_BUTTON, 'hover:border-decrease hover:text-decrease')}
-            >
-              <RiCloseLine aria-hidden size={16} />
-            </button>
-          </Tooltip>
-        )}
+        <Tooltip content={removeWords}>
+          <button
+            id={`source-remove-${source.id}`}
+            type="button"
+            aria-label={source.kind === 'screen' ? 'stop sharing' : source.kind === 'camera' ? 'turn the camera off' : 'remove'}
+            disabled={!canRemove}
+            onClick={() => removeSource(source.id)}
+            className={cn(ICON_BUTTON, 'hover:border-decrease hover:text-decrease')}
+          >
+            <RiCloseLine aria-hidden size={16} />
+          </button>
+        </Tooltip>
       </span>
     </li>
   );
@@ -338,17 +398,22 @@ function StartStop() {
 }
 
 /**
- * The sources, beside the preview: the camera, the shared screens and the pictures, top of
- * the stack first (the row order is the reverse of the array, the way a layers panel reads).
- * Each row selects its layer; the eye puts it on or off the stream; the arrows move it through
- * the stack; `×` stops a share or removes a picture. The `+` adds. Folded, it is a rail, with
- * start (or stop) still at its foot.
+ * The sources, beside the preview: the camera (or the avatar standing in for it, mic only),
+ * the shared screens and the pictures, top of the stack first (the row order is the reverse
+ * of the array, the way a layers panel reads). Each row selects its layer; the eye puts it on
+ * or off the stream; the arrows move it through the stack; `×` stops a share, removes a
+ * picture or the avatar, turns the camera off. The `+` adds. Folded, it is a rail, with start
+ * (or stop) still at its foot.
  */
 export function Sources() {
   const sources = useAtomValue(sourcesAtom);
   const open = useAtomValue(livePanelsAtom).sources;
-  const status = useAtomValue(imageStatusAtom);
+  const status = useAtomValue(sourceStatusAtom);
+  const phase = useAtomValue(publishPhaseAtom);
   const hasCamera = sources.some((s) => s.kind === 'camera');
+  // nothing opened: the camera was refused or is missing, or the mic was (mic only, kept from last time). the way out is the other start
+  const cameraRefused = phase === 'camera-blocked' || phase === 'no-camera';
+  const micRefused = phase === 'mic-blocked' || phase === 'no-mic';
   return (
     <aside
       id="sources"
@@ -357,7 +422,20 @@ export function Sources() {
     >
       <Collapsible id="sources-panel" title="sources" open={open} onToggle={() => setLivePanel('sources', !open)} aside={<AddMenu />} footer={<StartStop />}>
         {sources.length === 0 ? (
-          <p className="px-3 py-3 text-sm text-textTertiary">the camera shows up here once it is on</p>
+          <div className="px-3 py-3 text-sm text-textTertiary">
+            <p>{micRefused ? 'the mic shows up here once it is on' : 'the camera shows up here once it is on'}</p>
+            {/* the camera refused, or missing: the mic alone still makes a stream, with the avatar for a face. the other way round, the camera */}
+            {cameraRefused && (
+              <button id="mic-only" type="button" className="mt-2 text-sm font-semibold text-primaryBlue" onClick={() => void startMic()}>
+                go mic only: your avatar, moving with your voice
+              </button>
+            )}
+            {micRefused && (
+              <button id="use-camera" type="button" className="mt-2 text-sm font-semibold text-primaryBlue" onClick={() => void cameraOn()}>
+                use the camera instead
+              </button>
+            )}
+          </div>
         ) : (
           <ul id="source-list" className="m-0 list-none divide-y divide-primaryStroke p-0">
             {[...sources].reverse().map((source) => (
@@ -367,7 +445,7 @@ export function Sources() {
         )}
         <p className="px-3 py-2 text-xs text-textTertiary">drag a layer to move it, pull a corner to resize. arrow keys nudge, shift frees the shape</p>
         {status && (
-          <p id="image-status" className="px-3 pb-2 text-xs text-textSecondary" aria-live="polite">
+          <p id="source-status" className="px-3 pb-2 text-xs text-textSecondary" aria-live="polite">
             {status}
           </p>
         )}

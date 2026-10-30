@@ -17,6 +17,7 @@ import type { Owner } from '@/infra/api';
 import type { PipChatPlace } from '@/infra/atoms/settings-atoms';
 import { canPopOut, openPopout } from '@/infra/popout';
 import type { Layer } from '@/infra/relay';
+import type { AvatarVoice } from '@/shared-components/AvatarLayer';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { SceneView } from '@/shared-components/SceneView';
@@ -181,16 +182,18 @@ interface CornerPlayerProps {
   /** Over the middle of the picture ("tap to play"). */
   center?: ReactNode;
   /**
-   * The streamer's frame (the watch player): the layers drawn around the picture, as on the
-   * page, with `streamAtom` standing in for `slot`. In the player's own window, whose shape is
-   * the os's and not 16:9, the plain picture shows instead: the layers would not line up with it.
+   * The streamer's frame: the layers drawn around the picture, as on the page, with
+   * `streamAtom` standing in for `slot`. In the player's own window, whose shape is the os's
+   * and not 16:9, the plain picture shows instead: the layers would not line up with it. `onPick`
+   * is the watch player's (a layer clicked goes big); the broadcast's player has none.
    */
   scene?: {
     layers: readonly Layer[];
     slot: number | null;
     streamFor: (slot: number) => Atom<MediaStream | null>;
     imageUrl: (asset: number) => string;
-    onPick: (slot: number) => void;
+    avatar: AvatarVoice;
+    onPick?: (slot: number) => void;
   };
   /** In the picture's top left corner, across from the chat button and ×: the stream's health, and the broadcast's mic. Each chip places itself (`CORNER_BADGE`, `CORNER_BADGE_2`). */
   badge?: ReactNode;
@@ -457,6 +460,7 @@ export function CornerPlayer({
             layers={scene.layers}
             streamFor={scene.streamFor}
             imageUrl={scene.imageUrl}
+            avatar={scene.avatar}
             main={{ id: `${prefix}-video`, streamAtom, videoRef, slot: scene.slot, muted, volume, onPlaying, onAutoplayBlocked }}
             onPick={scene.onPick}
             className="min-w-0 border-0 border-b"

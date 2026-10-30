@@ -5,8 +5,10 @@
 // stream is a tile for watchers, as every screen used to be. Screens are shared into slots
 // offered empty when going live, so nobody renegotiates; a watcher arriving mid-stream gets the
 // whole scene at once. The mixer under the preview: the mic and the master move with the fake
-// mic, and a fader at 0 or a mute flattens the master. Chrome picks the screen on its own
-// (--auto-select-desktop-capture-source). Which picture is where is read off the layers
+// mic, and a fader at 0 or a mute flattens the master. Mic only at the end: the camera's × leaves
+// the mic alone with the avatar for a face, a watcher gets it on the sound with nothing on video
+// and the avatar moves with the voice on both sides, and the + puts the camera back live.
+// Chrome picks the screen on its own (--auto-select-desktop-capture-source). Which picture is where is read off the layers
 // (#layer-<id>, their place and size as fractions of the frame off the inline style), the tiles
 // (#tile-<slot>) and track identity (a track that moves between a layer and a tile is the same
 // track); not off sizes, which the encoder changes with the bitrate.
@@ -92,19 +94,23 @@ async function waitOrder(p, want, timeout = 5000) {
   }
   throw new Error(`the layers are ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
 }
-/** A meter's bar over 1.5s: its peak and how many different readings it gave. The fake mic beeps about twice a second. */
-async function meter(p, sel, ms = 1500) {
+/** A meter's bar over 1.5s (or an avatar's `data-voice`): its peak and how many different readings it gave. The fake mic beeps about twice a second. */
+async function meter(p, sel, ms = 1500, attr = 'aria-valuenow') {
   const t0 = Date.now();
   const levels = new Set();
   let peak = 0;
   while (Date.now() - t0 < ms) {
-    const now = Number(await p.getAttribute(sel, 'aria-valuenow'));
+    const now = Number(await p.getAttribute(sel, attr));
     levels.add(now);
     peak = Math.max(peak, now);
     await sleep(25);
   }
   return { peak, distinct: levels.size };
 }
+/** How much an avatar layer moved with the voice over 1.5s: `data-voice` 0..100 on its picture, written from the frame loop. */
+const voice = (p, id, ms = 1500) => meter(p, `#layer-${id}-avatar`, ms, 'data-voice');
+/** The tracks a <video> plays: a mic-only stream is sound and no picture. */
+const trackCounts = (p, sel) => p.$eval(sel, (v) => ({ video: v.srcObject?.getVideoTracks().length ?? 0, audio: v.srcObject?.getAudioTracks().length ?? 0 }));
 // Every RTCPeerConnection the page makes, for getStats: installed before navigation.
 function recordPeerConnections() {
   window.__pcs = [];
@@ -170,7 +176,7 @@ const SCREEN_CORNER = { x: 0.647, y: 0.631, w: 0.333, h: 0.333 };
   const pubContext = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] });
   // the arrangement, the presets, the panels and the faders are this browser's (localstorage): start clean, whatever an earlier run left
   await pubContext.addInitScript(() => {
-    for (const key of ['settings.lastArrangement', 'settings.scenePresets', 'settings.livePanels', 'settings.mixer', 'settings.cameraLayout']) localStorage.removeItem(key);
+    for (const key of ['settings.lastArrangement', 'settings.scenePresets', 'settings.livePanels', 'settings.mixer', 'settings.cameraLayout', 'settings.micOnly']) localStorage.removeItem(key);
   });
   const pub = await pubContext.newPage();
   const newWatcher = async () => {
@@ -443,6 +449,56 @@ const SCREEN_CORNER = { x: 0.647, y: 0.631, w: 0.333, h: 0.333 };
     expect((await trackId(pub, '#preview')) === track.pubCamera, 'the preview is not the camera after stop');
     await waitTiles(w, []);
     return 'ended';
+  });
+
+  await step("mic only: the camera's × turns it off, the avatar is a source and fills the frame as the face, the mic stays, and it is kept for the next visit", async () => {
+    await pub.click('#source-remove-cam');
+    await pub.waitForSelector('#source-cam', { state: 'detached', timeout: 5000 });
+    await pub.waitForSelector('#source-me', { timeout: 5000 });
+    const me = await waitBox(pub, 'me', FULL, 2000);
+    expect(me.kind === 'avatar', `the avatar layer is a ${me.kind}`);
+    await waitStatus(pub, /^mic ready$/);
+    const tracks = await trackCounts(pub, '#preview');
+    expect(tracks.video === 0 && tracks.audio === 1, `the stream is ${JSON.stringify(tracks)}, not the mic alone`);
+    expect(!(await pub.$eval('#start', (b) => b.disabled)), 'start is disabled with the mic alone');
+    const kept = await pub.evaluate(() => localStorage.getItem('settings.micOnly'));
+    expect(kept === 'true', `settings.micOnly is ${kept}`);
+    return `the avatar ${fmt(me)}, ${JSON.stringify(tracks)}`;
+  });
+
+  await step('start again, mic only: the watcher is watching on the sound alone, the avatar big, nothing coming in on video, and the avatar moves with the voice on both sides', async () => {
+    await pub.click('#start');
+    await waitStatus(pub, /^live$/);
+    await waitStatus(w, /^watching$/);
+    await waitBox(w, 'me', FULL);
+    await waitTiles(w, []);
+    const tracks = await trackCounts(w, '#video');
+    expect(tracks.video === 0 && tracks.audio === 1, `the watcher's stream is ${JSON.stringify(tracks)}`);
+    const n = await flowingVideos(w);
+    expect(n === 0, `${n} video streams flowing, not 0: the avatar is drawn, not sent`);
+    // a click first: the watcher's page has had none, and a sound reader made without one sits suspended until then
+    await w.click('#unmute');
+    const mine = await voice(pub, 'me');
+    const theirs = await voice(w, 'me');
+    expect(mine.peak > 0 && mine.distinct > 3, `my avatar does not move: ${JSON.stringify(mine)}`);
+    expect(theirs.peak > 0 && theirs.distinct > 3, `their avatar does not move: ${JSON.stringify(theirs)}`);
+    return `mine peak ${mine.peak}% · theirs peak ${theirs.peak}%`;
+  });
+
+  await step('the + puts the camera back, live: the camera fills the frame on both sides with frames flowing, the avatar goes off the stream (its row stays), mic only is forgotten', async () => {
+    await pub.click('#add-source');
+    await pub.click('#add-camera');
+    await pub.waitForSelector('#source-cam', { timeout: 10000 });
+    await waitBox(pub, 'cam', FULL, 5000);
+    await waitBox(pub, 'me', null, 2000);
+    expect((await pub.$('#source-me')) !== null, 'the avatar row went with the camera');
+    await waitBox(w, 'cam', FULL, 5000);
+    await waitBox(w, 'me', null, 5000);
+    await w.waitForFunction(() => document.querySelector('#layer-cam #video')?.srcObject?.getVideoTracks().length === 1, null, { timeout: 5000 });
+    const flow = await framesFlow(w, '#video');
+    const kept = await pub.evaluate(() => localStorage.getItem('settings.micOnly'));
+    expect(kept === 'false', `settings.micOnly is ${kept}`);
+    return flow;
   });
 
   await browser.close();

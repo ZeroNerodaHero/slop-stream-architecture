@@ -10,8 +10,9 @@
  *   a publisher sends  {"slots":[{"slot":0,"kind":"camera"},{"slot":1,"kind":"screen","label":"screen"}],
  *                       "scene":{"layers":[{"id":"s1","kind":"screen","slot":1,"x":0,"y":0,"w":1,"h":1},
  *                                          {"id":"cam","kind":"camera","slot":0,"x":0.73,"y":0.714,"w":0.25,"h":0.25}]}}
- *                      whenever what it shows changes: its video slots that are live, see `SlotInfo`,
- *                      and how its frame is laid out, see `Scene`
+ *                      whenever what it shows changes: its video slots that are live, see `SlotInfo`
+ *                      (slot 0 is named only while the camera is on: a mic-only stream leaves it
+ *                      out and its section quiet), and how its frame is laid out, see `Scene`
  *   a watcher gets     {"event":"slots","slots":[...],"scene":{...}}  right after the answer and on every change
  *                      (no `scene` from a publisher that never sent one: the dummy, an older page)
  *                      {"event":"ended"}  when the publisher leaves
@@ -56,13 +57,17 @@ export interface Box {
 /** How a video fills its box: `cover` crops to fill it (a face), `contain` shows the whole picture (a screen). Absent: by kind, see `fitOf`. */
 export type Fit = 'cover' | 'contain';
 /**
- * One layer of the streamer's frame (docs/screen.md): one of their video slots, or a picture
- * they uploaded (an api asset, by id: the watcher builds the url under the stream's name). `id`
- * is the streamer's, short, unique in the scene; it keys the boxes on both sides.
+ * One layer of the streamer's frame (docs/screen.md): one of their video slots, a picture
+ * they uploaded (an api asset, by id: the watcher builds the url under the stream's name), or
+ * their avatar (the profile picture under the stream's name, else the letter the name makes;
+ * every player draws it from the name and moves it with the sound it is receiving, so it
+ * carries nothing but its box). `id` is the streamer's, short, unique in the scene; it keys the
+ * boxes on both sides.
  */
 export type VideoLayer = Box & { id: string; kind: 'camera' | 'screen'; slot: number; fit?: Fit };
 export type ImageLayer = Box & { id: string; kind: 'image'; asset: number };
-export type Layer = VideoLayer | ImageLayer;
+export type AvatarLayer = Box & { id: string; kind: 'avatar' };
+export type Layer = VideoLayer | ImageLayer | AvatarLayer;
 /** The frame, bottom layer first: the array order is the z-order. A live video slot in no layer is a tile beside the picture. */
 export interface Scene {
   layers: Layer[];
@@ -75,7 +80,7 @@ export const LAYER_MIN = 0.05;
 /** A layer's id: short, plain. */
 const ID_RE = /^[a-z0-9_-]{1,16}$/i;
 
-export const isVideoLayer = (layer: Layer): layer is VideoLayer => layer.kind !== 'image';
+export const isVideoLayer = (layer: Layer): layer is VideoLayer => layer.kind === 'camera' || layer.kind === 'screen';
 /** How a video layer fills its box when it does not say: a face fills, a screen is shown whole (text must never be cut). */
 export const fitOf = (layer: VideoLayer): Fit => layer.fit ?? (layer.kind === 'camera' ? 'cover' : 'contain');
 
@@ -137,6 +142,7 @@ function validLayer(raw: unknown): Layer | null {
   if (l.kind === 'image') {
     return Number.isInteger(l.asset) && (l.asset as number) > 0 ? { id: l.id, kind: 'image', asset: l.asset as number, ...box } : null;
   }
+  if (l.kind === 'avatar') return { id: l.id, kind: 'avatar', ...box };
   return null;
 }
 

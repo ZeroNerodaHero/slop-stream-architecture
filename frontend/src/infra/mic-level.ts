@@ -20,6 +20,11 @@ export interface Level {
 }
 
 export interface MicLevel extends Level {
+  /**
+   * Asks the context to run, inside a click: one made with no gesture behind it (a watcher's
+   * page, freshly loaded) sits suspended and reads 0 until then. Nothing when it already runs.
+   */
+  resume(): void;
   /** Releases the audio context. Reading after this is 0. */
   close(): void;
 }
@@ -74,6 +79,9 @@ export function openMicLevel(track: MediaStreamTrack): MicLevel | null {
   return {
     read(now) {
       return closed ? 0 : level.read(now);
+    },
+    resume() {
+      if (!closed && ctx.state === 'suspended') ctx.resume().catch(() => undefined);
     },
     close() {
       closed = true;

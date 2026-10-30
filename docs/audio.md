@@ -1,6 +1,6 @@
 # audio
 
-a plan, partly built. two things on the stream that already exists. the mix in the page is built (`screen.md`, `infra/mixer.ts`): the mic through a fader into one opus, the audio section always offered so a sound can join later; a tab's sound into it, and the rest of this file, are still the plan.
+a plan, partly built. two things on the stream that already exists. the mix in the page is built (`screen.md`, `infra/mixer.ts`): the mic through a fader into one opus, the audio section always offered so a sound can join later. go live with no camera is built too (`screen.md`, "mic only"): the mic alone, the camera section offered empty and filled later with `replaceTrack`, the avatar for a face, moving with the voice; what is not is home's card for it (the avatar there, below). a tab's sound into the mix, and the rest of this file, are still the plan.
 
 you can go live with no camera: a mic, or the sound of a tab. and while you are live you can open a few spots, a number you pick, so other people on the watch page come on with a mic, or with a mic and a camera. off unless you turn it on. `idea.md` still holds: a stream is one person, and a room where everyone sends is a different product. the spots are a small number on your stream, not that room.
 
@@ -16,13 +16,13 @@ sound is one opus section, on the big video. a screen is an empty video section 
 
 ## go live with no camera
 
-start can be the camera, as now, or the mic alone.
+built, as `screen.md`'s mic only: start is the camera, as before, or the mic alone (the camera's `×` in the sources, kept as `settings.micOnly`; `#mic-only` when the camera is refused).
 
-mic alone: `getUserMedia({ audio: true, video: false })`. the offer still has the camera section and the three screen sections, sendonly, with nothing in the camera section. slot 0 stays the camera and stays quiet, the same way an unused screen slot stays quiet. watchers, tiles and the slots frame do not grow a new shape for this.
+mic alone: `getUserMedia({ audio: true })`. the offer still has the camera section and the three screen sections, sendonly, with nothing in the camera section. slot 0 stays the camera and stays quiet, the same way an unused screen slot stays quiet, and the slots frame simply does not name it. watchers, tiles and the slots frame did not grow a new shape for this; the scene grew one layer kind, `avatar`.
 
-the watch page hears that opus. with no picture coming, the big area is the avatar, else the still, and the word goes to `watching` once the audio is arriving, not once a frame is decoded. the speaker and the dial show then. a camera that starts later (they turn it on mid-stream, `replaceTrack` into slot 0) becomes the picture the page already knows.
+the watch page hears that opus. with no picture coming, the frame is the avatar (a layer of the scene, so it can sit in a corner over a screen too), moving with the sound the page receives, and the word goes to `watching` once the sound plays. the speaker and the dial show then. a camera that starts later (the `+`'s `camera`, `replaceTrack` into slot 0) becomes the picture the page already knows.
 
-home shows the avatar, else the still. there is no camera to preview on hover, and no thumbnail for ffmpeg to write. the card does not try.
+still the plan: home shows the avatar, else the still. there is no camera to preview on hover, and no thumbnail for ffmpeg to write; today the card shows the streamer's thumbnails and, with none, nothing.
 
 the sound of a tab or a screen is the same one opus. browsers will not hand that sound over without the picture (`getDisplayMedia` wants a video track), so that path is a screen share with audio, into a screen slot that already exists, and the page sends one opus: the mic, or the share, or the two mixed in the page before they are sent. half built: `infra/mixer.ts` is that mix, with a fader and a mute per source and a master, and the share's picture is a layer of the scene; the share's sound is not asked for yet (only chromium gives it, and it confused next to a share that never has sound). one host audio section, as today, offered even with nothing in it yet. the camera section can still be empty.
 
@@ -66,13 +66,13 @@ home and the thumbnail stay the host's picture, or the avatar when the host has 
 
 go live:
 
-- next to the camera start, a mic start. no camera prompt on that path. status `mic ready`, then `live`
+- built: the mic alone (the camera's `×`, kept; `#mic-only`). no camera prompt on that path. status `mic ready`, then `live`
 - screen share can include the tab's sound. one opus leaves the page
 - while live, the spots control: the number, who is on, drop on each. picture in picture keeps it, the same as the rest of the broadcast
 
 watch:
 
-- no picture from the host: the avatar or the still in the frame, sound on the same element, `watching` once audio arrives. `no video. udp blocked?` stays the failure for a connection that never comes up
+- built: no picture from the host: the avatar in the frame, moving with the sound, sound on the same element, `watching` once it plays. `no video. udp blocked?` stays the failure for a connection that never comes up
 - `come on` while a spot is open: mic, or camera. full shows full. on, you are a tile or a name, and `leave` frees the spot. drop, the host closing the spots, or the stream ending, puts you back to watching
 
 ## not here

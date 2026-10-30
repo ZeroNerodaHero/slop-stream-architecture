@@ -27,9 +27,9 @@ import {
   reorderSource,
   resizeSource,
   sceneAtom,
-  screenStreamAtom,
   selectedSourceAtom,
   selectSource,
+  sentStreamAtom,
   sourcesAtom,
   startCamera,
   startPublishPip,
@@ -40,6 +40,7 @@ import {
   watchUrlAtom,
   liveViewersAtom
 } from '@/infra/atoms/publish-atoms';
+import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
@@ -55,9 +56,6 @@ import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { IconButton, PipIcon, revealClassName } from '@/shared-components/VideoControls';
 import { cn } from '@/utils/cn';
-
-/** A layer's stream on this side: the camera, or a screen slot's own display stream. */
-const streamFor = (slot: number) => (slot === 0 ? cameraAtom : screenStreamAtom(slot - 1));
 
 export function LivePage() {
   const navigate = useNavigate();
@@ -81,10 +79,12 @@ export function LivePage() {
   const previewSlot = useAtomValue(previewSlotAtom);
   const selected = useAtomValue(selectedSourceAtom);
   const mixerOpen = useAtomValue(mixerOpenAtom);
+  const myAvatar = useAtomValue(myAvatarVersionAtom);
   const thumbFileRef = useRef<HTMLInputElement | null>(null);
 
-  // the editor's hooks on the preview: a drag, a corner, the keys. delete takes a picture out and
-  // puts a video source beside (a key must not stop a share); the brackets move through the stack
+  // the editor's hooks on the preview: a drag, a corner, the keys. delete takes a picture or the
+  // avatar out and puts a video source beside (a key must not stop a share, or turn the camera
+  // off); the brackets move through the stack
   const edit: SceneEdit = {
     selectedId: selected,
     onSelect: selectSource,
@@ -93,7 +93,8 @@ export function LivePage() {
     onNudge: nudgeSource,
     onKey: (id, what) => {
       if (what === 'remove') {
-        if (sources.find((s) => s.id === id)?.kind === 'image') removeSource(id);
+        const kind = sources.find((s) => s.id === id)?.kind;
+        if (kind === 'image' || kind === 'avatar') removeSource(id);
         else toggleSource(id);
       } else reorderSource(id, what === 'forward' ? 'up' : 'down');
     }
@@ -134,8 +135,10 @@ export function LivePage() {
                 <SceneView
                   id="scene"
                   layers={scene.layers}
-                  streamFor={streamFor}
+                  streamFor={sentStreamAtom}
                   imageUrl={(asset) => api.assetUrl(name, asset)}
+                  // the avatar moves with the mic: the mixer's own reading once that is up (the layer rebinds on that, the way the mic chip does)
+                  avatar={{ name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined }}
                   main={{ id: 'preview', streamAtom: previewStreamAtom, videoRef: previewRef, slot: previewSlot, muted: true }}
                   edit={edit}
                 />
@@ -146,8 +149,10 @@ export function LivePage() {
                 {(phase === 'live' || phase === 'reconnecting') && <StreamStatsButton id="live-stats" role="publish" stats={stats} className="left-[3.25rem] top-3" />}
                 {/* while the chat is closed the bar stays up, so it can be opened again off the preview. once
                     live, picture in picture beside it: the same button as the watch page's, for your own stream
-                    (here any way off the page keeps the stream; the button is the one that says so) */}
-                <div className={cn('absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 p-3', revealClassName(!chatOpen))}>
+                    (here any way off the page keeps the stream; the button is the one that says so). the bar
+                    itself takes no presses, only its buttons do: it lies across the bottom of the frame, where a
+                    layer in a corner is taken hold of */}
+                <div className={cn('pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 p-3 [&>*]:pointer-events-auto', revealClassName(!chatOpen))}>
                   <ChatOpenButton className="ml-auto" />
                   {publishing && (
                     <IconButton id="live-pip" label="picture in picture" onClick={toCorner}>

@@ -109,7 +109,7 @@ export function MicMeter({ id, streamAtom, read, className = 'left-3 top-3' }: M
         track.addEventListener('mute', onTrack);
         track.addEventListener('unmute', onTrack);
         track.addEventListener('ended', onTrack);
-        reader = read ? { read, close: () => undefined } : openMicLevel(track);
+        reader = read ? { read, resume: () => undefined, close: () => undefined } : openMicLevel(track);
       }
       setState(stateOf(track));
       draw(0);

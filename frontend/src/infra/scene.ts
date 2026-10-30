@@ -9,13 +9,14 @@ import { type Box, clampBox, type Fit, LAYER_MIN, type Layer, type Scene, thousa
 
 /**
  * One thing the streamer can put on the stream: the camera, a shared screen, an uploaded
- * picture. Its box is kept whether or not it is on the stream, so the eye brings it back where
+ * picture, their avatar (the profile picture, moving with the voice: the face of a mic-only
+ * stream). Its box is kept whether or not it is on the stream, so the eye brings it back where
  * it was. The list is in z-order, bottom first; a source on the stream is a layer of the scene.
  */
 export interface Source {
-  /** Short and plain: `cam`, `s1`..`s3` (the wire slot), `i<n>`. The layer's id on the wire. */
+  /** Short and plain: `cam`, `s1`..`s3` (the wire slot), `i<n>`, `me` (the avatar). The layer's id on the wire. */
   id: string;
-  kind: 'camera' | 'screen' | 'image';
+  kind: 'camera' | 'screen' | 'image' | 'avatar';
   label: string;
   /** A video source: its wire slot. The camera is 0, the screens 1 to 3. */
   slot?: number;
@@ -31,6 +32,8 @@ export interface Source {
 
 /** The whole frame. */
 export const FULL: Box = { x: 0, y: 0, w: 1, h: 1 };
+/** The avatar's id. One avatar: it is the streamer's own picture. Its box is laid out like the camera's; the square picture sits centred in it. */
+export const AVATAR_ID = 'me';
 /** Bottom right, a quarter wide, the same gap at the side (2% of the width) and the bottom (2% of the width is 3.6% of the height). */
 export const CORNER: Box = { x: 0.73, y: 0.714, w: 0.25, h: 0.25 };
 /** Where a second and a third screen land when they are added to a scene that already has two pictures: bottom left, top right, a third wide. */
@@ -39,11 +42,18 @@ const THIRD_SCREEN: Box = { x: 0.647, y: 0.036, w: 0.333, h: 0.333 };
 /** A picture arrives this wide, centred, no taller than this. */
 const IMAGE_W = 0.3;
 const IMAGE_MAX_H = 0.6;
+/** The avatar beside a camera arrives like a picture of its own shape: a square, 9/16 as wide as it is tall on the frame. */
+const AVATAR_BOX_RATIO = 9 / 16;
 
 export const layerOf = (s: Source): Layer =>
   s.kind === 'image'
     ? { id: s.id, kind: 'image', asset: s.asset ?? 0, ...s.box }
-    : { id: s.id, kind: s.kind, slot: s.slot ?? 0, ...(s.fit && { fit: s.fit }), ...s.box };
+    : s.kind === 'avatar'
+      ? { id: s.id, kind: 'avatar', ...s.box }
+      : { id: s.id, kind: s.kind, slot: s.slot ?? 0, ...(s.fit && { fit: s.fit }), ...s.box };
+
+/** The camera or a screen: a source that is a video slot on the wire. */
+export const isVideoSource = (s: Source) => s.kind === 'camera' || s.kind === 'screen';
 
 /** The scene the watchers get: the sources on the stream, bottom first. */
 export const sceneOf = (sources: readonly Source[]): Scene => ({ layers: sources.filter((s) => s.shown).map(layerOf) });
@@ -157,9 +167,14 @@ export const PRESETS: readonly Preset[] = [
 export const MAX_SAVED_PRESETS = 12;
 const ROLES: readonly Role[] = ['camera', 'screen1', 'screen2', 'screen3'];
 
-/** The role a source plays: the camera, or the n-th screen by slot. A picture has none. */
+/**
+ * The role a source plays: the camera, or the n-th screen by slot. The avatar is the face of a
+ * stream with no camera, so it is the camera's role then (`face`, `screen + face` and the rules
+ * lay a mic-only stream out like any other); beside a camera it has none. A picture has none.
+ */
 export function roleOf(source: Source, sources: readonly Source[]): Role | null {
   if (source.kind === 'camera') return 'camera';
+  if (source.kind === 'avatar') return sources.some((s) => s.kind === 'camera') ? null : 'camera';
   if (source.kind !== 'screen') return null;
   const screens = sources.filter((s) => s.kind === 'screen').sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
   const rank = screens.findIndex((s) => s.id === source.id);
@@ -169,16 +184,19 @@ export function roleOf(source: Source, sources: readonly Source[]): Role | null 
 /** The roles present: a preset whose roles are all here is whole; the strip dims the others. */
 export const rolesOf = (sources: readonly Source[]): Set<Role> => new Set(sources.map((s) => roleOf(s, sources)).filter((r): r is Role => r !== null));
 
+/** The sources the rules and the presets lay out: those with a role. The rest (a picture, the avatar beside a camera) stay where they are put. */
+const laidOut = (sources: readonly Source[]): Source[] => sources.filter((s) => roleOf(s, sources) !== null);
+
 /**
- * The preset laid onto the sources. Its video layers replace the ones there, in its order; a
- * role with no source is skipped; a video source it does not list goes off the stream, its box
+ * The preset laid onto the sources. Its layers replace the ones there, in its order; a role
+ * with no source is skipped; a source with a role it does not list goes off the stream, its box
  * kept. `reveal` (a click on the strip) puts the listed sources on the stream even if they were
  * off; without it (the rules below) a source the streamer took off stays off and only boxes
- * change. Pictures keep their boxes and their place: those under the lowest video stay under
- * (a background), the rest stay above (a border, a logo).
+ * change. Pictures (and the avatar beside a camera) keep their boxes and their place: those
+ * under the lowest placed source stay under (a background), the rest stay above (a border, a logo).
  */
 export function applyPreset(sources: readonly Source[], preset: Preset, reveal: boolean): Source[] {
-  const videos = sources.filter((s) => s.kind !== 'image');
+  const videos = laidOut(sources);
   const placed: Source[] = [];
   for (const b of preset.boxes) {
     const source = videos.find((v) => roleOf(v, sources) === b.role && !placed.some((p) => p.id === v.id));
@@ -186,9 +204,10 @@ export function applyPreset(sources: readonly Source[], preset: Preset, reveal: 
     placed.push({ ...source, box: { x: b.x, y: b.y, w: b.w, h: b.h }, fit: b.fit, shown: reveal || source.shown });
   }
   const rest = videos.filter((v) => !placed.some((p) => p.id === v.id)).map((v) => ({ ...v, shown: false }));
-  const lowest = sources.findIndex((s) => s.kind !== 'image');
-  const under = sources.filter((s, i) => s.kind === 'image' && lowest >= 0 && i < lowest);
-  const above = sources.filter((s) => s.kind === 'image' && !under.includes(s));
+  const lowest = sources.findIndex((s) => videos.includes(s));
+  const decor = sources.filter((s) => !videos.includes(s));
+  const under = decor.filter((s) => lowest >= 0 && sources.indexOf(s) < lowest);
+  const above = decor.filter((s) => !under.includes(s));
   return [...under, ...placed, ...rest, ...above];
 }
 
@@ -224,14 +243,16 @@ export function validPreset(raw: unknown): Preset | null {
 // ---- the rules: what happens to the frame when a source comes or goes -------------------------
 
 /**
- * A video source was added. One picture alone fills the frame. The first screen beside the
- * camera makes `screen + face`, or the arrangement this browser last had for a screen and the
- * camera (`last`). A third or later picture takes a corner of its own and moves nothing else:
- * the streamer is in another tab picking the share, and a reflow then is a jump nobody asked for
- * (`three up` is one click away).
+ * A source with a role was added (the camera, a screen, the avatar as the face). One picture
+ * alone fills the frame. The first screen beside the face makes `screen + face`, or the
+ * arrangement this browser last had for a screen and the face (`last`). A third or later picture
+ * takes a corner of its own and moves nothing else: the streamer is in another tab picking the
+ * share, and a reflow then is a jump nobody asked for (`three up` is one click away). The avatar
+ * added beside a camera has no role: it arrives centred, like a picture.
  */
 export function arrangedAfterAdd(sources: readonly Source[], added: Source, last: Preset | null): Source[] {
-  const videos = sources.filter((s) => s.kind !== 'image');
+  const videos = laidOut(sources);
+  if (!videos.some((v) => v.id === added.id)) return sources.map((s) => (s.id === added.id ? { ...s, box: imageBox(AVATAR_BOX_RATIO), shown: true } : s));
   if (videos.length === 1) return sources.map((s) => (s.id === added.id ? { ...s, box: FULL, shown: true } : s));
   if (videos.length === 2 && added.kind === 'screen') {
     const preset = last && last.boxes.some((b) => b.role === 'screen1') ? last : PRESETS.find((p) => p.name === 'screen + face');
@@ -242,9 +263,9 @@ export function arrangedAfterAdd(sources: readonly Source[], added: Source, last
   return sources.map((s) => (s.id === added.id ? { ...s, box, shown: true } : s));
 }
 
-/** A video source went. One picture left fills the frame; otherwise nothing moves (a hole is the streamer's to fix with one click). */
+/** A source with a role went. One left fills the frame; otherwise nothing moves (a hole is the streamer's to fix with one click). */
 export function arrangedAfterRemove(sources: readonly Source[]): Source[] {
-  const videos = sources.filter((s) => s.kind !== 'image');
+  const videos = laidOut(sources);
   if (videos.length !== 1) return [...sources];
-  return sources.map((s) => (s.kind !== 'image' ? { ...s, box: FULL } : s));
+  return sources.map((s) => (videos.includes(s) ? { ...s, box: FULL } : s));
 }

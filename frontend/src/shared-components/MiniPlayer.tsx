@@ -7,17 +7,25 @@ import {
   endLive,
   isPublishingAtom,
   liveViewersAtom,
+  micLevelReader,
+  mixerOpenAtom,
   ownerAtom,
+  previewSlotAtom,
+  previewStreamAtom,
   publishMessageAtom,
   publishPhaseAtom,
   publishPipAtom,
   publishStatsAtom,
   publishToneAtom,
+  sceneAtom,
+  sentStreamAtom,
   streamNameAtom
 } from '@/infra/atoms/publish-atoms';
 import { friendsOpenAtom } from '@/infra/atoms/follow-atoms';
+import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { pipChatPlaceAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import {
+  avatarAtom,
   canHearAtom,
   endWatch,
   markAutoplayBlocked,
@@ -93,6 +101,7 @@ function WatchCorner() {
   const viewers = useAtomValue(watchViewersAtom);
   const layers = useAtomValue(watchLayersAtom);
   const primary = useAtomValue(primarySlotAtom);
+  const avatar = useAtomValue(avatarAtom);
   const pipChat = useAtomValue(pipChatPlaceAtom);
   const cornerChat = useAtomValue(cornerChatAtom);
   const { pathname } = useLocation();
@@ -130,7 +139,14 @@ function WatchCorner() {
         )
       }
       // the streamer's frame, as on the page: the corner would otherwise show the big picture alone, and a face in a corner of it would be gone
-      scene={{ layers, slot: primary, streamFor: slotStreamAtom, imageUrl: (asset) => api.assetUrl(name, asset), onPick: pickSlot }}
+      scene={{
+        layers,
+        slot: primary,
+        streamFor: slotStreamAtom,
+        imageUrl: (asset) => api.assetUrl(name, asset),
+        avatar: { name, version: avatar, streamAtom: remoteStreamAtom },
+        onPick: pickSlot
+      }}
       badge={canHear && <StreamStatsButton id="pip-stats" role="watch" stats={stats} className={CORNER_BADGE} playback={{ muted, level: volume }} />}
       bar={canHear && <SoundControl videoRef={videoRef} buttonId="pip-unmute" dialId="pip-volume" dialClassName="w-20" />}
       barShown={muted}
@@ -140,12 +156,14 @@ function WatchCorner() {
 
 /**
  * Your own stream, wherever you go while it is up (leaving the go live page with a stream on
- * air puts it here) and you are anywhere but that page: the camera (muted, it is you), the
- * status word (`live`, green), how many are watching, the upload stats on hover, and your own
- * chat with your lines marked. The stream itself is untouched: the peer, the socket and the
- * camera are the same module handles the page uses. The × is stop, after a yes (a box in a
- * corner is easy to close by habit, and this one ends the stream for everyone): your stream
- * ends and the camera goes, as if you had pressed stop on the page.
+ * air puts it here) and you are anywhere but that page: your frame as the watchers get it
+ * (muted, it is you; the preview's `<video>` stands in for the bottom video layer, and a
+ * mic-only stream shows its avatar), the status word (`live`, green), how many are watching,
+ * the upload stats on hover, and your own chat with your lines marked. The stream itself is
+ * untouched: the peer, the socket and the camera are the same module handles the page uses.
+ * The × is stop, after a yes (a box in a corner is easy to close by habit, and this one ends
+ * the stream for everyone): your stream ends and the camera goes, as if you had pressed stop
+ * on the page.
  */
 function LiveCorner() {
   const pip = useAtomValue(publishPipAtom);
@@ -157,6 +175,10 @@ function LiveCorner() {
   const stats = useAtomValue(publishStatsAtom);
   const viewers = useAtomValue(liveViewersAtom);
   const owner = useAtomValue(ownerAtom);
+  const scene = useAtomValue(sceneAtom);
+  const previewSlot = useAtomValue(previewSlotAtom);
+  const mixerOpen = useAtomValue(mixerOpenAtom);
+  const myAvatar = useAtomValue(myAvatarVersionAtom);
   const pipChat = useAtomValue(pipChatPlaceAtom);
   const cornerChat = useAtomValue(cornerChatAtom);
   const { pathname } = useLocation();
@@ -172,9 +194,17 @@ function LiveCorner() {
       to="/live"
       message={message}
       tone={tone}
-      streamAtom={cameraAtom}
+      streamAtom={previewStreamAtom}
       videoRef={videoRef}
       muted
+      // the frame as the page's preview draws it, the avatar moving with the mic (off the mixer while it is up)
+      scene={{
+        layers: scene.layers,
+        slot: previewSlot,
+        streamFor: sentStreamAtom,
+        imageUrl: (asset) => api.assetUrl(name, asset),
+        avatar: { name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined }
+      }}
       chat={{ name, owner, place: pipChat, open: cornerChat === 'live-pip', pageHasChat: hasOwnChat(pathname), onToggle: () => toggleCornerChat('live-pip') }}
       closeLabel="stop streaming"
       onClose={endLive}

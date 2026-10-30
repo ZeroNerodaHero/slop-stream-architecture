@@ -16,10 +16,12 @@
 //!   {"slots":[{"slot":0,"kind":"camera"},{"slot":1,"kind":"screen","label":"screen"}],
 //!    "scene":{"layers":[{"id":"s1","kind":"screen","slot":1,"x":0,"y":0,"w":1,"h":1},
 //!                       {"id":"cam","kind":"camera","slot":0,"x":0.73,"y":0.714,"w":0.25,"h":0.25},
-//!                       {"id":"i1","kind":"image","asset":12,"x":0.02,"y":0.02,"w":0.2,"h":0.11}]}}
-//! (`slot` counts its video sections from 0; `scene`, optional, is how it lays its frame
-//! out, see `Scene`: boxes in fractions of a 16:9 frame, drawn bottom first, and a live
-//! slot in none of them is a tile beside the picture), and watchers get each change as
+//!                       {"id":"i1","kind":"image","asset":12,"x":0.02,"y":0.02,"w":0.2,"h":0.11},
+//!                       {"id":"me","kind":"avatar","x":0.35,"y":0.2,"w":0.3,"h":0.6}]}}
+//! (`slot` counts its video sections from 0, and a slot not named is not live: a mic-only
+//! publisher names no slot 0 and leaves the camera's section quiet; `scene`, optional, is how
+//! it lays its frame out, see `Scene`: boxes in fractions of a 16:9 frame, drawn bottom
+//! first, and a live slot in none of them is a tile beside the picture), and watchers get each change as
 //!   {"event":"slots","slots":[...],"scene":{...}}
 //! right after their answer and whenever it changes. Until the publisher says,
 //! the first video slot is the camera and there is no scene.
@@ -206,11 +208,13 @@ struct SlotInfo {
 }
 
 /// One box of a publisher's frame (docs/screen.md): a video slot of its own offer (`camera`,
-/// `screen`), or a picture it put up at the api (`image`, by asset id; the watcher builds the
-/// url under the stream's name). `x`,`y` is the top left corner and `w`,`h` the size, all
-/// fractions of a 16:9 frame, so every player draws the same picture at any size. `fit` is a
-/// video's: `cover` fills the box, `contain` shows the whole picture. Passed on as it came,
-/// once checked.
+/// `screen`), a picture it put up at the api (`image`, by asset id; the watcher builds the
+/// url under the stream's name), or the publisher's avatar (`avatar`: the profile picture
+/// under the stream's name, which the watcher draws and moves with the sound it receives, so
+/// the layer carries nothing but its box). `x`,`y` is the top left corner and `w`,`h` the
+/// size, all fractions of a 16:9 frame, so every player draws the same picture at any size.
+/// `fit` is a video's: `cover` fills the box, `contain` shows the whole picture. Passed on as
+/// it came, once checked.
 #[derive(Clone, Serialize, Deserialize)]
 struct Layer {
     id: String,
@@ -237,10 +241,10 @@ struct Scene {
 
 impl Scene {
     /// Not more layers than a frame can be, and each one: a short plain id, a known kind, a
-    /// video slot of this publisher's own offer for the video kinds and an asset for a picture,
-    /// fractions of the frame. Json has no NaN or infinity, and the range check keeps out the
-    /// rest. The length is checked first, so a frame of ten thousand layers is refused without
-    /// walking them.
+    /// video slot of this publisher's own offer for the video kinds, an asset for a picture
+    /// and nothing more for the avatar, fractions of the frame. Json has no NaN or infinity,
+    /// and the range check keeps out the rest. The length is checked first, so a frame of ten
+    /// thousand layers is refused without walking them.
     fn well_formed(&self, video_slots: usize) -> bool {
         self.layers.len() <= MAX_LAYERS
             && self.layers.iter().all(|layer| {
@@ -251,6 +255,7 @@ impl Scene {
                 let named = match layer.kind.as_str() {
                     "camera" | "screen" => layer.slot.is_some_and(|slot| slot < video_slots),
                     "image" => layer.asset.is_some_and(|asset| asset > 0),
+                    "avatar" => true,
                     _ => false,
                 };
                 id && placed && fit && named

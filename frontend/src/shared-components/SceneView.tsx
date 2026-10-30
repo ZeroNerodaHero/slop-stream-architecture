@@ -10,6 +10,7 @@ import {
 } from 'react';
 
 import { type Box, fitOf, isVideoLayer, type Layer } from '@/infra/relay';
+import { AvatarLayer, type AvatarVoice } from '@/shared-components/AvatarLayer';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
 
@@ -67,6 +68,8 @@ interface SceneViewProps {
   streamFor: (slot: number) => Atom<MediaStream | null>;
   /** A picture's url by asset id. */
   imageUrl: (asset: number) => string;
+  /** An avatar layer: whose picture, and the sound that moves it. Without it an avatar layer is an empty box. */
+  avatar?: AvatarVoice;
   main: MainVideo;
   /** A watcher's click on a video layer: that slot goes big. */
   onPick?: (slot: number) => void;
@@ -95,11 +98,12 @@ interface Gesture {
  * it, bottom first, each at its own fractions, so this preview and every watcher's player show
  * the same picture at any size. The main `<video>` (the one with the sound) stands in for the
  * first video layer of its slot and never unmounts: the other video layers are muted copies,
- * the pictures `<img>`s. A watcher clicks a video layer to see it alone; the streamer takes hold
- * of a layer to move it, pulls a corner to resize it, and uses the keys (arrows nudge, shift
- * five times as far, delete takes it off, `[` and `]` move it through the stack, escape lets go).
+ * the pictures `<img>`s, the avatar the streamer's picture moving with the sound (`AvatarLayer`).
+ * A watcher clicks a video layer to see it alone; the streamer takes hold of a layer to move
+ * it, pulls a corner to resize it, and uses the keys (arrows nudge, shift five times as far,
+ * delete takes it off, `[` and `]` move it through the stack, escape lets go).
  */
-export function SceneView({ id, layers, streamFor, imageUrl, main, onPick, edit, className, children }: SceneViewProps) {
+export function SceneView({ id, layers, streamFor, imageUrl, avatar, main, onPick, edit, className, children }: SceneViewProps) {
   const frame = useRef<HTMLDivElement | null>(null);
   const hostIndex = main.slot === null ? -1 : layers.findIndex((l) => isVideoLayer(l) && l.slot === main.slot);
   const host = layers[hostIndex];
@@ -128,6 +132,9 @@ export function SceneView({ id, layers, streamFor, imageUrl, main, onPick, edit,
         <LayerBox key={layer.id} layer={layer} frame={frame} edit={edit} onPick={onPick}>
           {i === hostIndex ? (
             mainVideo
+          ) : layer.kind === 'avatar' ? (
+            // keyed on where the sound comes from: a reader given later (the mixer opening) is bound on mount, like the stream
+            avatar && <AvatarLayer key={avatar.read ? 'mixer' : 'own'} id={`layer-${layer.id}-avatar`} wide={layer.w * 16 >= layer.h * 9} voice={avatar} />
           ) : isVideoLayer(layer) ? (
             <LayerVideo id={`layer-${layer.id}-video`} streamAtom={streamFor(layer.slot)} cover={fitOf(layer) === 'cover'} />
           ) : (
@@ -256,6 +263,9 @@ function LayerBox({ layer, frame, edit, onPick, children }: LayerBoxProps) {
   };
 
   const name = layer.kind === 'image' ? 'picture' : layer.kind;
+  // the avatar is a square picture in the middle of its box: the box itself shows nothing (no black ground,
+  // and on a watcher's side no edge), so in a corner over a screen the picture alone floats there
+  const bare = layer.kind === 'avatar';
   return (
     <div
       ref={el}
@@ -284,10 +294,15 @@ function LayerBox({ layer, frame, edit, onPick, children }: LayerBoxProps) {
       // `isolate`: the handles stack inside this layer, never over the one above it. the edge is an inset
       // outline, not a border: the picture starts at the box's own edge, as the fractions say
       className={cn(
-        'absolute isolate overflow-hidden bg-black outline transition-[outline-color] duration-150',
+        'absolute isolate overflow-hidden outline transition-[outline-color] duration-150',
+        !bare && 'bg-black',
         edit && cn('cursor-move', GRIP),
         pickable && 'cursor-pointer hover:outline-primaryBlue',
-        selected ? 'outline-2 -outline-offset-2 outline-primaryBlue' : 'outline-1 -outline-offset-1 outline-white/40 focus-visible:outline-primaryBlue'
+        selected
+          ? 'outline-2 -outline-offset-2 outline-primaryBlue'
+          : bare && !edit
+            ? 'outline-0'
+            : 'outline-1 -outline-offset-1 outline-white/40 focus-visible:outline-primaryBlue'
       )}
     >
       {children}

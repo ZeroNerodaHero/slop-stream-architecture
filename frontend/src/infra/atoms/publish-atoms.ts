@@ -22,8 +22,10 @@ import {
   applyPreset,
   arrangedAfterAdd,
   arrangedAfterRemove,
+  AVATAR_ID,
   FULL,
   imageBox,
+  isVideoSource,
   MAX_SAVED_PRESETS,
   movedBox,
   type Preset,
@@ -31,6 +33,7 @@ import {
   presetOf,
   ratioOf,
   resizedBox,
+  roleOf,
   sceneOf,
   type Source,
   validPreset
@@ -39,7 +42,21 @@ import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
 import type { Tone } from '@/shared-components/StatusLine';
 
-export type PublishPhase = 'camera-off' | 'camera-blocked' | 'no-camera' | 'camera-ready' | 'starting' | 'connecting' | 'live' | 'reconnecting' | 'stopped' | 'failed';
+/** `mic-ready`, `mic-blocked` and `no-mic` are the mic-only start's (docs/screen.md): the mic alone, with the avatar for a face. */
+export type PublishPhase =
+  | 'camera-off'
+  | 'camera-blocked'
+  | 'no-camera'
+  | 'camera-ready'
+  | 'mic-ready'
+  | 'mic-blocked'
+  | 'no-mic'
+  | 'starting'
+  | 'connecting'
+  | 'live'
+  | 'reconnecting'
+  | 'stopped'
+  | 'failed';
 
 const HEARTBEAT_MS = 15000;
 const VIDEO_MAX_BITRATE = 2_500_000;
@@ -48,7 +65,9 @@ const CAMERA_SHARING_BITRATE = 500_000;
 /** All the shared screens together. One alone gets it all, three get a third each. */
 const SCREENS_BITRATE = 3_000_000;
 const BUSY_PHASES: readonly PublishPhase[] = ['starting', 'connecting', 'live', 'reconnecting'];
-const BAD_PHASES: readonly PublishPhase[] = ['camera-blocked', 'no-camera', 'failed'];
+const BAD_PHASES: readonly PublishPhase[] = ['camera-blocked', 'no-camera', 'mic-blocked', 'no-mic', 'failed'];
+/** The camera's picture: 720p, the size the home card and the watchers get (docs/bitrates.md). */
+const CAMERA_VIDEO: MediaTrackConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
 /**
  * A shared screen is at most this big: a retina display would hand over a picture too big for
  * the bitrate, and the bits go on pixels the cap cannot afford (docs/bitrates.md).
@@ -78,7 +97,24 @@ const CAMERA_MIN_BITRATE = 150_000;
 /** The camera's encode is shrunk to fit its box: the picture is 1280 wide, a watcher's frame at most 1920. Steps, so a drag does not cost a keyframe per pixel. */
 const CAMERA_SCALES = [1, 1.33, 2, 2.67, 4];
 
+/**
+ * What `getUserMedia` gave: the camera and the mic, the camera alone (no mic), or the mic
+ * alone (mic only, docs/screen.md). Replaced whole whenever a track comes or goes (the camera
+ * turned off, or on again), so everything reading it follows; the mic track itself stays the
+ * same object through that, so the mixer and the meters never rebind.
+ */
 export const cameraAtom = atom<MediaStream | null>(null);
+/** The camera is on: its stream has a picture. Off (mic only), the stream is the mic alone. */
+export const hasCameraAtom = atom((get) => (get(cameraAtom)?.getVideoTracks().length ?? 0) > 0);
+/** There is a mic. Without one the camera cannot be turned off: nothing would be left to stream. */
+export const hasMicAtom = atom((get) => (get(cameraAtom)?.getAudioTracks().length ?? 0) > 0);
+/**
+ * Mic only, kept: the next visit opens the mic alone and never asks for the camera (someone
+ * who streams with their avatar should not have the camera's light come on every time).
+ * Set by the camera's × (off) and the +'s `camera` (on).
+ */
+const storedMicOnlyAtom = atomWithStorage<unknown>('settings.micOnly', false, undefined, { getOnInit: true });
+export const micOnlyAtom = atom((get) => get(storedMicOnlyAtom) === true);
 /** A screen being shared: which screen slot (0 to SCREEN_SLOTS-1) and what the browser called it. Its stream is in `screenStreamAtoms`. */
 export interface SharedScreen {
   slot: number;
@@ -90,6 +126,8 @@ const screenStreamAtoms = Array.from({ length: SCREEN_SLOTS }, () => atom<MediaS
 /** For a screen slot that does not exist (never: slots come from `screenSenders`, which has SCREEN_SLOTS): an atom that stays empty. */
 const spareStreamAtom = atom<MediaStream | null>(null);
 export const screenStreamAtom = (slot: number) => screenStreamAtoms[slot] ?? spareStreamAtom;
+/** The stream this page sends on a video slot: the camera on 0, a screen's display stream on 1 to SCREEN_SLOTS. The preview's layers and the corner player's draw from these. */
+export const sentStreamAtom = (slot: number) => (slot === 0 ? cameraAtom : screenStreamAtom(slot - 1));
 /** Phones have no screen capture; there the button is not shown at all. */
 export const screenShareSupported = typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 
@@ -110,7 +148,10 @@ export const previewStreamAtom = atom((get) => {
 export const selectedSourceAtom = atom<string | null>(null);
 /** The pictures this name has put up (api assets), oldest first: the + menu offers them again. */
 export const libraryAtom = atom<{ id: number; mime: string }[]>([]);
-export const imageStatusAtom = atom('');
+/** The sources panel's one line of words: a picture going up or refused, a camera asked for and refused. '' for nothing to say. */
+export const sourceStatusAtom = atom('');
+/** The avatar is a source already: one is all there is (it is the streamer's own picture). */
+export const hasAvatarAtom = atom((get) => get(sourcesAtom).some((s) => s.kind === 'avatar'));
 /** The presets this browser saved, as `infra/scene.ts` presets. */
 const storedPresetsAtom = atomWithStorage<unknown>('settings.scenePresets', [], undefined, { getOnInit: true });
 /** Read: well-formed presets only, whatever localstorage holds. */
@@ -287,14 +328,15 @@ export async function enterLivePage(): Promise<void> {
   await commitStreamName();
 }
 
+/** The page's arrival: the camera and the mic, or, kept from last time (`settings.micOnly`), the mic alone. */
 export async function startCamera(): Promise<void> {
   if (store.get(cameraAtom)) return;
+  if (store.get(micOnlyAtom)) return startMic();
   // the permission prompt can outlive the page. an answer that comes after leaving is not ours to keep.
   const generation = liveGeneration;
-  const video = { width: { ideal: 1280 }, height: { ideal: 720 } };
   let camera: MediaStream;
   try {
-    camera = await navigator.mediaDevices.getUserMedia({ video, audio: true });
+    camera = await navigator.mediaDevices.getUserMedia({ video: CAMERA_VIDEO, audio: true });
   } catch (err) {
     if (generation !== liveGeneration) return;
     if (err instanceof DOMException && err.name === 'NotAllowedError') {
@@ -303,7 +345,7 @@ export async function startCamera(): Promise<void> {
     }
     // no mic, or the mic is busy. go without sound.
     try {
-      camera = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+      camera = await navigator.mediaDevices.getUserMedia({ video: CAMERA_VIDEO, audio: false });
     } catch {
       if (generation === liveGeneration) setPhase('no-camera', 'no camera');
       return;
@@ -319,11 +361,122 @@ export async function startCamera(): Promise<void> {
   setPhase('camera-ready', camera.getAudioTracks().length ? 'camera ready' : 'camera ready, no mic');
 }
 
-/** The camera is a source from the moment it is on: the bottom of the scene, the whole frame, until a screen joins it. */
+/**
+ * Mic only (docs/screen.md): the mic alone, no camera prompt, and the avatar for a face. The
+ * page's arrival with `settings.micOnly` kept, and the way out of `camera blocked` or `no
+ * camera` (`#mic-only`). The stream's offer still carries the camera's section, empty, so the
+ * camera can be turned on later without anyone renegotiating (`cameraOn`).
+ */
+export async function startMic(): Promise<void> {
+  if (store.get(cameraAtom)) return;
+  const generation = liveGeneration;
+  let mic: MediaStream;
+  try {
+    mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    if (generation !== liveGeneration) return;
+    const blocked = err instanceof DOMException && err.name === 'NotAllowedError';
+    setPhase(blocked ? 'mic-blocked' : 'no-mic', blocked ? 'mic blocked' : 'no mic');
+    return;
+  }
+  if (generation !== liveGeneration) {
+    mic.getTracks().forEach((track) => track.stop());
+    return;
+  }
+  store.set(storedMicOnlyAtom, true);
+  store.set(cameraAtom, mic);
+  ensureAvatarSource();
+  setPhase('mic-ready', 'mic ready');
+}
+
+/**
+ * The camera's ×: mic only from here on. The picture's track is stopped (the light goes off),
+ * the mic stays, and the camera leaves the scene; the avatar stands in for the face (added if
+ * there is none, back on the stream if it was off), filling the frame when it is all there is.
+ * Live, the camera's section goes quiet (`replaceTrack(null)`) and the watchers are told slot 0
+ * is not live. Kept for the next visit. Not without a mic: nothing would be left to stream.
+ */
+export function cameraOff() {
+  const camera = store.get(cameraAtom);
+  if (!camera || !store.get(hasCameraAtom) || !store.get(hasMicAtom)) return;
+  camera.getVideoTracks().forEach((track) => track.stop());
+  store.set(cameraAtom, new MediaStream(camera.getAudioTracks()));
+  cameraSender?.replaceTrack(null).catch(() => undefined);
+  store.set(storedMicOnlyAtom, true);
+  dropSource('cam');
+  ensureAvatarSource();
+  if (!store.get(isPublishingAtom)) setPhase('mic-ready', 'mic ready');
+  slotsChanged();
+}
+
+/**
+ * The +'s `camera`, with the camera off: on again, before start or live. The picture's track
+ * joins the mic's stream and, live, goes into the camera's section (`replaceTrack`), and the
+ * camera is laid out where a camera goes (`arrangedAfterAdd`: alone it fills the frame, beside
+ * a screen it takes the corner). The avatar stood in for it: off the stream now, its box kept,
+ * so the eye brings it back beside the camera. With nothing opened yet (the mic was refused),
+ * this is the page's whole start over, camera and mic. Refused, the panel says so and mic only stays.
+ */
+export async function cameraOn(): Promise<void> {
+  const had = store.get(cameraAtom);
+  if (store.get(hasCameraAtom)) return;
+  store.set(storedMicOnlyAtom, false);
+  if (!had) return startCamera();
+  const generation = liveGeneration;
+  let picture: MediaStream;
+  try {
+    picture = await navigator.mediaDevices.getUserMedia({ video: CAMERA_VIDEO });
+  } catch (err) {
+    if (generation !== liveGeneration) return;
+    store.set(storedMicOnlyAtom, true);
+    store.set(sourceStatusAtom, err instanceof DOMException && err.name === 'NotAllowedError' ? 'camera blocked' : 'no camera');
+    return;
+  }
+  // the page was left, or the mic went (endLive), while the prompt was up
+  if (generation !== liveGeneration || store.get(cameraAtom) !== had) {
+    picture.getTracks().forEach((track) => track.stop());
+    return;
+  }
+  const track = picture.getVideoTracks()[0]!;
+  track.contentHint = 'motion';
+  store.set(cameraAtom, new MediaStream([...had.getAudioTracks(), track]));
+  cameraSender?.replaceTrack(track).catch(() => undefined);
+  setSources(store.get(sourcesAtom).map((s) => (s.kind === 'avatar' ? { ...s, shown: false } : s)));
+  ensureCameraSource();
+  store.set(sourceStatusAtom, '');
+  if (!store.get(isPublishingAtom)) setPhase('camera-ready', store.get(hasMicAtom) ? 'camera ready' : 'camera ready, no mic');
+  slotsChanged();
+}
+
+/** The camera is a source from the moment it is on: the bottom of the scene, laid out by the rules (the whole frame alone, the corner beside a screen). */
 function ensureCameraSource() {
   const sources = store.get(sourcesAtom);
   if (sources.some((s) => s.kind === 'camera')) return;
-  setSources([{ id: 'cam', kind: 'camera', label: 'camera', slot: 0, box: FULL, shown: true }, ...sources]);
+  const camera: Source = { id: 'cam', kind: 'camera', label: 'camera', slot: 0, box: FULL, shown: true };
+  setSources(arrangedAfterAdd([camera, ...sources], camera, store.get(lastArrangementAtom)));
+}
+
+/**
+ * The avatar is a source, on the stream. As the face (no camera) it goes to the bottom of the
+ * scene and is laid out like the camera; beside a camera it goes on top, centred, like a
+ * picture (`arrangedAfterAdd`). One already there is put back on the stream where it was.
+ */
+function ensureAvatarSource() {
+  const sources = store.get(sourcesAtom);
+  const there = sources.find((s) => s.kind === 'avatar');
+  if (there) {
+    if (!there.shown) withSource(there.id, (s) => ({ ...s, shown: true }));
+    return;
+  }
+  const avatar: Source = { id: AVATAR_ID, kind: 'avatar', label: 'avatar', box: FULL, shown: true };
+  const face = !sources.some((s) => s.kind === 'camera');
+  setSources(arrangedAfterAdd(face ? [avatar, ...sources] : [...sources, avatar], avatar, store.get(lastArrangementAtom)));
+}
+
+/** The +'s `avatar`: the streamer's picture, moving with their voice, as a source. */
+export function addAvatar() {
+  ensureAvatarSource();
+  store.set(selectedSourceAtom, AVATAR_ID);
 }
 
 export async function goLive(): Promise<void> {
@@ -366,10 +519,13 @@ export async function goLive(): Promise<void> {
     if (!gone()) onConnection(myPc.connectionState);
   };
 
-  for (const track of camera.getVideoTracks()) {
-    track.contentHint = 'motion';
-    cameraSender = myPc.addTransceiver(track, { direction: 'sendonly', streams: [camera], sendEncodings: [{ maxBitrate: VIDEO_MAX_BITRATE }] }).sender;
-  }
+  // The camera's section, video slot 0 to everyone: with the camera's track in it, or empty
+  // (mic only) and filled later by `cameraOn` with `replaceTrack`, the way a screen's is. Always
+  // offered, so the screens keep their slot numbers and a camera turned on later renegotiates nothing.
+  const cameraInit: RTCRtpTransceiverInit = { direction: 'sendonly', streams: [camera], sendEncodings: [{ maxBitrate: VIDEO_MAX_BITRATE }] };
+  const picture = camera.getVideoTracks()[0];
+  if (picture) picture.contentHint = 'motion';
+  cameraSender = (picture ? myPc.addTransceiver(picture, cameraInit) : myPc.addTransceiver('video', cameraInit)).sender;
   // One opus, always: the mix, else (no web audio) the mic, else a section with nothing in it.
   // A silent section beats no section: video makes the room's slots from the offer, so a
   // stream started without a mic could never carry a sound added later otherwise.
@@ -512,7 +668,7 @@ export async function shareScreen(): Promise<void> {
   const source: Source = { id, kind: 'screen', label, slot: slot + 1, box: FULL, shown: true };
   setSources(arrangedAfterAdd([...store.get(sourcesAtom), source], source, store.get(lastArrangementAtom)));
   store.set(selectedSourceAtom, id);
-  screensChanged();
+  slotsChanged();
 }
 
 /** The tile's stop, the row's ×, or the browser's "stop sharing" bar. The slot is emptied and free again. */
@@ -531,10 +687,11 @@ export function stopScreen(slot: number) {
   // a closed peer refuses this; nothing is lost then, the stream is over. before start there is no sender yet
   screenSenders[slot]?.replaceTrack(null).catch(() => undefined);
   dropSource(`s${slot + 1}`);
-  screensChanged();
+  slotsChanged();
 }
 
-function screensChanged() {
+/** A video slot came up or went quiet (a screen, the camera): the watchers are told now, and the upload divided again. */
+function slotsChanged() {
   announceSlots();
   void tuneSenders();
 }
@@ -571,11 +728,11 @@ function dropSource(id: string) {
   if (store.get(selectedSourceAtom) === id) store.set(selectedSourceAtom, null);
 }
 
-/** The camera and a screen both on the stream: this arrangement is the one the next first share makes. */
+/** The face (the camera, or the avatar standing in for it) and a screen both on the stream: this arrangement is the one the next first share makes. */
 function rememberArrangement() {
   const sources = store.get(sourcesAtom);
-  const shown = sources.filter((s) => s.shown && s.kind !== 'image');
-  if (!shown.some((s) => s.kind === 'camera') || !shown.some((s) => s.kind === 'screen')) return;
+  const roles = new Set(sources.filter((s) => s.shown).map((s) => roleOf(s, sources)));
+  if (!roles.has('camera') || !roles.has('screen1')) return;
   store.set(storedLastAtom, presetOf('last', sources));
 }
 
@@ -633,12 +790,13 @@ export function fitSourceTo(id: string, targetId: string) {
   setSources(sources);
 }
 
-/** The row's ×: a screen stops sharing, a picture leaves the scene (its upload stays in the library). The camera has no ×: the eye takes it off. */
+/** The row's ×: a screen stops sharing, a picture or the avatar leaves the scene (an upload stays in the library), the camera is turned off (mic only). */
 export function removeSource(id: string) {
   const source = store.get(sourcesAtom).find((s) => s.id === id);
   if (!source) return;
   if (source.kind === 'screen' && source.slot !== undefined) stopScreen(source.slot - 1);
-  else if (source.kind === 'image') dropSource(id);
+  else if (source.kind === 'camera') cameraOff();
+  else dropSource(id);
 }
 
 /** A chip of the presets strip: built in or saved, by name. The listed sources come onto the stream. */
@@ -684,22 +842,22 @@ async function imageRatio(url: string): Promise<number> {
 export async function addImage(file: File): Promise<void> {
   const name = store.get(streamNameAtom);
   if (!isValidName(name)) {
-    store.set(imageStatusAtom, 'pick a name first');
+    store.set(sourceStatusAtom, 'pick a name first');
     return;
   }
-  if (store.get(imageStatusAtom) === 'uploading') return;
+  if (store.get(sourceStatusAtom) === 'uploading') return;
   const picture = file.type === 'image/gif' ? file : await cropPicture(file, SCENE_PICTURE);
   if (!picture || store.get(streamNameAtom) !== name) return;
-  store.set(imageStatusAtom, 'uploading');
+  store.set(sourceStatusAtom, 'uploading');
   try {
     const saved = await api.saveAsset(name, picture);
     if (store.get(streamNameAtom) !== name) return;
     store.set(libraryAtom, [...store.get(libraryAtom).filter((a) => a.id !== saved.id), { id: saved.id, mime: saved.mime }]);
-    store.set(imageStatusAtom, '');
+    store.set(sourceStatusAtom, '');
     await placeImage(saved.id, file.name.replace(/\.[^.]+$/, '') || 'picture');
   } catch (err) {
     if (store.get(streamNameAtom) !== name) return;
-    store.set(imageStatusAtom, `not added: ${messageOf(err)}`);
+    store.set(sourceStatusAtom, `not added: ${messageOf(err)}`);
   }
 }
 
@@ -710,7 +868,7 @@ export async function placeImage(asset: number, label: string): Promise<void> {
   try {
     ratio = await imageRatio(api.assetUrl(name, asset));
   } catch {
-    store.set(imageStatusAtom, 'that picture does not load');
+    store.set(sourceStatusAtom, 'that picture does not load');
     return;
   }
   if (store.get(streamNameAtom) !== name) return;
@@ -726,7 +884,7 @@ export async function deleteImage(asset: number): Promise<void> {
   try {
     await api.deleteAsset(name, asset);
   } catch (err) {
-    store.set(imageStatusAtom, `not removed: ${messageOf(err)}`);
+    store.set(sourceStatusAtom, `not removed: ${messageOf(err)}`);
     return;
   }
   if (store.get(streamNameAtom) !== name) return;
@@ -832,11 +990,11 @@ function unwatchMixer() {
   document.removeEventListener('visibilitychange', checkMixer);
 }
 
-/** Tell video what is live where, for the watchers: the camera, then each shared screen, and the scene they are laid out in. */
+/** Tell video what is live where, for the watchers: the camera (while it is on; mic only leaves slot 0 out), then each shared screen, and the scene they are laid out in. */
 function announceSlots() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const screens: SlotInfo[] = store.get(screensAtom).map((s) => ({ slot: s.slot + 1, kind: 'screen', label: s.label }));
-  const slots: SlotInfo[] = [{ slot: 0, kind: 'camera' }, ...screens];
+  const slots: SlotInfo[] = store.get(hasCameraAtom) ? [{ slot: 0, kind: 'camera' }, ...screens] : screens;
   const scene = store.get(sceneAtom);
   record('/ws', 'out', { slots, scene });
   ws.send(JSON.stringify({ slots, scene }));
@@ -861,7 +1019,8 @@ function cameraScale(w: number): number {
 async function tuneSenders() {
   const sources = store.get(sourcesAtom);
   const screens = store.get(screensAtom);
-  const shown = sources.filter((s) => s.kind !== 'image' && s.shown);
+  // the pictures that cost bits: a picture and the avatar are drawn by the watcher, not sent
+  const shown = sources.filter((s) => isVideoSource(s) && s.shown);
   const stage = shown.reduce<Source | null>((best, s) => (!best || s.box.w * s.box.h > best.box.w * best.box.h ? s : best), null);
   const camera = sources.find((s) => s.kind === 'camera');
   if (!screens.length || stage?.kind === 'camera') {
@@ -1020,7 +1179,7 @@ export function endLive() {
   store.set(cameraAtom, null);
   store.set(sourcesAtom, []);
   store.set(selectedSourceAtom, null);
-  store.set(imageStatusAtom, '');
+  store.set(sourceStatusAtom, '');
   setPhase('camera-off', 'camera off');
   profileName = '';
   store.set(streamThumbsAtom, []);

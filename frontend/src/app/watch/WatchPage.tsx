@@ -320,6 +320,8 @@ export function WatchPage() {
                 layers={layers}
                 streamFor={slotStreamAtom}
                 imageUrl={(asset) => api.assetUrl(name, asset)}
+                // their avatar, moving with the sound arriving on #video's stream: drawn here from the name, nothing of it on the wire
+                avatar={{ name, version: avatar, streamAtom: remoteStreamAtom }}
                 main={{
                   id: 'video',
                   streamAtom: remoteStreamAtom,
