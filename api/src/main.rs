@@ -36,6 +36,7 @@
 //! /api/health says how this box is doing (postgres, redis, video, the s3 bucket,
 //! uptimes, build). The pages post their own failures to /api/errors (debug.rs).
 
+mod about_page;
 mod auth;
 mod chat;
 mod chat_images;
@@ -894,6 +895,7 @@ fn router(state: AppState) -> Router {
     Router::new()
         .merge(auth::routes())
         .merge(profile::routes())
+        .merge(about_page::routes())
         .merge(groups::routes())
         .merge(group_mod::routes())
         .merge(follows::routes())

@@ -166,10 +166,12 @@ export function closeAllDms() {
 /**
  * `GET /api/dms`: the login's threads, newest first, each with how many lines are new. Over
  * what is here: a tab opened from the grid with nothing said yet is kept, a tab taken off the
- * column this visit comes back only when it has a new line. Nobody: nothing to ask.
+ * column this visit comes back only when it has a new line. Nobody: nothing to ask. The list
+ * belongs to the login that asked: one that arrives after that login has gone is not these tabs.
  */
 export async function loadDms(): Promise<void> {
-  if (!store.get(meAtom)) return;
+  const me = store.get(meAtom);
+  if (!me) return;
   let list;
   try {
     list = await api.dms();
@@ -177,6 +179,8 @@ export async function loadDms(): Promise<void> {
     // the api is away: what is shown stays, the next open of the window asks again
     return;
   }
+  // this list is the login that asked. it is written only while that login is still the one here
+  if (store.get(meAtom) !== me) return;
   const have = store.get(dmsAtom);
   const fresh: Dm[] = list.map((t) => {
     const here = have.find((d) => d.name === t.name);

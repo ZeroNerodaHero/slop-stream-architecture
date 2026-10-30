@@ -289,3 +289,161 @@ export function demoAbout(name: string, pictures: { offline: number | null; thum
   });
   return { blocks, css: DEMO_CSS };
 }
+
+/** FNV-1a over the name. A fake stream's page is picked with it, so a reload does not shuffle it. */
+function fnv(name: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < name.length; i++) {
+    h ^= name.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+const DUMMY_WHO = [
+  'night streams from a small room. the lamp does most of the work.',
+  'the cat is the co-host. i am the one who talks.',
+  'here for the chat, and whatever was already open.',
+  'one desk, a microphone that mostly behaves, and a long one.'
+];
+const DUMMY_STREAM = [
+  'retro games, then a tangent, then the game again.',
+  'a cozy nothing. lo-fi, long silences, the plant in the corner.',
+  'building a thing live. it has been almost done for a while.',
+  'music i made, played badly, then talked over.'
+];
+const DUMMY_WHEN = [
+  'weeknights after 10. sundays if the coffee works.',
+  'late. later than i said.',
+  'no set time. the title says when.',
+  'saturday long, tuesday short.'
+];
+
+/**
+ * A page for a fake stream, from its name: the same blocks the editor uses, in an order and
+ * with words that are not the next dummy's. The media is the demo's, which is already on this
+ * origin. Nothing is saved.
+ */
+export function dummyPage(name: string, pictures: { offline: number | null }): AboutDoc {
+  const h = fnv(name);
+  const who = DUMMY_WHO[h % DUMMY_WHO.length] ?? DUMMY_WHO[0];
+  const stream = DUMMY_STREAM[(h >>> 4) % DUMMY_STREAM.length] ?? DUMMY_STREAM[0];
+  const when = DUMMY_WHEN[(h >>> 8) % DUMMY_WHEN.length] ?? DUMMY_WHEN[0];
+  const image: AboutBlock =
+    pictures.offline !== null
+      ? { kind: 'image', src: api.offlineUrl(name, pictures.offline), alt: `${name}'s offline picture` }
+      : { kind: 'image', src: '/about-demo/banner.jpg', alt: `${name}'s picture` };
+  const video: AboutBlock = { kind: 'video', src: '/about-demo/clip.mp4', poster: '/about-demo/poster.jpg', caption: 'a clip from the stream' };
+  const music: AboutBlock = {
+    kind: 'music',
+    title: h % 2 === 0 ? 'on repeat' : 'in the background',
+    tracks: [
+      { title: 'first light', src: '/about-demo/track-1.mp3' },
+      { title: 'late set', src: '/about-demo/track-2.mp3' }
+    ]
+  };
+  const heading: AboutBlock = { kind: 'heading', text: name };
+  const about: AboutBlock = { kind: 'text', text: `${who}\n\n${stream}\n\n${when}` };
+  const links: AboutBlock = {
+    kind: 'links',
+    links: [
+      { label: 'home', href: '/' },
+      { label: `/watch/${name}`, href: `/watch/${name}` }
+    ]
+  };
+  const orders: AboutBlock[][] = [
+    [heading, about, image, video, music, { kind: 'divider' }, links],
+    [heading, video, about, music, links],
+    [heading, image, about, music, video],
+    [heading, music, about, image, { kind: 'divider' }, links]
+  ];
+  return { blocks: orders[h % orders.length] ?? orders[0] ?? [], css: DEMO_CSS };
+}
+
+/** A block on the saved page: where it sits, and which object in the bucket it is. */
+export type PageType = 'text' | 'image' | 'video' | 'sound';
+
+export interface PageBlock {
+  type: PageType;
+  id: number;
+  x: number;
+  y: number;
+  z: number;
+  /** The box. Missing on an older page: the canvas uses the usual size for the type. */
+  w?: number;
+  h?: number;
+  /** Text only: the html as kept, 10 000 characters at most. */
+  html?: string;
+  /** A picture, a clip, a track: the path on this origin. */
+  src?: string;
+}
+
+export const TEXT_MAX = 10_000;
+export const POS_MAX = 1600;
+export const Z_MAX = 40;
+export const BLOCKS_MAX = 40;
+
+const PAGE_TAGS = new Set(['p', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'a', 'ul', 'ol', 'li', 'h2', 'h3', 'blockquote']);
+const PAGE_DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'svg', 'math', 'noscript', 'template', 'textarea', 'title', 'head', 'link', 'meta', 'base', 'form']);
+
+/** A link the text may keep: http or https, with a host and no password. */
+function pageUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 500) return null;
+  try {
+    const url = new URL(trimmed);
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) return null;
+    return url.href.length <= 500 ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function escapeText(text: string, budget: { n: number }): string {
+  let out = '';
+  for (const ch of text) {
+    if (budget.n <= 0) return out;
+    if (ch === '\u0000' || (ch < ' ' && ch !== '\n' && ch !== '\t')) continue;
+    budget.n -= 1;
+    if (ch === '<') out += '&lt;';
+    else if (ch === '>') out += '&gt;';
+    else if (ch === '&') out += '&amp;';
+    else out += ch;
+  }
+  return out;
+}
+
+function escapeAttr(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+function renderPageNode(node: Node, budget: { n: number }): string {
+  if (budget.n <= 0) return '';
+  if (node.nodeType === Node.TEXT_NODE) return escapeText(node.textContent ?? '', budget);
+  if (node.nodeType !== Node.ELEMENT_NODE) return '';
+  const el = node as Element;
+  const name = el.tagName.toLowerCase();
+  if (PAGE_DROP.has(name)) return '';
+  const kids = () => [...el.childNodes].map((child) => renderPageNode(child, budget)).join('');
+  if (name === 'br') return '<br>';
+  if (name === 'a') {
+    const href = pageUrl(el.getAttribute('href') ?? '');
+    const inner = kids();
+    return href ? `<a href="${escapeAttr(href)}">${inner}</a>` : inner;
+  }
+  const tag = name === 'div' ? 'p' : name;
+  if (!PAGE_TAGS.has(tag)) return kids();
+  return `<${tag}>${kids()}</${tag}>`;
+}
+
+/**
+ * The text block as it is kept: a fragment of a few tags, or the words with the tags escaped.
+ * A `div` (what a text box writes for a new line) becomes a `p`. A script is dropped with what
+ * is inside it. Cut at {@link TEXT_MAX} characters of text. The same rules run again at the door.
+ */
+export function sanitizeHtml(raw: string): string {
+  if (!raw) return '';
+  const doc = new DOMParser().parseFromString(raw, 'text/html');
+  const budget = { n: TEXT_MAX };
+  return [...doc.body.childNodes].map((node) => renderPageNode(node, budget)).join('');
+}

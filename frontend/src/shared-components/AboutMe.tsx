@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { chars } from '@/infra/atoms/chat-atoms';
 import { canEditProfileAtom, loadMyProfile, MAX_ABOUT_CHARS, profileAboutAtom, profileAboutStatusAtom, saveMyAbout, whyNotEditAtom } from '@/infra/atoms/profile-atoms';
 import { store } from '@/infra/store';
-import { buttonClassName } from '@/shared-components/Button';
 import { INPUT, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -81,12 +80,12 @@ export function AboutMe({ text, mine }: AboutMeProps) {
   if (!text) {
     if (!mine) return null;
     return (
-      <div id="about-me" data-empty className="mb-4 flex flex-wrap items-center gap-3 text-textSecondary">
-        <p>nothing here yet. a few lines about you, first on this tab: who you are, what the stream is.</p>
-        <button id="about-me-edit" type="button" onClick={open} className={buttonClassName('primary', 'px-3 py-1.5 text-sm', true)}>
+      <p id="about-me" data-empty className="mb-4 text-sm text-textTertiary">
+        <button id="about-me-edit" type="button" onClick={open} className="font-semibold text-primaryBlue">
           write it
         </button>
-      </div>
+        <span> — a few lines about you, first on this tab.</span>
+      </p>
     );
   }
 

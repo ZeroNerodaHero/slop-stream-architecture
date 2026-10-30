@@ -24,7 +24,12 @@
 // across logout and a client-side login is not the next account's chat: opening that
 // friend shows their lines, and the previous login's line ids are absent. the same hold
 // after the renames, with the friend's name from GET /api/me, still opens the next
-// login's own lines and asks for them again.
+// login's own lines and asks for them again. a settings PUT held across logout and a
+// client-side login is not written onto the next account's switches, and that account's
+// own switch still saves. a read that lands while a second inbox GET is in flight stays
+// read when that GET lands. a dm list GET held across logout and a
+// client-side login is not the next account's tabs.
+// two pages of one login: dm off on the first, then live off on the second, leaves dm off, follow on, and live off.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node notifications.js
 const { chromium, request } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
@@ -1538,6 +1543,374 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       } finally {
         await p.close();
         await ctx.close();
+      }
+    }
+  });
+
+  await step("a settings PUT held across logout and a client-side login leaves the next account's switches on, and their own switch saves", async () => {
+    // its own page, closed at the end: `page` stays logged in as fan. both go back to all on
+    // before return: the held save turns fan's dm off on the api, and star turns live off.
+    // star may already wear a new name, so the login is whoever GET /api/me says
+    const starWho = await body(await star.get('/api/me'));
+    expect(starWho && starWho.name, `star's name: ${JSON.stringify(starWho)}`);
+    const starName = starWho.name;
+    const allOn = { live: true, follow: true, dm: true };
+    const fanOn = await body(await fan.put('/api/notifications/settings', { data: allOn }));
+    const starOn = await body(await star.put('/api/notifications/settings', { data: allOn }));
+    expect(
+      fanOn && fanOn.live === true && fanOn.follow === true && fanOn.dm === true && starOn && starOn.live === true && starOn.follow === true && starOn.dm === true,
+      `reset to all on: ${JSON.stringify(fanOn)} ${JSON.stringify(starOn)}`
+    );
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p = await ctx.newPage();
+    let release = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    let holding = false;
+    let held = 0;
+    const openNotify = async () => {
+      await p.click('#notifications');
+      await p.waitForSelector('#notifications-settings', { timeout: 5000 });
+      await p.click('#notifications-settings');
+      await p.waitForSelector('#user-modal[open]', { timeout: 5000 });
+      expect((await p.getAttribute('#tab-notifications', 'aria-selected')) === 'true', 'the notifications tab is the open one');
+    };
+    try {
+      await login(p, FAN);
+      await openNotify();
+      await p.waitForFunction(() => {
+        const dm = document.querySelector('#notify-dm');
+        return !!dm && dm.disabled === false && dm.checked === true;
+      }, null, { timeout: 10000 });
+      expect(await p.isChecked('#notify-live') && (await p.isChecked('#notify-follow')), 'live and follow read on');
+      await p.route(/\/api\/notifications\/settings$/, async (route) => {
+        if (route.request().method() !== 'PUT' || holding) {
+          await route.continue();
+          return;
+        }
+        holding = true;
+        const response = await route.fetch();
+        held = response.status();
+        await gate;
+        await route.fulfill({ response });
+      });
+      await p.click('#notify-dm');
+      const untilHeld = Date.now() + 10000;
+      while (!held) {
+        if (Date.now() > untilHeld) throw new Error('turning dm off sent no settings PUT');
+        await sleep(50);
+      }
+      expect(held === 200, `the held settings PUT got ${held}`);
+      await p.evaluate(() => {
+        window.__settingsPage = 1;
+      });
+      // the dialog is modal: the panel's logout is not clickable until it closes. the PUT stays held
+      await p.click('#user-modal-close');
+      await p.waitForFunction(() => !document.querySelector('#user-modal'), null, { timeout: 5000 });
+      await p.hover('#user-panel');
+      await p.waitForSelector('#logout', { timeout: 10000 });
+      await p.click('#logout');
+      await p.hover('#user-panel');
+      await p.waitForSelector('#login-link', { timeout: 10000 });
+      await p.click('#login-link');
+      await p.waitForSelector('#auth-name', { timeout: 10000 });
+      await p.fill('#auth-name', starName);
+      await p.fill('#auth-password', PW);
+      await p.click('#auth-submit');
+      await p.waitForFunction((n) => document.querySelector('#me')?.textContent === n, starName, { timeout: 10000 });
+      expect((await p.evaluate(() => window.__settingsPage)) === 1, 'the second login reloaded the page');
+      await openNotify();
+      await p.waitForFunction(() => {
+        const dm = document.querySelector('#notify-dm');
+        const live = document.querySelector('#notify-live');
+        const follow = document.querySelector('#notify-follow');
+        return !!dm && !!live && !!follow && dm.disabled === false && live.disabled === false && follow.disabled === false;
+      }, null, { timeout: 10000 });
+      expect(await p.isChecked('#notify-dm') && (await p.isChecked('#notify-live')) && (await p.isChecked('#notify-follow')), 'star reads all on once the switches are enabled');
+      release();
+      // the held document is fan's, with dm off. long enough for it to have been written onto star
+      await sleep(300);
+      expect(await p.isChecked('#notify-dm'), 'dm stays on after the held settings PUT');
+      expect(await p.isChecked('#notify-live'), 'live stays on after the held settings PUT');
+      expect(await p.isChecked('#notify-follow'), 'follow stays on after the held settings PUT');
+      const noteHeld = await p.textContent('#notify-settings-note');
+      expect(noteHeld === '', `the note after the held settings PUT: ${JSON.stringify(noteHeld)}`);
+      await p.click('#notify-live');
+      await p.waitForFunction(() => document.querySelector('#notify-settings-note')?.textContent === 'saved', null, { timeout: 5000 });
+      expect((await p.isChecked('#notify-live')) === false, 'live reads off once saved');
+      expect(await p.isChecked('#notify-dm') && (await p.isChecked('#notify-follow')), 'dm and follow stay on');
+      const after = await inbox(star);
+      expect(
+        after.settings && after.settings.dm === true && after.settings.follow === true && after.settings.live === false,
+        `star after turning live off: ${JSON.stringify(after.settings)}`
+      );
+      return `${FAN}'s settings PUT held across login as ${starName}; live saved off`;
+    } finally {
+      release();
+      try {
+        const backFan = await body(await fan.put('/api/notifications/settings', { data: allOn }));
+        const backStar = await body(await star.put('/api/notifications/settings', { data: allOn }));
+        expect(
+          backFan && backFan.dm === true && backFan.live === true && backFan.follow === true && backStar && backStar.dm === true && backStar.live === true && backStar.follow === true,
+          `settings back to all on: ${JSON.stringify(backFan)} ${JSON.stringify(backStar)}`
+        );
+      } finally {
+        await p.close();
+        await ctx.close();
+      }
+    }
+  });
+
+  await step('a read that lands while a second inbox GET is in flight stays read when that GET lands', async () => {
+    // its own page, closed at the end: `page` stays logged in as fan. the inbox is already loaded
+    // once the bell shows the one unread dm. the notifications tab's GET is held, then that row
+    // is read through the api. the snapshot was taken before the read, so applying it alone
+    // would put the row back on the bell. pal may have been renamed; the row wears the name the
+    // api has now
+    const who = await body(await pal.get('/api/me'));
+    expect(who && who.name, `pal's name: ${JSON.stringify(who)}`);
+    const palName = who.name;
+    const prior = await inbox(fan);
+    if (prior.items.some((n) => !n.read)) {
+      const cleared = await fan.put('/api/notifications/read', { data: { id: prior.items[0].id } });
+      expect(cleared.status() === 204, `reading the inbox got ${cleared.status()}`);
+    }
+    const text = 'read while the list reloads';
+    const sent = await body(await pal.post(`/api/dm/${FAN}`, { data: { text } }));
+    expect(sent && sent.id, `a line from ${palName}: ${JSON.stringify(sent)}`);
+    let row = null;
+    const untilRow = Date.now() + 10000;
+    while (!row) {
+      if (Date.now() > untilRow) throw new Error(`the line is not the one unread row: ${JSON.stringify((await inbox(fan)).items.filter((n) => !n.read))}`);
+      const unread = (await inbox(fan)).items.filter((n) => !n.read);
+      if (unread.length === 1 && unread[0].kind === 'dm' && unread[0].name === palName && unread[0].text === text) row = unread[0];
+      else await sleep(50);
+    }
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p = await ctx.newPage();
+    const bell = async () => {
+      const el = await p.$('#notifications-unread');
+      return el ? (await el.textContent()) || '' : '';
+    };
+    let release = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    let arm = false;
+    let holding = false;
+    let fetched = 0;
+    let gets = 0;
+    try {
+      await login(p, FAN);
+      await p.waitForSelector('#my-presence[data-presence="online"]', { timeout: 10000 });
+      await p.waitForFunction(() => document.querySelector('#notifications-unread')?.textContent === '1', null, { timeout: 10000 });
+      // the next GET is the tab's, held until the read has landed on the loaded list
+      await p.route(/\/api\/notifications$/, async (route) => {
+        if (route.request().method() !== 'GET' || !arm) {
+          await route.continue();
+          return;
+        }
+        gets += 1;
+        if (holding) {
+          await route.continue();
+          return;
+        }
+        holding = true;
+        const response = await route.fetch();
+        fetched = response.status();
+        await gate;
+        await route.fulfill({ response });
+      });
+      arm = true;
+      await p.hover('#user-panel');
+      await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+      await p.click('#settings');
+      await p.waitForSelector('#user-modal[open]', { timeout: 5000 });
+      await p.click('#tab-notifications');
+      expect((await p.getAttribute('#tab-notifications', 'aria-selected')) === 'true', 'the notifications tab is the open one');
+      const untilFetched = Date.now() + 10000;
+      while (!fetched) {
+        if (Date.now() > untilFetched) throw new Error('the notifications tab sent no inbox GET');
+        await sleep(50);
+      }
+      expect(fetched === 200, `the held inbox GET got ${fetched}`);
+      expect(gets === 1, `inbox GETs while the refresh was held: ${gets}`);
+      expect((await bell()) === '1', `the bell before the read: ${JSON.stringify(await bell())}`);
+      const read = await fan.put('/api/notifications/read', { data: { id: row.id } });
+      expect(read.status() === 204, `reading the inbox got ${read.status()}`);
+      const untilBell = Date.now() + 10000;
+      let during = '1';
+      while (Date.now() < untilBell) {
+        during = await bell();
+        if (during === '') break;
+        await sleep(50);
+      }
+      expect(during === '', `the bell while the refresh was held: ${JSON.stringify(during)}`);
+      expect(gets === 1, `a second inbox GET landed before the held body was applied (${gets})`);
+      release();
+      // long enough for the held body to have been applied. a body that puts the row back fills the bell
+      await sleep(300);
+      const after = await bell();
+      expect(after === '', `the bell after the held inbox GET: ${JSON.stringify(after)}`);
+      const kept = (await inbox(fan)).items.find((n) => n.id === row.id);
+      expect(kept && kept.read === true, `the row after the held inbox GET: ${JSON.stringify(kept)}`);
+      return `row ${row.id} stayed read`;
+    } finally {
+      release();
+      await p.close();
+      await ctx.close();
+    }
+  });
+
+  await step('a dm list GET held across logout and a client-side login is not the next account\'s tabs', async () => {
+    // immediately before cleanup. its own page, closed at the end: `page` stays logged in as fan.
+    // star may already wear a new name, so the login and the tab check use whoever GET /api/me says.
+    // fan's list has that name (the other side of their thread); star's list does not
+    const starWho = await body(await star.get('/api/me'));
+    expect(starWho && starWho.name, `star's name: ${JSON.stringify(starWho)}`);
+    const starName = starWho.name;
+    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p = await ctx.newPage();
+    let release = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    let first = true;
+    let held = 0;
+    let continued = 0;
+    try {
+      // the first GET is held after the server has answered. later GETs, including the next login's, go through
+      await p.route(/\/api\/dms$/, async (route) => {
+        if (route.request().method() !== 'GET') {
+          await route.continue();
+          return;
+        }
+        if (!first) {
+          await route.continue();
+          continued += 1;
+          return;
+        }
+        first = false;
+        const response = await route.fetch();
+        held = response.status();
+        await gate;
+        await route.fulfill({ response });
+      });
+      await login(p, FAN);
+      const untilHeld = Date.now() + 10000;
+      while (!held) {
+        if (Date.now() > untilHeld) throw new Error('logging in sent no dm list GET');
+        await sleep(50);
+      }
+      expect(held === 200, `the held dm list GET got ${held}`);
+      const seen = continued;
+      await p.evaluate(() => {
+        window.__dmsPage = 1;
+      });
+      await p.hover('#user-panel');
+      await p.waitForSelector('#logout', { timeout: 10000 });
+      await p.click('#logout');
+      await p.hover('#user-panel');
+      await p.waitForSelector('#login-link', { timeout: 10000 });
+      await p.click('#login-link');
+      await p.waitForSelector('#auth-name', { timeout: 10000 });
+      await p.fill('#auth-name', starName);
+      await p.fill('#auth-password', PW);
+      await p.click('#auth-submit');
+      await p.waitForFunction((n) => document.querySelector('#me')?.textContent === n, starName, { timeout: 10000 });
+      expect((await p.evaluate(() => window.__dmsPage)) === 1, 'the second login reloaded the page');
+      const untilContinued = Date.now() + 10000;
+      while (continued <= seen) {
+        if (Date.now() > untilContinued) throw new Error('the next login sent no dm list GET of their own');
+        await sleep(50);
+      }
+      await p.hover('#user-panel');
+      await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+      await p.waitForSelector('#chats-open', { state: 'visible', timeout: 10000 });
+      await p.click('#chats-open');
+      await p.waitForSelector('#friend-chat', { timeout: 10000 });
+      // star's list has a tab for fan, which the held list does not. it is on screen before the held body is released
+      await p.waitForSelector(`#friend-chat-tab-${FAN}`, { timeout: 10000 });
+      const list = await body(await star.get('/api/dms'));
+      expect(Array.isArray(list) && list.length > 0, `star's threads: ${JSON.stringify(list)}`);
+      const names = list.map((t) => t.name);
+      expect(names.includes(FAN) && !names.includes(starName), `star's threads: ${JSON.stringify(names)}`);
+      release();
+      // long enough for the held list to have been applied, if it were still this login's
+      await sleep(300);
+      const tabs = await p.$$eval('[id^="friend-chat-tab-"]', (els) => els.map((e) => e.id.slice('friend-chat-tab-'.length)));
+      expect(tabs.length > 0 && tabs.every((name) => names.includes(name)), `tabs ${JSON.stringify(tabs)} are not among ${JSON.stringify(names)}`);
+      expect(!tabs.includes(starName), `${starName} is a tab: ${JSON.stringify(tabs)}`);
+      return `${FAN}'s dm list held across login as ${starName}`;
+    } finally {
+      release();
+      await p.close();
+      await ctx.close();
+    }
+  });
+
+  await step('a second page turning live off leaves the first page dm off', async () => {
+    // its own two pages, closed at the end: `page` stays logged in as fan. settings go back to all on before this returns
+    const ctx1 = await browser.newContext({ ignoreHTTPSErrors: true });
+    const ctx2 = await browser.newContext({ ignoreHTTPSErrors: true });
+    const p1 = await ctx1.newPage();
+    const p2 = await ctx2.newPage();
+    const openNotify = async (p) => {
+      await login(p, FAN);
+      await p.hover('#user-panel');
+      await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+      await p.click('#settings');
+      await p.waitForSelector('#user-modal[open]', { timeout: 5000 });
+      await p.click('#tab-notifications');
+      expect((await p.getAttribute('#tab-notifications', 'aria-selected')) === 'true', 'the notifications tab is the open one');
+      await p.waitForFunction(
+        () => {
+          const dm = document.querySelector('#notify-dm');
+          const live = document.querySelector('#notify-live');
+          const follow = document.querySelector('#notify-follow');
+          return (
+            !!dm &&
+            !!live &&
+            !!follow &&
+            dm.disabled === false &&
+            live.disabled === false &&
+            follow.disabled === false &&
+            dm.checked === true &&
+            live.checked === true &&
+            follow.checked === true
+          );
+        },
+        null,
+        { timeout: 10000 }
+      );
+    };
+    try {
+      const reset = await body(await fan.put('/api/notifications/settings', { data: { live: true, follow: true, dm: true } }));
+      expect(reset && reset.live === true && reset.follow === true && reset.dm === true, `settings reset: ${JSON.stringify(reset)}`);
+      await openNotify(p1);
+      await openNotify(p2);
+      await p1.click('#notify-dm');
+      await p1.waitForFunction(() => document.querySelector('#notify-settings-note')?.textContent === 'saved', null, { timeout: 5000 });
+      const afterDm = await inbox(fan);
+      expect(afterDm.settings && afterDm.settings.dm === false, `the api after dm off: ${JSON.stringify(afterDm.settings)}`);
+      await p2.click('#notify-live');
+      await p2.waitForFunction(() => document.querySelector('#notify-settings-note')?.textContent === 'saved', null, { timeout: 5000 });
+      const after = await inbox(fan);
+      expect(
+        after.settings && after.settings.dm === false && after.settings.follow === true && after.settings.live === false,
+        `the api after the second page: ${JSON.stringify(after.settings)}`
+      );
+      return 'dm stayed off, live off';
+    } finally {
+      try {
+        const back = await body(await fan.put('/api/notifications/settings', { data: { live: true, follow: true, dm: true } }));
+        expect(back && back.dm === true && back.live === true && back.follow === true, `settings back to all on: ${JSON.stringify(back)}`);
+      } finally {
+        await p1.close();
+        await p2.close();
+        await ctx1.close();
+        await ctx2.close();
       }
     }
   });

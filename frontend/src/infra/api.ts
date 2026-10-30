@@ -544,6 +544,24 @@ export const api = {
   saveBio: (name: string, bio: string) => request<{ name: string; bio: string }>('PUT', `/api/streamers/${name}`, { bio }),
   /** About me, the words first on the about tab (docs/about.md): paragraphs kept, 2000 characters at most, empty clears it. */
   saveAbout: (name: string, about: string) => request<{ name: string; about: string }>('PUT', `/api/streamers/${name}/about`, { about }),
+  /** The page under that: `{ blocks: [{ type, id, x, y, z, w, h, html? }] }`. Text html is written to the bucket. */
+  aboutPage: (name: string) =>
+    request<{ blocks: { type: 'text' | 'image' | 'video' | 'sound'; id: number; x: number; y: number; z: number; w?: number; h?: number; html?: string; src?: string }[] }>(
+      'GET',
+      `/api/streamers/${encodeURIComponent(name)}/about-page`
+    ),
+  saveAboutPage: (
+    name: string,
+    blocks: { type: string; id: number; x: number; y: number; z: number; w: number; h: number; html?: string }[]
+  ) =>
+    request<{ blocks: { type: 'text' | 'image' | 'video' | 'sound'; id: number; x: number; y: number; z: number; w?: number; h?: number; html?: string; src?: string }[] }>(
+      'PUT',
+      `/api/streamers/${encodeURIComponent(name)}/about-page`,
+      { blocks }
+    ),
+  /** A picture, a clip, or a sound for that page. The bytes go to the bucket. `type` is `image`, `video`, or `sound`. */
+  saveAboutFile: (name: string, type: 'image' | 'video' | 'sound', file: Blob) =>
+    request<{ id: number; type: string; src: string }>('PUT', `/api/streamers/${encodeURIComponent(name)}/about-file?type=${type}`, file),
   /** The jpeg itself as the body. The page has already made it 256x256. */
   saveAvatar: (name: string, jpeg: Blob) => request<{ name: string; avatar: number }>('PUT', `/api/streamers/${name}/avatar`, jpeg),
   deleteAvatar: (name: string) => request<null>('DELETE', `/api/streamers/${name}/avatar`),

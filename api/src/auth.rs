@@ -577,9 +577,15 @@ async fn change_password(
 pub(crate) async fn take_free_row(conn: &mut PgConnection, free: Uuid, me: Uuid, new: &str) -> Result<Vec<String>, ApiError> {
     let thumbs: Vec<i64> = sqlx::query_scalar("SELECT id FROM stream_thumbs WHERE name = $1").bind(new).fetch_all(&mut *conn).await?;
     let assets: Vec<(i64, String)> = sqlx::query_as("SELECT id, mime FROM stream_assets WHERE name = $1").bind(new).fetch_all(&mut *conn).await?;
-    let orphaned = profile::picture_keys(free, &thumbs, &assets);
+    let abouts: Vec<(i64, String, String)> =
+        sqlx::query_as("SELECT id, kind, mime FROM about_files WHERE name = $1").bind(new).fetch_all(&mut *conn).await?;
+    let mut orphaned = profile::picture_keys(free, &thumbs, &assets);
+    for (id, kind, mime) in &abouts {
+        orphaned.push(crate::about_page::about_key(free, *id, crate::about_page::ext_of(kind, mime)));
+    }
     sqlx::query("DELETE FROM stream_thumbs WHERE name = $1").bind(new).execute(&mut *conn).await?;
     sqlx::query("DELETE FROM stream_assets WHERE name = $1").bind(new).execute(&mut *conn).await?;
+    sqlx::query("DELETE FROM about_files WHERE name = $1").bind(new).execute(&mut *conn).await?;
     // the name's followers are mine now, from when they followed. not my own edge to it (no
     // self edges), and one who follows me already keeps the one edge
     sqlx::query(
@@ -681,6 +687,7 @@ async fn change_name(
     };
     sqlx::query("UPDATE stream_thumbs SET name = $2 WHERE name = $1").bind(&me.name).bind(&new).execute(&mut *tx).await?;
     sqlx::query("UPDATE stream_assets SET name = $2 WHERE name = $1").bind(&me.name).bind(&new).execute(&mut *tx).await?;
+    sqlx::query("UPDATE about_files SET name = $2 WHERE name = $1").bind(&me.name).bind(&new).execute(&mut *tx).await?;
     // going back to a name of mine ends its hold; the name I leave is held from now
     sqlx::query("DELETE FROM held_names WHERE name = $1 AND user_id = $2").bind(&new).bind(me.id).execute(&mut *tx).await?;
     sqlx::query(

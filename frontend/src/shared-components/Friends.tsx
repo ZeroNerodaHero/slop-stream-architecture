@@ -1,4 +1,4 @@
-import { RiChat3Line, RiCloseLine, RiSearchLine, RiUserFollowLine, RiUserHeartLine } from '@remixicon/react';
+import { RiBroadcastLine, RiChat3Line, RiCloseLine, RiSearchLine, RiUserFollowLine, RiUserHeartLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -152,11 +152,27 @@ interface Person {
   presence: Presence;
 }
 
-/** The picture and the presence square in its corner, the way the closed panel shows everyone. */
+/**
+ * The picture and the presence square in its bottom right corner, the way the closed panel
+ * shows everyone. Streaming, the bottom left corner gets the broadcast icon in red (the inbox's
+ * mark for a go-live, Notifications.tsx): closed, the column has no words, and the icon says
+ * what the blue square alone does not. The word is in the row's label; the icon's `title` says
+ * it on hover.
+ */
 function RailFace({ name, avatar, presence }: { name: string; avatar: number | null; presence: Presence }) {
   return (
     <span className="relative block shrink-0">
       <Face name={name} version={avatar} />
+      {presence === 'streaming' && (
+        <span
+          aria-hidden
+          data-streaming
+          title="streaming"
+          className="absolute -bottom-1 -left-1 flex h-4 w-4 items-center justify-center border border-background bg-decrease text-background"
+        >
+          <RiBroadcastLine size={10} />
+        </span>
+      )}
       <span aria-hidden data-presence={presence} className={cn('absolute -bottom-1 -right-1 h-3.5 w-3.5 border-2 border-background', PRESENCE_SQUARE[presence])} />
     </span>
   );

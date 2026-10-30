@@ -1,8 +1,10 @@
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { type AboutBlock, type AboutDoc, CSS_MAX, isSameOrigin, linkHref, mediaPath, safeCss } from '@/infra/about';
+import { type AboutBlock, type AboutDoc, CSS_MAX, type PageBlock, isSameOrigin, linkHref, mediaPath, safeCss } from '@/infra/about';
+import { api } from '@/infra/api';
 import { buttonClassName } from '@/shared-components/Button';
+import { AboutCanvas } from '@/shared-components/AboutCanvas';
 import { cn } from '@/utils/cn';
 
 /** The longest a block's words get, whatever a document says. */
@@ -254,47 +256,70 @@ function Block({ block }: { block: AboutBlock }) {
   }
 }
 
+const BOX = 'about relative isolate mt-3 flex max-h-[1200px] flex-col gap-4 overflow-auto border border-primaryStroke bg-backgroundSecondary p-4 [contain:layout_paint_style]';
+
 interface AboutProps {
   /** Whose page: the box's id is `about-<name>`, the scope every selector goes under. */
   name: string;
   doc: AboutDoc;
+  /** My own page: the blocks are the canvas. Drag to place, drop a file to add. */
+  edit?: boolean;
+  /** The sample line under a page nobody has built. A fake stream's page is not a sample. */
+  sample?: boolean;
 }
 
 /**
- * The page under the player (docs/about.md): the blocks, in a box that nothing in them leaves.
- * `contain: layout paint style` makes the box the containing block of every positioned
- * descendant (`fixed` included) and clips what they paint to it; `isolate` keeps blend modes
- * and z-indexes inside; the height is capped and scrolls. Their css, once through `safeCss`,
- * is a <style> inside the box. Under it, the css itself in a box to type in: the editor to
- * come, for now a way to see the rules hold (nothing typed is saved).
+ * The page under the player (docs/about.md). A page nobody has saved is the sample. My own page,
+ * and a page that has been saved, is the canvas: blocks of text, image, video and sound, placed
+ * by x, y and z. The bytes of those live in the bucket.
  */
-export function About({ name, doc }: AboutProps) {
+export function About({ name, doc, edit = false, sample = true }: AboutProps) {
   const scope = `about-${name}`;
   const [css, setCss] = useState(doc.css);
   const [typed, setTyped] = useState(doc.css);
-  // the sanitizer runs on a pause in the typing, not on every key
+  const [remote, setRemote] = useState<PageBlock[] | null>(null);
   useEffect(() => {
     const t = setTimeout(() => setCss(typed), 150);
     return () => clearTimeout(t);
   }, [typed]);
+  useEffect(() => {
+    if (edit || !sample) return;
+    let dead = false;
+    api
+      .aboutPage(name)
+      .then((page) => {
+        if (!dead) setRemote(page.blocks);
+      })
+      .catch(() => {
+        if (!dead) setRemote([]);
+      });
+    return () => {
+      dead = true;
+    };
+  }, [edit, name, sample]);
   const safe = useMemo(() => safeCss(css, scope), [css, scope]);
   const editorId = `${scope}-css`;
+  const saved = remote !== null && remote.length > 0;
 
   return (
     <div>
-      <p className="text-sm text-textTertiary">
-        a sample of what this tab can hold, until the editor lands: pictures, a clip, a few tracks, links, and your own css over them. nothing here is saved.
-      </p>
-      <section
-        id={scope}
-        className="about relative isolate mt-3 flex max-h-[1200px] flex-col gap-4 overflow-auto border border-primaryStroke bg-backgroundSecondary p-4 [contain:layout_paint_style]"
-        aria-label={`about ${name}`}
-      >
-        {safe.css && <style>{safe.css}</style>}
-        {doc.blocks.map((block, i) => (
-          <Block key={i} block={block} />
-        ))}
-      </section>
+      {edit || saved ? (
+        <AboutCanvas name={name} edit={edit} scope={scope} css={safe.css} boxClass={BOX} initial={edit ? null : remote} />
+      ) : (
+        <>
+          {sample && (
+            <p className="text-sm text-textTertiary">
+              a sample of what this tab can hold: pictures, a clip, a few tracks, links, and your own css over them. nothing here is saved.
+            </p>
+          )}
+          <section id={scope} className={BOX} aria-label={`about ${name}`}>
+            {safe.css && <style>{safe.css}</style>}
+            {doc.blocks.map((block, i) => (
+              <Block key={i} block={block} />
+            ))}
+          </section>
+        </>
+      )}
 
       <label htmlFor={editorId} className="mt-4 block text-sm font-semibold text-textSecondary">
         the css over the box
@@ -319,3 +344,4 @@ export function About({ name, doc }: AboutProps) {
     </div>
   );
 }
+

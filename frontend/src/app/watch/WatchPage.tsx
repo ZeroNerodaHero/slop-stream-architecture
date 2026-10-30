@@ -45,7 +45,7 @@ import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
-import { demoAbout } from '@/infra/about';
+import { demoAbout, dummyPage } from '@/infra/about';
 import { api } from '@/infra/api';
 import { cleanName, isDummyName } from '@/infra/names';
 import { store } from '@/infra/store';
@@ -135,8 +135,11 @@ export function WatchPage() {
   // page), this stream cannot go there too, and the button says so. the other way round, start
   // on the go live page ends a stream kept in the corner (publish-atoms' goLive)
   const cornerTaken = useAtomValue(publishPipAtom);
-  // the about tab's sample document, until there is a real one to ask for (docs/about.md)
-  const about = useMemo(() => demoAbout(name, { offline, thumbs: [] }), [name, offline]);
+  // a fake stream gets a page from its name. anyone else gets the sample, until they build their own.
+  const about = useMemo(
+    () => (isDummyName(name) ? dummyPage(name, { offline }) : demoAbout(name, { offline, thumbs: [] })),
+    [name, offline]
+  );
 
   // Mount only: start watching the name in the url (or take back the stream picture in picture
   // kept alive), and on the way out stop, unless picture in picture keeps it going in the corner.
@@ -387,7 +390,7 @@ export function WatchPage() {
               {tab === 'about' ? (
                 <>
                   <AboutMe text={aboutMe} mine={mine} />
-                  <About name={name} doc={about} />
+                  <About name={name} doc={about} edit={mine} sample={!isDummyName(name)} />
                 </>
               ) : tab === 'calendar' ? (
                 <Calendar name={name} />
