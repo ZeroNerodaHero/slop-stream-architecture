@@ -11,9 +11,10 @@
 #   ./scripts/deploy.sh --images TAG      a tag of your choosing, e.g. the one ./scripts/ship.sh --to printed
 #   ./scripts/deploy.sh --build           compile the images here instead (a laptop with uncommitted changes,
 #                                 a box without a registry). goes with --pull and services
-#   ./scripts/deploy.sh --prune-deploy    first give the disk back what builds took (docker's build cache,
-#                                 untagged images, old stream images), then deploy as asked. for the
-#                                 small box that says "only 2664MB free"
+#   ./scripts/deploy.sh --prune-deploy    first give the disk back what it can spare (docker's build cache,
+#                                 untagged and unused images, the system's rotated and oversized logs,
+#                                 apt's cache), then deploy as asked. for the small box that says
+#                                 "only 2664MB free". volumes, containers and the swapfile stay
 #   ./scripts/deploy.sh 203.0.113.7       everything, with this ip
 #   ./scripts/deploy.sh passwd billy      a new password for an account (there is no email reset)
 #   PUBLIC_IP=10.0.0.5 ./scripts/deploy.sh
@@ -335,12 +336,37 @@ check_ports() {
 
 free_mb_here() { df -Pm . 2>/dev/null | awk 'NR==2 {print $4}' || echo 0; }
 
+# "./scripts/deploy.sh --prune-deploy <the arguments as given>", the flag once: the message
+# that suggests it must not grow by a flag every time it is taken
+prune_hint() {
+  local a rest=()
+  for a in ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}; do
+    [ "$a" = --prune-deploy ] || rest+=("$a")
+  done
+  printf './scripts/deploy.sh --prune-deploy%s' "${rest[@]+ ${rest[*]}}"
+}
+
+# the disk's big places, biggest first, for the message when the prune was not enough: on a
+# small box that is the os, docker and its images (/var/lib/containerd with the containerd
+# snapshotter), and the logs. what the prune could not spare is in this list
+where_the_disk_went() {
+  [ "$OS" = linux ] || return 0
+  printf '  where the disk is:\n' >&2
+  as_root du -xsh /usr /opt /var/log /var/cache/apt /var/lib/docker /var/lib/containerd /home /tmp "$SWAP_FILE" 2>/dev/null | sort -rh | head -n 6 | sed 's/^/    /' >&2 || true
+}
+
 check_disk() {
   local free_mb need=4000 total
   free_mb="$(free_mb_here)"
   if [ "${IMAGES_MODE:-0}" = 1 ]; then
     # no build here: the four images are ~800 MB to pull, and docker wants room to unpack them
-    [ "${free_mb:-0}" -ge 1500 ] || die "only ${free_mb}MB free here; pulling the images needs about 1.5 GB. try: ./scripts/deploy.sh --prune-deploy ${ORIGINAL_ARGS[*]:-}"
+    if [ "${free_mb:-0}" -lt 1500 ]; then
+      if [ "${PRUNE:-0}" = 1 ]; then
+        where_the_disk_went
+        die "only ${free_mb}MB free here, even after the prune; pulling the images needs about 1.5 GB. what is left is not docker's to drop: grow the disk, or see what fills it. a logging agent that cannot reach its api writes a gigabyte of stack traces a day (journalctl -b -p warning | tail)"
+      fi
+      die "only ${free_mb}MB free here; pulling the images needs about 1.5 GB. try: $(prune_hint)   (drops what docker and the system's logs can spare)"
+    fi
     return 0
   fi
   # ensure_swap is about to dd a swapfile, most likely out of this same disk
@@ -350,10 +376,11 @@ check_disk() {
   fi
   if [ "${free_mb:-0}" -lt "$need" ]; then
     if [ "${PRUNE:-0}" = 1 ]; then
-      die "only ${free_mb}MB free here (${need}MB is the floor), even after the prune. the rust images need about 6-8GB to build. grow the disk, or look at what else is on it: docker system df -v; du -sh /var/lib/docker/containers/*/*-json.log"
+      where_the_disk_went
+      die "only ${free_mb}MB free here (${need}MB is the floor), even after the prune. the rust images need about 6-8GB to build. grow the disk, or see what fills it: docker system df -v; journalctl -b -p warning | tail"
     fi
     die "only ${free_mb}MB free here (${need}MB is the floor). the rust images need about 6-8GB to build.
-  try:  ./scripts/deploy.sh --prune-deploy ${ORIGINAL_ARGS[*]:-}   (drops docker's build cache and untagged images first, usually several GB)
+  try:  $(prune_hint)   (drops docker's build cache, unused images and the system's spare logs first, usually several GB)
   or grow the disk."
   fi
   if [ "${free_mb:-0}" -lt 10000 ]; then
@@ -362,27 +389,52 @@ check_disk() {
 }
 
 # ---- 3b. prune (--prune-deploy) ------------------------------------------------
-# give the disk back what the builds took, then deploy as asked. the build cache is the
-# big one: buildkit keeps every cargo target dir it ever made, and a box that compiled
-# a few times holds 10GB+ of them. untagged images are the small one. nothing that
-# holds data goes: no volumes, no containers, no tagged images, not the swapfile (the
-# build needs it on a small box). the build cache belongs to docker, not to this
-# project, so every project's goes; each one comes back on its next build.
+# give the disk back what it can spare, then deploy as asked. docker's first: the build
+# cache is the big one on a box that compiles (buildkit keeps every cargo target dir it
+# ever made, and a few builds hold 10GB+), untagged images the small one, then every
+# image no container has and this run is not about to start (other projects' too, and
+# the build stages a --build pulled, like ffmpeg's: each is pulled again when wanted).
+# then the system's logs, which is where a box that only pulls images fills up: the
+# journal's archives, rotated logs, live logs past 50MB cut to nothing, and apt's cache.
+# nothing that holds data goes: no volumes, no containers, not the swapfile (the build
+# needs it on a small box), not the lines since boot (`journalctl -b` has them). the
+# build cache belongs to docker, not to this project, so every project's goes.
 prune_for_deploy() {
-  local before after old
+  local before after old n
   before="$(free_mb_here)"
-  say "giving the disk back what the builds took (--prune-deploy). ${before}MB free now"
+  say "giving the disk back what it can spare (--prune-deploy). ${before}MB free now"
   note "build cache:      $("${DOCKER[@]}" builder prune -af 2>&1 | tail -n 1 || echo "could not prune it")"
   note "untagged images:  $("${DOCKER[@]}" image prune -f 2>&1 | tail -n 1 || echo "could not prune them")"
-  # our own images from earlier ships or builds (stream-x:<old tag>) that no container
-  # runs. not the four this run is about to start: nothing runs them yet, and the ones
-  # ./scripts/ship.sh --to just sent exist nowhere else
-  old="$(comm -23 <("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^([^/]+/)*stream-[a-z]+:' | sort -u) \
+  # every tagged image no container has, and not the four this run is about to start:
+  # nothing runs them yet, and the ones ./scripts/ship.sh --to just sent exist nowhere
+  # else. rmi without -f refuses an image a container still has, so none of theirs goes
+  old="$(comm -23 <("${DOCKER[@]}" images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -v '<none>' | sort -u) \
                  <({ "${DOCKER[@]}" ps -a --format '{{.Image}}' 2>/dev/null; target_images; } | sort -u) || true)"
   if [ -n "$old" ]; then
+    # what actually went: rmi names each tag it untagged (and the digest form of it, skipped)
     # shellcheck disable=SC2086
-    "${DOCKER[@]}" rmi $old >/dev/null 2>&1 || true
-    note "old stream images: $(echo "$old" | wc -l | tr -d ' ') removed ($(echo "$old" | tr '\n' ' '))"
+    old="$("${DOCKER[@]}" rmi $old 2>/dev/null | sed -n 's/^Untagged: //p' | grep -v '@sha256:' || true)"
+    if [ -n "$old" ]; then
+      note "unused images:    $(echo "$old" | wc -l | tr -d ' ') removed ($(echo "$old" | tr '\n' ' '))"
+    else
+      note "unused images:    none"
+    fi
+  fi
+  if [ "$OS" = linux ]; then
+    ! have journalctl || note "journal:          $(as_root journalctl --vacuum-size=100M 2>&1 | tail -n 1 || echo "could not vacuum it")"
+    # rotated logs: syslog.1, anything gzipped, an agent's dated files. the journal's own
+    # files are never touched, and neither are the login records
+    n="$(as_root find /var/log -xdev -type f \( -name '*.[0-9]' -o -name '*.gz' -o -name '*-20[0-9][0-9]-*' \) \
+          -not -path '/var/log/journal/*' -not -name 'wtmp*' -not -name 'btmp*' -not -name 'lastlog*' -print -delete 2>/dev/null | wc -l | tr -d ' ')"
+    note "rotated logs:     ${n:-0} removed"
+    # the live ones past 50MB, cut to nothing in place (what logrotate's copytruncate does):
+    # the writer keeps its handle, the disk gets the blocks back
+    n="$(as_root find /var/log -xdev -type f -size +50M \
+          -not -path '/var/log/journal/*' -not -name 'wtmp*' -not -name 'btmp*' -not -name 'lastlog*' -print -exec truncate -s 0 {} + 2>/dev/null | wc -l | tr -d ' ')"
+    note "live logs:        ${n:-0} over 50MB cut to nothing"
+    if have apt-get; then
+      if as_root apt-get clean >/dev/null 2>&1; then note "apt cache:        cleared"; else note "apt cache:        could not clear it"; fi
+    fi
   fi
   after="$(free_mb_here)"
   note "${after}MB free, $(( after - before ))MB back. the next build of every project compiles from scratch"
@@ -997,10 +1049,12 @@ ${B}flags${N}
   ${B}--pull${N}                    git pull --ff-only first. with no services named, redeploy what changed
                             since the last run that ended well (.deployed), so a --pull that
                             failed halfway is retried whole by the next one
-  ${B}--prune-deploy${N}            first give the disk back what the builds took, then deploy as asked:
+  ${B}--prune-deploy${N}            first give the disk back what it can spare, then deploy as asked:
                             docker's build cache (every project's on this machine; each comes
-                            back on its next build) and untagged images. for the box that says
-                            "only 2664MB free". volumes, containers and the swapfile stay
+                            back on its next build), untagged images, images no container has,
+                            the journal's archives, rotated logs, live logs past 50MB (cut to
+                            nothing) and apt's cache. for the box that says "only 2664MB free".
+                            volumes, containers and the swapfile stay; so do the lines since boot
 
 ${B}other${N}
   ${B}passwd <name>${N}             print a new random password for that account. the only reset there is
