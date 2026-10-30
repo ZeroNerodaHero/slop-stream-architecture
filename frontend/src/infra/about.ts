@@ -360,8 +360,31 @@ export function dummyPage(name: string, pictures: { offline: number | null }): A
   return { blocks: orders[h % orders.length] ?? orders[0] ?? [], css: DEMO_CSS };
 }
 
-/** A block on the saved page: where it sits, and which object in the bucket it is. */
-export type PageType = 'text' | 'image' | 'video' | 'sound';
+/** A block on the saved page: where it sits, and which object in the bucket it is. A line, a box, and a border have no object. */
+export type PageType = 'text' | 'image' | 'video' | 'sound' | 'line' | 'box' | 'border';
+
+/** Css families already on the machine. The value is a key, never a url, so nothing is fetched. */
+export const PAGE_FONTS = ['sans', 'serif', 'mono', 'cursive', 'fantasy', 'system', 'arial', 'helvetica', 'verdana', 'tahoma', 'trebuchet', 'georgia', 'times', 'courier', 'palatino', 'garamond', 'impact'] as const;
+
+export const FONT_STACK: Record<string, string> = {
+  sans: 'sans-serif',
+  serif: 'serif',
+  mono: 'monospace',
+  cursive: 'cursive',
+  fantasy: 'fantasy',
+  system: 'system-ui, sans-serif',
+  arial: 'Arial, Helvetica, sans-serif',
+  helvetica: 'Helvetica, Arial, sans-serif',
+  verdana: 'Verdana, Geneva, sans-serif',
+  tahoma: 'Tahoma, Geneva, sans-serif',
+  trebuchet: '"Trebuchet MS", Helvetica, sans-serif',
+  georgia: 'Georgia, serif',
+  times: '"Times New Roman", Times, serif',
+  courier: '"Courier New", Courier, monospace',
+  palatino: 'Palatino, "Palatino Linotype", serif',
+  garamond: 'Garamond, serif',
+  impact: 'Impact, sans-serif'
+};
 
 export interface PageBlock {
   type: PageType;
@@ -372,6 +395,16 @@ export interface PageBlock {
   /** The box. Missing on an older page: the canvas uses the usual size for the type. */
   w?: number;
   h?: number;
+  /** Degrees, -180 to 180. Text, a picture, and a shape. */
+  r?: number;
+  /** A key of `PAGE_FONTS`. */
+  font?: string;
+  size?: number;
+  color?: string;
+  bg?: string;
+  stroke?: number;
+  strokeColor?: string;
+  align?: 'left' | 'center' | 'right' | '';
   /** Text only: the html as kept, 10 000 characters at most. */
   html?: string;
   /** A picture, a clip, a track: the path on this origin. */

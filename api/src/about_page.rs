@@ -67,6 +67,8 @@ struct Incoming {
     h: i64,
     #[serde(default)]
     html: String,
+    #[serde(flatten, default)]
+    look: LookIn,
 }
 
 #[derive(Serialize)]
@@ -79,6 +81,8 @@ struct OutBlock {
     z: i32,
     w: i32,
     h: i32,
+    #[serde(flatten)]
+    look: Paint,
     #[serde(skip_serializing_if = "Option::is_none")]
     html: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,10 +98,63 @@ struct Kept {
     z: i32,
     w: i32,
     h: i32,
-    /// Text only: the cleaned html to write. None for a picture, a clip, a track.
+    /// Text only: the cleaned html to write. None for a picture, a clip, a track, a shape.
     html: Option<String>,
     /// True when this id is not in `about_files` yet.
     fresh: bool,
+    look: Paint,
+}
+
+/// How a block is painted. Fonts are css families already on the machine: nothing is fetched.
+/// A color is `#rrggbb` or it is dropped. A shape (`line`, `box`, `border`) has no file.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Paint {
+    #[serde(default, skip_serializing_if = "is_zero")]
+    r: i32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    font: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    size: i32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    color: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    bg: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    stroke: i32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    stroke_color: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    align: String,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LookIn {
+    #[serde(default)]
+    r: i64,
+    #[serde(default)]
+    font: String,
+    #[serde(default)]
+    size: i64,
+    #[serde(default)]
+    color: String,
+    #[serde(default)]
+    bg: String,
+    #[serde(default)]
+    stroke: i64,
+    #[serde(default)]
+    stroke_color: String,
+    #[serde(default)]
+    align: String,
+}
+
+fn is_zero(n: &i32) -> bool {
+    *n == 0
+}
+
+fn is_shape(kind: &str) -> bool {
+    matches!(kind, "line" | "box" | "border")
 }
 
 /// The bucket key. The row's uuid, so a rename does not move the object.
@@ -127,6 +184,11 @@ async fn get_page(State(s): State<AppState>, Name(name): Name) -> ApiResult {
     let stored = doc.and_then(|v| serde_json::from_value::<StoredPage>(v).ok()).unwrap_or_default();
     let mut blocks = Vec::with_capacity(stored.blocks.len());
     for block in stored.blocks {
+        if is_shape(&block.kind) {
+            let (w, h) = filled_size(&block.kind, block.w, block.h);
+            blocks.push(OutBlock { kind: block.kind, id: block.id, x: block.x, y: block.y, z: block.z, w, h, look: block.look, html: None, src: None });
+            continue;
+        }
         let Some(file) = file_row(&s.db, &name, block.id).await? else { continue };
         if file.kind != block.kind {
             continue;
@@ -137,7 +199,7 @@ async fn get_page(State(s): State<AppState>, Name(name): Name) -> ApiResult {
                 Ok(Some(bytes)) => String::from_utf8(bytes).unwrap_or_default(),
                 _ => String::new(),
             };
-            blocks.push(OutBlock { kind: block.kind, id: block.id, x: block.x, y: block.y, z: block.z, w, h, html: Some(html), src: None });
+            blocks.push(OutBlock { kind: block.kind, id: block.id, x: block.x, y: block.y, z: block.z, w, h, look: block.look, html: Some(html), src: None });
         } else {
             blocks.push(OutBlock {
                 kind: block.kind,
@@ -147,6 +209,7 @@ async fn get_page(State(s): State<AppState>, Name(name): Name) -> ApiResult {
                 z: block.z,
                 w,
                 h,
+                look: block.look,
                 html: None,
                 src: Some(file_src(&name, block.id)),
             });
@@ -225,7 +288,7 @@ async fn save_page(
     let layout = StoredPage {
         blocks: kept
             .iter()
-            .map(|b| StoredBlock { kind: b.kind.to_owned(), id: b.id, x: b.x, y: b.y, z: b.z, w: b.w, h: b.h })
+            .map(|b| StoredBlock { kind: b.kind.to_owned(), id: b.id, x: b.x, y: b.y, z: b.z, w: b.w, h: b.h, look: b.look.clone() })
             .collect(),
     };
     sqlx::query("UPDATE streamers SET about_page = $2, updated_at = now() WHERE name = $1")
@@ -251,7 +314,9 @@ async fn save_page(
     let mut out = Vec::with_capacity(kept.len());
     for block in kept {
         if block.kind == "text" {
-            out.push(OutBlock { kind: block.kind.to_owned(), id: block.id, x: block.x, y: block.y, z: block.z, w: block.w, h: block.h, html: block.html, src: None });
+            out.push(OutBlock { kind: block.kind.to_owned(), id: block.id, x: block.x, y: block.y, z: block.z, w: block.w, h: block.h, look: block.look, html: block.html, src: None });
+        } else if is_shape(block.kind) {
+            out.push(OutBlock { kind: block.kind.to_owned(), id: block.id, x: block.x, y: block.y, z: block.z, w: block.w, h: block.h, look: block.look, html: None, src: None });
         } else {
             out.push(OutBlock {
                 kind: block.kind.to_owned(),
@@ -261,6 +326,7 @@ async fn save_page(
                 z: block.z,
                 w: block.w,
                 h: block.h,
+                look: block.look,
                 html: None,
                 src: Some(file_src(name, block.id)),
             });
@@ -281,8 +347,10 @@ fn plan(body: &PageBody, have: &HashMap<i64, (String, String)>) -> Result<Vec<Ke
         let y = clamp_pos(block.y);
         let z = clamp_z(block.z);
         let (dw, dh) = default_size(block.kind.as_str());
-        let w = clamp_size(block.w, dw, W_MIN);
-        let h = clamp_size(block.h, dh, H_MIN);
+        let (min_w, min_h) = if block.kind == "line" { (8, 1) } else { (W_MIN, H_MIN) };
+        let w = clamp_size(block.w, dw, min_w);
+        let h = clamp_size(block.h, dh, min_h);
+        let look = clean_look(&block.look);
         match block.kind.as_str() {
             "text" => {
                 let html = sanitize_html(&block.html);
@@ -300,7 +368,7 @@ fn plan(body: &PageBody, have: &HashMap<i64, (String, String)>) -> Result<Vec<Ke
                 if !seen.insert(id) {
                     return Err(ApiError::new(StatusCode::BAD_REQUEST, "a block is on the page twice"));
                 }
-                kept.push(Kept { kind: "text", id, x, y, z, w, h, html: Some(html), fresh });
+                kept.push(Kept { kind: "text", id, x, y, z, w, h, html: Some(html), fresh, look });
             }
             "image" | "video" | "sound" => {
                 if block.id <= 0 {
@@ -319,9 +387,29 @@ fn plan(body: &PageBody, have: &HashMap<i64, (String, String)>) -> Result<Vec<Ke
                     "video" => "video",
                     _ => "sound",
                 };
-                kept.push(Kept { kind, id: block.id, x, y, z, w, h, html: None, fresh: false });
+                kept.push(Kept { kind, id: block.id, x, y, z, w, h, html: None, fresh: false, look });
             }
-            _ => return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad type. one of text, image, video, sound")),
+            "line" | "box" | "border" => {
+                let kind = match block.kind.as_str() {
+                    "line" => "line",
+                    "box" => "box",
+                    _ => "border",
+                };
+                let id = if block.id == 0 {
+                    let id = fresh_id(&reserved);
+                    reserved.insert(id);
+                    id
+                } else if have.contains_key(&block.id) {
+                    return Err(ApiError::new(StatusCode::BAD_REQUEST, "that id is a file"));
+                } else {
+                    block.id
+                };
+                if !seen.insert(id) {
+                    return Err(ApiError::new(StatusCode::BAD_REQUEST, "a block is on the page twice"));
+                }
+                kept.push(Kept { kind, id, x, y, z, w, h, html: None, fresh: false, look });
+            }
+            _ => return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad type. one of text, image, video, sound, line, box, border")),
         }
     }
     Ok(kept)
@@ -354,7 +442,64 @@ fn default_size(kind: &str) -> (i32, i32) {
         "text" => (280, 120),
         "video" => (320, 200),
         "sound" => (280, 56),
+        "line" => (240, 4),
+        "box" | "border" => (200, 120),
         _ => (300, 180),
+    }
+}
+
+fn clean_look(look: &LookIn) -> Paint {
+    Paint {
+        r: clamp_turn(look.r),
+        font: clean_font(&look.font),
+        size: clean_size(look.size),
+        color: clean_color(&look.color),
+        bg: clean_color(&look.bg),
+        stroke: clean_stroke(look.stroke),
+        stroke_color: clean_color(&look.stroke_color),
+        align: clean_align(&look.align),
+    }
+}
+
+fn clamp_turn(n: i64) -> i32 {
+    let mut n = n % 360;
+    if n > 180 {
+        n -= 360;
+    }
+    if n < -180 {
+        n += 360;
+    }
+    n as i32
+}
+
+fn clean_font(s: &str) -> String {
+    match s {
+        "sans" | "serif" | "mono" | "cursive" | "fantasy" | "system" | "arial" | "helvetica" | "verdana" | "tahoma"
+        | "trebuchet" | "georgia" | "times" | "courier" | "palatino" | "garamond" | "impact" => s.to_owned(),
+        _ => String::new(),
+    }
+}
+
+fn clean_color(s: &str) -> String {
+    let s = s.trim();
+    if s.len() == 7 && s.as_bytes().first() == Some(&b'#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit()) {
+        return s.to_ascii_lowercase();
+    }
+    String::new()
+}
+
+fn clean_size(n: i64) -> i32 {
+    if n <= 0 { 0 } else { n.clamp(12, 96) as i32 }
+}
+
+fn clean_stroke(n: i64) -> i32 {
+    n.clamp(0, 16) as i32
+}
+
+fn clean_align(s: &str) -> String {
+    match s {
+        "left" | "center" | "right" => s.to_owned(),
+        _ => String::new(),
     }
 }
 
@@ -579,6 +724,8 @@ struct StoredBlock {
     w: i32,
     #[serde(default)]
     h: i32,
+    #[serde(flatten, default)]
+    look: Paint,
 }
 
 async fn ensure_row(db: &PgPool, name: &str) -> Result<uuid::Uuid, sqlx::Error> {
@@ -938,8 +1085,8 @@ mod tests {
         have.insert(8, ("text".into(), "text/plain".into()));
         let body = PageBody {
             blocks: vec![
-                Incoming { kind: "image".into(), id: 7, x: -4, y: 20, z: 1, w: 0, h: 0, html: String::new() },
-                Incoming { kind: "text".into(), id: 8, x: 0, y: 0, z: 99, w: 900, h: 10, html: "<p>hi</p>".into() },
+                Incoming { kind: "image".into(), id: 7, x: -4, y: 20, z: 1, w: 0, h: 0, html: String::new(), look: LookIn::default() },
+                Incoming { kind: "text".into(), id: 8, x: 0, y: 0, z: 99, w: 900, h: 10, html: "<p>hi</p>".into(), look: LookIn { font: "Comic Sans MS".into(), color: "#FF00AA".into(), r: 400, ..LookIn::default() } },
             ],
         };
         let kept = plan(&body, &have).unwrap();
@@ -949,9 +1096,30 @@ mod tests {
         assert_eq!(kept[1].html.as_deref(), Some("<p>hi</p>"));
         assert_eq!(kept[1].z, Z_MAX);
         assert_eq!((kept[1].w, kept[1].h), (SIZE_MAX, H_MIN));
-        let missing = PageBody { blocks: vec![Incoming { kind: "video".into(), id: 3, x: 0, y: 0, z: 0, w: 0, h: 0, html: String::new() }] };
+        assert_eq!(kept[1].look.font, "");
+        assert_eq!(kept[1].look.color, "#ff00aa");
+        assert_eq!(kept[1].look.r, 40);
+        let missing = PageBody { blocks: vec![Incoming { kind: "video".into(), id: 3, x: 0, y: 0, z: 0, w: 0, h: 0, html: String::new(), look: LookIn::default() }] };
         assert_eq!(plan(&missing, &have).unwrap_err().message(), "no such file");
-        let wrong = PageBody { blocks: vec![Incoming { kind: "sound".into(), id: 7, x: 0, y: 0, z: 0, w: 0, h: 0, html: String::new() }] };
+        let wrong = PageBody { blocks: vec![Incoming { kind: "sound".into(), id: 7, x: 0, y: 0, z: 0, w: 0, h: 0, html: String::new(), look: LookIn::default() }] };
         assert_eq!(plan(&wrong, &have).unwrap_err().message(), "that file is a different kind");
+        let line = PageBody {
+            blocks: vec![Incoming {
+                kind: "line".into(),
+                id: 0,
+                x: 0,
+                y: 0,
+                z: 0,
+                w: 80,
+                h: 2,
+                html: String::new(),
+                look: LookIn { bg: "red".into(), stroke: 2, ..LookIn::default() },
+            }],
+        };
+        let drawn = plan(&line, &have).unwrap();
+        assert_eq!(drawn[0].kind, "line");
+        assert_eq!((drawn[0].w, drawn[0].h), (80, 2));
+        assert_eq!(drawn[0].look.bg, "");
+        assert!(drawn[0].id > 0);
     }
 }

@@ -450,6 +450,26 @@ function ownerQuery(owner: Owner): string {
   return `session=${owner.session}&token=${owner.token}`;
 }
 
+interface PageWire {
+  type: 'text' | 'image' | 'video' | 'sound' | 'line' | 'box' | 'border';
+  id: number;
+  x: number;
+  y: number;
+  z: number;
+  w?: number;
+  h?: number;
+  r?: number;
+  font?: string;
+  size?: number;
+  color?: string;
+  bg?: string;
+  stroke?: number;
+  strokeColor?: string;
+  align?: string;
+  html?: string;
+  src?: string;
+}
+
 export const api = {
   /** The login cookie goes along on its own (httponly, same origin). Every field null for nobody. */
   me: () => request<MeInfo>('GET', '/api/me'),
@@ -544,21 +564,11 @@ export const api = {
   saveBio: (name: string, bio: string) => request<{ name: string; bio: string }>('PUT', `/api/streamers/${name}`, { bio }),
   /** About me, the words first on the about tab (docs/about.md): paragraphs kept, 2000 characters at most, empty clears it. */
   saveAbout: (name: string, about: string) => request<{ name: string; about: string }>('PUT', `/api/streamers/${name}/about`, { about }),
-  /** The page under that: `{ blocks: [{ type, id, x, y, z, w, h, html? }] }`. Text html is written to the bucket. */
+  /** The page under that: `{ blocks: [{ type, id, x, y, z, w, h, r?, font?, size?, color?, bg?, stroke?, strokeColor?, align?, html? }] }`. Text html is written to the bucket. A line, a box, and a border have no file. */
   aboutPage: (name: string) =>
-    request<{ blocks: { type: 'text' | 'image' | 'video' | 'sound'; id: number; x: number; y: number; z: number; w?: number; h?: number; html?: string; src?: string }[] }>(
-      'GET',
-      `/api/streamers/${encodeURIComponent(name)}/about-page`
-    ),
-  saveAboutPage: (
-    name: string,
-    blocks: { type: string; id: number; x: number; y: number; z: number; w: number; h: number; html?: string }[]
-  ) =>
-    request<{ blocks: { type: 'text' | 'image' | 'video' | 'sound'; id: number; x: number; y: number; z: number; w?: number; h?: number; html?: string; src?: string }[] }>(
-      'PUT',
-      `/api/streamers/${encodeURIComponent(name)}/about-page`,
-      { blocks }
-    ),
+    request<{ blocks: PageWire[] }>('GET', `/api/streamers/${encodeURIComponent(name)}/about-page`),
+  saveAboutPage: (name: string, blocks: PageWire[]) =>
+    request<{ blocks: PageWire[] }>('PUT', `/api/streamers/${encodeURIComponent(name)}/about-page`, { blocks }),
   /** A picture, a clip, or a sound for that page. The bytes go to the bucket. `type` is `image`, `video`, or `sound`. */
   saveAboutFile: (name: string, type: 'image' | 'video' | 'sound', file: Blob) =>
     request<{ id: number; type: string; src: string }>('PUT', `/api/streamers/${encodeURIComponent(name)}/about-file?type=${type}`, file),

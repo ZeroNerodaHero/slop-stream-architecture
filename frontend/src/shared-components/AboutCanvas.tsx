@@ -1,7 +1,8 @@
-import { type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import { type CSSProperties, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 
-import { BLOCKS_MAX, POS_MAX, type PageBlock, type PageType, TEXT_MAX, Z_MAX, sanitizeHtml } from '@/infra/about';
+import { BLOCKS_MAX, FONT_STACK, PAGE_FONTS, POS_MAX, type PageBlock, type PageType, TEXT_MAX, Z_MAX, sanitizeHtml } from '@/infra/about';
 import { api } from '@/infra/api';
+import { cn } from '@/utils/cn';
 
 const ADD = 'text-sm font-semibold text-primaryBlue';
 const QUIET = 'text-sm text-textTertiary';
@@ -11,8 +12,10 @@ const SIZE_MAX = 800;
 /** Positions land on this grid, and on another block's edge when closer. */
 const GRID = 8;
 const SNAP = 8;
-/** Room above the page for the move tab. The page under it is the same square the preview scrolls. */
+/** Room above the page for the move tab. The page under it is as wide as the column beside the chat. */
 const TAB = 24;
+const SIZES = [12, 14, 16, 20, 24, 32, 48, 64, 80, 96];
+const STROKES = [0, 1, 2, 3, 4, 6, 8, 12];
 
 interface Item {
   key: string;
@@ -23,6 +26,14 @@ interface Item {
   z: number;
   w: number;
   h: number;
+  r: number;
+  font: string;
+  size: number;
+  color: string;
+  bg: string;
+  stroke: number;
+  strokeColor: string;
+  align: '' | 'left' | 'center' | 'right';
   html: string;
   src: string;
 }
@@ -31,7 +42,67 @@ function usualSize(type: PageType): { w: number; h: number } {
   if (type === 'text') return { w: 280, h: 120 };
   if (type === 'video') return { w: 320, h: 200 };
   if (type === 'sound') return { w: 280, h: 56 };
+  if (type === 'line') return { w: 240, h: 4 };
+  if (type === 'box' || type === 'border') return { w: 200, h: 120 };
   return { w: 300, h: 180 };
+}
+
+function minBox(type: PageType): { w: number; h: number } {
+  if (type === 'line') return { w: 8, h: 1 };
+  return { w: W_MIN, h: H_MIN };
+}
+
+function isMedia(type: PageType): boolean {
+  return type === 'image' || type === 'video' || type === 'sound';
+}
+
+function canTurn(type: PageType): boolean {
+  return type === 'text' || type === 'image' || type === 'line' || type === 'box' || type === 'border';
+}
+
+function hex(color: string): string {
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : '';
+}
+
+function blankLook(): Pick<Item, 'r' | 'font' | 'size' | 'color' | 'bg' | 'stroke' | 'strokeColor' | 'align'> {
+  return { r: 0, font: '', size: 0, color: '', bg: '', stroke: 0, strokeColor: '', align: '' };
+}
+
+function lookFrom(block: PageBlock): Pick<Item, 'r' | 'font' | 'size' | 'color' | 'bg' | 'stroke' | 'strokeColor' | 'align'> {
+  let r = Math.round(block.r || 0) % 360;
+  if (r > 180) r -= 360;
+  if (r < -180) r += 360;
+  const align = block.align === 'left' || block.align === 'center' || block.align === 'right' ? block.align : '';
+  return {
+    r,
+    font: block.font && FONT_STACK[block.font] ? block.font : '',
+    size: block.size && block.size >= 12 ? Math.min(96, Math.round(block.size)) : 0,
+    color: hex(block.color || ''),
+    bg: hex(block.bg || ''),
+    stroke: Math.max(0, Math.min(16, Math.round(block.stroke || 0))),
+    strokeColor: hex(block.strokeColor || ''),
+    align
+  };
+}
+
+function textStyle(block: Item): CSSProperties {
+  const style: CSSProperties = {};
+  const family = FONT_STACK[block.font];
+  if (family) style.fontFamily = family;
+  if (block.size) style.fontSize = block.size;
+  if (block.color) style.color = block.color;
+  if (block.bg) style.background = block.bg;
+  if (block.align) style.textAlign = block.align;
+  if (block.stroke > 0) style.WebkitTextStroke = `${block.stroke}px ${block.strokeColor || 'currentColor'}`;
+  return style;
+}
+
+function localDelta(dx: number, dy: number, r: number): { x: number; y: number } {
+  if (!r) return { x: dx, y: dy };
+  const rad = (r * Math.PI) / 180;
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  return { x: dx * c + dy * s, y: -dx * s + dy * c };
 }
 
 function fromPage(block: PageBlock): Item {
@@ -45,6 +116,7 @@ function fromPage(block: PageBlock): Item {
     z: block.z,
     w: block.w && block.w > 0 ? block.w : size.w,
     h: block.h && block.h > 0 ? block.h : size.h,
+    ...lookFrom(block),
     html: block.html ?? '',
     src: block.src ?? ''
   };
@@ -65,8 +137,8 @@ function grid(n: number): number {
   return Math.round(n / GRID) * GRID;
 }
 
-function edgeLines(others: Item[], axis: 'x' | 'y'): number[] {
-  const lines = [0, POS_MAX];
+function edgeLines(others: Item[], axis: 'x' | 'y', limit: number): number[] {
+  const lines = [0, limit];
   for (const block of others) {
     if (axis === 'x') lines.push(block.x, block.x + block.w, block.x + block.w / 2);
     else lines.push(block.y, block.y + block.h, block.y + block.h / 2);
@@ -75,8 +147,8 @@ function edgeLines(others: Item[], axis: 'x' | 'y'): number[] {
 }
 
 /** Where a block's left or top lands: on the grid, or on another block's edge when that is closer. */
-function snapSpan(origin: number, size: number, lines: number[]): { at: number; guide: number | null } {
-  const room = Math.max(0, POS_MAX - size);
+function snapSpan(origin: number, size: number, lines: number[], limit: number): { at: number; guide: number | null } {
+  const room = Math.max(0, limit - size);
   const edges = [0, size / 2, size];
   let bestAt = Math.min(room, Math.max(0, grid(origin)));
   let bestD = Math.abs(origin - bestAt);
@@ -117,12 +189,12 @@ function snapEdge(edge: number, lines: number[], min: number, max: number): { at
   return { at: Math.round(best), guide };
 }
 
-function Rich({ html }: { html: string }) {
+function Rich({ html, style }: { html: string; style?: CSSProperties }) {
   const safe = sanitizeHtml(html);
   if (!safe) return null;
   const doc = new DOMParser().parseFromString(safe, 'text/html');
   const nodes = [...doc.body.childNodes].map((node, i) => richNode(node, `t${i}`));
-  return <div className="about-text h-full overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere]">{nodes}</div>;
+  return <div className="about-text h-full overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere]" style={style}>{nodes}</div>;
 }
 
 function richNode(node: Node, key: string): ReactNode {
@@ -154,7 +226,7 @@ function richNode(node: Node, key: string): ReactNode {
   return <span key={key}>{kids}</span>;
 }
 
-function TextEditor({ html, autoFocus, onChange }: { html: string; autoFocus?: boolean; onChange: (html: string) => void }) {
+function TextEditor({ html, autoFocus, onChange, style }: { html: string; autoFocus?: boolean; onChange: (html: string) => void; style?: CSSProperties }) {
   const ref = useRef<HTMLDivElement>(null);
   const last = useRef(html);
   useEffect(() => {
@@ -194,14 +266,35 @@ function TextEditor({ html, autoFocus, onChange }: { html: string; autoFocus?: b
         onChange(next);
       }}
       className="about-text h-full min-h-[1.5rem] overflow-auto whitespace-pre-wrap outline-none [overflow-wrap:anywhere] empty:before:text-textTertiary empty:before:content-[attr(data-placeholder)]"
+      style={style}
     />
   );
 }
 
-function BlockBody({ block, live, focus, onHtml }: { block: Item; live: boolean; focus: boolean; onHtml: (html: string) => void }) {
+function BlockBody({
+  block,
+  live,
+  focus,
+  onHtml,
+  onChoose
+}: {
+  block: Item;
+  live: boolean;
+  focus: boolean;
+  onHtml: (html: string) => void;
+  onChoose?: () => void;
+}) {
   if (block.type === 'text') {
-    if (live) return <TextEditor html={block.html} autoFocus={focus} onChange={onHtml} />;
-    return <Rich html={block.html} />;
+    const style = textStyle(block);
+    if (live) return <TextEditor html={block.html} autoFocus={focus} onChange={onHtml} style={style} />;
+    return <Rich html={block.html} style={style} />;
+  }
+  if (block.type === 'image' && !block.src && live && onChoose) {
+    return (
+      <button type="button" className="flex h-full w-full items-center justify-center text-sm text-textTertiary" onClick={onChoose}>
+        choose image
+      </button>
+    );
   }
   if (block.type === 'image' && block.src) {
     return <img src={block.src} alt="" draggable={false} className="about-image h-full w-full bg-black object-contain" />;
@@ -213,6 +306,99 @@ function BlockBody({ block, live, focus, onHtml }: { block: Item; live: boolean;
     return <audio src={block.src} controls preload="metadata" className="about-music w-full" />;
   }
   return null;
+}
+
+function Shape({ block }: { block: Item }) {
+  if (block.type === 'line') {
+    return <div className="h-full w-full" style={{ background: block.bg || 'currentColor' }} />;
+  }
+  if (block.type === 'box' || block.type === 'border') {
+    return (
+      <div
+        className="h-full w-full"
+        style={{
+          background: block.type === 'box' ? block.bg || 'transparent' : 'transparent',
+          border: block.stroke > 0 ? `${block.stroke}px solid ${block.strokeColor || 'currentColor'}` : undefined
+        }}
+      />
+    );
+  }
+  return null;
+}
+
+const FIELD = 'border border-primaryStroke bg-background px-1 text-sm text-textPrimary';
+
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (color: string) => void }) {
+  return (
+    <label className="flex items-center gap-1 text-sm text-textTertiary">
+      {label}
+      <input type="color" aria-label={label} value={value || '#e8eaed'} onChange={(e) => onChange(e.target.value)} className="h-5 w-5 border border-primaryStroke bg-background" />
+      {value && (
+        <button type="button" className={QUIET} onClick={() => onChange('')}>
+          clear
+        </button>
+      )}
+    </label>
+  );
+}
+
+function LookBar({ block, onChange }: { block: Item; onChange: (part: Partial<Item>) => void }) {
+  const text = block.type === 'text';
+  const box = block.type === 'box' || block.type === 'border';
+  if (!text && block.type !== 'line' && !box) return null;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+      {text && (
+        <>
+          <select aria-label="font" value={block.font} onChange={(e) => onChange({ font: e.target.value })} className={FIELD}>
+            <option value="">font</option>
+            {PAGE_FONTS.map((font) => (
+              <option key={font} value={font}>
+                {font}
+              </option>
+            ))}
+          </select>
+          <select aria-label="size" value={block.size || ''} onChange={(e) => onChange({ size: Number(e.target.value) || 0 })} className={FIELD}>
+            <option value="">size</option>
+            {SIZES.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+          <ColorField label="color" value={block.color} onChange={(color) => onChange({ color })} />
+          <ColorField label="background" value={block.bg} onChange={(bg) => onChange({ bg })} />
+          <select aria-label="text border" value={block.stroke} onChange={(e) => onChange({ stroke: Number(e.target.value) })} className={FIELD}>
+            {STROKES.map((n) => (
+              <option key={n} value={n}>
+                {n === 0 ? 'text border' : `${n}px`}
+              </option>
+            ))}
+          </select>
+          <ColorField label="border color" value={block.strokeColor} onChange={(strokeColor) => onChange({ strokeColor })} />
+          {(['left', 'center', 'right'] as const).map((align) => (
+            <button key={align} type="button" className={block.align === align ? ADD : QUIET} onClick={() => onChange({ align })}>
+              {align}
+            </button>
+          ))}
+        </>
+      )}
+      {block.type === 'line' && <ColorField label="color" value={block.bg} onChange={(bg) => onChange({ bg })} />}
+      {box && (
+        <>
+          {block.type === 'box' && <ColorField label="fill" value={block.bg} onChange={(bg) => onChange({ bg })} />}
+          <select aria-label="border" value={block.stroke} onChange={(e) => onChange({ stroke: Number(e.target.value) })} className={FIELD}>
+            {STROKES.map((n) => (
+              <option key={n} value={n}>
+                {n === 0 ? 'border' : `${n}px`}
+              </option>
+            ))}
+          </select>
+          <ColorField label="border color" value={block.strokeColor} onChange={(strokeColor) => onChange({ strokeColor })} />
+        </>
+      )}
+    </div>
+  );
 }
 
 interface AboutCanvasProps {
@@ -228,38 +414,71 @@ interface AboutCanvasProps {
 /**
  * The saved page. The preview at the bottom is what a visitor sees. On my own page, edit opens
  * the canvas above it: a tab on each block moves it, the corner and the edges scale it, and
- * save writes the layout (it also saves on its own). The page is one fixed square; the canvas
- * and the preview scroll over it, and a block snaps to the grid and to the others.
+ * save writes the layout (it also saves on its own). The page is as wide as the column beside the
+ * chat and 1600 tall; you scroll it. Text, a picture, and a shape can turn. A block snaps to the
+ * grid and to the others.
  */
+/** A small picture of the preset: each column is a text block over a picture. */
+function ColumnSketch({ n }: { n: 1 | 2 | 3 }) {
+  return (
+    <span aria-hidden className="flex h-12 w-16 gap-0.5">
+      {Array.from({ length: n }, (_, i) => (
+        <span key={i} className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex h-4 flex-col justify-center gap-px border border-primaryStroke px-0.5">
+            <span className="h-px bg-textTertiary" />
+            <span className="h-px w-2/3 bg-textTertiary" />
+          </span>
+          <span className="min-h-0 flex-1 border border-primaryStroke bg-backgroundSecondary" />
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }: AboutCanvasProps) {
   const [items, setItems] = useState<Item[]>([]);
   const [status, setStatus] = useState('');
   const [editing, setEditing] = useState(false);
   const [focusKey, setFocusKey] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
   const ready = useRef(false);
   const dirty = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
+  const previewPageRef = useRef<HTMLDivElement>(null);
   const [lines, setLines] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
   const place = useRef<{ x: number; y: number; key: string | null; accept: string }>({ x: 16, y: 16, key: null, accept: 'image/*' });
   const itemsRef = useRef(items);
   itemsRef.current = items;
 
   const persist = (list: Item[]) => {
-    const pending = list.some((block) => block.type !== 'text' && block.id === 0);
-    const sent = list.filter((block) => block.type === 'text' || block.id !== 0);
+    const pending = list.some((block) => isMedia(block.type) && block.id === 0);
+    const sent = list.filter((block) => !isMedia(block.type) || block.id !== 0);
     if (pending && sent.length === 0) return;
     dirty.current = false;
     setStatus('saving');
     api
       .saveAboutPage(
         name,
-        sent.map((block) =>
-          block.type === 'text'
-            ? { type: 'text', id: block.id, x: block.x, y: block.y, z: block.z, w: block.w, h: block.h, html: sanitizeHtml(block.html) }
-            : { type: block.type, id: block.id, x: block.x, y: block.y, z: block.z, w: block.w, h: block.h }
-        )
+        sent.map((block) => ({
+          type: block.type,
+          id: block.id,
+          x: block.x,
+          y: block.y,
+          z: block.z,
+          w: block.w,
+          h: block.h,
+          r: block.r,
+          font: block.font,
+          size: block.size,
+          color: block.color,
+          bg: block.bg,
+          stroke: block.stroke,
+          strokeColor: block.strokeColor,
+          align: block.align,
+          ...(block.type === 'text' ? { html: sanitizeHtml(block.html) } : {})
+        }))
       )
       .then((saved) => {
         setItems((current) =>
@@ -321,6 +540,11 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
     setItems(next);
   };
 
+  const pageWidth = () => {
+    const w = pageRef.current?.clientWidth || previewPageRef.current?.clientWidth || 0;
+    return w > 0 ? Math.min(POS_MAX, w) : POS_MAX;
+  };
+
   const nextZ = (list: Item[]) => clamp(list.reduce((max, block) => Math.max(max, block.z), 0) + 1, Z_MAX);
   const nextY = (list: Item[]) => {
     if (list.length === 0) return GRID;
@@ -337,6 +561,74 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
     }
   };
 
+  /** One, two, or three columns under what is already there. Each column is a text block over an empty image of the same width. */
+  const addColumns = (n: 1 | 2 | 3) => {
+    const need = n * 2;
+    if (items.length + need > BLOCKS_MAX) {
+      setStatus('40 blocks at most');
+      return;
+    }
+    const width = pageWidth();
+    const gap = GRID;
+    const raw = (width - GRID * 2 - gap * (n - 1)) / n;
+    const colW = Math.floor(raw / GRID) * GRID;
+    if (colW < W_MIN) {
+      setStatus('too narrow for that many columns');
+      return;
+    }
+    const textH = usualSize('text').h;
+    const imageH = Math.floor(usualSize('image').h / GRID) * GRID;
+    const y = nextY(items);
+    if (y + textH + gap + imageH > POS_MAX) {
+      setStatus('no room under the page');
+      return;
+    }
+    const made: Item[] = [];
+    for (let i = 0; i < n; i++) {
+      const x = GRID + i * (colW + gap);
+      const stamp = Math.random().toString(36).slice(2, 8);
+      made.push({
+        key: `text-col-${stamp}`,
+        type: 'text',
+        id: 0,
+        x,
+        y,
+        z: 0,
+        w: colW,
+        h: textH,
+        ...blankLook(),
+        html: '',
+        src: ''
+      });
+      made.push({
+        key: `image-col-${stamp}`,
+        type: 'image',
+        id: 0,
+        x,
+        y: y + textH + gap,
+        z: 0,
+        w: colW,
+        h: imageH,
+        ...blankLook(),
+        html: '',
+        src: ''
+      });
+    }
+    setFocusKey(made[0].key);
+    setPicked(made[0].key);
+    touch((list) => {
+      let z = list.reduce((max, block) => Math.max(max, block.z), 0);
+      return [
+        ...list,
+        ...made.map((block) => {
+          z = Math.min(Z_MAX, z + 1);
+          return { ...block, z };
+        })
+      ];
+    });
+    reveal(y);
+  };
+
   const addText = () => {
     if (items.length >= BLOCKS_MAX) {
       setStatus('40 blocks at most');
@@ -346,7 +638,34 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
     const size = usualSize('text');
     setFocusKey(key);
     const y = nextY(items);
-    touch((list) => [...list, { key, type: 'text', id: 0, x: GRID, y, z: nextZ(list), ...size, html: '', src: '' }]);
+    const width = Math.min(size.w, Math.max(minBox('text').w, pageWidth() - GRID));
+    touch((list) => [...list, { key, type: 'text', id: 0, x: GRID, y, z: nextZ(list), w: width, h: size.h, ...blankLook(), html: '', src: '' }]);
+    setPicked(key);
+    reveal(y);
+  };
+
+  const addShape = (type: 'line' | 'box' | 'border') => {
+    if (items.length >= BLOCKS_MAX) {
+      setStatus('40 blocks at most');
+      return;
+    }
+    const size = usualSize(type);
+    const width = Math.min(size.w, Math.max(minBox(type).w, pageWidth() - GRID));
+    const key = `${type}-${Math.random().toString(36).slice(2, 8)}`;
+    const y = nextY(items);
+    const look = blankLook();
+    if (type === 'line') look.bg = '#d4d7de';
+    if (type === 'box') {
+      look.bg = '#3a4150';
+      look.stroke = 2;
+      look.strokeColor = '#d4d7de';
+    }
+    if (type === 'border') {
+      look.stroke = 2;
+      look.strokeColor = '#d4d7de';
+    }
+    setPicked(key);
+    touch((list) => [...list, { key, type, id: 0, x: GRID, y, z: nextZ(list), w: width, h: size.h, ...look, html: '', src: '' }]);
     reveal(y);
   };
 
@@ -377,13 +696,14 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
         list.map((block) => {
           if (block.key !== replaceKey) return block;
           if (block.src.startsWith('blob:')) URL.revokeObjectURL(block.src);
-          return { ...block, id: 0, src: blob, type };
+          return { ...block, id: 0, src: blob, type, ...blankLook(), r: block.r };
         })
       );
     } else {
-      const at = snapSpan(x, size.w, edgeLines(itemsRef.current, 'x'));
-      const down = snapSpan(y, size.h, edgeLines(itemsRef.current, 'y'));
-      touch((list) => [...list, { key, type, id: 0, x: at.at, y: down.at, z: nextZ(list), ...size, html: '', src: blob }]);
+      const width = pageWidth();
+      const at = snapSpan(x, size.w, edgeLines(itemsRef.current, 'x', width), width);
+      const down = snapSpan(y, size.h, edgeLines(itemsRef.current, 'y', POS_MAX), POS_MAX);
+      touch((list) => [...list, { key, type, id: 0, x: at.at, y: down.at, z: nextZ(list), ...size, ...blankLook(), html: '', src: blob }]);
       reveal(down.at);
     }
     try {
@@ -406,6 +726,19 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
     void takeFile(file, e.clientX - rect.left, e.clientY - rect.top, null);
   };
 
+  const turn = (key: string, r: number) => {
+    setItems((list) => {
+      const item = list.find((block) => block.key === key);
+      if (!item || item.r === r) return list;
+      dirty.current = true;
+      return list.map((block) => (block.key === key ? { ...block, r } : block));
+    });
+  };
+
+  const patch = (key: string, part: Partial<Item>) => {
+    touch((list) => list.map((block) => (block.key === key ? { ...block, ...part } : block)));
+  };
+
   const placeBlock = (key: string, x: number, y: number) => {
     setItems((list) => {
       const item = list.find((block) => block.key === key);
@@ -426,7 +759,7 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
 
   /** Pointer position on the page, and a scroll when it sits on the edge of the window, so a drag
    * reaches the same spot however far down the page that spot is. */
-  const dragOnPage = (e: ReactPointerEvent, apply: (x: number, y: number) => void, done: () => void) => {
+  const dragOnPage = (e: ReactPointerEvent, apply: (x: number, y: number, clientX: number, clientY: number) => void, done: () => void) => {
     e.preventDefault();
     e.stopPropagation();
     const handle = e.currentTarget;
@@ -438,7 +771,7 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
       const page = pageRef.current;
       if (!page) return;
       const rect = page.getBoundingClientRect();
-      apply(lastX - rect.left, lastY - rect.top);
+      apply(lastX - rect.left, lastY - rect.top, lastX, lastY);
     };
     const tick = () => {
       const scroller = scrollRef.current;
@@ -479,6 +812,7 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
   };
 
   const remove = (key: string) => {
+    if (picked === key) setPicked(null);
     touch((list) => {
       const gone = list.find((item) => item.key === key);
       if (gone?.src.startsWith('blob:')) URL.revokeObjectURL(gone.src);
@@ -499,13 +833,29 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
     persistRef.current(itemsRef.current);
   };
 
-  const pageStyle = { width: POS_MAX, height: POS_MAX };
+  const chosen = items.find((block) => block.key === picked) ?? null;
 
   return (
     <>
       {editing && (
         <>
-          <p className="text-sm text-textTertiary">drag the tab to move a block. it snaps to the grid and to the others. the corner and the edges scale it. scroll the page; it stays the same size.</p>
+          <p className="text-sm text-textTertiary">drag the tab to move a block. it snaps to the grid and to the others. rotate turns text, a picture, or a shape. a preset lays columns, text over a picture in each. the page is as wide as this column, up to the chat.</p>
+          <div className="mt-2 flex flex-wrap items-end gap-2">
+            <span className="pb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">preset</span>
+            {([1, 2, 3] as const).map((n) => (
+              <button
+                key={n}
+                id={`about-preset-${n}`}
+                type="button"
+                aria-label={n === 1 ? '1 column' : `${n} columns`}
+                className="flex flex-col items-center gap-1 border border-primaryStroke px-2 py-1.5 text-sm font-semibold text-primaryBlue hover:border-primaryBlue"
+                onClick={() => addColumns(n)}
+              >
+                <ColumnSketch n={n} />
+                {n === 1 ? '1 column' : `${n} columns`}
+              </button>
+            ))}
+          </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
             <span className="text-xs font-semibold uppercase tracking-wider text-textTertiary">add</span>
             <button id="about-add-text" type="button" className={ADD} onClick={addText}>
@@ -520,14 +870,24 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
             <button id="about-add-sound" type="button" className={ADD} onClick={() => pick('audio/*', GRID, nextY(items), null)}>
               sound
             </button>
+            <button id="about-add-line" type="button" className={ADD} onClick={() => addShape('line')}>
+              line
+            </button>
+            <button id="about-add-box" type="button" className={ADD} onClick={() => addShape('box')}>
+              box
+            </button>
+            <button id="about-add-border" type="button" className={ADD} onClick={() => addShape('border')}>
+              border
+            </button>
           </div>
+          {chosen && <LookBar block={chosen} onChange={(part) => patch(chosen.key, part)} />}
           <div id="about-canvas" ref={scrollRef} className="mt-3 h-[32rem] overflow-auto border border-dashed border-primaryStroke">
             <div style={{ height: TAB }} />
             <div
               ref={pageRef}
-              className="relative"
+              className="relative w-full"
               style={{
-                ...pageStyle,
+                height: POS_MAX,
                 backgroundImage:
                   'linear-gradient(to right, rgb(var(--primary-stroke) / 0.45) 1px, transparent 1px), linear-gradient(to bottom, rgb(var(--primary-stroke) / 0.45) 1px, transparent 1px)',
                 backgroundSize: `${GRID * 2}px ${GRID * 2}px`
@@ -546,6 +906,7 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
                     className="absolute bottom-full left-0 z-10 flex h-6 cursor-grab touch-none select-none items-center gap-2 whitespace-nowrap border border-b-0 border-primaryStroke bg-background px-2"
                     aria-label="drag to move"
                     onPointerDown={(e) => {
+                      setPicked(block.key);
                       const page = pageRef.current;
                       if (!page) return;
                       const rect = page.getBoundingClientRect();
@@ -555,8 +916,9 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
                         e,
                         (x, y) => {
                           const others = itemsRef.current.filter((item) => item.key !== block.key);
-                          const sx = snapSpan(x - grabX, block.w, edgeLines(others, 'x'));
-                          const sy = snapSpan(y - grabY, block.h, edgeLines(others, 'y'));
+                          const width = pageWidth();
+                          const sx = snapSpan(x - grabX, block.w, edgeLines(others, 'x', width), width);
+                          const sy = snapSpan(y - grabY, block.h, edgeLines(others, 'y', POS_MAX), POS_MAX);
                           setLines((cur) => (cur.x === sx.guide && cur.y === sy.guide ? cur : { x: sx.guide, y: sy.guide }));
                           placeBlock(block.key, sx.at, sy.at);
                         },
@@ -573,7 +935,7 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
                     >
                       front
                     </button>
-                    {block.type !== 'text' && (
+                    {isMedia(block.type) && (
                       <button
                         type="button"
                         className={QUIET}
@@ -586,84 +948,136 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
                     <button type="button" className={QUIET} onPointerDown={(e) => e.stopPropagation()} onClick={() => remove(block.key)}>
                       remove
                     </button>
+                    {canTurn(block.type) && (
+                      <button
+                        type="button"
+                        aria-label="rotate"
+                        className={cn(QUIET, 'cursor-grab touch-none')}
+                        onPointerDown={(e) => {
+                          setPicked(block.key);
+                          const box = e.currentTarget.parentElement?.parentElement?.getBoundingClientRect();
+                          if (!box) return;
+                          const cx = box.left + box.width / 2;
+                          const cy = box.top + box.height / 2;
+                          dragOnPage(
+                            e,
+                            (_x, _y, clientX, clientY) => {
+                              let deg = (Math.atan2(clientY - cy, clientX - cx) * 180) / Math.PI + 90;
+                              deg = ((deg + 180) % 360 + 360) % 360 - 180;
+                              deg = Math.round(deg / 15) * 15;
+                              if (deg <= -180) deg = 180;
+                              turn(block.key, deg);
+                            },
+                            () => {}
+                          );
+                        }}
+                      >
+                        rotate
+                      </button>
+                    )}
                   </div>
-                  <div className="h-full w-full overflow-hidden border border-primaryBlue bg-background">
-                    <BlockBody
-                      block={block}
-                      live
-                      focus={focusKey === block.key}
-                      onHtml={(html) => touch((list) => list.map((item) => (item.key === block.key ? { ...item, html } : item)))}
+                  <div className="relative h-full w-full" style={block.r ? { transform: `rotate(${block.r}deg)` } : undefined}>
+                    <div
+                      className={cn(
+                        'h-full w-full overflow-hidden border border-primaryBlue',
+                        block.type === 'line' || block.type === 'box' || block.type === 'border' ? 'bg-transparent' : 'bg-background'
+                      )}
+                      style={block.type === 'text' && block.bg ? { background: block.bg } : undefined}
+                    >
+                      {block.type === 'line' || block.type === 'box' || block.type === 'border' ? (
+                        <Shape block={block} />
+                      ) : (
+                        <BlockBody
+                          block={block}
+                          live
+                          focus={focusKey === block.key}
+                          onHtml={(html) => touch((list) => list.map((item) => (item.key === block.key ? { ...item, html } : item)))}
+                          onChoose={
+                            block.type === 'image' && !block.src
+                              ? () => pick('image/*', block.x, block.y, block.key)
+                              : undefined
+                          }
+                        />
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="scale width"
+                      className="absolute -right-1 bottom-3 top-3 z-10 w-2 cursor-ew-resize border-x border-primaryStroke bg-background"
+                      onPointerDown={(e) => {
+                        const page = pageRef.current;
+                        if (!page) return;
+                        const origin = page.getBoundingClientRect();
+                        const start = e.clientX - origin.left;
+                        const originW = block.w;
+                        const floor = minBox(block.type);
+                        dragOnPage(
+                          e,
+                          (x, y) => {
+                            const others = itemsRef.current.filter((item) => item.key !== block.key);
+                            const width = pageWidth();
+                            const d = localDelta(x - start, y - (e.clientY - origin.top), block.r);
+                            const edge = snapEdge(block.x + originW + d.x, edgeLines(others, 'x', width), block.x + floor.w, Math.min(block.x + SIZE_MAX, width));
+                            setLines((cur) => (cur.x === edge.guide && cur.y === null ? cur : { x: edge.guide, y: null }));
+                            sizeBlock(block.key, edge.at - block.x, block.h);
+                          },
+                          () => setLines({ x: null, y: null })
+                        );
+                      }}
+                    />
+                    <button
+                      type="button"
+                      aria-label="scale height"
+                      className="absolute -bottom-1 left-3 right-3 z-10 h-2 cursor-ns-resize border-y border-primaryStroke bg-background"
+                      onPointerDown={(e) => {
+                        const page = pageRef.current;
+                        if (!page) return;
+                        const origin = page.getBoundingClientRect();
+                        const start = e.clientY - origin.top;
+                        const originH = block.h;
+                        const floor = minBox(block.type);
+                        dragOnPage(
+                          e,
+                          (x, y) => {
+                            const others = itemsRef.current.filter((item) => item.key !== block.key);
+                            const d = localDelta(x - (e.clientX - origin.left), y - start, block.r);
+                            const edge = snapEdge(block.y + originH + d.y, edgeLines(others, 'y', POS_MAX), block.y + floor.h, Math.min(block.y + SIZE_MAX, POS_MAX));
+                            setLines((cur) => (cur.x === null && cur.y === edge.guide ? cur : { x: null, y: edge.guide }));
+                            sizeBlock(block.key, block.w, edge.at - block.y);
+                          },
+                          () => setLines({ x: null, y: null })
+                        );
+                      }}
+                    />
+                    <button
+                      type="button"
+                      aria-label="scale"
+                      className="absolute -bottom-1.5 -right-1.5 z-20 h-3 w-3 cursor-nwse-resize border border-primaryStroke bg-background"
+                      onPointerDown={(e) => {
+                        const page = pageRef.current;
+                        if (!page) return;
+                        const origin = page.getBoundingClientRect();
+                        const startX = e.clientX - origin.left;
+                        const startY = e.clientY - origin.top;
+                        const originW = block.w;
+                        const originH = block.h;
+                        const floor = minBox(block.type);
+                        dragOnPage(
+                          e,
+                          (x, y) => {
+                            const others = itemsRef.current.filter((item) => item.key !== block.key);
+                            const width = pageWidth();
+                            const d = localDelta(x - startX, y - startY, block.r);
+                            const right = snapEdge(block.x + originW + d.x, edgeLines(others, 'x', width), block.x + floor.w, Math.min(block.x + SIZE_MAX, width));
+                            const bottom = snapEdge(block.y + originH + d.y, edgeLines(others, 'y', POS_MAX), block.y + floor.h, Math.min(block.y + SIZE_MAX, POS_MAX));
+                            setLines((cur) => (cur.x === right.guide && cur.y === bottom.guide ? cur : { x: right.guide, y: bottom.guide }));
+                            sizeBlock(block.key, right.at - block.x, bottom.at - block.y);
+                          },
+                          () => setLines({ x: null, y: null })
+                        );
+                      }}
                     />
                   </div>
-                  <button
-                    type="button"
-                    aria-label="scale width"
-                    className="absolute -right-1 bottom-3 top-3 z-10 w-2 cursor-ew-resize border-x border-primaryStroke bg-background"
-                    onPointerDown={(e) => {
-                      const page = pageRef.current;
-                      if (!page) return;
-                      const origin = page.getBoundingClientRect();
-                      const start = e.clientX - origin.left;
-                      const originW = block.w;
-                      dragOnPage(
-                        e,
-                        (x) => {
-                          const others = itemsRef.current.filter((item) => item.key !== block.key);
-                          const edge = snapEdge(block.x + originW + (x - start), edgeLines(others, 'x'), block.x + W_MIN, Math.min(block.x + SIZE_MAX, POS_MAX));
-                          setLines((cur) => (cur.x === edge.guide && cur.y === null ? cur : { x: edge.guide, y: null }));
-                          sizeBlock(block.key, edge.at - block.x, block.h);
-                        },
-                        () => setLines({ x: null, y: null })
-                      );
-                    }}
-                  />
-                  <button
-                    type="button"
-                    aria-label="scale height"
-                    className="absolute -bottom-1 left-3 right-3 z-10 h-2 cursor-ns-resize border-y border-primaryStroke bg-background"
-                    onPointerDown={(e) => {
-                      const page = pageRef.current;
-                      if (!page) return;
-                      const origin = page.getBoundingClientRect();
-                      const start = e.clientY - origin.top;
-                      const originH = block.h;
-                      dragOnPage(
-                        e,
-                        (_x, y) => {
-                          const others = itemsRef.current.filter((item) => item.key !== block.key);
-                          const edge = snapEdge(block.y + originH + (y - start), edgeLines(others, 'y'), block.y + H_MIN, Math.min(block.y + SIZE_MAX, POS_MAX));
-                          setLines((cur) => (cur.x === null && cur.y === edge.guide ? cur : { x: null, y: edge.guide }));
-                          sizeBlock(block.key, block.w, edge.at - block.y);
-                        },
-                        () => setLines({ x: null, y: null })
-                      );
-                    }}
-                  />
-                  <button
-                    type="button"
-                    aria-label="scale"
-                    className="absolute -bottom-1.5 -right-1.5 z-20 h-3 w-3 cursor-nwse-resize border border-primaryStroke bg-background"
-                    onPointerDown={(e) => {
-                      const page = pageRef.current;
-                      if (!page) return;
-                      const origin = page.getBoundingClientRect();
-                      const startX = e.clientX - origin.left;
-                      const startY = e.clientY - origin.top;
-                      const originW = block.w;
-                      const originH = block.h;
-                      dragOnPage(
-                        e,
-                        (x, y) => {
-                          const others = itemsRef.current.filter((item) => item.key !== block.key);
-                          const right = snapEdge(block.x + originW + (x - startX), edgeLines(others, 'x'), block.x + W_MIN, Math.min(block.x + SIZE_MAX, POS_MAX));
-                          const bottom = snapEdge(block.y + originH + (y - startY), edgeLines(others, 'y'), block.y + H_MIN, Math.min(block.y + SIZE_MAX, POS_MAX));
-                          setLines((cur) => (cur.x === right.guide && cur.y === bottom.guide ? cur : { x: right.guide, y: bottom.guide }));
-                          sizeBlock(block.key, right.at - block.x, bottom.at - block.y);
-                        },
-                        () => setLines({ x: null, y: null })
-                      );
-                    }}
-                  />
                 </div>
               ))}
             </div>
@@ -694,13 +1108,23 @@ export function AboutCanvas({ name, edit, scope, css, boxClass, initial = null }
           {status && <span className="text-sm text-textTertiary">{status}</span>}
         </div>
       )}
-      <section id={scope} className={`${boxClass} h-[32rem] min-w-0`} aria-label={`about ${name}`}>
+      <section id={scope} className={cn(boxClass, 'h-[32rem] min-w-0 p-0')} aria-label={`about ${name}`}>
         {css && <style>{css}</style>}
-        <div className="relative shrink-0" style={pageStyle}>
-          {items.length === 0 && <p className="text-sm text-textTertiary">nothing on the page yet.</p>}
+        <div ref={previewPageRef} className="relative w-full shrink-0" style={{ height: POS_MAX }}>
+          {items.length === 0 && <p className="p-4 text-sm text-textTertiary">nothing on the page yet.</p>}
           {items.map((block) => (
-            <div key={block.key} className="absolute overflow-hidden" style={{ left: block.x, top: block.y, width: block.w, height: block.h, zIndex: block.z + 1 }}>
-              <BlockBody block={block} live={false} focus={false} onHtml={() => {}} />
+            <div
+              key={block.key}
+              className="absolute"
+              style={{ left: block.x, top: block.y, width: block.w, height: block.h, zIndex: block.z + 1, transform: block.r ? `rotate(${block.r}deg)` : undefined }}
+            >
+              <div className="h-full w-full overflow-hidden" style={block.type === 'text' && block.bg ? { background: block.bg } : undefined}>
+                {block.type === 'line' || block.type === 'box' || block.type === 'border' ? (
+                  <Shape block={block} />
+                ) : (
+                  <BlockBody block={block} live={false} focus={false} onHtml={() => {}} />
+                )}
+              </div>
             </div>
           ))}
         </div>

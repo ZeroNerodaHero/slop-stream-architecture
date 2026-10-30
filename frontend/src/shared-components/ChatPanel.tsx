@@ -51,7 +51,9 @@ import { chatFacesAtom, hideBotsAtom, setHideBots } from '@/infra/atoms/settings
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
+import { LiveMark } from '@/shared-components/LiveMark';
 import { panelClassName } from '@/shared-components/Panel';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { compressChatImage } from '@/infra/picture';
 import { cn } from '@/utils/cn';
 
@@ -125,6 +127,7 @@ function Speaker({ line }: { line: ChatLine }) {
   );
 }
 
+/** What stands after the name: the ✓, the group badges, the red broadcast mark for the streamer's own lines (the friends bar's, LiveMark.tsx; the word comes up at once on hover, Tooltip.tsx), `you` on ours. */
 function Marks({ line, mine }: { line: ChatLine; mine: boolean }) {
   return (
     <>
@@ -136,7 +139,11 @@ function Marks({ line, mine }: { line: ChatLine; mine: boolean }) {
       {line.groups.map((group) => (
         <Badge key={group.name} group={group} />
       ))}
-      {line.streamer && <span className="bg-increase/15 px-1 text-xs uppercase text-increase">streamer</span>}
+      {line.streamer && (
+        <Tooltip content="streamer">
+          <LiveMark role="img" aria-label="streamer" data-streamer-mark />
+        </Tooltip>
+      )}
       {mine && <span className="bg-primaryBlue/15 px-1 text-xs uppercase text-primaryBlue">you</span>}
     </>
   );
