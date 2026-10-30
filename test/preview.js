@@ -303,9 +303,9 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
   let publisher;
   await step('live: the share link has ?s=<session>', async () => {
     publisher = await fresh();
+    // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
+    await publisher.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), NAME);
     await publisher.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
-    await publisher.fill('#name', NAME);
-    await publisher.press('#name', 'Tab');
     await publisher.waitForFunction(() => !document.querySelector('#start').disabled);
     await publisher.click('#start');
     await waitStatus(publisher, /^live$/);

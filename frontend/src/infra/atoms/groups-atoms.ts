@@ -26,6 +26,8 @@ export const myGroupsAtom = atom((get) => get(groupsAtom).filter((g) => g.mine))
 export const myServersAtom = atom<Server[] | undefined>(undefined);
 
 let askingServers: Promise<void> | null = null;
+/** Bumped by `forgetMyServers`: an ask carries the stamp it was made under and lands only while that is still the current one. */
+let serversStamp = 0;
 
 /** Cheap, so every mount asks: `mine` depends on who is logged in, and others make groups too. */
 export async function loadGroups(): Promise<void> {
@@ -38,28 +40,35 @@ export async function loadGroups(): Promise<void> {
   }
 }
 
-/** The sidebar's list again, with who is live in each now. One ask at a time; a second caller waits for the first. Nobody: an empty list, no request. */
+/** The sidebar's list again, with who is live in each now. One ask at a time; a second caller waits for the first. An answer for a login since forgotten is dropped. Nobody: an empty list, no request. */
 export function loadMyServers(): Promise<void> {
   if (!store.get(meAtom)) {
     store.set(myServersAtom, []);
     return Promise.resolve();
   }
   if (!askingServers) {
+    const stamp = serversStamp;
     askingServers = api
       .explore()
-      .then((found) => store.set(myServersAtom, found.yours))
+      .then((found) => {
+        if (stamp === serversStamp) store.set(myServersAtom, found.yours);
+      })
       .catch(() => {
-        // the api is away: what is shown stays, the next open asks again
+        // the api is away: what is shown stays (nothing, for a first ask that failed: the column must not wait on it), the next open asks again
+        if (stamp === serversStamp && store.get(myServersAtom) === undefined) store.set(myServersAtom, []);
       })
       .finally(() => {
-        askingServers = null;
+        // a later login's ask may be in flight by now: only this stamp's own is cleared
+        if (stamp === serversStamp) askingServers = null;
       });
   }
   return askingServers;
 }
 
-/** The login changed (in, out, renamed): the servers shown were theirs. */
+/** The login changed (in, out, renamed): the servers shown were theirs, and so is an ask still in flight: its answer is dropped and the next ask is a fresh one. */
 export function forgetMyServers() {
+  serversStamp += 1;
+  askingServers = null;
   store.set(myServersAtom, undefined);
 }
 

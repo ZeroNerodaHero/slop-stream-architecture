@@ -170,7 +170,7 @@ const body = async (res) => {
   const fresh = async () => (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();
   const ROOM = 'authroom' + RUN;
 
-  await step('the login page: the user panel shows me, go live has my name locked in', async () => {
+  await step('the login page: the user panel shows me, go live streams as me', async () => {
     const p = await fresh();
     await p.goto(`${BASE}/login?next=/live`, { waitUntil: 'domcontentloaded' });
     await p.fill('#auth-name', NAME);
@@ -178,7 +178,9 @@ const body = async (res) => {
     await p.click('#auth-submit');
     await p.waitForFunction((n) => document.querySelector('#me')?.textContent === n, NAME, { timeout: 10000 });
     expect(p.url().endsWith('/live'), `landed on ${p.url()}`);
-    await p.waitForFunction((n) => document.querySelector('#name')?.value === n && document.querySelector('#name').disabled, NAME, { timeout: 10000 });
+    // no name box on /live: a login streams as its account, so its chat room opens on arrival (the panel, not the dashed placeholder)
+    await p.waitForSelector('#chat[data-phase]', { timeout: 10000 });
+    expect((await p.$('#pick-name')) === null, 'the page asks a login to pick a name');
     await p.close();
     return 'then /live';
   });

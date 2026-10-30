@@ -94,6 +94,7 @@ INSERT INTO groups (name, badge, color, about) VALUES ('bot', 'BOT', '#5865f2', 
 - chat: every line wears its speaker's badges after the name (and the `✓`), before the `streamer` mark. the header has a robot button, `hide bots`: on, the bots' lines are off the screen and it reads `N hidden`; a room with nothing but bots says so instead of `nothing yet`. a setting of this browser (`settings.hideBots`, localstorage), so it holds from room to room and across reloads; the settings tab has the same switch as two cards, `bots in chat`.
 - the user modal, `groups` tab (between profile and security): `your badges` (the name and what it wears), the list (badge, name, members, who made it, about; `join` or `leave`, `automatic` on `bot`, `delete` asks in a dialog (`#group-delete-<name>-confirm`, yes or no) for the maker), and `make a group` (name, badge, a colour from eight swatches or the colour box, about; a live preview of the badge as it will look in chat). without a login the list shows and the rest points to the security tab.
 - the profile tab's card wears the badges too, each a way to the groups tab.
+- the sidebar (`follows.md`) lists the groups you are in under the group icon, each as its square with the number of members live on its corner, the row a way to the group's page; the settings tab says where in the column the list goes, and whether it shows at all.
 
 ## tests
 

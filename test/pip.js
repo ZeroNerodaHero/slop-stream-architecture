@@ -81,8 +81,9 @@ async function drag(p, sel, dx, dy) {
   const publish = async (name) => {
     const ctx = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] });
     const p = await ctx.newPage();
+    // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
+    await p.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), name);
     await p.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
-    await p.fill('#name', name);
     await p.waitForFunction(() => !document.querySelector('#start').disabled);
     await p.click('#start');
     await waitStatus(p, /^live$/);

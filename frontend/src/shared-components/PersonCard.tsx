@@ -110,8 +110,10 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
   useEffect(() => {
     if (asks) void loadPeek(person.name);
   }, [person.name, asks]);
-  const bio = person.bio ?? peek?.bio ?? '';
-  const presence = person.presence ?? peek?.presence;
+  // a renamed login's old lines: the name's row is a free name's for the hold, so its word and status are not this person's
+  const known = person.verified && peek && !peek.verified ? undefined : peek;
+  const bio = person.bio ?? known?.bio ?? '';
+  const presence = person.presence ?? known?.presence;
   const root = at.host.ownerDocument.documentElement;
   const w = root.clientWidth;
   const h = root.clientHeight;

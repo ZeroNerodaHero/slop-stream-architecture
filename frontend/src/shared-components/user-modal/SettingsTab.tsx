@@ -82,25 +82,33 @@ function SidebarLists() {
   const choices = useAtomValue(sidebarListsAtom);
   const shown = choices.filter((c) => c.on).length;
   const rows = useRef<HTMLUListElement | null>(null);
-  const drag = useRef<{ list: SidebarList; y: number; from: number; pitch: number } | null>(null);
+  const drag = useRef<{ pointerId: number; list: SidebarList; y: number; from: number; pitch: number } | null>(null);
   const [dragging, setDragging] = useState<SidebarList | null>(null);
 
   function startDrag(e: PointerEvent<HTMLButtonElement>, list: SidebarList, from: number) {
-    const items = rows.current ? Array.from(rows.current.children) : [];
+    // the primary button only, and one drag at a time: a second finger on another handle takes nothing over
+    if (e.button !== 0 || drag.current) return;
+    const ul = rows.current;
+    const items = ul ? Array.from(ul.children) : [];
     const first = items[0]?.getBoundingClientRect();
     const second = items[1]?.getBoundingClientRect();
-    if (!first) return;
+    if (!ul || !first) return;
     e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
+    // the list holds the pointer, not the handle: a row dragged down is taken out of the document and put back
+    // by the reorder, and the browser lets go of a node that leaves. the drag ends with the capture, whatever ends it
+    ul.setPointerCapture(e.pointerId);
     // a row and the gap after it: the distance between two rows' tops, or the one row's height when there is one
-    drag.current = { list, y: e.clientY, from, pitch: second ? second.top - first.top : first.height };
+    drag.current = { pointerId: e.pointerId, list, y: e.clientY, from, pitch: second ? second.top - first.top : first.height };
     setDragging(list);
   }
-  function moveDrag(e: PointerEvent<HTMLButtonElement>) {
+  function moveDrag(e: PointerEvent<HTMLUListElement>) {
     const d = drag.current;
-    if (d) moveSidebarList(d.list, d.from + Math.round((e.clientY - d.y) / d.pitch));
+    // the drag is the pointer's that began it: another finger resting on the list neither steers nor ends it
+    if (!d || e.pointerId !== d.pointerId) return;
+    moveSidebarList(d.list, d.from + Math.round((e.clientY - d.y) / d.pitch));
   }
-  function endDrag() {
+  function endDrag(e: PointerEvent<HTMLUListElement>) {
+    if (drag.current && e.pointerId !== drag.current.pointerId) return;
     drag.current = null;
     setDragging(null);
   }
@@ -111,7 +119,15 @@ function SidebarLists() {
   }
 
   return (
-    <ul id="sidebar-lists" ref={rows} className="flex flex-col gap-2">
+    <ul
+      id="sidebar-lists"
+      ref={rows}
+      onPointerMove={moveDrag}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onLostPointerCapture={endDrag}
+      className="flex flex-col gap-2"
+    >
       {choices.map(({ list, on }, i) => {
         const { icon: Icon, label, detail } = SIDEBAR_LIST_WORDS[list];
         const last = on && shown <= 1;
@@ -133,9 +149,6 @@ function SidebarLists() {
               aria-keyshortcuts="ArrowUp ArrowDown"
               title="drag to move"
               onPointerDown={(e) => startDrag(e, list, i)}
-              onPointerMove={moveDrag}
-              onPointerUp={endDrag}
-              onPointerCancel={endDrag}
               onKeyDown={(e) => keyMove(e, list, i)}
               className={cn(
                 'shrink-0 touch-none select-none border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke hover:text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none',
@@ -165,7 +178,11 @@ function SidebarLists() {
                 down
               </button>
               <label
-                className={cn('flex items-center gap-2 text-xs font-semibold uppercase tracking-wider', on ? 'text-primaryBlue' : 'text-textTertiary', last ? 'cursor-default' : 'cursor-pointer')}
+                className={cn(
+                  'flex items-center gap-2 text-xs font-semibold uppercase tracking-wider',
+                  on ? 'text-primaryBlue' : 'text-textTertiary',
+                  last ? 'cursor-default' : 'cursor-pointer'
+                )}
                 title={last ? 'one list stays' : undefined}
               >
                 <input
@@ -438,13 +455,7 @@ export function SettingsTab() {
         <p className="mt-1 text-textSecondary">the messages the pages send and get: the events socket, the chat, the video setup. the last 1000, with a filter.</p>
         <div className="mt-4 flex flex-wrap items-center gap-4">
           <label className="flex items-center gap-2 text-base">
-            <input
-              id="inspector"
-              type="checkbox"
-              checked={inspectorOn}
-              onChange={(e) => setInspectorEnabled(e.target.checked)}
-              className={CHECKBOX}
-            />
+            <input id="inspector" type="checkbox" checked={inspectorOn} onChange={(e) => setInspectorEnabled(e.target.checked)} className={CHECKBOX} />
             keep the messages
           </label>
           {inspectorOn && (

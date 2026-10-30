@@ -195,8 +195,7 @@ export function ProfileTab() {
   const named = isValidName(name) && !isDummyName(name);
 
   function commitNick() {
-    const was = nickAtFocus.current;
-    if (store.get(nickAtom) !== was) identityChanged('nick', was);
+    if (store.get(nickAtom) !== nickAtFocus.current) identityChanged('nick');
   }
 
   return (

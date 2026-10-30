@@ -164,10 +164,7 @@ export const publishStatsAtom = atom<StreamStats | null>(null);
 export const publishMessageAtom = atom('camera off');
 /** Always clean: lowercase, trimmed. Set through `setStreamName`. */
 export const streamNameAtom = atom('');
-/**
- * The room the streamer's own chat panel is in: the name box as last settled (blur, enter,
- * start), never the keystrokes. Following every keystroke would join a room per letter typed.
- */
+/** The room the streamer's own chat panel is in: the name as settled on arrival, on an identity change, or at start. */
 export const chatRoomAtom = atom('');
 export const ownerAtom = atom<Owner | null>(null);
 /** How many are watching my stream, as video tells me. `null` while not live. */
@@ -267,7 +264,7 @@ export function setStreamName(raw: string) {
   store.set(streamNameAtom, cleanName(raw));
 }
 
-/** The name box settled (blur, enter): the chat moves to that room and its profile is loaded. */
+/** The name settled: the chat moves to that room and its thumbnails and pictures are loaded. */
 export function commitStreamName(): Promise<void> {
   const name = store.get(streamNameAtom);
   store.set(chatRoomAtom, isValidName(name) ? name : '');
@@ -275,9 +272,10 @@ export function commitStreamName(): Promise<void> {
 }
 
 /**
- * The name box on arrival: a login streams as itself, anyone else starts from
- * the name in the header (and can still type another). Back from the corner with the
- * stream still up there is nothing to fill in: the name, its room and its profile stayed.
+ * The name on arrival. There is no name box on the page: a login streams as itself, anyone
+ * else as the nick in the corner panel (the profile tab is where a guest picks one). Back from
+ * the corner with the stream still up there is nothing to settle: the name, its room and its
+ * profile stayed.
  */
 export async function enterLivePage(): Promise<void> {
   if (store.get(isPublishingAtom)) return;
@@ -285,8 +283,7 @@ export async function enterLivePage(): Promise<void> {
   await loadMe();
   if (generation !== liveGeneration) return; // left before the answer: nothing to fill in
   const me = store.get(meAtom);
-  if (me) setStreamName(me);
-  else if (!store.get(streamNameAtom)) setStreamName(store.get(nickAtom));
+  setStreamName(me ?? store.get(nickAtom));
   await commitStreamName();
 }
 
@@ -687,7 +684,7 @@ async function imageRatio(url: string): Promise<number> {
 export async function addImage(file: File): Promise<void> {
   const name = store.get(streamNameAtom);
   if (!isValidName(name)) {
-    store.set(imageStatusAtom, 'type a name first');
+    store.set(imageStatusAtom, 'pick a name first');
     return;
   }
   if (store.get(imageStatusAtom) === 'uploading') return;
@@ -1065,19 +1062,15 @@ export async function loadProfile(): Promise<void> {
 }
 
 /**
- * The name box follows the identity when the user modal or the corner panel changes it (a
- * login, a logout, a new nick) while this page is open and nothing is on air: the page seeds
- * the box once, on arrival, and would otherwise go live under the old name while the chat
- * speaks as the new. With `was` (a nick change), only a box that still held the old nick
- * follows: a name typed by hand is theirs.
+ * The name follows the identity when the user modal or the corner panel changes it (a login,
+ * a logout, a new nick) while this page is open and nothing is on air: the page settles the
+ * name once, on arrival, and would otherwise go live under the old name while the chat speaks
+ * as the new.
  */
-export function followIdentityOnLivePage(was?: string) {
+export function followIdentityOnLivePage() {
   if (location.pathname.replace(/\/$/, '') !== '/live' || store.get(isPublishingAtom)) return;
-  const me = store.get(meAtom);
-  const name = me ?? cleanName(store.get(nickAtom));
-  const box = store.get(streamNameAtom);
-  if (!isValidName(name) || box === name) return;
-  if (was !== undefined && !me && box !== cleanName(was)) return;
+  const name = store.get(meAtom) ?? cleanName(store.get(nickAtom));
+  if (name === store.get(streamNameAtom)) return;
   setStreamName(name);
   void commitStreamName();
 }
@@ -1090,7 +1083,7 @@ export function followIdentityOnLivePage(was?: string) {
 export async function addStreamThumb(file: File): Promise<void> {
   const name = store.get(streamNameAtom);
   if (!isValidName(name)) {
-    store.set(thumbStatusAtom, 'type a name first');
+    store.set(thumbStatusAtom, 'pick a name first');
     return;
   }
   if (store.get(thumbStatusAtom) === 'saving') return;

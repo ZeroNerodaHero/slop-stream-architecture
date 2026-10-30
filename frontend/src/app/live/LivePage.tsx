@@ -3,17 +3,12 @@ import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { api } from '@/infra/api';
-import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
   addStreamThumb,
   cameraAtom,
-  canShareScreenAtom,
-  canStartAtom,
   chatRoomAtom,
-  commitStreamName,
   copyWatchUrl,
   enterLivePage,
-  goLive,
   isPublishingAtom,
   leaveLivePage,
   micLevelReader,
@@ -32,17 +27,12 @@ import {
   reorderSource,
   resizeSource,
   sceneAtom,
-  screenShareSupported,
-  screensAtom,
   screenStreamAtom,
   selectedSourceAtom,
   selectSource,
-  setStreamName,
-  shareScreen,
   sourcesAtom,
   startCamera,
   startPublishPip,
-  stopLive,
   streamNameAtom,
   streamThumbsAtom,
   thumbStatusAtom,
@@ -52,8 +42,6 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
-import { SCREEN_SLOTS } from '@/infra/relay';
-import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Mixer } from '@/shared-components/live/Mixer';
 import { Presets } from '@/shared-components/live/Presets';
@@ -78,7 +66,6 @@ export function LivePage() {
   const tone = useAtomValue(publishToneAtom);
   const name = useAtomValue(streamNameAtom);
   const chatRoom = useAtomValue(chatRoomAtom);
-  const canStart = useAtomValue(canStartAtom);
   const publishing = useAtomValue(isPublishingAtom);
   const phase = useAtomValue(publishPhaseAtom);
   const stats = useAtomValue(publishStatsAtom);
@@ -87,11 +74,8 @@ export function LivePage() {
   const thumbStatus = useAtomValue(thumbStatusAtom);
   const owner = useAtomValue(ownerAtom);
   const viewers = useAtomValue(liveViewersAtom);
-  const me = useAtomValue(meAtom);
   const chatSide = useAtomValue(chatSideAtom);
   const chatOpen = useAtomValue(chatModalOpenAtom);
-  const screens = useAtomValue(screensAtom);
-  const canShare = useAtomValue(canShareScreenAtom);
   const scene = useAtomValue(sceneAtom);
   const sources = useAtomValue(sourcesAtom);
   const previewSlot = useAtomValue(previewSlotAtom);
@@ -115,7 +99,7 @@ export function LivePage() {
     }
   };
 
-  // Mount only: open the camera (or find it still on, back from the corner), fill the name box,
+  // Mount only: open the camera (or find it still on, back from the corner), settle the name,
   // and on the way out leave a stream that is up to the corner player; with nothing on air,
   // release the camera. The tab closing is the stream's own listener (publish-atoms), since the
   // stream can outlive this page.
@@ -176,56 +160,11 @@ export function LivePage() {
               {publishing && <Mixer />}
             </div>
           </div>
+          {/* the stream's status and who is watching. no name box: a login streams as its account, a guest
+              as the nick in the corner panel; start and stop are the foot of the sources panel */}
           <div className="flex flex-wrap items-baseline gap-x-4">
             <StatusLine text={message} tone={tone} />
             <ViewerCount id="viewers" count={viewers} className="text-lg text-textSecondary" />
-          </div>
-
-          <div className="my-3 flex flex-wrap items-center gap-3">
-            <label htmlFor="name" className="sr-only">
-              your name
-            </label>
-            <input
-              id="name"
-              value={name}
-              onChange={(e) => setStreamName(e.target.value)}
-              onBlur={() => void commitStreamName()}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.currentTarget.blur();
-              }}
-              disabled={publishing || !!me}
-              title={me ? 'you stream as your account' : undefined}
-              placeholder="your name"
-              autoComplete="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              maxLength={32}
-              className="w-full max-w-[320px] border border-primaryStroke bg-backgroundSecondary px-4 py-3 text-textPrimary disabled:opacity-60"
-            />
-            {!publishing && (
-              <Button id="start" variant="primary" disabled={!canStart} onClick={() => void goLive()}>
-                start
-              </Button>
-            )}
-            {publishing && (
-              <Button id="stop" variant="danger" onClick={() => stopLive()}>
-                stop
-              </Button>
-            )}
-            {/* one screen (or window, or tab) per press, up to SCREEN_SLOTS at once; the same as the sources' +.
-                not on phones: no screen capture there */}
-            {publishing && screenShareSupported && (
-              <button
-                id="share-screen"
-                type="button"
-                disabled={!canShare}
-                title={screens.length >= SCREEN_SLOTS ? `${SCREEN_SLOTS} screens at most` : undefined}
-                className="text-base font-semibold text-primaryBlue disabled:opacity-40"
-                onClick={() => void shareScreen()}
-              >
-                share screen
-              </button>
-            )}
           </div>
 
           {watchUrl && (
@@ -250,7 +189,7 @@ export function LivePage() {
               id="chat"
               className="flex h-full min-h-[200px] flex-1 items-center justify-center border border-dashed border-secondaryStroke p-6 text-center text-textTertiary"
             >
-              type your name and the chat opens here. once you are live, your lines are marked.
+              pick a name and the chat opens here. once you are live, your lines are marked.
             </aside>
           )}
         </ChatSlot>

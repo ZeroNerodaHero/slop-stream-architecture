@@ -176,6 +176,8 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     // the card comes 200ms after the pointer lands on a row of the open panel, whole: the row holds everything it says. the word is on the face
     await fanPage.hover(`#friend-${STAR}`);
     await fanPage.waitForSelector(`#friends-peek-${STAR}[data-presence="streaming"]`, { timeout: 5000 });
+    // the status rides on the list answer the open started, which may land after the card: wait for it before reading
+    await fanPage.waitForFunction(([sel, status]) => (document.querySelector(sel)?.textContent || '').includes(status), [`#friends-peek-${STAR}`, STATUS], { timeout: 10000 });
     // textContent runs the lines together: no word boundaries to lean on. the word is in it for a reader
     const text = (await fanPage.textContent(`#friends-peek-${STAR}`)) || '';
     expect(text.includes(STATUS) && /streaming/.test(text), `the card says "${text}"`);

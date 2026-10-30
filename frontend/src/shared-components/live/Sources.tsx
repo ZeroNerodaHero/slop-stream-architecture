@@ -289,10 +289,60 @@ function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
 }
 
 /**
+ * The foot of the panel: start, or stop once the stream is up, the width of the panel. A guest
+ * with no name yet is told so under it, with the way to the profile tab, where the name is
+ * picked (there is no name box on this page: a login streams as its account, anyone else as
+ * the nick in the corner panel). While live, `share screen` beside stop, the same press as the
+ * `+` menu's `screen or window`; not where the browser has no screen capture (phones).
+ */
+function StartStop() {
+  const publishing = useAtomValue(isPublishingAtom);
+  const canStart = useAtomValue(canStartAtom);
+  const canShare = useAtomValue(canShareScreenAtom);
+  const named = isValidName(useAtomValue(streamNameAtom));
+  return (
+    <div className="flex flex-col gap-2 p-2">
+      {publishing ? (
+        <Button id="stop" variant="danger" className="w-full" onClick={() => stopLive()}>
+          stop
+        </Button>
+      ) : (
+        <Button id="start" variant="primary" className="w-full" disabled={!canStart} onClick={() => void goLive()}>
+          start
+        </Button>
+      )}
+      {!publishing && !named && (
+        <button
+          id="pick-name"
+          type="button"
+          className="text-xs text-textTertiary underline-offset-2 hover:text-textPrimary hover:underline"
+          onClick={() => openUserModal('profile')}
+        >
+          pick a name first
+        </button>
+      )}
+      {publishing && screenShareSupported && (
+        <button
+          id="share-screen"
+          type="button"
+          disabled={!canShare}
+          title={canShare ? undefined : `${SCREEN_SLOTS} screens at most`}
+          className="text-sm font-semibold text-primaryBlue disabled:opacity-40"
+          onClick={() => void shareScreen()}
+        >
+          share screen
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
  * The sources, beside the preview: the camera, the shared screens and the pictures, top of
  * the stack first (the row order is the reverse of the array, the way a layers panel reads).
  * Each row selects its layer; the eye puts it on or off the stream; the arrows move it through
- * the stack; `×` stops a share or removes a picture. The `+` adds. Folded, it is a rail.
+ * the stack; `×` stops a share or removes a picture. The `+` adds. Folded, it is a rail, with
+ * start (or stop) still at its foot.
  */
 export function Sources() {
   const sources = useAtomValue(sourcesAtom);
@@ -305,7 +355,7 @@ export function Sources() {
       aria-label="sources"
       className={cn('shrink-0 transition-[width] duration-150 motion-reduce:transition-none', open ? 'w-full lg:w-60' : 'w-full lg:w-auto')}
     >
-      <Collapsible id="sources-panel" title="sources" open={open} onToggle={() => setLivePanel('sources', !open)} aside={<AddMenu />}>
+      <Collapsible id="sources-panel" title="sources" open={open} onToggle={() => setLivePanel('sources', !open)} aside={<AddMenu />} footer={<StartStop />}>
         {sources.length === 0 ? (
           <p className="px-3 py-3 text-sm text-textTertiary">the camera shows up here once it is on</p>
         ) : (

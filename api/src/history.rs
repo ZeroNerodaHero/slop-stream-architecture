@@ -44,13 +44,15 @@ const SEARCH_LIMIT: i64 = 50;
 
 /// A line's columns, with its speaker's picture as it is now (`LineRow`). The row keeps no
 /// picture: a read joins `streamers` for it, by account for a verified line (so a rename
-/// keeps it) and by name for the streamer's. A nick's line joins nothing: it is nobody's
+/// keeps it for the hold's length; after it, the letter: the name the page fetches by leads
+/// elsewhere) and by name for the streamer's. A nick's line joins nothing: it is nobody's
 /// picture, whoever holds that name later. A line out of redis gets the same from
 /// `chat::with_faces`, so the two sides of the window agree.
 const LINE_COLUMNS: &str = "l.id, l.at, l.speaker, l.user_id, l.\"text\", l.streamer, l.verified, l.badges, l.image,
                             (EXTRACT(EPOCH FROM COALESCE(u.avatar_at, r.avatar_at)))::bigint";
 const LINE_TABLES: &str = "chat_lines l
                            LEFT JOIN streamers u ON l.verified AND u.id = l.user_id
+                               AND (u.name = l.speaker OR EXISTS (SELECT 1 FROM held_names h WHERE h.user_id = u.id AND h.name = l.speaker AND h.until > now()))
                            LEFT JOIN streamers r ON l.streamer AND NOT l.verified AND r.name = l.speaker";
 
 pub(crate) fn routes() -> Router<ChatState> {
@@ -424,5 +426,54 @@ mod tests {
         assert!(at_seq("1-").is_none());
         assert!(at_seq("").is_none());
         assert!(at_seq("1729-0 ").is_none());
+    }
+
+    /// The one line in `room`, read the way a scroll reads it (`pg_older`, so `LINE_TABLES`), and its face.
+    async fn face_of_the_line_in(pool: &PgPool, room: &str, speaker: &str) -> Option<i64> {
+        let (at, seq) = at_seq("1729000000001-0").unwrap();
+        let lines = pg_older(pool, room, at, seq, PAGE).await.unwrap();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].from, speaker, "a line keeps the name it was said under");
+        lines[0].avatar
+    }
+
+    /// The postgres side of `chat::with_faces`'s rule, so the two sides of the window agree: a
+    /// verified line wears its account's face while the name it was said under is the account's
+    /// or held for it; after the hold, the letter, whoever holds that name later.
+    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored a_stored_lines_face` against a throwaway postgres (see auth.rs's `test_db`).
+    #[tokio::test]
+    #[ignore]
+    async fn a_stored_lines_face_follows_a_rename_for_the_hold_and_then_is_the_letter() {
+        use crate::auth::tests::{row, test_db};
+
+        let pool = test_db().await;
+        let run = std::process::id();
+        let room = format!("room6-{run}");
+        let alice_name = format!("alice6-{run}");
+        let alice = row(&pool, &alice_name, Some("alice-hash")).await;
+        sqlx::query("UPDATE streamers SET avatar_at = to_timestamp(1690000000) WHERE id = $1").bind(alice).execute(&pool).await.unwrap();
+        store(&pool, &room, "1729000000000-0", &alice_name, Some(alice), "hi", None, false, true, &[]).await.unwrap();
+        // her own name: her picture
+        assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, Some(1690000000));
+
+        // what change_name leaves behind: the row is bob, and alice is held for it. the face follows
+        let bob_name = format!("bob6-{run}");
+        sqlx::query("UPDATE streamers SET name = $2, renamed_at = now() WHERE id = $1").bind(alice).bind(&bob_name).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO held_names (name, user_id, until) VALUES ($1, $2, now() + interval '30 days')")
+            .bind(&alice_name)
+            .bind(alice)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, Some(1690000000), "the face follows a rename for the hold's length");
+
+        // the hold runs out: the old name is nobody's, so the line is the letter, not an <img> that 404s
+        sqlx::query("UPDATE held_names SET until = now() - interval '1 second' WHERE name = $1").bind(&alice_name).execute(&pool).await.unwrap();
+        assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, None, "after the hold the old name is not the account's: the letter");
+
+        // a stranger signs up as alice and uploads a picture: still the letter, not theirs and not bob's
+        let stranger = row(&pool, &alice_name, Some("stranger-hash")).await;
+        sqlx::query("UPDATE streamers SET avatar_at = to_timestamp(1700000000) WHERE id = $1").bind(stranger).execute(&pool).await.unwrap();
+        assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, None, "a stranger on the freed name is nobody's picture on the account's words");
     }
 }

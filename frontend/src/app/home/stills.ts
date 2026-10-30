@@ -22,10 +22,12 @@ export interface StillPictures {
   /** The one picture this name shows until the document is loaded again. */
   src: (name: string, thumbs: readonly number[]) => string;
   /**
-   * The picture was not there. A custom one that 404s falls back to one camera frame.
-   * A camera frame that is not written yet gets a new url a few times, then stops.
+   * The picture at `failed` was not there. A custom one that 404s falls back to one camera frame.
+   * A camera frame that is not written yet gets a new url a few times, then stops. A `failed`
+   * the entry has already moved past (another card of this name reported it first) is answered
+   * with the current url and counts for nothing, so two cards share one budget and one picture.
    */
-  missed: (name: string) => string | null;
+  missed: (name: string, failed: string) => string | null;
   /** The picture arrived, so the next misses are a fresh wait for a frame, not the tail of this one. */
   loaded: (name: string) => void;
 }
@@ -56,9 +58,14 @@ export function stillPictures(urls: StillUrls): StillPictures {
     return still.kind === 'custom' ? urls.custom(name, still.id) : urls.camera(name, still.token);
   }
 
-  function missed(name: string): string | null {
+  function missed(name: string, failed: string): string | null {
     const still = stills.get(name);
     if (!still) return null;
+    // the same name is on the page twice (the grid card and the followed card) and the other
+    // card reported this url first: hand over where the entry is, uncounted, or two cards
+    // spend two tries a round and are shown two pictures
+    const current = still.kind === 'custom' ? urls.custom(name, still.id) : urls.camera(name, still.token);
+    if (failed !== current) return current;
     if (still.kind === 'custom') {
       const camera: Still = { kind: 'camera', token: pagePick, tries: 0 };
       stills.set(name, camera);

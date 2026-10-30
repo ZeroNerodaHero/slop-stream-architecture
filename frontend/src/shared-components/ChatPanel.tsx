@@ -1,6 +1,6 @@
 import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine, RiRobot2Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type SyntheticEvent, type UIEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type SyntheticEvent, type UIEvent, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 
 import { api, messageOf, type Owner } from '@/infra/api';
@@ -22,7 +22,10 @@ import {
   chatResultsAtom,
   chatResultsForAtom,
   chatScrollAtom,
+  chatShakeAtom,
   chatSpeakerAtom,
+  chatTierAtom,
+  chatWaitAtom,
   clearResults,
   closeChat,
   hiddenBotLinesAtom,
@@ -87,6 +90,26 @@ function onKey(e: ReactKeyboardEvent<HTMLInputElement>) {
     e.preventDefault();
     sendChat();
   }
+}
+
+/** Whole seconds until `until` (unix ms), counting down; 0 once it has passed, or when there is nothing to wait for. */
+function useCountdown(until: number): number {
+  // the clock as an external store: the seconds left are the snapshot, and a timer says "look again" four times a second until the wait is over
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      if (until <= Date.now()) return () => {};
+      const timer = setInterval(() => {
+        onChange();
+        if (Date.now() >= until) clearInterval(timer);
+      }, 250);
+      return () => clearInterval(timer);
+    },
+    [until]
+  );
+  return useSyncExternalStore(subscribe, () => {
+    const left = until - Date.now();
+    return left > 0 ? Math.ceil(left / 1000) : 0;
+  });
 }
 
 /**
@@ -405,6 +428,10 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
   const pinned = useAtomValue(chatPinnedAtom);
   const behind = useAtomValue(chatBehindAtom);
   const scrollTick = useAtomValue(chatScrollAtom);
+  const tier = useAtomValue(chatTierAtom);
+  const shake = useAtomValue(chatShakeAtom);
+  // a send refused for the rate: the seconds until the next line may go, on the send button
+  const wait = useCountdown(useAtomValue(chatWaitAtom));
 
   // The inputs that change while mounted: the owner (going live) and the login.
   // Nothing opens until /api/me has answered, so the first hello is the right one.
@@ -575,7 +602,8 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
       >
         {lines.length === 0 && <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>}
         {lines.map((line) => {
-          const mine = line.from === myName;
+          // ours by name and by kind, since a nick may wear a free room's name: the streamer's lines wear `streamer`, a login's `verified`, a nick's neither
+          const mine = line.from === myName && (asStreamer ? line.streamer : me ? line.verified : !line.verified && !line.streamer);
           if (server) return <ServerLine key={line.id} line={line} mine={mine} faces={faces} />;
           return (
             <p
@@ -685,8 +713,23 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
                 autoComplete="off"
                 className="h-10 min-w-0 flex-1 border border-primaryStroke bg-background px-3 text-base"
               />
-              <Button id="chat-send" variant="primary" className="h-10 shrink-0 px-4 text-base" disabled={!canSend} onClick={sendChat}>
-                send
+              {/* refused for the rate: the button goes red and counts down to the next line, and shakes at each try meanwhile. still a button, so a try can shake it */}
+              <Button
+                id="chat-send"
+                variant={wait > 0 ? 'danger' : 'primary'}
+                className="h-10 shrink-0 px-4 text-base tabular-nums"
+                disabled={!canSend}
+                title={wait > 0 ? `${tier.words}. the next in ${wait}s` : undefined}
+                data-wait={wait > 0 ? wait : undefined}
+                onClick={sendChat}
+              >
+                {wait > 0 ? (
+                  <span key={shake} className="inline-block motion-safe:animate-shake">
+                    {wait}s
+                  </span>
+                ) : (
+                  'send'
+                )}
               </Button>
             </div>
           </>

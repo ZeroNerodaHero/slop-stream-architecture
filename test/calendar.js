@@ -63,9 +63,9 @@ const iso = (ms) => new Date(ms).toISOString();
   let a = await ctxA.newPage();
 
   const goLive = async (page) => {
+    // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
+    await page.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), NAME);
     await page.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#name', { timeout: 15000 });
-    await page.fill('#name', NAME);
     await page.waitForFunction(() => !document.querySelector('#start')?.disabled, null, { timeout: 20000 });
     await page.click('#start');
     await page.waitForFunction(() => /^\s*live\b/i.test(document.querySelector('#status')?.textContent || ''), null, { timeout: 20000 });

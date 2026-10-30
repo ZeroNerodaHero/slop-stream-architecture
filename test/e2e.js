@@ -191,10 +191,10 @@ function tap(page, tag) {
       return browser.version();
     });
 
-    await step('2. publisher: open /live, fill #name, wait #start enabled', async () => {
+    await step('2. publisher: open /live as the nick, wait #start enabled', async () => {
+      // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
+      await publisher.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), NAME);
       await publisher.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded', timeout: T.pageReady });
-      await publisher.locator('#name').waitFor({ state: 'visible', timeout: T.pageReady });
-      await publisher.fill('#name', NAME);      // name first: the page may keep #start disabled until a name exists
       await pollPage(publisher,
         () => { const b = document.querySelector('#start'), s = document.querySelector('#status');
                 return b ? { disabled: b.disabled, status: s ? s.textContent.trim() : null } : { missing: '#start' }; },

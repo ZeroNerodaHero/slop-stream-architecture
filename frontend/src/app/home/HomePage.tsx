@@ -88,7 +88,7 @@ function Thumb({ name, thumbs }: { name: string; thumbs: number[] }) {
       className={cn('absolute inset-0 h-full w-full object-cover', missing && 'opacity-0')}
       onError={() => {
         if (wait.current !== null) return;
-        const next = stills.missed(name);
+        const next = stills.missed(name, src);
         if (!next) {
           setMissing(true);
           return;

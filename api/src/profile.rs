@@ -203,6 +203,9 @@ async fn lift_object(s: &AppState, from: &str, to: &str) -> Result<Option<Vec<u8
 }
 
 async fn get_avatar(State(s): State<AppState>, Name(name): Name) -> Result<Response, ApiError> {
+    // a name held after a rename answers for the name it became (docs/ids.md): a chat line keeps
+    // the name it was said under, and the page fetches its face by that name for the hold's length
+    let name = auth::renamed_to(&s.db, &name).await?.unwrap_or(name);
     // avatar_at set, or bytes still in the row from before the bucket: there is a picture.
     let row: Option<(Uuid, Option<Vec<u8>>)> = sqlx::query_as(
         "SELECT id, avatar FROM streamers WHERE name = $1 AND (avatar IS NOT NULL OR avatar_at IS NOT NULL)",

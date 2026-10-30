@@ -46,10 +46,12 @@ function recordPcs() {
   const api = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true, timeout: 5000 });
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
   const ctx = async () => { const c = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] }); await c.addInitScript(recordPcs); return c; };
+  // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
+  const asNick = (page, name) => page.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), name);
   const publisher = async (name) => {
     const page = await (await ctx()).newPage();
+    await asNick(page, name);
     await page.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
-    await page.fill('#name', name);
     await page.waitForFunction(() => !document.querySelector('#start').disabled);
     await page.click('#start');
     await waitStatus(page, /^live$/);
@@ -84,7 +86,6 @@ function recordPcs() {
     const t0 = Date.now();
     await p.reload({ waitUntil: 'domcontentloaded' });
     await waitStatus(w, /ended/, 5000);
-    await p.fill('#name', 'r2');
     await p.waitForFunction(() => !document.querySelector('#start').disabled);
     await p.click('#start');
     await waitStatus(p, /^live$/);
@@ -152,8 +153,8 @@ function recordPcs() {
   // 5. start, stop fast, start again
   await step('start/stop/start race is clean', async () => {
     const page = await (await ctx()).newPage();
+    await asNick(page, 'r5');
     await page.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
-    await page.fill('#name', 'r5');
     await page.waitForFunction(() => !document.querySelector('#start').disabled);
     await page.click('#start');
     await sleep(150);

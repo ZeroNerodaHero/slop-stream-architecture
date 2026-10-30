@@ -183,8 +183,9 @@ const SCREEN_CORNER = { x: 0.647, y: 0.631, w: 0.333, h: 0.333 };
   const track = {};
 
   await step(`publisher goes live as ${NAME}: the sources and the camera layer are there before start, the share button and the mixer come with the stream`, async () => {
+    // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
+    await pub.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), NAME);
     await pub.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
-    await pub.fill('#name', NAME);
     await pub.waitForFunction(() => !document.querySelector('#start').disabled);
     expect((await pub.$('#share-screen')) === null, 'the share button shows before going live');
     expect((await pub.$('#mixer')) === null, 'the mixer shows before going live');

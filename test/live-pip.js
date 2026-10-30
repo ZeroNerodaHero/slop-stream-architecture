@@ -100,9 +100,11 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     const ctx = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] });
     return ctx.newPage();
   };
+  // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
+  const asNick = (p, name) => p.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), name);
   const goLive = async (p, name) => {
+    await asNick(p, name);
     await p.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
-    await p.fill('#name', name);
     await p.waitForFunction(() => !document.querySelector('#start').disabled);
     await p.click('#start');
     await waitStatus(p, /^live$/);
@@ -124,8 +126,8 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
   });
 
   await step(`${ME} goes live; the picture in picture button is on the preview only once live`, async () => {
+    await asNick(s, ME);
     await s.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
-    await s.fill('#name', ME);
     await s.waitForFunction(() => !document.querySelector('#start').disabled);
     expect((await s.$('#live-pip')) === null, 'the picture in picture button is up before start');
     expect((await s.$('#live-mic')) === null, 'the mic meter is up before start');
@@ -348,7 +350,7 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await s.click('#go-live');
     await s.waitForURL('**/live', { timeout: 10000 });
     expect((await s.$('#pip-player')) !== null, 'the watched player went before start');
-    await s.fill('#name', ME);
+    // the name is the nick still: nothing to fill in
     await s.waitForFunction(() => !document.querySelector('#start').disabled);
     await s.click('#start');
     await s.waitForSelector('#pip-player', { state: 'detached', timeout: 5000 });

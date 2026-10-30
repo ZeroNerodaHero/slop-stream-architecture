@@ -4,11 +4,10 @@
  * shows while I am not live (the offline picture and the line under the word), and where
  * else to find me (the links, docs/socials.md), edited on my own page under the player. All saved under the name I am, which is the login, else the nick
  * lowercased (every valid nick is a valid name). The user modal's profile tab edits the
- * first three and the corner panel shows the picture. Its own atoms, not the go live page's:
- * those follow the name box there and are reset when that page is left, which would blank a
- * status being typed in the modal. The one thing the two share is the picture's version,
- * bridged below; the links are bridged to the watch page the same way, so my own page
- * follows a save.
+ * first three and the corner panel shows the picture. Its own atoms, not the go live page's
+ * (that page keeps only the thumbnails and the picture library, under the name it streams as,
+ * and resets them when it is left). The links are bridged to the watch page below, so my own
+ * page follows a save.
  */
 
 import { atom } from 'jotai';
@@ -346,17 +345,17 @@ export async function saveMySocials(): Promise<void> {
 
 /**
  * I am somebody else now. The profile reloads for the new name and the go live page's name
- * box follows. After a login or a logout that is all: the chat panel reconnects on its own
- * when `me` changes. After a committed new nick (`was` the one before), the chat is told once
+ * follows (it has no box of its own). After a login or a logout that is all: the chat panel
+ * reconnects on its own when `me` changes. After a committed new nick, the chat is told once
  * here, never per keystroke: a reconnect replaces the history and blips the count for the
- * whole room; and the name box follows only if it still held the old nick.
+ * whole room.
  */
-export function identityChanged(change: 'login' | 'nick', was?: string) {
+export function identityChanged(change: 'login' | 'nick') {
   void loadMyProfile();
   if (change === 'nick') reconnectChat();
   // the events socket is who the browser is: a login or logout changes that too, not only a nick
   reconnectEvents();
-  followIdentityOnLivePage(change === 'nick' ? was : undefined);
+  followIdentityOnLivePage();
 }
 
 // my name changed on another device, or in another tab of this browser (the tab that did it

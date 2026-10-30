@@ -1,5 +1,7 @@
 // The text chat: two viewers talk, history survives a reload, 501 chars is refused,
-// the streamer's lines are marked. Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node chat.js
+// the streamer's lines are marked, their name wears the person card on hover, a nick's
+// third line in a minute waits on the send button and the chat refuses it on any socket.
+// Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node chat.js
 const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const ROOM = 'chattest' + Date.now().toString(36).slice(-4);
@@ -103,8 +105,9 @@ async function say(page, text) {
 
   await step('the streamer\'s lines are marked', async () => {
     const s = await fresh();
+    // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
+    await s.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), ROOM);
     await s.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
-    await s.fill('#name', ROOM);
     await s.waitForFunction(() => !document.querySelector('#start').disabled, null, { timeout: 15000 });
     await s.click('#start');
     await s.waitForFunction(() => /^live$/i.test(document.querySelector('#status').textContent.trim()), null, { timeout: 20000 });
@@ -121,11 +124,53 @@ async function say(page, text) {
     await a.hover(`#chat-lines p[data-streamer="true"] [data-from="${ROOM}"]`);
     await a.waitForSelector(`#chat-peek-${ROOM}[data-presence]`, { timeout: 10000 });
     const text = (await a.textContent(`#chat-peek-${ROOM}`)) || '';
-    expect(text.includes(ROOM), `the card says "${text}"`);
+    if (!text.includes(ROOM)) throw new Error(`the card says "${text}"`);
     // off the name: the card goes
     await a.mouse.move(5, 5);
     await a.waitForSelector(`#chat-peek-${ROOM}`, { state: 'detached', timeout: 5000 });
     return `"${text}"`;
+  });
+
+  await step('two lines a minute without an account: the third waits on the button, and the chat agrees across sockets', async () => {
+    const c = await fresh();
+    await c.goto(`${BASE}/watch/${ROOM}`, { waitUntil: 'domcontentloaded' });
+    await joinAs(c, 'carol');
+    await say(c, 'carol one');
+    await say(c, 'carol two');
+    await c.waitForFunction(() => /carol two/.test(document.querySelector('#chat-lines').textContent), null, { timeout: 10000 });
+    const before = (await lines(c)).length;
+    // the page's own bucket is empty: the line stays in the box, nothing is sent, and the send
+    // button is a red countdown to the next token (a few ms under 30s by now)
+    await c.fill('#chat-text', 'carol three');
+    await c.press('#chat-text', 'Enter');
+    await c.waitForSelector('#chat-send[data-wait]', { timeout: 5000 });
+    const shown = (await c.textContent('#chat-send')).trim();
+    const draft = await c.inputValue('#chat-text');
+    await sleep(700);
+    const after = (await lines(c)).length;
+    const secs = Number((shown.match(/^(\d+)s$/) || [])[1]);
+    if (!(secs > 0 && secs <= 30) || draft !== 'carol three' || after !== before) throw new Error(`button "${shown}", box "${draft}", lines ${before}->${after}`);
+    // the chat's bucket is the nick's, not the socket's: a second socket as carol is told to wait, and how long
+    const raw = await c.evaluate(
+      ({ room }) =>
+        new Promise((resolve) => {
+          const ws = new WebSocket(`wss://${location.host}/chat/${room}`);
+          ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', nick: 'Carol' }));
+          ws.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'history') ws.send(JSON.stringify({ type: 'say', text: 'carol again' }));
+            if (msg.type === 'error' || (msg.type === 'message' && msg.text === 'carol again')) {
+              ws.close();
+              resolve(msg);
+            }
+          };
+          setTimeout(() => resolve({ type: 'timeout' }), 8000);
+        }),
+      { room: ROOM }
+    );
+    if (raw.error !== 'slow down' || !(raw.wait > 0 && raw.wait <= 30000)) throw new Error(`the second socket got ${JSON.stringify(raw)}`);
+    await c.close();
+    return `button "${shown}", the second socket is told to wait ${raw.wait} ms`;
   });
 
   await browser.close();

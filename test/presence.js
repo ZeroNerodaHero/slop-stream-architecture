@@ -173,9 +173,8 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
 
   await step(`go live as ${NAME}: streaming on both, the watcher plays on the push, one \`watch\` call`, async () => {
     const calls = watchCalls;
+    // no name box on /live: the page streams as the nick the panel set above
     await a.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
-    await a.waitForSelector('#name', { timeout: 15000 });
-    await a.fill('#name', NAME);
     await a.waitForFunction(() => !document.querySelector('#start')?.disabled, null, { timeout: 20000 });
     await a.click('#start');
     await a.waitForFunction(() => /^\s*live\b/i.test(document.querySelector('#status')?.textContent || ''), null, { timeout: 20000 });

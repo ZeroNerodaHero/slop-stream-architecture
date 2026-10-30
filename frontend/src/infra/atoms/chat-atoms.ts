@@ -74,6 +74,31 @@ export const chatNoticeAtom = atom('');
 /** True while this socket speaks as the streamer. */
 export const chatAsStreamerAtom = atom(false);
 
+/**
+ * The chat's two token buckets (chat.rs `ANON_TIER`, `LOGIN_TIER`): `burst` lines at once,
+ * refilling at `burst` per `window` ms, one token every `window / burst`. The page keeps the same
+ * bucket (`Session.bucket`), so a line over the rate is refused here, at once, with how long until
+ * the next may go, and nothing is sent. The chat has the bucket itself, one per speaker per room
+ * and shared by every socket of theirs, and the last word: its `slow down` carries the same wait,
+ * and the page's bucket is set to agree (another tab spent the tokens, or this page was reloaded).
+ */
+export interface ChatTier {
+  burst: number;
+  window: number;
+  /** The rule in words, for the send button's title while it counts down. */
+  words: string;
+}
+const TIERS: { anon: ChatTier; login: ChatTier } = {
+  anon: { burst: 2, window: 60_000, words: '2 lines a minute without an account' },
+  login: { burst: 3, window: 10_000, words: '3 lines in 10 seconds' }
+};
+/** The tier of this browser's lines: a login's or the streamer's, else a nick's. */
+export const chatTierAtom = atom<ChatTier>((get) => (get(meAtom) || get(chatAsStreamerAtom) ? TIERS.login : TIERS.anon));
+/** When the next line may go, unix ms, set by a refused send; 0 when none was refused or the wait is over. The send button counts it down. */
+export const chatWaitAtom = atom(0);
+/** Bumped by every refused send, so the countdown on the button shakes again. */
+export const chatShakeAtom = atom(0);
+
 /** The lines on screen: every line, or without the bots' while `hideBotsAtom` is on. */
 export const visibleChatLinesAtom = atom((get) => {
   const lines = get(chatLinesAtom);
@@ -125,10 +150,47 @@ interface Session {
   owner: Owner | null;
   ws: WebSocket | null;
   timer: ReturnType<typeof setTimeout> | null;
+  /** The page's copy of the chat's bucket for this speaker in this room: the tokens in it as of `at` (unix ms). A reconnect keeps it, as the chat does; a new session is a new room or a new name, and a full one. */
+  bucket: { tokens: number; at: number };
 }
 
 let session: Session | null = null;
 let notice: ReturnType<typeof setTimeout> | null = null;
+
+/** The tier a session's lines are on: the streamer's grant or a login is the login's, a nick the other. */
+function tierOf(owner: Owner | null): ChatTier {
+  return owner || store.get(meAtom) ? TIERS.login : TIERS.anon;
+}
+
+function newSession(name: string, server: string | null, owner: Owner | null): Session {
+  return { name, server, owner, ws: null, timer: null, bucket: { tokens: tierOf(owner).burst, at: Date.now() } };
+}
+
+/** A token out of the page's bucket, or how long (ms) until there is one. */
+function takeToken(current: Session): number {
+  const { burst, window } = tierOf(current.owner);
+  const now = Date.now();
+  const b = current.bucket;
+  b.tokens = Math.min(burst, b.tokens + ((now - b.at) * burst) / window);
+  b.at = now;
+  if (b.tokens >= 1) {
+    b.tokens -= 1;
+    return 0;
+  }
+  return Math.ceil(((1 - b.tokens) * window) / burst);
+}
+
+/** The chat refused a line this bucket let through: its wait is the truth, and the bucket is set so one token is back in exactly that long. */
+function agreeWithChat(current: Session, wait: number) {
+  const { burst, window } = tierOf(current.owner);
+  current.bucket = { tokens: Math.max(0, 1 - (wait * burst) / window), at: Date.now() };
+}
+
+/** A refused send: the button counts `wait` ms down, and shakes. */
+function refuse(wait: number) {
+  store.set(chatWaitAtom, Date.now() + wait);
+  store.set(chatShakeAtom, store.get(chatShakeAtom) + 1);
+}
 
 /**
  * A server's channels, apart from the one on screen: each one's live tail (KEEP_LINES at most)
@@ -185,7 +247,7 @@ export function removeChatImage(id: string) {
 export function openChat(name: string, owner: Owner | null = null) {
   if (session && session.name === name && sameOwner(session.owner, owner) && session.ws) return;
   closeChat(false);
-  session = { name, server: null, owner, ws: null, timer: null };
+  session = newSession(name, null, owner);
   connect();
 }
 
@@ -203,7 +265,7 @@ export function openServerChat(server: string, show: string) {
     closeChat(true);
     takeShelf(server);
   } else closeChat(false);
-  session = { name: `${server}/${EVERY_CHANNEL}`, server, owner: null, ws: null, timer: null };
+  session = newSession(`${server}/${EVERY_CHANNEL}`, server, null);
   showChannel(show);
   connect();
 }
@@ -293,7 +355,7 @@ export function reconnectChat() {
   if (!session) return;
   const { name, server, owner } = session;
   closeChat(false);
-  session = { name, server, owner, ws: null, timer: null };
+  session = newSession(name, server, owner);
   connect();
 }
 
@@ -315,6 +377,7 @@ export function closeChat(reset = true) {
     store.set(chatDraftAtom, '');
     store.set(chatImagesAtom, []);
     store.set(chatNoticeAtom, '');
+    store.set(chatWaitAtom, 0);
     if (wasServer) {
       shelf = null;
       channel = '';
@@ -333,6 +396,12 @@ export function sendChat() {
     return;
   }
   if (session.server && !channel) return;
+  // the bucket, before anything goes out: over the rate, the line stays in the box and the button says how long
+  const wait = takeToken(session);
+  if (wait > 0) {
+    refuse(wait);
+    return;
+  }
   // `image` is the first, so a chat that only knows one picture still keeps that one
   const say: Record<string, unknown> = images.length ? { type: 'say', text, image: images[0], images } : { type: 'say', text };
   // a server socket is every channel: the line says which
@@ -377,7 +446,7 @@ function connect() {
     if (current.server) sendSince();
   };
   ws.onmessage = (e) => {
-    let msg: { type?: string; messages?: ChatLine[]; count?: number; error?: string; channel?: string } & Partial<ChatLine>;
+    let msg: { type?: string; messages?: ChatLine[]; count?: number; error?: string; wait?: number; channel?: string } & Partial<ChatLine>;
     try {
       msg = JSON.parse(String(e.data));
     } catch {
@@ -408,6 +477,14 @@ function connect() {
       const refused = /nick|account/.test(msg.error);
       const gone = /no such channel|not a server|that name is reserved|bad name/.test(msg.error);
       showNotice(msg.error, refused || gone ? 8000 : 3000);
+      // the chat's bucket said no where this page's said yes (another tab spent the tokens, or
+      // this page was reloaded): its wait is the truth, and the button counts it down
+      if (msg.error === 'slow down') {
+        const tier = tierOf(current.owner);
+        const wait = typeof msg.wait === 'number' && msg.wait > 0 ? msg.wait : tier.window / tier.burst;
+        agreeWithChat(current, wait);
+        refuse(wait);
+      }
       // the oldest line out was not taken: back into the box, unless something new is being typed
       if (/slow down|chat is (busy|down)/.test(msg.error)) {
         const lost = inFlight.shift();

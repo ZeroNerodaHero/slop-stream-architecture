@@ -54,11 +54,19 @@ const KEEP_LINES: usize = 500;
 pub(crate) const MAX_TEXT_CHARS: usize = 500;
 const MAX_NICK_CHARS: usize = 24;
 const ROOM_TTL_SECS: i64 = 7 * 24 * 3600;
-/// Token bucket per socket: this many lines at once, then one per second.
-const RATE_BURST: f64 = 5.0;
-const RATE_PER_SEC: f64 = 1.0;
-/// Sockets one ip may hold in one room. The rate limit and the count are per
-/// socket; this keeps "open fifty tabs" from being fifty of each.
+/// The token bucket a line is paid from (`Limiter`), by who is speaking. Without an account:
+/// two lines at once, then one every thirty seconds. A login, or the one who went live (the
+/// grant is as good as a name in their own room): three at once, then one every 3⅓ seconds.
+/// The pages hold the same two numbers (chat-atoms.ts `TIERS`) and refuse a line over them
+/// before it is sent; the bucket itself is here, and the chat has the last word.
+const ANON_TIER: Tier = Tier { burst: 2.0, window: Duration::from_secs(60) };
+const LOGIN_TIER: Tier = Tier { burst: 3.0, window: Duration::from_secs(10) };
+/// How often the buckets that have refilled are forgotten: a full bucket is the same as none.
+const SWEEP_EVERY: Duration = Duration::from_secs(60);
+/// The words of a refused line. The frame carries the wait too (`slow`).
+const SLOW_DOWN: &str = "slow down";
+/// Sockets one ip may hold in one room. The count is per socket; this keeps "open
+/// fifty tabs" from being fifty of it. (The rate is per speaker, so tabs share that.)
 const MAX_SOCKETS_PER_IP: usize = 8;
 /// The history is up to 200 lines in one frame: a slow link gets longer for that one.
 const HISTORY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -76,6 +84,8 @@ pub(crate) struct ChatState {
     pub(crate) redis: ConnectionManager,
     client: redis::Client,
     rooms: Arc<Mutex<HashMap<String, Room>>>,
+    /// The token buckets, one per speaker per room, shared by every socket.
+    limiter: Arc<Limiter>,
     /// Flips to true on SIGTERM. Every socket then sends a close frame and leaves.
     shutdown: watch::Receiver<bool>,
     /// Nicks starting with this are the fake streams' names: nobody's to wear.
@@ -184,6 +194,15 @@ enum Out<'a> {
     #[serde(rename = "count")]
     ChannelCount { channel: &'a str, count: usize },
     Error { error: &'a str },
+    /// `slow down`, with how long until the next line may go, in ms: the same `error` frame,
+    /// so a page that does not read `wait` sees the words alone. The panel's countdown is this.
+    #[serde(rename = "error")]
+    Slow { error: &'a str, wait: u64 },
+}
+
+/// The frame for a line the bucket refused: `slow down`, and the wait rounded up to the ms.
+fn slow(wait: Duration) -> Out<'static> {
+    Out::Slow { error: SLOW_DOWN, wait: (wait.as_secs_f64() * 1000.0).ceil() as u64 }
 }
 
 pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
@@ -198,6 +217,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         redis,
         client,
         rooms: Arc::new(Mutex::new(HashMap::new())),
+        limiter: Arc::new(Limiter::new()),
         shutdown,
         dummy_prefix,
         persist,
@@ -383,18 +403,24 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
 /// The picture of the name on the line, as it is now (its upload time, the `?v=`): the account's
 /// for a login (by id, so a rename keeps it), the room's for its streamer, nobody's for a nick,
 /// whoever's name it happens to be. Read at the say, not the hello, so a picture changed
-/// mid-chat is on the next line. The database not answering is a line with no face until it
-/// is read back (`with_faces`): a say does not fail for a picture.
+/// mid-chat is on the next line. The database not answering, or not in 2 s (awaited on the
+/// socket: bounded like `remember`'s insert), is a line with no face until it is read back
+/// (`with_faces`): a say does not fail for a picture.
 async fn face_now(db: &PgPool, room: &str, w: &Who) -> Option<i64> {
-    let looked: Result<Option<Option<i64>>, sqlx::Error> = match (w.user_id, w.streamer) {
-        (Some(id), _) => sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE id = $1").bind(id).fetch_optional(db).await,
-        (None, true) => sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE name = $1").bind(&w.from).fetch_optional(db).await,
+    let query = match (w.user_id, w.streamer) {
+        (Some(id), _) => sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE id = $1").bind(id),
+        (None, true) => sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE name = $1").bind(&w.from),
         (None, false) => return None,
     };
+    let looked: Result<Result<Option<Option<i64>>, sqlx::Error>, _> = tokio::time::timeout(Duration::from_secs(2), query.fetch_optional(db)).await;
     match looked {
-        Ok(version) => version.flatten(),
-        Err(e) => {
+        Ok(Ok(version)) => version.flatten(),
+        Ok(Err(e)) => {
             log::warn!("{room}: cannot read the picture of {}: {e}", w.from);
+            None
+        }
+        Err(_) => {
+            log::warn!("{room}: reading the picture of {} timed out", w.from);
             None
         }
     }
@@ -419,8 +445,10 @@ fn face_key(line: &Line) -> Option<FaceKey<'_>> {
 /// The faces on lines read back out of redis, as they are now. A line keeps who said it, not
 /// what they looked like: the picture is the row's today, the way history.rs joins `streamers`
 /// for a line from postgres, so a new picture shows on every old line and a rename keeps a
-/// login's. One query for the batch, none for a batch of nicks. A row that is gone is no face,
-/// as the join would have it. The database not answering leaves what each line was written
+/// login's for the hold's length; after it, the letter: the name leads elsewhere, and the page
+/// fetches the picture by it. One query for the batch, none for a batch of nicks. A row that is
+/// gone is no face, as the join would have it. The database not answering, or not in 2 s (the
+/// history frame and a `since` fill await this on the socket), leaves what each line was written
 /// with: faces a little behind, and the history still comes with the database down.
 pub(crate) async fn with_faces<'a>(db: &PgPool, lines: impl IntoIterator<Item = &'a mut Line>) {
     let lines: Vec<&mut Line> = lines.into_iter().collect();
@@ -436,24 +464,39 @@ pub(crate) async fn with_faces<'a>(db: &PgPool, lines: impl IntoIterator<Item = 
     if ids.is_empty() && names.is_empty() {
         return;
     }
-    let rows: Vec<(Uuid, String, Option<i64>)> = match sqlx::query_as(
-        "SELECT id, name, (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE id = ANY($1::uuid[]) OR name = ANY($2::text[])",
+    // each row with the names still held for it: a login's line wears the row's face only while
+    // `from` leads to the row, which is for as long as `/api/streamers/<from>/avatar` answers for it
+    let rows: Vec<(Uuid, String, Option<i64>, Vec<String>)> = match tokio::time::timeout(
+        Duration::from_secs(2),
+        sqlx::query_as(
+            "SELECT s.id, s.name, (EXTRACT(EPOCH FROM s.avatar_at))::bigint,
+                    ARRAY(SELECT h.name FROM held_names h WHERE h.user_id = s.id AND h.until > now())::text[]
+             FROM streamers s WHERE s.id = ANY($1::uuid[]) OR s.name = ANY($2::text[])",
+        )
+        .bind(&ids)
+        .bind(&names)
+        .fetch_all(db),
     )
-    .bind(&ids)
-    .bind(&names)
-    .fetch_all(db)
     .await
     {
-        Ok(rows) => rows,
-        Err(e) => {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(e)) => {
             log::warn!("cannot read the pictures for {} lines: {e}", lines.len());
+            return;
+        }
+        Err(_) => {
+            log::warn!("reading the pictures for {} lines timed out", lines.len());
             return;
         }
     };
     for line in lines {
         let face = match face_key(line) {
-            Some(FaceKey::Id(id)) => rows.iter().find(|(row, _, _)| *row == id).and_then(|(_, _, v)| *v),
-            Some(FaceKey::Name(name)) => rows.iter().find(|(_, row, _)| row == name).and_then(|(_, _, v)| *v),
+            Some(FaceKey::Id(id)) => rows
+                .iter()
+                .find(|(row, _, _, _)| *row == id)
+                .filter(|(_, name, _, held)| *name == line.from || held.iter().any(|h| *h == line.from))
+                .and_then(|(_, _, v, _)| *v),
+            Some(FaceKey::Name(name)) => rows.iter().find(|(_, row, _, _)| row == name).and_then(|(_, _, v, _)| *v),
             None => continue,
         };
         line.avatar = face;
@@ -497,7 +540,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
 
     // 3. the loop: lines from the room out, lines from the viewer in, a ping now
     //    and then so a peer that vanished without a close frame is found out
-    let mut rate = Rate::new();
+    let mut speaker = Speaker::of(who.as_ref(), &hello, &ip);
     let mut last_heard = Instant::now();
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay); // never a burst of pings
@@ -551,8 +594,8 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                         continue;
                     }
                 };
-                if !rate.allows() {
-                    let _ = send(&mut socket, &Out::Error { error: "slow down" }).await;
+                if let Err(wait) = s.limiter.take(&speaker, &name) {
+                    let _ = send(&mut socket, &slow(wait)).await;
                     continue;
                 }
                 // admitted while the database was down: whose line this would be is asked now
@@ -560,6 +603,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     match identify(&s, &name, &headers, &hello).await {
                         Ok(w) => {
                             who = Some(w);
+                            speaker = Speaker::of(who.as_ref(), &hello, &ip);
                             log::info!("{name}: the reader is {}", shown(&who));
                         }
                         Err(Unknown::Refused(why)) => {
@@ -585,29 +629,120 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
     log::info!("{name}: {} left", shown(&who));
 }
 
-/// Token bucket per socket: RATE_BURST lines at once, then RATE_PER_SEC. A token is paid
-/// before the database is asked anything about the line: a `say` the database cannot vouch
-/// for yet costs like any other dropped line, so a socket admitted read-only cannot turn
-/// every frame into a query.
-struct Rate {
-    bucket: f64,
-    last_refill: Instant,
+/// A token bucket's size and pace: `burst` lines at once, refilling at `burst` per `window`,
+/// one token every `window / burst`. Not a sliding window: three said at once are three gone,
+/// and the next goes when one token is back, not when the oldest of the three is a window old.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Tier {
+    burst: f64,
+    window: Duration,
 }
 
-impl Rate {
-    fn new() -> Self {
-        Rate { bucket: RATE_BURST, last_refill: Instant::now() }
+impl Tier {
+    fn per_sec(self) -> f64 {
+        self.burst / self.window.as_secs_f64()
+    }
+}
+
+/// One bucket: the tokens in it as of `at`. Refilled by the time passed whenever it is read.
+struct Bucket {
+    tokens: f64,
+    at: Instant,
+}
+
+impl Bucket {
+    fn new(tier: Tier, now: Instant) -> Self {
+        Bucket { tokens: tier.burst, at: now }
     }
 
-    fn allows(&mut self) -> bool {
-        let now = Instant::now();
-        self.bucket = (self.bucket + now.duration_since(self.last_refill).as_secs_f64() * RATE_PER_SEC).min(RATE_BURST);
-        self.last_refill = now;
-        if self.bucket < 1.0 {
-            return false;
+    fn refill(&mut self, tier: Tier, now: Instant) {
+        self.tokens = (self.tokens + now.duration_since(self.at).as_secs_f64() * tier.per_sec()).min(tier.burst);
+        self.at = now;
+    }
+
+    /// A token out, or how long until there is one.
+    fn take(&mut self, tier: Tier, now: Instant) -> Result<(), Duration> {
+        self.refill(tier, now);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            return Ok(());
         }
-        self.bucket -= 1.0;
-        true
+        Err(Duration::from_secs_f64((1.0 - self.tokens) / tier.per_sec()))
+    }
+
+    /// Would be full if read now: the same as no bucket at all.
+    fn is_full(&self, tier: Tier, now: Instant) -> bool {
+        self.tokens + now.duration_since(self.at).as_secs_f64() * tier.per_sec() >= tier.burst
+    }
+}
+
+/// Whose bucket a line is paid from. The speaker, not the socket: another tab, or a reconnect,
+/// draws on the same one, so neither is a fresh burst.
+#[derive(Hash, PartialEq, Eq, Clone, Debug)]
+enum Speaker {
+    /// A login, by account, so a rename keeps the bucket.
+    Account(Uuid),
+    /// The one who went live with no login: the room's name.
+    Streamer(String),
+    /// A nick: the ip and the nick, lowercased. One browser's tabs share the nick (localstorage),
+    /// and a household shares the ip, so two people behind one router with two nicks are two.
+    Nick(String, String),
+}
+
+impl Speaker {
+    /// Before the database has said who this is (`who` is None), the hello's nick on the anonymous
+    /// tier; a login whose cookie could not be read is that until its first accepted line.
+    fn of(who: Option<&Who>, hello: &Hello, ip: &str) -> Speaker {
+        match who {
+            Some(Who { user_id: Some(id), .. }) => Speaker::Account(*id),
+            Some(w) if w.streamer => Speaker::Streamer(w.from.clone()),
+            Some(w) => Speaker::Nick(ip.to_owned(), w.from.to_lowercase()),
+            None => Speaker::Nick(ip.to_owned(), hello.nick.as_deref().map(clean_nick).unwrap_or_default().to_lowercase()),
+        }
+    }
+
+    fn tier(&self) -> Tier {
+        match self {
+            Speaker::Account(_) | Speaker::Streamer(_) => LOGIN_TIER,
+            Speaker::Nick(..) => ANON_TIER,
+        }
+    }
+}
+
+/// The buckets, one per speaker per room, shared by every socket in the process. A token is paid
+/// before the database or redis is asked anything about the line: a `say` the database cannot
+/// vouch for yet costs like any other dropped line, so a socket admitted read-only cannot turn
+/// every frame into a query, and a refused line costs nothing but this lock. Nothing awaits under
+/// it, so it is std's. A bucket that has refilled is the same as none, so those are forgotten
+/// once a minute (`SWEEP_EVERY`): the map is the speakers of the last minute or so.
+struct Limiter {
+    inner: std::sync::Mutex<Buckets>,
+}
+
+struct Buckets {
+    by_speaker: HashMap<(Speaker, String), Bucket>,
+    swept: Instant,
+}
+
+impl Limiter {
+    fn new() -> Self {
+        Limiter { inner: std::sync::Mutex::new(Buckets { by_speaker: HashMap::new(), swept: Instant::now() }) }
+    }
+
+    /// A token out of this speaker's bucket in this room, or how long until there is one.
+    fn take(&self, speaker: &Speaker, room: &str) -> Result<(), Duration> {
+        self.take_at(speaker, room, Instant::now())
+    }
+
+    fn take_at(&self, speaker: &Speaker, room: &str, now: Instant) -> Result<(), Duration> {
+        let tier = speaker.tier();
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Buckets { by_speaker, swept } = &mut *inner;
+        if now.duration_since(*swept) >= SWEEP_EVERY {
+            *swept = now;
+            by_speaker.retain(|(speaker, _), bucket| !bucket.is_full(speaker.tier(), now));
+        }
+        by_speaker.entry((speaker.clone(), room.to_owned())).or_insert_with(|| Bucket::new(tier, now)).take(tier, now)
     }
 }
 
@@ -812,7 +947,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
     // 3. the loop: every channel's lines out with the channel on them, a say in for one of
     //    them, a ping now and then so a peer that vanished without a close frame is found out
     let mut last_seen: HashMap<Arc<str>, (u64, u64)> = HashMap::new();
-    let mut rate = Rate::new();
+    let mut speaker = Speaker::of(who.as_ref(), &hello, &ip);
     let mut last_heard = Instant::now();
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -881,8 +1016,8 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                         // the database whether the channel is there, so it costs a token like a line
                         let channel = channel.trim().to_lowercase();
                         if joined.iter().any(|c| c.as_ref() == channel) { continue; }
-                        if !rate.allows() {
-                            let _ = send(&mut socket, &Out::Error { error: "slow down" }).await;
+                        if let Err(wait) = s.limiter.take(&speaker, &name) {
+                            let _ = send(&mut socket, &slow(wait)).await;
                             continue;
                         }
                         if crate::groups::channel_room(&s.db, &server, &channel).await.is_ok() && !follow(&s, &server, &channel, &ip, &tx, &mut joined).await {
@@ -902,14 +1037,15 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                                 continue;
                             }
                         };
-                        if !rate.allows() {
-                            let _ = send(&mut socket, &Out::Error { error: "slow down" }).await;
+                        if let Err(wait) = s.limiter.take(&speaker, &name) {
+                            let _ = send(&mut socket, &slow(wait)).await;
                             continue;
                         }
                         if who.is_none() {
                             match identify(&s, &name, &headers, &hello).await {
                                 Ok(w) => {
                                     who = Some(w);
+                                    speaker = Speaker::of(who.as_ref(), &hello, &ip);
                                     log::info!("{name}: the reader is {}", shown(&who));
                                 }
                                 Err(Unknown::Refused(why)) => {
@@ -1297,6 +1433,117 @@ mod tests {
         assert_eq!(parse_say(String::new(), Some(id.into()), Vec::new()), Ok(Some((String::new(), vec![id.into()]))));
     }
 
+    fn about(wait: Duration, secs: f64) -> bool {
+        (wait.as_secs_f64() - secs).abs() < 0.01
+    }
+
+    /// Without an account: two at once, then one every thirty seconds, and a token is a token: the
+    /// third waits for the next one back, not for the first of the two to be a minute old.
+    #[test]
+    fn a_nick_has_two_lines_then_one_every_thirty_seconds() {
+        let now = Instant::now();
+        let at = |secs: u64| now + Duration::from_secs(secs);
+        let mut b = Bucket::new(ANON_TIER, now);
+        assert!(b.take(ANON_TIER, now).is_ok());
+        assert!(b.take(ANON_TIER, now).is_ok());
+        assert!(about(b.take(ANON_TIER, now).unwrap_err(), 30.0));
+        // ten seconds on: still no, and the wait has come down by that much
+        assert!(about(b.take(ANON_TIER, at(10)).unwrap_err(), 20.0));
+        // one is back at thirty seconds, and one only
+        assert!(b.take(ANON_TIER, at(30)).is_ok());
+        assert!(about(b.take(ANON_TIER, at(30)).unwrap_err(), 30.0));
+        // a long quiet is a full bucket again, and not more than full
+        assert!(b.take(ANON_TIER, at(600)).is_ok());
+        assert!(b.take(ANON_TIER, at(600)).is_ok());
+        assert!(b.take(ANON_TIER, at(600)).is_err());
+    }
+
+    /// A login: three at once, then one every 3⅓ seconds.
+    #[test]
+    fn a_login_has_three_lines_then_one_every_three_and_a_third_seconds() {
+        let now = Instant::now();
+        let mut b = Bucket::new(LOGIN_TIER, now);
+        for _ in 0..3 {
+            assert!(b.take(LOGIN_TIER, now).is_ok());
+        }
+        assert!(about(b.take(LOGIN_TIER, now).unwrap_err(), 10.0 / 3.0));
+        assert!(b.take(LOGIN_TIER, now + Duration::from_millis(3334)).is_ok());
+        assert!(b.take(LOGIN_TIER, now + Duration::from_millis(3334)).is_err());
+    }
+
+    /// The bucket is the speaker's in the room, whatever socket the line came on.
+    #[test]
+    fn the_bucket_is_the_speakers_not_the_sockets() {
+        let limiter = Limiter::new();
+        let now = Instant::now();
+        let alice = Speaker::Nick("1.2.3.4".into(), "alice".into());
+        assert!(limiter.take_at(&alice, "room", now).is_ok());
+        assert!(limiter.take_at(&alice, "room", now).is_ok());
+        // the same nick from another socket, spelled with a capital: the same bucket, empty
+        assert!(limiter.take_at(&Speaker::of(None, &Hello { nick: Some("Alice".into()), session: None, token: None, bot: None }, "1.2.3.4"), "room", now).is_err());
+        // another room is another bucket, and so is another nick behind the same ip
+        assert!(limiter.take_at(&alice, "other", now).is_ok());
+        assert!(limiter.take_at(&Speaker::Nick("1.2.3.4".into(), "bob".into()), "room", now).is_ok());
+        // a login's is by account, so two tabs of one login are one speaker
+        let bob = Speaker::Account(Uuid::nil());
+        for _ in 0..3 {
+            assert!(limiter.take_at(&bob, "room", now).is_ok());
+        }
+        assert!(limiter.take_at(&bob, "room", now).is_err());
+    }
+
+    /// Once a minute the buckets that have refilled go; one still owed a token stays.
+    #[test]
+    fn full_buckets_are_forgotten() {
+        let limiter = Limiter::new();
+        let now = Instant::now();
+        let alice = Speaker::Nick("1.2.3.4".into(), "alice".into());
+        let bob = Speaker::Account(Uuid::nil());
+        for _ in 0..2 {
+            limiter.take_at(&alice, "room", now).unwrap();
+        }
+        limiter.take_at(&bob, "room", now).unwrap();
+        // alice spends the one she got back at thirty seconds, so at the sweep she has one, not two
+        limiter.take_at(&alice, "room", now + Duration::from_secs(30)).unwrap();
+        assert_eq!(limiter.inner.lock().unwrap().by_speaker.len(), 2);
+        // the sweep rides on the next take, a minute after the first
+        let carol = Speaker::Nick("5.6.7.8".into(), "carol".into());
+        limiter.take_at(&carol, "room", now + SWEEP_EVERY).unwrap();
+        let kept: Vec<Speaker> = limiter.inner.lock().unwrap().by_speaker.keys().map(|(s, _)| s.clone()).collect();
+        assert_eq!(kept.len(), 2, "{kept:?}");
+        assert!(kept.contains(&alice) && kept.contains(&carol), "{kept:?}");
+    }
+
+    /// Who draws on which bucket: a login by account, the streamer by the room, a nick by ip and nick,
+    /// and somebody the database has not named yet by the hello's nick.
+    #[test]
+    fn who_draws_on_which_bucket() {
+        let hello = Hello { nick: Some(" Bob ".into()), session: None, token: None, bot: None };
+        let id = Uuid::nil();
+        let login = Who { from: "bob".into(), streamer: false, verified: true, groups: Vec::new(), user_id: Some(id) };
+        assert_eq!(Speaker::of(Some(&login), &hello, "1.2.3.4"), Speaker::Account(id));
+        // the one who went live while logged in as somebody else, or as nobody: the room's
+        let streamer = Who { from: "room".into(), streamer: true, verified: false, groups: Vec::new(), user_id: None };
+        assert_eq!(Speaker::of(Some(&streamer), &hello, "1.2.3.4"), Speaker::Streamer("room".into()));
+        // the streamer logged in as the room's name: the account, like any login
+        let own = Who { from: "room".into(), streamer: true, verified: true, groups: Vec::new(), user_id: Some(id) };
+        assert_eq!(Speaker::of(Some(&own), &hello, "1.2.3.4"), Speaker::Account(id));
+        let nick = Who { from: "Bob".into(), streamer: false, verified: false, groups: Vec::new(), user_id: None };
+        assert_eq!(Speaker::of(Some(&nick), &hello, "1.2.3.4"), Speaker::Nick("1.2.3.4".into(), "bob".into()));
+        assert_eq!(Speaker::of(None, &hello, "1.2.3.4"), Speaker::Nick("1.2.3.4".into(), "bob".into()));
+        assert_eq!(Speaker::of(None, &Hello { nick: None, session: None, token: None, bot: None }, "1.2.3.4"), Speaker::Nick("1.2.3.4".into(), String::new()));
+        assert_eq!(Speaker::Account(id).tier(), LOGIN_TIER);
+        assert_eq!(Speaker::Streamer("room".into()).tier(), LOGIN_TIER);
+        assert_eq!(Speaker::Nick("1.2.3.4".into(), "bob".into()).tier(), ANON_TIER);
+    }
+
+    /// The refusal is the `error` frame every page knows, with the wait beside the words, rounded up.
+    #[test]
+    fn a_refused_line_says_how_long() {
+        assert_eq!(serde_json::to_string(&slow(Duration::from_micros(1_234_500))).unwrap(), r#"{"type":"error","error":"slow down","wait":1235}"#);
+        assert_eq!(serde_json::to_string(&slow(Duration::from_secs(30))).unwrap(), r#"{"type":"error","error":"slow down","wait":30000}"#);
+    }
+
     /// The server socket's frames parse beside the stream's: a say names its channel, and
     /// `join` and `since` are only its.
     #[test]
@@ -1375,5 +1622,111 @@ mod tests {
         // numeric, not lexicographic: "-10" comes after "-9"
         assert!(id_parts("1729000000000-10") > id_parts("1729000000000-9"));
         assert!(id_parts("1729000000001-0") > id_parts("1729000000000-99"));
+    }
+
+    /// A pool that can never connect. sqlx retries a refused connection until the pool's
+    /// acquire timeout (5 s, as in main.rs), so a lookup with no bound of its own takes all of it.
+    fn pool_that_never_answers() -> PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(Duration::from_secs(5))
+            .connect_lazy("postgres://u:p@127.0.0.1:1/x")
+            .expect("a pool that is never connected")
+    }
+
+    /// `face_now` is awaited on the socket at each say: a database that does not answer is a
+    /// line with no face within 2 s, like `remember`'s insert, not the pool's 5 s.
+    #[tokio::test]
+    async fn a_face_at_the_say_waits_two_seconds_at_most() {
+        let pool = pool_that_never_answers();
+        let who = Who { from: "bob".to_owned(), streamer: false, verified: true, groups: Vec::new(), user_id: Some(Uuid::nil()) };
+        let started = Instant::now();
+        let face = face_now(&pool, "room", &who).await;
+        let took = started.elapsed();
+        assert_eq!(face, None);
+        assert!(took < Duration::from_secs(3), "face_now held the socket for {took:?}");
+    }
+
+    /// `with_faces` is awaited on the socket before the history frame and a `since` fill: a
+    /// database that does not answer leaves the lines as written, within 2 s, not the pool's 5 s.
+    #[tokio::test]
+    async fn faces_on_the_way_out_wait_two_seconds_at_most() {
+        let pool = pool_that_never_answers();
+        let mut lines = vec![Line {
+            id: "1729000000000-0".into(),
+            from: "bob".into(),
+            text: "hi".into(),
+            streamer: false,
+            verified: true,
+            groups: Vec::new(),
+            avatar: Some(7),
+            user_id: Some(Uuid::nil()),
+            at: 1729000000000,
+            image: None,
+            images: Vec::new(),
+        }];
+        let started = Instant::now();
+        with_faces(&pool, &mut lines).await;
+        let took = started.elapsed();
+        assert_eq!(lines[0].avatar, Some(7), "a line the database did not answer for is left as written");
+        assert!(took < Duration::from_secs(3), "with_faces held the socket for {took:?}");
+    }
+
+    /// A login's old lines keep its face through a rename for the hold's length, while
+    /// `/api/streamers/<old>/avatar` still answers for the account (profile.rs). After it the
+    /// old name leads elsewhere, and the page fetches by `from`: the letter, not the account's
+    /// current version (a 404 on the page) and not whoever took the name.
+    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored for_the_hold_and_then` against a throwaway postgres (see auth.rs's `test_db`).
+    #[tokio::test]
+    #[ignore]
+    async fn a_face_follows_a_rename_for_the_hold_and_then_is_the_letter() {
+        use crate::auth::tests::{row, test_db};
+
+        let pool = test_db().await;
+        let run = std::process::id();
+        let alice_name = format!("alice5-{run}");
+        let alice = row(&pool, &alice_name, Some("alice-hash")).await;
+        sqlx::query("UPDATE streamers SET avatar_at = to_timestamp(1690000000) WHERE id = $1").bind(alice).execute(&pool).await.unwrap();
+        let mut lines = vec![Line {
+            id: "1729000000000-0".into(),
+            from: alice_name.clone(),
+            text: "hi".into(),
+            streamer: false,
+            verified: true,
+            groups: Vec::new(),
+            avatar: None,
+            user_id: Some(alice),
+            at: 1729000000000,
+            image: None,
+            images: Vec::new(),
+        }];
+        // her own name: her picture
+        with_faces(&pool, &mut lines).await;
+        assert_eq!(lines[0].avatar, Some(1690000000));
+
+        // what change_name leaves behind: the row is bob, and alice is held for it. the face follows
+        let bob_name = format!("bob5-{run}");
+        sqlx::query("UPDATE streamers SET name = $2, renamed_at = now() WHERE id = $1").bind(alice).bind(&bob_name).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO held_names (name, user_id, until) VALUES ($1, $2, now() + interval '30 days')")
+            .bind(&alice_name)
+            .bind(alice)
+            .execute(&pool)
+            .await
+            .unwrap();
+        lines[0].avatar = None;
+        with_faces(&pool, &mut lines).await;
+        assert_eq!(lines[0].avatar, Some(1690000000), "the face follows a rename for the hold's length");
+
+        // the hold runs out: the old name is nobody's, so the line is the letter, not an <img> that 404s
+        sqlx::query("UPDATE held_names SET until = now() - interval '1 second' WHERE name = $1").bind(&alice_name).execute(&pool).await.unwrap();
+        with_faces(&pool, &mut lines).await;
+        assert_eq!(lines[0].avatar, None, "after the hold the old name is not the account's: the letter");
+
+        // a stranger signs up as alice and uploads a picture: still the letter, not theirs and not bob's.
+        // the line comes out of redis with the `a` the say wrote, and must be overwritten
+        let stranger = row(&pool, &alice_name, Some("stranger-hash")).await;
+        sqlx::query("UPDATE streamers SET avatar_at = to_timestamp(1700000000) WHERE id = $1").bind(stranger).execute(&pool).await.unwrap();
+        lines[0].avatar = Some(1690000000);
+        with_faces(&pool, &mut lines).await;
+        assert_eq!(lines[0].avatar, None, "a stranger on the freed name is nobody's picture on the account's words");
     }
 }

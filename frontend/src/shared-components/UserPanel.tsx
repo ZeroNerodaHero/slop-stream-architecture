@@ -18,11 +18,20 @@ import { isValidName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { Face } from '@/shared-components/Face';
 import { Friends } from '@/shared-components/Friends';
+import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { cn } from '@/utils/cn';
 
 /** Closed: a column of pictures. Open: wide enough for the names. The page sits in what's left. */
 const COLLAPSED = 'w-20';
 const EXPANDED = 'w-[min(360px,calc(100vw-12rem))]';
+/** The column's place in the page, closed or not yet known: sticky, the window's height, this wide. */
+const COLUMN = 'sticky top-0 h-screen w-20 shrink-0 self-start';
+/** The panel inside it, against the page's edge, with the stroke on the side the page is. */
+const panelClass = (side: 'left' | 'right') =>
+  cn(
+    'absolute top-0 flex h-full flex-col overflow-hidden bg-background text-base',
+    side === 'right' ? 'right-0 border-l border-primaryStroke' : 'left-0 border-r border-primaryStroke'
+  );
 
 /** How long the pointer may be off the panel before the sidebar closes. Room to reach the chat window. */
 const LEAVE_GRACE_MS = 250;
@@ -177,7 +186,24 @@ export function UserPanel() {
     store.set(friendsOpenAtom, false);
   }
 
-  if (me === undefined) return null;
+  // who I am is not known yet (/api/me is being asked): the column all the same, its width in the
+  // page from the first paint, with the search square at its head and your picture's square at
+  // its foot in grey. the page beside it would otherwise be laid out wider and reflow when the
+  // column arrived. no id: the panel the tests key on is the one below
+  if (me === undefined) {
+    return (
+      <aside aria-label="you" data-side={side} className={COLUMN}>
+        <Skeleton label="loading who you are" className={cn(panelClass(side), COLLAPSED)}>
+          <div className={cn('flex flex-1 pt-2', side === 'right' ? 'justify-end pr-[19px]' : 'pl-[19px]')}>
+            <Bone className="h-10 w-[42px]" />
+          </div>
+          <div className={cn('flex shrink-0 border-t border-primaryStroke py-2.5', side === 'right' ? 'justify-end pr-[19px]' : 'pl-[19px]')}>
+            <Bone className="h-[42px] w-[42px]" />
+          </div>
+        </Skeleton>
+      </aside>
+    );
+  }
   const next = encodeURIComponent(pathname);
   // on the right the panel grows leftward, so the row is mirrored and your picture stays at the edge, like the rows above it
   const mirrored = side === 'right';
@@ -235,16 +261,10 @@ export function UserPanel() {
           closeFriends();
         }
       }}
-      className={cn('sticky top-0 h-screen w-20 shrink-0 self-start', friendsOpen && 'z-40')}
+      className={cn(COLUMN, friendsOpen && 'z-40')}
     >
       {/* the column stays this wide in the page. open, the panel grows out of it and covers the streams */}
-      <div
-        className={cn(
-          'absolute top-0 flex h-full flex-col overflow-hidden bg-background text-base transition-[width] duration-150',
-          side === 'right' ? 'right-0 border-l border-primaryStroke' : 'left-0 border-r border-primaryStroke',
-          friendsOpen ? EXPANDED : COLLAPSED
-        )}
-      >
+      <div className={cn(panelClass(side), 'transition-[width] duration-150', friendsOpen ? EXPANDED : COLLAPSED)}>
         <div className="flex min-h-0 flex-1 flex-col">
           <Friends open={friendsOpen} side={side} onPick={closeFriends} />
         </div>
@@ -331,7 +351,7 @@ export function UserPanel() {
                     }}
                     onBlur={(e) => {
                       // a reconnect replaces the history and blips the count for the whole room: only for a new name
-                      if (e.currentTarget.value !== nickAtFocus.current) identityChanged('nick', nickAtFocus.current);
+                      if (e.currentTarget.value !== nickAtFocus.current) identityChanged('nick');
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') e.currentTarget.blur();

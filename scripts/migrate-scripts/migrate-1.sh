@@ -65,11 +65,15 @@ if ttl > 0 then redis.call("PEXPIRE", key, ttl) end
 return {filled, unknown}'
 
 # the account behind each name: the accounts as they are named now, and the names an account
-# left behind in a rename and still holds (docs/ids.md)
+# left behind in a rename and still holds (docs/ids.md). a name two accounts have had (a hold
+# that lapsed, then a new signup took it) is left out, so its lines are left alone
+# read through $(...), not < <(...): set -e never sees a process substitution fail, so a failed
+# psql would read as no accounts and the script would say "nothing to do"
+rows="$(sql "SELECT name, min(id::text) FROM (SELECT name, id FROM streamers WHERE password_hash IS NOT NULL UNION ALL SELECT name, user_id FROM held_names) n GROUP BY name HAVING count(DISTINCT id) = 1")"
 map=()
 while read -r name id; do
   if [ -n "$name" ] && [ -n "$id" ]; then map+=("$name" "$id"); fi
-done < <(sql "SELECT name, id FROM streamers WHERE password_hash IS NOT NULL UNION ALL SELECT name, user_id FROM held_names")
+done <<< "$rows"
 
 # every room: a stream's `chat:<name>`, a channel's `chat:<server>/<channel>`. names have no
 # spaces (the name rule), so one key per word is safe. the two numbers come on two lines, as

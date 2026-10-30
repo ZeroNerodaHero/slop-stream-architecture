@@ -119,7 +119,8 @@ anything that loads/runs/leaves stripped. **This is the hardened showcase — br
   flood of logins/signups queues behind the semaphore — measure whether it can stall real logins
   (the per-ip caps are the intended backstop; see if XFF evasion removes it).
 - **Caps to test for off-by-one or bypass**: signup/login windows, `GROUPS_PER_MAKER`, follow
-  churn (429), dm `slow down`, chat 1 line/sec/500 chars, calendar `RANGE_MAX_DAYS=93` /
+  churn (429), dm `slow down`, chat token bucket (nick 2 then 1/30s by ip+nick, login 3 then 1/3.3s by
+  account; per room, in-process: does a nick rotation or a reconnect refill it?) / 500 chars, calendar `RANGE_MAX_DAYS=93` /
   `RANGE_LIMIT=1000`, upload sizes (`MAX_ICON`, asset 2 MB).
 
 ## 7. Info disclosure & headers

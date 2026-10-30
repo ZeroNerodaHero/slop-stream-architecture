@@ -9,8 +9,9 @@ const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-str
   const mk = async () => {
     const ctx = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] });
     const page = await ctx.newPage();
+    // no name box on /live: a guest streams as the nick in the corner panel (localstorage, json the way jotai keeps it)
+    await page.addInitScript((n) => localStorage.setItem('nick', JSON.stringify(n)), NAME);
     await page.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
-    await page.fill('#name', NAME);
     await page.waitForFunction(() => !document.querySelector('#start').disabled);
     await page.click('#start');
     return page;

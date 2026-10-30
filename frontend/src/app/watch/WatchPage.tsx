@@ -94,11 +94,11 @@ function hintedLive(state: unknown): boolean {
 }
 
 /**
- * The hold on the player's box through the page's first ask (see `WatchPage`): `before` the
- * ask has begun, `asking` while it is under way, `done` once it has answered, whatever it said.
- * `none` is a page with no reason to hold.
+ * Where the page's first ask is (see `WatchPage`): `before` it has begun, `asking` while it is
+ * under way, `done` once it has answered, whatever it said. What is held through it (the
+ * player's box, the status line under the name) is let go at `done`.
  */
-type Hold = 'none' | 'before' | 'asking' | 'done';
+type Ask = 'before' | 'asking' | 'done';
 
 /** Arrows move the focus along the tabs and open the one landed on; Home and End go to the ends. The user modal's tabs do the same. */
 function roveTabs(e: KeyboardEvent<HTMLDivElement>) {
@@ -125,11 +125,12 @@ export function WatchPage() {
   // streaming (`state.live`), or the api's card already stood the box there (`servedWithCard`).
   // the ask decides: a grant that says not live drops the hold, and it never comes back for
   // a re-ask (the socket's word is what holds the box from then on)
-  const [hold, setHold] = useState<Hold>(() => {
+  const [expectLive] = useState(() => {
     const reason = hintedLive(state) || servedWithCard;
     servedWithCard = false;
-    return reason ? 'before' : 'none';
+    return reason;
   });
+  const [ask, setAsk] = useState<Ask>('before');
   const name = useAtomValue(watchNameAtom);
   const message = useAtomValue(watchMessageAtom);
   const tone = useAtomValue(watchToneAtom);
@@ -188,18 +189,19 @@ export function WatchPage() {
     navigate(`/watch/${renamedTo}`, { replace: true });
   }, [renamedTo]);
 
-  // The hold follows the phase: the first `loading` is the ask beginning, the first phase after
-  // it is its answer, and from then on the word on the socket is the only reason to hold the
-  // box. Set during the render that sees the change (react runs it again before painting), so
-  // no frame shows the box held past its answer.
-  if (hold === 'before' && phase === 'loading') setHold('asking');
-  else if (hold === 'asking' && phase !== 'loading') setHold('done');
-  const held = hold === 'before' || hold === 'asking';
+  // The first ask follows the phase: the first `loading` is it beginning, the first phase after
+  // that is its answer. Set during the render that sees the change (react runs it again before
+  // painting), so no frame shows anything held past the answer.
+  if (ask === 'before' && phase === 'loading') setAsk('asking');
+  else if (ask === 'asking' && phase !== 'loading') setAsk('done');
+  // the first ask is under way right now (not a re-ask, and not a page back on a stream the
+  // corner kept, which never asks): what is held for it is held now
+  const firstAsk = ask !== 'done' && phase === 'loading';
 
   // The stream is expected and not here yet: they are streaming, as the word says (or as the
   // hold assumes, until the ask has answered), and the page is asking or waiting to be told.
   // Then the player's box stands grey where the player will, so nothing moves when it does.
-  const expecting = phase === 'loading' ? presence === 'streaming' || held : phase === 'waiting' && presence === 'streaming';
+  const expecting = phase === 'loading' ? presence === 'streaming' || (expectLive && firstAsk) : phase === 'waiting' && presence === 'streaming';
 
   // The picture in picture button is a home click that keeps the stream: on, then away, and
   // the MiniPlayer has it in the corner by the time the home page shows.
@@ -234,11 +236,15 @@ export function WatchPage() {
             </span>
           )}
           {/* their status: the one line about them, under the name (the profile tab sets it; `bio` on the wire).
-              one line here too, the whole of it on hover */}
-          {bio && (
+              one line here too, the whole of it on hover. it comes with the grant: until then a line of grey
+              its height stands under the name, so the title row (and the whole page under it) does not grow
+              by a line when the grant lands */}
+          {bio ? (
             <span id="bio" title={bio} className="mt-1 block truncate text-base font-normal text-textSecondary">
               {bio}
             </span>
+          ) : (
+            firstAsk && <Bone className="mt-1 h-6 w-72 max-w-full" />
           )}
         </>
       }
