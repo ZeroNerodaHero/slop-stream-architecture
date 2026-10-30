@@ -301,19 +301,16 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
   });
 
   let publisher;
-  await step('live: the share link has ?s=<session>, the live page shows the picture', async () => {
+  await step('live: the share link has ?s=<session>', async () => {
     publisher = await fresh();
     await publisher.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
     await publisher.fill('#name', NAME);
     await publisher.press('#name', 'Tab');
-    await publisher.waitForSelector('#avatar-remove', { timeout: 10000 });
     await publisher.waitForFunction(() => !document.querySelector('#start').disabled);
     await publisher.click('#start');
     await waitStatus(publisher, /^live$/);
     const href = await publisher.getAttribute('#watchurl', 'href');
     expect(new RegExp(`/watch/${NAME}\\?s=\\d+$`).test(href), `link ${href}`);
-    const img = await publisher.getAttribute(`img[src*="/api/streamers/${NAME}/avatar?v="]`, 'src');
-    expect(img, 'no picture on the live page');
     return href.replace(BASE, '');
   });
 

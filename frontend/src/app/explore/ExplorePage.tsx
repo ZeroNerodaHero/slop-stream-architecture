@@ -74,14 +74,7 @@ export function ExplorePage() {
         <label htmlFor="groups-search" className="sr-only">
           search groups
         </label>
-        <input
-          id="groups-search"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="search groups and people"
-          autoComplete="off"
-          className={INPUT}
-        />
+        <input id="groups-search" value={text} onChange={(e) => setText(e.target.value)} placeholder="search groups and people" autoComplete="off" className={INPUT} />
         {me ? (
           <Button id="groups-create" variant="primary" className="shrink-0 px-4 py-2 text-sm" onClick={() => setMaking(true)}>
             create
@@ -268,7 +261,14 @@ function MakeGroup({ onClose }: { onClose: () => void }) {
               className={cn('h-8 w-8 border-2', swatch === color ? 'border-textPrimary' : 'border-transparent')}
             />
           ))}
-          <input id="groups-make-color" type="color" value={color} onChange={(e) => setColor(e.target.value)} aria-label="any other colour" className="h-8 w-12 cursor-pointer border border-primaryStroke bg-background p-0.5" />
+          <input
+            id="groups-make-color"
+            type="color"
+            value={color}
+            onChange={(e) => setColor(e.target.value)}
+            aria-label="any other colour"
+            className="h-8 w-12 cursor-pointer border border-primaryStroke bg-background p-0.5"
+          />
           <Badge group={{ name: clean || 'new', badge: badge.trim() || 'badge', color }} />
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -290,7 +290,10 @@ function MakeGroup({ onClose }: { onClose: () => void }) {
           >
             private
           </button>
-          <p className="text-sm text-textTertiary">a private group is left off the lists. someone with the address can still open it and join. four digits are added, so the same name can be made twice. the owner can switch this later, on the group.</p>
+          <p className="text-sm text-textTertiary">
+            a private group is left off the lists. someone with the address can still open it and join. four digits are added, so the same name can be made twice. the
+            owner can switch this later, on the group.
+          </p>
         </div>
         <div className="flex items-center justify-end gap-3">
           <button type="button" className="text-sm text-textTertiary" onClick={onClose}>

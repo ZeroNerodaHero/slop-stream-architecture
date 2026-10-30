@@ -407,7 +407,9 @@ function StreamsSkeleton() {
     <Skeleton id="loading" className={FEATURED_GRID}>
       {Array.from({ length: FEATURED }, (_, i) => (
         <div key={i} className={CARD}>
-          <Bone className="aspect-video border-b border-primaryStroke" />
+          <div className="relative aspect-video border-b border-primaryStroke">
+            <Bone className="absolute inset-0" />
+          </div>
           <div className="flex items-start gap-3 p-4">
             <Bone className="h-11 w-11 shrink-0" />
             <div className="flex flex-1 flex-col gap-2 py-1">

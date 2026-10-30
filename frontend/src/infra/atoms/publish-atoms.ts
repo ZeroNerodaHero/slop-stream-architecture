@@ -15,7 +15,7 @@ import { record } from '@/infra/atoms/inspector-atoms';
 import { endWatch, pipAtom } from '@/infra/atoms/watch-atoms';
 import { type Mixer, openMixer } from '@/infra/mixer';
 import { cleanName, isValidName } from '@/infra/names';
-import { AVATAR_PICTURE, SCENE_PICTURE, THUMB_PICTURE } from '@/infra/picture';
+import { SCENE_PICTURE, THUMB_PICTURE } from '@/infra/picture';
 import { type Box, connectRelay, type Fit, isVideoLayer, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
 import {
@@ -172,12 +172,6 @@ export const chatRoomAtom = atom('');
 export const ownerAtom = atom<Owner | null>(null);
 /** How many are watching my stream, as video tells me. `null` while not live. */
 export const liveViewersAtom = atom<number | null>(null);
-/** The status box: one line about the name, as typed. `bio` on the wire (docs/status.md has the word `status`). */
-export const bioDraftAtom = atom('');
-export const bioStatusAtom = atom('');
-/** The upload time of my picture (the `?v=` of its url). `null`: none. */
-export const myAvatarAtom = atom<number | null>(null);
-export const avatarStatusAtom = atom('');
 /** Pictures on this name's home card, oldest first. Empty: home shows the camera. */
 export const streamThumbsAtom = atom<number[]>([]);
 export const thumbStatusAtom = atom('');
@@ -231,9 +225,8 @@ let cameraCap = VIDEO_MAX_BITRATE;
 let imageCount = 0;
 /** Bumped on leaving /live: a camera granted after that belongs to nobody and is stopped. */
 let liveGeneration = 0;
-/** The name whose status and picture are in the boxes, and the status as it was loaded for it. */
+/** The name whose thumbnails and library are on the page. */
 let profileName = '';
-let loadedBio = '';
 
 function labelOfPublishTrack(trackId: string): string | undefined {
   for (const screen of store.get(screensAtom)) {
@@ -1032,47 +1025,32 @@ export function endLive() {
   store.set(selectedSourceAtom, null);
   store.set(imageStatusAtom, '');
   setPhase('camera-off', 'camera off');
-  profileName = loadedBio = '';
-  store.set(bioDraftAtom, '');
-  store.set(bioStatusAtom, '');
-  store.set(myAvatarAtom, null);
-  store.set(avatarStatusAtom, '');
+  profileName = '';
   store.set(streamThumbsAtom, []);
   store.set(thumbStatusAtom, '');
 }
 
 /**
- * The status, picture and thumbnails saved under the name in the box. A status being typed is
- * left alone. Another name than last time starts clean: the old name's saved status, picture
- * and thumbnails go, so they cannot be saved under the new one. Text the person typed is theirs
- * and stays.
+ * The thumbnails and the picture library saved under the name in the box. Another name than
+ * last time starts clean: the old name's go, so nothing of theirs can be saved under the new
+ * one. The status and the picture are not here: the profile tab sets them.
  */
 export async function loadProfile(): Promise<void> {
   const name = store.get(streamNameAtom);
   if (!isValidName(name)) return;
   if (profileName !== name) {
     if (profileName) {
-      // trimmed, as it was saved or loaded; the box may hold a trailing newline on top
-      if (store.get(bioDraftAtom).trim() === loadedBio) store.set(bioDraftAtom, '');
-      store.set(bioStatusAtom, '');
-      store.set(myAvatarAtom, null);
       store.set(streamThumbsAtom, []);
       store.set(thumbStatusAtom, '');
       store.set(libraryAtom, []);
     }
-    // the same name again keeps what was loaded for it: a second commit (focus, blur) must not
-    // forget the saved status, or the next name change would take it for typed text and keep it
     profileName = name;
-    loadedBio = '';
   }
   const generation = liveGeneration;
   try {
     const me = await api.streamer(name);
     // the box moved on, or the page was left, while the api was answering
     if (store.get(streamNameAtom) !== name || generation !== liveGeneration) return;
-    loadedBio = me.bio ?? '';
-    if (!store.get(bioDraftAtom)) store.set(bioDraftAtom, loadedBio);
-    store.set(myAvatarAtom, me.avatar ?? null);
     store.set(streamThumbsAtom, me.thumbs ?? []);
   } catch {
     // nothing saved yet
@@ -1148,56 +1126,6 @@ export async function removeStreamThumb(id: number): Promise<void> {
   } catch (err) {
     if (store.get(streamNameAtom) !== name) return;
     store.set(thumbStatusAtom, `not removed: ${messageOf(err)}`);
-  }
-}
-
-/** The picture: the square of the file picked in the crop dialog, as a 256x256 jpeg. The profile tab saves it the same way. */
-export async function saveAvatar(file: File): Promise<void> {
-  const name = store.get(streamNameAtom);
-  if (!isValidName(name)) {
-    store.set(avatarStatusAtom, 'type a name first');
-    return;
-  }
-  const jpeg = await cropPicture(file, AVATAR_PICTURE);
-  if (!jpeg || store.get(streamNameAtom) !== name) return;
-  store.set(avatarStatusAtom, 'saving');
-  try {
-    const saved = await api.saveAvatar(name, jpeg);
-    store.set(myAvatarAtom, saved.avatar);
-    store.set(avatarStatusAtom, 'saved');
-  } catch (err) {
-    store.set(avatarStatusAtom, `not saved: ${messageOf(err)}`);
-  }
-}
-
-export async function removeAvatar(): Promise<void> {
-  const name = store.get(streamNameAtom);
-  if (!isValidName(name)) return;
-  try {
-    await api.deleteAvatar(name);
-    store.set(myAvatarAtom, null);
-    store.set(avatarStatusAtom, 'removed');
-  } catch (err) {
-    store.set(avatarStatusAtom, `not removed: ${messageOf(err)}`);
-  }
-}
-
-/** The status as typed goes up; the api keeps it as one line, and the box shows that if nothing was typed meanwhile. */
-export async function saveBio(): Promise<void> {
-  const name = store.get(streamNameAtom);
-  if (!isValidName(name)) {
-    store.set(bioStatusAtom, 'type a name first');
-    return;
-  }
-  const typed = store.get(bioDraftAtom);
-  try {
-    const saved = await api.saveBio(name, typed.trim());
-    store.set(bioStatusAtom, saved.bio ? 'saved' : 'cleared');
-    // saved is as good as loaded: it belongs to this name now and goes with it on a name change
-    if (name === profileName) loadedBio = saved.bio;
-    if (store.get(streamNameAtom) === name && store.get(bioDraftAtom) === typed) store.set(bioDraftAtom, saved.bio);
-  } catch (err) {
-    store.set(bioStatusAtom, `not saved: ${messageOf(err)}`);
   }
 }
 

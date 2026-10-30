@@ -599,143 +599,255 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
 }
 
 /**
- * The right of the room, for a member: the roster (every member, their roles, who owns the
- * group), and, by power, the about line, the roles, the bans, the owners. The pictures are not
- * here: an owner changes them on the pictures themselves, at the top of the page. Every call
- * here lands through the socket, for this page and every other one with the room open.
+ * The right of the room, for a member: who is in. Each member's face and name, `owner` on an
+ * owner, the roles they hold in their colours, `live` on one whose camera is up; owners first,
+ * then the group's order (room-atoms sorts). Nothing here acts: what a power does is in the
+ * manage dialog, from the header.
  */
-function Moderation({ server, room, me, onError }: { server: string; room: GroupRoom; me: string | null; onError: (error: string) => void }) {
-  const navigate = useNavigate();
+function Roster({ room }: { room: GroupRoom }) {
   const members = room.roster ?? [];
-  const bans = room.bans ?? [];
-  // the about box: what is typed, over the line it started from. the line changing under it
-  // (saved here, or by another owner, which the socket brings) starts the box over from the new one
-  const [aboutDraft, setAboutDraft] = useState({ base: room.about, text: room.about });
-  const about = aboutDraft.base === room.about ? aboutDraft.text : room.about;
-  const setAbout = (text: string) => setAboutDraft({ base: room.about, text });
-  const [roleName, setRoleName] = useState('');
-  const [roleColor, setRoleColor] = useState<string>(COLORS[0]);
-  const [rolePerms, setRolePerms] = useState<RolePerms>(NO_PERMS);
-  const [editing, setEditing] = useState<number | null>(null);
-  const [ownerName, setOwnerName] = useState('');
-  const [banName, setBanName] = useState('');
-  const [banReason, setBanReason] = useState('');
-  const [sure, setSure] = useState(false);
-  const owners = members.filter((member) => member.owner).length;
+  const live = room.live ?? [];
+  return (
+    <aside
+      id="group-roster"
+      aria-label="members"
+      className="flex max-h-[70vh] flex-col gap-3 overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-4 text-sm"
+    >
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-textTertiary">
+        members <span className="font-normal normal-case tracking-normal">{room.members}</span>
+      </h3>
+      {room.roster === null && <p className="text-textTertiary">the roster is for members.</p>}
+      <ul id="group-members" className="flex flex-col gap-2">
+        {members.map((member) => (
+          <li key={member.name} data-member={member.name} data-owner={member.owner || undefined} className="flex items-center gap-2">
+            <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8 shrink-0" />
+            <span className="min-w-0 flex-1">
+              <span className="flex flex-wrap items-center gap-x-2">
+                <span className="truncate font-semibold">{member.name}</span>
+                {member.owner && <span className="text-xs uppercase text-primaryBlue">owner</span>}
+                {live.includes(member.name) && <span className="text-xs uppercase text-primaryBlue">live</span>}
+              </span>
+              {member.roles.length > 0 && (
+                <span className="flex flex-wrap gap-x-2 text-xs">
+                  {member.roles.map((role) => (
+                    <span key={role.id} style={{ color: role.color }}>
+                      {role.name}
+                    </span>
+                  ))}
+                </span>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </aside>
+  );
+}
 
-  async function run(work: () => Promise<unknown>) {
-    onError('');
+interface ManageProps {
+  server: string;
+  room: GroupRoom;
+  run: Run;
+}
+
+/**
+ * What a power does, in a dialog over the room (`manage`, in the header): the about line and
+ * the member order (appearance), the roles and who holds them (roles), kick and ban (each its
+ * own power), the owners and the delete (an owner). The pictures are not here: an owner
+ * changes them on the pictures themselves, at the top of the page; the channels are the
+ * list's own. Every call lands through the socket, for this page and every other one with
+ * the room open, so the dialog reads the room the page does and follows it live. A native
+ * <dialog>: the browser keeps focus in it, closes it on escape and hands focus back to the
+ * button that opened it; a click on the backdrop closes it too. A refusal is said in here,
+ * since the page is under the backdrop.
+ */
+function ManageDialog({ server, room, me, onClose }: { server: string; room: GroupRoom; me: string | null; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  /** The press that began this click was on the backdrop too: a text drag that ends outside is not a close. */
+  const pressedBackdrop = useRef(false);
+  const [error, setError] = useState('');
+  const words = groupWords(room);
+
+  // A layout effect: its cleanup runs while the node is still in the document, which is when
+  // close() hands focus back to the opener.
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog || dialog.open) return;
+    dialog.showModal();
+    // the heading, not the first control: a screen reader hears what this is
+    dialog.querySelector<HTMLElement>('#group-manage-title')?.focus();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, []);
+
+  // every way out goes through the element: close() restores focus, then fires `close`
+  const close = () => dialogRef.current?.close();
+
+  const run: Run = async (work) => {
+    setError('');
     try {
       await work();
     } catch (err) {
-      onError(messageOf(err));
+      setError(messageOf(err));
     }
-  }
-
-  /** The powers a role carries, by id: what the roster's held roles do not say. */
-  const permsOf = (id: number) => room.roles.find((role) => role.id === id)?.perms ?? NO_PERMS;
-  // a power this login lacks is one it cannot put on a role; an owner and a site admin lack none
-  const short = POWERS.filter((power) => !room.perms[power.key]);
-
-  function editRole(id: number) {
-    const role = room.roles.find((item) => item.id === id);
-    if (!role) return;
-    setEditing(id);
-    setRoleName(role.name);
-    setRoleColor(role.color);
-    setRolePerms(role.perms);
-  }
-
-  async function saveRole(e: FormEvent) {
-    e.preventDefault();
-    const body = { name: roleName.trim(), color: roleColor, perms: rolePerms };
-    await run(async () => {
-      if (editing === null) await api.createRole(server, body);
-      else await api.saveRole(server, editing, body);
-      setEditing(null);
-      setRoleName('');
-      setRolePerms(NO_PERMS);
-    });
-  }
+  };
 
   return (
-    <aside id="group-mod" className="flex max-h-[70vh] flex-col gap-6 overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-4 text-sm">
-      {room.perms.appearance && (
-        <section>
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">about</h3>
-          <form
-            className="flex gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void run(() => api.saveGroupAbout(server, about.trim()));
-            }}
-          >
-            <input id="group-about" value={about} onChange={(e) => setAbout(e.target.value)} maxLength={200} aria-label="about" className={INPUT} />
-            <button type="submit" className="text-sm font-semibold text-primaryBlue">
-              save
-            </button>
-          </form>
-        </section>
-      )}
+    <dialog
+      ref={dialogRef}
+      id="group-manage"
+      aria-labelledby="group-manage-title"
+      onPointerDown={(e) => {
+        pressedBackdrop.current = e.target === e.currentTarget;
+      }}
+      onClick={(e) => {
+        if (pressedBackdrop.current && e.target === e.currentTarget) close();
+      }}
+      onClose={(event) => {
+        // the delete asks in its own dialog, which closes itself. that close walks the react tree and would shut this too
+        if (event.target !== event.currentTarget) return;
+        onClose();
+      }}
+      // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
+      className="m-auto max-h-[min(760px,calc(100dvh-3rem))] w-[min(680px,calc(100vw-3rem))] flex-col overflow-hidden border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary open:flex backdrop:bg-black/60"
+    >
+      <div className="flex items-start justify-between gap-4 border-b border-primaryStroke px-6 py-4">
+        <h2 id="group-manage-title" tabIndex={-1} className="min-w-0 border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight outline-none">
+          manage <GroupName words={words} />
+        </h2>
+        <button
+          id="group-manage-close"
+          type="button"
+          aria-label="close"
+          aria-keyshortcuts="Escape"
+          onClick={close}
+          className="flex h-8 w-8 shrink-0 items-center justify-center border border-primaryStroke text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue"
+        >
+          <RiCloseLine aria-hidden size={20} />
+        </button>
+      </div>
+      {/* always rendered: a live region announces only text that arrives after it exists */}
+      <p id="group-manage-error" aria-live="polite" className="min-h-[1.5em] px-6 pt-3 text-sm text-decrease">
+        {error}
+      </p>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-1 text-sm [scrollbar-gutter:stable]">
+        {manages(room) ? (
+          <div className="divide-y divide-primaryStroke">
+            {room.perms.appearance && <AboutSection server={server} room={room} run={run} />}
+            <MembersSection server={server} room={room} me={me} run={run} />
+            {room.perms.ban && <BansSection server={server} room={room} run={run} />}
+            {room.perms.roles && <RolesSection server={server} room={room} run={run} />}
+            {room.owner && <DeleteSection server={server} run={run} />}
+          </div>
+        ) : (
+          // the powers went while this was open: an owner took the role, or this login was put out
+          <p className="text-textSecondary">you have no powers here now.</p>
+        )}
+      </div>
+    </dialog>
+  );
+}
 
-      <section>
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-textTertiary">members</h3>
-          {room.perms.appearance && room.member_order !== undefined && (
-            <span className="flex flex-wrap gap-1">
-              {ORDERS.map((order) => {
-                const on = (room.member_order === 'newest' || room.member_order === 'oldest' ? room.member_order : 'name') === order.id;
-                return (
-                  <button
-                    key={order.id}
-                    id={`member-order-${order.id}`}
-                    type="button"
-                    aria-pressed={on}
-                    className={cn('text-xs', on ? 'font-semibold text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
-                    onClick={() => void run(() => api.setMemberOrder(server, order.id))}
-                  >
-                    {order.label}
-                  </button>
-                );
-              })}
-            </span>
-          )}
-        </div>
-        {room.roster === null && <p className="text-textTertiary">the roster is for members.</p>}
-        <ul id="group-members" className="flex flex-col gap-2">
-          {members.map((member) => {
-            // a role cannot touch an owner, unless an owner is the one giving or taking
-            const touch = room.perms.roles && (!member.owner || room.owner);
-            const offer = touch ? room.roles.filter((role) => !member.roles.some((held) => held.id === role.id) && reaches(room, role.perms)) : [];
+function AboutSection({ server, room, run }: ManageProps) {
+  // the about box: what is typed, over the line it started from. the line changing under it
+  // (saved here, or by another owner, which the socket brings) starts the box over from the new one
+  const [draft, setDraft] = useState({ base: room.about, text: room.about });
+  const about = draft.base === room.about ? draft.text : room.about;
+  return (
+    <Section title="about" description="the line under the name, for anyone who opens the group. up to 200 characters.">
+      <form
+        className="flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void run(() => api.saveGroupAbout(server, about.trim()));
+        }}
+      >
+        <input
+          id="group-about"
+          value={about}
+          onChange={(e) => setDraft({ base: room.about, text: e.target.value })}
+          maxLength={200}
+          aria-label="about"
+          className={INPUT}
+        />
+        <button type="submit" className="text-sm font-semibold text-primaryBlue">
+          save
+        </button>
+      </form>
+    </Section>
+  );
+}
+
+/** Every member with what a power may do to them: give or take a role, kick, ban, remove owner. Then, for an owner, naming another. */
+function MembersSection({ server, room, me, run }: ManageProps & { me: string | null }) {
+  const [ownerName, setOwnerName] = useState('');
+  const members = room.roster ?? [];
+  const owners = members.filter((member) => member.owner).length;
+  const order = room.member_order === 'newest' || room.member_order === 'oldest' ? room.member_order : 'name';
+  /** The powers a role carries, by id: what the roster's held roles do not say. */
+  const permsOf = (id: number) => room.roles.find((role) => role.id === id)?.perms ?? NO_PERMS;
+
+  return (
+    <Section title="members" description="who is in, owners first.">
+      {room.perms.appearance && room.member_order !== undefined && (
+        <p className="flex flex-wrap items-center gap-2">
+          <span className="text-textTertiary">then by</span>
+          {ORDERS.map((item) => {
+            const on = order === item.id;
             return (
-              <li
-                key={member.name}
-                data-member={member.name}
-                data-owner={member.owner || undefined}
-                className="flex items-start gap-2 border border-primaryStroke px-2 py-1.5"
+              <button
+                key={item.id}
+                id={`member-order-${item.id}`}
+                type="button"
+                aria-pressed={on}
+                className={cn('text-sm font-semibold', on ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
+                onClick={() => void run(() => api.setMemberOrder(server, item.id))}
               >
-                <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-semibold">{member.name}</span>
-                    {member.owner && <span className="text-xs uppercase text-primaryBlue">owner</span>}
-                    {member.roles.map((role) => (
-                      <span key={role.id} className="text-xs" style={{ color: role.color }}>
-                        {role.name}
-                        {touch && reaches(room, permsOf(role.id)) && (
-                          <button
-                            type="button"
-                            className="ml-1 text-textTertiary"
-                            aria-label={`take ${role.name} from ${member.name}`}
-                            onClick={() => void run(() => api.takeRole(server, role.id, member.name))}
-                          >
-                            ×
-                          </button>
-                        )}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="mt-1 flex flex-wrap gap-2">
+                {item.label}
+              </button>
+            );
+          })}
+        </p>
+      )}
+      <ul id="manage-members" className="flex flex-col gap-2">
+        {members.map((member) => {
+          // a role cannot touch an owner, unless an owner is the one giving or taking
+          const touch = room.perms.roles && (!member.owner || room.owner);
+          const offer = touch ? room.roles.filter((role) => !member.roles.some((held) => held.id === role.id) && reaches(room, role.perms)) : [];
+          // not yourself; an owner only by an owner, and never the last one
+          const removable = member.name !== me && (!member.owner || (room.owner && owners > 1));
+          const acts = offer.length > 0 || (removable && (room.perms.kick || room.perms.ban || (room.owner && member.owner)));
+          return (
+            <li
+              key={member.name}
+              data-member={member.name}
+              data-owner={member.owner || undefined}
+              className="flex items-start gap-2 border border-primaryStroke px-2 py-1.5"
+            >
+              <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold">{member.name}</span>
+                  {member.owner && <span className="text-xs uppercase text-primaryBlue">owner</span>}
+                  {member.roles.map((role) => (
+                    <span key={role.id} className="text-xs" style={{ color: role.color }}>
+                      {role.name}
+                      {touch && reaches(room, permsOf(role.id)) && (
+                        <button
+                          type="button"
+                          className="ml-1 text-textTertiary"
+                          aria-label={`take ${role.name} from ${member.name}`}
+                          onClick={() => void run(() => api.takeRole(server, role.id, member.name))}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                </div>
+                {acts && (
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
                     {offer.length > 0 && (
                       <select
                         aria-label={`role for ${member.name}`}
@@ -755,207 +867,233 @@ function Moderation({ server, room, me, onError }: { server: string; room: Group
                         ))}
                       </select>
                     )}
-                    {room.perms.kick && member.name !== me && (!member.owner || (room.owner && owners > 1)) && (
+                    {room.perms.kick && removable && (
                       <button type="button" className="text-textTertiary" onClick={() => void run(() => api.kickMember(server, member.name))}>
                         kick
                       </button>
                     )}
-                    {room.perms.ban && member.name !== me && (!member.owner || (room.owner && owners > 1)) && (
+                    {room.perms.ban && removable && (
                       <button type="button" className="text-decrease" onClick={() => void run(() => api.banMember(server, member.name, ''))}>
                         ban
                       </button>
                     )}
-                    {room.owner && member.owner && member.name !== me && owners > 1 && (
+                    {room.owner && member.owner && removable && (
                       <button type="button" className="text-textTertiary" onClick={() => void run(() => api.revokeOwner(server, member.name))}>
                         remove owner
                       </button>
                     )}
                   </div>
-                </div>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {room.owner && (
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const name = ownerName.trim().toLowerCase();
+            if (!name) return;
+            void run(async () => {
+              await api.grantOwner(server, name);
+              setOwnerName('');
+            });
+          }}
+        >
+          <input
+            id="owner-name"
+            value={ownerName}
+            onChange={(e) => setOwnerName(e.target.value)}
+            placeholder="name an owner"
+            aria-label="name an owner"
+            className={INPUT}
+          />
+          <button id="owner-grant" type="submit" className="text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!ownerName.trim()}>
+            owner
+          </button>
+        </form>
+      )}
+    </Section>
+  );
+}
+
+function BansSection({ server, room, run }: ManageProps) {
+  const [name, setName] = useState('');
+  const [reason, setReason] = useState('');
+  const bans = room.bans ?? [];
+  return (
+    <Section title="bans" description="a banned name is out, and cannot join again until it is unbanned.">
+      <form
+        className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const who = name.trim().toLowerCase();
+          if (!who) return;
+          void run(async () => {
+            await api.banMember(server, who, reason.trim());
+            setName('');
+            setReason('');
+          });
+        }}
+      >
+        <input id="ban-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="ban a name" aria-label="ban a name" className={INPUT} />
+        <input id="ban-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason, optional" aria-label="ban reason" className={INPUT} />
+        <button id="ban-submit" type="submit" className="justify-self-start text-sm font-semibold text-decrease disabled:opacity-40" disabled={!name.trim()}>
+          ban
+        </button>
+      </form>
+      {bans.length === 0 ? (
+        <p className="text-textTertiary">nobody is banned.</p>
+      ) : (
+        <ul id="group-bans" className="flex flex-col gap-1">
+          {bans.map((ban) => (
+            <li key={ban.name} className="flex items-center gap-2">
+              <span className="font-semibold">{ban.name}</span>
+              {ban.reason && <span className="truncate text-textTertiary">{ban.reason}</span>}
+              <button type="button" className="ml-auto text-textTertiary" onClick={() => void run(() => api.unbanMember(server, ban.name))}>
+                unban
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+/** The roles, each with its powers, and one form that adds a role or, after a click on one within reach, changes it. */
+function RolesSection({ server, room, run }: ManageProps) {
+  const [name, setName] = useState('');
+  const [color, setColor] = useState<string>(COLORS[0]);
+  const [perms, setPerms] = useState<RolePerms>(NO_PERMS);
+  const [editing, setEditing] = useState<number | null>(null);
+  // a power this login lacks is one it cannot put on a role; an owner and a site admin lack none
+  const short = POWERS.filter((power) => !room.perms[power.key]);
+  const full = editing === null && room.roles.length >= ROLE_CAP;
+
+  function edit(id: number) {
+    const role = room.roles.find((item) => item.id === id);
+    if (!role) return;
+    setEditing(id);
+    setName(role.name);
+    setColor(role.color);
+    setPerms(role.perms);
+  }
+
+  function reset() {
+    setEditing(null);
+    setName('');
+    setPerms(NO_PERMS);
+  }
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    const body = { name: name.trim(), color, perms };
+    await run(async () => {
+      if (editing === null) await api.createRole(server, body);
+      else await api.saveRole(server, editing, body);
+      reset();
+    });
+  }
+
+  return (
+    <Section
+      title="roles"
+      description={`${room.roles.length} of ${ROLE_CAP}. a name, a colour and the powers it carries; click one to change it. ${
+        short.length > 0 ? 'a role carries only the powers you hold. ' : ''
+      }only an owner can name another owner, or change the pictures.`}
+    >
+      {room.roles.length === 0 && <p className="text-textTertiary">no roles yet.</p>}
+      {room.roles.length > 0 && (
+        <ul id="group-roles" className="flex flex-col gap-1">
+          {room.roles.map((role) => {
+            // a role past this login's reach is read, not changed
+            const within = reaches(room, role.perms);
+            return (
+              <li key={role.id} data-role={role.name} data-reach={within || undefined} className="flex items-center gap-2">
+                {within ? (
+                  <button type="button" className="font-semibold" style={{ color: role.color }} onClick={() => edit(role.id)}>
+                    {role.name}
+                  </button>
+                ) : (
+                  <span className="font-semibold" style={{ color: role.color }}>
+                    {role.name}
+                  </span>
+                )}
+                <span className="truncate text-xs text-textTertiary">
+                  {POWERS.filter((power) => role.perms[power.key])
+                    .map((power) => power.label)
+                    .join(', ') || 'no powers'}
+                </span>
+                {within && (
+                  <button type="button" className="ml-auto text-textTertiary" onClick={() => void run(() => api.deleteRole(server, role.id))}>
+                    delete
+                  </button>
+                )}
               </li>
             );
           })}
         </ul>
-        {room.owner && (
-          <form
-            className="mt-3 flex gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const name = ownerName.trim().toLowerCase();
-              if (!name) return;
-              void run(async () => {
-                await api.grantOwner(server, name);
-                setOwnerName('');
-              });
-            }}
-          >
-            <input
-              id="owner-name"
-              value={ownerName}
-              onChange={(e) => setOwnerName(e.target.value)}
-              placeholder="name an owner"
-              aria-label="name an owner"
-              className={INPUT}
-            />
-            <button id="owner-grant" type="submit" className="text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!ownerName.trim()}>
-              owner
-            </button>
-          </form>
-        )}
-        {room.perms.ban && (
-          <form
-            className="mt-3 flex flex-col gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const name = banName.trim().toLowerCase();
-              if (!name) return;
-              void run(async () => {
-                await api.banMember(server, name, banReason.trim());
-                setBanName('');
-                setBanReason('');
-              });
-            }}
-          >
-            <input id="ban-name" value={banName} onChange={(e) => setBanName(e.target.value)} placeholder="ban a name" aria-label="ban a name" className={INPUT} />
-            <input
-              id="ban-reason"
-              value={banReason}
-              onChange={(e) => setBanReason(e.target.value)}
-              placeholder="reason, optional"
-              aria-label="ban reason"
-              className={INPUT}
-            />
-            <button id="ban-submit" type="submit" className="self-start text-sm font-semibold text-decrease disabled:opacity-40" disabled={!banName.trim()}>
-              ban
-            </button>
-          </form>
-        )}
-        {room.perms.ban && bans.length > 0 && (
-          <ul id="group-bans" className="mt-2 flex flex-col gap-1">
-            {bans.map((ban) => (
-              <li key={ban.name} className="flex items-center gap-2">
-                <span className="font-semibold">{ban.name}</span>
-                {ban.reason && <span className="truncate text-textTertiary">{ban.reason}</span>}
-                <button type="button" className="ml-auto text-textTertiary" onClick={() => void run(() => api.unbanMember(server, ban.name))}>
-                  unban
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {room.perms.roles && (
-        <section>
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">
-            roles{' '}
-            <span className="font-normal normal-case tracking-normal text-textTertiary">
-              {room.roles.length} of {ROLE_CAP}
-            </span>
-          </h3>
-          <ul id="group-roles" className="mb-3 flex flex-col gap-1">
-            {room.roles.map((role) => {
-              // a role past this login's reach is read, not changed
-              const within = reaches(room, role.perms);
-              return (
-                <li key={role.id} data-role={role.name} data-reach={within || undefined} className="flex items-center gap-2">
-                  {within ? (
-                    <button type="button" className="font-semibold" style={{ color: role.color }} onClick={() => editRole(role.id)}>
-                      {role.name}
-                    </button>
-                  ) : (
-                    <span className="font-semibold" style={{ color: role.color }}>
-                      {role.name}
-                    </span>
-                  )}
-                  <span className="truncate text-xs text-textTertiary">
-                    {POWERS.filter((power) => role.perms[power.key])
-                      .map((power) => power.label)
-                      .join(', ') || 'no powers'}
-                  </span>
-                  {within && (
-                    <button type="button" className="ml-auto text-textTertiary" onClick={() => void run(() => api.deleteRole(server, role.id))}>
-                      delete
-                    </button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-          {editing === null && room.roles.length >= ROLE_CAP ? (
-            <p className="text-textTertiary">{ROLE_CAP} roles is the cap.</p>
-          ) : (
-            <form id="role-form" onSubmit={(e) => void saveRole(e)} className="flex flex-col gap-2">
-              <input
-                id="role-name"
-                value={roleName}
-                onChange={(e) => setRoleName(e.target.value)}
-                placeholder="role name"
-                maxLength={32}
-                aria-label="role name"
-                className={INPUT}
+      )}
+      {full ? (
+        <p className="text-textTertiary">{ROLE_CAP} roles is the cap. delete one to add another.</p>
+      ) : (
+        <form id="role-form" onSubmit={(e) => void save(e)} className="flex flex-col gap-3">
+          <input id="role-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="role name" maxLength={32} aria-label="role name" className={INPUT} />
+          <div className="flex flex-wrap gap-1">
+            {COLORS.map((swatch) => (
+              <button
+                key={swatch}
+                type="button"
+                aria-label={swatch}
+                aria-pressed={swatch === color}
+                onClick={() => setColor(swatch)}
+                style={{ backgroundColor: swatch }}
+                className={cn('h-6 w-6 border-2', swatch === color ? 'border-textPrimary' : 'border-transparent')}
               />
-              <div className="flex flex-wrap gap-1">
-                {COLORS.map((swatch) => (
-                  <button
-                    key={swatch}
-                    type="button"
-                    aria-label={swatch}
-                    aria-pressed={swatch === roleColor}
-                    onClick={() => setRoleColor(swatch)}
-                    style={{ backgroundColor: swatch }}
-                    className={cn('h-6 w-6 border-2', swatch === roleColor ? 'border-textPrimary' : 'border-transparent')}
-                  />
-                ))}
-              </div>
-              {POWERS.map((power) => (
-                <label key={power.key} className={cn('flex items-center gap-2', !room.perms[power.key] && 'text-textTertiary')}>
-                  <input
-                    id={`role-perm-${power.key}`}
-                    type="checkbox"
-                    checked={rolePerms[power.key]}
-                    disabled={!room.perms[power.key]}
-                    onChange={(e) => setRolePerms({ ...rolePerms, [power.key]: e.target.checked })}
-                  />
-                  {power.label}
-                </label>
-              ))}
-              <div className="flex gap-2">
-                <button
-                  id="role-save"
-                  type="submit"
-                  className="text-sm font-semibold text-primaryBlue disabled:opacity-40"
-                  disabled={!roleName.trim() || (editing === null && room.roles.length >= ROLE_CAP)}
-                >
-                  {editing === null ? 'add role' : 'save role'}
-                </button>
-                {editing !== null && (
-                  <button
-                    type="button"
-                    className="text-textTertiary"
-                    onClick={() => {
-                      setEditing(null);
-                      setRoleName('');
-                      setRolePerms(NO_PERMS);
-                    }}
-                  >
-                    cancel
-                  </button>
-                )}
-              </div>
-            </form>
-          )}
-          <p className="mt-2 text-xs text-textTertiary">
-            {short.length > 0 && 'a role carries only the powers you hold. '}only an owner can name another owner, or change the pictures.
-          </p>
-        </section>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {POWERS.map((power) => (
+              <label key={power.key} className={cn('flex items-center gap-2', !room.perms[power.key] && 'text-textTertiary')}>
+                <input
+                  id={`role-perm-${power.key}`}
+                  type="checkbox"
+                  checked={perms[power.key]}
+                  disabled={!room.perms[power.key]}
+                  onChange={(e) => setPerms({ ...perms, [power.key]: e.target.checked })}
+                />
+                {power.label}
+              </label>
+            ))}
+          </div>
+          <div className="flex items-center gap-3">
+            <button id="role-save" type="submit" className="text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!name.trim()}>
+              {editing === null ? 'add role' : 'save role'}
+            </button>
+            {editing !== null && (
+              <button type="button" className="text-textTertiary" onClick={reset}>
+                cancel
+              </button>
+            )}
+          </div>
+        </form>
       )}
+    </Section>
+  );
+}
 
-      {room.owner && (
-        <button type="button" className="self-start text-sm text-decrease" onClick={() => setSure(true)}>
-          delete group
-        </button>
-      )}
+/** An owner's delete. It asks first, in its own dialog over this one; a yes goes to /groups. */
+function DeleteSection({ server, run }: { server: string; run: Run }) {
+  const navigate = useNavigate();
+  const [sure, setSure] = useState(false);
+  return (
+    <Section title="delete" description="the group goes, and everyone in it is out.">
+      <button id="room-delete-ask" type="button" className="self-start text-sm font-semibold text-decrease" onClick={() => setSure(true)}>
+        delete group
+      </button>
       {sure && (
         <ConfirmDialog
           id="room-delete"
@@ -972,6 +1110,6 @@ function Moderation({ server, room, me, onError }: { server: string; room: Group
           onNo={() => setSure(false)}
         />
       )}
-    </aside>
+    </Section>
   );
 }

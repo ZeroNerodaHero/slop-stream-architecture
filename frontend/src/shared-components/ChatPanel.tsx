@@ -154,6 +154,10 @@ function pictureSrc(id: string): string {
   return `/api/chat-images/${encodeURIComponent(id)}`;
 }
 
+/** A thumbnail under the pointer (or with keyboard focus): a faint grey laid over the picture, so the hover is felt. */
+const THUMB_HOVER =
+  "relative after:pointer-events-none after:absolute after:inset-0 after:bg-white/[.03] after:opacity-0 after:transition-opacity after:duration-150 after:content-[''] hover:after:opacity-100 focus-visible:after:opacity-100";
+
 /**
  * The pictures on a line, under the words. One is drawn as it is, at most five lines tall. Two
  * sit side by side. More make two rows, the first with the odd one out, and the pictures of a
@@ -182,7 +186,7 @@ function ChatImages({ ids }: { ids: string[] }) {
                 type="button"
                 aria-label={many ? `picture ${i + 1} of ${ids.length}` : 'picture'}
                 title="see it full size"
-                className={many ? 'min-w-0 flex-1' : 'block max-w-full'}
+                className={cn(THUMB_HOVER, many ? 'min-w-0 flex-1' : 'block max-w-full')}
                 onClick={(e) => setView({ at: i, host: e.currentTarget.ownerDocument.body })}
               >
                 <img src={pictureSrc(id)} alt="" className={many ? 'h-full w-full object-cover' : 'max-h-[7.5rem] max-w-full object-contain'} />

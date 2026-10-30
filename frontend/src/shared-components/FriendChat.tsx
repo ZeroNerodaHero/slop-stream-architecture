@@ -37,6 +37,7 @@ import { Face } from '@/shared-components/Face';
 import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { Who, Word } from '@/shared-components/PersonRow';
+import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { INPUT } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -268,7 +269,15 @@ function Picker({ dms }: { dms: Dm[] }) {
   return (
     <div id="friend-chat-pick" className="min-h-0 flex-1 overflow-y-auto p-3">
       {following === undefined ? (
-        <p className="text-sm text-textTertiary">loading</p>
+        // the grid of squares in grey before the list has answered: a face and a name's worth each
+        <Skeleton id="friend-chat-pick-loading" className="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-2">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="flex flex-col items-center gap-1.5 p-2">
+              <Bone className="h-10 w-10" />
+              <Bone className="h-3 w-12" />
+            </div>
+          ))}
+        </Skeleton>
       ) : friends.length === 0 ? (
         <p id="friend-chat-pick-empty" className="text-sm text-textSecondary">
           nobody follows you back yet. a chat is with a friend: someone you follow who follows you.

@@ -86,12 +86,19 @@ const TAB_STEP: Record<string, number | undefined> = { ArrowRight: 1, ArrowDown:
  * first watch page of this document keeps that box through its ask instead of collapsing it to
  * the profile and growing it back for the player. True once; a later page here came by a click.
  */
-let servedWithCard = /^\/watch\//.test(location.pathname);
+let servedWithCard = location.pathname.startsWith('/watch/');
 
 /** The `state` a link to a stream's page may carry: `live`, the card or row that was clicked said they are streaming. */
 function hintedLive(state: unknown): boolean {
   return typeof state === 'object' && state !== null && (state as { live?: unknown }).live === true;
 }
+
+/**
+ * The hold on the player's box through the page's first ask (see `WatchPage`): `before` the
+ * ask has begun, `asking` while it is under way, `done` once it has answered, whatever it said.
+ * `none` is a page with no reason to hold.
+ */
+type Hold = 'none' | 'before' | 'asking' | 'done';
 
 /** Arrows move the focus along the tabs and open the one landed on; Home and End go to the ends. The user modal's tabs do the same. */
 function roveTabs(e: KeyboardEvent<HTMLDivElement>) {
@@ -118,12 +125,11 @@ export function WatchPage() {
   // streaming (`state.live`), or the api's card already stood the box there (`servedWithCard`).
   // the ask decides: a grant that says not live drops the hold, and it never comes back for
   // a re-ask (the socket's word is what holds the box from then on)
-  const [held, setHeld] = useState(() => {
-    const hold = hintedLive(state) || servedWithCard;
+  const [hold, setHold] = useState<Hold>(() => {
+    const reason = hintedLive(state) || servedWithCard;
     servedWithCard = false;
-    return hold;
+    return reason ? 'before' : 'none';
   });
-  const asked = useRef(false);
   const name = useAtomValue(watchNameAtom);
   const message = useAtomValue(watchMessageAtom);
   const tone = useAtomValue(watchToneAtom);
@@ -159,10 +165,7 @@ export function WatchPage() {
   // on the go live page ends a stream kept in the corner (publish-atoms' goLive)
   const cornerTaken = useAtomValue(publishPipAtom);
   // a fake stream gets a page from its name. anyone else gets the sample, until they build their own.
-  const about = useMemo(
-    () => (isDummyName(name) ? dummyPage(name, { offline }) : demoAbout(name, { offline, thumbs: [] })),
-    [name, offline]
-  );
+  const about = useMemo(() => (isDummyName(name) ? dummyPage(name, { offline }) : demoAbout(name, { offline, thumbs: [] })), [name, offline]);
 
   // Mount only: start watching the name in the url (or take back the stream picture in picture
   // kept alive), and on the way out stop, unless picture in picture keeps it going in the corner.
@@ -185,12 +188,13 @@ export function WatchPage() {
     navigate(`/watch/${renamedTo}`, { replace: true });
   }, [renamedTo]);
 
-  // The hold lasts for this page's first ask: once that ask has been made (`loading`) and
-  // answered (anything else), the word on the socket is the only reason to hold the box.
-  useEffect(() => {
-    if (phase === 'loading') asked.current = true;
-    else if (asked.current && held) setHeld(false);
-  }, [phase, held]);
+  // The hold follows the phase: the first `loading` is the ask beginning, the first phase after
+  // it is its answer, and from then on the word on the socket is the only reason to hold the
+  // box. Set during the render that sees the change (react runs it again before painting), so
+  // no frame shows the box held past its answer.
+  if (hold === 'before' && phase === 'loading') setHold('asking');
+  else if (hold === 'asking' && phase !== 'loading') setHold('done');
+  const held = hold === 'before' || hold === 'asking';
 
   // The stream is expected and not here yet: they are streaming, as the word says (or as the
   // hold assumes, until the ask has answered), and the page is asking or waiting to be told.
@@ -272,34 +276,34 @@ export function WatchPage() {
                 </div>
               </Skeleton>
             ) : (
-            <>
-              {offline !== null && (
-                <img
-                  id="offline-picture"
-                  src={api.offlineUrl(name, offline)}
-                  alt=""
-                  draggable={false}
-                  className="mb-3 aspect-video w-full border border-primaryStroke bg-black object-cover"
-                />
-              )}
-              <div id="profile" className={cn(panelClassName('flex flex-wrap items-center gap-6 p-6'))} data-presence={presence}>
-                <Face name={name} version={avatar} className="h-28 w-28 text-5xl" />
-                <div className="min-w-0 flex-1">
-                  <p className={cn('flex items-center gap-2 text-lg font-semibold', PRESENCE_TEXT[presence])}>
-                    <span aria-hidden className={cn('inline-block h-3 w-3', PRESENCE_SQUARE[presence])} />
-                    {PRESENCE_WORD[presence]}
-                  </p>
-                  {offlineNote && (
-                    <p id="offline-note" className="mt-1 [overflow-wrap:anywhere]">
-                      {offlineNote}
+              <>
+                {offline !== null && (
+                  <img
+                    id="offline-picture"
+                    src={api.offlineUrl(name, offline)}
+                    alt=""
+                    draggable={false}
+                    className="mb-3 aspect-video w-full border border-primaryStroke bg-black object-cover"
+                  />
+                )}
+                <div id="profile" className={cn(panelClassName('flex flex-wrap items-center gap-6 p-6'))} data-presence={presence}>
+                  <Face name={name} version={avatar} className="h-28 w-28 text-5xl" />
+                  <div className="min-w-0 flex-1">
+                    <p className={cn('flex items-center gap-2 text-lg font-semibold', PRESENCE_TEXT[presence])}>
+                      <span aria-hidden className={cn('inline-block h-3 w-3', PRESENCE_SQUARE[presence])} />
+                      {PRESENCE_WORD[presence]}
                     </p>
-                  )}
-                  <p className="mt-1 text-textSecondary">{phase === 'loading' ? 'loading' : NOT_LIVE_WORDS[presence]}</p>
+                    {offlineNote && (
+                      <p id="offline-note" className="mt-1 [overflow-wrap:anywhere]">
+                        {offlineNote}
+                      </p>
+                    )}
+                    <p className="mt-1 text-textSecondary">{phase === 'loading' ? 'loading' : NOT_LIVE_WORDS[presence]}</p>
+                  </div>
+                  {/* the chat's button lives on the player; without a player it lives here */}
+                  <ChatOpenButton className="self-start" />
                 </div>
-                {/* the chat's button lives on the player; without a player it lives here */}
-                <ChatOpenButton className="self-start" />
-              </div>
-            </>
+              </>
             )
           ) : (
             <div className="group relative">

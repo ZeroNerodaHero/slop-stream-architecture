@@ -2,9 +2,9 @@
  * Who the login follows (docs/follows.md), and the panel in the corner that shows them. The
  * list comes from `GET /api/following` each time the panel opens, so the words beside the names
  * (streaming, online, offline) are fresh; a follow or an unfollow changes the list at once and
- * asks again behind it. Search goes to `GET /api/search`, debounced by the box. The person
- * card's facts (how many follow a name, and the rest) come from `GET /api/streamers/:name`
- * when a card shows, kept a short while per name.
+ * asks again behind it. Search goes to `GET /api/search`, debounced by the box. What the person
+ * card needs past what its row holds (a chat line's speaker: the word and the status) comes
+ * from `GET /api/streamers/:name` when a card shows, kept a short while per name.
  */
 
 import { atom } from 'jotai';
@@ -32,12 +32,12 @@ export const searchBusyAtom = atom(false);
 /** What the person card (PersonCard.tsx) says past what its row holds: one profile read, and when it came. */
 export interface Peek {
   card: Streamer;
-  /** When the answer came, ms: the card's clock for "last live 3 hr ago", and when the answer is old. */
+  /** When the answer came, ms: when it is old. */
   at: number;
 }
 /** By name. A name not here has not been asked about, or the api did not answer. */
 export const peeksAtom = atom<Record<string, Peek>>({});
-/** How long an answer is good for. Followers move slowly; the word beside the name is the row's, not this. */
+/** How long an answer is good for. A row that holds the word shows its own; this is the chat's, where a speaker's word a few seconds behind is close enough. */
 const PEEK_FRESH_MS = 30_000;
 const peeking = new Map<string, Promise<void>>();
 
@@ -63,7 +63,7 @@ export function loadFollowing(): Promise<void> {
   return asking;
 }
 
-/** The login changed (in, out, renamed): nothing shown is theirs any more. The cards' "follows you" was theirs too. */
+/** The login changed (in, out, renamed): nothing shown is theirs any more. */
 export function forgetFollowing() {
   store.set(followingAtom, undefined);
   store.set(searchQueryAtom, '');
@@ -72,8 +72,8 @@ export function forgetFollowing() {
 }
 
 /**
- * The card's facts for `name`: `GET /api/streamers/:name`, unless a fresh answer is in hand
- * or one is on its way, so a pointer back and forth over the same rows asks once. A miss
+ * The profile read for `name`'s card: `GET /api/streamers/:name`, unless a fresh answer is in
+ * hand or one is on its way, so a pointer back and forth over the same names asks once. A miss
  * changes nothing: the card keeps to what its row holds.
  */
 export function loadPeek(name: string): Promise<void> {
@@ -98,15 +98,6 @@ function markSearch(name: string, following: boolean) {
     searchResultsAtom,
     store.get(searchResultsAtom).map((hit) => (hit.name === name ? { ...hit, following } : hit))
   );
-}
-
-/** A follow or an unfollow from this tab moves the count on the name's card at once, the way the watch page's count moves. */
-function markPeek(name: string, following: boolean) {
-  const peeks = store.get(peeksAtom);
-  const peek = peeks[name];
-  if (!peek || peek.card.following === following) return;
-  const followers = Math.max(0, (peek.card.followers ?? 0) + (following ? 1 : -1));
-  store.set(peeksAtom, { ...peeks, [name]: { ...peek, card: { ...peek.card, following, followers } } });
 }
 
 /** `POST …/follow`. The name joins the list at once (as offline, until the list is asked again). */

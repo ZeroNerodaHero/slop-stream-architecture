@@ -22,6 +22,7 @@ import { isValidName } from '@/infra/names';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
+import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { BUTTON, Field, INPUT, Section, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -87,7 +88,17 @@ export function GroupsTab() {
         title="groups"
         description="join one and its badge goes on your lines. bot is automatic: the fake streams' chatters wear it, nobody joins it, and the chat can hide those lines."
       >
-        {loaded === undefined && <p className="text-textTertiary">loading</p>}
+        {/* before the list has answered: the list's box with a few rows' worth of grey in it, the badge and the words */}
+        {loaded === undefined && (
+          <Skeleton id="group-list-loading" className="divide-y divide-primaryStroke border border-primaryStroke bg-background">
+            {Array.from({ length: 3 }, (_, i) => (
+              <div key={i} className="flex items-center gap-4 px-4 py-3">
+                <Bone className="h-5 w-14 shrink-0" />
+                <Bone className="h-4 w-40 max-w-full" />
+              </div>
+            ))}
+          </Skeleton>
+        )}
         {loaded === false && (
           <button id="group-reload" type="button" className="self-start text-base font-semibold text-primaryBlue" onClick={() => void loadGroups()}>
             try again
@@ -141,7 +152,13 @@ function GroupRow({ group, me, busy }: { group: Group; me: string | null; busy: 
             </button>
           </>
         ) : group.mine ? (
-          <button id={`group-leave-${group.name}`} type="button" className="text-sm font-semibold text-textTertiary disabled:opacity-40" disabled={busy} onClick={() => setLeaveSure(true)}>
+          <button
+            id={`group-leave-${group.name}`}
+            type="button"
+            className="text-sm font-semibold text-textTertiary disabled:opacity-40"
+            disabled={busy}
+            onClick={() => setLeaveSure(true)}
+          >
             leave
           </button>
         ) : (
@@ -150,12 +167,24 @@ function GroupRow({ group, me, busy }: { group: Group; me: string | null; busy: 
           </Button>
         )}
         {canDelete && group.public !== undefined && (
-          <button id={`group-access-${group.name}`} type="button" className="text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={busy} onClick={() => void setGroupListed(group.name, group.public === false, words.title)}>
+          <button
+            id={`group-access-${group.name}`}
+            type="button"
+            className="text-sm font-semibold text-primaryBlue disabled:opacity-40"
+            disabled={busy}
+            onClick={() => void setGroupListed(group.name, group.public === false, words.title)}
+          >
             {group.public === false ? 'make public' : 'make private'}
           </button>
         )}
         {canDelete && (
-          <button id={`group-delete-${group.name}`} type="button" className="text-sm font-semibold text-decrease disabled:opacity-40" disabled={busy} onClick={() => setSure(true)}>
+          <button
+            id={`group-delete-${group.name}`}
+            type="button"
+            className="text-sm font-semibold text-decrease disabled:opacity-40"
+            disabled={busy}
+            onClick={() => setSure(true)}
+          >
             delete
           </button>
         )}

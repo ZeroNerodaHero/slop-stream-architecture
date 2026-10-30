@@ -17,7 +17,7 @@ import { api, messageOf } from '@/infra/api';
 import { meAtom, reloadMe } from '@/infra/atoms/auth-atoms';
 import { nickAtom, reconnectChat, refaceLines } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
-import { followIdentityOnLivePage, myAvatarAtom, streamNameAtom } from '@/infra/atoms/publish-atoms';
+import { followIdentityOnLivePage } from '@/infra/atoms/publish-atoms';
 import { socialsAtom, watchNameAtom } from '@/infra/atoms/watch-atoms';
 import { onEvents, reconnectEvents } from '@/infra/events';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
@@ -139,11 +139,6 @@ export async function loadMyProfile(): Promise<void> {
   }
 }
 
-/** The go live page shows the same picture from the same (day-cached) url: keep its version in step. */
-function alsoOnLivePage(name: string, version: number | null) {
-  if (store.get(streamNameAtom) === name) store.set(myAvatarAtom, version);
-}
-
 /** My own page open in this tab shows the links from its grant: a save shows there at once, no reload. */
 function alsoOnWatchPage(name: string, saved: { socials?: Socials }) {
   if (store.get(watchNameAtom) !== name) return;
@@ -185,7 +180,6 @@ export async function saveMyAvatar(file: File): Promise<void> {
     const saved = await api.saveAvatar(name, jpeg);
     store.set(profileAvatarAtom, saved.avatar);
     store.set(profileAvatarStatusAtom, 'saved');
-    alsoOnLivePage(name, saved.avatar);
     refaceLines(name, saved.avatar);
   } catch (err) {
     store.set(profileAvatarStatusAtom, `not saved: ${messageOf(err)}`);
@@ -199,7 +193,6 @@ export async function removeMyAvatar(): Promise<void> {
     await api.deleteAvatar(name);
     store.set(profileAvatarAtom, null);
     store.set(profileAvatarStatusAtom, 'removed');
-    alsoOnLivePage(name, null);
     refaceLines(name, null);
   } catch (err) {
     store.set(profileAvatarStatusAtom, `not removed: ${messageOf(err)}`);

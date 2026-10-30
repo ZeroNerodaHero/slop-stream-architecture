@@ -16,6 +16,7 @@ import { FollowButton } from '@/shared-components/FollowButton';
 import { LiveMark } from '@/shared-components/LiveMark';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { Who } from '@/shared-components/PersonRow';
+import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { INPUT } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
@@ -24,8 +25,10 @@ const SEARCH_WAIT_MS = 200;
 /** How long the pointer rests on a row before the person's card shows: past the panel's 150ms widening, so the card is measured against the open panel. */
 const PEEK_MS = 200;
 const ICON_BUTTON = 'shrink-0 border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
-/** A line of words where a list would be: nobody yet, loading, the pointer to an account. */
+/** A line of words where a list would be: nobody yet, the pointer to an account. */
 const NOTE = 'px-3 py-3 text-sm text-textSecondary';
+/** How many grey squares stand in the face column before the list has answered. */
+const FACES_GUESS = 4;
 
 /**
  * The column of faces: 40px squares with a 1px border around each, 19px in from the panel's
@@ -505,6 +508,26 @@ function Results({ side, open, onPick, gap }: ListProps & { gap: number }) {
   );
 }
 
+/**
+ * The column before the list has answered: a face's worth of grey where each face goes, in the
+ * face column, with a name's worth beside it while the panel is open. The smallest gap, like a
+ * column with nothing to stretch; the faces land on the squares.
+ */
+function FollowingSkeleton({ side, open }: { side: PanelSide; open: boolean }) {
+  const mirrored = side === 'right';
+  return (
+    <Skeleton id="friends-loading" className="flex flex-col gap-2">
+      {Array.from({ length: FACES_GUESS }, (_, i) => (
+        <div key={i} className={cn('flex items-center gap-2', mirrored && 'flex-row-reverse', INSET[side])}>
+          {/* FACE_PX square */}
+          <Bone className="h-[42px] w-[42px] shrink-0" />
+          {open && <Bone className="h-3.5 w-24" />}
+        </div>
+      ))}
+    </Skeleton>
+  );
+}
+
 interface FriendsProps {
   /** Widened over the page (hover or focus), or the column of faces. */
   open: boolean;
@@ -582,8 +605,9 @@ export function Friends({ open, side, onPick }: FriendsProps) {
         . searching works anyway.
       </p>
     );
-  } else if (list === undefined) words = <p className={cn(NOTE, 'text-textTertiary')}>loading</p>;
-  else if (list.length === 0) words = <p className={NOTE}>nobody yet. find someone above.</p>;
+  } else if (list?.length === 0) words = <p className={NOTE}>nobody yet. find someone above.</p>;
+  // a login whose list has not answered: grey squares where the faces go, closed and open alike
+  const loading = !!me && list === undefined;
 
   return (
     <div id="friends" role="region" aria-label="following" className="flex min-h-0 flex-1 flex-col">
@@ -614,6 +638,8 @@ export function Friends({ open, side, onPick }: FriendsProps) {
         </div>
         {searching ? (
           <Results side={side} open={open} onPick={onPick} gap={fit.gap} />
+        ) : loading ? (
+          <FollowingSkeleton side={side} open={open} />
         ) : words ? (
           open && words
         ) : (
