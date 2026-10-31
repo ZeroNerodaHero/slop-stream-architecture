@@ -2,7 +2,8 @@
  * Groups: the list from `GET /api/groups`, which of them are mine, and the actions on them.
  * See docs/groups.md. The user modal's groups tab edits them and the profile tab shows mine;
  * the sidebar lists the ones I am in as servers (`GET /api/explore`'s `yours`, which has each
- * one's picture and who in it is live). The chat needs nothing from here: the server puts each
+ * one's picture and who in it is live) and its search box finds those and the public ones
+ * (`discover`). The chat needs nothing from here: the server puts each
  * speaker's badges on the line itself. Same shape as the other atom modules: atoms for what
  * renders, action functions to change it.
  */
@@ -24,6 +25,8 @@ export const groupsStatusAtom = atom('');
 export const myGroupsAtom = atom((get) => get(groupsAtom).filter((g) => g.mine));
 /** The servers the login is in, as the sidebar lists them (docs/follows.md). `undefined` until asked once this page load; `[]` for nobody. */
 export const myServersAtom = atom<Server[] | undefined>(undefined);
+/** The public servers the login is not in, the explorer's `discover`: what the sidebar's box finds past the ones you are in. `undefined` until asked once this page load. */
+export const publicServersAtom = atom<Server[] | undefined>(undefined);
 
 let askingServers: Promise<void> | null = null;
 /** Bumped by `forgetMyServers`: an ask carries the stamp it was made under and lands only while that is still the current one. */
@@ -40,18 +43,23 @@ export async function loadGroups(): Promise<void> {
   }
 }
 
-/** The sidebar's list again, with who is live in each now. One ask at a time; a second caller waits for the first. An answer for a login since forgotten is dropped. Nobody: an empty list, no request. */
-export function loadMyServers(): Promise<void> {
-  if (!store.get(meAtom)) {
-    store.set(myServersAtom, []);
-    return Promise.resolve();
-  }
+/**
+ * The explorer's answer again, for anyone: the servers you are in and the public ones you are
+ * not, with who is live in each now. One ask at a time; a second caller waits for the first. An
+ * answer for a login since forgotten is dropped.
+ */
+export function loadServers(): Promise<void> {
   if (!askingServers) {
     const stamp = serversStamp;
     askingServers = api
       .explore()
       .then((found) => {
-        if (stamp === serversStamp) store.set(myServersAtom, found.yours);
+        if (stamp !== serversStamp) return;
+        store.set(myServersAtom, found.yours);
+        store.set(
+          publicServersAtom,
+          found.discover.filter((server) => server.public !== false)
+        );
       })
       .catch(() => {
         // the api is away: what is shown stays (nothing, for a first ask that failed: the column must not wait on it), the next open asks again
@@ -65,11 +73,21 @@ export function loadMyServers(): Promise<void> {
   return askingServers;
 }
 
+/** The sidebar's list again (`loadServers`). Nobody: an empty list, no request; the column lists nothing for them. */
+export function loadMyServers(): Promise<void> {
+  if (!store.get(meAtom)) {
+    store.set(myServersAtom, []);
+    return Promise.resolve();
+  }
+  return loadServers();
+}
+
 /** The login changed (in, out, renamed): the servers shown were theirs, and so is an ask still in flight: its answer is dropped and the next ask is a fresh one. */
 export function forgetMyServers() {
   serversStamp += 1;
   askingServers = null;
   store.set(myServersAtom, undefined);
+  store.set(publicServersAtom, undefined);
 }
 
 /**

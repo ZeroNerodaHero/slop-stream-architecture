@@ -211,6 +211,41 @@ const body = async (res) => {
     return 'opened, hidden, opened again';
   });
 
+  await step("the shape of the lines: bubbles to start, yours right of theirs; the chat tab's cards make it a log or blocks, kept in the browser", async () => {
+    const shape = () => annPage.evaluate(() => document.querySelector('#friend-chat-log')?.getAttribute('data-style'));
+    expect((await shape()) === 'bubbles', `the log starts as ${await shape()}`);
+    // a box of yours sits to the right of a box of ben's (a line is the time at the left, then the box's row)
+    const [mine, theirs] = await annPage.evaluate(() => {
+      const box = (p) => p?.lastElementChild?.firstElementChild?.getBoundingClientRect().toJSON();
+      return [box(document.querySelector('#friend-chat-log p[data-mine]')), box(document.querySelector('#friend-chat-log p[data-id]:not([data-mine])'))];
+    });
+    expect(mine && theirs && mine.left > theirs.left && mine.right > theirs.right, `yours ${JSON.stringify(mine)} must sit right of theirs ${JSON.stringify(theirs)}`);
+    // the first line on screen starts a minute, so its time stands at the left, HH:MM
+    const clock = await annPage.evaluate(() => document.querySelector('#friend-chat-log p[data-id]')?.firstElementChild?.textContent);
+    expect(/^\d\d:\d\d$/.test(clock || ''), `the first line's time reads ${JSON.stringify(clock)}`);
+    // the gear opens the settings; the chat tab has the three cards, bubbles the one on
+    await annPage.hover('#user-panel');
+    await annPage.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+    await annPage.click('#settings');
+    await annPage.waitForSelector('#user-modal[open]', { timeout: 5000 });
+    await annPage.click('#tab-chat');
+    await annPage.waitForSelector('#dm-style-bubbles', { state: 'attached', timeout: 5000 });
+    expect(await annPage.isChecked('#dm-style-bubbles'), 'the bubbles card must be the one on');
+    await annPage.click('label[for="dm-style-log"]');
+    await annPage.waitForFunction(() => document.querySelector('#friend-chat-log')?.getAttribute('data-style') === 'log', null, { timeout: 5000 });
+    await annPage.click('label[for="dm-style-blocks"]');
+    await annPage.waitForFunction(() => document.querySelector('#friend-chat-log')?.getAttribute('data-style') === 'blocks', null, { timeout: 5000 });
+    const kept = await annPage.evaluate(() => localStorage.getItem('settings.dmStyle'));
+    expect(kept === '"blocks"', `the browser keeps ${kept}`);
+    // every line is still there in its shape, and it is still one <p> a line
+    expect((await annPage.$$('#friend-chat-log p[data-id]')).length === 50, 'the lines must all be there in the new shape');
+    await annPage.click('label[for="dm-style-bubbles"]');
+    await annPage.waitForFunction(() => document.querySelector('#friend-chat-log')?.getAttribute('data-style') === 'bubbles', null, { timeout: 5000 });
+    await annPage.click('#user-modal-close');
+    await annPage.waitForFunction(() => !document.querySelector('#user-modal[open]'), null, { timeout: 5000 });
+    return 'bubbles, a log, blocks, bubbles again';
+  });
+
   await step('a stranger again: unfollowed, the thread still reads but a line is refused with the words under the box; the line button goes', async () => {
     const undo = await ben.post(`/api/streamers/${ANN}/unfollow`);
     expect(undo.status() === 204, `ben unfollowing ann got ${undo.status()}`);

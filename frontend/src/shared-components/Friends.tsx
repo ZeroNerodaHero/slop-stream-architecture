@@ -3,11 +3,11 @@ import { useAtomValue } from 'jotai';
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { type Followed, groupWords, type Server } from '@/infra/api';
+import { type Followed, groupMatches, groupWords, type Server } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { dmUnreadAtom, openDm, showDms } from '@/infra/atoms/dm-atoms';
 import { followNoteAtom, followingAtom, loadFollowing, search, searchBusyAtom, searchQueryAtom, searchResultsAtom, unfollow } from '@/infra/atoms/follow-atoms';
-import { loadMyServers, myServersAtom } from '@/infra/atoms/groups-atoms';
+import { loadMyServers, loadServers, myServersAtom, publicServersAtom } from '@/infra/atoms/groups-atoms';
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import {
   type PanelSide,
@@ -562,9 +562,10 @@ function Divider({ value, min, max, above, below, onMove, pitch, gap, open, side
  * goes (the picture, or its letter on its colour, the size of a face), and open, the title with
  * its four digits and how many in it are live, else how many are in it. Live members are the
  * number on the square's corner, closed or open, in the blue of the streaming count. The whole
- * row is the way to the group's page. No card: the page is a click away and says it all.
+ * row is the way to the group's page. No card: the page is a click away and says it all. The
+ * same row stands in the search's hits (`Results`), under its own `id`.
  */
-function GroupRow({ server, side, open, onPick }: { server: Server; side: PanelSide; open: boolean; onPick: () => void }) {
+function GroupRow({ id, server, side, open, onPick }: { id: string; server: Server; side: PanelSide; open: boolean; onPick: () => void }) {
   const mirrored = side === 'right';
   const words = groupWords(server);
   const live = server.live?.length ?? 0;
@@ -572,7 +573,7 @@ function GroupRow({ server, side, open, onPick }: { server: Server; side: PanelS
   return (
     <li className={cn('flex snap-start items-center gap-1', mirrored && 'flex-row-reverse', INSET[side])} data-live={live}>
       <Link
-        id={`sidebar-group-${server.name}`}
+        id={id}
         to={`/groups/${encodeURIComponent(server.name)}`}
         onClick={onPick}
         draggable={false}
@@ -717,7 +718,9 @@ function Lists({ side, open, onPick, stack, rows, face, spacing, shares, folds }
             {/* folded, the list has no rows (`count` is 0) and slides to no height; it stays in the document, inert, so its rows are out of the tab order and off a reader */}
             <ul id={id} aria-label={word} inert={folded ? true : undefined} className={LIST} style={{ height: count * pitch, gap }}>
               {block.kind === 'groups'
-                ? block.servers.map((server) => <GroupRow key={server.name} server={server} side={side} open={open} onPick={onPick} />)
+                ? block.servers.map((server) => (
+                    <GroupRow key={server.name} id={`sidebar-group-${server.name}`} server={server} side={side} open={open} onPick={onPick} />
+                  ))
                 : block.people.map((f) => (
                     <Row key={f.name} id={`friend-${f.name}`} person={f} side={side} open={open} folded={folded} onPick={onPick}>
                       {block.kind === 'friends' && <Chat id={`friend-chat-${f.name}`} person={f} />}
@@ -733,26 +736,64 @@ function Lists({ side, open, onPick, stack, rows, face, spacing, shares, folds }
 }
 
 /**
- * What the box found, in place of the lists while it holds letters: the same rows, each with the
- * buttons its list would give it. A friend has chat and the ×, someone else you follow the ×
- * alone, and a name you do not follow the follow button. Who you follow is `followingAtom`, the
- * same answer the lists and the follow button read, so a click moves a row from one shape to
- * the next in place.
+ * The exact title (or the address, or the title with its digits, `gaming #0042` as the row
+ * shows it or `gaming#0042`) before the titles that start with the letters, before the rest:
+ * the api's own order for names, for the groups the page matches itself.
+ */
+function groupRank(server: Server, query: string): number {
+  const { title, tag } = groupWords(server);
+  const t = title.toLowerCase();
+  if (t === query || server.name === query || (tag !== null && (`${t} #${tag}` === query || `${t}#${tag}` === query))) return 0;
+  return t.startsWith(query) ? 1 : 2;
+}
+
+/**
+ * The groups the letters find, the ones you are in first, then the public ones you are not;
+ * inside each, `groupRank`, then as the explorer sent them (someone live first). The letters
+ * count anywhere in the title, the digits, the address, the badge or the about, the groups
+ * page's rule (`groupMatches`). The lists are small, so this runs on every letter.
+ */
+function groupHits(mine: Server[], others: Server[], query: string): Server[] {
+  return [mine, others].flatMap((list) =>
+    list
+      .filter((server) => groupMatches(server, query))
+      .map((server, i) => ({ server, i, rank: groupRank(server, query) }))
+      .sort((a, b) => a.rank - b.rank || a.i - b.i)
+      .map(({ server }) => server)
+  );
+}
+
+/**
+ * What the box found, in place of the lists while it holds letters: the groups first, the rows
+ * their list gives them (`groupHits`: yours, then the public ones, matched here from the
+ * explorer's answer as it stands, so they are up on the letter), then the people the api found,
+ * each with the buttons its list would give it. A friend has chat and the ×, someone else you
+ * follow the × alone, and a name you do not follow the follow button. Who you follow is
+ * `followingAtom`, the same answer the lists and the follow button read, so a click moves a row
+ * from one shape to the next in place.
  */
 function Results({ side, open, onPick, gap }: ListProps & { gap: number }) {
+  const query = useAtomValue(searchQueryAtom);
   const hits = useAtomValue(searchResultsAtom);
   const busy = useAtomValue(searchBusyAtom);
   const following = useAtomValue(followingAtom);
-  if (hits.length === 0) {
-    return <p className={cn(NOTE, 'text-textTertiary')}>{busy ? 'searching' : 'nobody called that'}</p>;
+  const mine = useAtomValue(myServersAtom);
+  const others = useAtomValue(publicServersAtom);
+  const groups = groupHits(mine ?? [], others ?? [], query.trim().toLowerCase());
+  if (groups.length === 0 && hits.length === 0) {
+    return <p className={cn(NOTE, 'text-textTertiary')}>{busy ? 'searching' : 'nothing called that'}</p>;
   }
   const known = new Map((following ?? []).map((f) => [f.name, f] as const));
   return (
     <ul id="friends-results" className={cn('flex min-h-0 flex-1 flex-col', SCROLL)} style={{ gap, paddingBottom: gap }}>
+      {/* a group and a person may share a name: the keys say which is which */}
+      {groups.map((server) => (
+        <GroupRow key={`group ${server.name}`} id={`result-group-${server.name}`} server={server} side={side} open={open} onPick={onPick} />
+      ))}
       {hits.map((h) => {
         const f = known.get(h.name);
         return (
-          <Row key={h.name} id={`result-${h.name}`} person={h} side={side} open={open} onPick={onPick}>
+          <Row key={`person ${h.name}`} id={`result-${h.name}`} person={h} side={side} open={open} onPick={onPick}>
             {f?.mutual && <Chat id={`result-chat-${h.name}`} person={h} />}
             {f ? <Unfollow id={`result-unfollow-${h.name}`} name={h.name} /> : <FollowButton id={`result-follow-${h.name}`} name={h.name} small />}
           </Row>
@@ -801,9 +842,12 @@ interface FriendsProps {
  * cut at whole rows, spend the room exactly; the lines between them, which drag, say how the
  * rows are shared, and the caret before each icon folds its list to the icon line, this
  * browser's choice (settings.sidebarFolds). The site's one search: letters in the box put what they find where the
- * lists were, each row with the buttons its list would give it, a follow button for a name you
- * do not follow; closing the panel empties it. Every open asks `GET /api/following` again, and
- * `GET /api/explore` for the groups while they are shown, so the words are now.
+ * lists were, the groups first (yours, then the public ones; a group is matched here, from the
+ * explorer's answer), then the people, each row with the buttons its list would give it, a
+ * follow button for a name you do not follow; closing the panel empties it. Every open asks
+ * `GET /api/following` again, and `GET /api/explore` for the groups while they are shown or
+ * once there are letters in the box (nobody's too: the public groups are theirs to find), so
+ * the words are now.
  */
 export function Friends({ open, side, onPick }: FriendsProps) {
   const me = useAtomValue(meAtom);
@@ -820,6 +864,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
   const [room, setRoom] = useState(0);
   const mirrored = side === 'right';
   const groupsOn = choices.some((c) => c.list === 'groups' && c.on);
+  const searching = query.trim() !== '';
 
   // the face and the box in px, off the document: read again when the text size changes, which the room's observer below does not see (the stack's
   // height stays, its rows grow). the setting's own subscriber (settings-atoms.ts) has put the size on <html> by then: the store tells every
@@ -850,7 +895,12 @@ export function Friends({ open, side, onPick }: FriendsProps) {
     return () => window.clearTimeout(t);
   }, [query]);
 
-  const searching = query.trim() !== '';
+  // the first letter: the groups again, the public ones with them, so the hits have every group the letters could find. one ask a search, not a letter;
+  // nobody's open asks nothing (`loadMyServers`), but their search may: the public groups are on their lists too
+  useEffect(() => {
+    if (searching) void loadServers();
+  }, [searching]);
+
   const list = me ? all : undefined;
   const friends = list?.filter((f) => f.mutual) ?? [];
   const rest = list?.filter((f) => !f.mutual) ?? [];
@@ -914,7 +964,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
       <div ref={stack} className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className={cn('shrink-0 transition-[padding]', SLIDE, INSET[side])} style={{ paddingTop: spacing.gaps.top, paddingBottom: spacing.gaps.search }}>
           <label htmlFor="friends-search" className="sr-only">
-            find someone
+            find someone or a group
           </label>
           {/* closed, the box is a square the size of a face (the face column's width) with the icon in it; open, it runs the width of the panel and the icon stays where it was */}
           <div className={cn('relative', open ? 'w-full' : 'w-[calc(2.5rem+2px)]', mirrored && 'ml-auto')}>
@@ -928,7 +978,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
               type="search"
               value={query}
               onChange={(e) => store.set(searchQueryAtom, e.target.value)}
-              placeholder="find someone to follow"
+              placeholder="find someone or a group"
               autoComplete="off"
               autoCapitalize="off"
               spellCheck={false}

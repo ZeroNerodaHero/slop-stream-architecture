@@ -314,6 +314,20 @@ export function groupWords(group: { name: string; title?: string | null; tag?: n
   return { title, tag };
 }
 
+/**
+ * Whether a search's letters are somewhere in the group's words: the title, the four digits
+ * (with or without the `#`, alone or after the title as the rows show them, `gaming #0042`, or
+ * run together, `gaming#0042`), the address, the badge, the about. `query` trimmed and
+ * lowercased by the caller; empty, it matches everything. The groups page and the sidebar's
+ * box share it.
+ */
+export function groupMatches(group: { name: string; badge: string; about: string; title?: string | null; tag?: number | null }, query: string): boolean {
+  if (!query) return true;
+  const { title, tag } = groupWords(group);
+  const named = tag ? `${title} #${tag} ${title}#${tag}` : title;
+  return `${named} ${group.name} ${group.badge} ${group.about}`.toLowerCase().includes(query);
+}
+
 /** The picture or the banner, cache-busted. Null when the group has none. */
 export function groupImage(name: string, kind: 'icon' | 'banner', version?: number | null): string | null {
   if (version == null) return null;

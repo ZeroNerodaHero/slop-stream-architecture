@@ -8,6 +8,7 @@ import {
   RiHashtag,
   RiInformationLine,
   RiLogoutBoxRLine,
+  RiNotificationLine,
   RiNotificationOffLine,
   RiSearchLine,
   RiSettings3Line,
@@ -91,6 +92,13 @@ const TOP_VIEW = 'snap-start scroll-mt-6';
 const ICON_BUTTON =
   'flex h-7 w-7 shrink-0 items-center justify-center border border-transparent focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default disabled:opacity-40';
 
+/**
+ * The bell on a channel's row while the channel is not muted: up with the pointer on the row
+ * (`group/channel`) or the keyboard focus on it, and always up on a screen with no hover,
+ * which has no pointer to rest there. Muted, the bell is the mark that says so, and stays up.
+ */
+const BELL_HIDDEN = 'opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/channel:opacity-100 [@media(hover:none)]:opacity-100';
+
 const COLORS = ['#5865f2', '#f85149', '#3fb950', '#f2cc60', '#bc8cff', '#ff9f43', '#39d2c0', '#ff6bcb'] as const;
 
 /** Matches `MAX_ROLES` in the api. */
@@ -121,9 +129,18 @@ function reaches(room: GroupRoom, perms: RolePerms): boolean {
   return room.owner || room.admin === true || POWERS.every((power) => !perms[power.key] || room.perms[power.key]);
 }
 
-/** Whether this login has anything to manage: a power the dialog holds. */
+/** Whether this login holds a power. Every power does something to a member, so this is the members tab's rule too. */
 function manages(room: GroupRoom): boolean {
   return room.owner || POWERS.some((power) => room.perms[power.key]);
+}
+
+/**
+ * Whether this login has a say over the channels: the channels power, or a channel they made
+ * (`can_delete`, the api's: a maker whose power has since gone still deletes their own). The
+ * channels tab's rule, and with `manages` the gear's; the list on the page deletes nothing.
+ */
+function managesChannels(room: GroupRoom): boolean {
+  return room.perms.channels || (room.channels ?? []).some((item) => item.can_delete);
 }
 
 /** Whether this login may change the pictures: an owner's, no role carries them. A site admin may, as with every power but naming an owner. */
@@ -433,7 +450,8 @@ export function ServerPage() {
   const noChannel = !found;
   const power = room.owner || POWERS.some((item) => room.perms[item.key]);
   const roster = mine || power || !!room.roster;
-  const canManage = manages(room);
+  // the gear: a tab to show. a power, or a channel of this login's own to delete (the channels tab)
+  const canManage = power || managesChannels(room);
   const lastMember = mine && room.members <= 1;
   const canPicture = ownsPictures(room);
 
@@ -615,14 +633,15 @@ export function ServerPage() {
  * The channels, in the order the manage dialog put them (`general` first until it is moved).
  * Adding one takes the channels power: `add channel`, a row under the last channel, asks the
  * name and a line about it in a dialog (AddChannelDialog), and goes at the cap (CHANNEL_CAP,
- * the api's). Who made a channel, or anyone with the power, deletes it; `general` stays. A
- * channel added, deleted or moved anywhere arrives on the socket and the list follows. A
- * member mutes a channel here (docs/notifications.md): its lines stop reaching their bell, and
- * the bell-off mark sits by its name until they unmute it.
+ * the api's). Nothing here deletes: that is the manage dialog's channels tab. A channel
+ * added, deleted or moved anywhere arrives on the socket and the list follows. A member mutes
+ * a channel here (docs/notifications.md): a bell at the right of its row, up while the pointer
+ * is on the row, with the word as a tooltip. A click mutes it, so its lines stop reaching
+ * their bell, and the bell on the row is the crossed one from then on, and stays up as the
+ * mark that says so, until they click it again.
  */
 function ChannelList({ server, channel, room, me, onError }: { server: string; channel: string; room: GroupRoom; me: string | null; onError: (error: string) => void }) {
   const [adding, setAdding] = useState(false);
-  const [sure, setSure] = useState<string | null>(null);
   const channels = room.channels ?? [];
   const muted = room.muted ?? [];
   const canAdd = room.perms.channels && room.mine;
@@ -639,16 +658,6 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
     }
   }
 
-  async function remove(item: string) {
-    onError('');
-    try {
-      await api.deleteChannel(server, item);
-      setSure(null);
-    } catch (err) {
-      onError(messageOf(err));
-    }
-  }
-
   return (
     <nav aria-label="channels">
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">channels</h3>
@@ -656,47 +665,39 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
         {channels.map((item) => {
           const here = item.name === channel;
           const isMuted = muted.includes(item.name);
-          // who made it, or the channels power; never general. kept right here, as channels and powers come and go
-          const canDelete = item.name !== 'general' && ((item.made_by != null && item.made_by === me) || room.perms.channels || item.can_delete);
-          // the bell-off mark by a muted channel's name: this login hears nothing from it
-          const mark = isMuted && <RiNotificationOffLine aria-label="muted" size={12} className="ml-1 inline-block shrink-0 align-[-1px] text-textTertiary" />;
           return (
-            <li key={item.name} data-muted={isMuted || undefined} className="flex items-center gap-1">
+            // the row is the box, the name fills it and the bell sits in it at the right: the pointer anywhere on the row brings the bell up
+            <li
+              key={item.name}
+              data-muted={isMuted || undefined}
+              className={cn('group/channel flex items-center', here ? 'bg-primaryStroke/40' : 'hover:bg-primaryStroke/20')}
+            >
               {here ? (
-                <span aria-current="page" className="min-w-0 flex-1 truncate bg-primaryStroke/40 px-2 py-1 font-semibold">
+                <span aria-current="page" className="min-w-0 flex-1 truncate px-2 py-1 font-semibold">
                   #{item.name}
-                  {mark}
                 </span>
               ) : (
                 <Link
                   id={`group-channel-${item.name}`}
                   to={item.name === 'general' ? `/groups/${server}` : `/groups/${server}/${item.name}`}
-                  className="min-w-0 flex-1 truncate px-2 py-1 text-textSecondary hover:bg-primaryStroke/20 hover:text-textPrimary"
+                  className="min-w-0 flex-1 truncate px-2 py-1 text-textSecondary group-hover/channel:text-textPrimary"
                 >
                   #{item.name}
-                  {mark}
                 </Link>
               )}
               {canMute && (
-                <button
-                  id={`channel-mute-${item.name}`}
-                  type="button"
-                  aria-pressed={isMuted}
-                  title={
-                    isMuted
-                      ? 'muted: its lines do not reach your bell. unmute to hear it again'
-                      : 'mute: its lines stop reaching your bell. the chat itself is not touched'
-                  }
-                  className={cn('px-1 text-xs', isMuted ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
-                  onClick={() => void mute(item.name, !isMuted)}
-                >
-                  {isMuted ? 'unmute' : 'mute'}
-                </button>
-              )}
-              {canDelete && (
-                <button type="button" className="px-1 text-xs text-textTertiary" onClick={() => setSure(item.name)}>
-                  delete
-                </button>
+                <Tooltip content={isMuted ? 'muted: nothing from it reaches your bell. click to unmute' : 'mute: its lines stop reaching your bell'}>
+                  <button
+                    id={`channel-mute-${item.name}`}
+                    type="button"
+                    aria-pressed={isMuted}
+                    aria-label={isMuted ? `unmute #${item.name}` : `mute #${item.name}`}
+                    className={cn(ICON_BUTTON, 'mr-0.5 text-textTertiary hover:text-textPrimary', !isMuted && BELL_HIDDEN)}
+                    onClick={() => void mute(item.name, !isMuted)}
+                  >
+                    {isMuted ? <RiNotificationOffLine aria-hidden size={16} /> : <RiNotificationLine aria-hidden size={16} />}
+                  </button>
+                </Tooltip>
               )}
             </li>
           );
@@ -721,20 +722,6 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
         </button>
       )}
       {adding && <AddChannelDialog server={server} channels={channels} onClose={() => setAdding(false)} />}
-      {sure && (
-        <ConfirmDialog
-          id={`channel-delete-${server}-${sure}`}
-          title={`delete #${sure}?`}
-          message="the channel goes."
-          yes="yes, delete"
-          onYes={() => {
-            const item = sure;
-            setSure(null);
-            void remove(item);
-          }}
-          onNo={() => setSure(null)}
-        />
-      )}
     </nav>
   );
 }
@@ -1036,12 +1023,13 @@ type ManageTab = 'about' | 'channels' | 'roles' | 'members' | 'bans' | 'delete';
 /**
  * The rail of the manage dialog, in order and in groups, each tab with the power that shows
  * it. `about` is the about line and the listing (appearance), and for an owner the pictures
- * too; `channels` is their order, and add and delete (channels); `members` is for anyone who
- * manages at all, since every power does something to a member.
+ * too; `channels` is their order, and add and delete (channels; and for a channel's maker
+ * without the power, the delete of their own); `members` is for anyone who manages at all,
+ * since every power does something to a member.
  */
 const MANAGE_TABS: { id: ManageTab; label: string; group: string; icon: ReactNode; shown: (room: GroupRoom) => boolean }[] = [
   { id: 'about', label: 'about', group: 'the group', icon: <RiInformationLine aria-hidden size={18} />, shown: (room) => room.perms.appearance },
-  { id: 'channels', label: 'channels', group: 'the group', icon: <RiHashtag aria-hidden size={18} />, shown: (room) => room.perms.channels },
+  { id: 'channels', label: 'channels', group: 'the group', icon: <RiHashtag aria-hidden size={18} />, shown: managesChannels },
   { id: 'roles', label: 'roles', group: 'the group', icon: <RiShieldStarLine aria-hidden size={18} />, shown: (room) => room.perms.roles },
   { id: 'members', label: 'members', group: 'people', icon: <RiGroupLine aria-hidden size={18} />, shown: (room) => manages(room) },
   { id: 'bans', label: 'bans', group: 'people', icon: <RiForbidLine aria-hidden size={18} />, shown: (room) => room.perms.ban },
@@ -1580,13 +1568,16 @@ function movedTo(order: string[], name: string, to: number): string[] {
  * the api (setChannelOrder, room-atoms); a drag moves it as the pointer goes and tells the
  * api once, on the drop. The list on the left follows under the backdrop, as does every other
  * room open. `add channel` opens the dialog the row under the list opens. Deleting the channel
- * on screen moves the page to `general` first, so the room under the dialog stays a room.
+ * on screen moves the page to `general` first, so the room under the dialog stays a room. The
+ * order and the add are the channels power's: without it this login is here for a channel
+ * they made (managesChannels), the rows are read, and `delete` is on theirs.
  */
 function ChannelsSection({ server, channel, room, run }: ManageProps & { channel: string }) {
   const navigate = useNavigate();
   const channels = room.channels ?? [];
   const names = channels.map((item) => item.name);
   const byName = new Map(channels.map((item) => [item.name, item]));
+  const orders = room.perms.channels;
   const [adding, setAdding] = useState(false);
   const [sure, setSure] = useState<string | null>(null);
   /** The order while a row is dragged: the one the drag began from, with the row where the pointer has it. Null between drags. */
@@ -1654,7 +1645,9 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
   return (
     <Section
       title="channels"
-      description={`${channels.length} of ${CHANNEL_CAP}, top to bottom as the list shows them. drag a row to move it, or up and down. general stays.`}
+      description={`${channels.length} of ${CHANNEL_CAP}, top to bottom as the list shows them. ${
+        orders ? 'drag a row to move it, or up and down. general stays.' : 'the channels power moves and adds them; the ones you made are yours to delete.'
+      }`}
     >
       <ul id="manage-channels" ref={rows} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} onLostPointerCapture={endDrag} className="flex flex-col gap-2">
         {order.map((name, i) => {
@@ -1667,32 +1660,44 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
               data-channel={name}
               className={cn('flex items-center gap-3 border bg-background px-3 py-2 transition-[border-color] duration-150', held ? 'border-primaryBlue' : 'border-primaryStroke')}
             >
-              <button
-                id={`channel-drag-${name}`}
-                type="button"
-                aria-label={`move #${name}: drag, or the arrow keys`}
-                aria-keyshortcuts="ArrowUp ArrowDown"
-                title="drag to move"
-                onPointerDown={(e) => startDrag(e, name, i)}
-                onKeyDown={(e) => keyMove(e, name, i)}
-                className={cn(
-                  'shrink-0 touch-none select-none border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke hover:text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none',
-                  held ? 'cursor-grabbing' : 'cursor-grab'
-                )}
-              >
-                <RiDraggable aria-hidden size={18} />
-              </button>
+              {orders && (
+                <button
+                  id={`channel-drag-${name}`}
+                  type="button"
+                  aria-label={`move #${name}: drag, or the arrow keys`}
+                  aria-keyshortcuts="ArrowUp ArrowDown"
+                  title="drag to move"
+                  onPointerDown={(e) => startDrag(e, name, i)}
+                  onKeyDown={(e) => keyMove(e, name, i)}
+                  className={cn(
+                    'shrink-0 touch-none select-none border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke hover:text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none',
+                    held ? 'cursor-grabbing' : 'cursor-grab'
+                  )}
+                >
+                  <RiDraggable aria-hidden size={18} />
+                </button>
+              )}
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="truncate font-semibold">#{name}</span>
                 {item.about && <span className="truncate text-xs text-textTertiary">{item.about}</span>}
               </span>
               <span className="flex shrink-0 items-center gap-3">
-                <button id={`channel-up-${name}`} type="button" disabled={i === 0} onClick={() => put(movedTo(order, name, i - 1))} className={ROW_WORD}>
-                  up
-                </button>
-                <button id={`channel-down-${name}`} type="button" disabled={i === order.length - 1} onClick={() => put(movedTo(order, name, i + 1))} className={ROW_WORD}>
-                  down
-                </button>
+                {orders && (
+                  <>
+                    <button id={`channel-up-${name}`} type="button" disabled={i === 0} onClick={() => put(movedTo(order, name, i - 1))} className={ROW_WORD}>
+                      up
+                    </button>
+                    <button
+                      id={`channel-down-${name}`}
+                      type="button"
+                      disabled={i === order.length - 1}
+                      onClick={() => put(movedTo(order, name, i + 1))}
+                      className={ROW_WORD}
+                    >
+                      down
+                    </button>
+                  </>
+                )}
                 {item.can_delete && (
                   <button id={`channel-remove-${name}`} type="button" className="text-sm text-decrease" onClick={() => setSure(name)}>
                     delete
@@ -1703,9 +1708,8 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
           );
         })}
       </ul>
-      {full ? (
-        <p className="text-textTertiary">{CHANNEL_CAP} channels is the cap. delete one to add another.</p>
-      ) : (
+      {orders && full && <p className="text-textTertiary">{CHANNEL_CAP} channels is the cap. delete one to add another.</p>}
+      {orders && !full && (
         <button id="manage-channel-add" type="button" aria-haspopup="dialog" className="self-start text-sm font-semibold text-primaryBlue" onClick={() => setAdding(true)}>
           add channel
         </button>

@@ -171,16 +171,25 @@ function FacesPreview({ on }: { on: boolean }) {
 /** The three shapes a chat with a friend can take (docs/dms.md). The card's picture is the thread. */
 const DM_STYLE_OPTIONS: readonly { style: DmStyle; label: string; detail: string }[] = [
   { style: 'log', label: 'a log', detail: 'one line each: the time, the name, then the words. nothing offset, and the most lines on screen' },
-  { style: 'bubbles', label: 'bubbles', detail: 'each line in a box of its own: yours on the right, theirs on the left. no names, the sides say who' },
+  {
+    style: 'bubbles',
+    label: 'bubbles',
+    detail: 'each line in a box of its own: yours on the right, theirs on the left. a minute\u2019s lines stand together, the time at the left once'
+  },
   { style: 'blocks', label: 'blocks', detail: 'the face, the name and the time over the words. one person\u2019s lines in a row stand together under one head' }
 ];
 
-/** The three lines the direct message cards draw: who said each (ann, or you), and a width for the words. Your two in a row are one run. */
+/** The three lines the direct message cards draw: who said each (ann, or you), and a width for the words. Your two in a row are one run, one minute. */
 const DM_PREVIEW_LINES: readonly { mine: boolean; words: string }[] = [
   { mine: false, words: 'w-3/5' },
   { mine: true, words: 'w-2/5' },
   { mine: true, words: 'w-1/2' }
 ];
+
+/** A bar for a time, the gutter's width; blank where the shape shows no time on that line. */
+function PreviewClock({ shown = true }: { shown?: boolean }) {
+  return <span className={cn('h-1 w-4 shrink-0', shown && 'bg-textTertiary')} />;
+}
 
 /** A bar for a name: yours in blue, the way the window draws it. */
 function PreviewName({ mine }: { mine: boolean }) {
@@ -197,11 +206,19 @@ function DmStylePreview({ style }: { style: DmStyle }) {
     return (
       <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-1.5 border border-primaryStroke bg-background px-3">
         {DM_PREVIEW_LINES.map(({ mine, words }, i) => (
-          <span key={i} className={cn('flex', mine ? 'justify-end' : 'justify-start')}>
-            <span
-              className={cn('flex h-5 items-center border px-1.5', words, mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary')}
-            >
-              <span className="h-1.5 w-full bg-textTertiary" />
+          <span key={i} className="flex items-center gap-1.5">
+            {/* the time at the left, on the first line of a minute: your second line is in the same minute as your first */}
+            <PreviewClock shown={DM_PREVIEW_LINES[i - 1]?.mine !== mine} />
+            <span className={cn('flex min-w-0 flex-1', mine ? 'justify-end' : 'justify-start')}>
+              <span
+                className={cn(
+                  'flex h-5 items-center border px-1.5',
+                  words,
+                  mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary'
+                )}
+              >
+                <span className="h-1.5 w-full bg-textTertiary" />
+              </span>
             </span>
           </span>
         ))}
@@ -235,7 +252,7 @@ function DmStylePreview({ style }: { style: DmStyle }) {
     <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-2.5 border border-primaryStroke bg-background px-3">
       {DM_PREVIEW_LINES.map(({ mine, words }, i) => (
         <span key={i} className="flex items-center gap-1.5">
-          <span className="h-1 w-4 shrink-0 bg-textTertiary" />
+          <PreviewClock />
           <PreviewName mine={mine} />
           <span className={cn('h-1.5 bg-textTertiary', words)} />
         </span>

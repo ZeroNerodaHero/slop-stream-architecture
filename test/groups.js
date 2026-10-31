@@ -12,6 +12,8 @@
 // and fills from `since`; the page switches channels with no reload, no refetch and no new
 // socket, and a channel deleted under it is said on the page. A channel is added from the
 // row under the list through a dialog, and the manage dialog's channels tab moves and deletes.
+// The sidebar's search box finds the group by its letters, its row above the people's, and
+// the row goes to its page.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node groups.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
@@ -521,6 +523,30 @@ const dropAll = async (ctx, names) => {
     expect(!(await q.$('#group-channel-clips')), 'the deleted channel is still listed');
     await q.close();
     return 'switched twice, nothing asked, nothing opened';
+  });
+
+  await step('the sidebar search: letters find the group, its row first and the people under it; the row goes to its page', async () => {
+    const q = await fresh();
+    await q.goto(`${BASE}/login?next=/`, { waitUntil: 'domcontentloaded' });
+    await q.fill('#auth-name', MEMBER);
+    await q.fill('#auth-password', PW);
+    await q.click('#auth-submit');
+    await q.waitForSelector('#user-panel', { timeout: 15000 });
+    await q.hover('#user-panel');
+    await q.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+    // the run's letters are in the group's title and in both logins' names: the group comes first all the same
+    await q.fill('#friends-search', RUN);
+    await q.waitForSelector(`#result-group-${slug}`, { timeout: 10000 });
+    await q.waitForSelector(`#result-${MAKER}`, { timeout: 10000 });
+    const first = await q.$eval('#friends-results > li', (el) => el.querySelector('a')?.id || '');
+    expect(first === `result-group-${slug}`, `first in the results is ${first}`);
+    // the panel is open, so the row has its words: the title with the digits
+    const words = (await q.textContent(`#result-group-${slug}`)) || '';
+    expect(words.includes(GROUP) && words.includes(`#${slug.slice(-4)}`), `the group's row reads "${words}"`);
+    await q.click(`#result-group-${slug}`);
+    await q.waitForURL((u) => u.pathname === `/groups/${slug}`, { timeout: 10000 });
+    await q.close();
+    return `${slug} first, ${MAKER} under it; the row went to /groups/${slug}`;
   });
 
   await step('leave: the only owner stays while someone else is in; then 204, one member, again 204', async () => {

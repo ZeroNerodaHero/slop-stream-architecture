@@ -112,7 +112,7 @@ the bell (`Notifications.tsx`, `NotificationsBell`): `#notifications` at the rig
 
 the tab (`user-modal/NotificationsTab.tsx`, `#tab-notifications`, in the `you` group after security: it is the account's): four cards with a checkbox each, `#notify-live`, `#notify-follow`, `#notify-dm`, `#notify-chat`, the chosen ones in the blue stroke with `on`; `#notify-settings-note` says `saving`, `saved` or `not saved: <why>`. the tab shows no rows: the list is the bell's. `#notify-nobody` for a guest.
 
-the mute (`ServerRoom.tsx`, the channel list, `groups.md`): for a member, `mute` after each channel's name (`#channel-mute-<name>`, words only, `aria-pressed`), `unmute` in blue once it is, and the bell-off mark by the name of a muted channel (the `li` says `data-muted`). the room answer carries `muted`; `setChannelMuted` (room-atoms) moves the list on the click, `PUT` or `DELETE .../mute`, and puts it back on a refusal. a channel deleted under the page takes its mute with it, as the table does.
+the mute (`ServerRoom.tsx`, the channel list, `groups.md`): for a member, a bell at the right of each channel's row (`#channel-mute-<name>`, icon only, `aria-pressed`, the word a tooltip), up while the pointer is on the row or the focus is on it (always on a screen with no hover); a click mutes the channel, and the bell is the crossed one from then on and stays up, the mark that says so (the `li` says `data-muted`), until a click unmutes it. the room answer carries `muted`; `setChannelMuted` (room-atoms) moves the list on the click, `PUT` or `DELETE .../mute`, and puts it back on a refusal. a channel deleted under the page takes its mute with it, as the table does.
 
 ## cost
 

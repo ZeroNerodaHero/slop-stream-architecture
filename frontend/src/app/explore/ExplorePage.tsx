@@ -3,7 +3,7 @@ import { useAtomValue } from 'jotai';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { api, mayMakeGroup, messageOf, type SearchHit, type Server } from '@/infra/api';
+import { api, groupMatches, mayMakeGroup, messageOf, type SearchHit, type Server } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { Button, buttonClassName } from '@/shared-components/Button';
 import { GroupSquare } from '@/shared-components/GroupSquare';
@@ -18,12 +18,6 @@ const SQUARES = 'grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3';
 const SECTION_TITLE = 'mb-4 text-sm font-semibold uppercase tracking-wider text-textTertiary';
 /** How many grey squares stand under each heading before the lists have answered. */
 const SQUARES_GUESS = 4;
-
-function matches(server: Server, query: string): boolean {
-  if (!query) return true;
-  const tag = server.tag == null ? '' : String(server.tag).padStart(4, '0');
-  return `${server.title || ''} ${tag} ${tag ? `#${tag}` : ''} ${server.name} ${server.badge} ${server.about}`.toLowerCase().includes(query);
-}
 
 /**
  * The groups you are in, then the public ones you are not. `bot` is a badge, not one of these.
@@ -63,8 +57,8 @@ export function ExplorePage() {
       gone = true;
     };
   }, [q]);
-  const yours = (query.data?.yours ?? []).filter((server) => matches(server, q));
-  const listed = (query.data?.discover ?? []).filter((server) => server.public !== false && matches(server, q));
+  const yours = (query.data?.yours ?? []).filter((server) => groupMatches(server, q));
+  const listed = (query.data?.discover ?? []).filter((server) => server.public !== false && groupMatches(server, q));
   // a login may make one once the list has said how many it owns, and how many it may
   const canMake = !!me && !!query.data && mayMakeGroup(query.data);
 

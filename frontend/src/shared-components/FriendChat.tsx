@@ -310,35 +310,71 @@ function stamp(at: number): string {
   return new Date(at).toLocaleString();
 }
 
-/** The clock of a line, short, on the line itself where the shape has one: the full stamp is its title. */
+/**
+ * The clock of a line, short, where a shape shows it: `HH:MM`, the hours of the day the way a
+ * log keeps them, so every time is five characters and the column at the left of the lines
+ * stays one width. The full stamp, in the browser's own words, is the line's title.
+ */
 function clock(at: number): string {
-  return new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 }
 
-/** Lines from one person closer together than this are a run: one head over them in `blocks`, less room between them in `bubbles`. */
+/** The minute a line fell in. Lines of one person in one minute are a bucket: one time at the left for all of them. */
+const minuteOf = (at: number) => Math.floor(at / 60_000);
+
+/** Lines from one person closer together than this are a run: one head over them in `blocks`. */
 const RUN_MS = 5 * 60_000;
+
+/** The gutter at the left of the lines: a face wide (`blocks` puts the face in it). */
+const GUTTER = 'w-8 shrink-0';
+
+/**
+ * The time in the gutter at the left of a line, `bubbles` and `blocks`. Shown on the first line
+ * of a minute (`shown`), and on the rest of that minute's lines while the line is pointed at,
+ * so a burst of lines says its time once and any one line can still be asked. A reader has the
+ * stamp in the title.
+ */
+function GutterClock({ at, shown, className }: { at: number; shown: boolean; className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        GUTTER,
+        'text-right text-[10px] leading-none tabular-nums text-textTertiary transition-opacity duration-150',
+        !shown && 'opacity-0 group-hover/line:opacity-100',
+        className
+      )}
+    >
+      {clock(at)}
+    </span>
+  );
+}
 
 interface LineProps {
   line: DmLine;
   /** This login wrote it. */
   mine: boolean;
-  /** The first of a run (`RUN_MS`): `blocks` puts the head on it, `bubbles` the room before it. */
+  /** The first of a run (`RUN_MS`): `blocks` puts the head on it. */
   first: boolean;
+  /** The first of a minute bucket (the run's first, or the minute turned): the time shows at the left, and the room before it. */
+  bucket: boolean;
   shape: DmStyle;
   /** The writer's picture, for the head in `blocks`. */
   avatar: number | null;
 }
 
 /**
- * One line, in the shape the chat tab picked (settings.dmStyle). `log`: the time, the name
- * (yours in blue), the words, one line. `bubbles`: the words in a box of their own, yours on
- * the right in the blue stroke and theirs on the left in the grey one; no name on screen, the
- * sides say who, so the name is there for a reader alone. `blocks`: the first line of a run
- * wears the writer's face, their name and the time over the words, and the lines after it in
- * the run stand under, their time in the gutter while pointed at. The same `<p>` whatever the
- * shape: `data-id`, `data-mine`, the full stamp as the title.
+ * One line, in the shape the chat tab picked (settings.dmStyle). The time stands at the left in
+ * every shape, one column. `log`: the time, the name (yours in blue), the words, one line; the
+ * words wrap under the name, not under the time. `bubbles`: the words in a box of their own,
+ * yours on the right in the blue stroke and theirs on the left in the grey one, the lines of
+ * one minute together with the time at the left once; no name on screen, the sides say who, so
+ * the name is there for a reader alone. `blocks`: the first line of a run wears the writer's
+ * face, their name and the time over the words, and the lines after it in the run stand under,
+ * the time at the left as the minute turns. The same `<p>` whatever the shape: `data-id`,
+ * `data-mine`, the full stamp as the title.
  */
-function Line({ line, mine, first, shape, avatar }: LineProps) {
+function Line({ line, mine, first, bucket, shape, avatar }: LineProps) {
   const words = (
     <span className={cn('whitespace-pre-wrap [overflow-wrap:anywhere]', shape !== 'bubbles' && 'text-textSecondary')}>
       <LinkedText text={line.text} />
@@ -346,10 +382,12 @@ function Line({ line, mine, first, shape, avatar }: LineProps) {
   );
   if (shape === 'log') {
     return (
-      <p data-id={line.id} data-mine={mine || undefined} title={stamp(line.at)} className="text-sm leading-snug">
-        <span className="mr-1.5 text-xs tabular-nums text-textTertiary">{clock(line.at)}</span>
-        <span className={cn('mr-1.5 font-semibold', mine && 'text-primaryBlue')}>{line.from}</span>
-        {words}
+      <p data-id={line.id} data-mine={mine || undefined} title={stamp(line.at)} className="flex items-baseline gap-2 text-sm leading-snug">
+        <span className="shrink-0 text-xs tabular-nums text-textTertiary">{clock(line.at)}</span>
+        <span className="min-w-0 flex-1">
+          <span className={cn('mr-1.5 font-semibold', mine && 'text-primaryBlue')}>{line.from}</span>
+          {words}
+        </span>
       </p>
     );
   }
@@ -361,16 +399,7 @@ function Line({ line, mine, first, shape, avatar }: LineProps) {
         title={stamp(line.at)}
         className={cn('group/line flex gap-2.5 text-sm leading-snug', first && 'mt-2 first:mt-0')}
       >
-        {first ? (
-          <Face name={line.from} version={avatar} className="mt-0.5 h-8 w-8 text-sm" />
-        ) : (
-          <span
-            aria-hidden
-            className="w-8 shrink-0 self-center text-right text-[10px] leading-none tabular-nums text-textTertiary opacity-0 transition-opacity duration-150 group-hover/line:opacity-100"
-          >
-            {clock(line.at)}
-          </span>
-        )}
+        {first ? <Face name={line.from} version={avatar} className={cn(GUTTER, 'mt-0.5 h-8 text-sm')} /> : <GutterClock at={line.at} shown={bucket} className="pt-1" />}
         <span className="flex min-w-0 flex-1 flex-col">
           {first && (
             <span className="flex items-baseline gap-2">
@@ -388,12 +417,15 @@ function Line({ line, mine, first, shape, avatar }: LineProps) {
       data-id={line.id}
       data-mine={mine || undefined}
       title={stamp(line.at)}
-      className={cn('flex text-sm leading-snug', mine ? 'justify-end' : 'justify-start', first && 'mt-1.5 first:mt-0')}
+      className={cn('group/line flex gap-2.5 text-sm leading-snug', bucket && 'mt-2 first:mt-0')}
     >
-      {/* the box: a stroke and a fill, no shadow (no-box-shadow.mdc). yours wears the blue */}
-      <span className={cn('max-w-[85%] border px-2.5 py-1.5', mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary')}>
-        <span className="sr-only">{mine ? 'you' : line.from}: </span>
-        {words}
+      <GutterClock at={line.at} shown={bucket} className="pt-2.5" />
+      <span className={cn('flex min-w-0 flex-1', mine ? 'justify-end' : 'justify-start')}>
+        {/* the box: a stroke and a fill, no shadow (no-box-shadow.mdc). yours wears the blue */}
+        <span className={cn('max-w-[85%] border px-2.5 py-1.5', mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary')}>
+          <span className="sr-only">{mine ? 'you' : line.from}: </span>
+          {words}
+        </span>
       </span>
     </p>
   );
@@ -615,7 +647,7 @@ export function FriendChat() {
         </header>
         {name ? (
           <>
-            {/* the lines in the shape picked: a log is a line each at an even gap; bubbles and blocks stand close within a run and apart between runs (`Line`) */}
+            {/* the lines in the shape picked: a log is a line each at an even gap; bubbles stand close within a minute and apart between minutes, blocks close within a run and apart between runs (`Line`) */}
             <div
               id="friend-chat-log"
               ref={log}
@@ -634,9 +666,10 @@ export function FriendChat() {
               {lines.map((line, i) => {
                 const mine = line.from === me;
                 const prev = lines[i - 1];
-                // a run: the same person, soon after the line before
+                // a run: the same person, soon after the line before. a bucket: a run's first line, or the minute turned
                 const first = !prev || prev.from !== line.from || line.at - prev.at > RUN_MS;
-                return <Line key={line.id} line={line} mine={mine} first={first} shape={shape} avatar={mine ? myAvatar : (dm?.avatar ?? null)} />;
+                const bucket = !prev || first || minuteOf(prev.at) !== minuteOf(line.at);
+                return <Line key={line.id} line={line} mine={mine} first={first} bucket={bucket} shape={shape} avatar={mine ? myAvatar : (dm?.avatar ?? null)} />;
               })}
             </div>
             <form onSubmit={(e) => void send(e)} className="border-t border-primaryStroke p-2">

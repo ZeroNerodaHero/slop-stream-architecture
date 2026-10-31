@@ -2116,13 +2116,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     expect(readAll, `the api after opening the list: ${JSON.stringify((await inbox(gb)).items.map((n) => [n.kind, n.read]))}`);
     await gbPage.keyboard.press('Escape');
     await gbPage.waitForFunction(() => !document.querySelector('#notifications-panel'), null, { timeout: 5000 });
-    // the room page: mute in the channel list
+    // the room page: the bell on the channel's row, icon only, so the state is its aria-pressed
     await gbPage.goto(`${BASE}/groups/${slug}`, { waitUntil: 'domcontentloaded' });
     await gbPage.waitForSelector('#group-channels', { timeout: 10000 });
-    await gbPage.waitForFunction(() => document.querySelector('#channel-mute-general')?.textContent === 'mute', null, { timeout: 10000 });
+    await gbPage.waitForFunction(() => document.querySelector('#channel-mute-general')?.getAttribute('aria-pressed') === 'false', null, { timeout: 10000 });
     expect(!(await gbPage.$('#group-channels li[data-muted]')), 'a channel reads muted before any click');
+    expect(!(await gbPage.$('#group-channels button:not([id^="channel-mute-"])')), "the list has a button besides the bells: delete is the manage dialog's");
     await gbPage.click('#channel-mute-general');
-    await gbPage.waitForFunction(() => document.querySelector('#channel-mute-general')?.textContent === 'unmute', null, { timeout: 5000 });
+    await gbPage.waitForFunction(() => document.querySelector('#channel-mute-general')?.getAttribute('aria-pressed') === 'true', null, { timeout: 5000 });
     expect(await gbPage.$('#group-channels li[data-muted]'), 'the muted channel wears no mark');
     const mutedRoom = await until(async () => {
       const r = await body(await gb.get(`/api/groups/${slug}`));
@@ -2130,7 +2131,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     }, 5000);
     expect(mutedRoom, 'the api does not say general is muted after the click');
     await gbPage.click('#channel-mute-general');
-    await gbPage.waitForFunction(() => document.querySelector('#channel-mute-general')?.textContent === 'mute', null, { timeout: 5000 });
+    await gbPage.waitForFunction(() => document.querySelector('#channel-mute-general')?.getAttribute('aria-pressed') === 'false', null, { timeout: 5000 });
     const unmutedRoom = await until(async () => {
       const r = await body(await gb.get(`/api/groups/${slug}`));
       return r && r.muted.length === 0 ? r : null;

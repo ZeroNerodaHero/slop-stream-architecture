@@ -6,9 +6,6 @@ import { type PanelSide, type SidebarList, moveSidebarList, panelSideAtom, setPa
 import { CHECKBOX, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
-/** A word that does something on a row: up, down. No box (the buttons rule). */
-const ROW_WORD = 'text-sm font-semibold text-textSecondary hover:text-textPrimary disabled:text-textTertiary disabled:opacity-40 disabled:hover:text-textTertiary';
-
 const PANEL_SIDE_OPTIONS: readonly { side: PanelSide; label: string; detail: string }[] = [
   { side: 'left', label: 'left of the page', detail: 'a column beside the streams. hover it and the names cover the page' },
   { side: 'right', label: 'right of the page', detail: 'the same column on the right. hover covers the streams; the picture in picture player stays above' }
@@ -43,9 +40,9 @@ const SIDEBAR_LIST_WORDS: Record<SidebarList, { icon: typeof RiUserHeartLine; la
 
 /**
  * The column's lists, top to bottom, each with a switch (`settings.sidebarLists`). A row is
- * dragged by its handle (the arrow keys on the handle do the same, a row a press; `up` and
- * `down` are the words for it), and the column behind follows at once. The last switch on is
- * disabled: one list stays, so the column is never empty by setting.
+ * dragged by its handle (the arrow keys on the handle do the same, a row a press), and the
+ * column behind follows at once. The last switch on is disabled: one list stays, so the
+ * column is never empty by setting.
  */
 function SidebarLists() {
   const choices = useAtomValue(sidebarListsAtom);
@@ -133,38 +130,24 @@ function SidebarLists() {
               <span className={cn('font-semibold leading-tight', on ? 'text-textPrimary' : 'text-textTertiary')}>{label}</span>
               <span className={cn('text-sm', on ? 'text-textSecondary' : 'text-textTertiary')}>{detail}</span>
             </span>
-            <span className="flex shrink-0 items-center gap-3">
-              <button id={`sidebar-list-${list}-up`} type="button" disabled={i === 0} onClick={() => moveSidebarList(list, i - 1)} className={ROW_WORD}>
-                up
-              </button>
-              <button
-                id={`sidebar-list-${list}-down`}
-                type="button"
-                disabled={i === choices.length - 1}
-                onClick={() => moveSidebarList(list, i + 1)}
-                className={ROW_WORD}
-              >
-                down
-              </button>
-              <label
-                className={cn(
-                  'flex items-center gap-2 text-xs font-semibold uppercase tracking-wider',
-                  on ? 'text-primaryBlue' : 'text-textTertiary',
-                  last ? 'cursor-default' : 'cursor-pointer'
-                )}
-                title={last ? 'one list stays' : undefined}
-              >
-                <input
-                  id={`sidebar-list-${list}-on`}
-                  type="checkbox"
-                  checked={on}
-                  disabled={last}
-                  onChange={(e) => setSidebarListOn(list, e.target.checked)}
-                  className={CHECKBOX}
-                />
-                {on ? 'shown' : 'hidden'}
-              </label>
-            </span>
+            <label
+              className={cn(
+                'flex shrink-0 items-center gap-2 text-xs font-semibold uppercase tracking-wider',
+                on ? 'text-primaryBlue' : 'text-textTertiary',
+                last ? 'cursor-default' : 'cursor-pointer'
+              )}
+              title={last ? 'one list stays' : undefined}
+            >
+              <input
+                id={`sidebar-list-${list}-on`}
+                type="checkbox"
+                checked={on}
+                disabled={last}
+                onChange={(e) => setSidebarListOn(list, e.target.checked)}
+                className={CHECKBOX}
+              />
+              {on ? 'shown' : 'hidden'}
+            </label>
           </li>
         );
       })}
