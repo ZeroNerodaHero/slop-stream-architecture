@@ -31,11 +31,11 @@ export function PresenceSquare({ presence, className }: { presence: Presence; cl
   return <span aria-hidden data-presence={presence} className={cn('absolute -bottom-1 -right-1 h-3.5 w-3.5 border-2', PRESENCE_SQUARE[presence], className)} />;
 }
 
-/** The square and the word, the colours of docs/status.md. */
-export function Word({ presence, className }: { presence: Presence; className?: string }) {
+/** The square and the word, the colours of docs/status.md. `square={false}`: the word alone, where the face beside it already carries the square. */
+export function Word({ presence, square = true, className }: { presence: Presence; square?: boolean; className?: string }) {
   return (
     <span className={cn('flex shrink-0 items-center gap-1.5 text-sm', PRESENCE_TEXT[presence], className)}>
-      <span aria-hidden className={cn('h-2.5 w-2.5', PRESENCE_SQUARE[presence])} />
+      {square && <span aria-hidden className={cn('h-2.5 w-2.5', PRESENCE_SQUARE[presence])} />}
       {PRESENCE_WORD[presence]}
     </span>
   );
@@ -57,8 +57,9 @@ interface PersonRowProps {
 }
 
 /**
- * Somebody, as a link to their watch page: the face, the name with its marks, the word beside
- * it. One shape wherever a person is listed (the corner box, the search, home's people).
+ * Somebody, as a link to their watch page: the face with the presence square on its corner,
+ * the name with its marks, the word beside it. One shape wherever a person is listed (the
+ * search, home's people and recently offline).
  */
 export function PersonRow({ id, name, verified, avatar, bio, presence, onPick, size = 'row', note }: PersonRowProps) {
   const card = size === 'card';
@@ -75,18 +76,22 @@ export function PersonRow({ id, name, verified, avatar, bio, presence, onPick, s
         card && 'gap-3'
       )}
     >
-      <Face name={name} version={avatar} className={card ? 'h-12 w-12 text-lg' : 'h-8 w-8 text-sm'} />
+      {/* the square on the picture's corner, the sidebar's way, ringed in what the row sits on: the card's panel colour, else the page. the word says it in letters */}
+      <span className="relative flex shrink-0">
+        <Face name={name} version={avatar} className={card ? 'h-12 w-12 text-lg' : 'h-8 w-8 text-sm'} />
+        <PresenceSquare presence={presence} className={card ? 'border-backgroundSecondary' : 'border-background'} />
+      </span>
       {card ? (
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <Who name={name} verified={verified} className="text-base" />
-          <Word presence={presence} />
+          <Word presence={presence} square={false} />
           {note && <span className="text-sm text-textSecondary">{note}</span>}
           {bio && <span className="truncate text-sm text-textSecondary">{bio}</span>}
         </span>
       ) : (
         <>
           <Who name={name} verified={verified} />
-          <Word presence={presence} className="ml-auto" />
+          <Word presence={presence} square={false} className="ml-auto" />
         </>
       )}
     </Link>

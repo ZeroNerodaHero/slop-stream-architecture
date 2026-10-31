@@ -69,7 +69,7 @@ export function PageFrame({ title, titleId, aside, wide = false, children }: Pag
         {title && (
           <div className="flex min-w-0 items-center gap-4">
             <HomeLink />
-            <h1 id={titleId} className="min-w-0 border-l-4 border-primaryBlue pl-3 text-[28px] font-semibold leading-tight [overflow-wrap:anywhere]">
+            <h1 id={titleId} className="min-w-0 border-l-4 border-primaryBlue pl-3 text-[1.75rem] font-semibold leading-tight [overflow-wrap:anywhere]">
               {title}
             </h1>
           </div>

@@ -25,7 +25,7 @@ flowchart LR
 ```
 
 - **without an account** you are the name in the bottom left panel. it is in localstorage. any name nobody owns is free: go live as it, chat as it, save its status, its page and its pictures.
-- **with an account** the name is claimed. only your login can go live as it, change its status or its page, or talk as it in chat. an anonymous nick equal to a claimed name is refused. a `✓` next to a name on home, on watch and in chat means a login is behind it.
+- **with an account** the name is claimed. only your login can go live as it, change its status or its page, or talk as it in chat. an anonymous nick equal to a claimed name is refused. a `✓` next to a name on home and on watch means a login is behind it; in chat the name's colour says it instead (a login blue, an anonymous nick red, the streamer green).
 - a name someone used without an account (a `streamers` row with no hash) is claimed by the first signup. the status, the page and the pictures stay.
 
 ## why not hash in the browser
@@ -135,7 +135,7 @@ changed:
 - `/login`, `/signup`: name, password, one button, a show toggle instead of a repeat box. `?next=` says where to land. the inputs carry `autocomplete="username"`, `"current-password"`, `"new-password"`, which is what makes password managers offer to save; they do more for the breach story than any code here.
 - the panel pinned to the bottom left of every page, discord style: a picture made from the name (a coloured square with the first letter; no uploads yet), then the name box with `sign up · log in` under it, or your name + `✓` with `log out` under it, the settings gear at the far end of that line, and the `go live` button on the right (not on `/live` itself). the picture, and a login's name, are links to your own page (`socials.md`).
 - go live: no name box. a login streams as its account, a guest as the nick in the panel.
-- chat: a login has no nick box; its lines show `✓`, and the badges of its groups (`groups.md`).
+- chat: a login has no nick box; its name is blue where an anonymous nick's is red, and its lines wear the badges of its groups (`groups.md`).
 - atoms: `meAtom` (`/api/me` once per page load; `undefined` until it answers; a failed ask is nobody for now and asked again on the next page, never remembered as "nobody"), actions `login`, `signup`, `logout`, `forgetMe` (the cookie died elsewhere: back to nobody). fetch sends the cookie on its own. nothing about the login is ever in localstorage.
 
 ## code

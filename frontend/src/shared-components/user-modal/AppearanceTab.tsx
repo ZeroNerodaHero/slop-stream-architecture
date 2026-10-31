@@ -1,6 +1,6 @@
 import { useAtomValue } from 'jotai';
 
-import { customFrom, paletteAtom, setCustomColor, setTheme, themeAtom } from '@/infra/atoms/settings-atoms';
+import { customFrom, paletteAtom, setCustomColor, setTextSize, setTheme, TEXT_SIZES, type TextSize, textSizeAtom, themeAtom } from '@/infra/atoms/settings-atoms';
 import { contrast, hex, type Palette, PRESET_NAMES, PRESETS, type PresetName, type TokenName, TOKENS } from '@/infra/theme';
 import { Field, OptionCard, SECTION_TITLE, Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
@@ -58,14 +58,39 @@ function Swatch({ palette }: { palette: Palette }) {
 const COLOR_INPUT =
   'h-11 w-11 shrink-0 cursor-pointer appearance-none border border-primaryStroke bg-transparent p-0 [&::-moz-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-0 disabled:cursor-default disabled:opacity-40';
 
+/** The five sizes, smallest first, each with its word and what it is of the browser's own. */
+const SIZE_WORDS: Record<TextSize, { label: string; detail: string }> = {
+  80: { label: 'smallest', detail: '80%. the most on a screen' },
+  90: { label: 'small', detail: '90%. a step down' },
+  100: { label: 'normal', detail: '100%, the default: the browser\u2019s own size' },
+  110: { label: 'large', detail: '110%. a step up' },
+  125: { label: 'largest', detail: '125%. for a screen across the room' }
+};
+
+/**
+ * A size in one picture: `Aa` at that share of the page's, on the page. In rems, so the cards
+ * shrink and grow with the pick and keep their steps apart from one another.
+ */
+function SizeSwatch({ size }: { size: TextSize }) {
+  return (
+    <span aria-hidden className="flex h-14 w-full items-center justify-center border border-primaryStroke bg-background">
+      <span className="font-semibold leading-none" style={{ fontSize: `${(size / 100) * 1.5}rem` }}>
+        Aa
+      </span>
+    </span>
+  );
+}
+
 /**
  * The theme: a preset, or colours of their own. Picking applies and keeps at once, so the page
  * behind is the preview; the derivation keeps the text readable whatever the picks, and dark
- * is one click away. Kept in this browser, like the layout.
+ * is one click away. And the size: how big the whole page is, in five steps. Kept in this
+ * browser, like the layout.
  */
 export function AppearanceTab() {
   const theme = useAtomValue(themeAtom);
   const palette = useAtomValue(paletteAtom);
+  const size = useAtomValue(textSizeAtom);
   const custom = theme.kind === 'custom';
   // the custom card's picture: the colours it would start from, or the ones it has
   const customPalette = custom ? palette : null;
@@ -170,6 +195,30 @@ export function AppearanceTab() {
           </div>
         </Section>
       )}
+
+      {/* the root font size as a percentage (settings.textSize): every rem in the stylesheet follows it,
+          so the words and the room around them shrink and grow together, the way the browser's zoom does */}
+      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+        <legend className={SECTION_TITLE}>size</legend>
+        <p className="mt-1 text-textSecondary">
+          how big everything is: the words, and the room around them. the browser&apos;s own size, or a step or two either way. the page behind follows as you pick.
+        </p>
+        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+          {TEXT_SIZES.map((s) => (
+            <OptionCard
+              key={s}
+              id={`text-size-${s}`}
+              name="text-size"
+              checked={s === size}
+              onChange={() => setTextSize(s)}
+              picture={<SizeSwatch size={s} />}
+              label={SIZE_WORDS[s].label}
+              detail={SIZE_WORDS[s].detail}
+            />
+          ))}
+        </div>
+        <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every page. the browser&apos;s own zoom works on top of it.</p>
+      </fieldset>
     </div>
   );
 }

@@ -1,25 +1,40 @@
-import { RiCloseLine, RiNotificationOffLine, RiSettings3Line } from '@remixicon/react';
+import {
+  RiCloseLine,
+  RiDeleteBinLine,
+  RiForbidLine,
+  RiGroupLine,
+  RiInformationLine,
+  RiLogoutBoxRLine,
+  RiNotificationOffLine,
+  RiSearchLine,
+  RiSettings3Line,
+  RiShieldStarLine
+} from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import { api, CHANNEL_CAP, groupImage, groupWords, messageOf, type GroupRoom, type RolePerms } from '@/infra/api';
+import { api, CHANNEL_CAP, groupImage, type GroupMember, type GroupRole, groupWords, messageOf, type GroupRoom, type RolePerms } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { reconnectChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
+import { PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
 import { enterRoom, leaveRoom, reloadRoom, roomAtom, roomErrorAtom, roomGoneAtom, setChannelMuted } from '@/infra/atoms/room-atoms';
 import { cleanName, isValidName } from '@/infra/names';
 import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { Badge } from '@/shared-components/Badge';
 import { Button, buttonClassName } from '@/shared-components/Button';
+import { SearchFilters, useChatSearch } from '@/shared-components/ChatSearch';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Face } from '@/shared-components/Face';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { PresenceSquare } from '@/shared-components/PersonRow';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -31,6 +46,27 @@ const TILE = 'block overflow-hidden border border-primaryStroke bg-backgroundSec
 const RESERVED = new Set(['before', 'search', 'by', 'around']);
 
 const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary';
+
+/**
+ * The room is the window: its height is the window's less the title row it sits under (4rem,
+ * PageFrame.tsx, which globals.css also makes the page's `scroll-padding-top`) and the page's
+ * foot (`pb-10`, 2.5rem). So the room scrolled to is exactly what the window shows, and the
+ * page can scroll exactly that far. The roster's column may not pass it.
+ */
+const ROOM_HEIGHT = 'h-[calc(100dvh-6.5rem)] min-h-[420px]';
+const ROSTER_HEIGHT = 'max-h-[calc(100dvh-6.5rem)]';
+
+/**
+ * The page's two views, each a snap area (`snap-start`; the type is on <html> while the page
+ * is up, see ServerPage): the top, where the banner's margin above (the title row's `mb-6`) is
+ * scroll margin so the snap lands at the very top of the page, not with the banner flush under
+ * the row; and the room, under the title row. The skeleton has the same two.
+ */
+const TOP_VIEW = 'snap-start scroll-mt-6';
+
+/** The header's icon-only buttons (the gear, leave): a tooltip for the word, a border on hover. */
+const ICON_BUTTON =
+  'flex h-7 w-7 shrink-0 items-center justify-center border border-transparent focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default disabled:opacity-40';
 
 const COLORS = ['#5865f2', '#f85149', '#3fb950', '#f2cc60', '#bc8cff', '#ff9f43', '#39d2c0', '#ff6bcb'] as const;
 
@@ -70,8 +106,8 @@ function manages(room: GroupRoom): boolean {
 /** One moderation call, with its refusal said where the caller shows it. The outcome arrives on the socket, like everyone else's. */
 type Run = (work: () => Promise<unknown>) => Promise<void>;
 
-/** One member's camera, muted. Click opens their stream. */
-function LiveFace({ name, big }: { name: string; big: boolean }) {
+/** One member's camera, muted, the width of the channel column. Click opens their stream. */
+function LiveFace({ name }: { name: string }) {
   const stream = useAtomValue(previewStreamsAtom)[name] ?? null;
   const ref = useRef<HTMLVideoElement | null>(null);
   // which stream the video got to play: a new stream is not playing until it says so
@@ -86,7 +122,7 @@ function LiveFace({ name, big }: { name: string; big: boolean }) {
   }, [stream]);
 
   return (
-    <Link id={`group-live-${name}`} to={`/watch/${encodeURIComponent(name)}`} state={{ live: true }} className={cn(TILE, big && 'sm:col-span-2')}>
+    <Link id={`group-live-${name}`} to={`/watch/${encodeURIComponent(name)}`} state={{ live: true }} className={TILE}>
       <div className="relative aspect-video bg-black">
         <img
           src={`/thumb/${encodeURIComponent(name)}.jpg`}
@@ -111,6 +147,48 @@ function LiveFace({ name, big }: { name: string; big: boolean }) {
   );
 }
 
+/**
+ * The room's search box, in the header between the gear and leave: the channel on screen is
+ * asked for the words on enter or the glass, and the filter words stand under the box while it
+ * has the focus (ChatSearch.tsx). The hits are the chat panel's results list, as they would be
+ * from its own box, which this page leaves out (`search={false}`).
+ */
+function RoomSearch({ channel }: { channel: string }) {
+  const input = useRef<HTMLInputElement | null>(null);
+  const search = useChatSearch(input);
+  return (
+    <form id="room-search-form" onSubmit={search.submit} className="group/search relative">
+      <label htmlFor="room-search" className="sr-only">
+        search #{channel}
+      </label>
+      <input
+        ref={input}
+        id="room-search"
+        value={search.query}
+        onChange={(e) => search.setQuery(e.target.value)}
+        placeholder={`search #${channel}`}
+        autoComplete="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        className="h-7 w-48 border border-primaryStroke bg-background pl-7 pr-2 text-sm text-textPrimary placeholder:text-textTertiary"
+      />
+      <button
+        id="room-search-go"
+        type="submit"
+        aria-label="search"
+        className="absolute left-0 top-0 flex h-7 w-7 items-center justify-center text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none"
+      >
+        <RiSearchLine aria-hidden size={14} />
+      </button>
+      <SearchFilters
+        id="room-search-filters"
+        search={search}
+        className="absolute left-0 right-0 top-full z-10 mt-1 hidden border border-primaryStroke bg-backgroundSecondary px-2 py-1 group-focus-within/search:flex"
+      />
+    </form>
+  );
+}
+
 function GroupName({ words }: { words: { title: string; tag: string | null } }) {
   return (
     <>
@@ -124,12 +202,13 @@ function GroupName({ words }: { words: { title: string; tag: string | null } }) 
  * The room's shape in grey while it is asked for: the banner with the picture over its foot,
  * the title and the line about it, then the channels beside the chat (the roster's column is
  * not guessed at: it is a member's, and the chat only narrows when it comes). The answer lands
- * on top of this instead of under a word.
+ * on top of this instead of under a word. `gridRef` is the room's place: the page scrolls to
+ * it while this shows, so the room lands where the window already is.
  */
-function RoomSkeleton() {
+function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }) {
   return (
     <Skeleton id="group-loading" label="loading the group">
-      <div className="relative mb-16">
+      <div className={cn('relative mb-16', TOP_VIEW)}>
         <div className="relative h-36 border border-primaryStroke">
           <Bone className="absolute inset-0" />
         </div>
@@ -141,14 +220,14 @@ function RoomSkeleton() {
         <Bone className="h-6 w-56 max-w-full" />
         <Bone className="h-4 w-80 max-w-full" />
       </div>
-      <div className="grid items-start gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
+      <div ref={gridRef} className="grid snap-start items-start gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
         <div className="flex flex-col gap-1.5">
           <Bone className="mb-1 h-3 w-24" />
           {Array.from({ length: 3 }, (_, i) => (
             <Bone key={i} className="h-7" />
           ))}
         </div>
-        <div className="flex h-[70vh] min-h-[420px] flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3">
+        <div className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3', ROOM_HEIGHT)}>
           <Bone className="h-4 w-2/3" />
           <Bone className="h-4 w-1/2" />
           <Bone className="h-4 w-3/4" />
@@ -167,7 +246,15 @@ function RoomSkeleton() {
  * events socket keeps it: every change arrives as a `group` frame and lands in place
  * (room-atoms). The chat is one socket for the whole server; the channel list swaps what the
  * panel shows. The banner and the picture sit over the channel list and a chat that reads as
- * a room, not as the stream's panel.
+ * a room, not as the stream's panel. Whoever is live is a tile under the channels, on the
+ * left (`LiveFace`, at most FACES playing); with every camera off the column is the channels alone.
+ *
+ * The page is two views, and snaps between them: the room, the height of the window under the
+ * title row (ROOM_HEIGHT), which is where the page lands when it opens, and the top, the
+ * banner, the picture, the name and the line about it, a scroll up away. The window is the
+ * page's scroller, so the snap type goes on <html> while the page is up; each view is a
+ * `snap-start` area (TOP_VIEW, `#group-room`). The landing is done once, on the first thing
+ * with the room's shape (the skeleton, or the room itself), so the room arrives in place.
  */
 export function ServerPage() {
   const params = useParams<{ server: string; channel?: string }>();
@@ -190,6 +277,10 @@ export function ServerPage() {
   const previewKey = shown.join(',');
   const channels = room?.channels ?? [];
   const found = channel === 'general' || channels.some((item) => item.name === channel);
+  /** The room's grid, or the skeleton's while the room is asked for: where the page lands. */
+  const roomRef = useRef<HTMLDivElement | null>(null);
+  /** Whether the page has landed on this server's own room. Until then every commit with a room's shape scrolls to it. */
+  const landed = useRef(false);
 
   // the room, once: asked when the page arrives (and again as another login), then the
   // socket's. the channel is not an input here: changing it asks nothing
@@ -204,6 +295,26 @@ export function ServerPage() {
     setHomePreviews(names);
     return () => setHomePreviews([]);
   }, [previewKey]);
+
+  // the two views snap: the type is the window's, so it sits on <html> for as long as the page is up
+  useEffect(() => {
+    if (!ok) return;
+    const root = document.documentElement;
+    root.style.scrollSnapType = 'y mandatory';
+    return () => {
+      root.style.scrollSnapType = '';
+    };
+  }, [ok]);
+
+  // the landing: the room under the title row, before anything is painted. the skeleton's grid
+  // counts, so the wait is spent looking at the room's place; the room itself, when it is this
+  // server's (the atom may still hold the last page's for the first commit), is the last time
+  useLayoutEffect(() => {
+    const grid = roomRef.current;
+    if (landed.current || !grid) return;
+    if (room !== null && room.name === server) landed.current = true;
+    grid.scrollIntoView({ block: 'start', behavior: 'instant' });
+  });
 
   if (!ok) {
     return (
@@ -229,7 +340,7 @@ export function ServerPage() {
   if (!room) {
     return (
       <PageFrame wide title={server || 'group'} titleId={titleId}>
-        {error ? <p className="text-textSecondary">{error === 'no such group' ? 'no such group.' : error}</p> : <RoomSkeleton />}
+        {error ? <p className="text-textSecondary">{error === 'no such group' ? 'no such group.' : error}</p> : <RoomSkeleton gridRef={roomRef} />}
       </PageFrame>
     );
   }
@@ -330,7 +441,7 @@ export function ServerPage() {
         </p>
       ) : (
         <>
-          <div className="relative mb-16">
+          <div className={cn('relative mb-16', TOP_VIEW)}>
             <div id="group-banner" className="group/banner relative h-36 overflow-hidden border border-primaryStroke" style={{ backgroundColor: color }}>
               {bannerSrc && <img src={bannerSrc} alt="" className="h-full w-full object-cover" />}
               {canPicture && (
@@ -376,41 +487,20 @@ export function ServerPage() {
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {room.perms.appearance && (
-                <span className="flex flex-wrap items-center gap-2">
-                  <button
-                    id="room-public"
-                    type="button"
-                    title="on the lists"
-                    aria-pressed={room.public !== false}
-                    className={cn('text-sm font-semibold', room.public !== false ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
-                    onClick={() => void act(() => api.setGroupPublic(server, true))}
-                  >
-                    public
-                  </button>
-                  <button
-                    id="room-private"
-                    type="button"
-                    title="off the lists. anyone with the address can still open it and join"
-                    aria-pressed={room.public === false}
-                    className={cn('text-sm font-semibold', room.public === false ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
-                    onClick={() => void act(() => api.setGroupPublic(server, false))}
-                  >
-                    private
-                  </button>
-                </span>
-              )}
               {canManage && (
-                <button
-                  id="group-manage-open"
-                  type="button"
-                  className="flex items-center gap-1 text-sm font-semibold text-textSecondary hover:text-textPrimary"
-                  onClick={() => setManaging(true)}
-                >
-                  <RiSettings3Line aria-hidden size={16} />
-                  manage
-                </button>
+                <Tooltip content="manage">
+                  <button
+                    id="group-manage-open"
+                    type="button"
+                    aria-label="manage"
+                    className={cn(ICON_BUTTON, 'text-textSecondary hover:border-primaryStroke hover:text-textPrimary')}
+                    onClick={() => setManaging(true)}
+                  >
+                    <RiSettings3Line aria-hidden size={16} />
+                  </button>
+                </Tooltip>
               )}
+              <RoomSearch channel={channel} />
               {!mine && me && (
                 <Button id="group-join" variant="primary" className="px-3 py-1.5 text-sm" disabled={busy} onClick={() => void join()}>
                   join
@@ -423,15 +513,18 @@ export function ServerPage() {
               )}
               {!mine && <p className="text-sm text-textSecondary">you can read this. join to talk.</p>}
               {mine && !leaving && (
-                <button
-                  id="room-leave"
-                  type="button"
-                  className={cn('text-sm font-semibold', lastMember ? 'text-decrease' : 'text-textSecondary hover:text-textPrimary')}
-                  disabled={busy}
-                  onClick={() => setLeaving(true)}
-                >
-                  {lastMember ? 'leave and delete' : 'leave'}
-                </button>
+                <Tooltip content={lastMember ? 'leave and delete' : 'leave'}>
+                  <button
+                    id="room-leave"
+                    type="button"
+                    aria-label={lastMember ? 'leave and delete' : 'leave'}
+                    className={cn(ICON_BUTTON, 'text-decrease hover:border-decrease')}
+                    disabled={busy}
+                    onClick={() => setLeaving(true)}
+                  >
+                    <RiLogoutBoxRLine aria-hidden size={16} />
+                  </button>
+                </Tooltip>
               )}
               {mine && leaving && (
                 <span className="flex flex-wrap items-center gap-2">
@@ -457,25 +550,30 @@ export function ServerPage() {
             </div>
           </div>
           {actionError && <p className="mb-4 text-sm text-decrease">{actionError}</p>}
-          <div id="group-room" className={cn('grid items-start gap-4', roster ? 'lg:grid-cols-[200px_minmax(0,1fr)_240px]' : 'lg:grid-cols-[200px_minmax(0,1fr)]')}>
-            <ChannelList server={server} channel={channel} room={room} me={me ?? null} onError={setActionError} />
-            <div className="min-w-0">
-              {shown.length === 0 && (
-                <p id="group-empty" className="mb-3 text-sm text-textSecondary">
-                  nobody's camera is up.
-                </p>
-              )}
+          <div
+            id="group-room"
+            ref={roomRef}
+            className={cn('grid snap-start items-start gap-4', roster ? 'lg:grid-cols-[200px_minmax(0,1fr)_240px]' : 'lg:grid-cols-[200px_minmax(0,1fr)]')}
+          >
+            <div className="flex min-w-0 flex-col gap-6">
+              <ChannelList server={server} channel={channel} room={room} me={me ?? null} onError={setActionError} />
+              {/* the cameras, under the channels. with every camera off the list stands alone: nothing says so */}
               {shown.length > 0 && (
-                <div className="mb-4 grid grid-cols-2 gap-3">
-                  {shown.map((name, i) => (
-                    <LiveFace key={name} name={name} big={i === 0 && shown.length > 1} />
-                  ))}
-                </div>
+                <section id="group-live" aria-label="live">
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">
+                    live <span className="font-normal normal-case tracking-normal">{live.length}</span>
+                  </h3>
+                  <div className="flex flex-col gap-3">
+                    {shown.map((name) => (
+                      <LiveFace key={name} name={name} />
+                    ))}
+                  </div>
+                  {live.length > FACES && <p className="mt-2 text-xs text-textTertiary">{live.length - FACES} more live</p>}
+                </section>
               )}
-              {live.length > FACES && <p className="mb-3 text-sm text-textTertiary">{live.length - FACES} more live</p>}
-              <div className="h-[70vh] min-h-[420px]">
-                <ChatPanel name={server} channel={channel} className="h-full" />
-              </div>
+            </div>
+            <div className={cn('min-w-0', ROOM_HEIGHT)}>
+              <ChatPanel name={server} channel={channel} search={false} className="h-full" />
             </div>
             {roster && <Roster room={room} />}
           </div>
@@ -574,7 +672,11 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
                   id={`channel-mute-${item.name}`}
                   type="button"
                   aria-pressed={isMuted}
-                  title={isMuted ? 'muted: its lines do not reach your bell. unmute to hear it again' : 'mute: its lines stop reaching your bell. the chat itself is not touched'}
+                  title={
+                    isMuted
+                      ? 'muted: its lines do not reach your bell. unmute to hear it again'
+                      : 'mute: its lines stop reaching your bell. the chat itself is not touched'
+                  }
                   className={cn('px-1 text-xs', isMuted ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
                   onClick={() => void mute(item.name, !isMuted)}
                 >
@@ -630,45 +732,142 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
 }
 
 /**
- * The right of the room, for a member: who is in. Each member's face and name, `owner` on an
- * owner, the roles they hold in their colours, `live` on one whose camera is up; owners first,
- * then the group's order (room-atoms sorts). Nothing here acts: what a power does is in the
- * manage dialog, from the header.
+ * One member of the roster: the face with the presence square on its corner (the sidebar's
+ * way, docs/status.md; the word for a reader), the name, `owner` on an owner, `live` on one
+ * whose camera is up, the roles they hold in their colours. The word is the events socket's:
+ * room-atoms holds every name on the roster while the room is up.
+ */
+function Member({ member, live }: { member: GroupMember; live: boolean }) {
+  const presence = useAtomValue(presenceOfAtom(member.name));
+  return (
+    <li data-member={member.name} data-owner={member.owner || undefined} data-presence={presence} className="flex items-center gap-2">
+      <span className="relative flex shrink-0">
+        <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8 shrink-0" />
+        <PresenceSquare presence={presence} className="border-backgroundSecondary" />
+        <span className="sr-only">{PRESENCE_WORD[presence]}</span>
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex flex-wrap items-center gap-x-2">
+          <span className="truncate font-semibold">{member.name}</span>
+          {member.owner && <span className="text-xs uppercase text-primaryBlue">owner</span>}
+          {live && <span className="text-xs uppercase text-primaryBlue">live</span>}
+        </span>
+        {member.roles.length > 0 && (
+          <span className="flex flex-wrap gap-x-2 text-xs">
+            {member.roles.map((role) => (
+              <span key={role.id} style={{ color: role.color }}>
+                {role.name}
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
+    </li>
+  );
+}
+
+/**
+ * The right of the room, for a member: who is in. The heading row, with a search icon at its
+ * far right; then each member (`Member`), owners first, then the group's order (room-atoms
+ * sorts). The icon slides a search bar in from the right, over the names and the roles, and
+ * the heading is pushed out to the left ahead of it: the two are one strip, the heading then
+ * the bar, each the width of the row, slid along by a row's width. Focus leaving the row (a
+ * click anywhere else, a tab past the icon), escape, or the icon again slides it back, and
+ * what was typed goes with it, so the list is whole again under the heading. The row stays
+ * put while the list scrolls, with no bar on it. Nothing here acts: what a power does is in
+ * the manage dialog, from the header.
  */
 function Roster({ room }: { room: GroupRoom }) {
   const members = room.roster ?? [];
   const live = room.live ?? [];
+  const [query, setQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const input = useRef<HTMLInputElement | null>(null);
+  const opener = useRef<HTMLButtonElement | null>(null);
+  const q = query.trim().toLowerCase();
+  const shown = q ? members.filter((member) => member.name.toLowerCase().includes(q) || member.roles.some((role) => role.name.toLowerCase().includes(q))) : members;
+
+  // typed in as soon as it is on its way: once the bar is out of its inert state. no scroll:
+  // the row was just clicked, so it is in view, and the bar is still off to the right
+  useEffect(() => {
+    if (searching) input.current?.focus({ preventScroll: true });
+  }, [searching]);
+
+  function close() {
+    setSearching(false);
+    setQuery('');
+  }
+
   return (
-    <aside
-      id="group-roster"
-      aria-label="members"
-      className="flex max-h-[70vh] flex-col gap-3 overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-4 text-sm"
-    >
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-textTertiary">
-        members <span className="font-normal normal-case tracking-normal">{room.members}</span>
-      </h3>
+    <aside id="group-roster" aria-label="members" className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-4 text-sm', ROSTER_HEIGHT)}>
+      <div
+        className="flex h-8 shrink-0 items-center gap-2"
+        onBlur={(e) => {
+          if (searching && !e.currentTarget.contains(e.relatedTarget)) close();
+        }}
+      >
+        {/* the window: a row's width, clipping the strip. `clip`, not `hidden`: a focus in the clipped bar must not scroll it */}
+        <div className="min-w-0 flex-1 overflow-clip">
+          <div className={cn('flex transition-transform duration-150 ease-out motion-reduce:transition-none', searching && '-translate-x-full')}>
+            <h3 className="flex h-8 w-full shrink-0 items-center gap-1 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-textTertiary">
+              members <span className="font-normal normal-case tracking-normal">{room.members}</span>
+            </h3>
+            {members.length > 0 && (
+              // in the document while it is away, so it can slide in; inert, so it is out of the tab order and off a reader
+              <div className="w-full shrink-0" inert={searching ? undefined : true}>
+                <label htmlFor="group-members-search" className="sr-only">
+                  find a member
+                </label>
+                <input
+                  ref={input}
+                  id="group-members-search"
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Escape') return;
+                    close();
+                    opener.current?.focus();
+                  }}
+                  placeholder="search members"
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  className={cn(INPUT, 'h-8 w-full py-0 text-sm')}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+        {members.length > 0 && (
+          <Tooltip content={searching ? 'close search' : 'search members'}>
+            <button
+              ref={opener}
+              id="group-members-search-open"
+              type="button"
+              aria-label={searching ? 'close search' : 'search members'}
+              aria-expanded={searching}
+              aria-controls="group-members-search"
+              // the press takes no focus from the bar: with it open, the click closes, and does not first blur it shut and then open it again
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => (searching ? close() : setSearching(true))}
+              className={cn(ICON_BUTTON, searching ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
+            >
+              <RiSearchLine aria-hidden size={16} />
+            </button>
+          </Tooltip>
+        )}
+      </div>
       {room.roster === null && <p className="text-textTertiary">the roster is for members.</p>}
-      <ul id="group-members" className="flex flex-col gap-2">
-        {members.map((member) => (
-          <li key={member.name} data-member={member.name} data-owner={member.owner || undefined} className="flex items-center gap-2">
-            <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8 shrink-0" />
-            <span className="min-w-0 flex-1">
-              <span className="flex flex-wrap items-center gap-x-2">
-                <span className="truncate font-semibold">{member.name}</span>
-                {member.owner && <span className="text-xs uppercase text-primaryBlue">owner</span>}
-                {live.includes(member.name) && <span className="text-xs uppercase text-primaryBlue">live</span>}
-              </span>
-              {member.roles.length > 0 && (
-                <span className="flex flex-wrap gap-x-2 text-xs">
-                  {member.roles.map((role) => (
-                    <span key={role.id} style={{ color: role.color }}>
-                      {role.name}
-                    </span>
-                  ))}
-                </span>
-              )}
-            </span>
-          </li>
+      {q && shown.length === 0 && (
+        <p id="group-members-nobody" className="text-textTertiary">
+          nobody by that name.
+        </p>
+      )}
+      {/* no bar: it would take width from the rows. the padding under the last row is for its presence square, which hangs 4px below its face and would otherwise be 4px of scroll. its scroll is its own: the end of a long roster does not send the page to its other view */}
+      <ul id="group-members" className="flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {shown.map((member) => (
+          <Member key={member.name} member={member} live={live.includes(member.name)} />
         ))}
       </ul>
     </aside>
@@ -681,23 +880,54 @@ interface ManageProps {
   run: Run;
 }
 
+type ManageTab = 'about' | 'roles' | 'members' | 'bans' | 'delete';
+
 /**
- * What a power does, in a dialog over the room (`manage`, in the header): the about line and
- * the member order (appearance), the roles and who holds them (roles), kick and ban (each its
- * own power), the owners and the delete (an owner). The pictures are not here: an owner
- * changes them on the pictures themselves, at the top of the page; the channels are the
- * list's own. Every call lands through the socket, for this page and every other one with
- * the room open, so the dialog reads the room the page does and follows it live. A native
- * <dialog>: the browser keeps focus in it, closes it on escape and hands focus back to the
- * button that opened it; a click on the backdrop closes it too. A refusal is said in here,
- * since the page is under the backdrop.
+ * The rail of the manage dialog, in order and in groups, each tab with the power that shows
+ * it. `about` is the about line and the listing (appearance); `members` is for anyone who
+ * manages at all, since every power does something to a member.
+ */
+const MANAGE_TABS: { id: ManageTab; label: string; group: string; icon: ReactNode; shown: (room: GroupRoom) => boolean }[] = [
+  { id: 'about', label: 'about', group: 'the group', icon: <RiInformationLine aria-hidden size={18} />, shown: (room) => room.perms.appearance },
+  { id: 'roles', label: 'roles', group: 'the group', icon: <RiShieldStarLine aria-hidden size={18} />, shown: (room) => room.perms.roles },
+  { id: 'members', label: 'members', group: 'people', icon: <RiGroupLine aria-hidden size={18} />, shown: () => true },
+  { id: 'bans', label: 'bans', group: 'people', icon: <RiForbidLine aria-hidden size={18} />, shown: (room) => room.perms.ban },
+  { id: 'delete', label: 'delete', group: 'owner', icon: <RiDeleteBinLine aria-hidden size={18} />, shown: (room) => room.owner }
+];
+
+// the rail's looks, the user modal's (UserModal.tsx): the mark under a tab in the phone strip, at its left in the rail
+const RAIL_GROUP = 'hidden px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wider text-textTertiary first:pt-0 sm:block';
+const RAIL_TAB = cn(
+  'flex shrink-0 items-center gap-2.5 whitespace-nowrap px-3 py-2 text-left font-semibold leading-tight transition-colors duration-150',
+  'border-b-2 sm:w-full sm:border-b-0 sm:border-l-2',
+  'focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue'
+);
+const RAIL_TAB_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
+const RAIL_TAB_OFF = 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary';
+const RAIL_STEP: Record<string, number | undefined> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
+
+/**
+ * What a power does, in a dialog over the room (`manage`, the gear in the header), laid out
+ * like the user modal: a rail of tabs down the left, in groups (the group: about and the
+ * listing, roles; people: members, bans; owner: delete), and the open tab's pane on the
+ * right. A tab shows for the power behind it, and the first one this login may see opens.
+ * The pictures are not here: an owner changes them on the pictures themselves, at the top
+ * of the page; the channels are the list's own. Every call lands through the socket, for
+ * this page and every other one with the room open, so the dialog reads the room the page
+ * does and follows it live. A native <dialog>: the browser keeps focus in it, closes it on
+ * escape and hands focus back to the button that opened it; a click on the backdrop closes
+ * it too. A refusal is said in the pane, since the page is under the backdrop.
  */
 function ManageDialog({ server, room, me, onClose }: { server: string; room: GroupRoom; me: string | null; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   /** The press that began this click was on the backdrop too: a text drag that ends outside is not a close. */
   const pressedBackdrop = useRef(false);
   const [error, setError] = useState('');
+  const [picked, setPicked] = useState<ManageTab | null>(null);
   const words = groupWords(room);
+  const tabs = MANAGE_TABS.filter((item) => item.shown(room));
+  // the tab picked while it is still one this login may see, else the first that is: a power lost while this was open moves the pane
+  const tab = tabs.find((item) => item.id === picked)?.id ?? tabs[0]?.id ?? null;
 
   // A layout effect: its cleanup runs while the node is still in the document, which is when
   // close() hands focus back to the opener.
@@ -724,6 +954,27 @@ function ManageDialog({ server, room, me, onClose }: { server: string; room: Gro
     }
   };
 
+  /** Another tab: its pane, and no refusal left over from the last one. */
+  function pick(next: ManageTab) {
+    setPicked(next);
+    setError('');
+  }
+
+  /** Arrows walk the rail and show the tab under focus; home and end jump. The buttons carry tabIndex 0/-1 themselves. */
+  function rove(e: KeyboardEvent<HTMLDivElement>) {
+    const buttons = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    const i = buttons.indexOf(e.target as HTMLButtonElement);
+    if (i < 0) return;
+    const step = RAIL_STEP[e.key];
+    const next = step !== undefined ? (i + step + buttons.length) % buttons.length : e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1 : -1;
+    const target = tabs[next]; // rendered from `tabs`, so dom order and this order agree
+    const button = buttons[next];
+    if (next < 0 || !target || !button) return;
+    e.preventDefault();
+    pick(target.id);
+    button.focus();
+  }
+
   return (
     <dialog
       ref={dialogRef}
@@ -740,41 +991,105 @@ function ManageDialog({ server, room, me, onClose }: { server: string; room: Gro
         if (event.target !== event.currentTarget) return;
         onClose();
       }}
-      // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
-      className="m-auto max-h-[min(760px,calc(100dvh-3rem))] w-[min(680px,calc(100vw-3rem))] flex-col overflow-hidden border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary open:flex backdrop:bg-black/60"
+      // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop.
+      // a set height, not a cap: the rail and the pane fill it, and a change of tab does not move the box
+      className={cn(
+        'm-auto h-[min(680px,calc(100dvh-3rem))] w-[min(880px,calc(100vw-3rem))] overflow-hidden border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary',
+        'flex-col open:flex sm:flex-row backdrop:bg-black/60'
+      )}
     >
-      <div className="flex items-start justify-between gap-4 border-b border-primaryStroke px-6 py-4">
-        <h2 id="group-manage-title" tabIndex={-1} className="min-w-0 border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight outline-none">
-          manage <GroupName words={words} />
-        </h2>
+      {/* the rail: the group at its head, then the tabs. a strip along the top on a phone */}
+      <div className="flex shrink-0 flex-col border-b border-primaryStroke bg-background sm:w-52 sm:border-b-0 sm:border-r">
+        <div className="hidden items-center gap-3 border-b border-primaryStroke px-3 py-3 sm:flex">
+          <GroupMark name={server} color={room.color || '#5865f2'} icon={room.icon} className="h-9 w-9 text-base" />
+          <span className="min-w-0">
+            <span className="block truncate font-semibold leading-tight">{words.title}</span>
+            <span className="block text-xs text-textTertiary">{words.tag ? `#${words.tag}` : 'manage'}</span>
+          </span>
+        </div>
+        <div
+          id="manage-tabs"
+          role="tablist"
+          aria-orientation="vertical"
+          aria-label="sections"
+          onKeyDown={rove}
+          className="flex flex-row gap-1 overflow-x-auto p-2 sm:flex-col sm:gap-0 sm:overflow-visible"
+        >
+          {tabs.map((item, i) => {
+            const on = item.id === tab;
+            const before = tabs[i - 1];
+            const newGroup = before === undefined || before.group !== item.group;
+            return (
+              <Fragment key={item.id}>
+                {/* a tablist may hold only tabs, so the group words are decoration; the tab names carry the meaning */}
+                {newGroup && (
+                  <span aria-hidden className={RAIL_GROUP}>
+                    {item.group}
+                  </span>
+                )}
+                <button
+                  id={`manage-tab-${item.id}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={on}
+                  aria-controls={on ? `manage-panel-${item.id}` : undefined}
+                  tabIndex={on ? 0 : -1}
+                  onClick={() => pick(item.id)}
+                  className={cn(RAIL_TAB, on ? RAIL_TAB_ON : RAIL_TAB_OFF)}
+                >
+                  {item.icon}
+                  {item.label}
+                </button>
+              </Fragment>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* pinned over the pane: the pane scrolls under it */}
         <button
           id="group-manage-close"
           type="button"
           aria-label="close"
           aria-keyshortcuts="Escape"
           onClick={close}
-          className="flex h-8 w-8 shrink-0 items-center justify-center border border-primaryStroke text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue"
+          className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue"
         >
           <RiCloseLine aria-hidden size={20} />
         </button>
-      </div>
-      {/* always rendered: a live region announces only text that arrives after it exists */}
-      <p id="group-manage-error" aria-live="polite" className="min-h-[1.5em] px-6 pt-3 text-sm text-decrease">
-        {error}
-      </p>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-1 text-sm [scrollbar-gutter:stable]">
-        {manages(room) ? (
-          <div className="divide-y divide-primaryStroke">
-            {room.perms.appearance && <AboutSection server={server} room={room} run={run} />}
-            <MembersSection server={server} room={room} me={me} run={run} />
-            {room.perms.ban && <BansSection server={server} room={room} run={run} />}
-            {room.perms.roles && <RolesSection server={server} room={room} run={run} />}
-            {room.owner && <DeleteSection server={server} run={run} />}
+        {/* keyed on the tab: a fresh pane starts at the top with its own form state */}
+        <div
+          key={tab ?? 'none'}
+          id={tab ? `manage-panel-${tab}` : undefined}
+          role={tab ? 'tabpanel' : undefined}
+          aria-labelledby={tab ? `manage-tab-${tab}` : undefined}
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 [scrollbar-gutter:stable] sm:px-8 sm:py-6"
+        >
+          <h2 id="group-manage-title" tabIndex={-1} className="min-w-0 border-l-4 border-primaryBlue pl-3 pr-12 text-xl font-semibold leading-tight outline-none">
+            {tab ?? 'manage'} <span className="font-normal text-textTertiary">· {words.title}</span>
+          </h2>
+          {/* always rendered: a live region announces only text that arrives after it exists */}
+          <p id="group-manage-error" aria-live="polite" className="min-h-[1.5em] pt-3 text-sm text-decrease">
+            {error}
+          </p>
+          <div className="pt-1 text-sm">
+            {tab === null && (
+              // the powers went while this was open: an owner took the role, or this login was put out
+              <p className="text-textSecondary">you have no powers here now.</p>
+            )}
+            {tab === 'about' && (
+              <div className="divide-y divide-primaryStroke">
+                <AboutSection server={server} room={room} run={run} />
+                <ListingSection server={server} room={room} run={run} />
+              </div>
+            )}
+            {tab === 'roles' && <RolesSection server={server} room={room} run={run} />}
+            {tab === 'members' && <MembersSection server={server} room={room} me={me} run={run} />}
+            {tab === 'bans' && <BansSection server={server} room={room} run={run} />}
+            {tab === 'delete' && <DeleteSection server={server} run={run} />}
           </div>
-        ) : (
-          // the powers went while this was open: an owner took the role, or this login was put out
-          <p className="text-textSecondary">you have no powers here now.</p>
-        )}
+        </div>
       </div>
     </dialog>
   );
@@ -810,6 +1125,39 @@ function AboutSection({ server, room, run }: ManageProps) {
   );
 }
 
+/**
+ * Public or private: whether the group is on the lists (home, `/groups`, `GET /api/groups`)
+ * for someone not in it. The create dialog asks the same; this is where it is changed after.
+ * The new word arrives on the socket (`access`), so the pressed one follows the room, not the click.
+ */
+function ListingSection({ server, room, run }: ManageProps) {
+  const isPublic = room.public !== false;
+  return (
+    <Section title="listing" description="public is on the lists for anyone. private is off them: someone with the address can still open it and join.">
+      <p className="flex flex-wrap items-center gap-2">
+        <button
+          id="room-public"
+          type="button"
+          aria-pressed={isPublic}
+          className={cn('text-sm font-semibold', isPublic ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
+          onClick={() => void run(() => api.setGroupPublic(server, true))}
+        >
+          public
+        </button>
+        <button
+          id="room-private"
+          type="button"
+          aria-pressed={!isPublic}
+          className={cn('text-sm font-semibold', !isPublic ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
+          onClick={() => void run(() => api.setGroupPublic(server, false))}
+        >
+          private
+        </button>
+      </p>
+    </Section>
+  );
+}
+
 /** Every member with what a power may do to them: give or take a role, kick, ban, remove owner. Then, for an owner, naming another. */
 function MembersSection({ server, room, me, run }: ManageProps & { me: string | null }) {
   const [ownerName, setOwnerName] = useState('');
@@ -817,7 +1165,7 @@ function MembersSection({ server, room, me, run }: ManageProps & { me: string | 
   const owners = members.filter((member) => member.owner).length;
   const order = room.member_order === 'newest' || room.member_order === 'oldest' ? room.member_order : 'name';
   /** The powers a role carries, by id: what the roster's held roles do not say. */
-  const permsOf = (id: number) => room.roles.find((role) => role.id === id)?.perms ?? NO_PERMS;
+  const permsOf = (id: string) => room.roles.find((role) => role.id === id)?.perms ?? NO_PERMS;
 
   return (
     <Section title="members" description="who is in, owners first.">
@@ -885,7 +1233,7 @@ function MembersSection({ server, room, me, run }: ManageProps & { me: string | 
                         defaultValue=""
                         className="border border-primaryStroke bg-background px-1 py-0.5"
                         onChange={(e) => {
-                          const id = Number(e.target.value);
+                          const id = e.target.value;
                           e.target.value = '';
                           if (id) void run(() => api.giveRole(server, id, member.name));
                         }}
@@ -994,45 +1342,84 @@ function BansSection({ server, room, run }: ManageProps) {
   );
 }
 
-/** The roles, each with its powers, and one form that adds a role or, after a click on one within reach, changes it. */
+/** A role as it is being changed in place: the id it is known by, and what `save` puts. */
+interface RoleDraft {
+  id: string;
+  name: string;
+  color: string;
+  perms: RolePerms;
+}
+
+/** What a new role is called: `new role`, or the first of `new role 2`, `new role 3`, … that no role here has, so the add never collides. */
+function freshRoleName(roles: GroupRole[]): string {
+  const taken = new Set(roles.map((role) => role.name.toLowerCase()));
+  if (!taken.has('new role')) return 'new role';
+  let n = 2;
+  while (taken.has(`new role ${n}`)) n += 1;
+  return `new role ${n}`;
+}
+
+/** The words for a role's powers in its row: the labels it carries, or `no powers`. */
+function powerWords(perms: RolePerms): string {
+  return (
+    POWERS.filter((power) => perms[power.key])
+      .map((power) => power.label)
+      .join(', ') || 'no powers'
+  );
+}
+
+/**
+ * The roles, each a row: the name in its colour and the powers it carries. A row within reach
+ * is the click: it opens in place as the name, the colour and the powers, with save, cancel
+ * and delete; one is open at a time. `add role` makes one right away, called `new role`
+ * (numbered when that is taken), and opens it with the name selected, so what is typed next
+ * is its name. A role is known by its id, not its name: a rename is a save like any other,
+ * and the open row stays on its role whatever the socket says of it meanwhile; a role deleted
+ * under it closes it.
+ */
 function RolesSection({ server, room, run }: ManageProps) {
-  const [name, setName] = useState('');
-  const [color, setColor] = useState<string>(COLORS[0]);
-  const [perms, setPerms] = useState<RolePerms>(NO_PERMS);
-  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState<RoleDraft | null>(null);
+  const [adding, setAdding] = useState(false);
   // a power this login lacks is one it cannot put on a role; an owner and a site admin lack none
   const short = POWERS.filter((power) => !room.perms[power.key]);
-  const full = editing === null && room.roles.length >= ROLE_CAP;
+  const full = room.roles.length >= ROLE_CAP;
+  // the row open in place: the draft, while the role it is of is still there
+  const open = draft !== null && room.roles.some((role) => role.id === draft.id) ? draft : null;
 
-  function edit(id: number) {
-    const role = room.roles.find((item) => item.id === id);
-    if (!role) return;
-    setEditing(id);
-    setName(role.name);
-    setColor(role.color);
-    setPerms(role.perms);
-  }
-
-  function reset() {
-    setEditing(null);
-    setName('');
-    setPerms(NO_PERMS);
+  /** A role now, so it has an id to be known by, then open with the name selected. */
+  async function add() {
+    setAdding(true);
+    try {
+      await run(async () => {
+        const made = await api.createRole(server, { name: freshRoleName(room.roles), color: COLORS[0], perms: NO_PERMS });
+        setDraft({ id: made.id, name: made.name, color: made.color, perms: made.perms });
+      });
+    } finally {
+      setAdding(false);
+    }
   }
 
   async function save(e: FormEvent) {
     e.preventDefault();
-    const body = { name: name.trim(), color, perms };
+    if (!open || !open.name.trim()) return;
     await run(async () => {
-      if (editing === null) await api.createRole(server, body);
-      else await api.saveRole(server, editing, body);
-      reset();
+      await api.saveRole(server, open.id, { name: open.name.trim(), color: open.color, perms: open.perms });
+      setDraft(null);
+    });
+  }
+
+  async function remove() {
+    if (!open) return;
+    await run(async () => {
+      await api.deleteRole(server, open.id);
+      setDraft(null);
     });
   }
 
   return (
     <Section
       title="roles"
-      description={`${room.roles.length} of ${ROLE_CAP}. a name, a colour and the powers it carries; click one to change it. ${
+      description={`${room.roles.length} of ${ROLE_CAP}. a name, a colour and the powers it carries; click one to change or delete it. ${
         short.length > 0 ? 'a role carries only the powers you hold. ' : ''
       }only an owner can name another owner, or change the pictures.`}
     >
@@ -1042,26 +1429,83 @@ function RolesSection({ server, room, run }: ManageProps) {
           {room.roles.map((role) => {
             // a role past this login's reach is read, not changed
             const within = reaches(room, role.perms);
+            if (open?.id === role.id) {
+              return (
+                <li key={role.id} data-role={role.name} data-open className="border border-primaryStroke p-3">
+                  <form id="role-form" onSubmit={(e) => void save(e)} className="flex flex-col gap-3">
+                    <input
+                      id="role-name"
+                      value={open.name}
+                      onChange={(e) => setDraft({ ...open, name: e.target.value })}
+                      placeholder="role name"
+                      maxLength={32}
+                      aria-label="role name"
+                      autoFocus
+                      onFocus={(e) => e.currentTarget.select()}
+                      className={INPUT}
+                    />
+                    <div className="flex flex-wrap gap-1">
+                      {COLORS.map((swatch) => (
+                        <button
+                          key={swatch}
+                          type="button"
+                          aria-label={swatch}
+                          aria-pressed={swatch === open.color}
+                          onClick={() => setDraft({ ...open, color: swatch })}
+                          style={{ backgroundColor: swatch }}
+                          className={cn('h-6 w-6 border-2', swatch === open.color ? 'border-textPrimary' : 'border-transparent')}
+                        />
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                      {POWERS.map((power) => (
+                        <label key={power.key} className={cn('flex items-center gap-2', !room.perms[power.key] && 'text-textTertiary')}>
+                          <input
+                            id={`role-perm-${power.key}`}
+                            type="checkbox"
+                            checked={open.perms[power.key]}
+                            disabled={!room.perms[power.key]}
+                            onChange={(e) => setDraft({ ...open, perms: { ...open.perms, [power.key]: e.target.checked } })}
+                          />
+                          {power.label}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button id="role-save" type="submit" className="text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!open.name.trim()}>
+                        save
+                      </button>
+                      <button id="role-cancel" type="button" className="text-sm text-textTertiary" onClick={() => setDraft(null)}>
+                        cancel
+                      </button>
+                      <button id="role-delete" type="button" className="ml-auto text-sm text-decrease" onClick={() => void remove()}>
+                        delete
+                      </button>
+                    </div>
+                  </form>
+                </li>
+              );
+            }
             return (
-              <li key={role.id} data-role={role.name} data-reach={within || undefined} className="flex items-center gap-2">
+              <li key={role.id} data-role={role.name} data-reach={within || undefined}>
                 {within ? (
-                  <button type="button" className="font-semibold" style={{ color: role.color }} onClick={() => edit(role.id)}>
-                    {role.name}
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-primaryStroke/20"
+                    onClick={() => setDraft({ id: role.id, name: role.name, color: role.color, perms: role.perms })}
+                  >
+                    <span className="font-semibold" style={{ color: role.color }}>
+                      {role.name}
+                    </span>
+                    <span className="truncate text-xs text-textTertiary">{powerWords(role.perms)}</span>
                   </button>
                 ) : (
-                  <span className="font-semibold" style={{ color: role.color }}>
-                    {role.name}
+                  <span className="flex items-center gap-2 px-2 py-1">
+                    <span className="font-semibold" style={{ color: role.color }}>
+                      {role.name}
+                    </span>
+                    <span className="truncate text-xs text-textTertiary">{powerWords(role.perms)}</span>
                   </span>
-                )}
-                <span className="truncate text-xs text-textTertiary">
-                  {POWERS.filter((power) => role.perms[power.key])
-                    .map((power) => power.label)
-                    .join(', ') || 'no powers'}
-                </span>
-                {within && (
-                  <button type="button" className="ml-auto text-textTertiary" onClick={() => void run(() => api.deleteRole(server, role.id))}>
-                    delete
-                  </button>
                 )}
               </li>
             );
@@ -1071,46 +1515,15 @@ function RolesSection({ server, room, run }: ManageProps) {
       {full ? (
         <p className="text-textTertiary">{ROLE_CAP} roles is the cap. delete one to add another.</p>
       ) : (
-        <form id="role-form" onSubmit={(e) => void save(e)} className="flex flex-col gap-3">
-          <input id="role-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="role name" maxLength={32} aria-label="role name" className={INPUT} />
-          <div className="flex flex-wrap gap-1">
-            {COLORS.map((swatch) => (
-              <button
-                key={swatch}
-                type="button"
-                aria-label={swatch}
-                aria-pressed={swatch === color}
-                onClick={() => setColor(swatch)}
-                style={{ backgroundColor: swatch }}
-                className={cn('h-6 w-6 border-2', swatch === color ? 'border-textPrimary' : 'border-transparent')}
-              />
-            ))}
-          </div>
-          <div className="flex flex-wrap gap-x-4 gap-y-1">
-            {POWERS.map((power) => (
-              <label key={power.key} className={cn('flex items-center gap-2', !room.perms[power.key] && 'text-textTertiary')}>
-                <input
-                  id={`role-perm-${power.key}`}
-                  type="checkbox"
-                  checked={perms[power.key]}
-                  disabled={!room.perms[power.key]}
-                  onChange={(e) => setPerms({ ...perms, [power.key]: e.target.checked })}
-                />
-                {power.label}
-              </label>
-            ))}
-          </div>
-          <div className="flex items-center gap-3">
-            <button id="role-save" type="submit" className="text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!name.trim()}>
-              {editing === null ? 'add role' : 'save role'}
-            </button>
-            {editing !== null && (
-              <button type="button" className="text-textTertiary" onClick={reset}>
-                cancel
-              </button>
-            )}
-          </div>
-        </form>
+        <button
+          id="role-add"
+          type="button"
+          className="self-start text-sm font-semibold text-primaryBlue disabled:opacity-40"
+          disabled={adding}
+          onClick={() => void add()}
+        >
+          add role
+        </button>
       )}
     </Section>
   );

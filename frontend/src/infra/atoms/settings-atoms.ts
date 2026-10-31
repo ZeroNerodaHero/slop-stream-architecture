@@ -2,7 +2,8 @@
  * The preferences this browser keeps (localstorage, like the nick): where the chat sits on a
  * page, where it sits on the corner player, which corner the you panel sits in, which lists
  * it shows in what order and which of them are folded, whether the bots' lines show, whether
- * the lines wear faces, and the theme. Not part of the account: a
+ * the lines wear faces, whether a link asks before it opens, the theme, and how big the pages
+ * are. Not part of the account: a
  * laptop and a phone can each have their own. Same shape as the other
  * atom modules: atoms for what renders, action functions to change it. The modal that edits
  * them is user-modal-atoms.ts.
@@ -104,7 +105,7 @@ export function setPanelSide(side: PanelSide) {
 /**
  * The sidebar's lists (docs/follows.md): friends (they follow you back), the rest of who you
  * follow, and the groups you are in. Which of them the column shows, and in what order top to
- * bottom, is this browser's: the settings tab drags them into an order and switches each on or
+ * bottom, is this browser's: the sidebar tab drags them into an order and switches each on or
  * off. One stays on, whatever is asked.
  */
 export type SidebarList = 'friends' | 'following' | 'groups';
@@ -253,6 +254,20 @@ export function setChatFaces(on: boolean) {
   store.set(storedChatFacesAtom, on);
 }
 
+/**
+ * A link somebody put in a line (the chat's, a direct message's) is drawn as one and opens in
+ * a new tab; first, a word that you are leaving this site for that one (LinkedText.tsx). On
+ * unless this browser turned it off: the links block of the chat tab, or `don't ask again` on
+ * the word itself, which is this same switch.
+ */
+const storedLinkWarningAtom = atomWithStorage<unknown>('settings.linkWarning', true, undefined, { getOnInit: true });
+/** Read: a boolean, whatever localstorage holds. Anything but a stored `false` is on. */
+export const linkWarningAtom = atom((get) => get(storedLinkWarningAtom) !== false);
+
+export function setLinkWarning(on: boolean) {
+  store.set(storedLinkWarningAtom, on);
+}
+
 // ---- theme ---------------------------------------------------------------------------------
 
 /** Three colours of their own (text null: derived from the background). */
@@ -356,4 +371,46 @@ store.sub(themeAtom, () => applyTheme(store.get(themeAtom)));
 
 export function applyStoredTheme() {
   applyTheme(store.get(themeAtom));
+}
+
+// ---- size ----------------------------------------------------------------------------------
+
+/**
+ * How big the pages are: the root font size, as a percentage of the browser's own. Every
+ * measure in the stylesheet is in rems (the words, the padding, the gaps, the columns; the body's
+ * 20px is 1.25rem in globals.css), so a step down here is a step down for the whole page, the way
+ * the browser's zoom is, kept here and for this site alone. 100 is the browser's size, the
+ * default, and sets nothing; the browser's own zoom works on top of any of them.
+ */
+export type TextSize = 80 | 90 | 100 | 110 | 125;
+
+export const TEXT_SIZES: readonly TextSize[] = [80, 90, 100, 110, 125];
+
+const storedTextSizeAtom = atomWithStorage<unknown>('settings.textSize', 100, undefined, { getOnInit: true });
+/** Read: always one of TEXT_SIZES, whatever localstorage holds. */
+export const textSizeAtom = atom((get): TextSize => {
+  const size = get(storedTextSizeAtom);
+  return (TEXT_SIZES as readonly unknown[]).includes(size) ? (size as TextSize) : 100;
+});
+
+export function setTextSize(size: TextSize) {
+  store.set(storedTextSizeAtom, size);
+}
+
+/**
+ * The choice onto a document's <html>: this page's, and the popped out player's window
+ * (infra/popout.ts), dressed as this one. 100 clears it: the stylesheet is the browser's size.
+ * The inline script in index.html reads the same key and does the same before first paint.
+ */
+export function applyTextSizeTo(root: HTMLElement) {
+  const size = store.get(textSizeAtom);
+  if (size === 100) root.style.removeProperty('font-size');
+  else root.style.fontSize = `${size}%`;
+}
+
+// the theme's subscriber, for the size: this tab's changes and another tab's alike
+store.sub(textSizeAtom, () => applyTextSizeTo(document.documentElement));
+
+export function applyStoredTextSize() {
+  applyTextSizeTo(document.documentElement);
 }

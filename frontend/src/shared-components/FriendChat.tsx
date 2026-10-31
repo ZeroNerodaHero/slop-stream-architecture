@@ -33,6 +33,7 @@ import { followingAtom } from '@/infra/atoms/follow-atoms';
 import { type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
+import { LinkedText } from '@/shared-components/LinkedText';
 import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { PresenceSquare, Who, Word } from '@/shared-components/PersonRow';
@@ -537,7 +538,9 @@ export function FriendChat() {
                     className={cn('text-sm leading-snug', mine ? 'text-right' : 'text-left')}
                   >
                     <span className="font-semibold">{mine ? 'you' : line.from}</span>
-                    <span className="mt-0.5 block whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]">{line.text}</span>
+                    <span className="mt-0.5 block whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]">
+                      <LinkedText text={line.text} />
+                    </span>
                   </p>
                 );
               })}

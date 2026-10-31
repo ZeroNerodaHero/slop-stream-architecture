@@ -4,7 +4,9 @@
 //! Only an owner can do that. The picture and the banner are the owner's too: no role carries
 //! them. A custom role is a name, a colour and a set of the powers below. It cannot grant
 //! owner, it cannot touch an owner, and it reaches only the powers its holder has: whoever
-//! makes, changes, deletes, gives or takes a role must hold every power on it.
+//! makes, changes, deletes, gives or takes a role must hold every power on it. A role is
+//! known by a uuid postgres made (migrate-23, docs/ids.md), so a rename is a save like any
+//! other, and a page holds a role open while its name changes under it.
 
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody, JsonRejection};
@@ -152,7 +154,7 @@ fn not_an_owner(me: &Shaper, target_is_owner: bool) -> Result<(), ApiError> {
 }
 
 /// A role's powers, by id, in this group. 404 `no such role`.
-async fn role_perms(db: &sqlx::PgPool, group: &str, id: i64) -> Result<i32, ApiError> {
+async fn role_perms(db: &sqlx::PgPool, group: &str, id: uuid::Uuid) -> Result<i32, ApiError> {
     let perms: Option<i32> = sqlx::query_scalar("SELECT perms FROM roles WHERE id = $1 AND group_name = $2").bind(id).bind(group).fetch_optional(db).await?;
     perms.ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such role"))
 }
@@ -344,9 +346,7 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, M
     };
     let admin = user.is_some_and(|id| s.admins.iter().any(|a| a.id == id));
     let powers = if held.owner { ALL } else { held.perms | if admin { ALL } else { 0 } };
-    let roles: Vec<(i64, String, String, i32)> =
-        sqlx::query_as("SELECT id, name, color, perms FROM roles WHERE group_name = $1 ORDER BY id").bind(&group).fetch_all(&s.db).await?;
-    let roles = roles.into_iter().map(|(id, name, color, perms)| json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms) }));
+    let roles = roles_of(&s.db, &group).await?;
     let channels = groups::channels_of(&s, &group, user, admin).await?;
     let live = groups::live_in(&s, &group).await?;
     // the channels this login has muted (docs/notifications.md): its own, so the list can say so
@@ -370,7 +370,7 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, M
         "icon": icon,
         "banner": banner,
         "perms": perms_json(powers),
-        "roles": roles.collect::<Vec<_>>(),
+        "roles": roles,
         "channels": channels,
         "muted": muted,
         "live": live,
@@ -420,12 +420,21 @@ async fn put_about(State(s): State<AppState>, Path(group): Path<String>, Me(me):
     Ok(Json(json!({ "about": about })))
 }
 
+/// One role as the room, the list and the `role` fact say it.
+fn role_json(id: uuid::Uuid, name: &str, color: &str, perms: i32) -> Value {
+    json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms) })
+}
+
+/// The group's roles, oldest first: the id is a uuid and says nothing about the order.
+async fn roles_of(db: &sqlx::PgPool, group: &str) -> Result<Vec<Value>, sqlx::Error> {
+    let roles: Vec<(uuid::Uuid, String, String, i32)> =
+        sqlx::query_as("SELECT id, name, color, perms FROM roles WHERE group_name = $1 ORDER BY created_at, name").bind(group).fetch_all(db).await?;
+    Ok(roles.into_iter().map(|(id, name, color, perms)| role_json(id, &name, &color, perms)).collect())
+}
+
 async fn list_roles(State(s): State<AppState>, Path(group): Path<String>) -> ApiResult {
     let group = server(&s.db, &group).await?;
-    let roles: Vec<(i64, String, String, i32)> =
-        sqlx::query_as("SELECT id, name, color, perms FROM roles WHERE group_name = $1 ORDER BY id").bind(&group).fetch_all(&s.db).await?;
-    let roles = roles.into_iter().map(|(id, name, color, perms)| json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms) }));
-    Ok(Json(Value::Array(roles.collect())))
+    Ok(Json(Value::Array(roles_of(&s.db, &group).await?)))
 }
 
 async fn create_role(
@@ -456,7 +465,8 @@ async fn create_role(
     if n >= MAX_ROLES {
         return Err(ApiError::new(StatusCode::FORBIDDEN, format!("this group has {MAX_ROLES} roles already")));
     }
-    let id: Option<i64> = sqlx::query_scalar(
+    // the id is postgres's (gen_random_uuid, the column's default), read back here
+    let id: Option<uuid::Uuid> = sqlx::query_scalar(
         "INSERT INTO roles (group_name, name, color, perms) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING RETURNING id",
     )
     .bind(&group)
@@ -469,14 +479,16 @@ async fn create_role(
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     };
     log::info!("{}: role {name} in {group}", who.name);
-    let role = json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms) });
+    let role = role_json(id, &name, &color, perms);
     groups::tell(&s, &group, "role", json!({ "role": role })).await;
     Ok((StatusCode::CREATED, Json(role)))
 }
 
+/// `PUT /api/groups/:group/roles/:id`: the role replaced whole, name included: a rename is
+/// this, since the id is what the role is known by. The same reach as making it.
 async fn update_role(
     State(s): State<AppState>,
-    Path((group, id)): Path<(String, i64)>,
+    Path((group, id)): Path<(String, uuid::Uuid)>,
     Me(me): Me,
     body: Result<Json<RoleIn>, JsonRejection>,
 ) -> ApiResult {
@@ -511,12 +523,12 @@ async fn update_role(
     if done.rows_affected() == 0 {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such role"));
     }
-    let role = json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms) });
+    let role = role_json(id, &name, &color, perms);
     groups::tell(&s, &group, "role", json!({ "role": role })).await;
     Ok(Json(role))
 }
 
-async fn delete_role(State(s): State<AppState>, Path((group, id)): Path<(String, i64)>, Me(me): Me) -> Result<StatusCode, ApiError> {
+async fn delete_role(State(s): State<AppState>, Path((group, id)): Path<(String, uuid::Uuid)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
     let me = shaper(&s, who.id, &group).await?;
@@ -534,7 +546,7 @@ async fn delete_role(State(s): State<AppState>, Path((group, id)): Path<(String,
 
 async fn give_role(
     State(s): State<AppState>,
-    Path((group, id)): Path<(String, i64)>,
+    Path((group, id)): Path<(String, uuid::Uuid)>,
     Me(me): Me,
     body: Result<Json<NameIn>, JsonRejection>,
 ) -> Result<StatusCode, ApiError> {
@@ -560,7 +572,7 @@ async fn give_role(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn take_role(State(s): State<AppState>, Path((group, id, name)): Path<(String, i64, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
+async fn take_role(State(s): State<AppState>, Path((group, id, name)): Path<(String, uuid::Uuid, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
     let me = shaper(&s, who.id, &group).await?;
@@ -594,9 +606,9 @@ async fn grant_owner(
     if already {
         return Ok(StatusCode::NO_CONTENT);
     }
-    // one each: an owner of some other group is not named an owner of this one
-    if groups::owns_a_group(&s.db, user).await? {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, format!("{name} owns a group already. one each")));
+    // the cap on owning counts this too: one who owns as many as it allows is not named an owner of another
+    if groups::groups_owned(&s.db, user).await? >= s.groups_per_owner {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, format!("{name} owns {}", groups::owned_cap_words(s.groups_per_owner))));
     }
     sqlx::query("UPDATE memberships SET owner = true WHERE user_id = $1 AND group_name = $2").bind(user).bind(&group).execute(&s.db).await?;
     log::info!("{}: named {name} an owner of {group}", who.name);
@@ -641,11 +653,11 @@ async fn members_of(db: &sqlx::PgPool, group: &str, order: &str) -> Result<Vec<V
     .bind(order)
     .fetch_all(db)
     .await?;
-    let roles: Vec<(String, i64, String, String)> = sqlx::query_as(
+    let roles: Vec<(String, uuid::Uuid, String, String)> = sqlx::query_as(
         "SELECT s.name, r.id, r.name, r.color FROM role_members rm
          JOIN roles r ON r.id = rm.role_id
          JOIN streamers s ON s.id = rm.user_id
-         WHERE r.group_name = $1 ORDER BY r.id",
+         WHERE r.group_name = $1 ORDER BY r.created_at, r.name",
     )
     .bind(group)
     .fetch_all(db)

@@ -7,6 +7,7 @@ import { type Presence, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import type { PanelSide } from '@/infra/atoms/settings-atoms';
 import { Face } from '@/shared-components/Face';
 import { PresenceSquare, Who } from '@/shared-components/PersonRow';
+import { StreamStill } from '@/shared-components/StreamStill';
 
 /** The card's width, and how far it stands off the column and off the window's edge. */
 const CARD_W = 260;
@@ -94,7 +95,9 @@ interface PersonCardProps {
 /**
  * Somebody, beside the column their row is in, while the pointer or the focus is on the row:
  * the face with the presence square on its corner, the name, then their status under the two.
- * The sidebar's rows, the chat window's tabs and a chat line's speaker all show it. A row holds
+ * Streaming, a frame of the stream (StreamStill.tsx, kept a few seconds old) stands between
+ * the name and the status, the card's width: the preview of what they are streaming, the
+ * sidebar's small one made big. The sidebar's rows, the chat window's tabs and a chat line's speaker all show it. A row holds
  * all of it (the following list, a search's hits, the open chats), so the card is up at once;
  * a chat line holds the name, the ✓ and the picture alone, and the word and the status come
  * from one `GET /api/streamers/:name` asked when the card shows (follow-atoms keeps the answer
@@ -145,6 +148,7 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
         </span>
         <Who name={person.name} verified={person.verified} className="flex-1" />
       </span>
+      {presence === 'streaming' && <StreamStill name={person.name} className="w-full" />}
       {/* the status, the width of the card: whole words, four lines at most */}
       {bio && <span className="line-clamp-4 break-words text-sm leading-snug">{bio}</span>}
     </div>,

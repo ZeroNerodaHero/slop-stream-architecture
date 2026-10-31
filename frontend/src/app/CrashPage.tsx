@@ -15,7 +15,7 @@ export function CrashPage() {
     <main className="mx-auto max-w-[960px] px-5 pb-16 pt-6">
       <header className="mb-6 flex flex-wrap items-center gap-4 border-b border-primaryStroke pb-4">
         <HomeLink reload />
-        <h1 className="min-w-0 border-l-4 border-decrease pl-3 text-[28px] font-semibold leading-tight">something broke</h1>
+        <h1 className="min-w-0 border-l-4 border-decrease pl-3 text-[1.75rem] font-semibold leading-tight">something broke</h1>
       </header>
       <p className="text-textSecondary">a report went out. a reload usually fixes it.</p>
       <pre id="crash" className="mt-3 whitespace-pre-wrap text-sm text-textTertiary [overflow-wrap:anywhere]">

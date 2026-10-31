@@ -3,13 +3,13 @@
  * other app, through the document picture in picture api. The window is a blank same-origin
  * document this page controls (no scripts of its own: react portals the player into it, and
  * the atoms, the chat socket and the peer stay here), dressed as this page: its stylesheets,
- * and the theme's variables on its <html>, kept in step with the appearance setting while it is
- * open. Chrome, edge and firefox 151+ have the api; safari does not, and there the button is
+ * and the theme's variables and the size on its <html>, kept in step with the appearance
+ * settings while it is open. Chrome, edge and firefox 151+ have the api; safari does not, and there the button is
  * not shown at all (`canPopOut`). The window never outlives the page: a load or a closed tab
  * closes it.
  */
 
-import { applyThemeTo, themeAtom } from '@/infra/atoms/settings-atoms';
+import { applyTextSizeTo, applyThemeTo, textSizeAtom, themeAtom } from '@/infra/atoms/settings-atoms';
 import { store } from '@/infra/store';
 
 // the api, until it is in the dom typings
@@ -44,14 +44,17 @@ export async function openPopout(width: number, height: number, onClose: (win: W
   for (const sheet of document.querySelectorAll('link[rel="stylesheet"], style')) doc.head.appendChild(sheet.cloneNode(true));
   const root = doc.documentElement;
   applyThemeTo(root);
+  applyTextSizeTo(root);
   // the page's <html> reserves a scrollbar gutter (globals.css); the player fills its window and scrolls nothing
   root.style.scrollbarGutter = 'auto';
   root.style.overflow = 'hidden';
-  const unsub = store.sub(themeAtom, () => applyThemeTo(root));
+  const unsubTheme = store.sub(themeAtom, () => applyThemeTo(root));
+  const unsubSize = store.sub(textSizeAtom, () => applyTextSizeTo(root));
   win.addEventListener(
     'pagehide',
     () => {
-      unsub();
+      unsubTheme();
+      unsubSize();
       onClose(win);
     },
     { once: true }

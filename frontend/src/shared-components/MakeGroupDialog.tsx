@@ -32,8 +32,8 @@ interface Picked {
  * The dialog that makes a group (docs/groups.md): the name, the word on the badge, a colour,
  * a line about it, public or private, and the banner and the picture, each through the crop
  * dialog and shown here as they will sit on the group. `make it` posts the group, puts the
- * pictures on it, and goes to the new room. Home and `/groups` open it, for a login that owns
- * no group yet: one each, and the api says so if asked twice.
+ * pictures on it, and goes to the new room. Home and `/groups` open it, for a login under the
+ * cap on owned groups (`groups_per_owner`, the api's); past it the api says so here.
  */
 export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
   const busy = useAtomValue(groupsBusyAtom);
@@ -236,7 +236,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
           </button>
           <p className="text-sm text-textTertiary">
             a private group is left off the lists. someone with the address can still open it and join. four digits are added, so the same name can be made twice. the
-            owner can switch this later, on the group.
+            owner can switch this later, under manage on the group.
           </p>
         </div>
         <div className="flex items-center justify-end gap-3">

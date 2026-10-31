@@ -1,7 +1,8 @@
 //! Groups: a login joins one, and its chat lines wear the group's badge. See docs/groups.md.
 //!
-//! A group is a name, a short badge, a colour and a line about it. A login owns one group at
-//! a time, is in a few, and deletes the one it owns. One is built in and automatic: `bot`.
+//! A group is a name, a short badge, a colour and a line about it. A login owns a couple of
+//! groups at most (`GROUPS_PER_OWNER`, two unless `.env` says otherwise), is in a few, and
+//! deletes the ones it owns. One is built in and automatic: `bot`.
 //! Nobody joins it; a chat socket whose hello says `bot: true` wears it (chat.rs), so the
 //! pretend chatters of the fake streams can be told apart, and hidden, in the panel.
 //!
@@ -42,9 +43,12 @@ pub(crate) const BOT_GROUP: &str = "bot";
 /// A badge is a word, not a sentence: `BOT`, `VIP`, `mod`. The panel shows it in capitals.
 const MAX_BADGE_CHARS: usize = 12;
 const MAX_ABOUT_CHARS: usize = 200;
-/// Groups one login may be in. Every badge goes on every line, so it is capped. Owning is one
-/// each (`owns_a_group`), not a count.
+/// Groups one login may be in. Every badge goes on every line, so it is capped. Owning has its
+/// own cap, `AppState::groups_per_owner`, read from `.env` (`groups_per_owner_from_env`).
 const GROUPS_PER_MEMBER: i64 = 8;
+/// Groups one login may own when `GROUPS_PER_OWNER` is not set: the ones it made plus the
+/// ones it was named owner of.
+pub(crate) const DEFAULT_GROUPS_PER_OWNER: i64 = 2;
 /// Channels on one server, `general` included. The pages hold the same number, so the add
 /// form goes at the cap; and it bounds what `GET .../messages` answers for one room.
 const CHANNELS_PER_SERVER: i64 = 20;
@@ -151,10 +155,36 @@ fn too_many_groups() -> ApiError {
     ApiError::new(StatusCode::FORBIDDEN, format!("you are in {GROUPS_PER_MEMBER} groups already. leave one first"))
 }
 
-/// Whether this account owns a group: the one it made, or one it was named owner of. One
-/// each: making another, or being named owner of another, is refused while this is true.
-pub(crate) async fn owns_a_group(db: &PgPool, user: Uuid) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1 AND owner)").bind(user).fetch_one(db).await
+/// `GROUPS_PER_OWNER` from the environment: how many groups one login may own. Unset or
+/// empty is the default; anything that is not a count of one or more is said in the log and
+/// the default is used, since a cap of zero would let nobody make a group.
+pub(crate) fn groups_per_owner_from_env() -> i64 {
+    let Some(raw) = std::env::var("GROUPS_PER_OWNER").ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty()) else {
+        return DEFAULT_GROUPS_PER_OWNER;
+    };
+    match raw.parse::<i64>() {
+        Ok(n) if n >= 1 => n,
+        _ => {
+            log::warn!("GROUPS_PER_OWNER={raw:?} is not a count of 1 or more, using {DEFAULT_GROUPS_PER_OWNER}");
+            DEFAULT_GROUPS_PER_OWNER
+        }
+    }
+}
+
+/// How many groups this account owns: the ones it made, and the ones it was named owner of.
+/// Making another, or being named owner of another, is refused at `groups_per_owner`.
+pub(crate) async fn groups_owned(db: &PgPool, user: Uuid) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT count(*) FROM memberships WHERE user_id = $1 AND owner").bind(user).fetch_one(db).await
+}
+
+/// The words for the cap on owning, as the create and the naming of an owner say it: `a
+/// group already. one each` for a cap of one, `2 groups already. that is the cap` above it.
+pub(crate) fn owned_cap_words(cap: i64) -> String {
+    if cap == 1 {
+        "a group already. one each".into()
+    } else {
+        format!("{cap} groups already. that is the cap")
+    }
 }
 
 /// How many are in the group now: on every `joined`, `left` and `banned` fact, so a room
@@ -231,8 +261,8 @@ fn default_public() -> bool {
 /// `POST /api/groups`: a login makes a group and is in it, as its owner. 201 with the group as
 /// the list shows it. The body's `name` is the title. The stored `name` is that title plus `-`
 /// and four random digits, so the same title can be made again. 400 for a bad name, badge or
-/// colour; 403 while the login owns a group already (one each); 409 `name taken` for `bot`,
-/// or when eight draws of the digits were all taken.
+/// colour; 403 while the login owns as many groups as `GROUPS_PER_OWNER` allows; 409 `name
+/// taken` for `bot`, or when eight draws of the digits were all taken.
 async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGroup>, JsonRejection>) -> Result<(StatusCode, Json<Value>), ApiError> {
     let maker = me.ok_or_else(not_logged_in)?;
     let Json(body) = body?;
@@ -243,8 +273,12 @@ async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGrou
     if title == BOT_GROUP {
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     }
-    if owns_a_group(&s.db, maker.id).await? {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "you own a group already. one each: delete it, or name another owner and step down first"));
+    if groups_owned(&s.db, maker.id).await? >= s.groups_per_owner {
+        let one = s.groups_per_owner == 1;
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            format!("you own {}: delete {}, or name another owner and step down first", owned_cap_words(s.groups_per_owner), if one { "it" } else { "one" }),
+        ));
     }
     if member_of(&s.db, maker.id).await? >= GROUPS_PER_MEMBER {
         return Err(too_many_groups());
@@ -513,7 +547,7 @@ struct ServerView {
     about: String,
     members: i64,
     mine: bool,
-    /// This login owns it. One each, so a page knows whether to offer `create`.
+    /// This login owns it. Counted against `groups_per_owner`, so a page knows whether to offer `create`.
     owner: bool,
     /// On the lists for someone who has not joined. A private group is only in `yours`.
     public: bool,
@@ -571,11 +605,12 @@ fn live_first(mut servers: Vec<ServerView>) -> Vec<ServerView> {
 /// it is in and the public ones it is not. A private group it has not joined is left out.
 /// Inside each, a server with someone live comes first. `live` is those members'
 /// names. Channels oldest first, `general` first because it was made with the group.
+/// `groups_per_owner` is the cap on owning, so a page offers `create` only under it.
 async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let user = me.as_ref().map(|a| a.id);
     let admin = me.as_ref().is_some_and(|a| s.admins.iter().any(|admin| admin.id == a.id));
     let mut living = live_members(&s.db, &live_names(&s).await?).await?;
-    // the groups this login owns (one, by the rule; the set keeps an older database honest)
+    // the groups this login owns: up to the cap, the set so the page counts them
     let owned: Vec<String> = sqlx::query_scalar("SELECT group_name FROM memberships WHERE user_id = $1 AND owner").bind(user).fetch_all(&s.db).await?;
     // name, badge, color, about, members, mine, public, title, tag, icon, banner,
     // can add a channel, channel, channel about, can delete, channel maker
@@ -630,7 +665,7 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
         }
     }
     let (yours, discover): (Vec<ServerView>, Vec<ServerView>) = servers.into_iter().partition(|server| server.mine);
-    Ok(Json(json!({ "yours": live_first(yours), "discover": live_first(discover) })))
+    Ok(Json(json!({ "yours": live_first(yours), "discover": live_first(discover), "groups_per_owner": s.groups_per_owner })))
 }
 
 #[derive(Deserialize)]
@@ -862,6 +897,13 @@ mod tests {
         assert_eq!(slug.len(), 32);
         assert!(slug.ends_with("-0007"));
         assert!(valid_name(&slug));
+    }
+
+    #[test]
+    fn the_cap_on_owning_is_said_by_its_size() {
+        assert_eq!(owned_cap_words(1), "a group already. one each");
+        assert_eq!(owned_cap_words(2), "2 groups already. that is the cap");
+        assert_eq!(owned_cap_words(5), "5 groups already. that is the cap");
     }
 
     #[test]

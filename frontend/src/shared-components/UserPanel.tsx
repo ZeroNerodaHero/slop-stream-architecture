@@ -33,8 +33,10 @@ const panelClass = (side: 'left' | 'right') =>
     side === 'right' ? 'right-0 border-l border-primaryStroke' : 'left-0 border-r border-primaryStroke'
   );
 
-/** How long the pointer may be off the panel before the sidebar closes. Room to reach the chat window. */
-const LEAVE_GRACE_MS = 250;
+/** How long the pointer may be off the panel before the sidebar closes: a slip over its edge does not shut it, a move away does. */
+const LEAVE_GRACE_MS = 100;
+/** The panel widening and narrowing: quick, and easing out, so it is at full width almost at once and settles. Still for anyone who asked for less motion. */
+const WIDEN = 'transition-[width] duration-100 ease-out motion-reduce:transition-none';
 
 /** The name line in both states: the same box, so logging in or out does not move anything. */
 const NAME_LINE = '-mx-1 block border border-transparent px-1 py-0.5 leading-tight';
@@ -70,7 +72,8 @@ function InspectorOpener() {
 }
 
 /**
- * The gear: the user modal (profile, groups, security; settings, appearance), opened on settings.
+ * The gear: the user modal (profile, groups, security, notifications; appearance, chat, sidebar,
+ * advanced), opened on appearance, the first of this browser's tabs.
  * The far end of the actions line, away from the picture. The opener takes focus first, so the
  * browser has somewhere to hand it back (safari does not focus a clicked button), and the
  * panel closes under the dialog.
@@ -86,7 +89,7 @@ function SettingsOpener({ className }: { className?: string }) {
       onClick={(e) => {
         e.currentTarget.focus();
         store.set(friendsOpenAtom, false);
-        openUserModal('settings');
+        openUserModal('appearance');
       }}
       className={cn(ACTION, 'align-middle hover:no-underline', className)}
     >
@@ -107,7 +110,7 @@ function SettingsOpener({ className }: { className?: string }) {
  * sign up and log in under it. Nobody has to. The picture, and a login's name, are the way to
  * your own page, `/watch/<you>`: your status, your about me, your links, your calendar as everyone sees them (the about me and the links are written there too); the
  * gear at the far end of the actions line is the way to the user modal (profile, groups,
- * security, settings, appearance). The `chat` button that brings the friend chat window back is
+ * security, notifications; appearance, chat, sidebar, advanced). The `chat` button that brings the friend chat window back is
  * the end of the friends line (Friends.tsx). Go live is the right end of the page's title row.
  * The ids are the ones the tests key on; `data-open` says which state the panel is in.
  */
@@ -173,9 +176,11 @@ export function UserPanel() {
     if (!friendsOpen) store.set(friendsOpenAtom, true);
   }
   function leaveSoon() {
-    // typing in the box, or tabbing along the rows: the pointer leaving does not close it. a click elsewhere takes the focus, and that does
+    // typing in the box, or tabbing along the rows: the pointer leaving does not close it. a click elsewhere takes the focus, and that
+    // does. a button clicked with the pointer keeps the focus too in some browsers, but not visibly (:focus-visible), and that is no
+    // reason to stay: a fold or a chat button pressed and left should not pin the panel open
     const active = document.activeElement;
-    if (active && active !== panel.current && panel.current?.contains(active)) return;
+    if (active && active !== panel.current && panel.current?.contains(active) && active.matches(':focus-visible')) return;
     if (leaving.current !== null) window.clearTimeout(leaving.current);
     leaving.current = window.setTimeout(() => {
       leaving.current = null;
@@ -264,7 +269,7 @@ export function UserPanel() {
       className={cn(COLUMN, friendsOpen && 'z-40')}
     >
       {/* the column stays this wide in the page. open, the panel grows out of it and covers the streams */}
-      <div className={cn(panelClass(side), 'transition-[width] duration-150', friendsOpen ? EXPANDED : COLLAPSED)}>
+      <div className={cn(panelClass(side), WIDEN, friendsOpen ? EXPANDED : COLLAPSED)}>
         <div className="flex min-h-0 flex-1 flex-col">
           <Friends open={friendsOpen} side={side} onPick={closeFriends} />
         </div>

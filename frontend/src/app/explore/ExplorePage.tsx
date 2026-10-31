@@ -3,7 +3,7 @@ import { useAtomValue } from 'jotai';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { api, messageOf, type SearchHit, type Server } from '@/infra/api';
+import { api, mayMakeGroup, messageOf, type SearchHit, type Server } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { Button, buttonClassName } from '@/shared-components/Button';
 import { GroupSquare } from '@/shared-components/GroupSquare';
@@ -27,7 +27,8 @@ function matches(server: Server, query: string): boolean {
 
 /**
  * The groups you are in, then the public ones you are not. `bot` is a badge, not one of these.
- * `create` is for a login that owns no group: one each, so an owner is not offered another.
+ * `create` is for a login under the cap on owned groups (the api's `groups_per_owner`), so
+ * one at the cap is not offered another.
  */
 export function ExplorePage() {
   const query = useQuery({ queryKey: ['explore'], queryFn: api.explore });
@@ -64,8 +65,8 @@ export function ExplorePage() {
   }, [q]);
   const yours = (query.data?.yours ?? []).filter((server) => matches(server, q));
   const listed = (query.data?.discover ?? []).filter((server) => server.public !== false && matches(server, q));
-  // a login may make one once the list has said whether it owns one already
-  const canMake = !!me && !!query.data && !query.data.yours.some((server) => server.owner === true);
+  // a login may make one once the list has said how many it owns, and how many it may
+  const canMake = !!me && !!query.data && mayMakeGroup(query.data);
 
   return (
     <PageFrame title="groups" titleId="groups-title">

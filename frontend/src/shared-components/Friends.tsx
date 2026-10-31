@@ -1,4 +1,4 @@
-import { RiArrowDownSLine, RiArrowRightSLine, RiChat3Line, RiCloseLine, RiGroupLine, RiSearchLine, RiUserFollowLine, RiUserHeartLine } from '@remixicon/react';
+import { RiArrowDownSLine, RiChat3Line, RiCloseLine, RiGroupLine, RiSearchLine, RiUserFollowLine, RiUserHeartLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { Fragment, type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -29,12 +29,13 @@ import { LiveMark } from '@/shared-components/LiveMark';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { Who } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
+import { StreamStill } from '@/shared-components/StreamStill';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { INPUT } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 const SEARCH_WAIT_MS = 200;
-/** How long the pointer rests on a row before the person's card shows: past the panel's 150ms widening, so the card is measured against the open panel. */
+/** How long the pointer rests on a row before the person's card shows: past the panel's 100ms widening (UserPanel.tsx), so the card is measured against the open panel. */
 const PEEK_MS = 200;
 const ICON_BUTTON = 'shrink-0 border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 /** A line of words where a list would be: nobody yet, the pointer to an account. */
@@ -71,7 +72,15 @@ const MIN_GAP = 8;
  * would move the faces, which are the column. Whole rows, so what shows is never half a face.
  */
 const SCROLL = 'overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden';
-const LIST = cn('flex shrink-0 snap-y snap-mandatory flex-col', SCROLL);
+/**
+ * How the stack moves when a list folds, a name comes or goes, or the room changes: every
+ * height, gap, margin and padding in it over the same beat, easing out, so a folded list's rows
+ * slide away as the others take the room and the heads and lines follow. The heights are
+ * numbers already (`measure`, `splitRows`), so a folded list is a list at no height. Still for
+ * anyone who asked for less motion.
+ */
+const SLIDE = 'duration-150 ease-out motion-reduce:transition-none';
+const LIST = cn('flex shrink-0 snap-y snap-mandatory flex-col transition-[height,gap]', SLIDE, SCROLL);
 
 /**
  * The gaps that are not between two faces, top to bottom: `top` and `search` around the box,
@@ -199,9 +208,13 @@ interface RowProps {
 /**
  * One person, closed and open alike: the face is in the same place either way, and opening
  * puts the name, the word for how they are, and the buttons beside it instead of moving
- * anything. The face and the name are one link to their page. The pointer resting on the row,
- * or the focus landing in it, puts the person's card (PersonCard.tsx, the chat window's too)
- * beside the panel: the face, the name, how they are, the bio.
+ * anything. Streaming, a frame of the stream (StreamStill.tsx, a few seconds old and kept so)
+ * stands between the word and the buttons, the row's height, so the open column says what each
+ * of them is streaming at a glance; closed, the column has no room for it, and the red mark on
+ * the face says that they are. The face and the name are one link to their page, and so is
+ * the frame. The pointer resting on the row, or the focus landing in it, puts the person's
+ * card (PersonCard.tsx, the chat window's too) beside the panel: the face, the name, how they
+ * are, the frame big, the bio.
  */
 function Row({ id, person, side, open, onPick, children }: RowProps) {
   const mirrored = side === 'right';
@@ -236,6 +249,8 @@ function Row({ id, person, side, open, onPick, children }: RowProps) {
             <span className={cn('text-xs', PRESENCE_TEXT[person.presence])}>{PRESENCE_WORD[person.presence]}</span>
           </span>
         )}
+        {/* the face's height: 40px, and 16:9 of that */}
+        {open && person.presence === 'streaming' && <StreamStill name={person.name} className="h-10" />}
       </Link>
       {open && children}
       {open && peek.at && <PersonCard id={`friends-peek-${person.name}`} person={person} at={peek.at} side={side} />}
@@ -303,11 +318,12 @@ interface ListProps {
 }
 
 /**
- * The fold button's reach into the panel's edge inset, where the caret goes: the caret's 16px
- * and 2px to the face column. The button's box reaches that far and pads the same back, so the
- * icon stands where the closed column has it and the caret sits before it, on the edge side.
+ * Where the caret goes: right before the icon, its 16px box ending 2px short of the icon's,
+ * which is 13px into the 42px face column. So the fold button reaches 5px into the panel's
+ * edge inset and pads the same back: the icon stands where the closed column has it, and the
+ * caret hangs off its edge side.
  */
-const CARET_ROOM: Record<PanelSide, string> = { left: '-ml-[18px] pl-[18px]', right: '-mr-[18px] pr-[18px]' };
+const CARET_ROOM: Record<PanelSide, string> = { left: '-ml-[5px] pl-[5px]', right: '-mr-[5px] pr-[5px]' };
 /** The fold button: caret, icon and word in one, the far end of the line left to the action. Hover and focus are a colour, like the line between two lists. */
 const FOLD = 'relative flex min-w-0 flex-1 items-center gap-2 outline-none transition-colors duration-150 hover:text-textPrimary focus-visible:text-primaryBlue';
 
@@ -335,11 +351,11 @@ interface HeadProps {
  * The icon over a list; open, the caret before it, the word and how many after it, and `action`
  * at the far end of the line. Caret, icon and word are one button (`#sidebar-fold-<list>`,
  * `aria-expanded`) that folds the list to this line and unfolds it, kept per browser
- * (settings.sidebarFolds). Closed, the icon alone, where it always is; no list, no icon.
+ * (settings.sidebarFolds); the caret points down at the rows, and turns to point along the line
+ * when they are folded away. Closed, the icon alone, where it always is; no list, no icon.
  */
 function Head({ icon: Icon, word, count, listId, kind, open, side, below, folded, action, mark }: HeadProps) {
   const mirrored = side === 'right';
-  const Caret = folded ? RiArrowRightSLine : RiArrowDownSLine;
   // the icon says what the word says, and the number what the chat button's title says, so readers skip them
   const icon = (
     <span aria-hidden className="relative flex w-[42px] shrink-0 justify-center">
@@ -357,7 +373,7 @@ function Head({ icon: Icon, word, count, listId, kind, open, side, below, folded
   );
   return (
     <div
-      className={cn('flex shrink-0 items-center gap-2 text-textTertiary', mirrored && 'flex-row-reverse', INSET[side])}
+      className={cn('flex shrink-0 items-center gap-2 text-textTertiary transition-[margin-bottom]', SLIDE, mirrored && 'flex-row-reverse', INSET[side])}
       style={{ height: HEAD_PX, marginBottom: below }}
     >
       {open ? (
@@ -371,7 +387,11 @@ function Head({ icon: Icon, word, count, listId, kind, open, side, below, folded
             onClick={() => setSidebarFolded(kind, !folded)}
             className={cn(FOLD, CARET_ROOM[side], mirrored && 'flex-row-reverse')}
           >
-            <Caret aria-hidden size={16} className={cn('absolute top-0', mirrored ? 'right-0' : 'left-0')} />
+            <RiArrowDownSLine
+              aria-hidden
+              size={16}
+              className={cn('absolute top-0 transition-transform', SLIDE, folded && '-rotate-90', mirrored ? 'right-0' : 'left-0')}
+            />
             {icon}
             {/* the word takes the room, so the action sits at the far end on either side */}
             <span className={cn('min-w-0 flex-1 truncate text-xs font-semibold uppercase leading-none tracking-wider', mirrored && 'text-right')}>
@@ -493,7 +513,8 @@ function Divider({ value, min, max, above, below, onMove, pitch, gap, open, side
         onMove(value + (e.key === 'ArrowUp' ? -1 : 1));
       }}
       className={cn(
-        "group relative flex shrink-0 touch-none select-none outline-none before:absolute before:inset-x-0 before:-inset-y-2 before:content-['']",
+        "group relative flex shrink-0 touch-none select-none outline-none transition-[margin-bottom] before:absolute before:inset-x-0 before:-inset-y-2 before:content-['']",
+        SLIDE,
         draggable && 'cursor-row-resize',
         open ? INSET[side] : COLUMN
       )}
@@ -591,9 +612,10 @@ interface ListsProps extends ListProps {
  * at the pitch `spacing` worked out for the room; the line between two lists says how the rows
  * are shared, and dragging it trades a row between them, keeping every list's weight as the rows
  * then stand (as fractions of the room, so a taller window keeps the proportion). The caret
- * before an icon folds its list to the icon line (settings.sidebarFolds): the word keeps its
- * count, the rows go to the other lists, and the line beside it stands still. A list nobody
- * is in has no icon either. Closed, the words have no room: only the faces.
+ * before an icon folds its list to the icon line (settings.sidebarFolds): its rows slide away
+ * (`SLIDE`) as the other lists take the room, the word keeps its count, and the line beside it
+ * stands still. A list nobody is in has no icon either. Closed, the words have no room: only
+ * the faces.
  */
 function Lists({ side, open, onPick, stack, rows, spacing, shares, folds }: ListsProps) {
   const unread = useAtomValue(dmUnreadAtom);
@@ -660,18 +682,17 @@ function Lists({ side, open, onPick, stack, rows, spacing, shares, folds }: List
               action={block.kind === 'friends' ? <ChatsOpener /> : undefined}
               mark={block.kind === 'friends' ? unread : undefined}
             />
-            {!folded && (
-              <ul id={id} aria-label={word} className={LIST} style={{ height: count * pitch, gap }}>
-                {block.kind === 'groups'
-                  ? block.servers.map((server) => <GroupRow key={server.name} server={server} side={side} open={open} onPick={onPick} />)
-                  : block.people.map((f) => (
-                      <Row key={f.name} id={`friend-${f.name}`} person={f} side={side} open={open} onPick={onPick}>
-                        {block.kind === 'friends' && <Chat id={`friend-chat-${f.name}`} person={f} />}
-                        <Unfollow id={`friend-unfollow-${f.name}`} name={f.name} />
-                      </Row>
-                    ))}
-              </ul>
-            )}
+            {/* folded, the list has no rows (`count` is 0) and slides to no height; it stays in the document, inert, so its rows are out of the tab order and off a reader */}
+            <ul id={id} aria-label={word} inert={folded ? true : undefined} className={LIST} style={{ height: count * pitch, gap }}>
+              {block.kind === 'groups'
+                ? block.servers.map((server) => <GroupRow key={server.name} server={server} side={side} open={open} onPick={onPick} />)
+                : block.people.map((f) => (
+                    <Row key={f.name} id={`friend-${f.name}`} person={f} side={side} open={open} onPick={onPick}>
+                      {block.kind === 'friends' && <Chat id={`friend-chat-${f.name}`} person={f} />}
+                      <Unfollow id={`friend-unfollow-${f.name}`} name={f.name} />
+                    </Row>
+                  ))}
+            </ul>
           </Fragment>
         );
       })}
@@ -831,7 +852,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
       words = (
         <p className={NOTE}>
           what you have is in a list that is off.{' '}
-          <button type="button" onClick={() => openUserModal('settings')} className="text-primaryBlue underline-offset-2 hover:underline">
+          <button type="button" onClick={() => openUserModal('sidebar')} className="text-primaryBlue underline-offset-2 hover:underline">
             settings
           </button>
         </p>
@@ -853,7 +874,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
   return (
     <div id="friends" role="region" aria-label="following and groups" className="flex min-h-0 flex-1 flex-col">
       <div ref={stack} className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className={cn('shrink-0', INSET[side])} style={{ paddingTop: spacing.gaps.top, paddingBottom: spacing.gaps.search }}>
+        <div className={cn('shrink-0 transition-[padding]', SLIDE, INSET[side])} style={{ paddingTop: spacing.gaps.top, paddingBottom: spacing.gaps.search }}>
           <label htmlFor="friends-search" className="sr-only">
             find someone
           </label>

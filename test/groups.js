@@ -1,8 +1,10 @@
-// Groups: the list (bot built in), a login makes one (and no second: one each), another joins
-// and leaves, badges on chat lines, a bot's lines wear BOT and the panel hides them, only the
-// maker deletes, the create dialog on /groups and the groups tab.
+// Groups: the list (bot built in), a login makes one (and up to the cap on owning, which
+// explore says: GROUPS_PER_OWNER, 2 unless .env says otherwise; one more is 403), another
+// joins and leaves, badges on chat lines, a bot's lines wear BOT and the panel hides them,
+// only the maker deletes, the create dialog on /groups and the groups tab.
 // The pictures are the owner's whatever the roles say (no remove), and a role reaches only the
-// powers its holder has.
+// powers its holder has. A role is known by a uuid, and the manage dialog changes one in place:
+// add role makes one and opens it, a save renames it, the row opens it again, delete is in there.
 // The room: one answer with the channels, who is live, the roster (members only) and the bans,
 // and the last lines of every channel; a watcher of `group:<name>` on the events socket hears a
 // channel added and deleted; the `*` chat socket carries every channel's lines with the channel
@@ -22,6 +24,8 @@ const GROUP = 'grp' + RUN;
 let slug = GROUP;
 const ROOM = 'grouproom' + RUN;
 const PW = 'correct horse battery';
+/** A role's id: a uuid the api made, never a counter. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors'];
 const results = [];
 async function step(name, fn) {
@@ -46,6 +50,24 @@ const body = async (res) => {
   }
 };
 const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === name) : undefined);
+// how many groups one login may own, as explore says it. read once the api has answered.
+let cap = 1;
+/** Groups made so `ctx` owns as many as the cap allows, on top of the `owned` it has. Their addresses, to delete after. */
+const fillToCap = async (ctx, owned, word) => {
+  const made = [];
+  for (let i = owned; i < cap; i++) {
+    const res = await ctx.post('/api/groups', { data: { name: `${word}${i}${RUN}`, badge: 'more', color: '#f2cc60' } });
+    expect(res.status() === 201, `group ${i + 1} of ${cap} got ${res.status()} ${JSON.stringify(await body(res))}`);
+    made.push((await body(res)).name);
+  }
+  return made;
+};
+const dropAll = async (ctx, names) => {
+  for (const name of names) {
+    const res = await ctx.delete(`/api/groups/${name}`);
+    expect(res.status() === 204, `dropping ${name} got ${res.status()}`);
+  }
+};
 
 (async () => {
   // three http clients: the one who makes the group, the one who joins it, and nobody
@@ -66,7 +88,7 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     return `${list.length} group(s), bot "${bot.badge}" ${bot.color}`;
   });
 
-  await step('a login makes a group: bad badge 400, bad colour 400, bot 409, good one 201 and mine; a second 403, one each', async () => {
+  await step('a login makes a group: bad badge 400, bad colour 400, bot 409, good one 201 and mine; one past the cap 403', async () => {
     const up = await maker.post('/api/signup', { data: { name: MAKER, password: PW } });
     expect(up.status() === 201, `signup got ${up.status()} ${JSON.stringify(await body(up))}`);
     const noBadge = await maker.post('/api/groups', { data: { name: GROUP, badge: '  ', color: '#f2cc60' } });
@@ -82,14 +104,20 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     const digits = String(made.tag).padStart(4, '0');
     expect(made.title === GROUP && made.tag === Number(digits) && made.name === `${GROUP}-${digits}` && made.badge === 'vip' && made.color === '#f2cc60' && made.about === 'the test group' && made.made_by === MAKER && made.members === 1 && made.mine === true && made.automatic === false && made.public === true, `made = ${JSON.stringify(made)}`);
     slug = made.name;
-    // one each: an owner is not given a second, whatever the name
+    // the cap on owning is the box's (GROUPS_PER_OWNER), and explore says it: up to it 201, one more 403, whatever the name
+    const found = await body(await maker.get('/api/explore'));
+    expect(found && Number.isInteger(found.groups_per_owner) && found.groups_per_owner >= 1, `explore's cap ${JSON.stringify(found && found.groups_per_owner)}`);
+    cap = found.groups_per_owner;
+    const extra = await fillToCap(maker, 1, 'more');
     const again = await maker.post('/api/groups', { data: { name: 'another' + RUN, badge: 'two', color: '#f2cc60' } });
     const refused = await body(again);
-    expect(again.status() === 403 && /own a group already/.test(refused && refused.error), `a second group got ${again.status()} ${JSON.stringify(refused)}`);
+    expect(again.status() === 403 && /you own .*already/.test(refused && refused.error), `group ${cap + 1} got ${again.status()} ${JSON.stringify(refused)}`);
+    // the maker owns one from here on
+    await dropAll(maker, extra);
     const mine = find(await body(await maker.get('/api/groups')), slug);
     const theirs = find(await body(await anon.get('/api/groups')), slug);
     expect(mine && mine.mine === true && theirs && theirs.mine === false && theirs.members === 1, `listed as ${JSON.stringify(mine)} / ${JSON.stringify(theirs)}`);
-    return `${slug}: badge trimmed, colour lowercased, a second refused`;
+    return `${slug}: badge trimmed, colour lowercased, ${cap} owned then "${refused.error}"`;
   });
 
   await step('explore: the maker has it in yours, as owner, with general and a live list', async () => {
@@ -119,11 +147,11 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     expect(join.status() === 204, `join got ${join.status()} ${JSON.stringify(await body(join))}`);
     const listed = find(await body(await member.get('/api/groups')), slug);
     expect(listed && listed.mine === true && listed.members === 2, `after join: ${JSON.stringify(listed)}`);
-    // one each the other way too: while they own theirs, they cannot be named an owner here
+    // the cap the other way too: owning as many as it allows, they cannot be named an owner here
+    const extra = await fillToCap(member, 1, 'theirs');
     const named = await maker.post(`/api/groups/${slug}/owners`, { data: { name: MEMBER } });
-    expect(named.status() === 403 && /owns a group already/.test((await body(named)).error), `naming an owner of another group got ${named.status()} ${JSON.stringify(await body(named))}`);
-    const dropped = await member.delete(`/api/groups/${other.name}`);
-    expect(dropped.status() === 204, `dropping theirs got ${dropped.status()}`);
+    expect(named.status() === 403 && new RegExp(`${MEMBER} owns .*already`).test((await body(named)).error), `naming an owner at the cap got ${named.status()} ${JSON.stringify(await body(named))}`);
+    await dropAll(member, [...extra, other.name]);
     const twice = await member.post(`/api/groups/${slug}/join`);
     const bot = await member.post('/api/groups/bot/join');
     const none = await member.post(`/api/groups/nosuch${RUN}/join`);
@@ -144,6 +172,13 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     const yes = await maker.post(`/api/groups/${slug}/roles`, { data: { name: 'mod', color: '#f85149', perms: { kick: true, ban: false } } });
     const made = await body(yes);
     expect(yes.status() === 201 && made.name === 'mod' && made.perms && made.perms.kick === true && made.perms.ban === false, `role ${yes.status()} ${JSON.stringify(made)}`);
+    expect(typeof made.id === 'string' && UUID.test(made.id), `a role's id is ${JSON.stringify(made.id)}, not a uuid`);
+    // the id is what the role is known by: a rename is a save, and the id stays
+    const renamed = await maker.put(`/api/groups/${slug}/roles/${made.id}`, { data: { name: 'mods', color: '#f85149', perms: { kick: true } } });
+    const after = await body(renamed);
+    expect(renamed.status() === 200 && after.id === made.id && after.name === 'mods', `renaming got ${renamed.status()} ${JSON.stringify(after)}`);
+    const notARole = await maker.put(`/api/groups/${slug}/roles/12345`, { data: { name: 'x', color: '#f85149', perms: {} } });
+    expect(notARole.status() === 400 || notARole.status() === 404, `a counter for an id got ${notARole.status()}`);
     const owned = await member.post(`/api/groups/${slug}/owners`, { data: { name: MEMBER } });
     expect(owned.status() === 403, `a member naming an owner got ${owned.status()}`);
     const priv = await maker.put(`/api/groups/${slug}/access`, { data: { public: false } });
@@ -496,7 +531,7 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     return 'gone';
   });
 
-  await step('home and /groups offer create to a login without a group; the dialog makes one and lands on it; the tab lists it with leave and on the card, delete it', async () => {
+  await step('home and /groups offer create under the cap; the dialog makes one and lands on it; manage: private, a role added, renamed and deleted in place; at the cap home offers nothing; the tab lists it with leave and on the card, delete it', async () => {
     const q = await fresh();
     await q.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
     await q.fill('#auth-name', MAKER);
@@ -522,10 +557,52 @@ const find = (list, name) => (Array.isArray(list) ? list.find((g) => g.name === 
     const madeName = decodeURIComponent(new URL(q.url()).pathname.split('/')[2]);
     expect(new RegExp(`^${name}-\\d{4}$`).test(madeName), `landed on ${q.url()}`);
     await q.waitForSelector('#group-banner', { timeout: 10000 });
-    // one each: home no longer offers create to this login
+    // public or private is under manage, not in the header. the owner switches it there, and the pressed word follows the socket
+    expect(!(await q.$('#room-private')), 'the header still has the public/private switch');
+    await q.click('#group-manage-open');
+    // the dialog is a rail of tabs; an owner lands on about, which holds the listing
+    await q.waitForSelector('#group-manage[open] #manage-tab-about[aria-selected="true"]', { timeout: 5000 });
+    await q.waitForSelector('#manage-panel-about #room-public[aria-pressed="true"]', { timeout: 5000 });
+    await q.click('#room-private');
+    await q.waitForSelector('#group-manage[open] #room-private[aria-pressed="true"]', { timeout: 10000 });
+    const room = await body(await maker.get(`/api/groups/${madeName}`));
+    expect(room && room.public === false, `after private the room says ${JSON.stringify(room && room.public)}`);
+    // roles are changed in place, under their tab. add role makes one called new role and opens it with the name
+    // selected; a name, a power and save rename it; its row is the click to open it again; delete is in there
+    await q.click('#manage-tab-roles');
+    await q.waitForSelector('#manage-panel-roles #role-add', { timeout: 5000 });
+    await q.click('#role-add');
+    await q.waitForSelector('#group-manage[open] #group-roles li[data-open] #role-name', { timeout: 10000 });
+    const started = await q.inputValue('#role-name');
+    expect(started === 'new role', `a new role is called "${started}"`);
+    await q.fill('#role-name', 'helpers');
+    await q.check('#role-perm-kick');
+    await q.click('#role-save');
+    await q.waitForSelector('#group-roles li[data-role="helpers"]:not([data-open])', { timeout: 10000 });
+    expect(!(await q.$('#role-name')), 'the editor stayed open after save');
+    const rolesRow = await q.textContent('#group-roles li[data-role="helpers"]');
+    expect(/kick/.test(rolesRow), `the row reads "${rolesRow}"`);
+    const roles = await body(await maker.get(`/api/groups/${madeName}/roles`));
+    const helpers = Array.isArray(roles) && roles.find((r) => r.name === 'helpers');
+    expect(helpers && UUID.test(helpers.id) && helpers.perms.kick === true && !roles.some((r) => r.name === 'new role'), `the api's roles ${JSON.stringify(roles)}`);
+    await q.click('#group-roles li[data-role="helpers"] button');
+    await q.waitForSelector('#group-roles li[data-role="helpers"][data-open] #role-name', { timeout: 5000 });
+    expect((await q.inputValue('#role-name')) === 'helpers', 'the editor opened on another role');
+    await q.click('#role-delete');
+    await q.waitForFunction(() => !document.querySelector('#group-roles li[data-role="helpers"]'), null, { timeout: 10000 });
+    await q.click('#group-manage-close');
+    await q.waitForFunction(() => !document.querySelector('#group-manage'), null, { timeout: 5000 });
+    // the maker owns one. under the cap home still offers create; owning as many as the cap allows, it does not
     await q.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await q.waitForSelector('#groups-count', { timeout: 10000 });
-    expect(!(await q.$('#home-groups-create')), 'home still offers create to an owner');
+    if (cap > 1) {
+      await q.waitForSelector('#home-groups-create', { timeout: 10000 });
+    }
+    const extra = await fillToCap(maker, 1, 'full');
+    await q.reload({ waitUntil: 'domcontentloaded' });
+    await q.waitForSelector('#groups-count', { timeout: 10000 });
+    expect(!(await q.$('#home-groups-create')), `home still offers create to a login owning ${cap} of ${cap}`);
+    await dropAll(maker, extra);
     // the gear at the end of your line in the panel opens the modal; the tab lists the group as yours
     await q.hover('#user-panel');
     await q.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });

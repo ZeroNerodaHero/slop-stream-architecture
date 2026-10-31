@@ -1,6 +1,16 @@
-import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine, RiRobot2Line } from '@remixicon/react';
+import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine, RiImageLine, RiRobot2Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type SyntheticEvent, type UIEvent, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type SyntheticEvent,
+  type UIEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react';
 import { createPortal } from 'react-dom';
 
 import { api, messageOf, type Owner } from '@/infra/api';
@@ -40,7 +50,6 @@ import {
   openLine,
   openServerChat,
   removeChatImage,
-  searchRoom,
   sendChat,
   setChatDraft,
   setChatFollowing,
@@ -54,7 +63,9 @@ import {
 import { chatFacesAtom, hideBotsAtom, setHideBots } from '@/infra/atoms/settings-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
+import { SearchFilters, useChatSearch } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
+import { LinkedText } from '@/shared-components/LinkedText';
 import { LiveMark } from '@/shared-components/LiveMark';
 import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
@@ -89,6 +100,8 @@ interface ChatPanelProps {
   owner?: Owner | null;
   /** Inside another box (the corner player): no stroke or minimum height of its own, and no header or search box, which a panel this small has no room for. The lines and the text box alone. */
   embedded?: boolean;
+  /** The search box under the header. Off where the page has one of its own (the group room's header, `ChatSearch.tsx`): the hits land in this panel's results list either way. */
+  search?: boolean;
   /**
    * A group's channel: `name` is the server, this the channel on screen. One socket for every
    * channel of the server (`openServerChat`); a change of channel is `showChannel`, no socket
@@ -131,9 +144,9 @@ function useCountdown(until: number): number {
  * The chat next to the video. Lines newest at the bottom, a nick box until you
  * have one (or a login), then one row: a picture, the text, send. Each line wears its
  * speaker's group badges, and starts with their face (a setting of this browser,
- * on unless the settings tab turned it off: the picture when the line is a login's
+ * on unless the chat tab of the user modal turned it off: the picture when the line is a login's
  * or the streamer's, the letter their name makes otherwise); the robot in the
- * header hides the bots' lines (a setting too, the settings tab has it as well). Joins on mount, leaves on
+ * header hides the bots' lines (a setting too, the chat tab has it as well). Joins on mount, leaves on
  * unmount; a change of `owner` (going live, stopping) or of the login reconnects
  * through `openChat`. One at a time: the chat atoms hold one room, and the ids
  * here are the ones the tests key on.
@@ -151,7 +164,9 @@ function saidAt(at: number): string {
  * name's (a login's, or the streamer's; an anonymous nick is nobody), the pointer resting on
  * the name, or the focus landing on it, puts the person's card (PersonCard.tsx, the sidebar's)
  * beside the chat: the face with the word on it, the name, their status. No `title` beside
- * it: two boxes for one name is one too many.
+ * it: two boxes for one name is one too many. The colour says who the line is really from:
+ * the streamer green, a login blue, an anonymous nick red (no card for it, so its `title`
+ * says why).
  */
 function Speaker({ line }: { line: ChatLine }) {
   const peek = usePeek(PEEK_MS);
@@ -160,7 +175,7 @@ function Speaker({ line }: { line: ChatLine }) {
   const watched = someone
     ? { onPointerEnter: show, onPointerLeave: (e: SyntheticEvent<HTMLElement>) => peek.leave(e.currentTarget), onFocus: show, onBlur: peek.blur }
     : {};
-  const color = line.streamer ? 'text-increase' : 'text-primaryBlue';
+  const color = line.streamer ? 'text-increase' : line.verified ? 'text-primaryBlue' : 'text-decrease';
   return (
     <>
       {line.verified ? (
@@ -181,7 +196,7 @@ function Speaker({ line }: { line: ChatLine }) {
           {line.from}
         </span>
       ) : (
-        <span {...watched} data-from={line.from} className={cn('font-semibold', color)}>
+        <span {...watched} data-from={line.from} title={someone ? undefined : 'not logged in'} className={cn('font-semibold', color)}>
           {line.from}
         </span>
       )}
@@ -190,15 +205,10 @@ function Speaker({ line }: { line: ChatLine }) {
   );
 }
 
-/** What stands after the name: the ✓, the group badges, the red broadcast mark for the streamer's own lines (the friends bar's, LiveMark.tsx; the word comes up at once on hover, Tooltip.tsx), `you` on ours. */
+/** What stands after the name: the group badges, the red broadcast mark for the streamer's own lines (the friends bar's, LiveMark.tsx; the word comes up at once on hover, Tooltip.tsx), `you` on ours. No ✓: the name's colour says whether a login is behind it (Speaker). */
 function Marks({ line, mine }: { line: ChatLine; mine: boolean }) {
   return (
     <>
-      {line.verified && (
-        <span className="text-increase" title="logged in as this name">
-          ✓
-        </span>
-      )}
       {line.groups.map((group) => (
         <Badge key={group.name} group={group} />
       ))}
@@ -216,9 +226,9 @@ function pictureSrc(id: string): string {
   return `/api/chat-images/${encodeURIComponent(id)}`;
 }
 
-/** A thumbnail under the pointer (or with keyboard focus): a faint grey laid over the picture, so the hover is felt. */
+/** A thumbnail under the pointer (or with keyboard focus): the picture greyed a little under a translucent black, still plainly seen, so the hover is felt. */
 const THUMB_HOVER =
-  "relative after:pointer-events-none after:absolute after:inset-0 after:bg-white/[.03] after:opacity-0 after:transition-opacity after:duration-150 after:content-[''] hover:after:opacity-100 focus-visible:after:opacity-100";
+  "relative after:pointer-events-none after:absolute after:inset-0 after:bg-black/25 after:opacity-0 after:transition-opacity after:duration-150 after:content-[''] hover:after:opacity-100 focus-visible:after:opacity-100";
 
 /**
  * The pictures on a line, under the words. One is drawn as it is, at most five lines tall. Two
@@ -404,7 +414,11 @@ function ServerLine({ line, mine, faces }: { line: ChatLine; mine: boolean; face
             {saidAt(line.at)}
           </time>
         </div>
-        {line.text && <p className="mt-0.5 whitespace-pre-wrap">{line.text}</p>}
+        {line.text && (
+          <p className="mt-0.5 whitespace-pre-wrap">
+            <LinkedText text={line.text} />
+          </p>
+        )}
         <ChatImages ids={line.images} />
       </div>
     </div>
@@ -448,7 +462,7 @@ function ChatSkeleton({ server, faces }: { server: boolean; faces: boolean }) {
   );
 }
 
-export function ChatPanel({ name, owner = null, embedded = false, channel, className }: ChatPanelProps) {
+export function ChatPanel({ name, owner = null, embedded = false, search = true, channel, className }: ChatPanelProps) {
   const server = channel !== undefined;
   const listRef = useRef<HTMLDivElement | null>(null);
   // height before the last paint, so prepending older lines can put the same pixels back
@@ -456,7 +470,8 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
   // true while the view sits at the newest line. someone who scrolled up to read is left there.
   const stuck = useRef(true);
   const shown = useRef(0);
-  const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const searching = useChatSearch(searchRef);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const lines = useAtomValue(visibleChatLinesAtom);
@@ -514,7 +529,8 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
       el.scrollTop += el.scrollHeight - hold.current;
     } else if (plan && typeof plan === 'object') {
       const node = el.querySelector(`[data-id="${CSS.escape(plan.id)}"]`);
-      if (node instanceof HTMLElement) node.scrollIntoView({ block: 'center' });
+      // centred by the list's own scroll, not scrollIntoView: that would centre the line in the window as well, scrolling the page under the panel (the room page snaps between its views)
+      if (node instanceof HTMLElement) el.scrollTop += node.getBoundingClientRect().top - el.getBoundingClientRect().top - (el.clientHeight - node.offsetHeight) / 2;
       stuck.current = false;
       setChatFollowing(false);
     } else if (plan === 'bottom' || stuck.current || shown.current === 0) {
@@ -557,11 +573,6 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
     }
   }
 
-  function onSearch(e: FormEvent) {
-    e.preventDefault();
-    void searchRoom(query);
-  }
-
   // the nick box stays until "join" actually opened the socket. a login never needs one.
   const needsNick = !owner && !me && phase === 'off';
   // the room's past is still on its way, and nothing of it has come: a server's lines are asked of the api as its page
@@ -601,22 +612,32 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
         </header>
       )}
 
-      {!embedded && (
-        <form id="chat-search-form" onSubmit={onSearch} className="flex gap-2 border-b border-primaryStroke px-3 py-2">
-          <label htmlFor="chat-search" className="sr-only">
-            search this room
-          </label>
-          <input
-            id="chat-search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="search this room"
-            autoComplete="off"
-            className="min-w-0 flex-1 border border-primaryStroke bg-background px-2 py-1 text-sm"
-          />
-          <button id="chat-search-go" type="submit" disabled={!query.trim() || phase !== 'open'} className="shrink-0 text-sm font-semibold text-primaryBlue disabled:opacity-40">
-            search
-          </button>
+      {!embedded && search && (
+        <form id="chat-search-form" onSubmit={searching.submit} className="border-b border-primaryStroke px-3 py-2">
+          <div className="flex gap-2">
+            <label htmlFor="chat-search" className="sr-only">
+              search this room
+            </label>
+            <input
+              ref={searchRef}
+              id="chat-search"
+              value={searching.query}
+              onChange={(e) => searching.setQuery(e.target.value)}
+              placeholder="search this room"
+              autoComplete="off"
+              className="min-w-0 flex-1 border border-primaryStroke bg-background px-2 py-1 text-sm"
+            />
+            <button
+              id="chat-search-go"
+              type="submit"
+              disabled={!searching.query.trim() || phase !== 'open'}
+              className="shrink-0 text-sm font-semibold text-primaryBlue disabled:opacity-40"
+            >
+              search
+            </button>
+          </div>
+          {/* the filters, as words under the box */}
+          <SearchFilters id="chat-search-filters" search={searching} className="mt-1" />
         </form>
       )}
 
@@ -634,9 +655,25 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
             </p>
           )}
           {results.map((line) => (
-            <button key={line.id} type="button" data-id={line.id} onClick={() => void openLine(line.id)} className="block w-full truncate py-0.5 text-left [overflow-wrap:anywhere]">
+            <button
+              key={line.id}
+              type="button"
+              data-id={line.id}
+              onClick={() => void openLine(line.id)}
+              className="block w-full truncate py-0.5 text-left [overflow-wrap:anywhere]"
+            >
               <span className="font-semibold text-primaryBlue">{line.from}</span>
               <span className="text-textSecondary">: {line.text}</span>
+              {/* a hit for its pictures may have no words: the picture mark says what is there */}
+              {line.images.length > 0 && (
+                <span
+                  className="ml-1 inline-flex items-center gap-0.5 align-middle text-textTertiary"
+                  title={line.images.length === 1 ? 'a picture' : `${line.images.length} pictures`}
+                >
+                  <RiImageLine aria-hidden size={12} />
+                  {line.images.length > 1 && <span className="text-xs tabular-nums">{line.images.length}</span>}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -655,7 +692,8 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
         role="log"
         aria-live="polite"
         data-faces={faces || undefined}
-        className="min-h-0 flex-1 overflow-y-auto px-4 py-2 text-base leading-snug"
+        // its scroll is its own: the top of the history does not scroll the page under it (the room page snaps between its views)
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-2 text-base leading-snug"
       >
         {waiting && <ChatSkeleton server={server} faces={faces} />}
         {!waiting && lines.length === 0 && (
@@ -683,7 +721,9 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
                 <Marks line={line} mine={mine} />
               </span>
               <span className="text-textSecondary">: </span>
-              <span className="whitespace-pre-wrap">{line.text}</span>
+              <span className="whitespace-pre-wrap">
+                <LinkedText text={line.text} />
+              </span>
               <ChatImages ids={line.images} />
             </p>
           );
@@ -755,15 +795,7 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, class
               >
                 <RiImageAddLine size={20} aria-hidden />
               </button>
-              <input
-                ref={fileRef}
-                id="chat-picture-file"
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => void pickPictures(e.target.files)}
-              />
+              <input ref={fileRef} id="chat-picture-file" type="file" accept="image/*" multiple className="hidden" onChange={(e) => void pickPictures(e.target.files)} />
               <input
                 id="chat-text"
                 value={draft}

@@ -113,6 +113,9 @@ pub(crate) struct AppState {
     pub(crate) ops_token: Option<String>,
     /// The bucket. The container when S3_ENDPOINT is off, otherwise the url it names. See s3.rs.
     s3: s3::Store,
+    /// How many groups one login may own (GROUPS_PER_OWNER; two unless set). Making one more,
+    /// or being named owner of one more, is refused at the cap. See groups.rs.
+    pub(crate) groups_per_owner: i64,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -1064,6 +1067,8 @@ async fn main() {
     }
     let build = env::var("BUILD").ok().filter(|b| !b.trim().is_empty()).unwrap_or_else(|| "dev".into());
     log::info!("env {env_name}, build {build}");
+    let groups_per_owner = groups::groups_per_owner_from_env();
+    log::info!("a login may own {groups_per_owner} group(s) (GROUPS_PER_OWNER)");
 
     // off: the seaweedfs container, and this waits until its bucket answers. a url is checked once.
     let s3 = s3::from_env().unwrap_or_else(|e| {
@@ -1086,6 +1091,7 @@ async fn main() {
         admins,
         ops_token,
         s3,
+        groups_per_owner,
     };
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))

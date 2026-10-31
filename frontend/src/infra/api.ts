@@ -219,7 +219,7 @@ export interface Server {
   about: string;
   members: number;
   mine: boolean;
-  /** This login owns it. One each: a page with one of these in `yours` offers no `create`. Absent on an older api. */
+  /** This login owns it. Counted against `groups_per_owner`: at the cap a page offers no `create` (`mayMakeGroup`). Absent on an older api. */
   owner?: boolean;
   /** On the lists for someone who has not joined. Absent on an older api: treated as public. */
   public?: boolean;
@@ -246,8 +246,9 @@ export interface RolePerms {
   ban: boolean;
 }
 
+/** A custom role. `id` is a uuid the api made: what the role is known by, so a rename is a save like any other. */
 export interface GroupRole {
-  id: number;
+  id: string;
   name: string;
   color: string;
   perms: RolePerms;
@@ -298,7 +299,7 @@ export interface GroupMember {
   avatar?: number | null;
   /** When they joined, unix seconds, so the room keeps the group's order as people come. Absent on an older api. */
   joined?: number;
-  roles: { id: number; name: string; color: string }[];
+  roles: { id: string; name: string; color: string }[];
 }
 
 export interface GroupBan {
@@ -322,6 +323,14 @@ export function groupImage(name: string, kind: 'icon' | 'banner', version?: numb
 export interface Explore {
   yours: Server[];
   discover: Server[];
+  /** How many groups one login may own (`GROUPS_PER_OWNER` in the box's `.env`). Absent on an older api: one each. */
+  groups_per_owner?: number;
+}
+
+/** Whether a login may make another group: it owns fewer than the api's cap. The pages offer `create` on this alone; the api refuses past it anyway. */
+export function mayMakeGroup(found: Explore): boolean {
+  const owned = found.yours.filter((server) => server.owner === true).length;
+  return owned < (found.groups_per_owner ?? 1);
 }
 
 export interface Grant {
@@ -498,7 +507,7 @@ export const api = {
   rename: (name: string, password: string) => request<{ id: string; name: string; renamed_at: string }>('POST', '/api/name', { name, password }),
   /** Every group, `bot` first; `mine` says which the login is in. See docs/groups.md. */
   groups: () => request<Group[]>('GET', '/api/groups'),
-  /** A login makes a group and is in it, as its owner. 400 bad name/badge/colour, 403 while they own one already (one each), 409 `name taken`. */
+  /** A login makes a group and is in it, as its owner. 400 bad name/badge/colour, 403 at the cap on owned groups (`groups_per_owner`), 409 `name taken`. */
   createGroup: (group: NewGroup) => request<Group>('POST', '/api/groups', group),
   joinGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/join`),
   leaveGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/leave`),
@@ -521,7 +530,7 @@ export const api = {
   /** The login has the channel on screen: its inbox rows for it are read. Its other devices hear it on the socket. */
   readChannel: (server: string, channel: string) => request<null>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/read`),
   saveGroupAbout: (name: string, about: string) => request<{ about: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/about`, { about }),
-  /** Appearance. A private group stays off the lists. */
+  /** Appearance, from the manage dialog. A private group stays off the lists. */
   setGroupPublic: (name: string, isPublic: boolean) => request<{ public: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/access`, { public: isPublic }),
   /** Appearance. Owners stay first; this is the order after them. */
   setMemberOrder: (name: string, order: 'name' | 'newest' | 'oldest') =>
@@ -531,15 +540,17 @@ export const api = {
   saveGroupBanner: (name: string, jpeg: Blob) => request<{ banner: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/banner`, jpeg),
   groupMembers: (name: string) => request<GroupMember[]>('GET', `/api/groups/${encodeURIComponent(name)}/members`),
   groupBans: (name: string) => request<GroupBan[]>('GET', `/api/groups/${encodeURIComponent(name)}/bans`),
+  /** The roles power. 201 the role, with the id the api made. 409 `name taken`, 403 past the cap or out of reach. */
   createRole: (group: string, role: { name: string; color: string; perms: RolePerms }) =>
     request<GroupRole>('POST', `/api/groups/${encodeURIComponent(group)}/roles`, role),
-  saveRole: (group: string, id: number, role: { name: string; color: string; perms: RolePerms }) =>
+  /** The role replaced whole, by id: a rename, a new colour, other powers, all this one call. */
+  saveRole: (group: string, id: string, role: { name: string; color: string; perms: RolePerms }) =>
     request<GroupRole>('PUT', `/api/groups/${encodeURIComponent(group)}/roles/${id}`, role),
-  deleteRole: (group: string, id: number) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/roles/${id}`),
-  giveRole: (group: string, id: number, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/roles/${id}/members`, { name }),
-  takeRole: (group: string, id: number, name: string) =>
+  deleteRole: (group: string, id: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/roles/${id}`),
+  giveRole: (group: string, id: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/roles/${id}/members`, { name }),
+  takeRole: (group: string, id: string, name: string) =>
     request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/roles/${id}/members/${encodeURIComponent(name)}`),
-  /** An owner names a member an owner. 403 for anyone else, and for a member who owns a group already (one each). */
+  /** An owner names a member an owner. 403 for anyone else, and for a member who owns as many groups as the cap allows. */
   grantOwner: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/owners`, { name }),
   revokeOwner: (group: string, name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/owners/${encodeURIComponent(name)}`),
   kickMember: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/kick`, { name }),

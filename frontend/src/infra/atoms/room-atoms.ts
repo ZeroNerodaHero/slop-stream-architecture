@@ -17,7 +17,7 @@ import { atom } from 'jotai';
 import { api, type GroupMember, type GroupRoom, messageOf, statusOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { dropChannel, followChannel, seedChannels } from '@/infra/atoms/chat-atoms';
-import { onEvents, unwatchPresence, watchPresence } from '@/infra/events';
+import { holdPresence, onEvents, releasePresence, unwatchPresence, watchPresence } from '@/infra/events';
 import { type GroupChange, groupTopic } from '@/infra/frames';
 import { store } from '@/infra/store';
 
@@ -247,6 +247,21 @@ function apply(change: GroupChange): void {
       return;
   }
 }
+
+/**
+ * The roster's names, held on the events socket while they are on the room: each member's
+ * word, for the square on their face (`presenceOfAtom`). The group's topic brings `live` and
+ * `ended` for them and nothing of `online` or `do not disturb`; a name watched brings its word
+ * at once and then as it changes. Reconciled on every change of the room, so a join is held
+ * and a leave let go, and leaving the page (the room goes null) lets go of them all.
+ */
+let heldMembers = new Set<string>();
+store.sub(roomAtom, () => {
+  const names = new Set((store.get(roomAtom)?.roster ?? []).map((member) => member.name));
+  for (const name of heldMembers) if (!names.has(name)) releasePresence(name);
+  for (const name of names) if (!heldMembers.has(name)) holdPresence(name);
+  heldMembers = names;
+});
 
 // the feed, while a room is up: its group's changes onto the room; the socket opening under
 // the page, back after a gap, is the room again, since the facts of the gap never reached it

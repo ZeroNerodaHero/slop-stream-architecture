@@ -153,6 +153,8 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await a.hover('#user-panel');
     await a.click('#settings');
     await a.waitForSelector('#user-modal[open]', { timeout: 5000 });
+    await a.click('#tab-advanced');
+    await a.waitForSelector('#inspector', { timeout: 5000 });
     await a.click('#inspector');
     expect(await a.isChecked('#inspector'), '#inspector is not checked');
     await a.keyboard.press('Escape');

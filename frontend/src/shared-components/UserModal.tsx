@@ -1,4 +1,14 @@
-import { RiCloseLine, RiGroupLine, RiNotification3Line, RiPaletteLine, RiSettings3Line, RiShieldKeyholeLine, RiUserLine } from '@remixicon/react';
+import {
+  RiChat1Line,
+  RiCloseLine,
+  RiGroupLine,
+  RiNotification3Line,
+  RiPaletteLine,
+  RiShieldKeyholeLine,
+  RiSideBarLine,
+  RiToolsLine,
+  RiUserLine
+} from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { Fragment, type KeyboardEvent, type ReactNode, useLayoutEffect, useRef } from 'react';
 
@@ -7,12 +17,14 @@ import { myPresenceAtom, PRESENCE_SQUARE, PRESENCE_WORD } from '@/infra/atoms/pr
 import { myAvatarVersionAtom, myNameAtom } from '@/infra/atoms/profile-atoms';
 import { USER_TABS, type UserTab, closeUserModal, pickTab, userModalOpenAtom, userTabAtom } from '@/infra/atoms/user-modal-atoms';
 import { Face } from '@/shared-components/Face';
+import { AdvancedTab } from '@/shared-components/user-modal/AdvancedTab';
 import { AppearanceTab } from '@/shared-components/user-modal/AppearanceTab';
+import { ChatTab } from '@/shared-components/user-modal/ChatTab';
 import { GroupsTab } from '@/shared-components/user-modal/GroupsTab';
 import { NotificationsTab } from '@/shared-components/user-modal/NotificationsTab';
 import { ProfileTab } from '@/shared-components/user-modal/ProfileTab';
 import { SecurityTab } from '@/shared-components/user-modal/SecurityTab';
-import { SettingsTab } from '@/shared-components/user-modal/SettingsTab';
+import { SidebarTab } from '@/shared-components/user-modal/SidebarTab';
 import { cn } from '@/utils/cn';
 
 const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> = {
@@ -20,8 +32,10 @@ const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> =
   groups: { label: 'groups', group: 'you', icon: <RiGroupLine aria-hidden size={18} /> },
   security: { label: 'security', group: 'you', icon: <RiShieldKeyholeLine aria-hidden size={18} /> },
   notifications: { label: 'notifications', group: 'you', icon: <RiNotification3Line aria-hidden size={18} /> },
-  settings: { label: 'settings', group: 'this browser', icon: <RiSettings3Line aria-hidden size={18} /> },
-  appearance: { label: 'appearance', group: 'this browser', icon: <RiPaletteLine aria-hidden size={18} /> }
+  appearance: { label: 'appearance', group: 'this browser', icon: <RiPaletteLine aria-hidden size={18} /> },
+  chat: { label: 'chat', group: 'this browser', icon: <RiChat1Line aria-hidden size={18} /> },
+  sidebar: { label: 'sidebar', group: 'this browser', icon: <RiSideBarLine aria-hidden size={18} /> },
+  advanced: { label: 'advanced', group: 'this browser', icon: <RiToolsLine aria-hidden size={18} /> }
 };
 
 const GROUP_LABEL = 'hidden px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wider text-textTertiary first:pt-0 sm:block';
@@ -54,11 +68,12 @@ function roveTabs(e: KeyboardEvent<HTMLDivElement>) {
 
 /**
  * The user modal: who you are and how this browser shows things, the way discord does its
- * settings. A rail of tabs down the left (profile, groups, security, notifications; settings,
- * appearance), the open one's pane on the right. Mounted by the Shell; it renders nothing until `openUserModal`, and
- * the page behind follows every change at once, so the layout and theme cards are their own
- * preview. A native <dialog>: the browser keeps focus in it, closes it on escape and hands
- * focus back to what opened it; a click on the backdrop closes it too.
+ * settings. A rail of tabs down the left (the account: profile, groups, security,
+ * notifications; this browser: appearance, chat, sidebar, advanced), the open one's pane on
+ * the right. Mounted by the Shell; it renders nothing until `openUserModal`, and the page
+ * behind follows every change at once, so the layout and theme cards are their own preview.
+ * A native <dialog>: the browser keeps focus in it, closes it on escape and hands focus back
+ * to what opened it; a click on the backdrop closes it too.
  */
 export function UserModal() {
   const open = useAtomValue(userModalOpenAtom);
@@ -78,7 +93,7 @@ function UserDialog() {
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
     dialog.showModal();
-    // the tab that is open, not the first focusable: the gear lands you on settings
+    // the tab that is open, not the first focusable: the gear lands you on appearance
     dialog.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
     return () => {
       if (dialog.open) dialog.close();
@@ -191,7 +206,7 @@ function Rail({ tab }: { tab: UserTab }) {
       <p className="mt-auto hidden px-3 py-3 text-xs leading-5 text-textTertiary sm:block">
         profile, groups, security and notifications are the account.
         <br />
-        settings and appearance are this browser.
+        appearance, chat, sidebar and advanced are this browser.
         <br />
         <span className="select-all tabular-nums" title={`build ${__BUILD__}`}>
           build {__BUILD__.slice(0, 7)}
@@ -237,8 +252,10 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
           {tab === 'groups' && <GroupsTab />}
           {tab === 'security' && <SecurityTab />}
           {tab === 'notifications' && <NotificationsTab />}
-          {tab === 'settings' && <SettingsTab />}
           {tab === 'appearance' && <AppearanceTab />}
+          {tab === 'chat' && <ChatTab />}
+          {tab === 'sidebar' && <SidebarTab />}
+          {tab === 'advanced' && <AdvancedTab />}
         </div>
       </div>
     </div>

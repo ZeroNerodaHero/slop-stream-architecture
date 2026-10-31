@@ -18,9 +18,9 @@ export function groupTopic(name: string): string {
   return `group:${name}`;
 }
 
-/** The roles a member holds, as a `group` frame and the roster name them. */
+/** The roles a member holds, as a `group` frame and the roster name them. `id` is the role's uuid. */
 export interface HeldRole {
-  id: number;
+  id: string;
   name: string;
   color: string;
 }
@@ -44,9 +44,9 @@ export type GroupChange =
   | { what: 'icon'; icon: number }
   | { what: 'banner'; banner: number }
   | { what: 'role'; role: HeldRole & { perms: { appearance: boolean; roles: boolean; channels: boolean; kick: boolean; ban: boolean } } }
-  | { what: 'unrole'; id: number }
+  | { what: 'unrole'; id: string }
   | { what: 'held'; who: string; role: HeldRole }
-  | { what: 'unheld'; who: string; id: number }
+  | { what: 'unheld'; who: string; id: string }
   | { what: 'owner'; who: string; owner: boolean }
   /** A member went live, or stopped: the room's faces. */
   | { what: 'live'; who: string }

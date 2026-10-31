@@ -4,9 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <!--
-      the theme this browser keeps, before first paint: the css variables the appearance setting
-      derived (src/infra/atoms/settings-atoms.ts writes them under settings.themeVars), applied
-      inline on <html> so a light or custom theme does not flash dark while the bundle loads.
+      the theme and the size this browser keeps, before first paint: the css variables the
+      appearance setting derived (src/infra/atoms/settings-atoms.ts writes them under
+      settings.themeVars) and the root font size as a percentage (settings.textSize; 100 is the
+      browser's own and sets nothing), applied inline on <html> so a light or custom theme does
+      not flash dark, nor a smaller page large, while the bundle loads.
       vite keeps a classic inline script as it is, and the api's /watch document leaves it in
       place (api/src/profile.rs looks for the title, the end of the head and #root only, none of
       them in here). nor may this comment spell the end-of-head tag out: vite's build injects the
@@ -14,12 +16,14 @@
     -->
     <script>
       try {
+        var style = document.documentElement.style;
         var kept = JSON.parse(localStorage.getItem('settings.themeVars') || 'null');
         if (kept && kept.vars) {
-          var style = document.documentElement.style;
           for (var name in kept.vars) style.setProperty(name, kept.vars[name]);
           if (kept.scheme) style.setProperty('color-scheme', kept.scheme);
         }
+        var size = JSON.parse(localStorage.getItem('settings.textSize') || 'null');
+        if (typeof size === 'number' && size >= 50 && size <= 200 && size !== 100) style.setProperty('font-size', size + '%');
       } catch (e) {}
     </script>
     <title>streams</title>
@@ -49,7 +53,7 @@
               </svg>
               home
             </a>
-            <h1 class="min-w-0 border-l-4 border-primaryBlue pl-3 text-[28px] font-semibold leading-tight [overflow-wrap:anywhere]">{{avatar}}{{name}}{{verified}}{{bio}}</h1>
+            <h1 class="min-w-0 border-l-4 border-primaryBlue pl-3 text-[1.75rem] font-semibold leading-tight [overflow-wrap:anywhere]">{{avatar}}{{name}}{{verified}}{{bio}}</h1>
           </div>
         </header>
         <div class="lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start lg:gap-6">

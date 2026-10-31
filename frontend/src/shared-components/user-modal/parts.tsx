@@ -8,6 +8,9 @@ export const SECTION_TITLE = 'text-xs font-semibold uppercase tracking-wider tex
 export const INPUT = 'w-full border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary disabled:opacity-40';
 /** The buttons in a pane: a size down from the page's. */
 export const BUTTON = 'px-4 py-2 text-base';
+/** A square to tick: the theme's box, blue when on. */
+export const CHECKBOX =
+  'h-4 w-4 shrink-0 appearance-none border border-primaryStroke bg-background checked:border-primaryBlue checked:bg-primaryBlue disabled:opacity-40';
 
 /** One block of a pane. The parent is `divide-y divide-primaryStroke`, which draws the rule between blocks. */
 export function Section({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {

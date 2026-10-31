@@ -55,8 +55,25 @@ interface Link {
 }
 
 let link: Link | null = null;
-/** Names this tab watches, so a new link (a fallback, a re-hello) asks for them again. */
+/**
+ * Names this tab watches, so a new link (a fallback, a re-hello) asks for them again. A page's
+ * subject (`watchPresence`: the stream on the watch page, home's `*`, a room's topic) is in the
+ * set once however often the page asks. A list's names (`holdPresence`: a room's roster) are
+ * counted, one hold per list, so the roster letting go of a name does not take it from the
+ * corner player, nor the other way round.
+ */
 const watching = new Set<string>();
+const held = new Map<string, number>();
+
+/** Whether anything in this tab wants `name` on the socket. */
+function wanted(name: string): boolean {
+  return watching.has(name) || held.has(name);
+}
+
+/** Every name this tab wants, for a link that has to ask again. */
+function allWanted(): Set<string> {
+  return new Set([...watching, ...held.keys()]);
+}
 
 /** The nick for the hello: a login needs none (the cookie goes with the handshake); a guest's name box. */
 function nickForHello(): string | null {
@@ -132,7 +149,7 @@ class WorkerLink implements Link {
     this.post({ kind: 'attach', nick: nickForHello(), inspector });
     // the ring so far, when this tab keeps the messages: a tab opened late sees what came before it
     if (inspector) this.post({ kind: 'snapshot' });
-    for (const name of watching) this.post({ kind: 'watch', name });
+    for (const name of allWanted()) this.post({ kind: 'watch', name });
     // a port has no close event a worker can rely on: the tab says bye, and pings meanwhile
     this.timer = setInterval(() => this.post({ kind: 'ping' }), TAB_PING_MS);
     window.addEventListener('pagehide', this.onHide);
@@ -208,7 +225,7 @@ class TabLink implements Link {
       const hello: ClientFrame = { type: 'hello' };
       if (nick && nick !== this.refusedNick) hello.nick = nick;
       this.send(hello);
-      for (const name of watching) this.send({ type: 'watch', name });
+      for (const name of allWanted()) this.send({ type: 'watch', name });
       setPhase('open');
     };
     socket.onmessage = (e) => {
@@ -323,13 +340,29 @@ export function reconnectEvents(): void {
 /** From now on, `name`'s word as it changes, and `live` / `ended` as they happen. */
 export function watchPresence(name: string): void {
   if (watching.has(name)) return;
+  const before = wanted(name);
   watching.add(name);
-  link?.watch(name);
+  if (!before) link?.watch(name);
 }
 
 export function unwatchPresence(name: string): void {
   if (!watching.delete(name)) return;
-  link?.unwatch(name);
+  if (!wanted(name)) link?.unwatch(name);
+}
+
+/** One of a list's names (a room's roster), on the socket while any list holds it. Every hold is let go with `releasePresence`. */
+export function holdPresence(name: string): void {
+  const before = wanted(name);
+  held.set(name, (held.get(name) ?? 0) + 1);
+  if (!before) link?.watch(name);
+}
+
+export function releasePresence(name: string): void {
+  const count = held.get(name) ?? 0;
+  if (count === 0) return;
+  if (count === 1) held.delete(name);
+  else held.set(name, count - 1);
+  if (!wanted(name)) link?.unwatch(name);
 }
 
 // the inspector setting is this browser's and the worker is the browser's: it follows at once

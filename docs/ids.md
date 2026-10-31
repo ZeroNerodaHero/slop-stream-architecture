@@ -25,6 +25,7 @@ flowchart LR
 - a name picked at signup is not the name wanted a month later. today it cannot change at all ("it is yours alone, and it does not change", the profile tab).
 - `follows.md` wants edges that survive a rename, and pictures that do not have to be copied when a name does.
 - a row that can be named by something other than its name is also what account deletion, a merge or an admin's "who is this" would want. none of those are here; the id makes them possible without another migration.
+- a group's custom roles (`groups.md`) are keyed the same way since migrate-23: `roles.id` is a uuid postgres made, so the manage dialog opens a role in place and saves it by its id, and a rename moves nothing.
 
 ## the rules
 

@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 
 import { hoverPreview } from '@/app/home/hover';
 import { stillPictures } from '@/app/home/stills';
-import { api, messageOf, type LiveStream, type Person, type Recent, type Server } from '@/infra/api';
+import { api, mayMakeGroup, messageOf, type LiveStream, type Person, type Recent, type Server } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { followingAtom, followingNamesAtom } from '@/infra/atoms/follow-atoms';
 import { enterHome, homeErrorAtom, homeNowAtom, homeStreamsAtom, leaveHome } from '@/infra/atoms/home-atoms';
@@ -430,8 +430,9 @@ function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
 
 /**
  * Every group but `bot`, under recently offline: yours and the public ones, as squares. The
- * heading opens the list; beside it, `create group` for a login that owns no group yet (one
- * each), which opens the same dialog `/groups` has and ends on the new room.
+ * heading opens the list; beside it, `create group` for a login under the cap on owned
+ * groups (the api's `groups_per_owner`), which opens the same dialog `/groups` has and ends
+ * on the new room.
  */
 function Groups() {
   const me = useAtomValue(meAtom);
@@ -439,7 +440,7 @@ function Groups() {
   const query = useQuery({ queryKey: ['explore'], queryFn: api.explore, refetchInterval: PEOPLE_POLL_MS, refetchOnWindowFocus: false });
   const groups: Server[] = query.data ? [...query.data.yours, ...query.data.discover].filter((group) => group.mine || group.public !== false) : [];
   const loading = !query.data && !query.error;
-  const canMake = !!me && !!query.data && !query.data.yours.some((group) => group.owner === true);
+  const canMake = !!me && !!query.data && mayMakeGroup(query.data);
   return (
     <Part
       id="home-groups"

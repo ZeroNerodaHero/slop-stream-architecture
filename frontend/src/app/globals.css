@@ -57,7 +57,8 @@ html:has(dialog:modal) {
 }
 
 body {
-  @apply bg-background font-sans text-[20px] leading-relaxed text-textPrimary antialiased;
+  /* 20px at the browser's size, in rems so the size setting (settings.textSize, a percentage on <html>) scales it with the rest */
+  @apply bg-background font-sans text-[1.25rem] leading-relaxed text-textPrimary antialiased;
 }
 
 @layer base {

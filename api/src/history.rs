@@ -11,6 +11,8 @@
 //!
 //! `GET /chat/<name>/before?id=`  older lines, oldest first. redis, then postgres.
 //! `GET /chat/<name>/search?q=`   matching lines in this room, newest first. off: history is not kept.
+//!                                 the box takes filters among the words (`parse_search`): `from:<name>`,
+//!                                 `has:image`, `has:link`, `has:video`, `before:<day>`, `after:<day>`.
 //! `GET /chat/<name>/by/<name>`   that account's verified lines in this room, newest first.
 //! `GET /chat/<name>/around/<id>` a window around one line. redis when the id is still in
 //! the stream, otherwise postgres. the panel scrolls to that id.
@@ -21,7 +23,7 @@
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::Router;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Days, NaiveDate, NaiveTime, Utc};
 use redis::streams::StreamRangeReply;
 use redis::AsyncCommands;
 use serde::Deserialize;
@@ -41,6 +43,13 @@ const PAGE: i64 = 50;
 /// Lines on each side of the one a search hit opens on.
 const WINDOW: usize = 40;
 const SEARCH_LIMIT: i64 = 50;
+/// A search's box, in unicode scalars: filters and words together.
+const SEARCH_CHARS: usize = 200;
+/// A link to a video, for `has:video`: a postgres regex (case-insensitive) over the text of the
+/// lines that have a link (`has_link`, migrate-22.sql). The chat keeps no videos of its own, so
+/// this is the hosts people paste, and the file types a browser plays. Not the schema's: a host
+/// is added here.
+const VIDEO_LINK: &str = r"(youtube\.com/(watch|shorts|live|embed)|youtu\.be/|twitch\.tv/videos/|clips\.twitch\.tv/|twitch\.tv/[^/[:space:]]+/clip/|vimeo\.com/[0-9]|streamable\.com/|kick\.com/[^[:space:]]*/clips?/|tiktok\.com/|\.(mp4|webm|mov|m3u8)([?#[:space:]]|$))";
 
 /// A line's columns, with its speaker's picture as it is now (`LineRow`). The row keeps no
 /// picture: a read joins `streamers` for it, by account for a verified line (so a rename
@@ -174,20 +183,181 @@ async fn search_room(s: &ChatState, room: &str, q: &str) -> Result<JsonLines, Ap
         return Err(not_kept());
     }
     let q = q.trim();
-    if q.is_empty() {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "say what to look for"));
-    }
-    if q.chars().count() > 200 {
+    if q.chars().count() > SEARCH_CHARS {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "too long"));
     }
-    // `simple`: the words as written, not stems. websearch so a quoted phrase stays a phrase.
-    let sql = format!(
-        "SELECT {LINE_COLUMNS} FROM {LINE_TABLES}
-         WHERE l.room = $1 AND l.search @@ websearch_to_tsquery('simple', $2)
-         ORDER BY l.at DESC, l.seq DESC LIMIT $3"
-    );
-    let rows: Vec<LineRow> = sqlx::query_as(&sql).bind(room).bind(q).bind(SEARCH_LIMIT).fetch_all(&s.db).await?;
+    let search = parse_search(q)?;
+    if search.words.is_empty() && !search.filtered() {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "say what to look for"));
+    }
+    // `from:` is the name's account too, when it has one: a login's line is its account's
+    // whatever name it was said under (a rename), and the account's lines are all its names'
+    let account: Option<Uuid> = match &search.from {
+        Some(name) => {
+            sqlx::query_scalar("SELECT id FROM streamers WHERE name = $1 AND password_hash IS NOT NULL")
+                .bind(name)
+                .fetch_optional(&s.db)
+                .await?
+        }
+        None => None,
+    };
+    let (sql, binds) = search_sql(&search, account);
+    let mut query = sqlx::query_as::<_, LineRow>(&sql).bind(room);
+    for bind in binds {
+        query = match bind {
+            Bind::Text(text) => query.bind(text),
+            Bind::Id(id) => query.bind(id),
+            Bind::At(at) => query.bind(at),
+        };
+    }
+    let rows: Vec<LineRow> = query.bind(SEARCH_LIMIT).fetch_all(&s.db).await?;
     Ok(json_lines(rows.into_iter().map(line_of).collect()))
+}
+
+/// What the one box asked for: the words looked for, and the filters taken out from among them.
+#[derive(Debug, Default, PartialEq)]
+struct Search {
+    /// The words as typed, filters removed, for `websearch_to_tsquery`. Empty with filters alone.
+    words: String,
+    /// `from:<name>`, lower case: lines said under that name, and its account's under any name.
+    from: Option<String>,
+    /// `has:image` (or `picture`): a line with a picture on it.
+    image: bool,
+    /// `has:link` (or `url`): a line with a link in its words.
+    link: bool,
+    /// `has:video` (or `clip`): a line with a link to a video (`VIDEO_LINK`).
+    video: bool,
+    /// `before:<day>`: said before that day began (utc).
+    before: Option<DateTime<Utc>>,
+    /// `after:<day>`: said once that day was over (utc), so the day itself is out, as on discord.
+    after: Option<DateTime<Utc>>,
+}
+
+impl Search {
+    fn filtered(&self) -> bool {
+        self.from.is_some() || self.image || self.link || self.video || self.before.is_some() || self.after.is_some()
+    }
+}
+
+/// The box's text apart: a `key:value` word with a key this knows is a filter; the rest are the
+/// words, kept in their order. Inside a quoted phrase nothing is a filter, so `"from: the top"`
+/// is still a phrase. A known key with nothing after the colon, or a value it cannot read, is a
+/// 400 that says what the key wants.
+fn parse_search(q: &str) -> Result<Search, ApiError> {
+    let mut search = Search::default();
+    let mut words: Vec<&str> = Vec::new();
+    let mut quoted = false;
+    for token in q.split_whitespace() {
+        if quoted {
+            words.push(token);
+            quoted = !token.ends_with('"');
+            continue;
+        }
+        if let Some(rest) = token.strip_prefix('"') {
+            words.push(token);
+            quoted = !rest.ends_with('"');
+            continue;
+        }
+        let Some((key, value)) = token.split_once(':') else {
+            words.push(token);
+            continue;
+        };
+        let key = key.to_ascii_lowercase();
+        let bad = |want: &str| ApiError::new(StatusCode::BAD_REQUEST, format!("{key}: wants {want}"));
+        match key.as_str() {
+            "from" => {
+                let name = value.to_lowercase();
+                if !valid_name(&name) {
+                    return Err(bad("a name, like from:bob"));
+                }
+                search.from = Some(name);
+            }
+            "has" => match value.to_ascii_lowercase().as_str() {
+                "image" | "picture" => search.image = true,
+                "link" | "url" => search.link = true,
+                "video" | "clip" => search.video = true,
+                _ => return Err(bad("image, link or video")),
+            },
+            "before" | "after" => {
+                let Ok(day) = NaiveDate::parse_from_str(value, "%Y-%m-%d") else {
+                    return Err(bad(&format!("a day, like {key}:2026-10-30")));
+                };
+                if key == "before" {
+                    search.before = Some(day.and_time(NaiveTime::MIN).and_utc());
+                } else {
+                    let next = day.checked_add_days(Days::new(1)).ok_or_else(|| bad("a day this side of the end of time"))?;
+                    search.after = Some(next.and_time(NaiveTime::MIN).and_utc());
+                }
+            }
+            // `https://…`, `re:…`: a word with a colon in it
+            _ => words.push(token),
+        }
+    }
+    search.words = words.join(" ");
+    Ok(search)
+}
+
+/// A value the search binds after the room ($1), in the order `search_sql` named them.
+enum Bind {
+    Text(String),
+    Id(Uuid),
+    At(DateTime<Utc>),
+}
+
+/// The next placeholder: the room is $1, so a bind pushed here is $(its count + 1).
+fn placeholder(binds: &mut Vec<Bind>, bind: Bind) -> String {
+    binds.push(bind);
+    format!("${}", binds.len() + 1)
+}
+
+/// The query for a search: the room, then one clause per thing asked, each bound in the order
+/// returned, and the limit last. `simple`: the words as written, not stems; websearch so a
+/// quoted phrase stays a phrase. `has:image` and `has:link` are the partial indexes of
+/// migrate-22.sql; `has:video` is a regex over the linked lines; the dates are the room index.
+fn search_sql(search: &Search, account: Option<Uuid>) -> (String, Vec<Bind>) {
+    let mut binds = Vec::new();
+    let mut clauses: Vec<String> = Vec::new();
+    if !search.words.is_empty() {
+        let words = placeholder(&mut binds, Bind::Text(search.words.clone()));
+        clauses.push(format!("l.search @@ websearch_to_tsquery('simple', {words})"));
+    }
+    if let Some(name) = &search.from {
+        // a nick is stored as typed (`Bob`); an account name is lower case already
+        let name = placeholder(&mut binds, Bind::Text(name.clone()));
+        match account {
+            Some(id) => {
+                let id = placeholder(&mut binds, Bind::Id(id));
+                clauses.push(format!("(lower(l.speaker) = {name} OR l.user_id = {id})"));
+            }
+            None => clauses.push(format!("lower(l.speaker) = {name}")),
+        }
+    }
+    if search.image {
+        clauses.push("l.image IS NOT NULL".to_owned());
+    }
+    if search.link || search.video {
+        clauses.push("l.has_link".to_owned());
+    }
+    if search.video {
+        let hosts = placeholder(&mut binds, Bind::Text(VIDEO_LINK.to_owned()));
+        clauses.push(format!("l.\"text\" ~* {hosts}"));
+    }
+    if let Some(at) = search.before {
+        let at = placeholder(&mut binds, Bind::At(at));
+        clauses.push(format!("l.at < {at}"));
+    }
+    if let Some(at) = search.after {
+        let at = placeholder(&mut binds, Bind::At(at));
+        clauses.push(format!("l.at >= {at}"));
+    }
+    let limit = binds.len() + 2;
+    let mut sql = format!("SELECT {LINE_COLUMNS} FROM {LINE_TABLES} WHERE l.room = $1");
+    for clause in &clauses {
+        sql.push_str(" AND ");
+        sql.push_str(clause);
+    }
+    sql.push_str(&format!(" ORDER BY l.at DESC, l.seq DESC LIMIT ${limit}"));
+    (sql, binds)
 }
 
 async fn by_user(State(s): State<ChatState>, Path((room, speaker)): Path<(String, String)>) -> Result<JsonLines, ApiError> {
@@ -415,6 +585,88 @@ mod tests {
         assert!(!flag_on(Some("yes please")));
     }
 
+    fn utc(day: &str) -> DateTime<Utc> {
+        NaiveDate::parse_from_str(day, "%Y-%m-%d").unwrap().and_time(NaiveTime::MIN).and_utc()
+    }
+
+    #[test]
+    fn words_alone_are_the_old_search() {
+        let s = parse_search("hello world").unwrap();
+        assert_eq!(s.words, "hello world");
+        assert!(!s.filtered());
+        // a colon with a key this does not know is a word, so a pasted link is looked for
+        let s = parse_search("https://example.com/x re:that").unwrap();
+        assert_eq!(s.words, "https://example.com/x re:that");
+        assert!(!s.filtered());
+    }
+
+    #[test]
+    fn filters_come_out_from_among_the_words() {
+        let s = parse_search("from:Bob has:image hello HAS:link there").unwrap();
+        assert_eq!(s.from.as_deref(), Some("bob"), "a name is lower case, as nicks are compared");
+        assert!(s.image && s.link && !s.video);
+        assert_eq!(s.words, "hello there");
+        // filters alone are a search
+        let s = parse_search("has:video").unwrap();
+        assert!(s.video && s.words.is_empty() && s.filtered());
+        assert!(parse_search("has:picture").unwrap().image);
+        assert!(parse_search("has:url").unwrap().link);
+        assert!(parse_search("has:clip").unwrap().video);
+    }
+
+    #[test]
+    fn a_quoted_phrase_is_never_a_filter() {
+        let s = parse_search("\"from: the top\" rope").unwrap();
+        assert_eq!(s.words, "\"from: the top\" rope");
+        assert!(s.from.is_none());
+        let s = parse_search("\"has:image\" from:ann").unwrap();
+        assert_eq!(s.words, "\"has:image\"");
+        assert!(!s.image && s.from.as_deref() == Some("ann"));
+    }
+
+    #[test]
+    fn the_days_are_utc_and_the_day_itself_is_out() {
+        let s = parse_search("before:2026-10-30 after:2026-10-01").unwrap();
+        assert_eq!(s.before, Some(utc("2026-10-30")));
+        assert_eq!(s.after, Some(utc("2026-10-02")), "after a day is from the next day on");
+    }
+
+    #[test]
+    fn a_filter_it_cannot_read_says_what_it_wants() {
+        let want = |q: &str| parse_search(q).err().map(|e| e.message().to_owned()).unwrap_or_default();
+        assert_eq!(want("has:gif"), "has: wants image, link or video");
+        assert_eq!(want("from:"), "from: wants a name, like from:bob");
+        assert_eq!(want("from:b!b"), "from: wants a name, like from:bob");
+        assert_eq!(want("before:yesterday"), "before: wants a day, like before:2026-10-30");
+        assert_eq!(want("after:2026-13-01"), "after: wants a day, like after:2026-10-30");
+    }
+
+    #[test]
+    fn the_query_binds_each_thing_asked_in_order_and_the_limit_last() {
+        let id = Uuid::nil();
+        let s = parse_search("from:bob has:video hello before:2026-10-30").unwrap();
+        let (sql, binds) = search_sql(&s, Some(id));
+        assert!(sql.starts_with(&format!("SELECT {LINE_COLUMNS} FROM {LINE_TABLES} WHERE l.room = $1")));
+        assert!(sql.contains("l.search @@ websearch_to_tsquery('simple', $2)"));
+        assert!(sql.contains("(lower(l.speaker) = $3 OR l.user_id = $4)"));
+        assert!(sql.contains("l.has_link") && sql.contains("l.\"text\" ~* $5"));
+        assert!(sql.contains("l.at < $6"));
+        assert!(sql.ends_with("ORDER BY l.at DESC, l.seq DESC LIMIT $7"));
+        assert_eq!(binds.len(), 5);
+        assert!(matches!(&binds[0], Bind::Text(w) if w == "hello"));
+        assert!(matches!(&binds[1], Bind::Text(n) if n == "bob"));
+        assert!(matches!(&binds[2], Bind::Id(i) if *i == id));
+        assert!(matches!(&binds[3], Bind::Text(re) if re == VIDEO_LINK));
+        assert!(matches!(&binds[4], Bind::At(at) if *at == utc("2026-10-30")));
+
+        // a name with no account is the speaker alone; pictures bind nothing
+        let s = parse_search("from:guest has:image").unwrap();
+        let (sql, binds) = search_sql(&s, None);
+        assert!(sql.contains("lower(l.speaker) = $2 AND l.image IS NOT NULL"));
+        assert!(sql.ends_with("LIMIT $3"));
+        assert_eq!(binds.len(), 1);
+    }
+
     #[test]
     fn only_a_redis_stream_id_is_a_line_id() {
         assert!(at_seq("1729000000000-0").is_some());
@@ -475,5 +727,73 @@ mod tests {
         let stranger = row(&pool, &alice_name, Some("stranger-hash")).await;
         sqlx::query("UPDATE streamers SET avatar_at = to_timestamp(1700000000) WHERE id = $1").bind(stranger).execute(&pool).await.unwrap();
         assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, None, "a stranger on the freed name is nobody's picture on the account's words");
+    }
+
+    /// The ids a search of `room` finds, through the query `search_room` runs, newest first.
+    async fn found(pool: &PgPool, room: &str, q: &str) -> Vec<String> {
+        let search = parse_search(q).unwrap();
+        let account: Option<Uuid> = match &search.from {
+            Some(name) => sqlx::query_scalar("SELECT id FROM streamers WHERE name = $1 AND password_hash IS NOT NULL").bind(name).fetch_optional(pool).await.unwrap(),
+            None => None,
+        };
+        let (sql, binds) = search_sql(&search, account);
+        let mut query = sqlx::query_as::<_, LineRow>(&sql).bind(room);
+        for bind in binds {
+            query = match bind {
+                Bind::Text(text) => query.bind(text),
+                Bind::Id(id) => query.bind(id),
+                Bind::At(at) => query.bind(at),
+            };
+        }
+        let rows: Vec<LineRow> = query.bind(SEARCH_LIMIT).fetch_all(pool).await.unwrap();
+        rows.into_iter().map(|row| line_of(row).id).collect()
+    }
+
+    /// The filters against the database: the generated `has_link` (migrate-22.sql), the video
+    /// regex as postgres reads it, `from:` by name and by account, and the days.
+    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored the_filters` against a throwaway postgres (see auth.rs's `test_db`).
+    #[tokio::test]
+    #[ignore]
+    async fn the_filters_find_the_lines_they_name() {
+        use crate::auth::tests::{row, test_db};
+
+        let pool = test_db().await;
+        let run = std::process::id();
+        let room = format!("room7-{run}");
+        let ann_name = format!("ann7-{run}");
+        let ann = row(&pool, &ann_name, Some("ann-hash")).await;
+        // ids are redis stream ids: 2026-10-29 is 1793232000000 ms, 2026-10-30 is 1793318400000
+        let oct29 = 1_793_232_000_000u64;
+        let oct30 = 1_793_318_400_000u64;
+        let line = |ms: u64, seq: u64| format!("{ms}-{seq}");
+        // ann, logged in: plain words
+        store(&pool, &room, &line(oct29, 0), &ann_name, Some(ann), "morning everyone", None, false, true, &[]).await.unwrap();
+        // a nick, Bob as typed, with a link
+        store(&pool, &room, &line(oct29, 1), "Bob", None, "look https://example.com/page.", None, false, false, &[]).await.unwrap();
+        // ann with a picture and no words
+        store(&pool, &room, &line(oct30, 0), &ann_name, Some(ann), "", Some("11111111-1111-1111-1111-111111111111"), false, true, &[]).await.unwrap();
+        // a nick with a video link, scheme-less
+        store(&pool, &room, &line(oct30, 1), "cy", None, "this one www.youtube.com/watch?v=abc", None, false, false, &[]).await.unwrap();
+        // a nick with a link to a video file
+        store(&pool, &room, &line(oct30, 2), "cy", None, "or http://files.test/clip.mp4?x=1 later", None, false, false, &[]).await.unwrap();
+        // "example.com" in words is not a link
+        store(&pool, &room, &line(oct30, 3), "Bob", None, "example.com is a domain not a link", None, false, false, &[]).await.unwrap();
+
+        assert_eq!(found(&pool, &room, "everyone").await, vec![line(oct29, 0)], "the words alone, as before");
+        assert_eq!(found(&pool, &room, "has:image").await, vec![line(oct30, 0)]);
+        assert_eq!(found(&pool, &room, "has:link").await, vec![line(oct30, 2), line(oct30, 1), line(oct29, 1)], "newest first, and a bare domain is not a link");
+        assert_eq!(found(&pool, &room, "has:video").await, vec![line(oct30, 2), line(oct30, 1)]);
+        assert_eq!(found(&pool, &room, "has:video later").await, vec![line(oct30, 2)], "a filter and the words together");
+        assert_eq!(found(&pool, &room, "from:bob").await, vec![line(oct30, 3), line(oct29, 1)], "a nick as typed, asked for in lower case");
+        assert_eq!(found(&pool, &room, &format!("from:{ann_name}")).await, vec![line(oct30, 0), line(oct29, 0)], "an account's lines");
+        assert_eq!(found(&pool, &room, "from:bob has:link").await, vec![line(oct29, 1)]);
+        assert_eq!(found(&pool, &room, "before:2026-10-30").await, vec![line(oct29, 1), line(oct29, 0)]);
+        assert_eq!(found(&pool, &room, "after:2026-10-29").await.len(), 4, "after a day is from the next day on");
+        assert_eq!(found(&pool, &room, "after:2026-10-29 before:2026-10-30").await, Vec::<String>::new());
+
+        // the account's lines follow a rename: ann is now dee, and `from:dee` finds what ann said
+        let dee_name = format!("dee7-{run}");
+        sqlx::query("UPDATE streamers SET name = $2, renamed_at = now() WHERE id = $1").bind(ann).bind(&dee_name).execute(&pool).await.unwrap();
+        assert_eq!(found(&pool, &room, &format!("from:{dee_name}")).await, vec![line(oct30, 0), line(oct29, 0)]);
     }
 }

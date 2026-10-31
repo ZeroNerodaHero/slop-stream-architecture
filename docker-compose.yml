@@ -138,6 +138,8 @@ services:
       # who may read /api/errors: these accounts (the /admin page), or a bearer token (a machine)
       ADMIN_NAMES: ${ADMIN_NAMES:-}
       OPS_TOKEN: ${OPS_TOKEN:-}
+      # how many groups one login may own. empty: 2. see docs/groups.md
+      GROUPS_PER_OWNER: ${GROUPS_PER_OWNER:-}
       # off (the default): the s3 container below. a url: that bucket, with the key and secret.
       # the container's own login is not these two; it is the literals on the s3 service.
       S3_ENDPOINT: ${S3_ENDPOINT:-off}

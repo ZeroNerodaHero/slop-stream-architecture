@@ -87,7 +87,7 @@ export function GroupsTab() {
             <Link id="group-make-there" to="/groups" onClick={closeUserModal} className="text-primaryBlue underline-offset-2 hover:underline">
               the groups page
             </Link>
-            : one each. bot is automatic: the fake streams&apos; chatters wear it, nobody joins it, and the chat can hide those lines.
+            . bot is automatic: the fake streams&apos; chatters wear it, nobody joins it, and the chat can hide those lines.
           </>
         }
       >

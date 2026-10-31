@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot } from 'react-dom/client';
 import { RouterProvider } from 'react-router-dom';
 
-import { applyStoredTheme } from '@/infra/atoms/settings-atoms';
+import { applyStoredTextSize, applyStoredTheme } from '@/infra/atoms/settings-atoms';
 import { startEvents } from '@/infra/events';
 import { installReporting, report } from '@/infra/report';
 import { router } from '@/router';
@@ -16,9 +16,10 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1 } } 
 const root = document.getElementById('root');
 if (!root) throw new Error('index.html has no #root');
 
-// the theme this browser keeps, before anything renders. (index.html's inline script already
-// painted it; this is the same answer from the atom, and from here on the atom is in charge.)
+// the theme and the size this browser keeps, before anything renders. (index.html's inline script
+// already painted them; this is the same answer from the atoms, and from here on they are in charge.)
 applyStoredTheme();
+applyStoredTextSize();
 
 // failures go to /api/errors, see docs/debugging.md. window errors and rejections here. a
 // render crash through the router's onError: once per crash, with the route pattern and
