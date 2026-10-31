@@ -122,14 +122,14 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
   const putOffline = (ctx, name, data) => ctx.put(`/api/streamers/${name}/offline`, { data, headers: { 'content-type': 'image/jpeg' } });
   const putNote = (ctx, name, note) => ctx.put(`/api/streamers/${name}/offline-note`, { data: { note } });
 
-  await step('the offline picture: not a jpeg 400, over 512 kb 413, 300 kb 200 (its own ceiling), round-trips; the line is kept as one line', async () => {
+  await step('the offline picture: not a jpeg 400, over 1 mb 413, 700 kb 200 (its own ceiling), round-trips; the line is kept as one line', async () => {
     const text = await putOffline(anon, NAME, Buffer.from('hello'));
     expect(text.status() === 400, `text got ${text.status()}`);
-    const big = await putOffline(anon, NAME, Buffer.concat([JPEG, Buffer.alloc(600 * 1024)]));
-    expect(big.status() === 413, `600 kb got ${big.status()}`);
-    // past the avatar's 256 kb and under this picture's 512: the wider one has a ceiling of its own
-    const wide = await putOffline(anon, NAME, Buffer.concat([JPEG, Buffer.alloc(300 * 1024)]));
-    expect(wide.status() === 200, `300 kb got ${wide.status()}`);
+    const big = await putOffline(anon, NAME, Buffer.concat([JPEG, Buffer.alloc(1200 * 1024)]));
+    expect(big.status() === 413, `1200 kb got ${big.status()}`);
+    // past the avatar's 256 kb and under this picture's 1 mb: the wider one has a ceiling of its own
+    const wide = await putOffline(anon, NAME, Buffer.concat([JPEG, Buffer.alloc(700 * 1024)]));
+    expect(wide.status() === 200, `700 kb got ${wide.status()}`);
     const ok = await putOffline(anon, NAME, JPEG);
     const saved = await ok.json();
     expect(ok.status() === 200 && Number.isInteger(saved.offline), `jpeg got ${ok.status()} ${JSON.stringify(saved)}`);
@@ -183,7 +183,7 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
       return { r, g, b };
     }, buf.toString('base64'));
 
-  await step('the profile tab as the name: the picture and the line are there; a wide png lands as a 1280x720 jpeg under 512 kb', async () => {
+  await step('the profile tab as the name: the picture and the line are there; a wide png lands as a 1920x1080 jpeg under 1 mb', async () => {
     const p = await fresh();
     profile = p;
     await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
@@ -217,7 +217,7 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     // the crop dialog opens over the modal, the 16:9 box as big as fits in the middle; used as it is, that is the old middle cut
     await p.waitForSelector('#crop[open] #crop-box', { timeout: 10000 });
     const goes = ((await p.textContent('#crop-size')) || '').trim();
-    expect(goes === 'goes up as a 1280×720 jpeg', `the dialog says "${goes}"`);
+    expect(goes === 'goes up as a 1920×1080 jpeg', `the dialog says "${goes}"`);
     await p.click('#crop-use');
     await p.waitForFunction(() => document.querySelector('#profile-offline-status')?.textContent === 'saved', null, { timeout: 15000 });
     const me = await (await anon.get(`/api/streamers/${NAME}`)).json();
@@ -225,7 +225,7 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
     offlineVersion = me.offline;
     const bytes = await (await anon.get(`/api/streamers/${NAME}/offline?v=${offlineVersion}`)).body();
     offlineBytes = bytes;
-    expect(bytes.length <= 512 * 1024 && bytes[0] === 0xff && bytes[1] === 0xd8, `${bytes.length} bytes, not a jpeg under 512 kb`);
+    expect(bytes.length <= 1024 * 1024 && bytes[0] === 0xff && bytes[1] === 0xd8, `${bytes.length} bytes, not a jpeg under 1 mb`);
     const size = await p.evaluate(
       (url) =>
         new Promise((res, rej) => {
@@ -236,7 +236,7 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
         }),
       `/api/streamers/${NAME}/offline?v=${offlineVersion}`
     );
-    expect(size[0] === 1280 && size[1] === 720, `the picture is ${size.join('x')}`);
+    expect(size[0] === 1920 && size[1] === 1080, `the picture is ${size.join('x')}`);
     return `${bytes.length} bytes, ${size.join('x')}`;
   });
 
@@ -267,7 +267,7 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
       bytes = await (await anon.get(`/api/streamers/${NAME}/offline?v=${Date.now()}`)).body();
     }
     expect(!bytes.equals(offlineBytes), 'the offline picture did not change');
-    expect(bytes.length <= 512 * 1024 && bytes[0] === 0xff && bytes[1] === 0xd8, `${bytes.length} bytes, not a jpeg under 512 kb`);
+    expect(bytes.length <= 1024 * 1024 && bytes[0] === 0xff && bytes[1] === 0xd8, `${bytes.length} bytes, not a jpeg under 1 mb`);
     // the gradient runs orange at the top left to blue at the bottom right. the middle cut ends deep in the blue;
     // the top left quarter ends near the picture's centre, still more orange than blue
     const middle = await cornerOf(p, offlineBytes);

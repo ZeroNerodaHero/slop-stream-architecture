@@ -45,13 +45,16 @@ export const GROUP_ICON: PictureSpec = {
   max: 256 * 1024
 };
 
-/** 1280x320 at `groups/<name>/banner.jpg`. A wide strip across the top of the group. */
+/**
+ * 2560x640 at `groups/<name>/banner.jpg`. A wide strip across the top of the group, the room's
+ * whole width: a 1280 one was stretched over twice its pixels on a sharp screen.
+ */
 export const GROUP_BANNER: PictureSpec = {
   title: "the group's banner",
   where: 'across the top of the group',
-  size: { width: 1280, height: 320 },
-  qualities: [0.8, 0.7, 0.6, 0.5],
-  max: 512 * 1024
+  size: { width: 2560, height: 640 },
+  qualities: [0.8, 0.7, 0.6],
+  max: 1024 * 1024
 };
 
 /** 256x256 at `avatars/<id>.jpg`. The page shows it at 40px, the preview card of a link bigger. */
@@ -63,22 +66,30 @@ export const AVATAR_PICTURE: PictureSpec = {
   max: 256 * 1024
 };
 
-/** 640x360, one of up to six on the card on home. The avatar's ceiling: the routes share a body limit. */
+/**
+ * 960x540, one of up to six on the card on home: a card is 280px and up, a featured one half the
+ * page, on screens with two pixels to the point. The avatar's ceiling: the routes share a body
+ * limit, so a busy photo steps down once to fit.
+ */
 export const THUMB_PICTURE: PictureSpec = {
   title: 'a thumbnail',
   where: 'your card on home, until that page is refreshed',
-  size: { width: 640, height: 360 },
-  qualities: [0.8],
+  size: { width: 960, height: 540 },
+  qualities: [0.8, 0.7],
   max: 256 * 1024
 };
 
-/** 1280x720 where the player would be while the name is not live. A photo at 0.8 can run past its ceiling, so the quality steps down. */
+/**
+ * 1920x1080 where the player would be while the name is not live: the player's own size, so it
+ * is not blown up on a desktop. A photo at 0.8 can run past its ceiling, so the quality steps
+ * down, and stops at 0.6: softer than that is blocks, and the dialog asks for a plainer picture.
+ */
 export const OFFLINE_PICTURE: PictureSpec = {
   title: 'the offline picture',
   where: 'where the player would be while you are not live, and in the preview of your link then',
-  size: { width: 1280, height: 720 },
-  qualities: [0.8, 0.7, 0.6, 0.5],
-  max: 512 * 1024
+  size: { width: 1920, height: 1080 },
+  qualities: [0.8, 0.7, 0.6],
+  max: 1024 * 1024
 };
 
 /** A layer over the camera (docs/screen.md): up as it is, its holes and its pixels kept. */
@@ -206,14 +217,41 @@ export function formatWord(type: string): string {
   return type === 'image/jpeg' ? 'jpeg' : type === 'image/webp' ? 'webp' : type === 'image/gif' ? 'gif' : 'png';
 }
 
-/** `rect` of `picture` drawn at `width` x `height` and encoded as `type`. */
-export async function cutPicture(picture: ImageBitmap, rect: Rect, width: number, height: number, type: string, quality?: number): Promise<Blob> {
+/** `source`'s rectangle drawn onto a new canvas of `width` x `height`, at the best smoothing the browser has. */
+function drawScaled(source: CanvasImageSource, sx: number, sy: number, sw: number, sh: number, width: number, height: number): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('no canvas');
-  ctx.drawImage(picture, rect.x, rect.y, rect.w, rect.h, 0, 0, width, height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, sx, sy, sw, sh, 0, 0, width, height);
+  return canvas;
+}
+
+/**
+ * `rect` of `picture` drawn at `width` x `height` and encoded as `type`. Shrunk by halves while
+ * the cut is still twice the output or more, then the last step: a half is a 2x2 average, which
+ * the bilinear filter every browser has gets right, and the last step is under 2x, where a
+ * filter has all the pixels. One `drawImage` straight from a 4000px photo to 256 reads four
+ * source pixels per output pixel and drops the rest: hair, fabric and text come out aliased,
+ * fine detail turns to moiré, edges go jagged, and the picture is worse than the dialog's
+ * preview, which the `<img>` scaler shrinks properly. `imageSmoothingQuality` alone fixes it
+ * where it is implemented (chrome, safari); the halves do the same where it is not (firefox).
+ */
+export async function cutPicture(picture: ImageBitmap, rect: Rect, width: number, height: number, type: string, quality?: number): Promise<Blob> {
+  let source: CanvasImageSource = picture;
+  let { x, y, w, h } = rect;
+  while (w >= width * 2 && h >= height * 2) {
+    const half = drawScaled(source, x, y, w, h, Math.round(w / 2), Math.round(h / 2));
+    source = half;
+    x = 0;
+    y = 0;
+    w = half.width;
+    h = half.height;
+  }
+  const canvas = drawScaled(source, x, y, w, h, width, height);
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('could not make the picture'))), type, quality);
   });

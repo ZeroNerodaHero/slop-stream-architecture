@@ -12,6 +12,7 @@ import {
   useState
 } from 'react';
 
+import type { DmLine } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
   type Dm,
@@ -30,7 +31,8 @@ import {
   sendDm
 } from '@/infra/atoms/dm-atoms';
 import { followingAtom } from '@/infra/atoms/follow-atoms';
-import { type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
+import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
+import { type DmStyle, dmStyleAtom, type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { LinkedText } from '@/shared-components/LinkedText';
@@ -308,6 +310,95 @@ function stamp(at: number): string {
   return new Date(at).toLocaleString();
 }
 
+/** The clock of a line, short, on the line itself where the shape has one: the full stamp is its title. */
+function clock(at: number): string {
+  return new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Lines from one person closer together than this are a run: one head over them in `blocks`, less room between them in `bubbles`. */
+const RUN_MS = 5 * 60_000;
+
+interface LineProps {
+  line: DmLine;
+  /** This login wrote it. */
+  mine: boolean;
+  /** The first of a run (`RUN_MS`): `blocks` puts the head on it, `bubbles` the room before it. */
+  first: boolean;
+  shape: DmStyle;
+  /** The writer's picture, for the head in `blocks`. */
+  avatar: number | null;
+}
+
+/**
+ * One line, in the shape the chat tab picked (settings.dmStyle). `log`: the time, the name
+ * (yours in blue), the words, one line. `bubbles`: the words in a box of their own, yours on
+ * the right in the blue stroke and theirs on the left in the grey one; no name on screen, the
+ * sides say who, so the name is there for a reader alone. `blocks`: the first line of a run
+ * wears the writer's face, their name and the time over the words, and the lines after it in
+ * the run stand under, their time in the gutter while pointed at. The same `<p>` whatever the
+ * shape: `data-id`, `data-mine`, the full stamp as the title.
+ */
+function Line({ line, mine, first, shape, avatar }: LineProps) {
+  const words = (
+    <span className={cn('whitespace-pre-wrap [overflow-wrap:anywhere]', shape !== 'bubbles' && 'text-textSecondary')}>
+      <LinkedText text={line.text} />
+    </span>
+  );
+  if (shape === 'log') {
+    return (
+      <p data-id={line.id} data-mine={mine || undefined} title={stamp(line.at)} className="text-sm leading-snug">
+        <span className="mr-1.5 text-xs tabular-nums text-textTertiary">{clock(line.at)}</span>
+        <span className={cn('mr-1.5 font-semibold', mine && 'text-primaryBlue')}>{line.from}</span>
+        {words}
+      </p>
+    );
+  }
+  if (shape === 'blocks') {
+    return (
+      <p
+        data-id={line.id}
+        data-mine={mine || undefined}
+        title={stamp(line.at)}
+        className={cn('group/line flex gap-2.5 text-sm leading-snug', first && 'mt-2 first:mt-0')}
+      >
+        {first ? (
+          <Face name={line.from} version={avatar} className="mt-0.5 h-8 w-8 text-sm" />
+        ) : (
+          <span
+            aria-hidden
+            className="w-8 shrink-0 self-center text-right text-[10px] leading-none tabular-nums text-textTertiary opacity-0 transition-opacity duration-150 group-hover/line:opacity-100"
+          >
+            {clock(line.at)}
+          </span>
+        )}
+        <span className="flex min-w-0 flex-1 flex-col">
+          {first && (
+            <span className="flex items-baseline gap-2">
+              <span className={cn('truncate font-semibold', mine && 'text-primaryBlue')}>{line.from}</span>
+              <span className="shrink-0 text-xs tabular-nums text-textTertiary">{clock(line.at)}</span>
+            </span>
+          )}
+          {words}
+        </span>
+      </p>
+    );
+  }
+  return (
+    <p
+      data-id={line.id}
+      data-mine={mine || undefined}
+      title={stamp(line.at)}
+      className={cn('flex text-sm leading-snug', mine ? 'justify-end' : 'justify-start', first && 'mt-1.5 first:mt-0')}
+    >
+      {/* the box: a stroke and a fill, no shadow (no-box-shadow.mdc). yours wears the blue */}
+      <span className={cn('max-w-[85%] border px-2.5 py-1.5', mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary')}>
+        <span className="sr-only">{mine ? 'you' : line.from}: </span>
+        {words}
+      </span>
+    </p>
+  );
+}
+
 /**
  * Direct chats with friends (docs/dms.md), opened from the sidebar: one window, a tab per
  * friend down its side, dragged by its header, resized from a corner. The lines are the
@@ -316,6 +407,8 @@ function stamp(at: number): string {
  * half-typed draft while another tab is shown. The × on the header hides the window and keeps
  * everything; the sidebar's chat button brings it back. With no tab shown, the friends to
  * pick from are where the thread would be, under `no chat` when there are no tabs at all.
+ * The lines take the shape the chat tab picked (settings.dmStyle, `Line`): a log, bubbles,
+ * or blocks; the log carries it as `data-style`.
  */
 export function FriendChat() {
   const me = useAtomValue(meAtom);
@@ -325,6 +418,8 @@ export function FriendChat() {
   const threads = useAtomValue(dmThreadsAtom);
   const notice = useAtomValue(dmNoticeAtom);
   const side = useAtomValue(panelSideAtom);
+  const shape = useAtomValue(dmStyleAtom);
+  const myAvatar = useAtomValue(myAvatarVersionAtom);
   const following = useAtomValue(followingAtom);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [sending, setSending] = useState(false);
@@ -520,29 +615,28 @@ export function FriendChat() {
         </header>
         {name ? (
           <>
-            <div id="friend-chat-log" ref={log} onScroll={onScroll} role="log" aria-live="polite" className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2.5">
+            {/* the lines in the shape picked: a log is a line each at an even gap; bubbles and blocks stand close within a run and apart between runs (`Line`) */}
+            <div
+              id="friend-chat-log"
+              ref={log}
+              onScroll={onScroll}
+              role="log"
+              aria-live="polite"
+              data-style={shape}
+              className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto p-2.5', shape === 'log' ? 'gap-1' : 'gap-0.5')}
+            >
               {!thread?.loaded && lines.length === 0 && <p className="text-sm text-textTertiary">loading</p>}
               {thread?.loaded && lines.length === 0 && (
                 <p id="friend-chat-empty" className="text-sm text-textTertiary">
                   nothing yet. say hi to {name}: only the two of you see this.
                 </p>
               )}
-              {lines.map((line) => {
+              {lines.map((line, i) => {
                 const mine = line.from === me;
-                return (
-                  <p
-                    key={line.id}
-                    data-id={line.id}
-                    data-mine={mine || undefined}
-                    title={stamp(line.at)}
-                    className={cn('text-sm leading-snug', mine ? 'text-right' : 'text-left')}
-                  >
-                    <span className="font-semibold">{mine ? 'you' : line.from}</span>
-                    <span className="mt-0.5 block whitespace-pre-wrap text-textSecondary [overflow-wrap:anywhere]">
-                      <LinkedText text={line.text} />
-                    </span>
-                  </p>
-                );
+                const prev = lines[i - 1];
+                // a run: the same person, soon after the line before
+                const first = !prev || prev.from !== line.from || line.at - prev.at > RUN_MS;
+                return <Line key={line.id} line={line} mine={mine} first={first} shape={shape} avatar={mine ? myAvatar : (dm?.avatar ?? null)} />;
               })}
             </div>
             <form onSubmit={(e) => void send(e)} className="border-t border-primaryStroke p-2">

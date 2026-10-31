@@ -1,7 +1,8 @@
 // Direct messages (docs/dms.md): a login writes a line to a friend. Nobody gets 401; a stranger
 // 403 until both follows are there; the line is kept, listed with its count of what is new, read;
 // the window in a browser gets the line pushed over the events socket and sends one back; a line
-// that comes while the window is hidden counts on the sidebar; two tabs of one login agree.
+// that comes while the window is hidden counts on the sidebar; two tabs of one login agree; a
+// friend's watch page has the line button beside the chat button, a stranger's does not.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node dms.js
 const { chromium, request } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
@@ -184,7 +185,33 @@ const body = async (res) => {
     return 'count 2 on both tabs, 0 on both after one reads';
   });
 
-  await step('a stranger again: unfollowed, the thread still reads but a line is refused with the words under the box', async () => {
+  await step("a friend's page: beside the chat button a line button opens their thread, lit while it shows, and hides it again", async () => {
+    // a fresh load of ben's page: the window is down, and ben is not live, so the chat button is on his profile
+    await annPage.goto(`${BASE}/watch/${BEN}`, { waitUntil: 'domcontentloaded' });
+    await annPage.waitForFunction((n) => document.querySelector('#me')?.textContent === n, ANN, { timeout: 10000 });
+    await annPage.waitForSelector('#profile #chat-open', { timeout: 10000 });
+    // the line button comes once the list has said ben follows back
+    await annPage.waitForSelector('#profile #dm-open', { timeout: 10000 });
+    expect(!(await annPage.$('#friend-chat')), 'the window must be down on a fresh page');
+    const label = await annPage.getAttribute('#dm-open', 'aria-label');
+    expect(label === `message ${BEN}`, `the button is named ${JSON.stringify(label)}`);
+    expect((await annPage.getAttribute('#dm-open', 'aria-pressed')) === null, 'the button must not be lit while the window is down');
+    await annPage.click('#dm-open');
+    await annPage.waitForSelector(`#friend-chat[data-with="${BEN}"]`, { timeout: 10000 });
+    await annPage.waitForFunction(() => document.querySelectorAll('#friend-chat-log p[data-id]').length === 50, null, { timeout: 10000 });
+    await annPage.waitForFunction(() => document.querySelector('#dm-open')?.getAttribute('aria-pressed') === 'true', null, { timeout: 5000 });
+    expect((await annPage.getAttribute('#dm-open', 'aria-label')) === `hide the chat with ${BEN}`, 'lit, the button says it hides the chat');
+    // lit, it hides the window and keeps the tab; pressed again, the thread is back
+    await annPage.click('#dm-open');
+    await annPage.waitForFunction(() => !document.querySelector('#friend-chat'), null, { timeout: 5000 });
+    expect((await annPage.getAttribute('#dm-open', 'aria-pressed')) === null, 'hidden, the button is not lit');
+    await annPage.click('#dm-open');
+    await annPage.waitForSelector(`#friend-chat[data-with="${BEN}"]`, { timeout: 10000 });
+    await annPage.waitForFunction(() => document.querySelectorAll('#friend-chat-log p[data-id]').length === 50, null, { timeout: 10000 });
+    return 'opened, hidden, opened again';
+  });
+
+  await step('a stranger again: unfollowed, the thread still reads but a line is refused with the words under the box; the line button goes', async () => {
     const undo = await ben.post(`/api/streamers/${ANN}/unfollow`);
     expect(undo.status() === 204, `ben unfollowing ann got ${undo.status()}`);
     const thread = await body(await ann.get(`/api/dm/${BEN}`));
@@ -193,7 +220,12 @@ const body = async (res) => {
     await annPage.press('#friend-chat-text', 'Enter');
     await annPage.waitForFunction(() => /not friends/.test(document.querySelector('#friend-chat-notice')?.textContent || ''), null, { timeout: 10000 });
     expect((await annPage.inputValue('#friend-chat-text')) === 'still there?', 'a refused line stays in the box');
-    return 'refused, the words shown';
+    // ben's page again: the list now has him among the rest ann follows, not the friends, and the line button is not beside the chat button
+    await annPage.goto(`${BASE}/watch/${BEN}`, { waitUntil: 'domcontentloaded' });
+    await annPage.waitForSelector('#profile #chat-open', { timeout: 10000 });
+    await annPage.waitForSelector(`#friends-list #friend-${BEN}`, { state: 'attached', timeout: 10000 });
+    expect(!(await annPage.$('#dm-open')), 'a one-way follow must not get the line button');
+    return 'refused, the words shown; no button for a stranger';
   });
 
   await step('cleanup', async () => {

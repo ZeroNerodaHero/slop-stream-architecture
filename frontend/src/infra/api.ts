@@ -607,7 +607,7 @@ export const api = {
   /** The jpeg itself as the body. The page has already made it 256x256. */
   saveAvatar: (name: string, jpeg: Blob) => request<{ name: string; avatar: number }>('PUT', `/api/streamers/${name}/avatar`, jpeg),
   deleteAvatar: (name: string) => request<null>('DELETE', `/api/streamers/${name}/avatar`),
-  /** The jpeg itself as the body. The page has already made it 640x360. */
+  /** The jpeg itself as the body. The page has already made it 960x540. */
   saveStreamThumb: (name: string, jpeg: Blob) => request<{ id: number }>('PUT', `/api/streamers/${name}/thumbs`, jpeg),
   deleteStreamThumb: (name: string, id: number) => request<null>('DELETE', `/api/streamers/${name}/thumbs/${id}`),
   /** One picture on the home card. The id is the url, so it can be cached. */
@@ -619,7 +619,7 @@ export const api = {
   listAssets: (name: string) => request<{ assets: { id: number; mime: string; bytes: number }[] }>('GET', `/api/streamers/${name}/assets`),
   /** An id is never reused and the bytes never change, so this url caches for good. */
   assetUrl: (name: string, id: number) => `/api/streamers/${encodeURIComponent(name)}/assets/${id}`,
-  /** The jpeg itself as the body. The page has already made it 1280x720 and under 512 kb. */
+  /** The jpeg itself as the body. The page has already made it 1920x1080 and under 1 mb. */
   saveOffline: (name: string, jpeg: Blob) => request<{ name: string; offline: number }>('PUT', `/api/streamers/${name}/offline`, jpeg),
   deleteOffline: (name: string) => request<null>('DELETE', `/api/streamers/${name}/offline`),
   /** Like `avatarUrl`: the version makes a new url per upload, so a day of cache is safe. */

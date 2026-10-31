@@ -1235,7 +1235,7 @@ export function followIdentityOnLivePage() {
 }
 
 /**
- * A thumbnail: the 16:9 of the file picked in the crop dialog, as a 640x360 jpeg (infra/picture.ts),
+ * A thumbnail: the 16:9 of the file picked in the crop dialog, as a 960x540 jpeg (infra/picture.ts),
  * so the api never has to decode an image. Nothing is said while the dialog is open; closed
  * without, nothing happens.
  */

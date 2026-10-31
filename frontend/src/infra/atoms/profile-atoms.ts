@@ -198,7 +198,7 @@ export async function removeMyAvatar(): Promise<void> {
   }
 }
 
-/** The offline picture: the 16:9 of the file picked in the crop dialog, as a 1280x720 jpeg, softer until it is under the api's ceiling. */
+/** The offline picture: the 16:9 of the file picked in the crop dialog, as a 1920x1080 jpeg, softer until it is under the api's ceiling. */
 export async function saveMyOffline(file: File): Promise<void> {
   const name = store.get(myNameAtom);
   if (!isValidName(name)) {

@@ -435,7 +435,7 @@ export function ProfileTab() {
             )}
             <Status
               id="profile-offline-status"
-              text={offlineStatus || (canEdit ? 'click the picture to change it. a wide jpeg, 1280×720: the 16:9 you cut out of yours.' : whyNot)}
+              text={offlineStatus || (canEdit ? 'click the picture to change it. a wide jpeg, 1920×1080: the 16:9 you cut out of yours.' : whyNot)}
             />
           </div>
         </div>

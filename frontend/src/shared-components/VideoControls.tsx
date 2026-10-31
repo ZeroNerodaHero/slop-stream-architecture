@@ -114,6 +114,16 @@ export function ChatIcon() {
   );
 }
 
+/** An envelope: a box with its flap as a V from the top corners. A line to one person, where the speech box is the room. Angular, like the rest. */
+export function MailIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinejoin="miter">
+      <path d="M3 5h18v14H3z" />
+      <path d="M3 5l9 8 9-8" />
+    </svg>
+  );
+}
+
 /**
  * A speaker. Crossed out while muted; otherwise its sound waves say how loud, the way youtube's
  * do: two above two thirds, one above a third, none for a whisper. Angular waves, no arcs in this theme.

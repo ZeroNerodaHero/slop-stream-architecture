@@ -11,13 +11,13 @@
 //! the bio.
 //!
 //! Thumbnails are the pictures on that name's card on home: up to six, each a
-//! 640x360 jpeg the browser made, at `thumbs/<id>/<n>.jpg` (before ids:
+//! 960x540 jpeg the browser made, at `thumbs/<id>/<n>.jpg` (before ids:
 //! `thumbs/<name>/<n>.jpg`, lifted the same way). The row is written first and
 //! dropped again if the bucket does not take the bytes. None means home shows the
 //! camera, the way it always has.
 //!
 //! The offline picture is what the watch page shows where the player would be while the
-//! name is not live: a 1280x720 jpeg the browser made, at `offline/<id>.jpg`, its save time
+//! name is not live: a 1920x1080 jpeg the browser made, at `offline/<id>.jpg`, its save time
 //! in `offline_at` as the `?v=`. Newer than ids, so there is no name key to lift. With it
 //! goes a line under the word, `offline_note`. Both through the bio's gate.
 //!
@@ -73,11 +73,12 @@ use crate::s3;
 use crate::{is_live, may_write, thumb_exists, unique_violation, valid_name, ApiError, ApiResult, AppState, Name, PasswordQuery};
 
 /// The browser sends 256x256 at quality 0.85, a few tens of kb. This is the ceiling.
-/// A thumbnail is 640x360 and shares it: the same body limit covers both routes.
+/// A thumbnail is 960x540 and shares it: the same body limit covers both routes, and the
+/// page steps a busy photo down a notch to fit.
 const MAX_AVATAR_BYTES: usize = 256 * 1024;
-/// The offline picture is 1280x720 at quality 0.8, and a photo at that size runs past the
-/// avatar's ceiling. The page steps the quality down until it fits under this one.
-const MAX_OFFLINE_BYTES: usize = 512 * 1024;
+/// The offline picture is 1920x1080 at quality 0.8, and a photo at that size runs far past
+/// the avatar's ceiling. The page steps the quality down until it fits under this one.
+const MAX_OFFLINE_BYTES: usize = 1024 * 1024;
 /// The line under the word while they are not live. One line; the page's box stops here too.
 const MAX_NOTE_CHARS: usize = 140;
 /// How many pictures one name may put on its home card.
@@ -799,7 +800,7 @@ fn offline_failed(name: &str, what: &str, err: String) -> ApiError {
 }
 
 fn offline_too_big() -> ApiError {
-    ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "picture too big. 512 kb at most")
+    ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "picture too big. 1 mb at most")
 }
 
 async fn get_offline(State(s): State<AppState>, Name(name): Name) -> Result<Response, ApiError> {

@@ -38,7 +38,8 @@ pub(crate) const BAN: i32 = 16;
 const ALL: i32 = APPEARANCE | ROLES | CHANNELS | KICK | BAN;
 const MAX_ROLES: i64 = 20;
 const MAX_ICON: usize = 256 * 1024;
-const MAX_BANNER: usize = 512 * 1024;
+/// The banner is 2560x640, the room's width on a sharp screen; a photo at that size needs the room.
+const MAX_BANNER: usize = 1024 * 1024;
 const JPEG: [u8; 3] = [0xFF, 0xD8, 0xFF];
 
 struct Held {
@@ -869,7 +870,7 @@ async fn get_banner(State(s): State<AppState>, Path(group): Path<String>) -> Res
     read_picture(&s, &group, &banner_key(&group), "banner_at").await
 }
 
-/// `PUT /api/groups/:group/banner`: the same, 512kb, as `banner`.
+/// `PUT /api/groups/:group/banner`: the same, 1 mb, as `banner`.
 async fn put_banner(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Bytes, BytesRejection>) -> ApiResult {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;

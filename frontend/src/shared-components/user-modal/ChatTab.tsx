@@ -4,14 +4,17 @@ import type { ReactNode } from 'react';
 
 import {
   type ChatSide,
+  type DmStyle,
   type PipChatPlace,
   chatFacesAtom,
   chatSideAtom,
+  dmStyleAtom,
   hideBotsAtom,
   linkWarningAtom,
   pipChatPlaceAtom,
   setChatFaces,
   setChatSide,
+  setDmStyle,
   setHideBots,
   setLinkWarning,
   setPipChatPlace
@@ -165,17 +168,94 @@ function FacesPreview({ on }: { on: boolean }) {
   );
 }
 
+/** The three shapes a chat with a friend can take (docs/dms.md). The card's picture is the thread. */
+const DM_STYLE_OPTIONS: readonly { style: DmStyle; label: string; detail: string }[] = [
+  { style: 'log', label: 'a log', detail: 'one line each: the time, the name, then the words. nothing offset, and the most lines on screen' },
+  { style: 'bubbles', label: 'bubbles', detail: 'each line in a box of its own: yours on the right, theirs on the left. no names, the sides say who' },
+  { style: 'blocks', label: 'blocks', detail: 'the face, the name and the time over the words. one person\u2019s lines in a row stand together under one head' }
+];
+
+/** The three lines the direct message cards draw: who said each (ann, or you), and a width for the words. Your two in a row are one run. */
+const DM_PREVIEW_LINES: readonly { mine: boolean; words: string }[] = [
+  { mine: false, words: 'w-3/5' },
+  { mine: true, words: 'w-2/5' },
+  { mine: true, words: 'w-1/2' }
+];
+
+/** A bar for a name: yours in blue, the way the window draws it. */
+function PreviewName({ mine }: { mine: boolean }) {
+  return <span className={cn('h-1.5 w-8 shrink-0', mine ? 'bg-primaryBlue' : 'bg-textSecondary')} />;
+}
+
+/**
+ * A chat with a friend in miniature, in one of its three shapes: a bar for the words, a shorter
+ * one for a name, a face where the shape has one, a box where it has one. The same three lines
+ * on every card, so the shapes are compared and not the words.
+ */
+function DmStylePreview({ style }: { style: DmStyle }) {
+  if (style === 'bubbles') {
+    return (
+      <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-1.5 border border-primaryStroke bg-background px-3">
+        {DM_PREVIEW_LINES.map(({ mine, words }, i) => (
+          <span key={i} className={cn('flex', mine ? 'justify-end' : 'justify-start')}>
+            <span
+              className={cn('flex h-5 items-center border px-1.5', words, mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary')}
+            >
+              <span className="h-1.5 w-full bg-textTertiary" />
+            </span>
+          </span>
+        ))}
+      </span>
+    );
+  }
+  if (style === 'blocks') {
+    return (
+      <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-1.5 border border-primaryStroke bg-background px-3">
+        {DM_PREVIEW_LINES.map(({ mine, words }, i) => {
+          const first = DM_PREVIEW_LINES[i - 1]?.mine !== mine;
+          return (
+            <span key={i} className="flex items-start gap-1.5">
+              {first ? <GeneratedAvatar name={mine ? 'bob' : 'ann'} className="h-4 w-4 text-[9px]" /> : <span className="h-4 w-4 shrink-0" />}
+              <span className="flex min-w-0 flex-1 flex-col gap-1 pt-0.5">
+                {first && (
+                  <span className="flex items-center gap-1.5">
+                    <PreviewName mine={mine} />
+                    <span className="h-1 w-4 bg-textTertiary" />
+                  </span>
+                )}
+                <span className={cn('h-1.5 bg-textTertiary', words)} />
+              </span>
+            </span>
+          );
+        })}
+      </span>
+    );
+  }
+  return (
+    <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-2.5 border border-primaryStroke bg-background px-3">
+      {DM_PREVIEW_LINES.map(({ mine, words }, i) => (
+        <span key={i} className="flex items-center gap-1.5">
+          <span className="h-1 w-4 shrink-0 bg-textTertiary" />
+          <PreviewName mine={mine} />
+          <span className={cn('h-1.5 bg-textTertiary', words)} />
+        </span>
+      ))}
+    </span>
+  );
+}
+
 /**
  * This browser's settings for the chat: where it sits on the watch page and the go live page,
  * where it opens on the corner player, whether the bots' lines show, whether the lines wear
- * faces, whether a link asks before it opens. The chat behind the modal follows every change
- * at once, so the cards are their own preview.
+ * faces, the shape of the lines in a chat with a friend, whether a link asks before it opens.
+ * The chat behind the modal follows every change at once, so the cards are their own preview.
  */
 export function ChatTab() {
   const chatSide = useAtomValue(chatSideAtom);
   const pipChat = useAtomValue(pipChatPlaceAtom);
   const hideBots = useAtomValue(hideBotsAtom);
   const faces = useAtomValue(chatFacesAtom);
+  const dmStyle = useAtomValue(dmStyleAtom);
   const linkWarning = useAtomValue(linkWarningAtom);
   return (
     <div className="divide-y divide-primaryStroke">
@@ -257,6 +337,29 @@ export function ChatTab() {
           ))}
         </div>
         <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every room. a chat that is open follows as you pick.</p>
+      </fieldset>
+
+      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+        <legend className={SECTION_TITLE}>direct messages</legend>
+        <p className="mt-1 text-textSecondary">
+          how a chat with a friend draws its lines, in the chat window beside the sidebar. each card is the thread in that shape: the same three lines, two of them
+          yours.
+        </p>
+        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {DM_STYLE_OPTIONS.map(({ style, label, detail }) => (
+            <OptionCard
+              key={style}
+              id={`dm-style-${style}`}
+              name="dm-style"
+              checked={style === dmStyle}
+              onChange={() => setDmStyle(style)}
+              picture={<DmStylePreview style={style} />}
+              label={label}
+              detail={detail}
+            />
+          ))}
+        </div>
+        <p className="mt-4 text-sm text-textTertiary">kept in this browser. a chat window that is open follows as you pick. the rooms keep their own shape.</p>
       </fieldset>
 
       <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">

@@ -24,7 +24,7 @@ flowchart LR
 
 - a post is a **login's**. `follows.md`'s reason: it needs an id with a person behind it, and a free nick is anyone's. the author is `streamers.id` (`ids.md`), never the name: a rename keeps the posts, and every read joins the name back.
 - the text: `clean_text` (`chat.rs:678`, the chat line's cleaning), then 1 to **500** characters, the chat's cap, one number for one kind of thing people type. with a picture the text may be empty.
-- the picture: **one** jpeg, the way the profile has one. the page resizes to 1280 on the long side at quality 0.8 and the api takes at most **512 KB** (`MAX_OFFLINE_BYTES`, the offline picture's ceiling; `jpeg_body` checks it the same way). it lives in the bucket at `posts/<id>.jpg`. a post's id is never reused and a post is never edited, so that key is immutable and caches forever.
+- the picture: **one** jpeg, the way the profile has one. the page resizes to 1280 on the long side at quality 0.8 and the api takes at most **1 MB** (`MAX_OFFLINE_BYTES`, the offline picture's ceiling; `jpeg_body` checks it the same way). it lives in the bucket at `posts/<id>.jpg`. a post's id is never reused and a post is never edited, so that key is immutable and caches forever.
 - a reply points at a **top-level post**. replying to a reply replies to its post (instagram's comments, not twitter's tree): a thread is one range of one index, and a delete is one level deep. the tree is an open question below.
 - no edits. delete and post again, the groups' rule.
 - the author deletes a post, or an admin (`ADMIN_NAMES`). a deleted post takes its replies and its likes with it (`ON DELETE CASCADE`) and its jpeg out of the bucket.

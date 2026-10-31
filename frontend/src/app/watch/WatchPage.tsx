@@ -39,6 +39,8 @@ import {
   watchToneAtom,
   watchViewersAtom
 } from '@/infra/atoms/watch-atoms';
+import { dmActiveAtom, dmOpenAtom, hideDms, openDm } from '@/infra/atoms/dm-atoms';
+import { followingAtom } from '@/infra/atoms/follow-atoms';
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
 import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-atoms';
@@ -64,7 +66,7 @@ import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { StreamTile } from '@/shared-components/StreamTile';
 import { TestBadge } from '@/shared-components/TestBadge';
-import { IconButton, PipIcon, SoundControl, revealClassName } from '@/shared-components/VideoControls';
+import { IconButton, MailIcon, PipIcon, SoundControl, revealClassName } from '@/shared-components/VideoControls';
 import { cn } from '@/utils/cn';
 
 /** The sentence under the word while they are not live: why to wait, or not. */
@@ -112,6 +114,32 @@ function roveTabs(e: KeyboardEvent<HTMLDivElement>) {
   e.preventDefault();
   button.click();
   button.focus();
+}
+
+/**
+ * Beside the chat's button, wherever that is on the page: a line to the streamer (docs/dms.md),
+ * the same chip. For a friend alone, someone this login follows who follows it back: a line
+ * goes nowhere else, and the sidebar's list already says who that is. It opens the chat
+ * window on their thread (or shows the one they have), lit while that thread is the one on
+ * screen, and then it hides the window, the chat button's way.
+ */
+function DmButton({ name, className }: { name: string; className?: string }) {
+  const friend = useAtomValue(followingAtom)?.find((f) => f.name === name && f.mutual);
+  const open = useAtomValue(dmOpenAtom);
+  const active = useAtomValue(dmActiveAtom);
+  if (!friend) return null;
+  const on = open && active === name;
+  return (
+    <IconButton
+      id="dm-open"
+      label={on ? `hide the chat with ${name}` : `message ${name}`}
+      active={on}
+      className={className}
+      onClick={() => (on ? hideDms() : openDm({ id: '', name, avatar: friend.avatar, verified: friend.verified, bio: friend.bio, presence: friend.presence }))}
+    >
+      <MailIcon />
+    </IconButton>
+  );
 }
 
 export function WatchPage() {
@@ -277,8 +305,9 @@ export function WatchPage() {
             expecting ? (
               <Skeleton id="player-loading" label="loading the stream" className="relative aspect-video w-full border border-primaryStroke bg-backgroundSecondary">
                 <Bone className="absolute inset-0" />
-                <div className="absolute inset-x-0 bottom-0 flex items-center p-3">
+                <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
                   <ChatOpenButton className="ml-auto" />
+                  <DmButton name={name} />
                 </div>
               </Skeleton>
             ) : (
@@ -306,8 +335,11 @@ export function WatchPage() {
                     )}
                     <p className="mt-1 text-textSecondary">{phase === 'loading' ? 'loading' : NOT_LIVE_WORDS[presence]}</p>
                   </div>
-                  {/* the chat's button lives on the player; without a player it lives here */}
-                  <ChatOpenButton className="self-start" />
+                  {/* the chat's button lives on the player; without a player it lives here, and a friend's line button with it */}
+                  <span className="flex items-center gap-3 self-start">
+                    <ChatOpenButton />
+                    <DmButton name={name} />
+                  </span>
                 </div>
               </>
             )
@@ -350,11 +382,13 @@ export function WatchPage() {
               )}
               {/* top left, once frames play: how the picture is arriving. up on its own while it is in trouble */}
               {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} playback={{ muted, level: volume }} />}
-              {/* while the chat is closed the bar stays up, so the button that brings it back is on the picture */}
+              {/* while the chat is closed the bar stays up, so the button that brings it back is on the picture.
+                  beside it, for a friend, the line to them (docs/dms.md) */}
               {phase !== 'bad-name' && (
                 <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || !chatOpen))}>
                   {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
                   <ChatOpenButton className="ml-auto" />
+                  <DmButton name={name} />
                   <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'picture in picture'} disabled={cornerTaken} onClick={toCorner}>
                     <PipIcon />
                   </IconButton>

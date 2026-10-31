@@ -2,8 +2,8 @@
  * The preferences this browser keeps (localstorage, like the nick): where the chat sits on a
  * page, where it sits on the corner player, which corner the you panel sits in, which lists
  * it shows in what order and which of them are folded, whether the bots' lines show, whether
- * the lines wear faces, whether a link asks before it opens, the theme, and how big the pages
- * are. Not part of the account: a
+ * the lines wear faces, the shape of the lines in a chat with a friend, whether a link asks
+ * before it opens, the theme, and how big the pages are. Not part of the account: a
  * laptop and a phone can each have their own. Same shape as the other
  * atom modules: atoms for what renders, action functions to change it. The modal that edits
  * them is user-modal-atoms.ts.
@@ -252,6 +252,29 @@ export const chatFacesAtom = atom((get) => get(storedChatFacesAtom) !== false);
 
 export function setChatFaces(on: boolean) {
   store.set(storedChatFacesAtom, on);
+}
+
+/**
+ * The shape of the lines in a chat with a friend, the chat window's (docs/dms.md,
+ * FriendChat.tsx). `log`: one line each, the time, the name, then the words, nothing offset,
+ * the most lines on screen. `bubbles` (the default): each line in a box of its own, yours on
+ * the right and theirs on the left, no names (the sides say who). `blocks`: the face, the name
+ * and the time over the words, and one person's lines in a row under one head. The room chat
+ * is not this: its lines have one shape (docs/chat.md).
+ */
+export type DmStyle = 'log' | 'bubbles' | 'blocks';
+
+export const DM_STYLES: readonly DmStyle[] = ['log', 'bubbles', 'blocks'];
+
+const storedDmStyleAtom = atomWithStorage<string>('settings.dmStyle', 'bubbles', undefined, { getOnInit: true });
+/** Read: always one of DM_STYLES, whatever localstorage holds. */
+export const dmStyleAtom = atom((get) => {
+  const style = get(storedDmStyleAtom);
+  return (DM_STYLES as readonly string[]).includes(style) ? (style as DmStyle) : 'bubbles';
+});
+
+export function setDmStyle(style: DmStyle) {
+  store.set(storedDmStyleAtom, style);
 }
 
 /**
