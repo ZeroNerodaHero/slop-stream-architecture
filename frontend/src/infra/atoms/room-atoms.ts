@@ -16,7 +16,7 @@ import { atom } from 'jotai';
 
 import { api, type Channel, type GroupMember, type GroupRoom, messageOf, statusOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { dropChannel, followChannel, seedChannels } from '@/infra/atoms/chat-atoms';
+import { dropChannel, followChannel, moveChannelLines, reconnectChat, seedChannels } from '@/infra/atoms/chat-atoms';
 import { holdPresence, onEvents, releasePresence, unwatchPresence, watchPresence } from '@/infra/events';
 import { type GroupChange, groupTopic } from '@/infra/frames';
 import { store } from '@/infra/store';
@@ -27,6 +27,8 @@ export const roomAtom = atom<GroupRoom | null>(null);
 export const roomErrorAtom = atom('');
 /** The group was deleted while its room was on screen. */
 export const roomGoneAtom = atom(false);
+/** A channel was renamed while the room was on screen: the page on `from` moves to `to`, and clears this. */
+export const channelRenamedAtom = atom<{ from: string; to: string } | null>(null);
 
 /** The server whose room is open. '' off the page. */
 let open = '';
@@ -42,6 +44,7 @@ export function enterRoom(server: string): void {
   store.set(roomAtom, null);
   store.set(roomErrorAtom, '');
   store.set(roomGoneAtom, false);
+  store.set(channelRenamedAtom, null);
   watchPresence(groupTopic(server));
   void loadRoom();
   void loadLines();
@@ -56,6 +59,7 @@ export function leaveRoom(): void {
   store.set(roomAtom, null);
   store.set(roomErrorAtom, '');
   store.set(roomGoneAtom, false);
+  store.set(channelRenamedAtom, null);
 }
 
 /** The room again, after this login's own join or leave: a member's room is not a stranger's, and the answer is theirs to see at once. */
@@ -115,19 +119,85 @@ export async function setChannelOrder(server: string, order: string[]): Promise<
   }
 }
 
-/** The room as the api has it. The one pull behind the push, for what the socket cannot carry per viewer. */
+/**
+ * The channel `from` is called `to` (the channels tab's pencil): the api is asked first, since
+ * the name is checked at its door (taken, reserved) and the lines, mutes and inbox rows move
+ * with it there; on its yes the room follows at once, as it would on the fact, which then finds
+ * nothing left to do. A refusal throws, for the dialog to say why.
+ */
+export async function renameChannel(server: string, from: string, to: string): Promise<void> {
+  await api.renameChannel(server, from, to);
+  const room = store.get(roomAtom);
+  if (room && room.name === server) applyRename(room, from, to);
+}
+
+/**
+ * `from` is `to` now: in the list (its place kept), in the mutes, on the chat's shelf, and the
+ * socket follows the new name for the lines to come. `channelRenamedAtom` tells the page, which
+ * moves to the new address when `from` is the channel on screen. Nothing when `from` is gone
+ * already (the api answered before the fact came).
+ */
+function applyRename(room: GroupRoom, from: string, to: string): void {
+  const channels = room.channels ?? [];
+  if (from === to || !channels.some((c) => c.name === from)) return;
+  store.set(roomAtom, {
+    ...room,
+    channels: channels.filter((c) => c.name !== to).map((c) => (c.name === from ? { ...c, name: to } : c)),
+    muted: room.muted?.map((c) => (c === from ? to : c)) ?? room.muted
+  });
+  moveChannelLines(from, to);
+  followChannel(to);
+  store.set(channelRenamedAtom, { from, to });
+}
+
+/**
+ * The room as the api has it. The one pull behind the push, for what the socket cannot carry
+ * per viewer: among it, which channels this login sees (docs/groups.md: a channel kept to roles
+ * is seen by their holders, the owners and the channels power). Asked again, the channels are
+ * reconciled with the chat (`reconcileChannels`).
+ */
 async function loadRoom(): Promise<void> {
   const server = open;
   const mine = attempt;
   try {
     const room = await api.group(server);
     if (mine !== attempt) return;
+    const before = store.get(roomAtom);
     store.set(roomAtom, room);
     store.set(roomErrorAtom, '');
+    if (before && before.name === server) reconcileChannels(before.channels ?? [], room.channels ?? []);
   } catch (err) {
     if (mine !== attempt) return;
     store.set(roomErrorAtom, statusOf(err) === 404 ? 'no such group' : messageOf(err));
   }
+}
+
+/** The last lines again (`loadLines`): for a page that took its chat down and put it back, with the shelf gone with it. */
+export function reloadLines(): void {
+  if (open) void loadLines();
+}
+
+/**
+ * The channels this login sees, as the room had them and as it has them now (a role given or
+ * taken, a channel kept to a role or let go of): one that appeared is followed on the chat
+ * socket and the lines are asked for, so it has its last lines like the others; one that went
+ * takes its lines off the shelf, and the socket is opened again, since the chat joins what the
+ * login sees as the socket opens and keeps carrying a channel until then.
+ */
+function reconcileChannels(was: Channel[], now: Channel[]): void {
+  const had = new Set(was.map((c) => c.name));
+  const has = new Set(now.map((c) => c.name));
+  const came = now.filter((c) => !had.has(c.name));
+  const went = was.filter((c) => !has.has(c.name));
+  for (const c of went) dropChannel(c.name);
+  if (went.length > 0) reconnectChat();
+  else for (const c of came) followChannel(c.name);
+  if (came.length > 0) void loadLines();
+}
+
+/** Two lists of channel names as sets. */
+function sameNames(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((name) => b.includes(name));
 }
 
 /** The last lines of every channel, onto the chat's shelf. A failure is not the room's: the socket still brings new lines. */
@@ -203,6 +273,9 @@ function apply(change: GroupChange): void {
       });
       dropChannel(change.channel);
       return;
+    case 'channel_renamed':
+      applyRename(room, change.channel, change.name);
+      return;
     case 'channel_order':
       store.set(roomAtom, { ...room, channels: sortChannels(room.channels ?? [], change.order) });
       return;
@@ -223,24 +296,29 @@ function apply(change: GroupChange): void {
       return;
     case 'role': {
       // made or changed: the list, and the name and colour on everyone who holds it
-      const roles = room.roles.some((r) => r.id === change.role.id) ? room.roles.map((r) => (r.id === change.role.id ? change.role : r)) : [...room.roles, change.role];
+      const was = room.roles.find((r) => r.id === change.role.id);
+      const roles = was ? room.roles.map((r) => (r.id === change.role.id ? change.role : r)) : [...room.roles, change.role];
       const roster =
         room.roster?.map((m) => ({ ...m, roles: m.roles.map((r) => (r.id === change.role.id ? { id: r.id, name: change.role.name, color: change.role.color } : r)) })) ??
         room.roster;
       const held = room.roster?.find((m) => m.name === me)?.roles.some((r) => r.id === change.role.id) ?? false;
+      // the channels kept to it changed (or it came with some): which channels anyone sees may have too
+      const kept = was ? !sameNames(was.channels ?? [], change.role.channels ?? []) : (change.role.channels?.length ?? 0) > 0;
       store.set(roomAtom, { ...room, roles, roster });
       // its powers changed, and I hold it: what I may do did too
-      if (held) void loadRoom();
+      if (held || kept) void loadRoom();
       return;
     }
     case 'unrole': {
+      const was = room.roles.find((r) => r.id === change.id);
       const held = room.roster?.find((m) => m.name === me)?.roles.some((r) => r.id === change.id) ?? false;
       store.set(roomAtom, {
         ...room,
         roles: room.roles.filter((r) => r.id !== change.id),
         roster: room.roster?.map((m) => ({ ...m, roles: m.roles.filter((r) => r.id !== change.id) })) ?? room.roster
       });
-      if (held) void loadRoom();
+      // a role that kept channels is gone: they are everyone's now, or still another role's
+      if (held || (was?.channels?.length ?? 0) > 0) void loadRoom();
       return;
     }
     case 'held':
@@ -265,6 +343,13 @@ function apply(change: GroupChange): void {
       store.set(roomAtom, { ...room, roster: roster ? sortMembers(roster, room.member_order) : room.roster });
       return;
     }
+    case 'owner_role':
+      store.set(roomAtom, { ...room, owner_role: change.name });
+      return;
+    case 'timeout':
+      // the roster's mark; the chat itself refuses a timed-out login's lines, whatever the page knows
+      store.set(roomAtom, { ...room, roster: room.roster?.map((m) => (m.name === change.who ? { ...m, timeout: change.until } : m)) ?? room.roster });
+      return;
     case 'live': {
       const live = room.live ?? [];
       if (!live.includes(change.who)) store.set(roomAtom, { ...room, live: [...live, change.who] });

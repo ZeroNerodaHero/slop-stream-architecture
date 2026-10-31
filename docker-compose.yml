@@ -178,6 +178,8 @@ services:
       PORT: "4100"
       # empty or 0: redis only, last 500 lines. 1: also keep every line in postgres.
       CHAT_PERSIST: ${CHAT_PERSIST:-}
+      # the site admins see every channel of a server, kept to a role or not (docs/groups.md): the same names the api reads
+      ADMIN_NAMES: ${ADMIN_NAMES:-}
       RUST_LOG: info
     depends_on:
       # healthy, not started: the api creates the tables (accounts included) on its

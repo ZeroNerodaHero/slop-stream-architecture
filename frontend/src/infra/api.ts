@@ -252,6 +252,19 @@ export interface GroupRole {
   name: string;
   color: string;
   perms: RolePerms;
+  /** The channels kept to this role (docs/groups.md): its holders see them; whoever holds none of a channel's roles does not. Never `general`. Absent on an older api: none. */
+  channels?: string[];
+  /** Seconds its holders wait between lines in the group's channels (docs/groups.md). 0: none. A member waits the longest of their roles'; owners wait for nobody. Absent on an older api: none. */
+  cooldown?: number;
+}
+
+/** What makes or replaces a role: everything but the id, every field said. */
+export interface RoleBody {
+  name: string;
+  color: string;
+  perms: RolePerms;
+  channels: string[];
+  cooldown: number;
 }
 
 /**
@@ -266,6 +279,8 @@ export interface GroupRoom {
   members: number;
   mine: boolean;
   owner: boolean;
+  /** What the owner role is called: `owner` until an owner renames it. The word on the roster's crown. Absent on an older api. */
+  owner_role?: string;
   /** A site admin: every power, whatever the roles say. Absent on an older api. */
   admin?: boolean;
   /** Absent on an older api. */
@@ -300,6 +315,8 @@ export interface GroupMember {
   /** When they joined, unix seconds, so the room keeps the group's order as people come. Absent on an older api. */
   joined?: number;
   roles: { id: string; name: string; color: string }[];
+  /** Timed out (docs/groups.md): until when, unix seconds, while it runs; null or absent otherwise. */
+  timeout?: number | null;
 }
 
 export interface GroupBan {
@@ -537,6 +554,9 @@ export const api = {
   createChannel: (server: string, name: string, about = '') => request<Channel>('POST', `/api/groups/${encodeURIComponent(server)}/channels`, { name, about }),
   /** The channels in this order, from the top. The channels power. A channel not named keeps its place after these. → the whole order as it now stands. */
   setChannelOrder: (server: string, order: string[]) => request<{ order: string[] }>('PUT', `/api/groups/${encodeURIComponent(server)}/channels`, { order }),
+  /** The channel is called `name` from now on, its lines, mutes and inbox rows with it. Who made it, or the channels power. `general` stays. → the channel as the room lists it. */
+  renameChannel: (server: string, channel: string, name: string) =>
+    request<Channel>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`, { name }),
   /** Who made the channel, or someone who may manage channels. `general` stays. */
   deleteChannel: (server: string, channel: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`),
   /** No inbox row for this channel's lines from now on, for this login (docs/notifications.md). 204, also when already muted. */
@@ -557,17 +577,21 @@ export const api = {
   groupMembers: (name: string) => request<GroupMember[]>('GET', `/api/groups/${encodeURIComponent(name)}/members`),
   groupBans: (name: string) => request<GroupBan[]>('GET', `/api/groups/${encodeURIComponent(name)}/bans`),
   /** The roles power. 201 the role, with the id the api made. 409 `name taken`, 403 past the cap or out of reach. */
-  createRole: (group: string, role: { name: string; color: string; perms: RolePerms }) =>
-    request<GroupRole>('POST', `/api/groups/${encodeURIComponent(group)}/roles`, role),
-  /** The role replaced whole, by id: a rename, a new colour, other powers, all this one call. */
-  saveRole: (group: string, id: string, role: { name: string; color: string; perms: RolePerms }) =>
-    request<GroupRole>('PUT', `/api/groups/${encodeURIComponent(group)}/roles/${id}`, role),
+  createRole: (group: string, role: RoleBody) => request<GroupRole>('POST', `/api/groups/${encodeURIComponent(group)}/roles`, role),
+  /** The role replaced whole, by id: a rename, a new colour, other powers, other channels kept to it, all this one call. */
+  saveRole: (group: string, id: string, role: RoleBody) => request<GroupRole>('PUT', `/api/groups/${encodeURIComponent(group)}/roles/${id}`, role),
   deleteRole: (group: string, id: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/roles/${id}`),
   giveRole: (group: string, id: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/roles/${id}/members`, { name }),
   takeRole: (group: string, id: string, name: string) =>
     request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/roles/${id}/members/${encodeURIComponent(name)}`),
-  /** An owner names a member an owner. 403 for anyone else, and for a member who owns as many groups as the cap allows. */
-  grantOwner: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/owners`, { name }),
+  /** No line of `name`'s in the group's channels for `seconds` (10 to a week). The kick power; not an owner unless by an owner. Set again, the new end stands. */
+  timeoutMember: (group: string, name: string, seconds: number) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/timeout`, { name, seconds }),
+  /** The timeout lifted early. The kick power. */
+  liftTimeout: (group: string, name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/timeout/${encodeURIComponent(name)}`),
+  /** The group is `name`'s from now on and not this login's: they are made an owner and the login stops being one, in one go. An owner, for a member who is not one; the cap on owning counts for them. */
+  transferOwnership: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/transfer`, { name }),
+  /** What the owner role is called from now on. An owner. 400 a bad name, 409 a custom role's name. */
+  renameOwnerRole: (group: string, name: string) => request<{ name: string }>('PUT', `/api/groups/${encodeURIComponent(group)}/owner-role`, { name }),
   revokeOwner: (group: string, name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/owners/${encodeURIComponent(name)}`),
   kickMember: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/kick`, { name }),
   banMember: (group: string, name: string, reason: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/ban`, { name, reason }),

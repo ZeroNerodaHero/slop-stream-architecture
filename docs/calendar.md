@@ -9,7 +9,7 @@ flowchart LR
   row --> video["video: the publisher is gone · ≤ 15s"]
   row --> sweep["the sweeper · ≤ 4 min"]
   stop & video & sweep -->|"ended_at · the block closes"| closed[("the block")]
-  closed -->|"GET /api/streamers/:name/sessions?from=&to="| grid["the grid · 28 days × 24 hours · the usually line"]
+  closed -->|"GET /api/streamers/:name/sessions?from=&to="| grid["the grid · 7 days × 24 hours · the week's line"]
 ```
 
 ## the short answer
@@ -128,11 +128,11 @@ nothing else. `GET /api/streamers/:name` does not gain a count or a usual line; 
 
 ## pages
 
-**the grid.** 28 day rows, oldest at the top and today at the bottom, each row 24 hours wide. a block is a bar on its row from its start hour to its end hour (`left` and `width` as percentages of the row, two spans for a block that crosses midnight, one on each row). days as rows and hours as columns is the point: every 8pm is the same column, so a person who streams at 8 is a vertical stripe you see before you read anything. a thin hour scale along the bottom in the viewer's clock (`12am · 6am · 12pm · 6pm`), the weekday short name and the date down the side in the viewer's locale, the week lines heavier. the live block ends at a line that moves: a 60s tick re-renders the one row. blocks are the accent (`primaryBlue`); a block that ended by `sweep`, or is open under a name that is not live, is `textTertiary` with its end hatched; the hairline at a drop is `decrease`. never a colour alone: the detail says it.
+**the grid.** a week: 7 day rows, oldest at the top and today at the bottom, each row 24 hours wide. a block is a bar on its row from its start hour to its end hour (`left` and `width` as percentages of the row, two spans for a block that crosses midnight, one on each row). days as rows and hours as columns is the point: every 8pm is the same column, so a person who streams at 8 is a vertical stripe you see before you read anything. a thin hour scale along the bottom in the viewer's clock (`12am · 6am · 12pm · 6pm`), the weekday short name and the date down the side in the viewer's locale, the monday line heavier. `‹ ›` step a week at a time (one request each), `today` comes back. the live block ends at a line that moves: a 60s tick re-renders the one row. blocks are the accent (`primaryBlue`); a block that ended by `sweep`, or is open under a name that is not live, is `textTertiary` with its end hatched; the hairline at a drop is `decrease`. never a colour alone: the detail says it.
 
 **the detail.** pointer or focus on a block (`Tooltip.tsx`, the sidebar's shape): `tue oct 14 · 7:58pm – 11:12pm · 3h 14m`, and for a merged one `dropped 9:03pm, back 9:05pm`. `data-start`, `data-end`, `data-by` on the bar for the tests.
 
-**the line.** `#usually`, from the four weeks on screen, in the page: the weekdays with a block in at least two of the four weeks, and the median start rounded to the half hour. `usually tuesdays and thursdays around 8pm` (the viewer's clock, so a watcher in another zone reads their own 8pm). fewer than three blocks in the four weeks: `streamed 2 times in the last month`, no pattern claimed. none: `has not streamed in the last month`. no rows at all: nothing, no calendar.
+**the line.** `#calendar-usually`, from the week on screen, in the page: the days with a block, in the strip's order, and the median start rounded to the half hour. `streamed tuesday and thursday around 8pm` (the viewer's clock, so a watcher in another zone reads their own 8pm); all seven, `streamed every day around 8pm`. one week is too short to call a habit, so the line says what happened and claims no `usually`. none: `has not streamed this week`, or `did not stream that week` on an older page.
 
 **where.**
 
@@ -145,7 +145,7 @@ nothing else. `GET /api/streamers/:name` does not gain a count or a usual line; 
 
 ## cost
 
-one column written per heartbeat, inside the round trip the heartbeat already makes: zero new queries. one index, partial, on the rows that have an account. a calendar open is one index range of at most 1000 rows, ~80 bytes each on the wire, once per month shown; the pushed `live`/`ended` re-fetch is the same request. the dummy streams go live at boot and stop on shutdown, so a deploy of video makes one block per fake stream: true, and drawn as such. nothing new runs.
+one column written per heartbeat, inside the round trip the heartbeat already makes: zero new queries. one index, partial, on the rows that have an account. a calendar open is one index range of at most 1000 rows, ~80 bytes each on the wire, once per week shown; the pushed `live`/`ended` re-fetch is the same request. the dummy streams go live at boot and stop on shutdown, so a deploy of video makes one block per fake stream: true, and drawn as such. nothing new runs.
 
 ## tests
 

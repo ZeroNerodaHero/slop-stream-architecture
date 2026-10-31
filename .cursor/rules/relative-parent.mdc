@@ -1,0 +1,29 @@
+---
+description: An absolute child (sr-only included) sits in a relative parent, so it scrolls with its pane and a focus cannot scroll an overflow-hidden ancestor
+globs: frontend/**/*.tsx
+alwaysApply: false
+---
+
+# An absolute child has a relative parent
+
+`absolute` puts a box in its nearest positioned ancestor, not in its parent. `sr-only` is `absolute` too, 1px by 1px, and the one that bites: nothing on screen shows where it landed.
+
+When no ancestor between the box and its scroll container is positioned, the box escapes the scroller. It is laid out at its unscrolled place, it does not move when the pane scrolls, and it hangs out of whatever holds the scroller, giving that element scrollable overflow it never asked for. `overflow-hidden` is no defence: a hidden-overflow box still scrolls when something inside it is focused or scrolled into view, and nothing can scroll it back.
+
+That is how the user modal went blank. A card low in the chat tab had its radio 1800px under the dialog; the click on the label focused the radio; the browser scrolled the overflow-hidden `<dialog>` down to it, and the rail and the pane went with it.
+
+So: the element that wraps an `absolute` child is `relative` (or is itself `absolute`, `fixed`, or `sticky`). For an `sr-only` control that is the `<label>`, the card, or the row it belongs to. This holds with no scroller in sight: one is added later, and the bug arrives with it.
+
+```tsx
+// ❌ BAD — the radio lands in whatever positioned ancestor the pane happens to have
+<label htmlFor={id} className="flex flex-col gap-3 border p-4">
+  <input id={id} type="radio" className="sr-only" />
+
+// ✅ GOOD — the card is the containing block
+<label htmlFor={id} className="relative flex flex-col gap-3 border p-4">
+  <input id={id} type="radio" className="sr-only" />
+```
+
+Not a fix: `tabIndex={-1}`, `focus({ preventScroll: true })`, `overflow-clip` on the dialog, or a scroll reset after the fact. The control is still in the wrong place; each of those hides one symptom of it.
+
+An `sr-only` label or word with nothing to focus wants the same `relative` parent: it still has a place, and it still counts toward a scroller's overflow. The `scroll-escape` skill finds the ones already in the tree.

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>chat · tech docs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav><a href="index.html">← all pages</a></nav>
+  <main>
+    <h1>chat</h1>
+    <p class="lead">three chats. a stream's room. a group's channel. a message to a friend.</p>
+
+    <section>
+      <h2>the three</h2>
+      <table>
+        <tr><th></th><th>where</th><th>who may write</th><th>what is kept</th></tr>
+        <tr><td><b>a room</b></td><td>beside the video. on the watch page and the go live page.</td><td>anyone. a login or a nick.</td><td>the last 500 lines, in redis. a week after the last line, the room is forgotten. with <code>CHAT_PERSIST=1</code>, every line also in the database, for good.</td></tr>
+        <tr><td><b>a channel</b></td><td>a group's server page. <code>/groups/&lt;name&gt;/&lt;channel&gt;</code>.</td><td>members of the group.</td><td>the same as a room. the last 100 lines of every channel come with the page. a line also lands under the other members' bells.</td></tr>
+        <tr><td><b>a dm</b></td><td>the friends window. a tab per friend. bubbles, a log, or blocks: your pick.</td><td>two people who follow each other.</td><td>every line, in the database. a read mark per thread.</td></tr>
+      </table>
+      <p>the rules for a dm are on <a href="people.html">people</a>. for a channel, on <a href="groups.html">groups</a>. the rest of this page is the room.</p>
+    </section>
+
+    <section>
+      <h2>a line</h2>
+      <div class="pic">
+        <div class="box">viewer</div>
+        <div class="flow both" data-say="one socket each"><i></i><i></i></div>
+        <div class="box hot">chat</div>
+        <div class="flow" data-say="add, trim to 500"><i></i></div>
+        <div class="box store">redis</div>
+      </div>
+      <p>you type. <span class="type" style="--n: 21">hello from the cave &gt;</span></p>
+      <p>the line goes to the chat box. the chat box puts it in the memory box. the memory box keeps the last 500. the chat box sends the line to every socket in the room. all of it in one trip.</p>
+      <p>a new viewer gets the last 200 lines first. then the live ones.</p>
+      <p>a line carries the speaker's face and badges as they are now. a picture on a line: click it and it fills the page. escape closes it.</p>
+    </section>
+
+    <section>
+      <h2>limits</h2>
+      <ul>
+        <li>500 letters a line. <span class="shake" tabindex="0">501 letters: refused</span></li>
+        <li>pictures on a line: ten at most. the page shrinks each one first. a login only.</li>
+        <li>500 lines a room in memory. the oldest fall off.</li>
+      </ul>
+      <p>how fast you may talk is a bucket of tokens. a line takes one. the bucket refills slowly. the send button counts down and shakes when it is empty.</p>
+      <table>
+        <tr><th>who</th><th>at once</th><th>then</th></tr>
+        <tr><td>a nick, no account</td><td>2 lines</td><td>one every 30 s. two a minute.</td></tr>
+        <tr><td>a login, or the streamer</td><td>3 lines</td><td>one every 3⅓ s. three in ten.</td></tr>
+      </table>
+      <p>the bucket is the speaker's, not the socket's. a login's by account. a nick's by ip and nick. two tabs share one.</p>
+      <p>a login's bucket refilling:</p>
+      <div class="bar green" style="--t: 3.3s"><i></i></div>
+      <p>the room filling up, then the oldest falling off:</p>
+      <div class="bar" style="--t: 5s"><i></i></div>
+      <p>a week with no line, and the room is gone from memory:</p>
+      <div class="bar red" style="--t: 9s"><i></i></div>
+    </section>
+
+    <section>
+      <h2>why redis streams</h2>
+      <p>every line gets an id. a viewer who drops and comes back says the last id it saw. it gets what it missed. no gap. no double.</p>
+      <p>one structure does the memory and the fan-out. not a list plus pub/sub, which can disagree. not kafka, which is a cluster for a problem this small.</p>
+      <p>the database is asked two things at hello only. is this socket really the streamer. who does its cookie say it is. the database down: you can still read. a <code>say</code> waits for it.</p>
+    </section>
+
+    <section>
+      <h2>kept for good</h2>
+      <p><code>CHAT_PERSIST=1</code> in <code>.env</code>, then a deploy of the api image. every line also goes to the database.</p>
+      <ul>
+        <li>scroll past the last 500. the room asks for the page before.</li>
+        <li>search the room. the words as written. 50 hits at most, newest first. <code>from:&lt;name&gt;</code> narrows it.</li>
+        <li>jump to one line. the room opens around it.</li>
+      </ul>
+      <p>off, search says <code>history is not kept</code>.</p>
+    </section>
+
+    <section>
+      <h2>names and colours</h2>
+      <ul>
+        <li>a login is blue. a nick is red. the streamer is green.</li>
+        <li>a group's badge sits next to the name. a small box, the group's colour, a word in capitals.</li>
+        <li>the fake streams' chatters wear <code>BOT</code>. the robot button hides their lines.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>where the panel sits</h2>
+      <p>right of the video. or the left. or a window you drag around. a setting of this browser. the chat tab of the user modal shows a picture of each.</p>
+      <p>the chat button on the video closes it and opens it again.</p>
+    </section>
+
+    <section>
+      <h2>if the chat box restarts</h2>
+      <p>every socket gets a close. up to 2 s to leave. the panel comes back in 3 s. the last lines reload from memory. nothing is lost.</p>
+    </section>
+  </main>
+  <footer>long version: <code>docs/chat.md</code>, <code>docs/chats.md</code></footer>
+</body>
+</html>

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tech docs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav>tech docs</nav>
+  <main>
+    <h1>tech docs</h1>
+    <p class="lead">the whole thing in small words. five minutes. nothing to install.</p>
+
+    <section>
+      <p>one computer. you open its ip. one person go live. other people watch. that is the whole idea.</p>
+      <div class="pic">
+        <div class="box">streamer</div>
+        <div class="flow" data-say="one upload"><i></i></div>
+        <div class="box hot pulse">the computer</div>
+        <div class="col">
+          <div class="pic"><div class="flow"><i></i></div><div class="box">watcher</div></div>
+          <div class="pic"><div class="flow"><i></i></div><div class="box">watcher</div></div>
+          <div class="pic"><div class="flow"><i></i></div><div class="box">watcher</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>how to read these</h2>
+      <ul>
+        <li>one page, one topic. short sentences. every number is real.</li>
+        <li>the moving dots are data moving. the arrow says which way.</li>
+        <li>a <span class="box inline">box</span> is a program or a place. a <span class="box inline store">dashed one</span> remembers things. a <span class="box inline ghost">dotted one</span> is not built yet.</li>
+        <li>the square next to a name is presence: <span class="sq on"></span>here, <span class="sq stream"></span>live, <span class="sq dnd"></span>do not disturb, <span class="sq off"></span>off.</li>
+        <li>each page names its long doc at the bottom. the long docs are <code>docs/*.md</code>. they have every rule.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>the pages</h2>
+      <div class="grid">
+        <a href="start.html"><b>start</b><span>what this is. run it. work on it.</span></a>
+        <a href="boxes.html"><b>boxes</b><span>twelve programs on one computer. what each one does.</span></a>
+        <a href="stream.html"><b>a stream</b><span>go live, the copies, the watchers, the end.</span></a>
+        <a href="chat.html"><b>chat</b><span>three chats and their limits.</span></a>
+        <a href="people.html"><b>people</b><span>names, passwords, presence, follows, friends, the inbox.</span></a>
+        <a href="groups.html"><b>groups</b><span>badges. owners and roles. a server with channels.</span></a>
+        <a href="pages.html"><b>pages</b><span>every screen, one line each.</span></a>
+        <a href="ops.html"><b>ops</b><span>deploy. the knobs. what broke, and where to look.</span></a>
+        <a href="plans.html"><b>plans</b><span>ideas written down. not built.</span></a>
+        <a href="new.html"><b>what moved lately</b><span>the last stretch of commits, by topic.</span></a>
+      </div>
+    </section>
+  </main>
+  <footer>
+    last looked at the code: 2026-10-31. these pages follow the commits; the <code>tech-docs</code> skill in <code>.cursor/skills/tech-docs</code> brings them up to date.
+    served by <code>npm run dev</code> while <code>SHOW_DOCS=1</code> is in <code>.env</code>.
+  </footer>
+</body>
+</html>

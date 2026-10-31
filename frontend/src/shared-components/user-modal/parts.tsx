@@ -101,13 +101,19 @@ interface OptionCardProps {
   detail: string;
 }
 
-/** A radio as a card: the chosen one has the blue stroke (no shadow) and says so in words too. */
+/**
+ * A radio as a card: the chosen one has the blue stroke (no shadow) and says so in words too.
+ * `relative`, so the sr-only radio (position absolute) is placed inside the card. Without it the
+ * input's containing block is the pane wrapper outside the scrolling tabpanel: a card low in the
+ * pane puts its 1px input past the dialog's bottom edge, and the click that focuses it scrolls
+ * the overflow-hidden dialog down to it, taking the rail and the pane out of view.
+ */
 export function OptionCard({ id, name, checked, onChange, picture, label, detail }: OptionCardProps) {
   return (
     <label
       htmlFor={id}
       className={cn(
-        'flex cursor-pointer flex-col gap-3 border bg-background p-4 transition-[border-color,color] duration-150',
+        'relative flex cursor-pointer flex-col gap-3 border bg-background p-4 transition-[border-color,color] duration-150',
         checked ? 'border-primaryBlue' : 'border-primaryStroke hover:border-secondaryStroke',
         'has-[:focus-visible]:border-primaryBlue'
       )}

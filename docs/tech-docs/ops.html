@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ops · tech docs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav><a href="index.html">← all pages</a></nav>
+  <main>
+    <h1>ops</h1>
+    <p class="lead">keep it running. know what broke. the knobs.</p>
+
+    <section>
+      <h2>releases</h2>
+      <div class="pic stack">
+        <div class="box">you push to <code>main</code></div>
+        <div class="flow" data-say="github builds four images"><i></i></div>
+        <div class="box store">ghcr.io<small>stream-pages, -api, -video, -dummy</small></div>
+        <div class="flow" data-say="./scripts/deploy.sh pulls"><i></i></div>
+        <div class="box hot">the box</div>
+      </div>
+      <p>every run is a release. numbered one past the last. <code>v12</code>. tagged on the commit once all four images are up. <code>/api/health</code> says which one runs. <code>--images v12</code> pins one.</p>
+      <p>a commit that only touched docs has no images of its own. it runs the ones before it. nothing restarts for it.</p>
+    </section>
+
+    <section>
+      <h2>is it up</h2>
+      <p><code>https://&lt;ip&gt;/api/health</code>. one json. the version, the box's name, is video answering.</p>
+      <p>a dead box cannot say it is dead. so a monitor on another machine asks. <code>api monitor</code>: our own code, one container, one json file, one page.</p>
+      <div class="pic">
+        <div class="box hot">monitor<small>another machine</small></div>
+        <div class="flow" data-say="/api/health every 15 s"><i></i></div>
+        <div class="box">prod</div>
+      </div>
+      <div class="pic">
+        <div class="box hot">monitor</div>
+        <div class="flow" data-say="/api/errors every minute"><i></i></div>
+        <div class="box">dev</div>
+      </div>
+      <p>down, then up again: a webhook to you. the page: <code>ssh -L 3002</code>, then <code>http://localhost:3002</code>.</p>
+      <aside class="plan">not built yet. plan only. the monitor box itself (you make it, ten minutes). a watcher bot. grafana.</aside>
+    </section>
+
+    <section>
+      <h2>what broke for a person</h2>
+      <p>a page breaks. it tells on itself. <code>POST /api/errors</code>, to its own site, with the commit it was built from.</p>
+      <p>the api keeps the reports in a second database, <code>debug</code>. the main one is never touched. the api runs fine without it.</p>
+      <p><code>/admin</code> shows them. for the names in <code>ADMIN_NAMES</code>. a machine reads them with <code>OPS_TOKEN</code> instead. 16 letters at least, or it is ignored.</p>
+    </section>
+
+    <section>
+      <h2>what is the browser being told</h2>
+      <p>the messages inspector. <code>advanced</code> tab of the user modal. it keeps the frames this browser sends and gets on its three sockets. the last 1000. a filter. a panel over the page.</p>
+      <p>tokens are taken out first. nothing leaves the browser.</p>
+    </section>
+
+    <section>
+      <h2>look inside</h2>
+      <table>
+        <tr><th>you type</th><th>you see</th></tr>
+        <tr><td><code>./scripts/manage.sh --db</code></td><td>the database in a terminal. tables, rows, columns, a query of your own. read only. <code>d</code> hops to the error database.</td></tr>
+        <tr><td><code>./scripts/manage.sh --redis</code></td><td>every key, its type, its ttl. enter shows what is in it.</td></tr>
+        <tr><td><code>./scripts/manage.sh --to billy@1.2.3.4 --db</code></td><td>the same, against the box, over ssh.</td></tr>
+        <tr><td><code>./scripts/seed.sh 5</code></td><td>five accounts that look like people. names and passwords in <code>.seeded-users</code>.</td></tr>
+        <tr><td><code>./scripts/test.sh</code></td><td>real chrome, fake camera. go live, watch, stop, chat, accounts. a few minutes.</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>the knobs</h2>
+      <p><code>.env</code> in the repo root. <code>.env.example</code> explains every line. a pull brings new knobs in with their defaults. a line you set is never touched.</p>
+      <table>
+        <tr><th>knob</th><th>what</th></tr>
+        <tr><td><code>PUBLIC_IP</code></td><td>the ip people type. deploy fills it in.</td></tr>
+        <tr><td><code>ENV_NAME</code></td><td>what this box calls itself in health and in errors. empty: the hostname.</td></tr>
+        <tr><td><code>ADMIN_NAMES</code></td><td>who may open <code>/admin</code>. empty: nobody.</td></tr>
+        <tr><td><code>OPS_TOKEN</code></td><td>a machine's key for the errors. empty: off.</td></tr>
+        <tr><td><code>DUMMY_STREAMS</code> <code>DUMMY_PASSWORD</code> <code>DUMMY_NAMES</code></td><td>the fake streams. how many, the key, your own names.</td></tr>
+        <tr><td><code>S3_ENDPOINT</code> and friends</td><td><code>off</code>: the bucket on this box. a url: a real bucket.</td></tr>
+        <tr><td><code>CHAT_PERSIST</code></td><td><code>1</code>: every chat line kept in the database. search and scroll back.</td></tr>
+        <tr><td><code>GROUPS_PER_OWNER</code></td><td>groups one login may own. empty: 2. 8 at most.</td></tr>
+        <tr><td><code>CARGO_BUILD_JOBS</code></td><td>cores a rust build may use. deploy sets it from the ram.</td></tr>
+        <tr><td><code>IMAGES</code> <code>TAG</code></td><td>where the images come from and which ran last. deploy writes them.</td></tr>
+        <tr><td><code>SHOW_DOCS</code></td><td><code>1</code>: these pages on the dev server. the box ignores it.</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>disk</h2>
+      <p>every box logs to 3 files of 10 MB. a full disk is old builds and images: <code>./scripts/deploy.sh --prune-deploy</code>.</p>
+    </section>
+  </main>
+  <footer>long version: <code>docs/overview.md</code>, <code>docs/debugging.md</code>, <code>.env.example</code></footer>
+</body>
+</html>

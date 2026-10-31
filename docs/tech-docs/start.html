@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>start · tech docs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav><a href="index.html">← all pages</a></nav>
+  <main>
+    <h1>start</h1>
+    <p class="lead">what this is. how to run it. how to change it.</p>
+
+    <section>
+      <h2>what it is</h2>
+      <p>a test stream site. one computer. you open its ip. one person go live. other people watch. there is chat beside the video. there are accounts, but nobody has to have one.</p>
+      <div class="pic">
+        <div class="box">streamer</div>
+        <div class="flow" data-say="one upload"><i></i></div>
+        <div class="box hot">the computer</div>
+        <div class="flow" data-say="many copies"><i></i><i></i><i></i></div>
+        <div class="box">watchers</div>
+      </div>
+      <p>the streamer upload once. the computer copy it to every watcher. that is the one trick everything else sits on.</p>
+    </section>
+
+    <section>
+      <h2>run it</h2>
+      <p>on the server:</p>
+      <pre><code>git clone &lt;repo&gt; &amp;&amp; cd slop-stream-architecture
+./scripts/deploy.sh</code></pre>
+      <ol class="steps">
+        <li>it check the box. ports 80 and 443 must be free.</li>
+        <li>it write <code>.env</code>. your ip goes in.</li>
+        <li>it pull the images. nothing is compiled here.</li>
+        <li>it start twelve boxes. see <a href="boxes.html">boxes</a>.</li>
+        <li>it print a url. open it. click through the warning.</li>
+      </ol>
+      <p>the warning is the https cert. it is self made, for your ip. camera only works on https. the warning is enough.</p>
+      <p class="note">nothing is compiled on the server. every push to <code>main</code> makes github build the four images. deploy pull them. a 1 GB box is enough. the build takes a few minutes after a push. a deploy before it is done says so and does nothing.</p>
+    </section>
+
+    <section>
+      <h2>update it</h2>
+      <table>
+        <tr><th>you type</th><th>what happens</th></tr>
+        <tr><td><code>./scripts/deploy.sh --pull</code></td><td>pull the repo. then the images for it. new knobs land in <code>.env</code> with defaults.</td></tr>
+        <tr><td><code>./scripts/deploy.sh api</code></td><td>only the api. streams stay up.</td></tr>
+        <tr><td><code>./scripts/deploy.sh frontend</code></td><td>only the pages. streams stay up.</td></tr>
+        <tr><td><code>./scripts/deploy.sh video</code></td><td>ends every stream. it warns first.</td></tr>
+        <tr><td><code>./scripts/deploy.sh</code></td><td>everything again.</td></tr>
+        <tr><td><code>./scripts/deploy.sh --prune-deploy</code></td><td>disk full of old builds. drop them. then deploy.</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>build it yourself</h2>
+      <p><code>./scripts/deploy.sh --build</code> compiles on the machine it runs on. an hour and 4 GB of ram on a small box. a few minutes on a laptop.</p>
+      <p>changes not pushed yet, but you want them on the box:</p>
+      <pre><code>./scripts/ship.sh --to gcloud:test-machine   # laptop: build, send over ssh, print a tag
+./scripts/deploy.sh --images &lt;that tag&gt;      # box: start them. pull nothing</code></pre>
+      <p><code>--to billy@1.2.3.4</code> for any other box.</p>
+    </section>
+
+    <section>
+      <h2>work on the pages</h2>
+      <pre><code>cd frontend &amp;&amp; npm install &amp;&amp; npm run dev</code></pre>
+      <p>open <code>http://localhost:42069</code>. edits show up live. the camera works there too.</p>
+      <p>which backend it talks to, in order: <code>BACKEND=https://1.2.3.4 npm run dev</code>, or that line in <code>frontend/.env</code>. else the docker stack on this machine.</p>
+      <p>these docs: <code>SHOW_DOCS=1</code> in the repo's <code>.env</code>. then <code>http://localhost:42069/tech-docs</code>. only the dev server serves them. a deploy never does.</p>
+    </section>
+
+    <section>
+      <h2>ports</h2>
+      <ul>
+        <li><b>80</b> and <b>443</b>, tcp. the site. http just sends you to https.</li>
+        <li><b>7882</b>, udp. the video packets. one port for all of them.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>this test skips</h2>
+      <p>email. password reset. two factor. oauth. more than one video size. a cdn. more than one streamer in a room.</p>
+    </section>
+  </main>
+  <footer>long version: <code>docs/overview.md</code></footer>
+</body>
+</html>

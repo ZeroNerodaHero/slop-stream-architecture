@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use redis::streams::StreamRangeReply;
 use serde::{Deserialize, Serialize};
@@ -55,8 +55,8 @@ const CHANNELS_PER_SERVER: i64 = 20;
 /// Lines of each channel in `GET /api/groups/:group/messages`: what a room draws before its
 /// socket says more. The socket fills from the newest of these, so nothing falls between.
 const MESSAGES_PER_CHANNEL: usize = 100;
-/// The channel a group starts with. It is not deleted.
-const GENERAL: &str = "general";
+/// The channel a group starts with. It is not deleted, not renamed, and never kept to a role.
+pub(crate) const GENERAL: &str = "general";
 /// Words the chat history routes already use, so a channel cannot be one of them.
 const RESERVED_CHANNELS: &[&str] = &["before", "search", "by", "around"];
 
@@ -507,6 +507,38 @@ pub(crate) async fn member(db: &PgPool, user: Uuid, group: &str) -> Result<bool,
         .await
 }
 
+/// The sql for "this viewer sees channel `c`" (docs/groups.md): a channel kept to no role is
+/// everyone's; one kept to roles (`channel_roles`) is seen by whoever holds one of them; an
+/// owner, the channels power and a site admin see every channel. `c` is the `channels` row in
+/// the query this goes into, `user` the placeholder of the viewer's id (null for nobody) and
+/// `admin` the placeholder of whether they are a site admin.
+pub(crate) fn sees_sql(user: &str, admin: &str) -> String {
+    let channels_bit = crate::group_mod::CHANNELS;
+    format!(
+        "({admin}
+          OR EXISTS (SELECT 1 FROM memberships om WHERE om.group_name = c.server AND om.user_id = {user} AND om.owner)
+          OR EXISTS (SELECT 1 FROM role_members rm JOIN roles r ON r.id = rm.role_id
+                     WHERE r.group_name = c.server AND rm.user_id = {user} AND (r.perms & {channels_bit}) <> 0)
+          OR NOT EXISTS (SELECT 1 FROM channel_roles cr WHERE cr.server = c.server AND cr.channel = c.name)
+          OR EXISTS (SELECT 1 FROM channel_roles cr JOIN role_members rm ON rm.role_id = cr.role_id
+                     WHERE cr.server = c.server AND cr.channel = c.name AND rm.user_id = {user}))"
+    )
+}
+
+/// The channels of `server` this viewer sees (`sees_sql`), by name, in their order. What the
+/// room, the messages and the server's chat socket go by.
+pub(crate) async fn visible_channels(db: &PgPool, server: &str, user: Option<Uuid>, admin: bool) -> Result<Vec<String>, sqlx::Error> {
+    let sql = format!("SELECT c.name FROM channels c WHERE c.server = $1 AND {} ORDER BY c.position, c.created_at, c.name", sees_sql("$2", "$3"));
+    sqlx::query_scalar(&sql).bind(server).bind(user).bind(admin).fetch_all(db).await
+}
+
+/// Whether this viewer sees `channel` of `server` (`sees_sql`). False for a channel that is not
+/// there, so a hidden one and a missing one read the same: `no such channel`.
+pub(crate) async fn may_see(db: &PgPool, server: &str, channel: &str, user: Option<Uuid>, admin: bool) -> Result<bool, sqlx::Error> {
+    let sql = format!("SELECT EXISTS (SELECT 1 FROM channels c WHERE c.server = $1 AND c.name = $4 AND {})", sees_sql("$2", "$3"));
+    sqlx::query_scalar(&sql).bind(server).bind(user).bind(admin).bind(channel).fetch_one(db).await
+}
+
 #[derive(Serialize)]
 pub(crate) struct ChannelView {
     name: String,
@@ -520,21 +552,21 @@ pub(crate) struct ChannelView {
 
 /// The channels of one server in their order (`position`, as the channels power last put them;
 /// oldest first until then, `general` first because it was made with the group), as the room
-/// answers them for `user`. The same rule as the explorer's: `can_delete` is who made the
-/// channel, or anyone with the channels power (an owner, that role, a site admin).
+/// answers them for `user`: the ones they see (`sees_sql`; a channel kept to roles they do not
+/// hold is not here). The same rule as the explorer's: `can_delete` is who made the channel,
+/// or anyone with the channels power (an owner, that role, a site admin).
 pub(crate) async fn channels_of(s: &AppState, server: &str, user: Option<Uuid>, admin: bool) -> Result<Vec<ChannelView>, sqlx::Error> {
     let may_manage = match user {
         Some(id) => crate::group_mod::allows(s, id, server, crate::group_mod::CHANNELS).await?,
         None => false,
     };
-    let rows: Vec<(String, String, Option<Uuid>, Option<String>)> = sqlx::query_as(
+    let sql = format!(
         "SELECT c.name, c.about, c.created_by_id, maker.name FROM channels c
          LEFT JOIN streamers maker ON maker.id = c.created_by_id
-         WHERE c.server = $1 ORDER BY c.position, c.created_at, c.name",
-    )
-    .bind(server)
-    .fetch_all(&s.db)
-    .await?;
+         WHERE c.server = $1 AND {} ORDER BY c.position, c.created_at, c.name",
+        sees_sql("$2", "$3")
+    );
+    let rows: Vec<(String, String, Option<Uuid>, Option<String>)> = sqlx::query_as(&sql).bind(server).bind(user).bind(admin).fetch_all(&s.db).await?;
     Ok(rows
         .into_iter()
         .map(|(name, about, made_by_id, made_by)| {
@@ -617,7 +649,8 @@ fn live_first(mut servers: Vec<ServerView>) -> Vec<ServerView> {
 /// `GET /api/explore`: every server (not `bot`) this login may see, split into the ones
 /// it is in and the public ones it is not. A private group it has not joined is left out.
 /// Inside each, a server with someone live comes first. `live` is those members'
-/// names. Channels in their order (`position`), as the room lists them.
+/// names. Channels in their order (`position`), as the room lists them: the ones this login
+/// sees (`sees_sql`), like the room.
 /// `groups_per_owner` is the cap on owning, so a page offers `create` only under it.
 async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let user = me.as_ref().map(|a| a.id);
@@ -627,8 +660,7 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let owned: Vec<String> = sqlx::query_scalar("SELECT group_name FROM memberships WHERE user_id = $1 AND owner").bind(user).fetch_all(&s.db).await?;
     // name, badge, color, about, members, mine, public, title, tag, icon, banner,
     // can add a channel, channel, channel about, can delete, channel maker
-    #[allow(clippy::type_complexity)]
-    let rows: Vec<(String, String, String, String, i64, bool, bool, Option<String>, Option<i32>, Option<i64>, Option<i64>, bool, Option<String>, Option<String>, bool, Option<String>)> = sqlx::query_as(
+    let sql = format!(
         "SELECT g.name, g.badge, g.color, g.about,
                 (SELECT count(*) FROM memberships m WHERE m.group_name = g.name),
                 EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1),
@@ -654,17 +686,16 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
                 ), false),
                 cm.name
          FROM groups g
-         LEFT JOIN channels c ON c.server = g.name
+         LEFT JOIN channels c ON c.server = g.name AND {}
          LEFT JOIN streamers cm ON cm.id = c.created_by_id
          WHERE g.name <> $3
            AND (g.public OR EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1))
          ORDER BY g.created_at, g.name, c.position NULLS LAST, c.created_at, c.name",
-    )
-    .bind(user)
-    .bind(admin)
-    .bind(BOT_GROUP)
-    .fetch_all(&s.db)
-    .await?;
+        sees_sql("$1", "$2")
+    );
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(String, String, String, String, i64, bool, bool, Option<String>, Option<i32>, Option<i64>, Option<i64>, bool, Option<String>, Option<String>, bool, Option<String>)> =
+        sqlx::query_as(&sql).bind(user).bind(admin).bind(BOT_GROUP).fetch_all(&s.db).await?;
     let mut servers: Vec<ServerView> = Vec::new();
     for (name, badge, color, about, members, mine, public, title, tag, icon, banner, can_channels, channel, channel_about, can_delete, made_by) in rows {
         if servers.last().is_none_or(|server| server.name != name) {
@@ -791,6 +822,87 @@ async fn reorder_channels(State(s): State<AppState>, Path(group): Path<String>, 
     Ok(Json(json!({ "order": order })))
 }
 
+#[derive(Deserialize)]
+struct ChannelName {
+    name: String,
+}
+
+/// `PUT /api/groups/:group/channels/:channel` `{ name }`: the channel is called `name` from now
+/// on. Who made the channel, or the channels power; `general` stays. The name goes through the
+/// door a new channel's does (the name rule, the history words, 409 for one the server has).
+/// Everything that knows the channel by its name follows it in one transaction: the row, the
+/// mutes on it (the foreign key cascades, migrate-25), the inbox rows for its lines
+/// (`notifications.room`) and the lines kept for search (`chat_lines.room`); then the chat's
+/// stream in redis is renamed, so the history reads on. → the channel as the room lists it, and
+/// a `channel_renamed` fact (`channel` the old name, `name` the new) to every room open; a page
+/// on the channel moves to the new address. The same name again is 200 and nothing.
+async fn rename_channel(
+    State(s): State<AppState>,
+    Path((group, channel)): Path<(String, String)>,
+    Me(me): Me,
+    body: Result<Json<ChannelName>, JsonRejection>,
+) -> ApiResult {
+    let who = me.ok_or_else(not_logged_in)?;
+    let Json(body) = body?;
+    let (server, channel) = channel_names(&group, &channel)?;
+    if channel == GENERAL {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "general stays"));
+    }
+    let (_, name) = channel_names(&server, &body.name)?;
+    let row: Option<(Option<Uuid>, String, Option<String>)> = sqlx::query_as(
+        "SELECT c.created_by_id, c.about, maker.name FROM channels c
+         LEFT JOIN streamers maker ON maker.id = c.created_by_id
+         WHERE c.server = $1 AND c.name = $2",
+    )
+    .bind(&server)
+    .bind(&channel)
+    .fetch_optional(&s.db)
+    .await?;
+    let Some((made_by_id, about, made_by)) = row else {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel"));
+    };
+    // who made the channel, or anyone with the channels bit: an owner, that role, a site admin
+    if made_by_id != Some(who.id) && !crate::group_mod::allows(&s, who.id, &server, crate::group_mod::CHANNELS).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "not your channel"));
+    }
+    let view = json!({ "name": name, "about": about, "can_delete": true, "made_by": made_by });
+    if name == channel {
+        return Ok(Json(view));
+    }
+    let old_room = format!("{server}/{channel}");
+    let new_room = format!("{server}/{name}");
+    let mut tx = s.db.begin().await?;
+    let renamed = sqlx::query("UPDATE channels SET name = $3 WHERE server = $1 AND name = $2")
+        .bind(&server)
+        .bind(&channel)
+        .bind(&name)
+        .execute(&mut *tx)
+        .await;
+    match renamed {
+        // the channel went between the look and this
+        Ok(done) if done.rows_affected() == 0 => return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel")),
+        Ok(_) => {}
+        Err(e) if crate::unique_violation(&e) => return Err(ApiError::new(StatusCode::CONFLICT, "name taken")),
+        Err(e) => return Err(e.into()),
+    }
+    sqlx::query("UPDATE notifications SET room = $2 WHERE kind = 'chat' AND room = $1").bind(&old_room).bind(&new_room).execute(&mut *tx).await?;
+    sqlx::query("UPDATE chat_lines SET room = $2 WHERE room = $1").bind(&old_room).bind(&new_room).execute(&mut *tx).await?;
+    tx.commit().await?;
+    // the lines in redis: the room's stream under the new key. a channel nobody has spoken in has
+    // no key, and `no such key` is that; anything else is a history that will read empty until it fills again
+    let moved: Result<(), redis::RedisError> = redis::cmd("RENAME").arg(room_key(&old_room)).arg(room_key(&new_room)).query_async(&mut s.redis.clone()).await;
+    if let Err(e) = moved {
+        if e.to_string().contains("no such key") {
+            log::debug!("{old_room}: no lines to move");
+        } else {
+            log::warn!("{old_room}: the stream was not moved to {new_room}: {e}");
+        }
+    }
+    log::info!("{}: renamed #{channel} in {server} to #{name}", who.name);
+    tell(&s, &server, "channel_renamed", json!({ "channel": channel, "name": name })).await;
+    Ok(Json(view))
+}
+
 /// `DELETE /api/groups/:group/channels/:channel`: who made the channel, who made the server,
 /// or an admin. `general` stays.
 async fn delete_channel(State(s): State<AppState>, Path((group, channel)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
@@ -881,17 +993,21 @@ async fn read_channel(State(s): State<AppState>, Path((group, channel)): Path<(S
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /api/groups/:group/messages`: the last MESSAGES_PER_CHANNEL lines of every channel,
-/// oldest first, keyed by channel: `{ "general": [line, …], "clips": [...] }`. One answer for
-/// the whole server, so a room draws every channel at once and switching between them asks
+/// `GET /api/groups/:group/messages`: the last MESSAGES_PER_CHANNEL lines of every channel
+/// this login sees (`sees_sql`: a channel kept to roles they do not hold is not here), oldest
+/// first, keyed by channel: `{ "general": [line, …], "clips": [...] }`. One answer for the
+/// whole server, so a room draws every channel at once and switching between them asks
 /// nothing. Redis only, like the socket's history: the room's stream holds the last 500 of
 /// each. Anyone may read a server (chat.md). 404 for `bot` and for no such group.
-async fn messages(State(s): State<AppState>, Path(group): Path<String>) -> ApiResult {
+async fn messages(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
     let server = group_name(&group)?;
     if server == BOT_GROUP {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "bot is not a server"));
     }
-    let channels: Vec<String> = sqlx::query_scalar("SELECT name FROM channels WHERE server = $1 ORDER BY created_at, name").bind(&server).fetch_all(&s.db).await?;
+    let user = me.as_ref().map(|a| a.id);
+    let admin = me.as_ref().is_some_and(|a| s.admins.iter().any(|admin| admin.id == a.id));
+    // general is never kept to a role, so a group that is there always answers with at least it
+    let channels = visible_channels(&s.db, &server, user, admin).await?;
     if channels.is_empty() {
         // a group without `general` is no group: it was deleted (or never was)
         return Err(no_such_group());
@@ -925,7 +1041,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}/join", post(join))
         .route("/api/groups/{group}/leave", post(leave))
         .route("/api/groups/{group}/channels", post(create_channel).put(reorder_channels))
-        .route("/api/groups/{group}/channels/{channel}", delete(delete_channel))
+        .route("/api/groups/{group}/channels/{channel}", put(rename_channel).delete(delete_channel))
         .route("/api/groups/{group}/channels/{channel}/mute", put(mute_channel).delete(unmute_channel))
         .route("/api/groups/{group}/channels/{channel}/read", put(read_channel))
         .route("/api/groups/{group}/messages", get(messages))

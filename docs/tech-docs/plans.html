@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>plans · tech docs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav><a href="index.html">← all pages</a></nav>
+  <main>
+    <h1>plans</h1>
+    <p class="lead">ideas written down. not built. the long doc says how each would go, and what to settle first.</p>
+
+    <section>
+      <div class="pic">
+        <div class="box">built</div>
+        <div class="flow slow" data-say="one at a time"><i></i></div>
+        <div class="box ghost">a plan</div>
+        <div class="flow slow"><i></i></div>
+        <div class="box ghost">a plan</div>
+      </div>
+      <p>a plan is not stale. it is a thing decided but not made. when one is built, it leaves this page and lands on its own.</p>
+    </section>
+
+    <section>
+      <h2>whole plans</h2>
+      <ul>
+        <li><b>posts</b> (<code>posts.md</code>). a login writes a short post. one picture or none. a reply is a post pointing at another. one table. the feed is a read over follows, not a timeline per follower. a post is one fact on the wire, so every follower has it at once.</li>
+        <li><b>more video sizes</b> (<code>bitrates.md</code>). the streamer keeps sending one 1080p. the box makes 720 and 360 copies. a watcher gets one of them.</li>
+        <li><b>hover to preview</b> (<code>hover-preview.md</code>). hold the mouse on a card and it plays. click, and the page keeps the connection the card made. the first frame is instant.</li>
+        <li><b>kubernetes</b> (<code>kubernetes.md</code>). what it would buy. the video routing problem. the code to change first. the steps.</li>
+        <li><b>metrics</b> (<code>metrics.md</code>). cpu, memory, disk, network. per box, per container. our own code: an <code>api agent</code> on every box, the monitor drawing it, alerts on the lines that matter.</li>
+        <li><b>the move off polling</b> (<code>transition.md</code>). every http loop the pages ran, which became pushes, what stays http, the deploy order with a way back.</li>
+        <li><b>the product</b> (<code>idea.md</code>). open groups where people show their face and talk. a stream you decorate. one person's audio for everyone else.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>second halves</h2>
+      <p>built, but not all of it.</p>
+      <ul>
+        <li><b>audio</b> (<code>audio.md</code>). built: the mixer, and mic only. plan: home's card for a mic only stream. a tab's sound. up to 4 people on the watch page coming on with a mic, or a mic and a camera.</li>
+        <li><b>calendar</b> (<code>calendar.md</code>). built: the tab, the blocks, the week strip. plan: the totals on the profile tab. a schedule.</li>
+        <li><b>follows</b> (<code>follows.md</code>). built: the edge, the column, the button, the counts. plan: followed streams first on home. the modal tab.</li>
+        <li><b>debugging</b> (<code>debugging.md</code>). built: health, the reports, <code>/admin</code>, the monitor program. plan: the monitor box itself. a watcher bot. grafana.</li>
+        <li><b>about</b> (<code>about.md</code>). built: the about me, the page of blocks, its editor, the css rules. plan: <code>@keyframes</code> in their css. themes to pick from, the way myspace had layouts.</li>
+      </ul>
+    </section>
+  </main>
+  <footer>long version: <code>docs/README.md</code> says which doc is a plan. each one above is in <code>docs/</code>.</footer>
+</body>
+</html>

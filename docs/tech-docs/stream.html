@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>a stream · tech docs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav><a href="index.html">← all pages</a></nav>
+  <main>
+    <h1>a stream</h1>
+    <p class="lead">one upload in. many copies out. from go live to the end.</p>
+
+    <section>
+      <h2>go live</h2>
+      <ol class="steps">
+        <li>you open <code>/live</code>. your camera shows in the preview.</li>
+        <li>you pick your sources. or not. the camera alone is fine.</li>
+        <li>you press start. you stream as your account, or as the nick in the corner.</li>
+        <li>the browser sets up with <code>video</code> over <code>/ws</code>. the packets go to udp 7882.</li>
+        <li>video has your stream. a <code>live</code> fact goes out. your card appears on home.</li>
+        <li>watchers come. video copy your stream to each one.</li>
+      </ol>
+      <div class="pic">
+        <div class="box">you</div>
+        <div class="flow" data-say="1080p · 30 fps · vp8 · ~3 Mbps"><i></i></div>
+        <div class="box hot pulse">video</div>
+        <div class="col">
+          <div class="pic"><div class="flow"><i></i></div><div class="box">watcher</div></div>
+          <div class="pic"><div class="flow"><i></i></div><div class="box">watcher</div></div>
+          <div class="pic"><div class="flow"><i></i></div><div class="box">watcher</div></div>
+        </div>
+      </div>
+      <p>you send one copy. video send one copy to each watcher. your upload never grows with the crowd.</p>
+      <p>camera only works on https. the warning you click through is enough.</p>
+    </section>
+
+    <section>
+      <h2>sources and layers</h2>
+      <p>beside the preview, your sources. the camera. a screen or a window. pictures and gifs you put up. your avatar. add one with the <code>+</code>, before start or while live.</p>
+      <p>each source is a layer over the preview. drag it. pull a corner. order them. hide one. what you see is what watchers see.</p>
+      <p>presets: <code>screen + face</code>, <code>side by side</code>, and the rest. or save your own.</p>
+      <p>every watcher's player draws the same frame from the scene. nothing is mixed on the server. sharp text at the same 3 Mbps.</p>
+    </section>
+
+    <section>
+      <h2>mic only</h2>
+      <p><code>×</code> on the camera turns it off. your avatar takes its place. it moves with your voice. every player draws it from your name and the sound. nothing extra is sent.</p>
+      <p>it stays that way next visit, until you add the camera back.</p>
+      <p>under the preview: the sound. a fader and a meter for the mic. a mute. what everyone hears.</p>
+    </section>
+
+    <section>
+      <h2>while live</h2>
+      <ul>
+        <li>you get a watch link to copy. paste it in a chat and it unfurls: your name, live or not, your status, the picture.</li>
+        <li>leave the page and the stream keeps going. it sits in a corner of every other page. your chat with it. <code>×</code> on the corner is stop.</li>
+        <li>video make a jpeg of your stream every 5 s. home shows it. <code>/thumb/&lt;name&gt;.jpg</code>. no cdn. no bucket.</li>
+        <li><b>N watching</b>: video count connected watchers. one per ip. capped per ip. hard to spam.</li>
+      </ul>
+      <p>right now: <b class="count" style="--to: 12"></b> watching. the number climbs as they arrive.</p>
+    </section>
+
+    <section>
+      <h2>the end</h2>
+      <p>three things can end a stream:</p>
+      <ol>
+        <li>you press stop.</li>
+        <li>video notices your packets stopped. the publisher is gone.</li>
+        <li>the sweeper finds a session nobody closed.</li>
+      </ol>
+      <p>each one closes the block in the log. the block says who closed it. an <code>ended</code> fact goes out. home drops your card.</p>
+      <div class="pic">
+        <div class="box">video</div>
+        <div class="flow" data-say="ended"><i></i></div>
+        <div class="box">events</div>
+        <div class="flow" data-say="to every open page"><i></i><i></i><i></i></div>
+        <div class="box">browsers</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>the calendar</h2>
+      <p>the <code>calendar</code> tab on the watch page. when they stream. one block per session, from the log. a week strip with a line for now.</p>
+      <aside class="plan">not built yet. plan only. the totals on the profile tab. a schedule you set.</aside>
+    </section>
+
+    <section>
+      <h2>fake streams</h2>
+      <p>for styling without a camera. in <code>.env</code>:</p>
+      <pre><code>DUMMY_STREAMS=3
+DUMMY_PASSWORD=anyword</code></pre>
+      <p>then <code>./scripts/deploy.sh dummy</code>. home fills with <code>dummy-mango</code>, <code>dummy-pixel</code>, <code>dummy-disco</code>. three gifs each, bouncing like the dvd logo. a clock. a quiet tone. about a tenth of a core each.</p>
+      <p>the password is what lets the dummy box use <code>dummy-</code> names. nobody else can. set it back to 0 and run it again to turn them off.</p>
+    </section>
+
+    <aside class="plan">not built yet. plan only. more than one video size (720, 360 copies made on the box). hold the mouse on a card and it plays. up to 4 people on the watch page coming on with a mic.</aside>
+  </main>
+  <footer>long version: <code>docs/status.md</code>, <code>docs/screen.md</code>, <code>docs/viewers.md</code>, <code>docs/calendar.md</code>, <code>docs/audio.md</code></footer>
+</body>
+</html>

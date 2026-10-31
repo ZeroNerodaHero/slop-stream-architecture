@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>groups · tech docs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav><a href="index.html">← all pages</a></nav>
+  <main>
+    <h1>groups</h1>
+    <p class="lead">a login join a group. its chat lines wear the badge. a group is also a server, with channels.</p>
+
+    <section>
+      <h2>the badge</h2>
+      <div class="pic">
+        <div class="box">a login</div>
+        <div class="flow" data-say="join"><i></i></div>
+        <div class="box hot">group<small>badge · colour</small></div>
+        <div class="flow" data-say="every line it says"><i></i><i></i></div>
+        <div class="box">chat line<small>name + badge</small></div>
+      </div>
+      <p>a small box in the group's colour. a word in capitals. next to your name in chat, the way discord tags a bot.</p>
+      <p>one group is built in: <code>bot</code>. the fake streams' chatters wear it. the robot button in the chat hides their lines. nobody can make it or join it.</p>
+    </section>
+
+    <section>
+      <h2>make one</h2>
+      <p>any account can. you type a title. <code>a-z 0-9 _ -</code>, 1 to 32. four random digits are added. <code>gaming-0042</code>. two groups can share a title; the digits tell them apart.</p>
+      <ul>
+        <li>a badge. 1 to 12 letters. shown in capitals.</li>
+        <li>a colour.</li>
+        <li>an about line. up to 200.</li>
+        <li>a picture and a banner, if you like.</li>
+      </ul>
+      <p>you are in it from the start. you are its owner.</p>
+    </section>
+
+    <section>
+      <h2>the numbers</h2>
+      <table>
+        <tr><th>how many</th><th>of what</th></tr>
+        <tr><td><b>2</b></td><td>groups one login may own. <code>GROUPS_PER_OWNER</code> in <code>.env</code> changes it. 8 at most.</td></tr>
+        <tr><td><b>8</b></td><td>groups one login may be in. every badge goes on every line.</td></tr>
+        <tr><td><b>20</b></td><td>roles a group may have.</td></tr>
+        <tr><td><b>20</b></td><td>channels a server may have.</td></tr>
+        <tr><td><b>100</b></td><td>lines of every channel that come with the page.</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>owners and roles</h2>
+      <p>the maker is an owner. an owner has every power. an owner can name another owner, and take it back. nobody else can. not a site admin.</p>
+      <p>a group keeps one owner while anyone else is in it. the last owner cannot leave until they name another. the last person out deletes the group.</p>
+      <p>a role: a name, a colour, and any of five powers.</p>
+      <ul>
+        <li><b>appearance</b>. the about line. public or private. the member order.</li>
+        <li><b>roles</b>. make roles and hand them out. never owner.</li>
+        <li><b>channels</b>. add, rename, order, delete.</li>
+        <li><b>kick</b>.</li>
+        <li><b>ban</b>. a ban stops a join until it is lifted.</li>
+      </ul>
+      <p>joining and leaving are your own choice. no invitations. no approval.</p>
+    </section>
+
+    <section>
+      <h2>a server</h2>
+      <p><code>/groups</code> is where you find them: yours, and ones to discover. and where you make one, while you are under the cap.</p>
+      <p><code>/groups/&lt;name&gt;</code> is the room. a banner. the picture. the channel list. the chat. the roster on the right, with a search.</p>
+      <ol class="steps">
+        <li>a server starts with one channel, <code>general</code>. it stays.</li>
+        <li>add another, rename it, drag the order, delete it. the channels power.</li>
+        <li>the room loads once. after that it is pushed to. a new channel, a new line, a rename: it arrives.</li>
+        <li>mute a channel and the bell hears nothing from it.</li>
+        <li>look at a channel and it is read, on every device of yours.</li>
+      </ol>
+      <p>home lists servers under recently offline. a chat line in a channel is a block, not a stream's line.</p>
+    </section>
+  </main>
+  <footer>long version: <code>docs/groups.md</code></footer>
+</body>
+</html>

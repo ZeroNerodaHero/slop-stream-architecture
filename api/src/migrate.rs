@@ -196,6 +196,34 @@ const MIGRATIONS: &[Migration] = &[
         present: "SELECT EXISTS (SELECT 1 FROM information_schema.columns
             WHERE table_schema = 'public' AND table_name = 'channels' AND column_name = 'position')",
     },
+    Migration {
+        version: 25,
+        name: "migrate-25.sql",
+        sql: include_str!("../migrations/migrate-25.sql"),
+        present: "SELECT EXISTS (SELECT 1 FROM information_schema.referential_constraints
+            WHERE constraint_schema = 'public' AND constraint_name = 'channel_mutes_server_channel_fkey' AND update_rule = 'CASCADE')",
+    },
+    Migration {
+        version: 26,
+        name: "migrate-26.sql",
+        sql: include_str!("../migrations/migrate-26.sql"),
+        present: "SELECT to_regclass('public.channel_roles') IS NOT NULL",
+    },
+    Migration {
+        version: 27,
+        name: "migrate-27.sql",
+        sql: include_str!("../migrations/migrate-27.sql"),
+        present: "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'groups' AND column_name = 'owner_role')",
+    },
+    Migration {
+        version: 28,
+        name: "migrate-28.sql",
+        sql: include_str!("../migrations/migrate-28.sql"),
+        present: "SELECT to_regclass('public.timeouts') IS NOT NULL
+            AND EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'roles' AND column_name = 'cooldown')",
+    },
 ];
 
 /// Apply every migration that has not run. The chat process does not call this.

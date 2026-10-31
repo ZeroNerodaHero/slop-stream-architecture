@@ -94,6 +94,19 @@ pub(crate) struct ChatState {
     dummy_prefix: String,
     /// `CHAT_PERSIST`. Off: redis only. On: each line is also a row in `chat_lines`.
     pub(crate) persist: bool,
+    /// The site admins (`ADMIN_NAMES`, as the api reads them): they see every channel of a
+    /// server, kept to a role or not (groups.rs `sees_sql`).
+    admins: Vec<Uuid>,
+}
+
+impl ChatState {
+    fn is_admin(&self, who: Option<&Who>) -> bool {
+        who.and_then(|w| w.user_id).is_some_and(|id| self.is_admin_id(id))
+    }
+
+    pub(crate) fn is_admin_id(&self, id: Uuid) -> bool {
+        self.admins.contains(&id)
+    }
 }
 
 impl FromRef<ChatState> for PgPool {
@@ -214,6 +227,14 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
     let dummy_prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
     let persist = history::enabled();
     log::info!("chat history {}", if persist { "on" } else { "off" });
+    // the admins as main.rs reads them: the names with an account, by id from here on
+    let admin_names: Vec<String> = std::env::var("ADMIN_NAMES")
+        .unwrap_or_default()
+        .split(',')
+        .map(|n| n.trim().to_lowercase())
+        .filter(|n| crate::valid_name(n))
+        .collect();
+    let admins: Vec<Uuid> = crate::debug::admins_with_accounts(&db, admin_names).await?.into_iter().map(|a| a.id).collect();
     let state = ChatState {
         db,
         redis,
@@ -223,6 +244,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         shutdown,
         dummy_prefix,
         persist,
+        admins,
     };
     let rooms = state.rooms.clone();
 
@@ -520,6 +542,24 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
         }
         Err(Unknown::Busy) => None,
     };
+    // a server's channel kept to roles this login does not hold is no channel to them (groups.rs
+    // `may_see`): the same words as one that is not there, so the panel does not reconnect
+    if let Some(server) = &server {
+        let channel = name.strip_prefix(server.as_str()).and_then(|rest| rest.strip_prefix('/')).unwrap_or("");
+        let user = who.as_ref().and_then(|w| w.user_id);
+        match crate::groups::may_see(&s.db, server, channel, user, s.is_admin(who.as_ref())).await {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = send(&mut socket, &Out::Error { error: "no such channel" }).await;
+                return;
+            }
+            Err(e) => {
+                log::warn!("{name}: cannot read the channel's roles: {e}");
+                let _ = send(&mut socket, &Out::Error { error: "chat is busy, try again" }).await;
+                return;
+            }
+        }
+    }
 
     // 2. subscribe first, then load history, so nothing can fall between the two.
     //    Lines the history already covers are dropped from the live feed by id.
@@ -620,7 +660,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                 }
                 let Some(w) = who.as_ref() else { continue };
                 if let Err(why) = accept(&s, &name, server.as_deref(), w, &text, &images).await {
-                    let _ = send(&mut socket, &Out::Error { error: why }).await;
+                    let _ = send(&mut socket, &why.frame()).await;
                     continue;
                 }
             }
@@ -764,32 +804,97 @@ fn parse_say(text: String, image: Option<String>, images: Vec<String>) -> Result
     Ok(Some((text, images)))
 }
 
-/// An identified socket's line into `room`: in a server's channel only a member may speak;
-/// the pictures must be ones the api kept; then the line and the room's ttl in one atomic
-/// round trip (a room whose first line landed but whose expire did not would otherwise live
-/// forever), and the row for history on its own task. `Err` is what the socket hears, and
-/// the line is not kept.
-async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: &str, images: &[String]) -> Result<(), &'static str> {
+/// Why a line was not taken: the words alone (`error`), or words with how long until one would
+/// be, in ms, the `slow down` frame's shape, which the panel counts down on the send button.
+enum Refused {
+    Words(&'static str),
+    Wait(&'static str, u64),
+}
+
+impl Refused {
+    fn frame(&self) -> Out<'static> {
+        match self {
+            Refused::Words(error) => Out::Error { error },
+            Refused::Wait(error, wait) => Out::Slow { error, wait: *wait },
+        }
+    }
+}
+
+impl From<&'static str> for Refused {
+    fn from(words: &'static str) -> Self {
+        Refused::Words(words)
+    }
+}
+
+/// The words for a login timed out of a server (docs/groups.md), with the ms until it ends.
+const TIMED_OUT: &str = "timed out";
+/// The words for a login whose role has a cooldown, with the ms until the next line may go.
+const COOLDOWN: &str = "cooldown";
+
+/// A member's standing in a server, for one line: whether they own it, the ms left on a
+/// timeout that is running, and the longest cooldown of their roles, in seconds (0: none).
+/// None: not a member.
+type Standing = (bool, Option<i64>, i32);
+
+/// An identified socket's line into `room`: in a server's channel only a member may speak, one
+/// who is not timed out (`timeouts`, the kick power's), and whose roles' cooldown has passed
+/// since their last line in the server (the longest cooldown of their roles; an owner and a
+/// site admin wait for nobody; the wait is a key in redis, `cd:<server>:<account>`, that lives
+/// the cooldown long); the pictures must be ones the api kept; then the line and the room's ttl
+/// in one atomic round trip (a room whose first line landed but whose expire did not would
+/// otherwise live forever), and the row for history on its own task. `Err` is what the socket
+/// hears, and the line is not kept.
+async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: &str, images: &[String]) -> Result<(), Refused> {
+    let mut cooldown: Option<(String, i32)> = None;
     // a channel is open to read. talking is for people in the server.
     if let Some(server) = server {
-        let allowed = match w.user_id {
-            Some(id) => match crate::groups::member(&s.db, id, server).await {
-                Ok(yes) => yes,
-                Err(e) => {
-                    log::warn!("{room}: membership: {e}");
-                    return Err("chat is busy, try again");
-                }
-            },
-            None => false,
+        let Some(id) = w.user_id else { return Err("join the server first".into()) };
+        let standing: Result<Option<Standing>, sqlx::Error> = sqlx::query_as(
+            "SELECT m.owner,
+                    (SELECT (EXTRACT(EPOCH FROM (t.until - now())) * 1000)::bigint FROM timeouts t
+                      WHERE t.group_name = $2 AND t.user_id = $1 AND t.until > now()),
+                    (SELECT COALESCE(max(r.cooldown), 0) FROM role_members rm JOIN roles r ON r.id = rm.role_id
+                      WHERE rm.user_id = $1 AND r.group_name = $2)
+             FROM memberships m WHERE m.user_id = $1 AND m.group_name = $2",
+        )
+        .bind(id)
+        .bind(server)
+        .fetch_optional(&s.db)
+        .await;
+        let (owner, timed_out, secs) = match standing {
+            Ok(Some(standing)) => standing,
+            Ok(None) => return Err("join the server first".into()),
+            Err(e) => {
+                log::warn!("{room}: membership: {e}");
+                return Err("chat is busy, try again".into());
+            }
         };
-        if !allowed {
-            return Err("join the server first");
+        if let Some(ms) = timed_out {
+            return Err(Refused::Wait(TIMED_OUT, ms.max(1) as u64));
+        }
+        if secs > 0 && !owner && !s.is_admin(Some(w)) {
+            cooldown = Some((format!("cd:{server}:{id}"), secs));
         }
     }
     pictures_exist(&s.db, room, images).await?;
     // the face as the row has it this moment, so the line fanned out now wears the right one
     let avatar = face_now(&s.db, room, w).await.map(|v| v.to_string());
     let mut r = s.redis.clone();
+    // the cooldown: the key set for this line, unless the last line's is still there, in which case its time left is the wait
+    if let Some((key, secs)) = &cooldown {
+        let set: Result<Option<String>, _> = redis::cmd("SET").arg(key).arg("1").arg("PX").arg(i64::from(*secs) * 1000).arg("NX").query_async(&mut r).await;
+        match set {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let left: i64 = redis::cmd("PTTL").arg(key).query_async(&mut r).await.unwrap_or(1000);
+                return Err(Refused::Wait(COOLDOWN, left.max(1) as u64));
+            }
+            Err(e) => {
+                log::warn!("{room}: cooldown: {e}");
+                return Err("chat is down, try again".into());
+            }
+        }
+    }
     // the badges as json, the picture's version and the account as text, and no field at
     // all for the common case of none
     let groups = if w.groups.is_empty() { String::new() } else { serde_json::to_string(&w.groups).unwrap_or_default() };
@@ -822,7 +927,7 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
         Ok((id, _)) => id,
         Err(e) => {
             log::warn!("{room}: xadd: {e}");
-            return Err("chat is down, try again");
+            return Err("chat is down, try again".into());
         }
     };
     // redis already has the line, and the room will fan it out. the insert
@@ -852,11 +957,12 @@ fn notify_members(s: &ChatState, server: &str, room: &str, actor: Uuid, text: &s
     let Some(channel) = room.strip_prefix(server).and_then(|rest| rest.strip_prefix('/')) else { return };
     let db = s.db.clone();
     let redis = s.redis.clone();
+    let admins = s.admins.clone();
     let server = server.to_owned();
     let channel = channel.to_owned();
     let text = text.to_owned();
     tokio::spawn(async move {
-        if tokio::time::timeout(NOTIFY_LIMIT, crate::notify::channel_line(&db, &redis, &server, &channel, actor, &text)).await.is_err() {
+        if tokio::time::timeout(NOTIFY_LIMIT, crate::notify::channel_line(&db, &redis, &server, &channel, actor, &text, &admins)).await.is_err() {
             log::warn!("{server}/{channel}: the inbox rows for a line timed out");
         }
     });
@@ -950,8 +1056,11 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
         None => "somebody (database down, reading only)".to_owned(),
     };
 
-    // 2. every channel of the server, joined. no history: the page has the api's
-    let channels: Vec<String> = match sqlx::query_scalar("SELECT name FROM channels WHERE server = $1 ORDER BY created_at, name").bind(&server).fetch_all(&s.db).await {
+    // 2. every channel of the server this login sees (groups.rs `visible_channels`: one kept to
+    //    roles they do not hold is not followed, and a say in it is `say which channel`), joined.
+    //    no history: the page has the api's. what they see is read now: a role given or taken
+    //    while the socket is up reaches it on the next connect, and the page reconnects on its own
+    let channels: Vec<String> = match crate::groups::visible_channels(&s.db, &server, who.as_ref().and_then(|w| w.user_id), s.is_admin(who.as_ref())).await {
         Ok(channels) => channels,
         Err(e) => {
             // a server with no channels to follow is no use: the panel is back in 3s
@@ -1041,15 +1150,19 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                         }
                     }
                     Ok(In::Join { channel }) => {
-                        // a channel added since the socket opened (the events socket said so). it asks
-                        // the database whether the channel is there, so it costs a token like a line
+                        // a channel added since the socket opened, or unlocked for this login since (the
+                        // events socket said so). it asks the database whether the channel is there and
+                        // theirs to see, so it costs a token like a line
                         let channel = channel.trim().to_lowercase();
                         if joined.iter().any(|c| c.as_ref() == channel) { continue; }
                         if let Err(wait) = s.limiter.take(&speaker, &name) {
                             let _ = send(&mut socket, &slow(wait)).await;
                             continue;
                         }
-                        if crate::groups::channel_room(&s.db, &server, &channel).await.is_ok() && !follow(&s, &server, &channel, &ip, &tx, &mut joined).await {
+                        let user = who.as_ref().and_then(|w| w.user_id);
+                        let seen = crate::groups::channel_names(&server, &channel).is_ok()
+                            && crate::groups::may_see(&s.db, &server, &channel, user, s.is_admin(who.as_ref())).await.unwrap_or(false);
+                        if seen && !follow(&s, &server, &channel, &ip, &tx, &mut joined).await {
                             let _ = send(&mut socket, &Out::Error { error: "too many tabs" }).await;
                         }
                     }
@@ -1090,7 +1203,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                         let Some(w) = who.as_ref() else { continue };
                         let room = format!("{server}/{channel}");
                         if let Err(why) = accept(&s, &room, Some(&server), w, &text, &images).await {
-                            let _ = send(&mut socket, &Out::Error { error: why }).await;
+                            let _ = send(&mut socket, &why.frame()).await;
                             continue;
                         }
                     }

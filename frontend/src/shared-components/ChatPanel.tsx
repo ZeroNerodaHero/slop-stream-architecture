@@ -120,6 +120,13 @@ function onKey(e: ReactKeyboardEvent<HTMLInputElement>) {
   }
 }
 
+/** A wait on the send button: `12s` under a minute, `9:05` from there (a cooldown or a timeout can run minutes), `3h 10m` past an hour. */
+function waitWords(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
 /** Whole seconds until `until` (unix ms), counting down; 0 once it has passed, or when there is nothing to wait for. */
 function useCountdown(until: number): number {
   // the clock as an external store: the seconds left are the snapshot, and a timer says "look again" four times a second until the wait is over
@@ -811,13 +818,13 @@ export function ChatPanel({ name, owner = null, embedded = false, search = true,
                 variant={wait > 0 ? 'danger' : 'primary'}
                 className="h-10 shrink-0 px-4 text-base tabular-nums"
                 disabled={!canSend}
-                title={wait > 0 ? `${tier.words}. the next in ${wait}s` : undefined}
+                title={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : undefined}
                 data-wait={wait > 0 ? wait : undefined}
                 onClick={sendChat}
               >
                 {wait > 0 ? (
                   <span key={shake} className="inline-block motion-safe:animate-shake">
-                    {wait}s
+                    {waitWords(wait)}
                   </span>
                 ) : (
                   'send'

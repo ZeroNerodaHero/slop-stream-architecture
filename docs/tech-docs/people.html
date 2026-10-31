@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>people · tech docs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav><a href="index.html">← all pages</a></nav>
+  <main>
+    <h1>people</h1>
+    <p class="lead">who you are. who is here. who you follow. what reaches you.</p>
+
+    <section>
+      <h2>a name</h2>
+      <p>nobody has to log in. the name box in the corner panel is you. it lives in your browser. it is your chat nick and your go live name. any name nobody owns is free.</p>
+      <p>sign up, and the name is yours. nobody else can go live as it. or chat as it. or change its page. a <code>✓</code> next to a name means a login is behind it.</p>
+      <p>a name used without an account, then claimed: the status, the page and the pictures stay.</p>
+    </section>
+
+    <section>
+      <h2>the password</h2>
+      <div class="pic">
+        <div class="box">browser</div>
+        <div class="flow" data-say="https · the password"><i></i></div>
+        <div class="box hot">api<small>scramble it, forget it</small></div>
+        <div class="flow" data-say="the scramble only"><i></i></div>
+        <div class="box store">database</div>
+      </div>
+      <p>the browser sends the password as it is. https hides the trip. the api scramble it. <code>argon2id</code> is the scrambler. it is slow on purpose. only the scramble is kept. the real password is never kept.</p>
+      <p>why not scramble in the browser. because then the scramble <em>is</em> the password. a thief with the database could log in with it. nothing gained.</p>
+      <table>
+        <tr><th>they steal</th><th>they get</th></tr>
+        <tr><td>the database</td><td>names, bios, scrambles. slow to crack.</td></tr>
+        <tr><td>the wire</td><td>nothing. https.</td></tr>
+        <tr><td>a laptop with the site open</td><td>that one login, until <code>logout-all</code>. scripts cannot read the cookie.</td></tr>
+      </table>
+      <p>no email, so no reset. on the server: <code>./scripts/deploy.sh passwd &lt;name&gt;</code> prints a new one.</p>
+    </section>
+
+    <section>
+      <h2>an id under the name</h2>
+      <p>every name has an id that never changes. follows, groups, pictures and messages point at the id. not the name.</p>
+      <p>so you can change your name. the profile tab. once a month. with your password. not while live. everything follows.</p>
+      <p>the old name is held 30 days. old links still find you.</p>
+    </section>
+
+    <section>
+      <h2>presence</h2>
+      <p>the square on the corner of your picture. the word next to your name on your page.</p>
+      <ul>
+        <li><span class="sq on"></span><b>online</b>. a tab of the site is open.</li>
+        <li><span class="sq stream live"></span><b>streaming</b>. you are live.</li>
+        <li><span class="sq dnd"></span><b>do not disturb</b>. you picked it.</li>
+        <li><span class="sq off"></span><b>offline</b>. you picked <code>appear offline</code>, or closed the last tab.</li>
+      </ul>
+      <div class="pic">
+        <div class="box">every open tab</div>
+        <div class="flow both" data-say="one wire a browser"><i></i><i></i></div>
+        <div class="box hot">events</div>
+        <div class="flow back" data-say="who is here"><i></i></div>
+        <div class="box store">redis</div>
+      </div>
+      <p>one wire per browser, shared by all its tabs. it says which names it watches. a fact about one of them comes down the wire. nothing on a page asks again and again.</p>
+      <p>the wire drops: back in 3 s. it replays the last 10 s. the last tab closes: offline at once.</p>
+    </section>
+
+    <section>
+      <h2>follows</h2>
+      <p>you follow a name. one row: you, them. they follow you back: you are <b>friends</b>.</p>
+      <p>the side column shows who you follow. friends apart from the rest. the ones streaming first. a search box to find more.</p>
+      <p>the watch page has the button, and <b class="count" style="--to: 48"></b> followers.</p>
+    </section>
+
+    <section>
+      <h2>dms</h2>
+      <p>friends only. you write a line. it is saved. it is pushed to every device of both of you, at once.</p>
+      <div class="pic">
+        <div class="box">you</div>
+        <div class="flow" data-say="a line"><i></i></div>
+        <div class="box hot">api</div>
+        <div class="flow" data-say="to both, every device"><i></i><i></i></div>
+        <div class="box">friend</div>
+      </div>
+      <p>a read mark per thread. the count of new lines holds across reloads and devices. the window: a tab per friend. a grid to pick one. the counts on the side column.</p>
+    </section>
+
+    <section>
+      <h2>the inbox</h2>
+      <p>the bell at the right end of the title row. how many are new on its corner. the list under it.</p>
+      <p>the last <b class="count" style="--to: 30"></b> things that happened to you. someone you follow went live. someone followed you. a friend wrote. someone wrote in a channel of a group you are in. clipped to 30 on every write.</p>
+      <p>read on one device, read on all. which kinds go in: four switches on the <code>notifications</code> tab of the user modal. a channel too loud: mute it, and only it.</p>
+    </section>
+  </main>
+  <footer>long version: <code>docs/accounts.md</code>, <code>docs/ids.md</code>, <code>docs/status.md</code>, <code>docs/follows.md</code>, <code>docs/dms.md</code>, <code>docs/notifications.md</code></footer>
+</body>
+</html>

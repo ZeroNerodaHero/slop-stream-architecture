@@ -1,17 +1,17 @@
 /**
  * The calendar's arithmetic (docs/calendar.md): the api's session rows become blocks (sessions
  * merged across a gap under five minutes: one stream that dropped), blocks become spans on day
- * rows (cut at the viewer's midnights), and four weeks of blocks become the line `usually
- * tuesdays and thursdays around 8pm`. Pure; the viewer's clock and zone come in as arguments,
- * and nothing here reads one.
+ * rows (cut at the viewer's midnights), and a week of blocks becomes the line `streamed tuesday
+ * and thursday around 8pm`. Pure; the viewer's clock and zone come in as arguments, and nothing
+ * here reads one.
  */
 
 import type { SessionRow } from '@/infra/api';
 
 export const MIN_MS = 60_000;
 export const DAY_MS = 24 * 60 * MIN_MS;
-/** The strip: four weeks, today the bottom row. */
-export const DAYS = 28;
+/** The strip: a week, today the bottom row. */
+export const DAYS = 7;
 /** Two sessions closer than this are one stream whose connection dropped: one block with a mark at the drop. */
 export const GAP_MS = 5 * MIN_MS;
 /** A session shorter than this is a go-live whose negotiation failed. The log keeps it; the strip does not draw it. */
@@ -131,7 +131,7 @@ export function rowsOf(blocks: Block[], first: Date, now: Date): { spans: Span[]
 }
 
 const SHORT_DAY = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-const LONG_DAYS = ['sundays', 'mondays', 'tuesdays', 'wednesdays', 'thursdays', 'fridays', 'saturdays'];
+const LONG_DAY = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const SHORT_MONTH = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
 export function fmtClock(h: number, m: number): string {
@@ -173,21 +173,23 @@ function listOf(words: string[]): string {
 }
 
 /**
- * The line read off four weeks of blocks: the weekdays with a block in at least two of them,
- * and the median start rounded to the half hour. Fewer than three blocks claim no pattern.
+ * The line read off the week's blocks: the days with one, in the strip's order (`first` is the
+ * top row's midnight; a block that began before it is on the top row, so it counts there), and
+ * the median start rounded to the half hour. One week is too short to call a habit, so the line
+ * says what happened: `streamed tuesday and thursday around 8pm`. The week that has today in it
+ * is `this week`; an older page is `that week`.
  */
-export function usuallyOf(blocks: Block[]): string {
-  if (blocks.length === 0) return 'has not streamed in these four weeks';
-  if (blocks.length < 3) return `streamed ${blocks.length === 1 ? 'once' : 'twice'} in these four weeks`;
-  const perDow = Array.from({ length: 7 }, () => 0);
-  for (const b of blocks) perDow[b.start.getDay()] = (perDow[b.start.getDay()] ?? 0) + 1;
-  const days = perDow.map((n, i) => (n >= 2 ? i : -1)).filter((i) => i >= 0);
+export function usuallyOf(blocks: Block[], first: Date, now: Date): string {
+  const current = localMidnight(now) < addDays(first, DAYS);
+  if (blocks.length === 0) return current ? 'has not streamed this week' : 'did not stream that week';
+  const dows = new Set(blocks.map((b) => (b.start < first ? first : b.start).getDay()));
+  const days = Array.from({ length: DAYS }, (_, i) => addDays(first, i).getDay()).filter((d) => dows.has(d));
   const mins = blocks.map((b) => b.start.getHours() * 60 + b.start.getMinutes()).sort((a, b) => a - b);
   const median = mins[Math.floor(mins.length / 2)] ?? 0;
   const rounded = Math.round(median / 30) * 30;
   const when = fmtClock(Math.floor(rounded / 60) % 24, rounded % 60);
-  if (days.length === 0) return `streams around ${when}, no fixed day`;
-  return `usually ${listOf(days.map((d) => LONG_DAYS[d] ?? ''))} around ${when}`;
+  const on = days.length === DAYS ? 'every day' : listOf(days.map((d) => LONG_DAY[d] ?? ''));
+  return `streamed ${on} around ${when}`;
 }
 
 /** What a block says of itself: the day, the hours, the length, the drops, how sure its end is. */

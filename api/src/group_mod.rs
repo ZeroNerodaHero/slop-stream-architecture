@@ -221,10 +221,20 @@ fn role_name(raw: &str) -> Result<String, ApiError> {
     if !(1..=32).contains(&n) {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "role name: 1 to 32 characters"));
     }
-    if name.eq_ignore_ascii_case("owner") {
+    Ok(name)
+}
+
+/// What the group calls its owner role (docs/groups.md): `owner` until an owner renames it.
+async fn owner_role_of(db: &sqlx::PgPool, group: &str) -> Result<String, sqlx::Error> {
+    sqlx::query_scalar("SELECT owner_role FROM groups WHERE name = $1").bind(group).fetch_one(db).await
+}
+
+/// A custom role cannot be called what the owner role is: that word is the owners' on the roster.
+async fn not_the_owner_role(db: &sqlx::PgPool, group: &str, name: &str) -> Result<(), ApiError> {
+    if owner_role_of(db, group).await?.eq_ignore_ascii_case(name) {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "that name is reserved"));
     }
-    Ok(name)
+    Ok(())
 }
 
 #[derive(Deserialize, Default)]
@@ -253,6 +263,32 @@ struct RoleIn {
     color: String,
     #[serde(default)]
     perms: PermsIn,
+    /// The channels kept to this role (docs/groups.md): its holders see them, whoever else
+    /// cannot. Absent: none.
+    #[serde(default)]
+    channels: Vec<String>,
+    /// Seconds its holders wait between lines (docs/groups.md). Absent, or 0: no cooldown.
+    #[serde(default)]
+    cooldown: i32,
+}
+
+/// A role's cooldown is seconds, none to an hour.
+const MAX_COOLDOWN_SECS: i32 = 3600;
+/// A timeout is seconds, ten to a week.
+const MIN_TIMEOUT_SECS: i64 = 10;
+const MAX_TIMEOUT_SECS: i64 = 7 * 86400;
+
+fn cooldown_of(raw: i32) -> Result<i32, ApiError> {
+    if !(0..=MAX_COOLDOWN_SECS).contains(&raw) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, format!("cooldown: 0 to {MAX_COOLDOWN_SECS} seconds")));
+    }
+    Ok(raw)
+}
+
+#[derive(Deserialize)]
+struct TimeoutIn {
+    name: String,
+    seconds: i64,
 }
 
 #[derive(Deserialize)]
@@ -309,8 +345,12 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}/roles/{id}/members/{name}", axum::routing::delete(take_role))
         .route("/api/groups/{group}/owners", post(grant_owner))
         .route("/api/groups/{group}/owners/{name}", axum::routing::delete(revoke_owner))
+        .route("/api/groups/{group}/owner-role", axum::routing::put(rename_owner_role))
+        .route("/api/groups/{group}/transfer", post(transfer_ownership))
         .route("/api/groups/{group}/members", get(list_members))
         .route("/api/groups/{group}/kick", post(kick))
+        .route("/api/groups/{group}/timeout", post(timeout))
+        .route("/api/groups/{group}/timeout/{name}", axum::routing::delete(lift_timeout))
         .route("/api/groups/{group}/ban", post(ban))
         .route("/api/groups/{group}/bans", get(list_bans))
         .route("/api/groups/{group}/bans/{name}", axum::routing::delete(unban))
@@ -325,18 +365,19 @@ pub(crate) fn routes() -> Router<AppState> {
 pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
     let group = server(&s.db, &group).await?;
     let user = me.as_ref().map(|a| a.id);
-    let row: (String, String, String, i64, Option<i64>, Option<i64>, bool, Option<String>, Option<i32>, String) = sqlx::query_as(
+    #[allow(clippy::type_complexity)]
+    let row: (String, String, String, i64, Option<i64>, Option<i64>, bool, Option<String>, Option<i32>, String, String) = sqlx::query_as(
         "SELECT g.badge, g.color, g.about,
                 (SELECT count(*) FROM memberships m WHERE m.group_name = g.name),
                 (EXTRACT(EPOCH FROM g.icon_at))::bigint,
                 (EXTRACT(EPOCH FROM g.banner_at))::bigint,
-                g.public, g.title, g.tag, g.member_order
+                g.public, g.title, g.tag, g.member_order, g.owner_role
          FROM groups g WHERE g.name = $1",
     )
     .bind(&group)
     .fetch_one(&s.db)
     .await?;
-    let (badge, color, about, members, icon, banner, public, title, tag, member_order) = row;
+    let (badge, color, about, members, icon, banner, public, title, tag, member_order, owner_role) = row;
     let mine = match user {
         Some(id) => groups::member(&s.db, id, &group).await?,
         None => false,
@@ -363,6 +404,7 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, M
         "members": members,
         "mine": mine,
         "owner": held.owner,
+        "owner_role": owner_role,
         "admin": admin,
         "public": public,
         "title": title,
@@ -421,16 +463,70 @@ async fn put_about(State(s): State<AppState>, Path(group): Path<String>, Me(me):
     Ok(Json(json!({ "about": about })))
 }
 
-/// One role as the room, the list and the `role` fact say it.
-fn role_json(id: uuid::Uuid, name: &str, color: &str, perms: i32) -> Value {
-    json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms) })
+/// One role as the room, the list and the `role` fact say it. `channels` is the ones kept to it,
+/// `cooldown` the seconds its holders wait between lines (0: none).
+fn role_json(id: uuid::Uuid, name: &str, color: &str, perms: i32, channels: &[String], cooldown: i32) -> Value {
+    json!({ "id": id, "name": name, "color": color, "perms": perms_json(perms), "channels": channels, "cooldown": cooldown })
 }
 
-/// The group's roles, oldest first: the id is a uuid and says nothing about the order.
+/// The group's roles, oldest first: the id is a uuid and says nothing about the order. Each
+/// with the channels kept to it, by name, and its cooldown.
 async fn roles_of(db: &sqlx::PgPool, group: &str) -> Result<Vec<Value>, sqlx::Error> {
-    let roles: Vec<(uuid::Uuid, String, String, i32)> =
-        sqlx::query_as("SELECT id, name, color, perms FROM roles WHERE group_name = $1 ORDER BY created_at, name").bind(group).fetch_all(db).await?;
-    Ok(roles.into_iter().map(|(id, name, color, perms)| role_json(id, &name, &color, perms)).collect())
+    let roles: Vec<(uuid::Uuid, String, String, i32, Vec<String>, i32)> = sqlx::query_as(
+        "SELECT r.id, r.name, r.color, r.perms,
+                COALESCE((SELECT array_agg(cr.channel ORDER BY cr.channel) FROM channel_roles cr WHERE cr.role_id = r.id), '{}'),
+                r.cooldown
+         FROM roles r WHERE r.group_name = $1 ORDER BY r.created_at, r.name",
+    )
+    .bind(group)
+    .fetch_all(db)
+    .await?;
+    Ok(roles.into_iter().map(|(id, name, color, perms, channels, cooldown)| role_json(id, &name, &color, perms, &channels, cooldown)).collect())
+}
+
+/// The channels a role's body names, cleaned, as the shaper may put them: each a channel of the
+/// group the shaper sees (`groups::may_see`; a hidden one and a missing one are both `no such
+/// channel`, so the roles power cannot unlock for itself what it cannot see), never `general`
+/// (everyone's), each once. Sorted, as `roles_of` lists them.
+async fn kept_channels(s: &AppState, group: &str, me: &Shaper, who: uuid::Uuid, raw: &[String]) -> Result<Vec<String>, ApiError> {
+    let mut channels: Vec<String> = Vec::with_capacity(raw.len());
+    for name in raw {
+        let name = name.trim().to_lowercase();
+        if name == groups::GENERAL {
+            return Err(ApiError::new(StatusCode::BAD_REQUEST, "general is everyone's"));
+        }
+        if channels.contains(&name) {
+            continue;
+        }
+        if !groups::may_see(&s.db, group, &name, Some(who), me.admin).await? {
+            return Err(ApiError::new(StatusCode::NOT_FOUND, format!("no such channel: {name}")));
+        }
+        channels.push(name);
+    }
+    channels.sort();
+    Ok(channels)
+}
+
+/// The channels kept to a role, replaced by `channels` as far as the shaper sees: a channel kept
+/// to the role that the shaper cannot see stays kept, since the body could not have named it.
+/// → the role's channels as they stand after. Within the caller's transaction.
+async fn keep_channels(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    group: &str,
+    id: uuid::Uuid,
+    who: uuid::Uuid,
+    admin: bool,
+    channels: &[String],
+) -> Result<Vec<String>, sqlx::Error> {
+    let seen = format!("DELETE FROM channel_roles cr0 WHERE cr0.role_id = $1 AND EXISTS (SELECT 1 FROM channels c WHERE c.server = cr0.server AND c.name = cr0.channel AND {})", groups::sees_sql("$2", "$3"));
+    sqlx::query(&seen).bind(id).bind(who).bind(admin).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO channel_roles (server, channel, role_id) SELECT $1, unnest($2::text[]), $3 ON CONFLICT DO NOTHING")
+        .bind(group)
+        .bind(channels)
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query_scalar("SELECT channel FROM channel_roles WHERE role_id = $1 ORDER BY channel").bind(id).fetch_all(&mut **tx).await
 }
 
 async fn list_roles(State(s): State<AppState>, Path(group): Path<String>) -> ApiResult {
@@ -449,11 +545,14 @@ async fn create_role(
     let group = server(&s.db, &group).await?;
     let me = shaper(&s, who.id, &group).await?;
     let name = role_name(&body.name)?;
+    not_the_owner_role(&s.db, &group, &name).await?;
     let color = groups::clean_color(&body.color)?;
     let perms = body.perms.bits();
+    let cooldown = cooldown_of(body.cooldown)?;
     if !me.reaches(perms) {
         return Err(out_of_reach());
     }
+    let channels = kept_channels(&s, &group, &me, who.id, &body.channels).await?;
     let taken: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM roles WHERE group_name = $1 AND lower(name) = lower($2))")
         .bind(&group)
         .bind(&name)
@@ -467,26 +566,31 @@ async fn create_role(
         return Err(ApiError::new(StatusCode::FORBIDDEN, format!("this group has {MAX_ROLES} roles already")));
     }
     // the id is postgres's (gen_random_uuid, the column's default), read back here
+    let mut tx = s.db.begin().await?;
     let id: Option<uuid::Uuid> = sqlx::query_scalar(
-        "INSERT INTO roles (group_name, name, color, perms) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING RETURNING id",
+        "INSERT INTO roles (group_name, name, color, perms, cooldown) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING RETURNING id",
     )
     .bind(&group)
     .bind(&name)
     .bind(&color)
     .bind(perms)
-    .fetch_optional(&s.db)
+    .bind(cooldown)
+    .fetch_optional(&mut *tx)
     .await?;
     let Some(id) = id else {
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     };
+    let channels = keep_channels(&mut tx, &group, id, who.id, me.admin, &channels).await?;
+    tx.commit().await?;
     log::info!("{}: role {name} in {group}", who.name);
-    let role = role_json(id, &name, &color, perms);
+    let role = role_json(id, &name, &color, perms, &channels, cooldown);
     groups::tell(&s, &group, "role", json!({ "role": role })).await;
     Ok((StatusCode::CREATED, Json(role)))
 }
 
 /// `PUT /api/groups/:group/roles/:id`: the role replaced whole, name included: a rename is
-/// this, since the id is what the role is known by. The same reach as making it.
+/// this, since the id is what the role is known by. The same reach as making it. `channels`
+/// replaces the channels kept to the role, as far as the shaper sees them (`keep_channels`).
 async fn update_role(
     State(s): State<AppState>,
     Path((group, id)): Path<(String, uuid::Uuid)>,
@@ -498,12 +602,15 @@ async fn update_role(
     let group = server(&s.db, &group).await?;
     let me = shaper(&s, who.id, &group).await?;
     let name = role_name(&body.name)?;
+    not_the_owner_role(&s.db, &group, &name).await?;
     let color = groups::clean_color(&body.color)?;
     let perms = body.perms.bits();
+    let cooldown = cooldown_of(body.cooldown)?;
     // the role as it is, and as it would be: both within reach
     if !me.reaches(role_perms(&s.db, &group, id).await?) || !me.reaches(perms) {
         return Err(out_of_reach());
     }
+    let channels = kept_channels(&s, &group, &me, who.id, &body.channels).await?;
     let taken: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM roles WHERE group_name = $1 AND lower(name) = lower($2) AND id <> $3)")
         .bind(&group)
         .bind(&name)
@@ -513,18 +620,22 @@ async fn update_role(
     if taken {
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     }
-    let done = sqlx::query("UPDATE roles SET name = $3, color = $4, perms = $5 WHERE id = $1 AND group_name = $2")
+    let mut tx = s.db.begin().await?;
+    let done = sqlx::query("UPDATE roles SET name = $3, color = $4, perms = $5, cooldown = $6 WHERE id = $1 AND group_name = $2")
         .bind(id)
         .bind(&group)
         .bind(&name)
         .bind(&color)
         .bind(perms)
-        .execute(&s.db)
+        .bind(cooldown)
+        .execute(&mut *tx)
         .await?;
     if done.rows_affected() == 0 {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such role"));
     }
-    let role = role_json(id, &name, &color, perms);
+    let channels = keep_channels(&mut tx, &group, id, who.id, me.admin, &channels).await?;
+    tx.commit().await?;
+    let role = role_json(id, &name, &color, perms, &channels, cooldown);
     groups::tell(&s, &group, "role", json!({ "role": role })).await;
     Ok(Json(role))
 }
@@ -617,6 +728,71 @@ async fn grant_owner(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `POST /api/groups/:group/transfer` `{ name }`: the group is `name`'s from now on, and not
+/// this login's (docs/groups.md): they are made an owner and the caller stops being one, in one
+/// transaction, so the group has an owner throughout. An owner, for a member who is not one
+/// (an owner already is 409), not themselves (400); the cap on owning counts for them as it
+/// does for a naming. Two `owner` facts, theirs then the caller's. 204. The caller keeps their
+/// roles and stays in the group; the members tab asks before this.
+async fn transfer_ownership(
+    State(s): State<AppState>,
+    Path(group): Path<String>,
+    Me(me): Me,
+    body: Result<Json<NameIn>, JsonRejection>,
+) -> Result<StatusCode, ApiError> {
+    let who = me.ok_or_else(login)?;
+    let Json(body) = body?;
+    let group = server(&s.db, &group).await?;
+    if !is_owner(&s.db, who.id, &group).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "only an owner hands the group on"));
+    }
+    let name = body.name.trim().to_lowercase();
+    if name == who.name {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "that is you"));
+    }
+    let (user, already) = member_id(&s.db, &group, &name).await?;
+    if already {
+        return Err(ApiError::new(StatusCode::CONFLICT, format!("{name} is an owner already")));
+    }
+    if groups::groups_owned(&s.db, user).await? >= s.groups_per_owner {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, format!("{name} owns {}", groups::owned_cap_words(s.groups_per_owner))));
+    }
+    let mut tx = s.db.begin().await?;
+    sqlx::query("UPDATE memberships SET owner = true WHERE user_id = $1 AND group_name = $2").bind(user).bind(&group).execute(&mut *tx).await?;
+    sqlx::query("UPDATE memberships SET owner = false WHERE user_id = $1 AND group_name = $2").bind(who.id).bind(&group).execute(&mut *tx).await?;
+    tx.commit().await?;
+    log::info!("{}: handed {group} on to {name}", who.name);
+    groups::tell(&s, &group, "owner", json!({ "who": name, "owner": true })).await;
+    groups::tell(&s, &group, "owner", json!({ "who": who.name, "owner": false })).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `PUT /api/groups/:group/owner-role` `{ name }`: what the owner role is called from now on
+/// (docs/groups.md): the word on the roster's crown and the roles tab's first row. An owner
+/// (or a site admin). A role's name rule; not a custom role's name (409). → `{ name }`, and an
+/// `owner_role` fact to every room open. Owning itself is untouched: the owners stay the owners.
+async fn rename_owner_role(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<NameIn>, JsonRejection>) -> ApiResult {
+    let who = me.ok_or_else(login)?;
+    let Json(body) = body?;
+    let group = server(&s.db, &group).await?;
+    if !is_owner(&s.db, who.id, &group).await? && !s.admins.iter().any(|a| a.id == who.id) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "only an owner names the owner role"));
+    }
+    let name = role_name(&body.name)?;
+    let taken: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM roles WHERE group_name = $1 AND lower(name) = lower($2))")
+        .bind(&group)
+        .bind(&name)
+        .fetch_one(&s.db)
+        .await?;
+    if taken {
+        return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
+    }
+    sqlx::query("UPDATE groups SET owner_role = $2 WHERE name = $1").bind(&group).bind(&name).execute(&s.db).await?;
+    log::info!("{}: the owner role of {group} is {name}", who.name);
+    groups::tell(&s, &group, "owner_role", json!({ "name": name })).await;
+    Ok(Json(json!({ "name": name })))
+}
+
 async fn revoke_owner(State(s): State<AppState>, Path((group, name)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
@@ -641,8 +817,10 @@ async fn revoke_owner(State(s): State<AppState>, Path((group, name)): Path<(Stri
 /// keeps the order right as people come and go), whether they own the group, and the roles
 /// they hold. Owners first, then `order` (`name`, `newest`, `oldest`).
 async fn members_of(db: &sqlx::PgPool, group: &str, order: &str) -> Result<Vec<Value>, sqlx::Error> {
-    let rows: Vec<(String, bool, Option<i64>, Option<i64>)> = sqlx::query_as(
-        "SELECT s.name, m.owner, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, (EXTRACT(EPOCH FROM m.joined_at))::bigint
+    // `timeout`: unix seconds until a timeout that is still running ends, else null
+    let rows: Vec<(String, bool, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+        "SELECT s.name, m.owner, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, (EXTRACT(EPOCH FROM m.joined_at))::bigint,
+                (SELECT (EXTRACT(EPOCH FROM t.until))::bigint FROM timeouts t WHERE t.group_name = m.group_name AND t.user_id = m.user_id AND t.until > now())
          FROM memberships m JOIN streamers s ON s.id = m.user_id
          WHERE m.group_name = $1
          ORDER BY m.owner DESC,
@@ -663,13 +841,13 @@ async fn members_of(db: &sqlx::PgPool, group: &str, order: &str) -> Result<Vec<V
     .bind(group)
     .fetch_all(db)
     .await?;
-    let out = rows.into_iter().map(|(name, owner, avatar, joined)| {
+    let out = rows.into_iter().map(|(name, owner, avatar, joined, timeout)| {
         let mine: Vec<Value> = roles
             .iter()
             .filter(|(n, _, _, _)| n == &name)
             .map(|(_, id, role, color)| json!({ "id": id, "name": role, "color": color }))
             .collect();
-        json!({ "name": name, "owner": owner, "avatar": avatar, "joined": joined.unwrap_or(0), "roles": mine })
+        json!({ "name": name, "owner": owner, "avatar": avatar, "joined": joined.unwrap_or(0), "roles": mine, "timeout": timeout })
     });
     Ok(out.collect())
 }
@@ -715,6 +893,62 @@ async fn kick(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, 
     groups::tell(&s, &group, "left", json!({ "who": name, "by": "kick", "members": members })).await;
     groups::delete_if_empty(&s, &group).await?;
     log::info!("{}: kicked {name} from {group}", who.name);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/groups/:group/timeout` `{ name, seconds }`: no line of `name`'s in the group's
+/// channels for that long (docs/groups.md): the chat refuses them with `timed out` and the wait.
+/// The kick power; a member (404), not yourself (400), an owner only by an owner (403); ten
+/// seconds to a week (400). Set again, the new end stands. A row of its own (`timeouts`), so
+/// leaving and joining again does not end it; the expired rows of the group are swept here.
+/// A `timeout` fact carries `until`, unix seconds. 204.
+async fn timeout(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<TimeoutIn>, JsonRejection>) -> Result<StatusCode, ApiError> {
+    let who = me.ok_or_else(login)?;
+    let Json(body) = body?;
+    let group = server(&s.db, &group).await?;
+    need(&s, who.id, &group, KICK).await?;
+    let name = body.name.trim().to_lowercase();
+    if name == who.name {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "you can't time yourself out"));
+    }
+    if !(MIN_TIMEOUT_SECS..=MAX_TIMEOUT_SECS).contains(&body.seconds) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, format!("time out: {MIN_TIMEOUT_SECS} seconds to a week")));
+    }
+    let (user, owner) = member_id(&s.db, &group, &name).await?;
+    if owner && !is_owner(&s.db, who.id, &group).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "an owner is not timed out by a role"));
+    }
+    sqlx::query("DELETE FROM timeouts WHERE group_name = $1 AND until < now()").bind(&group).execute(&s.db).await?;
+    let until: i64 = sqlx::query_scalar(
+        "INSERT INTO timeouts (group_name, user_id, until, by_id) VALUES ($1, $2, now() + make_interval(secs => $3), $4)
+         ON CONFLICT (group_name, user_id) DO UPDATE SET until = EXCLUDED.until, by_id = EXCLUDED.by_id
+         RETURNING (EXTRACT(EPOCH FROM until))::bigint",
+    )
+    .bind(&group)
+    .bind(user)
+    .bind(body.seconds as f64)
+    .bind(who.id)
+    .fetch_one(&s.db)
+    .await?;
+    log::info!("{}: timed {name} out of {group} for {}s", who.name, body.seconds);
+    groups::tell(&s, &group, "timeout", json!({ "who": name, "until": until })).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `DELETE /api/groups/:group/timeout/:name`: the timeout lifted, early. The kick power. 204,
+/// also when there was none; the name needs an account (404), not a membership, since a timeout
+/// outlives a leave. A `timeout` fact with `until` null.
+async fn lift_timeout(State(s): State<AppState>, Path((group, name)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
+    let who = me.ok_or_else(login)?;
+    let group = server(&s.db, &group).await?;
+    need(&s, who.id, &group, KICK).await?;
+    let name = name.trim().to_lowercase();
+    let user = account(&s.db, &name).await?;
+    let lifted = sqlx::query("DELETE FROM timeouts WHERE group_name = $1 AND user_id = $2").bind(&group).bind(user).execute(&s.db).await?;
+    if lifted.rows_affected() > 0 {
+        log::info!("{}: lifted the timeout on {name} in {group}", who.name);
+        groups::tell(&s, &group, "timeout", json!({ "who": name, "until": Value::Null })).await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

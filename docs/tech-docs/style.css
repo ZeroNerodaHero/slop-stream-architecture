@@ -1,0 +1,166 @@
+/* tech docs: the look and every animation. the pages reach these by class and carry no css of
+   their own (.cursor/skills/tech-docs/SKILL.md lists the classes). the site's palette
+   (frontend/src/app/globals.css), 1px strokes, no radius, no shadow (.cursor/rules/no-box-shadow.mdc).
+   every animation shows a fact: a dot moving is data moving, a blink is live, a bar filling is a
+   limit. all of them stop under prefers-reduced-motion, at the bottom, with the end state readable. */
+
+:root {
+  color-scheme: dark;
+  --bg: rgb(15 17 21);
+  --bg2: rgb(24 27 34);
+  --bg3: rgb(32 36 46);
+  --text: rgb(242 243 245);
+  --text2: rgb(154 163 178);
+  --text3: rgb(110 118 132);
+  --blue: rgb(79 139 255);
+  --blue2: rgb(110 160 255);
+  --stroke: rgb(42 47 58);
+  --stroke2: rgb(58 64 78);
+  --green: rgb(63 185 80);
+  --red: rgb(248 81 73);
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+html { background: var(--bg); color: var(--text); font: 18px/1.55 system-ui, sans-serif; }
+body { margin: 0; }
+nav, main, footer { max-width: 72ch; margin: 0 auto; padding: 0 1.25rem; }
+nav { padding-top: 1.25rem; font-size: 0.9rem; }
+nav a { color: var(--text2); text-decoration: none; }
+nav a:hover { color: var(--blue2); }
+main { padding-bottom: 3rem; }
+footer { border-top: 1px solid var(--stroke); padding: 1rem 1.25rem 3rem; color: var(--text3); font-size: 0.85rem; }
+footer a { color: var(--text2); }
+
+h1 { font-size: 2rem; line-height: 1.15; margin: 1.5rem 0 0.5rem; padding-left: 0.75rem; border-left: 4px solid var(--blue); font-weight: 600; }
+h2 { font-size: 1.2rem; margin: 2.5rem 0 0.5rem; font-weight: 600; }
+h3 { font-size: 1rem; margin: 1.5rem 0 0.25rem; font-weight: 600; color: var(--text2); }
+p, li { margin: 0.4rem 0; }
+.lead { color: var(--text2); font-size: 1.1rem; margin: 0 0 1.5rem; }
+a { color: var(--blue); }
+a:hover { color: var(--blue2); }
+code { background: var(--bg3); padding: 0 0.3em; font: 0.9em var(--mono); }
+pre { background: var(--bg2); border: 1px solid var(--stroke); padding: 0.75rem 1rem; overflow-x: auto; font: 0.85rem/1.5 var(--mono); }
+pre code { background: none; padding: 0; font: inherit; }
+b { font-weight: 600; }
+ul, ol { padding-left: 1.3rem; }
+section { margin-bottom: 1rem; }
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.95rem; }
+td, th { border: 1px solid var(--stroke); padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+th { color: var(--text2); font-weight: 600; }
+.when { color: var(--text3); font-size: 0.85rem; font-weight: 400; margin-left: 0.5rem; }
+
+/* a side note, and the box for a thing that is a plan and not built */
+.note { border-left: 1px solid var(--stroke2); color: var(--text2); padding: 0.25rem 0 0.25rem 1rem; margin: 1rem 0; }
+.plan { display: block; border: 1px dotted var(--stroke2); color: var(--text2); padding: 0.75rem 1rem; margin: 1.25rem 0; }
+
+/* the map on the index: a card per page */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: 0.75rem; margin: 1.5rem 0; }
+.grid a { display: block; border: 1px solid var(--stroke); padding: 0.9rem 1rem; color: var(--text); text-decoration: none; }
+.grid a:hover { border-color: var(--blue); color: var(--text); }
+.grid a b { display: block; margin-bottom: 0.2rem; }
+.grid a span { color: var(--text2); font-size: 0.9rem; }
+
+/* ---- pictures: boxes, and lines with dots travelling along them. a dot is data moving. ---- */
+
+.pic { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 0; margin: 1.25rem 0; }
+.pic .pic { margin: 0; flex: 1; }
+.col { display: flex; flex-direction: column; gap: 0.35rem; flex: 1; }
+.box { border: 1px solid var(--stroke2); background: var(--bg2); padding: 0.5rem 0.9rem; font-size: 0.95rem; text-align: center; white-space: nowrap; }
+.box small { display: block; color: var(--text3); font-size: 0.75rem; white-space: normal; }
+.box.hot { border-color: var(--blue); }      /* the box this section is about */
+.box.store { border-style: dashed; }          /* it remembers things */
+.box.ghost { border-style: dotted; color: var(--text3); background: transparent; } /* optional, or not built */
+.box.inline { display: inline-block; padding: 0 0.4em; font-size: 0.85em; } /* a box named in a sentence */
+
+.flow { position: relative; flex: 1 1 3rem; min-width: 3rem; height: 1px; background: var(--stroke2); margin: 0 0.5rem; }
+.flow::after { content: ''; position: absolute; right: -1px; top: -3px; border: 3.5px solid transparent; border-left: 5px solid var(--stroke2); border-right: 0; }
+.flow.back::after { right: auto; left: -1px; border-left: 0; border-right: 5px solid var(--stroke2); }
+.flow.both::after { display: none; }
+.flow i { position: absolute; top: -2px; left: 0; width: 5px; height: 5px; background: var(--blue); animation: go 2.4s linear infinite; }
+.flow i:nth-child(2) { animation-delay: 1.2s; }
+.flow i:nth-child(3) { animation-delay: 0.6s; }
+.flow.back i { animation-name: back; }
+.flow.both i:nth-child(2) { animation-name: back; }
+.flow.slow i { animation-duration: 4.8s; }
+.flow.fast i { animation-duration: 1.2s; }
+.flow.red i { background: var(--red); }
+.flow.green i { background: var(--green); }
+.flow[data-say]::before { content: attr(data-say); position: absolute; left: 0; right: 0; bottom: 0.4rem; text-align: center; font-size: 0.72rem; color: var(--text3); white-space: nowrap; }
+@keyframes go { from { left: 0; } to { left: calc(100% - 5px); } }
+@keyframes back { from { left: calc(100% - 5px); } to { left: 0; } }
+
+/* stacked: a sequence in time, top to bottom. the line stands up and the dots fall. */
+.pic.stack { flex-direction: column; align-items: center; }
+.stack .flow { width: 1px; height: 2.5rem; flex: none; min-width: 0; margin: 0; }
+.stack .flow::after { right: auto; top: auto; left: -3px; bottom: -1px; border: 3.5px solid transparent; border-top: 5px solid var(--stroke2); border-bottom: 0; }
+.stack .flow.back::after { bottom: auto; top: -1px; border-top: 0; border-bottom: 5px solid var(--stroke2); }
+.stack .flow i { left: -2px; top: 0; animation-name: fall; }
+.stack .flow.back i { animation-name: rise; }
+.stack .flow[data-say]::before { left: 1rem; right: auto; bottom: auto; top: 50%; transform: translateY(-50%); text-align: left; }
+@keyframes fall { from { top: 0; } to { top: calc(100% - 5px); } }
+@keyframes rise { from { top: calc(100% - 5px); } to { top: 0; } }
+
+/* ---- the presence square, as on the site: green here, blue live, red do not disturb, grey off ---- */
+
+.sq { display: inline-block; width: 0.7em; height: 0.7em; margin-right: 0.3em; vertical-align: -0.05em; background: var(--text3); }
+.sq.on { background: var(--green); }
+.sq.stream { background: var(--blue); }
+.sq.dnd { background: var(--red); }
+.sq.off { background: var(--text3); }
+/* live: it blinks. on a square, a word, or a box */
+.live { animation: blink 1.2s steps(2, start) infinite; }
+@keyframes blink { to { visibility: hidden; } }
+
+/* a box doing work right now: its stroke breathes blue */
+.pulse { animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { border-color: var(--stroke2); } 50% { border-color: var(--blue); } }
+
+/* a line being written: the words appear as if typed, --n is how many characters, a cursor blinks at the end.
+   monospace, so 1ch is one character. types over 60% of 4s, holds, then again */
+.type { display: inline-block; overflow: hidden; white-space: nowrap; vertical-align: bottom; border-right: 2px solid var(--text2); width: calc(var(--n) * 1ch); font: 0.95em var(--mono); animation: type 4s steps(var(--n), end) infinite, cursor 0.7s step-end infinite; }
+@keyframes type { 0% { width: 0; } 60%, 100% { width: calc(var(--n) * 1ch); } }
+@keyframes cursor { 50% { border-color: transparent; } }
+
+/* a sequence: the items come one after another when the page opens, and stay */
+.steps li { opacity: 0; animation: appear 0.5s ease-out forwards; }
+.steps li:nth-child(1) { animation-delay: 0.2s; }
+.steps li:nth-child(2) { animation-delay: 0.8s; }
+.steps li:nth-child(3) { animation-delay: 1.4s; }
+.steps li:nth-child(4) { animation-delay: 2s; }
+.steps li:nth-child(5) { animation-delay: 2.6s; }
+.steps li:nth-child(6) { animation-delay: 3.2s; }
+.steps li:nth-child(7) { animation-delay: 3.8s; }
+.steps li:nth-child(8) { animation-delay: 4.4s; }
+.steps li:nth-child(n+9) { animation-delay: 5s; }
+@keyframes appear { to { opacity: 1; } }
+
+/* a limit filling: the bar fills over --t seconds, then empties, then again. 500 lines, a week, a line a second */
+.bar { position: relative; height: 0.6rem; border: 1px solid var(--stroke2); background: var(--bg2); margin: 0.5rem 0; overflow: hidden; }
+.bar i { position: absolute; top: 0; bottom: 0; left: 0; width: 0; background: var(--blue); animation: fill var(--t, 4s) linear infinite; }
+.bar.red i { background: var(--red); }
+.bar.green i { background: var(--green); }
+@keyframes fill { 0% { width: 0; } 92% { width: 100%; } 100% { width: 0; } }
+
+/* a number counting up to --to: watchers, followers, the 30 things in the inbox.
+   the browser needs @property to count; one without it shows the end number */
+@property --n { syntax: '<integer>'; inherits: false; initial-value: 0; }
+.count { font-variant-numeric: tabular-nums; counter-reset: n var(--n); animation: count 3s ease-out forwards; }
+.count::after { content: counter(n); }
+@keyframes count { from { --n: 0; } to { --n: var(--to); } }
+
+/* refused: the box shakes once when pointed at or focused. too long, too fast, not yours */
+.shake { display: inline-block; border: 1px solid var(--red); color: var(--red); padding: 0.1rem 0.5rem; font-size: 0.9rem; }
+.shake:hover, .shake:focus-visible { animation: shake 0.4s ease-in-out; }
+@keyframes shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-4px); } 40%, 80% { transform: translateX(4px); } }
+
+/* ---- less motion asked for: nothing moves, and every end state still reads ---- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; }
+  .flow i { display: none; }                  /* the line and its arrowhead stay */
+  .type { width: calc(var(--n) * 1ch); border-right-color: transparent; }
+  .steps li { opacity: 1; }
+  .bar i { width: 100%; }
+  .count { --n: var(--to); }
+  .live { visibility: visible; }
+}

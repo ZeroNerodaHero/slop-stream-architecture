@@ -3,7 +3,7 @@
 // a go-live opens a block the watcher sees live and growing, a stop closes it with `ended_by: stop`
 // and the heartbeat's time on the row, a connection that drops (the tab goes offline and away, no
 // stop) is closed by video within a beat of the last heartbeat and the two sessions a minute apart
-// draw as one block with a mark at the drop, the strip pages four weeks back and forward, an
+// draw as one block with a mark at the drop, the strip pages a week back and forward, an
 // account's rows are its own. Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node calendar.js
 const { chromium, request } = require('playwright');
 const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
@@ -104,14 +104,14 @@ const iso = (ms) => new Date(ms).toISOString();
     await w.click('#tab-calendar');
     await w.waitForSelector('#calendar[data-phase="ready"]', { timeout: 10000 });
     const rows = await w.$$eval('#calendar-strip > div.grid', (els) => els.length);
-    expect(rows === 28, `${rows} day rows, want 28`);
+    expect(rows === 7, `${rows} day rows, want 7`);
     const usually = (await w.textContent('#calendar-usually')).trim();
-    expect(/^(usually|streamed|streams|has not)/.test(usually), `the line reads "${usually}"`);
-    expect(await w.$eval('#calendar-forward', (b) => b.disabled), 'forward is enabled on the current four weeks');
+    expect(/^(streamed|has not streamed this week)/.test(usually), `the line reads "${usually}"`);
+    expect(await w.$eval('#calendar-forward', (b) => b.disabled), 'forward is enabled on the current week');
     return usually;
   });
 
-  await step('the strip pages four weeks back (today goes, the range moves) and comes back', async () => {
+  await step('the strip pages a week back (today goes, the range moves) and comes back', async () => {
     const before = (await w.textContent('#calendar-range')).trim();
     await w.click('#calendar-back');
     await w.waitForSelector('#calendar[data-page="1"][data-phase="ready"]', { timeout: 10000 });

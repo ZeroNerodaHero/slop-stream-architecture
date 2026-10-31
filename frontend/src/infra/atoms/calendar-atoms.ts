@@ -1,7 +1,7 @@
 /**
- * The calendar on the watch page (docs/calendar.md): four weeks of the name's sessions from
+ * The calendar on the watch page (docs/calendar.md): a week of the name's sessions from
  * `GET /api/streamers/:name/sessions?from=&to=`, as rows; `Calendar.tsx` turns them into blocks
- * in the viewer's zone. `page` 0 is the four weeks ending today, 1 the four before, and so on.
+ * in the viewer's zone. `page` 0 is the week ending today, 1 the week before, and so on.
  * The rows are asked again when the stream on screen starts or ends, so the open block appears
  * and closes with no reload, and when the strip is opened on another name or another page.
  */
@@ -24,7 +24,7 @@ export interface CalendarState {
 
 export const calendarAtom = atom<CalendarState>({ name: '', page: 0, rows: [], phase: 'loading' });
 
-/** The four weeks `page` names: `[first, first + 28 days)`, `first` a local midnight. */
+/** The week `page` names: `[first, first + 7 days)`, `first` a local midnight. */
 export function rangeOf(page: number, now: Date): { first: Date; last: Date; from: Date; to: Date } {
   const today = localMidnight(now);
   const first = addDays(today, -(DAYS - 1) - page * DAYS);
@@ -58,7 +58,7 @@ export const watchIsLiveAtom = atom((get) => LIVE_PHASES.includes(get(watchPhase
 /** An end reaches the watcher from video a beat before the api has written `ended_at`: ask once more after this. */
 const SETTLE_MS = 3000;
 
-// the stream on screen started or ended: the current four weeks again, so the block opens or
+// the stream on screen started or ended: the current week again, so the block opens or
 // closes without a reload. only once the strip has asked for this name (a page with no calendar
 // open makes no request)
 let wasLive = store.get(watchIsLiveAtom);

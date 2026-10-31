@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pages · tech docs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav><a href="index.html">← all pages</a></nav>
+  <main>
+    <h1>pages</h1>
+    <p class="lead">every screen. what is on it. one line each, then a little more.</p>
+
+    <section>
+      <h2>the map</h2>
+      <table>
+        <tr><th>url</th><th>what</th></tr>
+        <tr><td><code>/</code></td><td>home. who is live. then servers and recently offline. then everyone else.</td></tr>
+        <tr><td><code>/live</code></td><td>go live. your camera, your sources, start.</td></tr>
+        <tr><td><code>/watch/&lt;name&gt;</code></td><td>their stream. or their profile while they are off.</td></tr>
+        <tr><td><code>/groups</code></td><td>your groups, and ones to discover. make one.</td></tr>
+        <tr><td><code>/groups/&lt;name&gt;/&lt;channel&gt;</code></td><td>a server's room. channels, chat, roster.</td></tr>
+        <tr><td><code>/login</code> <code>/signup</code></td><td>a name and a password.</td></tr>
+        <tr><td><code>/admin</code></td><td>the error reports. for the names in <code>ADMIN_NAMES</code>.</td></tr>
+      </table>
+      <p>every page but one is the same html, drawn by the browser. <code>/watch/&lt;name&gt;</code> comes from the api with that name's title and preview tags filled in. so a shared link gets a card.</p>
+    </section>
+
+    <section>
+      <h2>home</h2>
+      <p>every live stream, with a picture of it a few seconds old. click one to watch.</p>
+      <p>under them, everyone else. a rectangle each: their picture, the square on its corner, the name, the word. online first.</p>
+      <p>the page asks the home box once. then it listens on the wire. a stream starting appears without a reload.</p>
+    </section>
+
+    <section>
+      <h2>go live</h2>
+      <p>your camera in the preview. your sources beside it. start at the foot of the sources panel. see <a href="stream.html">a stream</a>.</p>
+      <p>a watch link to copy. your status and your picture are set on the profile tab, not here.</p>
+    </section>
+
+    <section>
+      <h2>watch</h2>
+      <p>the player. their name, the square, the word, their status line under the name. the chat beside it. <code>N watching</code>. the follow button and <code>N followers</code>.</p>
+      <p>three tabs under the player:</p>
+      <ul>
+        <li><b>about</b>. their about me, a few paragraphs. then a page of their own, in blocks: words, pictures, a clip, a music player, links. their own css over it, cleaned first. no html. media from this site only. an owner writes it in place.</li>
+        <li><b>calendar</b>. when they stream. one block per session.</li>
+        <li><b>socials</b>. where else to find them. links as icons. tiktok, youtube, twitch, discord, x, a globe for anything else. a row or a grid. twenty at most.</li>
+      </ul>
+      <p>they are not live: the page is their profile. the picture big. the word. the tabs. the chat. a streamer can set an offline picture where the player would be, and a line like <code>back tuesday at 8</code>. the camera appears the moment they start.</p>
+    </section>
+
+    <section>
+      <h2>the side column</h2>
+      <p>the left side. or the right, from settings. closed, it is pictures and squares, you at the bottom. the page uses the rest.</p>
+      <p>hover it, or tab into it. it widens over the page. the page stays where it is.</p>
+      <ul>
+        <li>who you follow. friends apart. the ones streaming first. the word beside each name.</li>
+        <li>the search box. the site's one. find people, follow them.</li>
+        <li>a chat window for a friend. a tab per friend.</li>
+        <li>your picture at the bottom is your own page. the gear at the end of your line is settings.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>the title row</h2>
+      <p>sticks to the top while the page scrolls. <code>go live</code> at the right end. before it, the bell: your inbox, with how many are new.</p>
+    </section>
+
+    <section>
+      <h2>settings</h2>
+      <p>the gear opens the user modal. eight tabs in two groups.</p>
+      <table>
+        <tr><th>you</th><th>this browser</th></tr>
+        <tr>
+          <td>
+            <b>profile</b>: picture, status, presence, offline picture, the name change.<br>
+            <b>groups</b>: the ones you are in.<br>
+            <b>security</b>: password, log out everywhere.<br>
+            <b>notifications</b>: the four switches.
+          </td>
+          <td>
+            <b>appearance</b>: the theme, the text size.<br>
+            <b>chat</b>: where the panel sits.<br>
+            <b>sidebar</b>: left or right.<br>
+            <b>advanced</b>: the messages inspector.
+          </td>
+        </tr>
+      </table>
+      <p>the first group is saved with your account. the second is this browser only.</p>
+    </section>
+
+    <section>
+      <h2>the corner</h2>
+      <p>you are live and you leave the page. the stream keeps going in a corner of every other page. your chat with it. the picture in picture button on the preview is that same move. <code>×</code> is stop.</p>
+    </section>
+
+    <section>
+      <h2>the look</h2>
+      <p>dark. hard edges. a box is a 1px stroke. no shadows anywhere. a hover is a colour or a border change. a small action is words, not a button.</p>
+    </section>
+  </main>
+  <footer>long version: <code>docs/overview.md</code>, <code>docs/about.md</code>, <code>docs/socials.md</code>, <code>docs/follows.md</code></footer>
+</body>
+</html>

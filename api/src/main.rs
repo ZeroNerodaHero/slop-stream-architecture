@@ -547,7 +547,7 @@ struct RangeQuery {
     to: Option<DateTime<Utc>>,
 }
 
-/// The most one calendar request spans: a quarter. The page asks four weeks at a time.
+/// The most one calendar request spans: a quarter. The page asks a week at a time.
 const RANGE_MAX_DAYS: i64 = 93;
 /// The most rows one range answers. A person live every night for three years is a thousand.
 const RANGE_LIMIT: i64 = 1000;

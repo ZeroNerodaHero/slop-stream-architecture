@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>what moved lately · tech docs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav><a href="index.html">← all pages</a></nav>
+  <main>
+    <h1>what moved lately</h1>
+    <p class="lead">the last stretch of commits, newest first. grouped by what changed, not by commit. each group points at its page.</p>
+
+    <div class="pic">
+      <div class="box">a commit</div>
+      <div class="flow" data-say="the files it touched"><i></i></div>
+      <div class="box hot">a topic</div>
+      <div class="flow" data-say="one line here"><i></i></div>
+      <div class="box">its page</div>
+    </div>
+    <p class="note">the commit messages here are one word. so the files a commit touched, and the long docs it changed, say what it did. that is what these lines are read from. the whole history is 69 commits, so this first page covers all of it.</p>
+
+    <section>
+      <h2>oct 30 to 31 <span class="when">19 commits</span></h2>
+      <ul>
+        <li><b>groups are servers, finished.</b> owners can be named and handed over. roles with five powers, known by an id so a rename keeps them. the cap on groups you own, <code>GROUPS_PER_OWNER</code>. <code>/groups</code> shows yours and ones to discover. the roster has a search. the picture and the banner are the owner's alone. channels can be ordered, muted, and read across your devices. the side column lists your groups with who is live. → <a href="groups.html">groups</a></li>
+        <li><b>chat talks at a bucket's pace.</b> not one line a second any more. a nick: 2 at once, then one every 30 s. a login or the streamer: 3 at once, then one every 3⅓ s. a line can carry ten pictures; one fills the page on a click. a line in a channel also reaches the members' bells. every line wears the speaker's face and badges as they are now. → <a href="chat.html">chat</a></li>
+        <li><b>your about page has an editor.</b> blocks of words, pictures, a clip, a sound, placed by hand on your own page and saved. the column presets went, so a page keeps its layout. → <a href="pages.html">pages</a></li>
+        <li><b>mic only, and a mixer.</b> <code>×</code> on the camera; your avatar moves with your voice. a fader and a meter under the preview. → <a href="stream.html">a stream</a></li>
+        <li><b>friends got their window.</b> a tab per friend. lines as bubbles, a log, or blocks. the search box finds groups too, yours first. the inbox has a fourth kind, a channel line, and a fourth switch. → <a href="people.html">people</a></li>
+        <li><b>for people changing the pages:</b> a hook refuses an edit that adds a box shadow. small actions are words, not buttons. → <a href="pages.html">pages</a>, the look</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>oct 27 to 28 <span class="when">13 commits</span></h2>
+      <ul>
+        <li><b>dms.</b> friends write each other. a line saved, pushed to every device of both, a read mark per thread. → <a href="people.html">people</a></li>
+        <li><b>the inbox.</b> the bell, the last 30 things, the switches. read on one device, read on all. → <a href="people.html">people</a></li>
+        <li><b>the calendar tab.</b> one block per session, from the log. the three ways a block closes. → <a href="stream.html">a stream</a></li>
+        <li><b>sources and layers.</b> the camera, a screen, pictures, your avatar, as layers over the preview. presets. every player draws the same frame. → <a href="stream.html">a stream</a></li>
+        <li><b>the about and socials tabs.</b> an about me written in place. links as icons, twenty at most. a crop dialog for every picture you put up. → <a href="pages.html">pages</a></li>
+        <li><b>the home box.</b> the home list in memory, in a box of its own, checked against video every 30 s. → <a href="boxes.html">boxes</a></li>
+        <li><b>a server's room, first cut.</b> the page with channels and chat; owners and roles begin. → <a href="groups.html">groups</a></li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>oct 25 to 26 <span class="when">12 commits</span></h2>
+      <ul>
+        <li><b>follows, and the side column.</b> one edge table. who you follow, friends apart, streaming first, a search box. the button and the count on the watch page. → <a href="people.html">people</a></li>
+        <li><b>an id under every name.</b> a uuid on every row; follows, groups and pictures point at it. the name change: once a month, with the password, not while live, the old name held 30 days. → <a href="people.html">people</a></li>
+        <li><b>chat kept for good.</b> <code>CHAT_PERSIST=1</code>: every line in the database. scroll back, search, jump to a line. group channels get a table. → <a href="chat.html">chat</a></li>
+        <li><b>the corner player.</b> leave the page while live and the stream rides along in a corner. → <a href="stream.html">a stream</a></li>
+        <li><b>a real bucket.</b> <code>S3_ENDPOINT</code>: off for the one on this box, a url for yours. → <a href="boxes.html">boxes</a></li>
+        <li><b>tools.</b> migrations as sql files. <code>manage.sh</code> for the database and redis in a terminal. <code>seed.sh</code> for accounts that look like people. → <a href="ops.html">ops</a></li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>oct 21 to 24 <span class="when">17 commits</span></h2>
+      <ul>
+        <li><b>the data wire.</b> one socket per browser, presence on every name, <code>live</code> and <code>ended</code> pushed. the squares. groups' first cut, with badges in chat. → <a href="people.html">people</a>, <a href="groups.html">groups</a></li>
+        <li><b>the monitor.</b> <code>api monitor</code> on another machine. health every 15 s, errors every minute, a webhook when a box goes down and comes back. → <a href="ops.html">ops</a></li>
+        <li><b>images built by github.</b> every push to <code>main</code> builds the four images. deploy pulls them. <code>ship.sh</code> for a laptop's unpushed build. → <a href="start.html">start</a></li>
+        <li><b>the mini player and the stats.</b> a stream in a small frame; the numbers of your own stream while live. → <a href="stream.html">a stream</a></li>
+        <li><b>plans written.</b> more video sizes, hover to preview, the move off polling, metrics. → <a href="plans.html">plans</a></li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>oct 17 to 19 <span class="when">8 commits</span></h2>
+      <ul>
+        <li><b>the start.</b> <code>deploy.sh</code>, the compose file, caddy, the api, video, the chat. one upload in, copies out. → <a href="start.html">start</a>, <a href="boxes.html">boxes</a></li>
+        <li><b>fake streams and thumbnails.</b> <code>DUMMY_STREAMS</code> gifs bouncing. a picture of every live stream on home. → <a href="stream.html">a stream</a></li>
+        <li><b>accounts, and knowing what broke.</b> a name and a password, scrambled on the api. the pages report their failures; a <code>debug</code> database; <code>/admin</code>; <code>ENV_NAME</code>, <code>ADMIN_NAMES</code>, <code>OPS_TOKEN</code>. → <a href="people.html">people</a>, <a href="ops.html">ops</a></li>
+      </ul>
+    </section>
+  </main>
+  <footer>made from <code>git log</code> over the last 100 commits at most, by the <code>tech-docs</code> skill. the long docs for each line are named on its page.</footer>
+</body>
+</html>

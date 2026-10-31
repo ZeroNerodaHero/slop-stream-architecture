@@ -23,9 +23,9 @@ function pct(min: number): string {
 }
 
 /**
- * When they stream (docs/calendar.md): four weeks of day rows, oldest at the top and today at
- * the bottom, each row 24 hours wide, a bar per stream from its start hour to its end hour. Days
- * as rows and hours as columns on purpose: every 8pm is the same column, so a person who streams
+ * When they stream (docs/calendar.md): a week of day rows, oldest at the top and today at the
+ * bottom, each row 24 hours wide, a bar per stream from its start hour to its end hour. Days as
+ * rows and hours as columns on purpose: every 8pm is the same column, so a person who streams
  * at 8 is a stripe you see before you read anything. The line above the strip says it in words.
  * Everything is the viewer's clock and zone: a block over the viewer's midnight is two pieces on
  * two rows. Blocks are the accent; one the sweeper closed is grey with a dashed end (its end is
@@ -41,7 +41,7 @@ export function Calendar({ name }: { name: string }) {
     const t = setInterval(() => setNow(new Date()), MIN_MS);
     return () => clearInterval(t);
   }, []);
-  // the four weeks ending today, for this name, each time the strip is shown: one request per open
+  // the week ending today, for this name, each time the strip is shown: one request per open
   useEffect(() => {
     void loadCalendar(name, 0);
   }, [name]);
@@ -51,7 +51,7 @@ export function Calendar({ name }: { name: string }) {
   const rows = mine ? cal.rows : [];
   const { first, last } = rangeOf(page, now);
   const today = localMidnight(now);
-  // a thousand rows at most, laid out on 28 days: cheap enough to do on every render (a render is an
+  // a thousand rows at most, laid out on 7 days: cheap enough to do on every render (a render is an
   // atom change or the minute tick, not a hover: the tooltips keep their own state)
   const blocks = blocksOf(rows, live, now);
   const byDay = rowsOf(blocks, first, now);
@@ -63,7 +63,7 @@ export function Calendar({ name }: { name: string }) {
     <div id="calendar" data-page={page} data-phase={mine ? cal.phase : 'loading'}>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span id="calendar-usually" className="font-semibold">
-          {mine && cal.phase === 'ready' ? usuallyOf(blocks) : mine && cal.phase === 'failed' ? 'cannot load the calendar' : 'loading'}
+          {mine && cal.phase === 'ready' ? usuallyOf(blocks, first, now) : mine && cal.phase === 'failed' ? 'cannot load the calendar' : 'loading'}
         </span>
         <span className="text-sm text-textTertiary">your time</span>
         {blocks.length > 0 && (
@@ -74,13 +74,13 @@ export function Calendar({ name }: { name: string }) {
       </div>
 
       <div className="mt-3 flex items-center gap-2 text-base">
-        <button id="calendar-back" type="button" aria-label="four weeks back" className={NAV} onClick={() => void loadCalendar(name, page + 1)}>
+        <button id="calendar-back" type="button" aria-label="a week back" className={NAV} onClick={() => void loadCalendar(name, page + 1)}>
           ‹
         </button>
         <span id="calendar-range" className="min-w-[7.5rem] text-center text-textSecondary">
           {fmtDate(first)} – {fmtDate(last)}
         </span>
-        <button id="calendar-forward" type="button" aria-label="four weeks on" className={NAV} disabled={page === 0} onClick={() => void loadCalendar(name, page - 1)}>
+        <button id="calendar-forward" type="button" aria-label="a week on" className={NAV} disabled={page === 0} onClick={() => void loadCalendar(name, page - 1)}>
           ›
         </button>
         {page > 0 && (
@@ -103,12 +103,12 @@ export function Calendar({ name }: { name: string }) {
           return (
             <div
               key={d}
-              className={cn('grid h-[15px] border-t', monday ? 'border-secondaryStroke' : 'border-primaryStroke')}
+              className={cn('grid h-7 border-t', monday ? 'border-secondaryStroke' : 'border-primaryStroke')}
               style={{ gridTemplateColumns: `${LABEL_W}px minmax(0, 1fr)` }}
             >
               <span
                 className={cn(
-                  'whitespace-nowrap pr-1.5 text-[10px] leading-[14px]',
+                  'whitespace-nowrap pr-1.5 text-xs leading-[27px]',
                   isToday ? 'font-semibold text-textPrimary' : monday ? 'text-textSecondary' : 'text-textTertiary'
                 )}
               >
@@ -128,7 +128,7 @@ export function Calendar({ name }: { name: string }) {
                         data-start={b.start.toISOString()}
                         data-end={b.end?.toISOString()}
                         className={cn(
-                          'block absolute inset-y-[2px] cursor-default border-0 p-0 outline-offset-1 focus-visible:outline focus-visible:outline-1 focus-visible:outline-textPrimary',
+                          'block absolute inset-y-[3px] cursor-default border-0 p-0 outline-offset-1 focus-visible:outline focus-visible:outline-1 focus-visible:outline-textPrimary',
                           b.uncertain ? 'bg-textTertiary' : 'bg-primaryBlue',
                           s.last && b.live && 'border-r-2 border-solid border-textPrimary',
                           s.last && b.uncertain && 'border-r-[3px] border-dashed border-textSecondary'
@@ -141,7 +141,7 @@ export function Calendar({ name }: { name: string }) {
                 {byDay.drops
                   .filter((x) => x.day === d)
                   .map((x, i) => (
-                    <span key={i} aria-hidden className="drop pointer-events-none absolute inset-y-[2px] w-[2px] bg-decrease" style={{ left: pct(x.min) }} />
+                    <span key={i} aria-hidden className="drop pointer-events-none absolute inset-y-[3px] w-[2px] bg-decrease" style={{ left: pct(x.min) }} />
                   ))}
               </div>
             </div>

@@ -21,6 +21,7 @@
 //! `/chat/<server>/<channel>/before`, `search`, `by/<account>`, `around/<id>`.
 
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::Router;
 use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveTime, Utc};
@@ -80,31 +81,52 @@ pub(crate) fn routes() -> Router<ChatState> {
         .route("/chat/{server}/{channel}/around/{id}", get(around_channel))
 }
 
-async fn room_of_channel(s: &ChatState, server: &str, channel: &str) -> Result<String, ApiError> {
-    Ok(crate::groups::channel_room(&s.db, server, channel).await?.1)
+/// The room key of a server's channel, once it is there and this caller sees it (groups.rs
+/// `may_see`: a channel kept to roles they do not hold reads `no such channel`, like one that
+/// is not there). The caller is the login the cookie names, or nobody.
+async fn room_of_channel(s: &ChatState, headers: &HeaderMap, server: &str, channel: &str) -> Result<String, ApiError> {
+    let (server, room) = crate::groups::channel_room(&s.db, server, channel).await?;
+    let me = crate::auth::whoami_readonly(&s.db, headers).await?;
+    let user = me.as_ref().map(|a| a.id);
+    let channel = room.strip_prefix(server.as_str()).and_then(|rest| rest.strip_prefix('/')).unwrap_or("");
+    if !crate::groups::may_see(&s.db, &server, channel, user, user.is_some_and(|id| s.is_admin_id(id))).await? {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel"));
+    }
+    Ok(room)
 }
 
-async fn before_channel(State(s): State<ChatState>, Path((server, channel)): Path<(String, String)>, Query(q): Query<IdQuery>) -> Result<JsonLines, ApiError> {
-    let room = room_of_channel(&s, &server, &channel).await?;
+async fn before_channel(
+    State(s): State<ChatState>,
+    Path((server, channel)): Path<(String, String)>,
+    headers: HeaderMap,
+    Query(q): Query<IdQuery>,
+) -> Result<JsonLines, ApiError> {
+    let room = room_of_channel(&s, &headers, &server, &channel).await?;
     let id = stream_id(&q.id)?;
     Ok(json_lines(older(&s, &room, &id).await?))
 }
 
-async fn search_channel(State(s): State<ChatState>, Path((server, channel)): Path<(String, String)>, Query(q): Query<SearchQuery>) -> Result<JsonLines, ApiError> {
-    let room = room_of_channel(&s, &server, &channel).await?;
+async fn search_channel(
+    State(s): State<ChatState>,
+    Path((server, channel)): Path<(String, String)>,
+    headers: HeaderMap,
+    Query(q): Query<SearchQuery>,
+) -> Result<JsonLines, ApiError> {
+    let room = room_of_channel(&s, &headers, &server, &channel).await?;
     search_room(&s, &room, &q.q).await
 }
 
 async fn by_channel(
     State(s): State<ChatState>,
     Path((server, channel, speaker)): Path<(String, String, String)>,
+    headers: HeaderMap,
 ) -> Result<JsonLines, ApiError> {
-    let room = room_of_channel(&s, &server, &channel).await?;
+    let room = room_of_channel(&s, &headers, &server, &channel).await?;
     lines_of(&s, &room, &speaker).await
 }
 
-async fn around_channel(State(s): State<ChatState>, Path((server, channel, id)): Path<(String, String, String)>) -> Result<JsonLines, ApiError> {
-    let room = room_of_channel(&s, &server, &channel).await?;
+async fn around_channel(State(s): State<ChatState>, Path((server, channel, id)): Path<(String, String, String)>, headers: HeaderMap) -> Result<JsonLines, ApiError> {
+    let room = room_of_channel(&s, &headers, &server, &channel).await?;
     window(&s, &room, &id).await
 }
 

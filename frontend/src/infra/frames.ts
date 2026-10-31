@@ -38,6 +38,8 @@ export type GroupChange =
   | { what: 'unbanned'; who: string }
   | { what: 'channel'; channel: { name: string; about: string; made_by: string | null } }
   | { what: 'unchannel'; channel: string }
+  /** The channel `channel` is called `name` now; its place in the order, its lines and its mutes went with it. */
+  | { what: 'channel_renamed'; channel: string; name: string }
   /** The channels put in this order, every one of them, from the top. */
   | { what: 'channel_order'; order: string[] }
   | { what: 'about'; about: string }
@@ -45,11 +47,16 @@ export type GroupChange =
   | { what: 'order'; order: string }
   | { what: 'icon'; icon: number }
   | { what: 'banner'; banner: number }
-  | { what: 'role'; role: HeldRole & { perms: { appearance: boolean; roles: boolean; channels: boolean; kick: boolean; ban: boolean } } }
+  /** A role made or changed, whole: its powers, the channels kept to it (by name), and its cooldown (seconds; 0 none). The last two are absent from an older api: none. */
+  | { what: 'role'; role: HeldRole & { perms: { appearance: boolean; roles: boolean; channels: boolean; kick: boolean; ban: boolean }; channels?: string[]; cooldown?: number } }
+  /** `who` is timed out until `until` (unix seconds), or no longer (null). */
+  | { what: 'timeout'; who: string; until: number | null }
   | { what: 'unrole'; id: string }
   | { what: 'held'; who: string; role: HeldRole }
   | { what: 'unheld'; who: string; id: string }
   | { what: 'owner'; who: string; owner: boolean }
+  /** What the owner role is called now. */
+  | { what: 'owner_role'; name: string }
   /** A member went live, or stopped: the room's faces. */
   | { what: 'live'; who: string }
   | { what: 'ended'; who: string }

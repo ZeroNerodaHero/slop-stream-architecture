@@ -333,15 +333,17 @@ pub(crate) fn room_of(server: &str, channel: &str) -> String {
 /// speaker who keeps `chat` and has not muted that channel. The newest line in a channel is the
 /// one unread row for it, the dm rule per room rather than per writer: a busy channel is one
 /// line of the list that says who spoke last and what they said, not thirty; the unread row for
-/// the room goes as the new one comes, a read one stays. Never fails the line: it is in the room
-/// already; a miss is logged. The chat process has no `AppState`, so this takes the two handles.
-pub(crate) async fn channel_line(db: &PgPool, redis: &ConnectionManager, server: &str, channel: &str, actor: Uuid, text: &str) {
-    if let Err(e) = chat_rows(db, redis, server, channel, actor, text).await {
+/// the room goes as the new one comes, a read one stays. A channel kept to roles (groups.rs
+/// `sees_sql`) is news only to the members who see it; `admins` are the site admins, who see
+/// every channel. Never fails the line: it is in the room already; a miss is logged. The chat
+/// process has no `AppState`, so this takes the handles.
+pub(crate) async fn channel_line(db: &PgPool, redis: &ConnectionManager, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid]) {
+    if let Err(e) = chat_rows(db, redis, server, channel, actor, text, admins).await {
         log::warn!("notify: a line in {}: {}", room_of(server, channel), e.message());
     }
 }
 
-async fn chat_rows(db: &PgPool, redis: &ConnectionManager, server: &str, channel: &str, actor: Uuid, text: &str) -> Result<(), ApiError> {
+async fn chat_rows(db: &PgPool, redis: &ConnectionManager, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid]) -> Result<(), ApiError> {
     let Some(actor) = actor_by_id(db, actor).await? else { return Ok(()) };
     let room = room_of(server, channel);
     let words: String = text.chars().take(TEXT_CHARS).collect();
@@ -355,12 +357,15 @@ async fn chat_rows(db: &PgPool, redis: &ConnectionManager, server: &str, channel
         // the channel went between the line and this: nobody's inbox to write
         return Ok(());
     }
-    let rows: Vec<LiveRow> = sqlx::query_as(
+    // a channel kept to roles (groups.rs `sees_sql`) is news only to the members who see it:
+    // the holders of those roles, the owners, the channels power and the site admins ($6)
+    let sql = format!(
         "WITH recipients AS (
             SELECT m.user_id FROM memberships m JOIN streamers u ON u.id = m.user_id
             WHERE m.group_name = $1 AND m.user_id <> $3 AND u.password_hash IS NOT NULL
               AND COALESCE((u.notify->>'chat')::boolean, true)
               AND NOT EXISTS (SELECT 1 FROM channel_mutes cm WHERE cm.user_id = m.user_id AND cm.server = $1 AND cm.channel = $2)
+              AND EXISTS (SELECT 1 FROM channels c WHERE c.server = $1 AND c.name = $2 AND {sees})
          ),
          gone AS (
             DELETE FROM notifications n USING recipients r
@@ -373,14 +378,17 @@ async fn chat_rows(db: &PgPool, redis: &ConnectionManager, server: &str, channel
          )
          SELECT m.id, u.name, m.user_id, (EXTRACT(EPOCH FROM m.at) * 1000)::bigint
          FROM made m JOIN streamers u ON u.id = m.user_id",
-    )
-    .bind(server)
-    .bind(channel)
-    .bind(actor.id)
-    .bind(&room)
-    .bind(&words)
-    .fetch_all(&mut *tx)
-    .await?;
+        sees = crate::groups::sees_sql("m.user_id", "m.user_id = ANY($6)")
+    );
+    let rows: Vec<LiveRow> = sqlx::query_as(&sql)
+        .bind(server)
+        .bind(channel)
+        .bind(actor.id)
+        .bind(&room)
+        .bind(&words)
+        .bind(admins)
+        .fetch_all(&mut *tx)
+        .await?;
     tx.commit().await?;
     if rows.is_empty() {
         return Ok(());

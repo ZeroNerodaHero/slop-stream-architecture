@@ -7,12 +7,17 @@ import {
   RiGroupLine,
   RiHashtag,
   RiInformationLine,
+  RiLockLine,
   RiLogoutBoxRLine,
   RiNotificationLine,
   RiNotificationOffLine,
+  RiPencilLine,
   RiSearchLine,
   RiSettings3Line,
-  RiShieldStarLine
+  RiShieldStarLine,
+  RiTimeLine,
+  RiUserUnfollowLine,
+  RiVipCrownLine
 } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
@@ -36,10 +41,23 @@ import { meAtom } from '@/infra/atoms/auth-atoms';
 import { reconnectChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
-import { enterRoom, leaveRoom, reloadRoom, roomAtom, roomErrorAtom, roomGoneAtom, setChannelMuted, setChannelOrder } from '@/infra/atoms/room-atoms';
+import {
+  channelRenamedAtom,
+  enterRoom,
+  leaveRoom,
+  reloadLines,
+  reloadRoom,
+  renameChannel,
+  roomAtom,
+  roomErrorAtom,
+  roomGoneAtom,
+  setChannelMuted,
+  setChannelOrder
+} from '@/infra/atoms/room-atoms';
 import { cleanName, isValidName } from '@/infra/names';
 import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
+import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
 import { Button, buttonClassName } from '@/shared-components/Button';
 import { SearchFilters, useChatSearch } from '@/shared-components/ChatSearch';
@@ -64,21 +82,24 @@ const RESERVED = new Set(['before', 'search', 'by', 'around']);
 
 const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary';
 
-/** A word that does something on a row of the manage dialog: up, down. No box (the buttons rule). */
-const ROW_WORD = 'text-sm font-semibold text-textSecondary hover:text-textPrimary disabled:text-textTertiary disabled:opacity-40 disabled:hover:text-textTertiary';
-
 /** Matches `MAX_ABOUT_CHARS` in the api: a channel's line about it, like the group's. */
 const ABOUT_CAP = 200;
 
 /**
- * The room is the window: its height is the window's less the title row it sits under (its
- * measured height, `--title-row`: PageFrame.tsx, which globals.css also makes the page's
- * `scroll-padding-top`; 4rem until it is measured) and the page's foot (`pb-10`, 2.5rem). So
- * the room scrolled to is exactly what the window shows, and the page can scroll exactly that
- * far, whether the row is one line or two. The roster's column may not pass it.
+ * The room is the window: a 7px breath under the title row it sits under (its measured height,
+ * `--title-row`: PageFrame.tsx, which globals.css also makes the page's `scroll-padding-top`;
+ * 4rem until it is measured), the chat, and a 7px breath over the window's foot. The grid
+ * carries both breaths as padding, so the snap puts its edge under the row and the chat 7px
+ * below it, and it folds the page's foot (`pb-10`, 2.5rem) under itself. So the room scrolled
+ * to is exactly what the window shows, and the page can scroll exactly that far, whether the
+ * row is one line or two. The columns beside the chat, the channels and the roster, stand 7px
+ * further in (SIDE_INSET): 14px under the row, and the roster ends 14px over the foot, which
+ * it may not pass.
  */
-const ROOM_HEIGHT = 'h-[calc(100dvh-var(--title-row,4rem)-2.5rem)] min-h-[420px]';
-const ROSTER_HEIGHT = 'max-h-[calc(100dvh-var(--title-row,4rem)-2.5rem)]';
+const ROOM_GRID = 'grid snap-start items-start gap-4 py-[7px] -mb-10';
+const ROOM_HEIGHT = 'h-[calc(100dvh-var(--title-row,4rem)-14px)] min-h-[420px]';
+const SIDE_INSET = 'mt-[7px]';
+const ROSTER_HEIGHT = 'max-h-[calc(100dvh-var(--title-row,4rem)-28px)]';
 
 /**
  * The page's two views, each a snap area (`snap-start`; the type is on <html> while the page
@@ -99,6 +120,9 @@ const ICON_BUTTON =
  */
 const BELL_HIDDEN = 'opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/channel:opacity-100 [@media(hover:none)]:opacity-100';
 
+/** The pencil by a channel's name on the channels tab, the same way: up with the pointer on the name (`group/name`), the focus on it, or no hover to wait for. */
+const PENCIL_HIDDEN = 'opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/name:opacity-100 [@media(hover:none)]:opacity-100';
+
 const COLORS = ['#5865f2', '#f85149', '#3fb950', '#f2cc60', '#bc8cff', '#ff9f43', '#39d2c0', '#ff6bcb'] as const;
 
 /** Matches `MAX_ROLES` in the api. */
@@ -110,15 +134,67 @@ const ORDERS = [
   { id: 'oldest', label: 'oldest' }
 ] as const;
 
-const POWERS: { key: keyof RolePerms; label: string }[] = [
-  { key: 'appearance', label: 'about and public' },
-  { key: 'roles', label: 'roles' },
-  { key: 'channels', label: 'channels' },
-  { key: 'kick', label: 'kick' },
-  { key: 'ban', label: 'ban' }
+/** The five powers: the word for each (the rows, the tooltips) and its icon (the role editor's toggles), the manage tabs' icons where a tab is that power's. */
+const POWERS: { key: keyof RolePerms; label: string; icon: ReactNode }[] = [
+  {
+    key: 'appearance',
+    label: 'about and public',
+    icon: <RiInformationLine aria-hidden size={16} />
+  },
+  {
+    key: 'roles',
+    label: 'roles',
+    icon: <RiShieldStarLine aria-hidden size={16} />
+  },
+  {
+    key: 'channels',
+    label: 'channels',
+    icon: <RiHashtag aria-hidden size={16} />
+  },
+  {
+    key: 'kick',
+    label: 'kick',
+    icon: <RiUserUnfollowLine aria-hidden size={16} />
+  },
+  { key: 'ban', label: 'ban', icon: <RiForbidLine aria-hidden size={16} /> }
 ];
 
-const NO_PERMS: RolePerms = { appearance: false, roles: false, channels: false, kick: false, ban: false };
+const NO_PERMS: RolePerms = {
+  appearance: false,
+  roles: false,
+  channels: false,
+  kick: false,
+  ban: false
+};
+
+/** A role's cooldown, the choices (seconds): off, then a few steps up to five minutes. The api takes any 0 to 3600. */
+const COOLDOWNS = [0, 5, 15, 30, 60, 300];
+
+/** A cooldown in words: `off`, `30s`, `5m`. */
+function cooldownWords(seconds: number): string {
+  if (seconds === 0) return 'off';
+  return seconds < 60 ? `${seconds}s` : `${Math.round(seconds / 60)}m`;
+}
+
+/** How long a timeout runs, the choices on the members tab (seconds, and the word). The api takes 10 seconds to a week. */
+const TIMEOUTS: { key: string; label: string }[] = [
+  { key: '60', label: '1 minute' },
+  { key: '600', label: '10 minutes' },
+  { key: '3600', label: 'an hour' },
+  { key: '86400', label: 'a day' }
+];
+
+/** Whether a member's timeout (unix seconds) is still running. */
+function timedOut(member: GroupMember): boolean {
+  return (member.timeout ?? 0) * 1000 > Date.now();
+}
+
+/** When a timeout ends, in words: the time today, or the day and the time further off. */
+function untilWords(unix: number): string {
+  const at = new Date(unix * 1000);
+  const far = at.getTime() - Date.now() > 20 * 3600_000;
+  return far ? at.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
 
 /**
  * Whether this login may make, change, delete, give or take a role with these powers: an owner
@@ -132,6 +208,220 @@ function reaches(room: GroupRoom, perms: RolePerms): boolean {
 /** Whether this login holds a power. Every power does something to a member, so this is the members tab's rule too. */
 function manages(room: GroupRoom): boolean {
   return room.owner || POWERS.some((power) => room.perms[power.key]);
+}
+
+/** What the group calls its owner role (docs/groups.md): `owner` until an owner renames it; an older api has no word for it. */
+function ownerRoleOf(room: GroupRoom): string {
+  return room.owner_role ?? 'owner';
+}
+
+/**
+ * An owner's mark: a crown, the owner role's name its tooltip and its words for a reader. On the
+ * header and the roster. With `words`, the name stands beside the crown instead, the way a role
+ * stands on the members tab, and there is no tooltip to repeat it.
+ */
+function OwnerMark({ name, size = 14, words = false }: { name: string; size?: number; words?: boolean }) {
+  if (words) {
+    return (
+      <span data-owner-mark className="flex shrink-0 items-center gap-1 text-xs text-primaryBlue">
+        <RiVipCrownLine aria-hidden size={size} />
+        {name}
+      </span>
+    );
+  }
+  return (
+    <Tooltip content={name}>
+      <span role="img" aria-label={name} data-owner-mark className="flex shrink-0 text-primaryBlue">
+        <RiVipCrownLine aria-hidden size={size} />
+      </span>
+    </Tooltip>
+  );
+}
+
+/** One line of a `HoverMenu`: what a pick says (`key`), the word for it, and its colour when it has one (a role's). */
+interface MenuItem {
+  key: string;
+  label: string;
+  color?: string;
+}
+
+/**
+ * A menu on a small trigger (the `+` after a member's roles, the word `time out`): its items
+ * open while the pointer rests on the trigger or on the menu (a short grace for a pointer
+ * crossing between them), or on a click or enter for a touch screen and the keyboard, which
+ * puts the focus on the first item; the arrows walk it, escape closes it and hands the focus
+ * back, so does the focus leaving. A 1px box drawn into the dialog, fixed, like the tooltips,
+ * since the pane scrolls and would clip it: under the trigger, or over it at the window's
+ * foot. A pick closes the menu and says its key. Nothing at all without items.
+ */
+function HoverMenu({
+  label,
+  items,
+  onPick,
+  className,
+  children
+}: {
+  label: string;
+  items: MenuItem[];
+  onPick: (key: string) => void;
+  className: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  const plus = useRef<HTMLButtonElement | null>(null);
+  const menu = useRef<HTMLUListElement | null>(null);
+  const closing = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Opened by a click or a key: the first item takes the focus once the menu is placed. */
+  const focusFirst = useRef(false);
+
+  const show = () => {
+    if (closing.current) clearTimeout(closing.current);
+    closing.current = null;
+    setHost(plus.current?.closest<HTMLElement>('dialog:modal') ?? document.body);
+    setOpen(true);
+  };
+  const hide = () => {
+    if (closing.current) clearTimeout(closing.current);
+    closing.current = setTimeout(() => setOpen(false), 150);
+  };
+  const close = () => {
+    if (closing.current) clearTimeout(closing.current);
+    closing.current = null;
+    setOpen(false);
+  };
+
+  useEffect(
+    () => () => {
+      if (closing.current) clearTimeout(closing.current);
+    },
+    []
+  );
+
+  // placed before paint (`left-0 top-0` until then, the tooltips' way): under the plus, kept in
+  // the window; over the plus when the foot is too near. again on a scroll or a resize
+  useLayoutEffect(() => {
+    const el = menu.current;
+    if (!open || !el) return;
+    const place = () => {
+      const a = plus.current?.getBoundingClientRect();
+      if (!a) return;
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      el.style.left = `${Math.max(4, Math.min(a.left, document.documentElement.clientWidth - w - 4))}px`;
+      el.style.top = `${a.bottom + h <= document.documentElement.clientHeight - 4 ? a.bottom : Math.max(4, a.top - h)}px`;
+    };
+    place();
+    if (focusFirst.current) {
+      focusFirst.current = false;
+      el.querySelector<HTMLButtonElement>('button')?.focus();
+    }
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [open]);
+
+  if (items.length === 0) return null;
+
+  function walk(e: KeyboardEvent<HTMLUListElement>) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+      plus.current?.focus();
+      return;
+    }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const items = Array.from(menu.current?.querySelectorAll<HTMLButtonElement>('button') ?? []);
+    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+  }
+
+  return (
+    <>
+      <button
+        ref={plus}
+        type="button"
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onPointerEnter={(e) => {
+          if (e.pointerType !== 'touch') show();
+        }}
+        onPointerLeave={hide}
+        onClick={() => {
+          if (open) return close();
+          focusFirst.current = true;
+          show();
+        }}
+        className={className}
+      >
+        {children}
+      </button>
+      {open &&
+        host &&
+        createPortal(
+          <ul
+            ref={menu}
+            role="menu"
+            aria-label={label}
+            onPointerEnter={show}
+            onPointerLeave={hide}
+            onKeyDown={walk}
+            onBlur={(e) => {
+              const to = e.relatedTarget;
+              if (to instanceof Node && (menu.current?.contains(to) || plus.current === to)) return;
+              close();
+            }}
+            className="fixed left-0 top-0 z-[60] flex min-w-32 flex-col border border-primaryStroke bg-backgroundSecondary py-1 text-sm"
+          >
+            {items.map((item) => (
+              <li key={item.key} role="none">
+                <button
+                  role="menuitem"
+                  type="button"
+                  data-pick={item.key}
+                  className={cn(
+                    'flex w-full items-center px-3 py-1 text-left hover:bg-primaryStroke/20 focus-visible:bg-primaryStroke/20 focus-visible:outline-none',
+                    item.color ? 'font-semibold' : 'text-textPrimary'
+                  )}
+                  style={item.color ? { color: item.color } : undefined}
+                  onClick={() => {
+                    close();
+                    onPick(item.key);
+                  }}
+                >
+                  {item.label}
+                </button>
+              </li>
+            ))}
+          </ul>,
+          host
+        )}
+    </>
+  );
+}
+
+/** The roles a channel is kept to (docs/groups.md). None: the channel is everyone's. */
+function keptTo(room: GroupRoom, channel: string): GroupRole[] {
+  return room.roles.filter((role) => (role.channels ?? []).includes(channel));
+}
+
+/** The mark on a channel kept to roles: a lock, the roles' names its tooltip. Nothing on a channel that is everyone's. */
+function KeptMark({ roles }: { roles: GroupRole[] }) {
+  if (roles.length === 0) return null;
+  const words = `only ${roles.map((role) => role.name).join(', ')}`;
+  return (
+    <Tooltip content={words}>
+      <span role="img" aria-label={words} className="flex shrink-0 text-textTertiary">
+        <RiLockLine aria-hidden size={14} />
+      </span>
+    </Tooltip>
+  );
 }
 
 /**
@@ -265,8 +555,8 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
         <Bone className="h-6 w-56 max-w-full" />
         <Bone className="h-4 w-80 max-w-full" />
       </div>
-      <div ref={gridRef} className="grid snap-start items-start gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
-        <div className="flex flex-col gap-1.5">
+      <div ref={gridRef} className={cn(ROOM_GRID, 'lg:grid-cols-[200px_minmax(0,1fr)]')}>
+        <div className={cn('flex flex-col gap-1.5', SIDE_INSET)}>
           <Bone className="mb-1 h-3 w-24" />
           {Array.from({ length: 3 }, (_, i) => (
             <Bone key={i} className="h-7" />
@@ -312,6 +602,7 @@ export function ServerPage() {
   const room = useAtomValue(roomAtom);
   const error = useAtomValue(roomErrorAtom);
   const gone = useAtomValue(roomGoneAtom);
+  const renamed = useAtomValue(channelRenamedAtom);
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState('');
@@ -321,7 +612,10 @@ export function ServerPage() {
   const shown = live.slice(0, FACES);
   const previewKey = shown.join(',');
   const channels = room?.channels ?? [];
-  const found = channel === 'general' || channels.some((item) => item.name === channel);
+  // the channel just renamed is still found under its old name until the layout effect below
+  // has moved the page: otherwise the room, its dialog and its chat would be taken down for
+  // "no such channel" and put back empty under the new address
+  const found = channel === 'general' || channels.some((item) => item.name === channel) || renamed?.from === channel;
   /** The room's grid, or the skeleton's while the room is asked for: where the page lands. */
   const roomRef = useRef<HTMLDivElement | null>(null);
   /** Whether the page has landed on this server's own room. Until then every commit with a room's shape scrolls to it. */
@@ -334,6 +628,26 @@ export function ServerPage() {
     enterRoom(server);
     return leaveRoom;
   }, [ok, server, me]);
+
+  // a channel was renamed (the channels tab here, or the fact from elsewhere): the page on it is
+  // the new address, and the note is cleared once the page is off the old name. not in the same
+  // pass: the router lands a render later than a store write does, and clearing first would
+  // leave one render with the old name in the url and no channel of that name in the room
+  useLayoutEffect(() => {
+    if (!renamed) return;
+    if (renamed.from === channel) navigate(`/groups/${server}/${renamed.to}`, { replace: true });
+    else store.set(channelRenamedAtom, null);
+  }, [renamed, channel]);
+
+  // the room was taken down for "no such channel" (the channel on screen deleted, or kept to a
+  // role this login lost, under the page) and is back on another channel: the chat panel went
+  // down with it, and its shelf of lines, so the last lines are asked for again
+  const missing = room !== null && !found;
+  const wasMissing = useRef(false);
+  useEffect(() => {
+    if (wasMissing.current && !missing) reloadLines();
+    wasMissing.current = missing;
+  }, [missing]);
 
   useEffect(() => {
     const names = previewKey ? previewKey.split(',') : [];
@@ -519,7 +833,7 @@ export function ServerPage() {
               <h2 className="flex flex-wrap items-center gap-2 text-xl font-semibold">
                 {words.title}
                 {words.tag && <span className="text-base font-normal text-textTertiary">#{words.tag}</span>}
-                {room.owner && <span className="bg-primaryBlue/15 px-1.5 py-0.5 text-xs uppercase text-primaryBlue">owner</span>}
+                {room.owner && <OwnerMark name={ownerRoleOf(room)} size={18} />}
                 {room.public === false && <span className="bg-primaryStroke px-1.5 py-0.5 text-xs uppercase text-textSecondary">private</span>}
                 <span id="group-members-count" className="text-sm font-normal text-textTertiary">
                   {room.members === 1 ? '1 member' : `${room.members} members`}
@@ -595,12 +909,8 @@ export function ServerPage() {
             </div>
           </div>
           {actionError && <p className="mb-4 text-sm text-decrease">{actionError}</p>}
-          <div
-            id="group-room"
-            ref={roomRef}
-            className={cn('grid snap-start items-start gap-4', roster ? 'lg:grid-cols-[200px_minmax(0,1fr)_240px]' : 'lg:grid-cols-[200px_minmax(0,1fr)]')}
-          >
-            <div className="flex min-w-0 flex-col gap-6">
+          <div id="group-room" ref={roomRef} className={cn(ROOM_GRID, roster ? 'lg:grid-cols-[200px_minmax(0,1fr)_240px]' : 'lg:grid-cols-[200px_minmax(0,1fr)]')}>
+            <div className={cn('flex min-w-0 flex-col gap-6', SIDE_INSET)}>
               <ChannelList server={server} channel={channel} room={room} me={me ?? null} onError={setActionError} />
               {/* the cameras, under the channels. with every camera off the list stands alone: nothing says so */}
               {shown.length > 0 && (
@@ -685,6 +995,7 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
                   #{item.name}
                 </Link>
               )}
+              <KeptMark roles={keptTo(room, item.name)} />
               {canMute && (
                 <Tooltip content={isMuted ? 'muted: nothing from it reaches your bell. click to unmute' : 'mute: its lines stop reaching your bell'}>
                   <button
@@ -871,11 +1182,12 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
 
 /**
  * One member of the roster: the face with the presence square on its corner (the sidebar's
- * way, docs/status.md; the word for a reader), the name, `owner` on an owner, `live` on one
- * whose camera is up, the roles they hold in their colours. The word is the events socket's:
- * room-atoms holds every name on the roster while the room is up.
+ * way, docs/status.md; the word for a reader), the name, the crown on an owner (OwnerMark, the
+ * owner role's name its tooltip), `live` on one whose camera is up, the roles they hold in
+ * their colours. The word is the events socket's: room-atoms holds every name on the roster
+ * while the room is up.
  */
-function Member({ member, live }: { member: GroupMember; live: boolean }) {
+function Member({ member, live, ownerRole }: { member: GroupMember; live: boolean; ownerRole: string }) {
   const presence = useAtomValue(presenceOfAtom(member.name));
   return (
     <li data-member={member.name} data-owner={member.owner || undefined} data-presence={presence} className="flex items-center gap-2">
@@ -887,7 +1199,14 @@ function Member({ member, live }: { member: GroupMember; live: boolean }) {
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-x-2">
           <span className="truncate font-semibold">{member.name}</span>
-          {member.owner && <span className="text-xs uppercase text-primaryBlue">owner</span>}
+          {member.owner && <OwnerMark name={ownerRole} />}
+          {timedOut(member) && (
+            <Tooltip content={`timed out until ${untilWords(member.timeout ?? 0)}`}>
+              <span role="img" aria-label={`timed out until ${untilWords(member.timeout ?? 0)}`} data-timed-out className="flex shrink-0 text-textTertiary">
+                <RiTimeLine aria-hidden size={14} />
+              </span>
+            </Tooltip>
+          )}
           {live && <span className="text-xs uppercase text-primaryBlue">live</span>}
         </span>
         {member.roles.length > 0 && (
@@ -937,7 +1256,11 @@ function Roster({ room }: { room: GroupRoom }) {
   }
 
   return (
-    <aside id="group-roster" aria-label="members" className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-4 text-sm', ROSTER_HEIGHT)}>
+    <aside
+      id="group-roster"
+      aria-label="members"
+      className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-4 text-sm', SIDE_INSET, ROSTER_HEIGHT)}
+    >
       <div
         className="flex h-8 shrink-0 items-center gap-2"
         onBlur={(e) => {
@@ -1005,7 +1328,7 @@ function Roster({ room }: { room: GroupRoom }) {
       {/* no bar: it would take width from the rows. the padding under the last row is for its presence square, which hangs 4px below its face and would otherwise be 4px of scroll. its scroll is its own: the end of a long roster does not send the page to its other view */}
       <ul id="group-members" className="flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {shown.map((member) => (
-          <Member key={member.name} member={member} live={live.includes(member.name)} />
+          <Member key={member.name} member={member} live={live.includes(member.name)} ownerRole={ownerRoleOf(room)} />
         ))}
       </ul>
     </aside>
@@ -1027,13 +1350,55 @@ type ManageTab = 'about' | 'channels' | 'roles' | 'members' | 'bans' | 'delete';
  * without the power, the delete of their own); `members` is for anyone who manages at all,
  * since every power does something to a member.
  */
-const MANAGE_TABS: { id: ManageTab; label: string; group: string; icon: ReactNode; shown: (room: GroupRoom) => boolean }[] = [
-  { id: 'about', label: 'about', group: 'the group', icon: <RiInformationLine aria-hidden size={18} />, shown: (room) => room.perms.appearance },
-  { id: 'channels', label: 'channels', group: 'the group', icon: <RiHashtag aria-hidden size={18} />, shown: managesChannels },
-  { id: 'roles', label: 'roles', group: 'the group', icon: <RiShieldStarLine aria-hidden size={18} />, shown: (room) => room.perms.roles },
-  { id: 'members', label: 'members', group: 'people', icon: <RiGroupLine aria-hidden size={18} />, shown: (room) => manages(room) },
-  { id: 'bans', label: 'bans', group: 'people', icon: <RiForbidLine aria-hidden size={18} />, shown: (room) => room.perms.ban },
-  { id: 'delete', label: 'delete', group: 'owner', icon: <RiDeleteBinLine aria-hidden size={18} />, shown: (room) => room.owner }
+const MANAGE_TABS: {
+  id: ManageTab;
+  label: string;
+  group: string;
+  icon: ReactNode;
+  shown: (room: GroupRoom) => boolean;
+}[] = [
+  {
+    id: 'about',
+    label: 'about',
+    group: 'the group',
+    icon: <RiInformationLine aria-hidden size={18} />,
+    shown: (room) => room.perms.appearance
+  },
+  {
+    id: 'channels',
+    label: 'channels',
+    group: 'the group',
+    icon: <RiHashtag aria-hidden size={18} />,
+    shown: managesChannels
+  },
+  {
+    id: 'roles',
+    label: 'roles',
+    group: 'the group',
+    icon: <RiShieldStarLine aria-hidden size={18} />,
+    shown: (room) => room.perms.roles
+  },
+  {
+    id: 'members',
+    label: 'members',
+    group: 'people',
+    icon: <RiGroupLine aria-hidden size={18} />,
+    shown: (room) => manages(room)
+  },
+  {
+    id: 'bans',
+    label: 'bans',
+    group: 'people',
+    icon: <RiForbidLine aria-hidden size={18} />,
+    shown: (room) => room.perms.ban
+  },
+  {
+    id: 'delete',
+    label: 'delete',
+    group: 'owner',
+    icon: <RiDeleteBinLine aria-hidden size={18} />,
+    shown: (room) => room.owner
+  }
 ];
 
 // the rail's looks, the user modal's (UserModal.tsx): the mark under a tab in the phone strip, at its left in the rail
@@ -1045,7 +1410,12 @@ const RAIL_TAB = cn(
 );
 const RAIL_TAB_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
 const RAIL_TAB_OFF = 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary';
-const RAIL_STEP: Record<string, number | undefined> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
+const RAIL_STEP: Record<string, number | undefined> = {
+  ArrowDown: 1,
+  ArrowRight: 1,
+  ArrowUp: -1,
+  ArrowLeft: -1
+};
 
 /**
  * What a power does, in a dialog over the room (`manage`, the gear in the header), laid out
@@ -1366,9 +1736,16 @@ function ListingSection({ server, room, run }: ManageProps) {
   );
 }
 
-/** Every member with what a power may do to them: give or take a role, kick, ban, remove owner. Then, for an owner, naming another. */
+/**
+ * Every member with what a power may do to them: give or take a role, kick, ban, remove owner.
+ * For an owner, `transfer ownership` on a member who is not one: it asks first, in a dialog of
+ * its own over this one, and a yes makes them an owner and this login no longer one, in the
+ * api's one call (`transferOwnership`); the facts move the crowns, and this login's room is
+ * asked again, since what it may do changed.
+ */
 function MembersSection({ server, room, me, run }: ManageProps & { me: string | null }) {
-  const [ownerName, setOwnerName] = useState('');
+  /** The member the group is about to be handed to, while the question is up. */
+  const [handing, setHanding] = useState<string | null>(null);
   const members = room.roster ?? [];
   const owners = members.filter((member) => member.owner).length;
   const order = room.member_order === 'newest' || room.member_order === 'oldest' ? room.member_order : 'name';
@@ -1404,7 +1781,11 @@ function MembersSection({ server, room, me, run }: ManageProps & { me: string | 
           const offer = touch ? room.roles.filter((role) => !member.roles.some((held) => held.id === role.id) && reaches(room, role.perms)) : [];
           // not yourself; an owner only by an owner, and never the last one
           const removable = member.name !== me && (!member.owner || (room.owner && owners > 1));
-          const acts = offer.length > 0 || (removable && (room.perms.kick || room.perms.ban || (room.owner && member.owner)));
+          // an owner hands the group to a member who is not one
+          const handable = room.owner && !member.owner && member.name !== me;
+          // the kick power times a member out, and lifts it; an owner only by an owner, like a kick
+          const quiet = timedOut(member);
+          const acts = handable || (removable && (room.perms.kick || room.perms.ban || (room.owner && member.owner)));
           return (
             <li
               key={member.name}
@@ -1414,16 +1795,17 @@ function MembersSection({ server, room, me, run }: ManageProps & { me: string | 
             >
               <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8 shrink-0" />
               <div className="min-w-0 flex-1">
+                {/* the roles they hold, the owner role first as the crown and its name, each a word in its colour with its take; then the plus, for the ones to give */}
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-semibold">{member.name}</span>
-                  {member.owner && <span className="text-xs uppercase text-primaryBlue">owner</span>}
+                  {member.owner && <OwnerMark name={ownerRoleOf(room)} words size={12} />}
                   {member.roles.map((role) => (
-                    <span key={role.id} className="text-xs" style={{ color: role.color }}>
+                    <span key={role.id} data-held={role.name} className="flex items-center text-xs" style={{ color: role.color }}>
                       {role.name}
                       {touch && reaches(room, permsOf(role.id)) && (
                         <button
                           type="button"
-                          className="ml-1 text-textTertiary"
+                          className="ml-1 text-textTertiary hover:text-textPrimary"
                           aria-label={`take ${role.name} from ${member.name}`}
                           onClick={() => void run(() => api.takeRole(server, role.id, member.name))}
                         >
@@ -1432,33 +1814,46 @@ function MembersSection({ server, room, me, run }: ManageProps & { me: string | 
                       )}
                     </span>
                   ))}
+                  <HoverMenu
+                    label={`give ${member.name} a role`}
+                    items={offer.map((role) => ({ key: role.id, label: role.name, color: role.color }))}
+                    onPick={(id) => void run(() => api.giveRole(server, id, member.name))}
+                    className="flex h-5 w-5 shrink-0 items-center justify-center border border-transparent text-textTertiary hover:border-primaryStroke hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none"
+                  >
+                    <RiAddLine aria-hidden size={14} />
+                  </HoverMenu>
                 </div>
                 {acts && (
                   <div className="mt-1 flex flex-wrap items-center gap-2">
-                    {offer.length > 0 && (
-                      <select
-                        aria-label={`role for ${member.name}`}
-                        defaultValue=""
-                        className="border border-primaryStroke bg-background px-1 py-0.5"
-                        onChange={(e) => {
-                          const id = e.target.value;
-                          e.target.value = '';
-                          if (id) void run(() => api.giveRole(server, id, member.name));
-                        }}
-                      >
-                        <option value="">give a role</option>
-                        {offer.map((role) => (
-                          <option key={role.id} value={role.id}>
-                            {role.name}
-                          </option>
-                        ))}
-                      </select>
-                    )}
                     {room.perms.kick && removable && (
                       <button type="button" className="text-textTertiary" onClick={() => void run(() => api.kickMember(server, member.name))}>
                         kick
                       </button>
                     )}
+                    {room.perms.kick &&
+                      removable &&
+                      (quiet ? (
+                        <span data-timed-out className="flex items-center gap-2 text-decrease">
+                          timed out until {untilWords(member.timeout ?? 0)}
+                          <button
+                            id={`timeout-lift-${member.name}`}
+                            type="button"
+                            className="text-textTertiary hover:text-textPrimary"
+                            onClick={() => void run(() => api.liftTimeout(server, member.name))}
+                          >
+                            lift
+                          </button>
+                        </span>
+                      ) : (
+                        <HoverMenu
+                          label={`time ${member.name} out`}
+                          items={TIMEOUTS}
+                          onPick={(seconds) => void run(() => api.timeoutMember(server, member.name, Number(seconds)))}
+                          className="text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none"
+                        >
+                          time out
+                        </HoverMenu>
+                      ))}
                     {room.perms.ban && removable && (
                       <button type="button" className="text-decrease" onClick={() => void run(() => api.banMember(server, member.name, ''))}>
                         ban
@@ -1469,6 +1864,11 @@ function MembersSection({ server, room, me, run }: ManageProps & { me: string | 
                         remove owner
                       </button>
                     )}
+                    {handable && (
+                      <button id={`transfer-owner-${member.name}`} type="button" className="text-textTertiary" onClick={() => setHanding(member.name)}>
+                        transfer ownership
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1476,31 +1876,19 @@ function MembersSection({ server, room, me, run }: ManageProps & { me: string | 
           );
         })}
       </ul>
-      {room.owner && (
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const name = ownerName.trim().toLowerCase();
-            if (!name) return;
-            void run(async () => {
-              await api.grantOwner(server, name);
-              setOwnerName('');
-            });
+      {handing && (
+        <ConfirmDialog
+          id={`transfer-owner-${handing}-confirm`}
+          title={`transfer ownership to ${handing}?`}
+          message={`${handing} becomes the ${ownerRoleOf(room)} of the group, and you stop being one. you keep your roles and stay in the group. only they can hand it back.`}
+          yes="yes, transfer"
+          onYes={() => {
+            const name = handing;
+            setHanding(null);
+            void run(() => api.transferOwnership(server, name));
           }}
-        >
-          <input
-            id="owner-name"
-            value={ownerName}
-            onChange={(e) => setOwnerName(e.target.value)}
-            placeholder="name an owner"
-            aria-label="name an owner"
-            className={INPUT}
-          />
-          <button id="owner-grant" type="submit" className="text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!ownerName.trim()}>
-            owner
-          </button>
-        </form>
+          onNo={() => setHanding(null)}
+        />
       )}
     </Section>
   );
@@ -1562,15 +1950,116 @@ function movedTo(order: string[], name: string, to: number): string[] {
 }
 
 /**
+ * A channel's name on its row of the channels tab and, within reach, the way to change it: a
+ * pencil beside the name (up while the pointer or the keyboard is on the name) opens the name
+ * as a box in its own place, typed to the name rule like the add dialog's. Enter puts the new
+ * name; escape leaves the old one; the box losing focus puts a name that passes and leaves one
+ * that does not. Enter on a name that cannot be keeps the box, with the fault where the about
+ * line was. The row keeps its shape: the box is the name's size, with a stroke under it.
+ */
+function ChannelName({ item, channels, editable, onRename }: { item: Channel; channels: Channel[]; editable: boolean; onRename: (to: string) => void }) {
+  const { name, about } = item;
+  /** What the box holds while it is open. Null: the name is a word. */
+  const [draft, setDraft] = useState<string | null>(null);
+  const box = useRef<HTMLInputElement | null>(null);
+  /** The box was closed by a key: the blur that may follow its unmount puts nothing. */
+  const closed = useRef(false);
+  const editing = draft !== null;
+  const fault = editing && draft !== name ? channelNameFault(draft, channels) : '';
+  const ok = editing && draft !== name && isValidName(draft) && fault === '';
+
+  useLayoutEffect(() => {
+    if (!editing) return;
+    closed.current = false;
+    box.current?.focus();
+    box.current?.select();
+  }, [editing]);
+
+  /** The box closes; with `put`, the name in it goes to the api when it can. */
+  function finish(put: boolean) {
+    if (closed.current) return;
+    closed.current = true;
+    if (put && ok && draft) onRename(draft);
+    setDraft(null);
+  }
+
+  return (
+    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+      {editing ? (
+        <span className="flex min-w-0 items-center font-semibold">
+          <span aria-hidden>#</span>
+          <input
+            ref={box}
+            id={`channel-name-${name}`}
+            value={draft}
+            onChange={(e) =>
+              setDraft(
+                e.target.value
+                  .toLowerCase()
+                  .replace(/[^a-z0-9_-]/g, '')
+                  .slice(0, 32)
+              )
+            }
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                if (ok) finish(true);
+                else if (draft === name) finish(false);
+              } else if (e.key === 'Escape') {
+                // the manage dialog is a <dialog>: left to the browser, escape closes it, box and all
+                e.preventDefault();
+                e.stopPropagation();
+                finish(false);
+              }
+            }}
+            onBlur={() => finish(true)}
+            aria-label={`rename #${name}`}
+            aria-invalid={fault !== '' || undefined}
+            maxLength={32}
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            className={cn(
+              'min-w-0 flex-1 border-0 border-b bg-transparent p-0 font-semibold text-textPrimary outline-none',
+              fault ? 'border-decrease' : 'border-primaryBlue'
+            )}
+          />
+        </span>
+      ) : (
+        <span className="group/name flex min-w-0 items-center gap-1.5">
+          <span className="truncate border-b border-transparent font-semibold">#{name}</span>
+          {editable && (
+            <Tooltip content="rename">
+              <button
+                id={`channel-rename-${name}`}
+                type="button"
+                aria-label={`rename #${name}`}
+                onClick={() => setDraft(name)}
+                className={cn('flex shrink-0 text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none', PENCIL_HIDDEN)}
+              >
+                <RiPencilLine aria-hidden size={14} />
+              </button>
+            </Tooltip>
+          )}
+        </span>
+      )}
+      {fault ? <span className="text-xs text-decrease">{fault}</span> : about && <span className="truncate text-xs text-textTertiary">{about}</span>}
+    </span>
+  );
+}
+
+/**
  * The channels in their order, each a row: a handle to drag it by (the arrow keys on the
- * handle do the same, a row a press; `up` and `down` are the words for it), the name, the
- * line about it, and `delete` (never on `general`). A press moves the row at once and tells
- * the api (setChannelOrder, room-atoms); a drag moves it as the pointer goes and tells the
- * api once, on the drop. The list on the left follows under the backdrop, as does every other
- * room open. `add channel` opens the dialog the row under the list opens. Deleting the channel
- * on screen moves the page to `general` first, so the room under the dialog stays a room. The
- * order and the add are the channels power's: without it this login is here for a channel
- * they made (managesChannels), the rows are read, and `delete` is on theirs.
+ * handle do the same, a row a press), the name with its pencil (ChannelName), the line about
+ * it, and `delete` (never on `general`). A press moves the row at once and tells the api
+ * (setChannelOrder, room-atoms); a drag moves it as the pointer goes and tells the api once,
+ * on the drop. A rename asks the api first and lands when it says yes (renameChannel): the
+ * list on the left follows under the backdrop, as does every other room open, and a page on
+ * the channel moves to its new address. `add channel` opens the dialog the row under the list
+ * opens. Deleting the channel on screen moves the page to `general` first, so the room under
+ * the dialog stays a room. The order and the add are the channels power's: without it this
+ * login is here for a channel they made (managesChannels), the rows are read, and the pencil
+ * and `delete` are on theirs.
  */
 function ChannelsSection({ server, channel, room, run }: ManageProps & { channel: string }) {
   const navigate = useNavigate();
@@ -1584,7 +2073,15 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
   const [draft, setDraft] = useState<string[] | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const rows = useRef<HTMLUListElement | null>(null);
-  const drag = useRef<{ pointerId: number; name: string; y: number; from: number; pitch: number; start: string[]; now: string[] } | null>(null);
+  const drag = useRef<{
+    pointerId: number;
+    name: string;
+    y: number;
+    from: number;
+    pitch: number;
+    start: string[];
+    now: string[];
+  } | null>(null);
   const full = channels.length >= CHANNEL_CAP;
   /** `list` over the room's channels: a channel gone since is dropped, one added since goes after, as the api puts it. */
   const settle = (list: string[]) => [...list.filter((name) => byName.has(name)), ...names.filter((name) => !list.includes(name))];
@@ -1610,7 +2107,15 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
     // by the reorder, and the browser lets go of a node that leaves. the drag ends with the capture, whatever ends it
     ul.setPointerCapture(e.pointerId);
     // a row and the gap after it: the distance between two rows' tops, or the one row's height when there is one
-    drag.current = { pointerId: e.pointerId, name, y: e.clientY, from, pitch: second ? second.top - first.top : first.height, start: order, now: order };
+    drag.current = {
+      pointerId: e.pointerId,
+      name,
+      y: e.clientY,
+      from,
+      pitch: second ? second.top - first.top : first.height,
+      start: order,
+      now: order
+    };
     setDragging(name);
   }
   function moveDrag(e: PointerEvent<HTMLUListElement>) {
@@ -1646,10 +2151,20 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
     <Section
       title="channels"
       description={`${channels.length} of ${CHANNEL_CAP}, top to bottom as the list shows them. ${
-        orders ? 'drag a row to move it, or up and down. general stays.' : 'the channels power moves and adds them; the ones you made are yours to delete.'
+        orders
+          ? 'drag a row to move it. the pencil by a name changes it. general stays.'
+          : 'the channels power moves and adds them; the ones you made are yours to rename and delete.'
       }`}
     >
-      <ul id="manage-channels" ref={rows} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} onLostPointerCapture={endDrag} className="flex flex-col gap-2">
+      <ul
+        id="manage-channels"
+        ref={rows}
+        onPointerMove={moveDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onLostPointerCapture={endDrag}
+        className="flex flex-col gap-2"
+      >
         {order.map((name, i) => {
           const item = byName.get(name);
           if (!item) return null;
@@ -1658,7 +2173,10 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
             <li
               key={name}
               data-channel={name}
-              className={cn('flex items-center gap-3 border bg-background px-3 py-2 transition-[border-color] duration-150', held ? 'border-primaryBlue' : 'border-primaryStroke')}
+              className={cn(
+                'flex items-center gap-3 border bg-background px-3 py-2 transition-[border-color] duration-150',
+                held ? 'border-primaryBlue' : 'border-primaryStroke'
+              )}
             >
               {orders && (
                 <button
@@ -1677,40 +2195,27 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
                   <RiDraggable aria-hidden size={18} />
                 </button>
               )}
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="truncate font-semibold">#{name}</span>
-                {item.about && <span className="truncate text-xs text-textTertiary">{item.about}</span>}
-              </span>
-              <span className="flex shrink-0 items-center gap-3">
-                {orders && (
-                  <>
-                    <button id={`channel-up-${name}`} type="button" disabled={i === 0} onClick={() => put(movedTo(order, name, i - 1))} className={ROW_WORD}>
-                      up
-                    </button>
-                    <button
-                      id={`channel-down-${name}`}
-                      type="button"
-                      disabled={i === order.length - 1}
-                      onClick={() => put(movedTo(order, name, i + 1))}
-                      className={ROW_WORD}
-                    >
-                      down
-                    </button>
-                  </>
-                )}
-                {item.can_delete && (
-                  <button id={`channel-remove-${name}`} type="button" className="text-sm text-decrease" onClick={() => setSure(name)}>
-                    delete
-                  </button>
-                )}
-              </span>
+              {/* the api's rename rule is delete's: who made it, or the channels power, and never general */}
+              <ChannelName item={item} channels={channels} editable={item.can_delete} onRename={(to) => void run(() => renameChannel(server, name, to))} />
+              <KeptMark roles={keptTo(room, name)} />
+              {item.can_delete && (
+                <button id={`channel-remove-${name}`} type="button" className="shrink-0 text-sm text-decrease" onClick={() => setSure(name)}>
+                  delete
+                </button>
+              )}
             </li>
           );
         })}
       </ul>
       {orders && full && <p className="text-textTertiary">{CHANNEL_CAP} channels is the cap. delete one to add another.</p>}
       {orders && !full && (
-        <button id="manage-channel-add" type="button" aria-haspopup="dialog" className="self-start text-sm font-semibold text-primaryBlue" onClick={() => setAdding(true)}>
+        <button
+          id="manage-channel-add"
+          type="button"
+          aria-haspopup="dialog"
+          className="self-start text-sm font-semibold text-primaryBlue"
+          onClick={() => setAdding(true)}
+        >
           add channel
         </button>
       )}
@@ -1739,6 +2244,10 @@ interface RoleDraft {
   name: string;
   color: string;
   perms: RolePerms;
+  /** The channels kept to it, by name. */
+  channels: string[];
+  /** Seconds between its holders' lines; 0 none. */
+  cooldown: number;
 }
 
 /** What a new role is called: `new role`, or the first of `new role 2`, `new role 3`, … that no role here has, so the add never collides. */
@@ -1750,26 +2259,36 @@ function freshRoleName(roles: GroupRole[]): string {
   return `new role ${n}`;
 }
 
-/** The words for a role's powers in its row: the labels it carries, or `no powers`. */
-function powerWords(perms: RolePerms): string {
-  return (
-    POWERS.filter((power) => perms[power.key])
+/** The words for a role in its row: the powers it carries (or `no powers`), the channels kept to it when there are any, and its cooldown when it has one. */
+function roleWords(role: GroupRole): string {
+  const words = [
+    POWERS.filter((power) => role.perms[power.key])
       .map((power) => power.label)
       .join(', ') || 'no powers'
-  );
+  ];
+  const kept = role.channels ?? [];
+  const cooldown = role.cooldown ?? 0;
+  if (kept.length > 0) words.push(`keeps ${kept.map((name) => `#${name}`).join(', ')}`);
+  if (cooldown > 0) words.push(`cooldown ${cooldownWords(cooldown)}`);
+  return words.join(' · ');
 }
 
 /**
- * The roles, each a row: the name in its colour and the powers it carries. A row within reach
- * is the click: it opens in place as the name, the colour and the powers, with save, cancel
- * and delete; one is open at a time. `add role` makes one right away, called `new role`
- * (numbered when that is taken), and opens it with the name selected, so what is typed next
- * is its name. A role is known by its id, not its name: a rename is a save like any other,
- * and the open row stays on its role whatever the socket says of it meanwhile; a role deleted
- * under it closes it.
+ * The roles, each a row: the name in its colour, the powers it carries and the channels kept
+ * to it. A row within reach is the click: it opens in place as the name, the colour, the
+ * powers and the channels, with save, cancel and delete; one is open at a time. The channels
+ * (docs/groups.md): every channel but `general` as a box; ticked, the channel is kept to this
+ * role, and seen by its holders, the roles that also tick it, the owners and the channels
+ * power, and by nobody else; a channel no role ticks is everyone's. Beside each is who sees
+ * it as the draft stands. `add role` makes one right away, called `new role` (numbered when
+ * that is taken), and opens it with the name selected, so what is typed next is its name. A
+ * role is known by its id, not its name: a rename is a save like any other, and the open row
+ * stays on its role whatever the socket says of it meanwhile; a role deleted under it closes it.
  */
 function RolesSection({ server, room, run }: ManageProps) {
   const [draft, setDraft] = useState<RoleDraft | null>(null);
+  /** The owner role's name as it is being changed; null while that row is closed. One row is open at a time, this one or a custom role's. */
+  const [ownerDraft, setOwnerDraft] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState(false);
   /** The name box that has had its open-time select. A later focus of the same box (a click into the word) edits in place; a role opened is a new box. */
@@ -1777,16 +2296,33 @@ function RolesSection({ server, room, run }: ManageProps) {
   // a power this login lacks is one it cannot put on a role; an owner and a site admin lack none
   const short = POWERS.filter((power) => !room.perms[power.key]);
   const full = room.roles.length >= ROLE_CAP;
+  const ownerRole = ownerRoleOf(room);
   // the row open in place: the draft, while the role it is of is still there
   const open = draft !== null && room.roles.some((role) => role.id === draft.id) ? draft : null;
+  // the channels a role can be given: the ones this login sees, general apart, since general is everyone's
+  const keepable = (room.channels ?? []).filter((item) => item.name !== 'general');
 
   /** A role now, so it has an id to be known by, then open with the name selected. */
   async function add() {
     setAdding(true);
     try {
       await run(async () => {
-        const made = await api.createRole(server, { name: freshRoleName(room.roles), color: COLORS[0], perms: NO_PERMS });
-        setDraft({ id: made.id, name: made.name, color: made.color, perms: made.perms });
+        const made = await api.createRole(server, {
+          name: freshRoleName(room.roles),
+          color: COLORS[0],
+          perms: NO_PERMS,
+          channels: [],
+          cooldown: 0
+        });
+        setOwnerDraft(null);
+        setDraft({
+          id: made.id,
+          name: made.name,
+          color: made.color,
+          perms: made.perms,
+          channels: made.channels ?? [],
+          cooldown: made.cooldown ?? 0
+        });
       });
     } finally {
       setAdding(false);
@@ -1797,9 +2333,33 @@ function RolesSection({ server, room, run }: ManageProps) {
     e.preventDefault();
     if (!open || !open.name.trim()) return;
     await run(async () => {
-      await api.saveRole(server, open.id, { name: open.name.trim(), color: open.color, perms: open.perms });
+      await api.saveRole(server, open.id, {
+        name: open.name.trim(),
+        color: open.color,
+        perms: open.perms,
+        channels: open.channels,
+        cooldown: open.cooldown
+      });
       setDraft(null);
     });
+  }
+
+  /** The owner role's new name. The fact brings it to every room open, this one included. */
+  async function saveOwner(e: FormEvent) {
+    e.preventDefault();
+    if (ownerDraft === null || !ownerDraft.trim()) return;
+    await run(async () => {
+      await api.renameOwnerRole(server, ownerDraft.trim());
+      setOwnerDraft(null);
+    });
+  }
+
+  /** Who sees `channel` as the draft stands: `everyone`, or `only` the roles that keep it, this one first. */
+  function seers(channel: string): string {
+    const ticked = open?.channels.includes(channel) ?? false;
+    const others = room.roles.filter((role) => role.id !== open?.id && (role.channels ?? []).includes(channel)).map((role) => role.name);
+    const names = ticked ? ['this role', ...others] : others;
+    return names.length > 0 ? `only ${names.join(', ')}` : 'everyone';
   }
 
   /** The open role, deleted. One call at a time, as `add`: a second click while the first is out would be a 404 said in red after the role is gone. */
@@ -1821,37 +2381,109 @@ function RolesSection({ server, room, run }: ManageProps) {
       title="roles"
       description={`${room.roles.length} of ${ROLE_CAP}. a name, a colour and the powers it carries; click one to change or delete it. ${
         short.length > 0 ? 'a role carries only the powers you hold. ' : ''
-      }only an owner can name another owner, or change the pictures.`}
+      }only an owner can hand the group on, or change the pictures.`}
     >
-      {room.roles.length === 0 && <p className="text-textTertiary">no roles yet.</p>}
-      {room.roles.length > 0 && (
-        <ul id="group-roles" className="flex flex-col gap-1">
-          {room.roles.map((role) => {
-            // a role past this login's reach is read, not changed
-            const within = reaches(room, role.perms);
-            if (open?.id === role.id) {
-              // and written only while the role as it is and as it would be are both within reach, the api's rule for a save and a delete:
-              // a power taken from this login mid-edit greys save and delete and leaves the row open, with cancel the way out
-              const mayWrite = within && reaches(room, open.perms);
-              return (
-                <li key={role.id} data-role={role.name} data-open className="border border-primaryStroke p-3">
-                  <form id="role-form" onSubmit={(e) => void save(e)} className="flex flex-col gap-3">
-                    <input
-                      id="role-name"
-                      value={open.name}
-                      onChange={(e) => setDraft({ ...open, name: e.target.value })}
-                      placeholder="role name"
-                      maxLength={32}
-                      aria-label="role name"
-                      autoFocus
-                      onFocus={(e) => {
-                        if (selected.current === e.currentTarget) return;
-                        selected.current = e.currentTarget;
-                        e.currentTarget.select();
-                      }}
-                      className={INPUT}
-                    />
-                    <div className="flex flex-wrap gap-1">
+      <ul id="group-roles" className="flex flex-col gap-1">
+        {/* the owner role first: every power, every channel, not a row of the api's roles. an owner renames it, nothing else changes */}
+        <li data-role={ownerRole} data-owner data-open={ownerDraft !== null || undefined} className={cn(ownerDraft !== null && 'border border-primaryStroke p-3')}>
+          {ownerDraft !== null ? (
+            <form id="owner-role-form" onSubmit={(e) => void saveOwner(e)} className="flex flex-col gap-3">
+              <input
+                id="owner-role-name"
+                value={ownerDraft}
+                onChange={(e) => setOwnerDraft(e.target.value)}
+                placeholder="owner role name"
+                maxLength={32}
+                aria-label="owner role name"
+                autoFocus
+                onFocus={(e) => e.currentTarget.select()}
+                className={INPUT}
+              />
+              <div role="group" aria-label="powers" className="flex flex-wrap items-center gap-1">
+                <span className="flex h-6 w-6 items-center justify-center text-primaryBlue">
+                  <RiVipCrownLine aria-hidden size={16} />
+                </span>
+                <span aria-hidden className="mx-2 h-6 w-px bg-primaryStroke" />
+                {POWERS.map((power) => (
+                  <Tooltip key={power.key} content={`${power.label}: an owner's`}>
+                    <button
+                      id={`owner-role-perm-${power.key}`}
+                      type="button"
+                      aria-label={power.label}
+                      aria-pressed
+                      aria-disabled
+                      className="flex h-6 w-6 cursor-default items-center justify-center text-primaryBlue"
+                    >
+                      {power.icon}
+                    </button>
+                  </Tooltip>
+                ))}
+              </div>
+              <p className="text-xs text-textTertiary">
+                an owner has every power and sees every channel. only the name changes here; who owns the group is the members tab.
+              </p>
+              <div className="flex items-center gap-3">
+                <button id="owner-role-save" type="submit" className="text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!ownerDraft.trim()}>
+                  save
+                </button>
+                <button id="owner-role-cancel" type="button" className="text-sm text-textTertiary" onClick={() => setOwnerDraft(null)}>
+                  cancel
+                </button>
+              </div>
+            </form>
+          ) : room.owner ? (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-primaryStroke/20"
+              onClick={() => {
+                setDraft(null);
+                setOwnerDraft(ownerRole);
+              }}
+            >
+              <span className="flex items-center gap-1.5 font-semibold text-primaryBlue">
+                <RiVipCrownLine aria-hidden size={14} />
+                {ownerRole}
+              </span>
+              <span className="truncate text-xs text-textTertiary">every power · sees every channel</span>
+            </button>
+          ) : (
+            <span className="flex items-center gap-2 px-2 py-1">
+              <span className="flex items-center gap-1.5 font-semibold text-primaryBlue">
+                <RiVipCrownLine aria-hidden size={14} />
+                {ownerRole}
+              </span>
+              <span className="truncate text-xs text-textTertiary">every power · sees every channel</span>
+            </span>
+          )}
+        </li>
+        {room.roles.map((role) => {
+          // a role past this login's reach is read, not changed
+          const within = reaches(room, role.perms);
+          if (open?.id === role.id) {
+            // and written only while the role as it is and as it would be are both within reach, the api's rule for a save and a delete:
+            // a power taken from this login mid-edit greys save and delete and leaves the row open, with cancel the way out
+            const mayWrite = within && reaches(room, open.perms);
+            return (
+              <li key={role.id} data-role={role.name} data-open className="border border-primaryStroke p-3">
+                <form id="role-form" onSubmit={(e) => void save(e)} className="flex flex-col gap-3">
+                  <input
+                    id="role-name"
+                    value={open.name}
+                    onChange={(e) => setDraft({ ...open, name: e.target.value })}
+                    placeholder="role name"
+                    maxLength={32}
+                    aria-label="role name"
+                    autoFocus
+                    onFocus={(e) => {
+                      if (selected.current === e.currentTarget) return;
+                      selected.current = e.currentTarget;
+                      e.currentTarget.select();
+                    }}
+                    className={INPUT}
+                  />
+                  {/* one row: the colour, a rule, then the powers as icons. a power is a pressed icon (blue), the word its tooltip */}
+                  <div className="flex flex-wrap items-center gap-1">
+                    <div role="group" aria-label="colour" className="flex items-center gap-1">
                       {COLORS.map((swatch) => (
                         <button
                           key={swatch}
@@ -1864,72 +2496,151 @@ function RolesSection({ server, room, run }: ManageProps) {
                         />
                       ))}
                     </div>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1">
-                      {POWERS.map((power) => (
-                        <label key={power.key} className={cn('flex items-center gap-2', !room.perms[power.key] && 'text-textTertiary')}>
-                          <input
-                            id={`role-perm-${power.key}`}
-                            type="checkbox"
-                            checked={open.perms[power.key]}
-                            disabled={!room.perms[power.key]}
-                            onChange={(e) => setDraft({ ...open, perms: { ...open.perms, [power.key]: e.target.checked } })}
-                          />
-                          {power.label}
-                        </label>
-                      ))}
+                    <span aria-hidden className="mx-2 h-6 w-px bg-primaryStroke" />
+                    <div role="group" aria-label="powers" className="flex items-center gap-1">
+                      {POWERS.map((power) => {
+                        const on = open.perms[power.key];
+                        // a power this login lacks is not its to give: greyed, and the tooltip says so
+                        const mine = room.perms[power.key];
+                        return (
+                          <Tooltip key={power.key} content={mine ? power.label : `${power.label}: not yours to give`}>
+                            <button
+                              id={`role-perm-${power.key}`}
+                              type="button"
+                              aria-label={power.label}
+                              aria-pressed={on}
+                              aria-disabled={!mine || undefined}
+                              onClick={() =>
+                                mine &&
+                                setDraft({
+                                  ...open,
+                                  perms: { ...open.perms, [power.key]: !on }
+                                })
+                              }
+                              className={cn(
+                                'flex h-6 w-6 items-center justify-center border border-transparent focus-visible:border-primaryBlue focus-visible:outline-none',
+                                !mine ? 'cursor-default opacity-40' : on ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary'
+                              )}
+                            >
+                              {power.icon}
+                            </button>
+                          </Tooltip>
+                        );
+                      })}
                     </div>
-                    <div className="flex items-center gap-3">
+                  </div>
+                  {/* the cooldown: seconds between its holders' lines, as pressed words; off unless a role says otherwise */}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="text-sm font-semibold text-textSecondary">cooldown</span>
+                    {(COOLDOWNS.includes(open.cooldown) ? COOLDOWNS : [...COOLDOWNS, open.cooldown].sort((a, b) => a - b)).map((seconds) => (
                       <button
-                        id="role-save"
-                        type="submit"
-                        className="text-sm font-semibold text-primaryBlue disabled:opacity-40"
-                        disabled={!open.name.trim() || !mayWrite}
-                      >
-                        save
-                      </button>
-                      <button id="role-cancel" type="button" className="text-sm text-textTertiary" onClick={() => setDraft(null)}>
-                        cancel
-                      </button>
-                      <button
-                        id="role-delete"
+                        key={seconds}
+                        id={`role-cooldown-${seconds}`}
                         type="button"
-                        className="ml-auto text-sm text-decrease disabled:opacity-40"
-                        disabled={removing || !mayWrite}
-                        onClick={() => void remove()}
+                        aria-pressed={open.cooldown === seconds}
+                        onClick={() => setDraft({ ...open, cooldown: seconds })}
+                        className={cn('text-sm font-semibold', open.cooldown === seconds ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
                       >
-                        delete
+                        {cooldownWords(seconds)}
                       </button>
-                    </div>
-                  </form>
-                </li>
-              );
-            }
-            return (
-              <li key={role.id} data-role={role.name} data-reach={within || undefined}>
-                {within ? (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-primaryStroke/20"
-                    onClick={() => setDraft({ id: role.id, name: role.name, color: role.color, perms: role.perms })}
-                  >
-                    <span className="font-semibold" style={{ color: role.color }}>
-                      {role.name}
-                    </span>
-                    <span className="truncate text-xs text-textTertiary">{powerWords(role.perms)}</span>
-                  </button>
-                ) : (
-                  <span className="flex items-center gap-2 px-2 py-1">
-                    <span className="font-semibold" style={{ color: role.color }}>
-                      {role.name}
-                    </span>
-                    <span className="truncate text-xs text-textTertiary">{powerWords(role.perms)}</span>
-                  </span>
-                )}
+                    ))}
+                    <span className="text-xs text-textTertiary">between lines, for whoever holds this role. owners wait for nobody.</span>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-sm font-semibold text-textSecondary">channels</span>
+                    {keepable.length === 0 ? (
+                      <p className="text-xs text-textTertiary">only #general so far, and general is everyone&apos;s. add a channel to keep one to a role.</p>
+                    ) : (
+                      <>
+                        <p className="text-xs text-textTertiary">
+                          tick a channel to keep it to this role: its holders see it, with the roles that also tick it, the owners and the channels power, and nobody
+                          else. a channel no role ticks is everyone&apos;s.
+                        </p>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1">
+                          {keepable.map((item) => (
+                            <label key={item.name} className="flex items-center gap-2">
+                              <input
+                                id={`role-channel-${item.name}`}
+                                type="checkbox"
+                                checked={open.channels.includes(item.name)}
+                                onChange={(e) =>
+                                  setDraft({
+                                    ...open,
+                                    channels: e.target.checked ? [...open.channels, item.name] : open.channels.filter((name) => name !== item.name)
+                                  })
+                                }
+                              />
+                              #{item.name}
+                              <span id={`role-channel-${item.name}-who`} className="text-xs text-textTertiary">
+                                {seers(item.name)}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      id="role-save"
+                      type="submit"
+                      className="text-sm font-semibold text-primaryBlue disabled:opacity-40"
+                      disabled={!open.name.trim() || !mayWrite}
+                    >
+                      save
+                    </button>
+                    <button id="role-cancel" type="button" className="text-sm text-textTertiary" onClick={() => setDraft(null)}>
+                      cancel
+                    </button>
+                    <button
+                      id="role-delete"
+                      type="button"
+                      className="ml-auto text-sm text-decrease disabled:opacity-40"
+                      disabled={removing || !mayWrite}
+                      onClick={() => void remove()}
+                    >
+                      delete
+                    </button>
+                  </div>
+                </form>
               </li>
             );
-          })}
-        </ul>
-      )}
+          }
+          return (
+            <li key={role.id} data-role={role.name} data-reach={within || undefined}>
+              {within ? (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-primaryStroke/20"
+                  onClick={() => {
+                    setOwnerDraft(null);
+                    setDraft({
+                      id: role.id,
+                      name: role.name,
+                      color: role.color,
+                      perms: role.perms,
+                      channels: role.channels ?? [],
+                      cooldown: role.cooldown ?? 0
+                    });
+                  }}
+                >
+                  <span className="font-semibold" style={{ color: role.color }}>
+                    {role.name}
+                  </span>
+                  <span className="truncate text-xs text-textTertiary">{roleWords(role)}</span>
+                </button>
+              ) : (
+                <span className="flex items-center gap-2 px-2 py-1">
+                  <span className="font-semibold" style={{ color: role.color }}>
+                    {role.name}
+                  </span>
+                  <span className="truncate text-xs text-textTertiary">{roleWords(role)}</span>
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
       {full ? (
         <p className="text-textTertiary">{ROLE_CAP} roles is the cap. delete one to add another.</p>
       ) : (

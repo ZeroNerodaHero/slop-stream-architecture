@@ -53,7 +53,10 @@ const RECONNECT_MS = 3000;
 
 /** A stream is one segment. A server channel is two (`vip/general`): encode each, keep the slash. */
 function chatPath(room: string): string {
-  return room.split('/').map((part) => encodeURIComponent(part)).join('/');
+  return room
+    .split('/')
+    .map((part) => encodeURIComponent(part))
+    .join('/');
 }
 /** The channel of `/chat/<server>/<channel>` that is every channel: the server socket's. Matches `EVERY_CHANNEL` in chat.rs. */
 const EVERY_CHANNEL = '*';
@@ -193,6 +196,12 @@ function agreeWithChat(current: Session, wait: number) {
   current.bucket = { tokens: Math.max(0, 1 - (wait * burst) / window), at: Date.now() };
 }
 
+/** The chat's short words for a refusal, as the notice reads them. Anything else is said as it came. */
+const NOTICE_WORDS: Record<string, string> = {
+  cooldown: 'your role has a cooldown between lines',
+  'timed out': 'you are timed out here'
+};
+
 /** A refused send: the button counts `wait` ms down, and shakes. */
 function refuse(wait: number) {
   store.set(chatWaitAtom, Date.now() + wait);
@@ -244,7 +253,10 @@ export function addChatImage(id: string) {
 }
 
 export function removeChatImage(id: string) {
-  store.set(chatImagesAtom, store.get(chatImagesAtom).filter((have) => have !== id));
+  store.set(
+    chatImagesAtom,
+    store.get(chatImagesAtom).filter((have) => have !== id)
+  );
 }
 
 /**
@@ -344,6 +356,25 @@ export function dropChannel(name: string) {
 }
 
 /**
+ * The channel `from` is called `to` now (the events socket said so): its tail and its count
+ * on the shelf go under the new name, and when it is the one on screen, the screen is `to`'s
+ * from here, live tail and all, so the page moving to the new address swaps nothing.
+ */
+export function moveChannelLines(from: string, to: string) {
+  if (!shelf || from === to) return;
+  const tail = shelf.tails.get(from);
+  const count = shelf.counts.get(from);
+  shelf.tails.delete(from);
+  shelf.counts.delete(from);
+  if (tail) shelf.tails.set(to, tail);
+  if (count !== undefined) shelf.counts.set(to, count);
+  if (channel === from) {
+    channel = to;
+    store.set(chatChannelAtom, to);
+  }
+}
+
+/**
  * My picture changed: every line of mine already on screen wears the new one, on the tail, the
  * shelf and a search. The server gives a line its speaker's picture as it is now (chat.rs
  * `with_faces`), so anything loaded from here on is right on its own; this is the tab that
@@ -406,6 +437,12 @@ export function sendChat() {
     return;
   }
   if (session.server && !channel) return;
+  // a wait the chat set (a cooldown, a timeout) still running: the line stays in the box and the button shakes
+  const held = store.get(chatWaitAtom) - Date.now();
+  if (held > 0) {
+    refuse(held);
+    return;
+  }
   // the bucket, before anything goes out: over the rate, the line stays in the box and the button says how long
   const wait = takeToken(session);
   if (wait > 0) {
@@ -469,8 +506,7 @@ function connect() {
       scrollPlan = 'bottom';
       store.set(chatLinesAtom, msg.messages.slice(-KEEP_LINES).map(fromWire));
       store.set(chatLoadedAtom, true);
-    }
-    else if (msg.type === 'message' && msg.id) {
+    } else if (msg.type === 'message' && msg.id) {
       const sent = inFlight.findIndex((p) => p.text === (msg.text ?? '') && samePictures(p.images, picturesOf(msg)));
       if (sent >= 0) inFlight.splice(sent, 1);
       const line = fromWire(msg as ChatLine);
@@ -487,7 +523,7 @@ function connect() {
       // a channel that is not there is not a dead login.
       const refused = /nick|account/.test(msg.error);
       const gone = /no such channel|not a server|that name is reserved|bad name/.test(msg.error);
-      showNotice(msg.error, refused || gone ? 8000 : 3000);
+      showNotice(NOTICE_WORDS[msg.error] ?? msg.error, refused || gone ? 8000 : 3000);
       // the chat's bucket said no where this page's said yes (another tab spent the tokens, or
       // this page was reloaded): its wait is the truth, and the button counts it down
       if (msg.error === 'slow down') {
@@ -496,8 +532,11 @@ function connect() {
         agreeWithChat(current, wait);
         refuse(wait);
       }
+      // a role's cooldown, or a timeout (docs/groups.md): the chat says how long, and the button
+      // counts it down; the bucket is not the matter, so it is left alone
+      if ((msg.error === 'cooldown' || msg.error === 'timed out') && typeof msg.wait === 'number' && msg.wait > 0) refuse(msg.wait);
       // the oldest line out was not taken: back into the box, unless something new is being typed
-      if (/slow down|chat is (busy|down)/.test(msg.error)) {
+      if (/slow down|cooldown|timed out|chat is (busy|down)/.test(msg.error)) {
         const lost = inFlight.shift();
         if (lost?.text && !store.get(chatDraftAtom)) store.set(chatDraftAtom, lost.text);
         if (lost && lost.images.length > 0 && store.get(chatImagesAtom).length === 0) store.set(chatImagesAtom, lost.images);
@@ -525,7 +564,7 @@ function fromWire(line: ChatLine): ChatLine {
     groups: Array.isArray(line.groups) ? line.groups : [],
     avatar: typeof line.avatar === 'number' ? line.avatar : null,
     image: images[0] ?? null,
-    images,
+    images
   };
 }
 

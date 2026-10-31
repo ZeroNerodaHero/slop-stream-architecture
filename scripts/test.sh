@@ -21,8 +21,14 @@
 #   groups     bot is built in, a login makes a group, another joins and leaves, badges on chat lines, a bot's lines wear BOT and the panel hides them, only the maker deletes, the groups tab;
 #              the pictures are the owner's whatever the roles say (no remove) and a role reaches only the powers its holder has;
 #              the room is one answer (channels, live, the roster for members, the bans) plus the last lines of every channel, a watcher of group:<name> hears a channel
-#              added, the channels put in order and one deleted, the server's one chat socket carries every channel's lines and fills from since, the page switches channels
-#              with no reload, refetch or socket; a channel is added from the list's dialog and moved and deleted on the manage dialog's channels tab
+#              added, the channels put in order, one renamed (its mute and lines following) and one deleted, the server's one chat socket carries every channel's lines and
+#              fills from since, a channel kept to a role is hidden from a member without it everywhere (the room, explore, messages, both sockets, the history,
+#              the inbox) and seen with it, and the roles power cannot unlock what it cannot see; the page switches channels with no reload, refetch or socket;
+#              a channel is added from the list's dialog and moved, renamed in place and deleted on the manage dialog's channels tab, and kept to a role from
+#              the roles tab (the lock on both lists); the owner role is the roles tab's first row (a crown, every power locked), renamed by the owner, the
+#              crowns on the roster and the header following, and a custom role cannot take its name; the members tab hands the group on (transfer ownership
+#              asks first; the crown moves, the old owner stays a member) and has no box to name a second owner; a timeout (the kick power) keeps a member's
+#              lines out of the chat until it ends or is lifted, and a role's cooldown spaces its holders' lines (the owner unslowed), both refused with a wait
 #   follows    a login follows names: counts and the flag on a profile, the list with its words, a free name gets a row, the box over the corner
 #              panel (hover: who you follow, streaming first; search finds and follows), the watch page's button and count, home's people under
 #              the streams (online first) and the top search, a rename keeps the followers
