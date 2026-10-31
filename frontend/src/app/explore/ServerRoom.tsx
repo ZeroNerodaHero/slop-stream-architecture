@@ -1,8 +1,11 @@
 import {
+  RiAddLine,
   RiCloseLine,
   RiDeleteBinLine,
+  RiDraggable,
   RiForbidLine,
   RiGroupLine,
+  RiHashtag,
   RiInformationLine,
   RiLogoutBoxRLine,
   RiNotificationOffLine,
@@ -11,15 +14,28 @@ import {
   RiShieldStarLine
 } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+  type RefObject
+} from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import { api, CHANNEL_CAP, groupImage, type GroupMember, type GroupRole, groupWords, messageOf, type GroupRoom, type RolePerms } from '@/infra/api';
+import { api, type Channel, CHANNEL_CAP, groupImage, type GroupMember, type GroupRole, groupWords, messageOf, type GroupRoom, type RolePerms } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { reconnectChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
-import { enterRoom, leaveRoom, reloadRoom, roomAtom, roomErrorAtom, roomGoneAtom, setChannelMuted } from '@/infra/atoms/room-atoms';
+import { enterRoom, leaveRoom, reloadRoom, roomAtom, roomErrorAtom, roomGoneAtom, setChannelMuted, setChannelOrder } from '@/infra/atoms/room-atoms';
 import { cleanName, isValidName } from '@/infra/names';
 import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
@@ -35,7 +51,7 @@ import { PresenceSquare } from '@/shared-components/PersonRow';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { Tooltip } from '@/shared-components/Tooltip';
-import { Section } from '@/shared-components/user-modal/parts';
+import { Field, SECTION_TITLE, Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 /** Cameras played in the room. The same peers home uses, muted, and not counted as viewers. */
@@ -47,14 +63,21 @@ const RESERVED = new Set(['before', 'search', 'by', 'around']);
 
 const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary';
 
+/** A word that does something on a row of the manage dialog: up, down. No box (the buttons rule). */
+const ROW_WORD = 'text-sm font-semibold text-textSecondary hover:text-textPrimary disabled:text-textTertiary disabled:opacity-40 disabled:hover:text-textTertiary';
+
+/** Matches `MAX_ABOUT_CHARS` in the api: a channel's line about it, like the group's. */
+const ABOUT_CAP = 200;
+
 /**
- * The room is the window: its height is the window's less the title row it sits under (4rem,
- * PageFrame.tsx, which globals.css also makes the page's `scroll-padding-top`) and the page's
- * foot (`pb-10`, 2.5rem). So the room scrolled to is exactly what the window shows, and the
- * page can scroll exactly that far. The roster's column may not pass it.
+ * The room is the window: its height is the window's less the title row it sits under (its
+ * measured height, `--title-row`: PageFrame.tsx, which globals.css also makes the page's
+ * `scroll-padding-top`; 4rem until it is measured) and the page's foot (`pb-10`, 2.5rem). So
+ * the room scrolled to is exactly what the window shows, and the page can scroll exactly that
+ * far, whether the row is one line or two. The roster's column may not pass it.
  */
-const ROOM_HEIGHT = 'h-[calc(100dvh-6.5rem)] min-h-[420px]';
-const ROSTER_HEIGHT = 'max-h-[calc(100dvh-6.5rem)]';
+const ROOM_HEIGHT = 'h-[calc(100dvh-var(--title-row,4rem)-2.5rem)] min-h-[420px]';
+const ROSTER_HEIGHT = 'max-h-[calc(100dvh-var(--title-row,4rem)-2.5rem)]';
 
 /**
  * The page's two views, each a snap area (`snap-start`; the type is on <html> while the page
@@ -98,9 +121,14 @@ function reaches(room: GroupRoom, perms: RolePerms): boolean {
   return room.owner || room.admin === true || POWERS.every((power) => !perms[power.key] || room.perms[power.key]);
 }
 
-/** Whether this login has anything to manage: a power the dialog holds. Channels are the list's own, on the left. */
+/** Whether this login has anything to manage: a power the dialog holds. */
 function manages(room: GroupRoom): boolean {
-  return room.owner || room.perms.appearance || room.perms.roles || room.perms.kick || room.perms.ban;
+  return room.owner || POWERS.some((power) => room.perms[power.key]);
+}
+
+/** Whether this login may change the pictures: an owner's, no role carries them. A site admin may, as with every power but naming an owner. */
+function ownsPictures(room: GroupRoom): boolean {
+  return room.owner || room.admin === true;
 }
 
 /** One moderation call, with its refusal said where the caller shows it. The outcome arrives on the socket, like everyone else's. */
@@ -216,7 +244,7 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
           <Bone className="h-full" />
         </div>
       </div>
-      <div className="mb-6 flex flex-col gap-2 pl-4">
+      <div className="mb-7 flex flex-col gap-2 pl-4">
         <Bone className="h-6 w-56 max-w-full" />
         <Bone className="h-4 w-80 max-w-full" />
       </div>
@@ -407,8 +435,7 @@ export function ServerPage() {
   const roster = mine || power || !!room.roster;
   const canManage = manages(room);
   const lastMember = mine && room.members <= 1;
-  // the pictures are the owner's: no role carries them. a site admin may, as with every power but naming an owner
-  const canPicture = room.owner || room.admin === true;
+  const canPicture = ownsPictures(room);
 
   return (
     <PageFrame
@@ -469,7 +496,7 @@ export function ServerPage() {
               </div>
             </div>
           </div>
-          <div className="mb-6 flex flex-wrap items-start justify-between gap-3 pl-4">
+          <div className="mb-7 flex flex-wrap items-start justify-between gap-3 pl-4">
             <div className="min-w-0">
               <h2 className="flex flex-wrap items-center gap-2 text-xl font-semibold">
                 {words.title}
@@ -481,7 +508,7 @@ export function ServerPage() {
                 </span>
               </h2>
               {room.about && (
-                <p id="group-about-line" className="mt-1 max-w-xl text-textSecondary">
+                <p id="group-about-line" className="mt-2 max-w-xl text-textSecondary">
                   {room.about}
                 </p>
               )}
@@ -577,7 +604,7 @@ export function ServerPage() {
             </div>
             {roster && <Roster room={room} />}
           </div>
-          {managing && <ManageDialog server={server} room={room} me={me ?? null} onClose={() => setManaging(false)} />}
+          {managing && <ManageDialog server={server} channel={channel} room={room} me={me ?? null} onClose={() => setManaging(false)} />}
         </>
       )}
     </PageFrame>
@@ -585,40 +612,28 @@ export function ServerPage() {
 }
 
 /**
- * The channels, `general` first. Adding one takes the channels power, and stops at the cap
- * (CHANNEL_CAP, the api's). Who made a channel, or anyone with the power, deletes it; `general`
- * stays. A channel added or deleted anywhere arrives on the socket and the list follows. A
+ * The channels, in the order the manage dialog put them (`general` first until it is moved).
+ * Adding one takes the channels power: `add channel`, a row under the last channel, asks the
+ * name and a line about it in a dialog (AddChannelDialog), and goes at the cap (CHANNEL_CAP,
+ * the api's). Who made a channel, or anyone with the power, deletes it; `general` stays. A
+ * channel added, deleted or moved anywhere arrives on the socket and the list follows. A
  * member mutes a channel here (docs/notifications.md): its lines stop reaching their bell, and
  * the bell-off mark sits by its name until they unmute it.
  */
 function ChannelList({ server, channel, room, me, onError }: { server: string; channel: string; room: GroupRoom; me: string | null; onError: (error: string) => void }) {
-  const [name, setName] = useState('');
+  const [adding, setAdding] = useState(false);
   const [sure, setSure] = useState<string | null>(null);
-  const clean = cleanName(name);
   const channels = room.channels ?? [];
   const muted = room.muted ?? [];
   const canAdd = room.perms.channels && room.mine;
   // the mute is a member's: a stranger gets no row to mute
   const canMute = room.mine && me !== null;
   const full = channels.length >= CHANNEL_CAP;
-  const valid = isValidName(clean) && !RESERVED.has(clean) && !channels.some((item) => item.name === clean);
 
   async function mute(item: string, on: boolean) {
     onError('');
     try {
       await setChannelMuted(server, item, on);
-    } catch (err) {
-      onError(messageOf(err));
-    }
-  }
-
-  async function add(e: FormEvent) {
-    e.preventDefault();
-    if (!valid || full) return;
-    onError('');
-    try {
-      await api.createChannel(server, clean);
-      setName('');
     } catch (err) {
       onError(messageOf(err));
     }
@@ -636,12 +651,7 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
 
   return (
     <nav aria-label="channels">
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">
-        channels{' '}
-        <span id="group-channels-count" className="font-normal normal-case tracking-normal">
-          {channels.length} of {CHANNEL_CAP}
-        </span>
-      </h3>
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">channels</h3>
       <ul id="group-channels" className="flex flex-col gap-0.5">
         {channels.map((item) => {
           const here = item.name === channel;
@@ -698,21 +708,19 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
         </p>
       )}
       {canAdd && !full && (
-        <form onSubmit={(e) => void add(e)} className="mt-3 flex flex-col gap-2">
-          <input
-            id={`channel-name-${server}`}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="new channel"
-            maxLength={32}
-            aria-label={`new channel in ${server}`}
-            className={INPUT}
-          />
-          <button id={`channel-create-${server}`} type="submit" className="self-start text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!valid}>
-            add
-          </button>
-        </form>
+        // a row under the last channel, in the list's own shape: the dialog takes the name
+        <button
+          id="group-channel-add"
+          type="button"
+          aria-haspopup="dialog"
+          onClick={() => setAdding(true)}
+          className="mt-0.5 flex w-full items-center gap-1 px-2 py-1 text-left text-textTertiary hover:bg-primaryStroke/20 hover:text-textPrimary"
+        >
+          <RiAddLine aria-hidden size={14} />
+          add channel
+        </button>
       )}
+      {adding && <AddChannelDialog server={server} channels={channels} onClose={() => setAdding(false)} />}
       {sure && (
         <ConfirmDialog
           id={`channel-delete-${server}-${sure}`}
@@ -728,6 +736,149 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
         />
       )}
     </nav>
+  );
+}
+
+/**
+ * Why a channel cannot have this name, or nothing when it can: the name rule, the history
+ * words (RESERVED, the api's), and a channel the server already has.
+ */
+function channelNameFault(clean: string, channels: Channel[]): string {
+  if (!isValidName(clean)) return '';
+  if (RESERVED.has(clean)) return `${clean} is a word the history routes use, so it cannot be a channel.`;
+  if (channels.some((item) => item.name === clean)) return `there is a #${clean} already.`;
+  return '';
+}
+
+/**
+ * The dialog that adds a channel (docs/groups.md): its name, and a line about it if wanted.
+ * `add it` posts the channel, which goes under the last one, and the page is the new channel.
+ * Opened by the row under the channel list, and by `add channel` on the manage dialog's
+ * channels tab: it is put on the page's body, not inside whatever opened it, the way the
+ * confirm dialog is (a modal inside a modal closes the outer one with it), and the manage
+ * dialog lets a close that is not its own pass. A refusal from the api is said in here.
+ */
+function AddChannelDialog({ server, channels, onClose }: { server: string; channels: Channel[]; onClose: () => void }) {
+  const navigate = useNavigate();
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const pressedBackdrop = useRef(false);
+  const [name, setName] = useState('');
+  const [about, setAbout] = useState('');
+  const [sending, setSending] = useState(false);
+  const [status, setStatus] = useState('');
+  const clean = cleanName(name);
+  const fault = channelNameFault(clean, channels);
+  const ok = isValidName(clean) && fault === '';
+
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog || dialog.open) return;
+    dialog.showModal();
+    dialog.querySelector<HTMLElement>('#channel-make-name')?.focus();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, []);
+
+  // every way out goes through the element: close() hands focus back, then fires `close`, which is onClose
+  const close = () => dialogRef.current?.close();
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!ok || sending) return;
+    setSending(true);
+    setStatus('');
+    try {
+      const made = await api.createChannel(server, clean, about.trim());
+      close();
+      navigate(`/groups/${server}/${made.name}`);
+    } catch (err) {
+      setStatus(messageOf(err));
+      setSending(false);
+    }
+  }
+
+  const onPointerDown = (e: PointerEvent<HTMLDialogElement>) => {
+    pressedBackdrop.current = e.target === e.currentTarget;
+  };
+  const onClick = (e: MouseEvent<HTMLDialogElement>) => {
+    if (pressedBackdrop.current && e.target === e.currentTarget) close();
+  };
+
+  return createPortal(
+    <dialog
+      ref={dialogRef}
+      id="channel-make"
+      aria-labelledby="channel-make-title"
+      onPointerDown={onPointerDown}
+      onClick={onClick}
+      onClose={(event) => {
+        event.stopPropagation();
+        onClose();
+      }}
+      // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
+      className="m-auto w-[min(460px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60"
+    >
+      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-5">
+        <div>
+          <h2 id="channel-make-title" className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
+            add a channel
+          </h2>
+          <p className="mt-3 text-sm text-textSecondary">a name, and a line about it if you like. it goes under the last channel; manage moves it.</p>
+        </div>
+        <Field id="channel-make-name" label="name" hint={fault || 'letters, digits, _ and -. up to 32.'}>
+          <div className="relative">
+            <span aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-textTertiary">
+              #
+            </span>
+            <input
+              id="channel-make-name"
+              value={name}
+              onChange={(e) =>
+                setName(
+                  e.target.value
+                    .toLowerCase()
+                    .replace(/[^a-z0-9_-]/g, '')
+                    .slice(0, 32)
+                )
+              }
+              maxLength={32}
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              aria-describedby="channel-make-name-hint"
+              aria-invalid={fault !== '' || undefined}
+              className={cn(INPUT, 'w-full pl-7')}
+            />
+          </div>
+        </Field>
+        <Field id="channel-make-about" label="about" hint={`optional. up to ${ABOUT_CAP} characters.`}>
+          <input
+            id="channel-make-about"
+            value={about}
+            onChange={(e) => setAbout(e.target.value)}
+            maxLength={ABOUT_CAP}
+            autoComplete="off"
+            aria-describedby="channel-make-about-hint"
+            className={cn(INPUT, 'w-full')}
+          />
+        </Field>
+        {status && (
+          <p id="channel-make-status" className="text-sm text-decrease">
+            {status}
+          </p>
+        )}
+        <div className="flex items-center justify-end gap-3">
+          <button type="button" className="text-sm text-textTertiary" onClick={close}>
+            cancel
+          </button>
+          <Button id="channel-make-submit" type="submit" variant="primary" className="px-4 py-2" disabled={!ok || sending}>
+            {sending ? 'adding…' : 'add it'}
+          </Button>
+        </div>
+      </form>
+    </dialog>,
+    document.body
   );
 }
 
@@ -880,17 +1031,19 @@ interface ManageProps {
   run: Run;
 }
 
-type ManageTab = 'about' | 'roles' | 'members' | 'bans' | 'delete';
+type ManageTab = 'about' | 'channels' | 'roles' | 'members' | 'bans' | 'delete';
 
 /**
  * The rail of the manage dialog, in order and in groups, each tab with the power that shows
- * it. `about` is the about line and the listing (appearance); `members` is for anyone who
+ * it. `about` is the about line and the listing (appearance), and for an owner the pictures
+ * too; `channels` is their order, and add and delete (channels); `members` is for anyone who
  * manages at all, since every power does something to a member.
  */
 const MANAGE_TABS: { id: ManageTab; label: string; group: string; icon: ReactNode; shown: (room: GroupRoom) => boolean }[] = [
   { id: 'about', label: 'about', group: 'the group', icon: <RiInformationLine aria-hidden size={18} />, shown: (room) => room.perms.appearance },
+  { id: 'channels', label: 'channels', group: 'the group', icon: <RiHashtag aria-hidden size={18} />, shown: (room) => room.perms.channels },
   { id: 'roles', label: 'roles', group: 'the group', icon: <RiShieldStarLine aria-hidden size={18} />, shown: (room) => room.perms.roles },
-  { id: 'members', label: 'members', group: 'people', icon: <RiGroupLine aria-hidden size={18} />, shown: () => true },
+  { id: 'members', label: 'members', group: 'people', icon: <RiGroupLine aria-hidden size={18} />, shown: (room) => manages(room) },
   { id: 'bans', label: 'bans', group: 'people', icon: <RiForbidLine aria-hidden size={18} />, shown: (room) => room.perms.ban },
   { id: 'delete', label: 'delete', group: 'owner', icon: <RiDeleteBinLine aria-hidden size={18} />, shown: (room) => room.owner }
 ];
@@ -909,16 +1062,18 @@ const RAIL_STEP: Record<string, number | undefined> = { ArrowDown: 1, ArrowRight
 /**
  * What a power does, in a dialog over the room (`manage`, the gear in the header), laid out
  * like the user modal: a rail of tabs down the left, in groups (the group: about and the
- * listing, roles; people: members, bans; owner: delete), and the open tab's pane on the
- * right. A tab shows for the power behind it, and the first one this login may see opens.
- * The pictures are not here: an owner changes them on the pictures themselves, at the top
- * of the page; the channels are the list's own. Every call lands through the socket, for
- * this page and every other one with the room open, so the dialog reads the room the page
- * does and follows it live. A native <dialog>: the browser keeps focus in it, closes it on
- * escape and hands focus back to the button that opened it; a click on the backdrop closes
- * it too. A refusal is said in the pane, since the page is under the backdrop.
+ * listing, channels, roles; people: members, bans; owner: delete), and the open tab's pane on
+ * the right. A tab shows for the power behind it, and the first one this login may see opens.
+ * The pictures are an owner's: the top of `about` here, and the pictures themselves at the
+ * top of the page; the channels are put in order here, and the list on the left follows.
+ * Every call lands through the socket, for this page and every other one with the room open,
+ * so the dialog reads the room the page does and follows it live. A native <dialog>: the
+ * browser keeps focus in it, closes it on escape and hands focus back to the button that
+ * opened it; a click on the backdrop closes it too. A refusal is said in the pane, since the
+ * page is under the backdrop. `channel` is the one on screen: deleting it from here moves the
+ * page to `general` first, so the room under the dialog does not turn into `no such channel`.
  */
-function ManageDialog({ server, room, me, onClose }: { server: string; room: GroupRoom; me: string | null; onClose: () => void }) {
+function ManageDialog({ server, channel, room, me, onClose }: { server: string; channel: string; room: GroupRoom; me: string | null; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   /** The press that began this click was on the backdrop too: a text drag that ends outside is not a close. */
   const pressedBackdrop = useRef(false);
@@ -928,9 +1083,20 @@ function ManageDialog({ server, room, me, onClose }: { server: string; room: Gro
   const tabs = MANAGE_TABS.filter((item) => item.shown(room));
   // the tab picked while it is still one this login may see, else the first that is: a power lost while this was open moves the pane
   const tab = tabs.find((item) => item.id === picked)?.id ?? tabs[0]?.id ?? null;
+  // the tab moved without a pick (a power lost while this was open): the pane it lands on starts clean, as a picked one does.
+  // a layout effect, so the last pane's refusal is cleared before the new pane is painted
+  useLayoutEffect(() => setError(''), [tab]);
+
+  /** The parent's `onClose` as of the last render: the layout effect runs once, and its cleanup tells the parent through this. */
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   // A layout effect: its cleanup runs while the node is still in the document, which is when
-  // close() hands focus back to the opener.
+  // close() hands focus back to the opener. Taken away while still open (the room dropped under
+  // it: `me` changed and the page went back to its skeleton), the parent is told from here. The
+  // `close` event that close() queues lands on a node react has already let go of, so the
+  // element's onClose would not fire, `managing` would stay true, and this would open again by
+  // itself when the room came back.
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
@@ -938,7 +1104,9 @@ function ManageDialog({ server, room, me, onClose }: { server: string; room: Gro
     // the heading, not the first control: a screen reader hears what this is
     dialog.querySelector<HTMLElement>('#group-manage-title')?.focus();
     return () => {
-      if (dialog.open) dialog.close();
+      if (!dialog.open) return;
+      dialog.close();
+      onCloseRef.current();
     };
   }, []);
 
@@ -1080,10 +1248,12 @@ function ManageDialog({ server, room, me, onClose }: { server: string; room: Gro
             )}
             {tab === 'about' && (
               <div className="divide-y divide-primaryStroke">
+                {ownsPictures(room) && <PicturesSection server={server} room={room} run={run} />}
                 <AboutSection server={server} room={room} run={run} />
                 <ListingSection server={server} room={room} run={run} />
               </div>
             )}
+            {tab === 'channels' && <ChannelsSection server={server} channel={channel} room={room} run={run} />}
             {tab === 'roles' && <RolesSection server={server} room={room} run={run} />}
             {tab === 'members' && <MembersSection server={server} room={room} me={me} run={run} />}
             {tab === 'bans' && <BansSection server={server} room={room} run={run} />}
@@ -1092,6 +1262,56 @@ function ManageDialog({ server, room, me, onClose }: { server: string; room: Gro
         </div>
       </div>
     </dialog>
+  );
+}
+
+/**
+ * The pictures, for an owner (ownsPictures): the group's picture, square, and its banner, one
+ * row with a word over each, the picture on the left and the banner filling the rest. Each is
+ * the click, the way it is on the page itself: the pointer over one greys it and puts a camera
+ * on it, and the crop dialog, over this one, takes the file from there. The new version comes
+ * back on the socket, here and at the top of the page alike. There is no remove.
+ */
+function PicturesSection({ server, room, run }: ManageProps) {
+  const color = room.color || '#5865f2';
+  const bannerSrc = groupImage(server, 'banner', room.banner);
+
+  async function pick(file: File, kind: 'icon' | 'banner') {
+    const jpeg = await cropPicture(file, kind === 'icon' ? GROUP_ICON : GROUP_BANNER);
+    if (!jpeg) return;
+    await run(() => (kind === 'icon' ? api.saveGroupIcon(server, jpeg) : api.saveGroupBanner(server, jpeg)));
+  }
+
+  return (
+    <section id="manage-pictures" className="flex flex-wrap items-start gap-4 py-6 first:pt-0 last:pb-0">
+      <div className="flex flex-col gap-2">
+        <h3 className={SECTION_TITLE}>group image</h3>
+        <div className="group/icon relative flex">
+          <GroupMark id="manage-icon" name={server} color={color} icon={room.icon} className="h-24 w-24 border border-primaryStroke text-3xl" />
+          <PicturePick
+            id="manage-icon-pick"
+            label={room.icon === null ? 'add a picture' : 'change picture'}
+            reveal="group-hover/icon:opacity-100"
+            className="inset-0"
+            onPick={(file) => void pick(file, 'icon')}
+          />
+        </div>
+      </div>
+      {/* the banner takes the rest of the row, and drops under the picture when the row is too narrow for a strip */}
+      <div className="flex min-w-48 flex-1 flex-col gap-2">
+        <h3 className={SECTION_TITLE}>group banner</h3>
+        <div id="manage-banner" className="group/banner relative h-24 overflow-hidden border border-primaryStroke" style={{ backgroundColor: color }}>
+          {bannerSrc && <img src={bannerSrc} alt="" className="h-full w-full object-cover" />}
+          <PicturePick
+            id="manage-banner-pick"
+            label={room.banner === null ? 'add a banner' : 'change banner'}
+            reveal="group-hover/banner:opacity-100"
+            className="inset-0"
+            onPick={(file) => void pick(file, 'banner')}
+          />
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -1342,6 +1562,173 @@ function BansSection({ server, room, run }: ManageProps) {
   );
 }
 
+/** `name` moved to index `to` in `order` (held to the ends): the order that leaves. The same order when it is not there, or already at `to`. */
+function movedTo(order: string[], name: string, to: number): string[] {
+  const from = order.indexOf(name);
+  if (from < 0) return order;
+  const at = Math.max(0, Math.min(order.length - 1, to));
+  if (at === from) return order;
+  const next = order.filter((item) => item !== name);
+  next.splice(at, 0, name);
+  return next;
+}
+
+/**
+ * The channels in their order, each a row: a handle to drag it by (the arrow keys on the
+ * handle do the same, a row a press; `up` and `down` are the words for it), the name, the
+ * line about it, and `delete` (never on `general`). A press moves the row at once and tells
+ * the api (setChannelOrder, room-atoms); a drag moves it as the pointer goes and tells the
+ * api once, on the drop. The list on the left follows under the backdrop, as does every other
+ * room open. `add channel` opens the dialog the row under the list opens. Deleting the channel
+ * on screen moves the page to `general` first, so the room under the dialog stays a room.
+ */
+function ChannelsSection({ server, channel, room, run }: ManageProps & { channel: string }) {
+  const navigate = useNavigate();
+  const channels = room.channels ?? [];
+  const names = channels.map((item) => item.name);
+  const byName = new Map(channels.map((item) => [item.name, item]));
+  const [adding, setAdding] = useState(false);
+  const [sure, setSure] = useState<string | null>(null);
+  /** The order while a row is dragged: the one the drag began from, with the row where the pointer has it. Null between drags. */
+  const [draft, setDraft] = useState<string[] | null>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const rows = useRef<HTMLUListElement | null>(null);
+  const drag = useRef<{ pointerId: number; name: string; y: number; from: number; pitch: number; start: string[]; now: string[] } | null>(null);
+  const full = channels.length >= CHANNEL_CAP;
+  /** `list` over the room's channels: a channel gone since is dropped, one added since goes after, as the api puts it. */
+  const settle = (list: string[]) => [...list.filter((name) => byName.has(name)), ...names.filter((name) => !list.includes(name))];
+  // the rows: the draft while a row is dragged, else the room's
+  const order = draft ? settle(draft) : names;
+
+  /** The channels in `next`: moved on screen now, the api told. Nothing to tell when nothing moved. */
+  function put(next: string[]) {
+    if (next.length === names.length && next.every((name, i) => name === names[i])) return;
+    void run(() => setChannelOrder(server, next));
+  }
+
+  function startDrag(e: PointerEvent<HTMLButtonElement>, name: string, from: number) {
+    // the primary button only, and one drag at a time: a second finger on another handle takes nothing over
+    if (e.button !== 0 || drag.current) return;
+    const ul = rows.current;
+    const items = ul ? Array.from(ul.children) : [];
+    const first = items[0]?.getBoundingClientRect();
+    const second = items[1]?.getBoundingClientRect();
+    if (!ul || !first) return;
+    e.preventDefault();
+    // the list holds the pointer, not the handle: a row dragged is taken out of the document and put back
+    // by the reorder, and the browser lets go of a node that leaves. the drag ends with the capture, whatever ends it
+    ul.setPointerCapture(e.pointerId);
+    // a row and the gap after it: the distance between two rows' tops, or the one row's height when there is one
+    drag.current = { pointerId: e.pointerId, name, y: e.clientY, from, pitch: second ? second.top - first.top : first.height, start: order, now: order };
+    setDragging(name);
+  }
+  function moveDrag(e: PointerEvent<HTMLUListElement>) {
+    const d = drag.current;
+    // the drag is the pointer's that began it: another finger resting on the list neither steers nor ends it
+    if (!d || e.pointerId !== d.pointerId) return;
+    d.now = movedTo(d.start, d.name, d.from + Math.round((e.clientY - d.y) / d.pitch));
+    setDraft(d.now);
+  }
+  function endDrag(e: PointerEvent<HTMLUListElement>) {
+    const d = drag.current;
+    if (!d || e.pointerId !== d.pointerId) return;
+    drag.current = null;
+    setDragging(null);
+    // the drop: the room moves to this order at once (room-atoms), so the draft can go in the same breath
+    setDraft(null);
+    put(settle(d.now));
+  }
+  function keyMove(e: KeyboardEvent<HTMLButtonElement>, name: string, at: number) {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    put(movedTo(order, name, at + (e.key === 'ArrowUp' ? -1 : 1)));
+  }
+
+  async function remove(name: string) {
+    await run(async () => {
+      await api.deleteChannel(server, name);
+      if (name === channel) navigate(`/groups/${server}`);
+    });
+  }
+
+  return (
+    <Section
+      title="channels"
+      description={`${channels.length} of ${CHANNEL_CAP}, top to bottom as the list shows them. drag a row to move it, or up and down. general stays.`}
+    >
+      <ul id="manage-channels" ref={rows} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} onLostPointerCapture={endDrag} className="flex flex-col gap-2">
+        {order.map((name, i) => {
+          const item = byName.get(name);
+          if (!item) return null;
+          const held = dragging === name;
+          return (
+            <li
+              key={name}
+              data-channel={name}
+              className={cn('flex items-center gap-3 border bg-background px-3 py-2 transition-[border-color] duration-150', held ? 'border-primaryBlue' : 'border-primaryStroke')}
+            >
+              <button
+                id={`channel-drag-${name}`}
+                type="button"
+                aria-label={`move #${name}: drag, or the arrow keys`}
+                aria-keyshortcuts="ArrowUp ArrowDown"
+                title="drag to move"
+                onPointerDown={(e) => startDrag(e, name, i)}
+                onKeyDown={(e) => keyMove(e, name, i)}
+                className={cn(
+                  'shrink-0 touch-none select-none border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke hover:text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none',
+                  held ? 'cursor-grabbing' : 'cursor-grab'
+                )}
+              >
+                <RiDraggable aria-hidden size={18} />
+              </button>
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="truncate font-semibold">#{name}</span>
+                {item.about && <span className="truncate text-xs text-textTertiary">{item.about}</span>}
+              </span>
+              <span className="flex shrink-0 items-center gap-3">
+                <button id={`channel-up-${name}`} type="button" disabled={i === 0} onClick={() => put(movedTo(order, name, i - 1))} className={ROW_WORD}>
+                  up
+                </button>
+                <button id={`channel-down-${name}`} type="button" disabled={i === order.length - 1} onClick={() => put(movedTo(order, name, i + 1))} className={ROW_WORD}>
+                  down
+                </button>
+                {item.can_delete && (
+                  <button id={`channel-remove-${name}`} type="button" className="text-sm text-decrease" onClick={() => setSure(name)}>
+                    delete
+                  </button>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      {full ? (
+        <p className="text-textTertiary">{CHANNEL_CAP} channels is the cap. delete one to add another.</p>
+      ) : (
+        <button id="manage-channel-add" type="button" aria-haspopup="dialog" className="self-start text-sm font-semibold text-primaryBlue" onClick={() => setAdding(true)}>
+          add channel
+        </button>
+      )}
+      {adding && <AddChannelDialog server={server} channels={channels} onClose={() => setAdding(false)} />}
+      {sure && (
+        <ConfirmDialog
+          id={`manage-channel-delete-${sure}`}
+          title={`delete #${sure}?`}
+          message="the channel goes."
+          yes="yes, delete"
+          onYes={() => {
+            const name = sure;
+            setSure(null);
+            void remove(name);
+          }}
+          onNo={() => setSure(null)}
+        />
+      )}
+    </Section>
+  );
+}
+
 /** A role as it is being changed in place: the id it is known by, and what `save` puts. */
 interface RoleDraft {
   id: string;
@@ -1380,6 +1767,9 @@ function powerWords(perms: RolePerms): string {
 function RolesSection({ server, room, run }: ManageProps) {
   const [draft, setDraft] = useState<RoleDraft | null>(null);
   const [adding, setAdding] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  /** The name box that has had its open-time select. A later focus of the same box (a click into the word) edits in place; a role opened is a new box. */
+  const selected = useRef<HTMLInputElement | null>(null);
   // a power this login lacks is one it cannot put on a role; an owner and a site admin lack none
   const short = POWERS.filter((power) => !room.perms[power.key]);
   const full = room.roles.length >= ROLE_CAP;
@@ -1408,12 +1798,18 @@ function RolesSection({ server, room, run }: ManageProps) {
     });
   }
 
+  /** The open role, deleted. One call at a time, as `add`: a second click while the first is out would be a 404 said in red after the role is gone. */
   async function remove() {
-    if (!open) return;
-    await run(async () => {
-      await api.deleteRole(server, open.id);
-      setDraft(null);
-    });
+    if (!open || removing) return;
+    setRemoving(true);
+    try {
+      await run(async () => {
+        await api.deleteRole(server, open.id);
+        setDraft(null);
+      });
+    } finally {
+      setRemoving(false);
+    }
   }
 
   return (
@@ -1430,6 +1826,9 @@ function RolesSection({ server, room, run }: ManageProps) {
             // a role past this login's reach is read, not changed
             const within = reaches(room, role.perms);
             if (open?.id === role.id) {
+              // and written only while the role as it is and as it would be are both within reach, the api's rule for a save and a delete:
+              // a power taken from this login mid-edit greys save and delete and leaves the row open, with cancel the way out
+              const mayWrite = within && reaches(room, open.perms);
               return (
                 <li key={role.id} data-role={role.name} data-open className="border border-primaryStroke p-3">
                   <form id="role-form" onSubmit={(e) => void save(e)} className="flex flex-col gap-3">
@@ -1441,7 +1840,11 @@ function RolesSection({ server, room, run }: ManageProps) {
                       maxLength={32}
                       aria-label="role name"
                       autoFocus
-                      onFocus={(e) => e.currentTarget.select()}
+                      onFocus={(e) => {
+                        if (selected.current === e.currentTarget) return;
+                        selected.current = e.currentTarget;
+                        e.currentTarget.select();
+                      }}
                       className={INPUT}
                     />
                     <div className="flex flex-wrap gap-1">
@@ -1472,13 +1875,24 @@ function RolesSection({ server, room, run }: ManageProps) {
                       ))}
                     </div>
                     <div className="flex items-center gap-3">
-                      <button id="role-save" type="submit" className="text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!open.name.trim()}>
+                      <button
+                        id="role-save"
+                        type="submit"
+                        className="text-sm font-semibold text-primaryBlue disabled:opacity-40"
+                        disabled={!open.name.trim() || !mayWrite}
+                      >
                         save
                       </button>
                       <button id="role-cancel" type="button" className="text-sm text-textTertiary" onClick={() => setDraft(null)}>
                         cancel
                       </button>
-                      <button id="role-delete" type="button" className="ml-auto text-sm text-decrease" onClick={() => void remove()}>
+                      <button
+                        id="role-delete"
+                        type="button"
+                        className="ml-auto text-sm text-decrease disabled:opacity-40"
+                        disabled={removing || !mayWrite}
+                        onClick={() => void remove()}
+                      >
                         delete
                       </button>
                     </div>

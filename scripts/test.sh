@@ -21,7 +21,8 @@
 #   groups     bot is built in, a login makes a group, another joins and leaves, badges on chat lines, a bot's lines wear BOT and the panel hides them, only the maker deletes, the groups tab;
 #              the pictures are the owner's whatever the roles say (no remove) and a role reaches only the powers its holder has;
 #              the room is one answer (channels, live, the roster for members, the bans) plus the last lines of every channel, a watcher of group:<name> hears a channel
-#              added and deleted, the server's one chat socket carries every channel's lines and fills from since, the page switches channels with no reload, refetch or socket
+#              added, the channels put in order and one deleted, the server's one chat socket carries every channel's lines and fills from since, the page switches channels
+#              with no reload, refetch or socket; a channel is added from the list's dialog and moved and deleted on the manage dialog's channels tab
 #   follows    a login follows names: counts and the flag on a profile, the list with its words, a free name gets a row, the box over the corner
 #              panel (hover: who you follow, streaming first; search finds and follows), the watch page's button and count, home's people under
 #              the streams (online first) and the top search, a rename keeps the followers

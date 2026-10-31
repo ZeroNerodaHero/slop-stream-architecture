@@ -238,7 +238,7 @@ function Rail({ dms, active, side }: { dms: Dm[]; active: string | null; side: P
         onClick={pickDm}
         className={cn(
           SQUARE,
-          'flex h-[42px] w-[42px] items-center justify-center',
+          'flex h-[calc(2.5rem+2px)] w-[calc(2.5rem+2px)] items-center justify-center',
           active === null ? cn(SQUARE_ON, 'text-primaryBlue') : cn(SQUARE_OFF, 'text-textSecondary')
         )}
       >

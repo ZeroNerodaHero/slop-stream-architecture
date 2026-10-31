@@ -1,6 +1,6 @@
 import { RiArrowDownSLine, RiChat3Line, RiCloseLine, RiGroupLine, RiSearchLine, RiUserFollowLine, RiUserHeartLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { Fragment, type ReactNode, useEffect, useRef, useState } from 'react';
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { type Followed, groupWords, type Server } from '@/infra/api';
@@ -18,7 +18,8 @@ import {
   type SidebarList,
   sidebarListsAtom,
   type SidebarShares,
-  sidebarSharesAtom
+  sidebarSharesAtom,
+  textSizeAtom
 } from '@/infra/atoms/settings-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { store } from '@/infra/store';
@@ -44,29 +45,54 @@ const NOTE = 'px-3 py-3 text-sm text-textSecondary';
 const FACES_GUESS = 4;
 
 /**
- * The column of faces: 40px squares with a 1px border around each, 19px in from the panel's
- * edge, which centers them in the closed panel and lines them up with you at the bottom. The
- * panel grows away from that edge (docs/follows.md), so on the right side each row is mirrored
- * and the faces stay put there too.
+ * The column of faces: 2.5rem squares with a 1px border around each, 1.25rem less that border
+ * in from the panel's edge (19px at the browser's size), which centers them in the closed 5rem
+ * panel at every text size and lines them up with you at the bottom. The panel grows away from
+ * that edge (docs/follows.md), so on the right side each row is mirrored and the faces stay
+ * put there too.
  */
-const INSET: Record<PanelSide, string> = { left: 'pl-[19px] pr-2', right: 'pr-[19px] pl-2' };
+const INSET: Record<PanelSide, string> = { left: 'pl-[calc(1.25rem-1px)] pr-2', right: 'pr-[calc(1.25rem-1px)] pl-2' };
 /** The face column alone, for a line that has nothing beside the column: the icon, the divider. */
-const COLUMN = 'px-[19px]';
+const COLUMN = 'px-[calc(1.25rem-1px)]';
 
 /**
  * The column is a stack of blocks, each followed by the same gap, whole pixels: the box, then
  * for each list its icon line and its faces, with a line between one list and the next. Their
- * sizes, and the gap nothing goes under.
+ * sizes, and the gap nothing goes under. The face and the box are in rems and so follow the
+ * root font size (`Sizes`); the icon line, the line and the gap are px and do not.
  */
-/** A face: 40px and its border. A group's square is the same. */
-const FACE_PX = 42;
-/** The search box. */
-const SEARCH_PX = 40;
+/** A face is `h-10`, 2.5rem (Face.tsx), and so is the search box. A group's square is the same. */
+const FACE_REM = 2.5;
+/** The row around a face: a 1px border above it and below it. The box's own border is inside its 2.5rem. */
+const ROW_BORDER_PX = 2;
 /** The icon line over a list: the icon, and the word in text-xs, are both 16px. The chat button at the friends line's end is 14. */
 const HEAD_PX = 16;
 /** The line between two lists. The room to grab it reaches into the gaps on either side. */
 const LINE_PX = 1;
 const MIN_GAP = 8;
+
+/**
+ * The face and the box in px, for one root font size. The text size setting sets that size
+ * (settings-atoms.ts puts `font-size: N%` on <html>, and every rem follows), so `Friends` reads
+ * it again when the setting changes; the 1px borders are px and stay.
+ */
+interface Sizes {
+  /** A face, 2.5rem, and the row's border above and below it: the pitch of a list less its gap. 42 at the browser's size. */
+  face: number;
+  /** The search box, 2.5rem: 40 at the browser's size. */
+  search: number;
+}
+
+/** A rem in px: the root font size the document has now. 16, the browsers' own, should it not be readable. */
+function rootPx(): number {
+  const px = parseFloat(getComputedStyle(document.documentElement).fontSize);
+  return Number.isFinite(px) && px > 0 ? px : 16;
+}
+
+function sizesOf(rem: number): Sizes {
+  return { face: FACE_REM * rem + ROW_BORDER_PX, search: FACE_REM * rem };
+}
+
 /**
  * The lists scroll with no bar: a bar takes width from the box, and on the right side that
  * would move the faces, which are the column. Whole rows, so what shows is never half a face.
@@ -123,15 +149,16 @@ function gapNames(lists: number): GapName[] {
  * what does not divide (fewer pixels than there are gaps) is `left` for `spend`. Nothing to
  * lay out (a note, nobody yet): the smallest gap, and no stretching. `lists`: how many lists
  * the stack has, each with its icon line; a search has none, its hits are one list with no line.
+ * `sizes`: the face and the box at the root font size of the moment.
  */
-function measure(room: number, lists: number, faces: boolean): Fit {
+function measure(room: number, lists: number, faces: boolean, { face, search }: Sizes): Fit {
   const names = gapNames(lists);
   if (room <= 0 || !faces) return { rows: 0, gap: MIN_GAP, left: 0, names };
-  const blocks = SEARCH_PX + lists * HEAD_PX + Math.max(0, lists - 1) * LINE_PX;
-  const rows = Math.floor((room - blocks - names.length * MIN_GAP) / (FACE_PX + MIN_GAP));
+  const blocks = search + lists * HEAD_PX + Math.max(0, lists - 1) * LINE_PX;
+  const rows = Math.floor((room - blocks - names.length * MIN_GAP) / (face + MIN_GAP));
   // a window too short for one row: one row anyway, cut off by the panel
   if (rows < 1) return { rows: 1, gap: MIN_GAP, left: 0, names };
-  const spare = room - blocks - rows * FACE_PX;
+  const spare = room - blocks - rows * face;
   const count = names.length + rows;
   const gap = Math.floor(spare / count);
   return { rows, gap, left: spare - gap * count, names };
@@ -200,6 +227,8 @@ interface RowProps {
   person: Person;
   side: PanelSide;
   open: boolean;
+  /** In a list folded to its icon line (`Lists`): the row stays mounted so the fold can slide, but it is off screen, so it asks for no frame. */
+  folded?: boolean;
   onPick: () => void;
   /** The buttons past the name while open: chat and unfollow, or follow. */
   children?: ReactNode;
@@ -216,7 +245,7 @@ interface RowProps {
  * card (PersonCard.tsx, the chat window's too) beside the panel: the face, the name, how they
  * are, the frame big, the bio.
  */
-function Row({ id, person, side, open, onPick, children }: RowProps) {
+function Row({ id, person, side, open, folded = false, onPick, children }: RowProps) {
   const mirrored = side === 'right';
   const peek = usePeek(PEEK_MS);
   return (
@@ -249,8 +278,8 @@ function Row({ id, person, side, open, onPick, children }: RowProps) {
             <span className={cn('text-xs', PRESENCE_TEXT[person.presence])}>{PRESENCE_WORD[person.presence]}</span>
           </span>
         )}
-        {/* the face's height: 40px, and 16:9 of that */}
-        {open && person.presence === 'streaming' && <StreamStill name={person.name} className="h-10" />}
+        {/* the face's height: 40px, and 16:9 of that. not in a folded list: the still asks video for a frame every 5s while mounted, and a folded row shows nothing */}
+        {open && !folded && person.presence === 'streaming' && <StreamStill name={person.name} className="h-10" />}
       </Link>
       {open && children}
       {open && peek.at && <PersonCard id={`friends-peek-${person.name}`} person={person} at={peek.at} side={side} />}
@@ -319,7 +348,7 @@ interface ListProps {
 
 /**
  * Where the caret goes: right before the icon, its 16px box ending 2px short of the icon's,
- * which is 13px into the 42px face column. So the fold button reaches 5px into the panel's
+ * which is 13px into the face column (42px at the browser's size). So the fold button reaches 5px into the panel's
  * edge inset and pads the same back: the icon stands where the closed column has it, and the
  * caret hangs off its edge side.
  */
@@ -357,8 +386,9 @@ interface HeadProps {
 function Head({ icon: Icon, word, count, listId, kind, open, side, below, folded, action, mark }: HeadProps) {
   const mirrored = side === 'right';
   // the icon says what the word says, and the number what the chat button's title says, so readers skip them
+  // the column is a face wide (`Sizes.face`: 2.5rem and the row's border), so the icon stands centered under the faces
   const icon = (
-    <span aria-hidden className="relative flex w-[42px] shrink-0 justify-center">
+    <span aria-hidden className="relative flex w-[calc(2.5rem+2px)] shrink-0 justify-center">
       <Icon size={16} />
       {/* the number stands with the closed column too, where the chat button has no room: the one sign something came */}
       {mark !== undefined && mark > 0 && (
@@ -596,6 +626,8 @@ interface ListsProps extends ListProps {
   stack: Block[];
   /** The rows each has, in the same order. A folded list has none. */
   rows: number[];
+  /** A row's face in px (`Sizes.face`), which with the list's gap is its pitch. */
+  face: number;
   spacing: Spacing;
   /** The weights the rows were shared by, which the lines between the lists move. */
   shares: SidebarShares;
@@ -617,7 +649,7 @@ interface ListsProps extends ListProps {
  * stands still. A list nobody is in has no icon either. Closed, the words have no room: only
  * the faces.
  */
-function Lists({ side, open, onPick, stack, rows, spacing, shares, folds }: ListsProps) {
+function Lists({ side, open, onPick, stack, rows, face, spacing, shares, folds }: ListsProps) {
   const unread = useAtomValue(dmUnreadAtom);
   const { gaps } = spacing;
   const all = rows.reduce((sum, r) => sum + r, 0);
@@ -648,7 +680,7 @@ function Lists({ side, open, onPick, stack, rows, spacing, shares, folds }: List
     <>
       {laid.map(({ block, folded, held, length, rows: count, gap }, i) => {
         const { icon, word, id } = LIST_WORDS[block.kind];
-        const pitch = FACE_PX + gap;
+        const pitch = face + gap;
         const before = laid[i - 1];
         const pair = before ? before.rows + count : 0;
         // a folded list on either side of the line has no rows to trade: the line stands where it is
@@ -663,7 +695,7 @@ function Lists({ side, open, onPick, stack, rows, spacing, shares, folds }: List
                 above={LIST_WORDS[before.block.kind].word}
                 below={word}
                 onMove={(want) => moveLine(i - 1, want)}
-                pitch={(FACE_PX + before.gap + pitch) / 2}
+                pitch={(face + before.gap + pitch) / 2}
                 gap={gaps[`line-${i - 1}`] ?? MIN_GAP}
                 open={open}
                 side={side}
@@ -687,7 +719,7 @@ function Lists({ side, open, onPick, stack, rows, spacing, shares, folds }: List
               {block.kind === 'groups'
                 ? block.servers.map((server) => <GroupRow key={server.name} server={server} side={side} open={open} onPick={onPick} />)
                 : block.people.map((f) => (
-                    <Row key={f.name} id={`friend-${f.name}`} person={f} side={side} open={open} onPick={onPick}>
+                    <Row key={f.name} id={`friend-${f.name}`} person={f} side={side} open={open} folded={folded} onPick={onPick}>
                       {block.kind === 'friends' && <Chat id={`friend-chat-${f.name}`} person={f} />}
                       <Unfollow id={`friend-unfollow-${f.name}`} name={f.name} />
                     </Row>
@@ -741,8 +773,8 @@ function FollowingSkeleton({ side, open }: { side: PanelSide; open: boolean }) {
     <Skeleton id="friends-loading" className="flex flex-col gap-2">
       {Array.from({ length: FACES_GUESS }, (_, i) => (
         <div key={i} className={cn('flex items-center gap-2', mirrored && 'flex-row-reverse', INSET[side])}>
-          {/* FACE_PX square */}
-          <Bone className="h-[42px] w-[42px] shrink-0" />
+          {/* a face's square: `Sizes.face`, 2.5rem and the row's border */}
+          <Bone className="h-[calc(2.5rem+2px)] w-[calc(2.5rem+2px)] shrink-0" />
           {open && <Bone className="h-3.5 w-24" />}
         </div>
       ))}
@@ -782,11 +814,17 @@ export function Friends({ open, side, onPick }: FriendsProps) {
   const folds = useAtomValue(sidebarFoldsAtom);
   const query = useAtomValue(searchQueryAtom);
   const note = useAtomValue(followNoteAtom);
+  const textSize = useAtomValue(textSizeAtom);
   const stack = useRef<HTMLDivElement | null>(null);
   // the room for the stack, box included. 0 until measured: then nothing is cut
   const [room, setRoom] = useState(0);
   const mirrored = side === 'right';
   const groupsOn = choices.some((c) => c.list === 'groups' && c.on);
+
+  // the face and the box in px, off the document: read again when the text size changes, which the room's observer below does not see (the stack's
+  // height stays, its rows grow). the setting's own subscriber (settings-atoms.ts) has put the size on <html> by then: the store tells every
+  // subscriber in the same call, and react renders after it
+  const sizes = useMemo(() => sizesOf(rootPx()), [textSize]);
 
   // the room follows the window (and the note under the lists, when there is one)
   useEffect(() => {
@@ -823,7 +861,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
     .filter((c) => c.on && holds[c.list] > 0)
     .map((c): Block => (c.list === 'groups' ? { kind: 'groups', servers: groups } : { kind: c.list, people: c.list === 'friends' ? friends : rest }));
   const faces = searching || blocks.length > 0;
-  const fit = measure(room, searching ? 0 : blocks.length, faces);
+  const fit = measure(room, searching ? 0 : blocks.length, faces, sizes);
   const rows = splitRows(
     // a folded list shows no rows: its share of the room goes to the others
     blocks.map((block) => (folds[block.kind] ? 0 : lengthOf(block))),
@@ -878,8 +916,8 @@ export function Friends({ open, side, onPick }: FriendsProps) {
           <label htmlFor="friends-search" className="sr-only">
             find someone
           </label>
-          {/* closed, the box is a square the size of a face with the icon in it; open, it runs the width of the panel and the icon stays where it was */}
-          <div className={cn('relative', open ? 'w-full' : 'w-[42px]', mirrored && 'ml-auto')}>
+          {/* closed, the box is a square the size of a face (the face column's width) with the icon in it; open, it runs the width of the panel and the icon stays where it was */}
+          <div className={cn('relative', open ? 'w-full' : 'w-[calc(2.5rem+2px)]', mirrored && 'ml-auto')}>
             <RiSearchLine
               aria-hidden
               size={18}
@@ -905,7 +943,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
         ) : words ? (
           open && words
         ) : (
-          <Lists side={side} open={open} onPick={onPick} stack={blocks} rows={rows} spacing={spacing} shares={shares} folds={folds} />
+          <Lists side={side} open={open} onPick={onPick} stack={blocks} rows={rows} face={sizes.face} spacing={spacing} shares={shares} folds={folds} />
         )}
       </div>
       {open && note && (

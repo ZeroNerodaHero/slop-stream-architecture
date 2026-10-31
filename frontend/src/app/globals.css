@@ -24,8 +24,8 @@
 html {
   /* classic scrollbars: the page under a modal loses its scrollbar below; the gutter stays, so nothing moves */
   scrollbar-gutter: stable;
-  /* the title row sticks over the first 4rem of the page (PageFrame.tsx): a focused link or an anchor scrolled into view stops under it, not behind it */
-  scroll-padding-top: 4rem;
+  /* the title row sticks over the top of the page (PageFrame.tsx measures it into --title-row; 4rem when it has no title): a focused link or an anchor scrolled into view stops under it, not behind it */
+  scroll-padding-top: var(--title-row, 4rem);
 }
 
 /* one thin bar, the page's and every pane's: a square thumb in the faintest text colour (3:1 on every surface,

@@ -9,17 +9,25 @@ import { buttonClassName } from '@/shared-components/Button';
 import { CHECKBOX } from '@/shared-components/user-modal/parts';
 
 /**
- * A link in talk: `http(s)://…` or `www.…` at the start of a word, up to the next space. The
- * same shape as `has_link` in postgres (migrate-22.sql), so what the panel draws as a link is
- * what `has:link` finds.
+ * A link in talk: `http(s)://…` or `www.…` at the start of a word, up to the next space or the
+ * first mark of CJK punctuation, which Chinese and Japanese put no space after: `、。，．！？：；`
+ * (U+3001-3002, U+FF0C, U+FF0E, U+FF01, U+FF1F, U+FF1A-1B), `…—“”` (U+2026, U+2014, U+201C-D)
+ * and the brackets `（）「」『』【】《》〈〉［］｛｝` (U+FF08-09, U+300C-F, U+3010-11, U+300A-B, U+3008-9,
+ * U+FF3B, U+FF3D, U+FF5B, U+FF5D). U+3002/U+FF0E would be a host's dot to the URL parser
+ * (UTS #46): the cut is on purpose, since `。` ending a sentence before unspaced prose is far more
+ * common than a fullwidth dot typed inside a host. The same start as `has_link` in postgres
+ * (migrate-22.sql), which says nothing about where a link ends, so what the panel draws as a
+ * link is what `has:link` finds.
  */
-const LINK_RE = /(^|[^\p{L}\p{N}])((?:https?:\/\/|www\.)[^\s]+)/giu;
+const LINK_RE =
+  /(^|[^\p{L}\p{N}])((?:https?:\/\/|www\.)[^\s\u3001\u3002\uff0c\uff0e\uff01\uff1f\uff1a\uff1b\u2026\u2014\u201c\u201d\uff08\uff09\u300c\u300d\u300e\u300f\u3010\u3011\u300a\u300b\u3008\u3009\uff3b\uff3d\uff5b\uff5d]+)/giu;
 /** What a sentence puts after a link and is not part of it: `see https://x.y/z.` */
 const TRAIL = /[.,;:!?'"\u00bb\u201d\u2019]+$/;
 const BRACKETS: readonly (readonly [open: string, close: string])[] = [
   ['(', ')'],
   ['[', ']'],
-  ['{', '}']
+  ['{', '}'],
+  ['<', '>']
 ];
 const LINK = 'text-primaryBlue underline-offset-2 hover:underline';
 
@@ -44,9 +52,19 @@ function trimLink(raw: string): string {
   }
 }
 
-/** Where the link goes, or null for one the browser would not take as http(s). A `www.` link is https. */
+/**
+ * Where the link goes, or null for one the browser would not take as http(s). A `www.` link is
+ * https. Null too for a match the trim left without its `https://` or `www.` (`www..` → `www`):
+ * `linkHref` would take that as a path on this site. And null for this origin with a path that
+ * starts `//` (`https://<site>//evil.example/`; `\\`, `/\` and `/..//` parse to the same).
+ */
 export function hrefOf(link: string): string | null {
-  return linkHref(/^www\./i.test(link) ? `https://${link}` : link);
+  if (!/^(https?:\/\/|www\.)/i.test(link)) return null;
+  const href = linkHref(/^www\./i.test(link) ? `https://${link}` : link);
+  // react-router reads a `to` of `//host` as another origin and renders a bare same-tab anchor to
+  // it, past the leave-site dialog: the same shape `AuthPage.nextFrom` walls for `?next=`
+  if (href && isSameOrigin(href) && !/^\/(?![/\\])/.test(new URL(href).pathname)) return null;
+  return href;
 }
 
 /** The site a link goes to, for the words: its host, without a `www.`. */
@@ -175,6 +193,8 @@ function LeaveBox({ href, onClose }: LeaveDialogProps) {
     pressedBackdrop.current = e.target === e.currentTarget;
   };
   const onClick = (e: MouseEvent<HTMLDialogElement>) => {
+    // the second click of a double-click on the link lands on the backdrop the first one opened: not a stay
+    if (e.detail > 1) return;
     if (pressedBackdrop.current && e.target === e.currentTarget) close();
   };
 

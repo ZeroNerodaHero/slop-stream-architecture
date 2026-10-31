@@ -14,7 +14,7 @@
 
 import { atom } from 'jotai';
 
-import { api, type GroupMember, type GroupRoom, messageOf, statusOf } from '@/infra/api';
+import { api, type Channel, type GroupMember, type GroupRoom, messageOf, statusOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { dropChannel, followChannel, seedChannels } from '@/infra/atoms/chat-atoms';
 import { holdPresence, onEvents, releasePresence, unwatchPresence, watchPresence } from '@/infra/events';
@@ -81,6 +81,36 @@ export async function setChannelMuted(server: string, channel: string, muted: bo
   } catch (err) {
     const current = store.get(roomAtom);
     if (current && current.name === server) store.set(roomAtom, { ...current, muted: was });
+    throw err;
+  }
+}
+
+/**
+ * The channels in `order`, from the top. One the order does not name (added since the order
+ * was drawn up) keeps its place after the named ones, as the api puts it.
+ */
+function sortChannels(channels: Channel[], order: string[]): Channel[] {
+  const at = new Map(order.map((name, i) => [name, i]));
+  const named = channels.filter((c) => at.has(c.name)).sort((a, b) => (at.get(a.name) ?? 0) - (at.get(b.name) ?? 0));
+  return [...named, ...channels.filter((c) => !at.has(c.name))];
+}
+
+/**
+ * The channels power puts the channels in `order` (the manage dialog's channels tab): the list
+ * moves at once, here and on the page under the dialog; the api is told, and the fact it sends
+ * back lands on every other room open. A refusal puts the list back as it was and throws, for
+ * the dialog to say why.
+ */
+export async function setChannelOrder(server: string, order: string[]): Promise<void> {
+  const room = store.get(roomAtom);
+  if (!room || room.name !== server) return;
+  const was = room.channels ?? [];
+  store.set(roomAtom, { ...room, channels: sortChannels(was, order) });
+  try {
+    await api.setChannelOrder(server, order);
+  } catch (err) {
+    const current = store.get(roomAtom);
+    if (current && current.name === server) store.set(roomAtom, { ...current, channels: sortChannels(current.channels ?? [], was.map((c) => c.name)) });
     throw err;
   }
 }
@@ -172,6 +202,9 @@ function apply(change: GroupChange): void {
         muted: room.muted?.filter((c) => c !== change.channel) ?? room.muted
       });
       dropChannel(change.channel);
+      return;
+    case 'channel_order':
+      store.set(roomAtom, { ...room, channels: sortChannels(room.channels ?? [], change.order) });
       return;
     case 'about':
       store.set(roomAtom, { ...room, about: change.about });

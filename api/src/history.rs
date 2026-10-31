@@ -23,7 +23,7 @@
 use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::Router;
-use chrono::{DateTime, Days, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveTime, Utc};
 use redis::streams::StreamRangeReply;
 use redis::AsyncCommands;
 use serde::Deserialize;
@@ -46,10 +46,14 @@ const SEARCH_LIMIT: i64 = 50;
 /// A search's box, in unicode scalars: filters and words together.
 const SEARCH_CHARS: usize = 200;
 /// A link to a video, for `has:video`: a postgres regex (case-insensitive) over the text of the
-/// lines that have a link (`has_link`, migrate-22.sql). The chat keeps no videos of its own, so
-/// this is the hosts people paste, and the file types a browser plays. Not the schema's: a host
-/// is added here.
-const VIDEO_LINK: &str = r"(youtube\.com/(watch|shorts|live|embed)|youtu\.be/|twitch\.tv/videos/|clips\.twitch\.tv/|twitch\.tv/[^/[:space:]]+/clip/|vimeo\.com/[0-9]|streamable\.com/|kick\.com/[^[:space:]]*/clips?/|tiktok\.com/|\.(mp4|webm|mov|m3u8)([?#[:space:]]|$))";
+/// lines that have a link (`has_link`, migrate-22.sql). The host or the file type has to sit
+/// inside a link of that same shape, so a video-looking word beside an unrelated link
+/// (`a.mov … https://example.com`) is not one. A file link may end a sentence: the punctuation
+/// the panel leaves out of a link (`LinkedText.tsx`) is allowed before a space or the end, so
+/// `clip.mp4.` and `(…/clip.mp4)` are videos and `x.movie` and `clip.mp4.example.com/a` are not.
+/// The chat keeps no videos of its own, so this is the hosts people paste, and the file types a
+/// browser plays. Not the schema's: a host is added here.
+const VIDEO_LINK: &str = r"(^|[^[:alnum:]])(https?://|www\.)[^[:space:]]*(youtube\.com/(watch|shorts|live|embed)|youtu\.be/|twitch\.tv/videos/|clips\.twitch\.tv/|twitch\.tv/[^/[:space:]]+/clip/|vimeo\.com/[0-9]|streamable\.com/|kick\.com/[^[:space:]]*/clips?/|tiktok\.com/|\.(mp4|webm|mov|m3u8)([?#]|[[:punct:]]*([[:space:]]|$)))";
 
 /// A line's columns, with its speaker's picture as it is now (`LineRow`). The row keeps no
 /// picture: a read joins `streamers` for it, by account for a verified line (so a rename
@@ -241,21 +245,20 @@ impl Search {
 
 /// The box's text apart: a `key:value` word with a key this knows is a filter; the rest are the
 /// words, kept in their order. Inside a quoted phrase nothing is a filter, so `"from: the top"`
-/// is still a phrase. A known key with nothing after the colon, or a value it cannot read, is a
-/// 400 that says what the key wants.
+/// is still a phrase; the phrase ends at its closing `"` even mid-word (`world",`), as
+/// `websearch_to_tsquery` reads it. A known key with nothing after the colon, or a value it
+/// cannot read, is a 400 that says what the key wants.
 fn parse_search(q: &str) -> Result<Search, ApiError> {
     let mut search = Search::default();
     let mut words: Vec<&str> = Vec::new();
     let mut quoted = false;
     for token in q.split_whitespace() {
-        if quoted {
+        if quoted || token.starts_with('"') {
             words.push(token);
-            quoted = !token.ends_with('"');
-            continue;
-        }
-        if let Some(rest) = token.strip_prefix('"') {
-            words.push(token);
-            quoted = !rest.ends_with('"');
+            // each `"` opens or closes a phrase, so `"a"` and `"gg"!` are whole and `world",` closes
+            if token.matches('"').count() % 2 == 1 {
+                quoted = !quoted;
+            }
             continue;
         }
         let Some((key, value)) = token.split_once(':') else {
@@ -279,7 +282,10 @@ fn parse_search(q: &str) -> Result<Search, ApiError> {
                 _ => return Err(bad("image, link or video")),
             },
             "before" | "after" => {
-                let Ok(day) = NaiveDate::parse_from_str(value, "%Y-%m-%d") else {
+                // `%Y` reads a signed year of any length (`-5000`), which postgres cannot hold as an
+                // `at`; and no line is at a day before the epoch (`at_seq`), so 1970 is the floor
+                let day = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok().filter(|day| day.year() >= 1970);
+                let Some(day) = day else {
                     return Err(bad(&format!("a day, like {key}:2026-10-30")));
                 };
                 if key == "before" {
@@ -625,10 +631,29 @@ mod tests {
     }
 
     #[test]
+    fn a_phrase_ends_at_its_closing_quote_even_mid_word() {
+        // the sentence's punctuation after a closing quote is not part of the phrase, as
+        // websearch_to_tsquery reads it, so what follows is a filter again
+        let s = parse_search("\"hello world\", from:bob").unwrap();
+        assert_eq!(s.words, "\"hello world\",");
+        assert_eq!(s.from.as_deref(), Some("bob"));
+        let s = parse_search("\"gg\"! has:video").unwrap();
+        assert_eq!(s.words, "\"gg\"!");
+        assert!(s.video);
+        let s = parse_search("\"hello world\") from:bob").unwrap();
+        assert_eq!(s.from.as_deref(), Some("bob"));
+        // a phrase that opens and closes in one word
+        let s = parse_search("\"a\" from:bob").unwrap();
+        assert_eq!(s.words, "\"a\"");
+        assert_eq!(s.from.as_deref(), Some("bob"));
+    }
+
+    #[test]
     fn the_days_are_utc_and_the_day_itself_is_out() {
         let s = parse_search("before:2026-10-30 after:2026-10-01").unwrap();
         assert_eq!(s.before, Some(utc("2026-10-30")));
         assert_eq!(s.after, Some(utc("2026-10-02")), "after a day is from the next day on");
+        assert!(parse_search("before:1970-01-01").is_ok(), "the epoch is the first day a line can be at");
     }
 
     #[test]
@@ -639,6 +664,12 @@ mod tests {
         assert_eq!(want("from:b!b"), "from: wants a name, like from:bob");
         assert_eq!(want("before:yesterday"), "before: wants a day, like before:2026-10-30");
         assert_eq!(want("after:2026-13-01"), "after: wants a day, like after:2026-10-30");
+        // chrono's `%Y` reads a signed year of any length, which postgres cannot hold; and no
+        // line is at a day before the epoch, so the floor is 1970 and a shorter year is out too
+        assert_eq!(want("before:-5000-01-01"), "before: wants a day, like before:2026-10-30");
+        assert_eq!(want("after:-9999-01-01"), "after: wants a day, like after:2026-10-30");
+        assert_eq!(want("before:1969-12-31"), "before: wants a day, like before:2026-10-30");
+        assert_eq!(want("before:26-10-30"), "before: wants a day, like before:2026-10-30");
     }
 
     #[test]
@@ -778,17 +809,33 @@ mod tests {
         store(&pool, &room, &line(oct30, 2), "cy", None, "or http://files.test/clip.mp4?x=1 later", None, false, false, &[]).await.unwrap();
         // "example.com" in words is not a link
         store(&pool, &room, &line(oct30, 3), "Bob", None, "example.com is a domain not a link", None, false, false, &[]).await.unwrap();
+        // a video file link that ends a sentence: the period, the bracket and the exclamation are
+        // the sentence's, not the link's, as the panel draws it (LinkedText.tsx)
+        store(&pool, &room, &line(oct30, 4), "cy", None, "watch this https://files.test/clip.mp4.", None, false, false, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 5), "cy", None, "clip (https://files.test/clip.mp4)", None, false, false, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 6), "cy", None, "lol https://x.test/a.webm!", None, false, false, &[]).await.unwrap();
+        // a video-looking word beside a link that is not one: linked, not a video
+        store(&pool, &room, &line(oct30, 7), "cy", None, "I saw a.mov yesterday https://example.com", None, false, false, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 8), "cy", None, "x.movie https://example.com", None, false, false, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 9), "cy", None, "the youtube.com/watch page is slow, see https://example.com/help", None, false, false, &[]).await.unwrap();
+        // the extension inside a host is not a video file
+        store(&pool, &room, &line(oct30, 10), "cy", None, "see https://clip.mp4.example.com/a", None, false, false, &[]).await.unwrap();
 
         assert_eq!(found(&pool, &room, "everyone").await, vec![line(oct29, 0)], "the words alone, as before");
         assert_eq!(found(&pool, &room, "has:image").await, vec![line(oct30, 0)]);
-        assert_eq!(found(&pool, &room, "has:link").await, vec![line(oct30, 2), line(oct30, 1), line(oct29, 1)], "newest first, and a bare domain is not a link");
-        assert_eq!(found(&pool, &room, "has:video").await, vec![line(oct30, 2), line(oct30, 1)]);
+        let linked = vec![line(oct30, 10), line(oct30, 9), line(oct30, 8), line(oct30, 7), line(oct30, 6), line(oct30, 5), line(oct30, 4), line(oct30, 2), line(oct30, 1), line(oct29, 1)];
+        assert_eq!(found(&pool, &room, "has:link").await, linked, "newest first, and a bare domain is not a link");
+        assert_eq!(
+            found(&pool, &room, "has:video").await,
+            vec![line(oct30, 6), line(oct30, 5), line(oct30, 4), line(oct30, 2), line(oct30, 1)],
+            "a file link may end a sentence; a video-looking word beside another link is not a video"
+        );
         assert_eq!(found(&pool, &room, "has:video later").await, vec![line(oct30, 2)], "a filter and the words together");
         assert_eq!(found(&pool, &room, "from:bob").await, vec![line(oct30, 3), line(oct29, 1)], "a nick as typed, asked for in lower case");
         assert_eq!(found(&pool, &room, &format!("from:{ann_name}")).await, vec![line(oct30, 0), line(oct29, 0)], "an account's lines");
         assert_eq!(found(&pool, &room, "from:bob has:link").await, vec![line(oct29, 1)]);
         assert_eq!(found(&pool, &room, "before:2026-10-30").await, vec![line(oct29, 1), line(oct29, 0)]);
-        assert_eq!(found(&pool, &room, "after:2026-10-29").await.len(), 4, "after a day is from the next day on");
+        assert_eq!(found(&pool, &room, "after:2026-10-29").await.len(), 11, "after a day is from the next day on");
         assert_eq!(found(&pool, &room, "after:2026-10-29 before:2026-10-30").await, Vec::<String>::new());
 
         // the account's lines follow a rename: ann is now dee, and `from:dee` finds what ann said

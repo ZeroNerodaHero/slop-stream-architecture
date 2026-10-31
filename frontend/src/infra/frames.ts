@@ -38,6 +38,8 @@ export type GroupChange =
   | { what: 'unbanned'; who: string }
   | { what: 'channel'; channel: { name: string; about: string; made_by: string | null } }
   | { what: 'unchannel'; channel: string }
+  /** The channels put in this order, every one of them, from the top. */
+  | { what: 'channel_order'; order: string[] }
   | { what: 'about'; about: string }
   | { what: 'access'; public: boolean }
   | { what: 'order'; order: string }

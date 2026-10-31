@@ -7,9 +7,11 @@
 // add role makes one and opens it, a save renames it, the row opens it again, delete is in there.
 // The room: one answer with the channels, who is live, the roster (members only) and the bans,
 // and the last lines of every channel; a watcher of `group:<name>` on the events socket hears a
-// channel added and deleted; the `*` chat socket carries every channel's lines with the channel
-// on them and fills from `since`; the page switches channels with no reload, no refetch and no
-// new socket, and a channel deleted under it is said on the page.
+// channel added, the channels put in order (the channels power; the whole order on the fact)
+// and one deleted; the `*` chat socket carries every channel's lines with the channel on them
+// and fills from `since`; the page switches channels with no reload, no refetch and no new
+// socket, and a channel deleted under it is said on the page. A channel is added from the
+// row under the list through a dialog, and the manage dialog's channels tab moves and deletes.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node groups.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
@@ -351,7 +353,7 @@ const dropAll = async (ctx, names) => {
     return 'hidden, counted, kept, shown';
   });
 
-  await step('a watcher of group:<name> on the events socket hears a channel added and deleted', async () => {
+  await step('a watcher of group:<name> on the events socket hears a channel added, the channels put in order, and one deleted', async () => {
     // a raw /events socket from a context with no login: hello as nobody, then watch the room's topic
     const w = await fresh();
     await w.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
@@ -381,6 +383,27 @@ const dropAll = async (ctx, names) => {
     await w.waitForFunction(() => window.__groupFrames.some((f) => f.what === 'channel' && f.channel && f.channel.name === 'clips'), null, { timeout: 10000 });
     const heard = await w.evaluate(() => window.__groupFrames.find((f) => f.what === 'channel'));
     expect(heard.group === slug && heard.channel.made_by === MAKER, `the channel frame ${JSON.stringify(heard)}`);
+    // the new channel is last; the channels power puts them in order, and everyone hears the whole order.
+    // a member without the power cannot, nobody cannot, and a name that is not a channel or named twice is 400
+    const before = await body(await anon.get(`/api/groups/${slug}`));
+    expect(before.channels.map((c) => c.name).join(' ') === 'general clips', `before the move: ${before.channels.map((c) => c.name).join(' ')}`);
+    const noPower = await member.put(`/api/groups/${slug}/channels`, { data: { order: ['clips', 'general'] } });
+    const nobodyMoves = await anon.put(`/api/groups/${slug}/channels`, { data: { order: ['clips', 'general'] } });
+    const notOne = await maker.put(`/api/groups/${slug}/channels`, { data: { order: ['clips', 'nosuch'] } });
+    const twice = await maker.put(`/api/groups/${slug}/channels`, { data: { order: ['clips', 'clips'] } });
+    expect(noPower.status() === 403 && nobodyMoves.status() === 401 && notOne.status() === 400 && twice.status() === 400, `moving: member ${noPower.status()}, nobody ${nobodyMoves.status()}, not a channel ${notOne.status()}, twice ${twice.status()}`);
+    // the named ones first in that order; one not named (general here) keeps its place after them
+    const moved = await maker.put(`/api/groups/${slug}/channels`, { data: { order: ['clips'] } });
+    const order = await body(moved);
+    expect(moved.status() === 200 && order.order.join(' ') === 'clips general', `the move got ${moved.status()} ${JSON.stringify(order)}`);
+    await w.waitForFunction(() => window.__groupFrames.some((f) => f.what === 'channel_order'), null, { timeout: 10000 });
+    const ordered = await w.evaluate(() => window.__groupFrames.find((f) => f.what === 'channel_order'));
+    expect(ordered.group === slug && Array.isArray(ordered.order) && ordered.order.join(' ') === 'clips general', `the channel_order frame ${JSON.stringify(ordered)}`);
+    const after = await body(await anon.get(`/api/groups/${slug}`));
+    expect(after.channels.map((c) => c.name).join(' ') === 'clips general', `after the move the room lists ${after.channels.map((c) => c.name).join(' ')}`);
+    const explored = await body(await maker.get('/api/explore'));
+    const mine = explored.yours.find((g) => g.name === slug);
+    expect(mine && mine.channels.map((c) => c.name).join(' ') === 'clips general', `explore lists ${JSON.stringify(mine && mine.channels.map((c) => c.name))}`);
     const gone = await maker.delete(`/api/groups/${slug}/channels/clips`);
     expect(gone.status() === 204, `deleting clips got ${gone.status()}`);
     await w.waitForFunction(() => window.__groupFrames.some((f) => f.what === 'unchannel' && f.channel === 'clips'), null, { timeout: 10000 });
@@ -446,7 +469,7 @@ const dropAll = async (ctx, names) => {
     return `#general: "${outcome.line.text}", filled once`;
   });
 
-  await step('the room page: channels with their cap, a pushed channel, a switch with no reload, refetch or socket, a line lands, a deleted channel is said', async () => {
+  await step('the room page: the channel list, a pushed channel, a switch with no reload, refetch or socket, a line lands, a deleted channel is said', async () => {
     const q = await fresh();
     await q.goto(`${BASE}/login?next=/groups/${slug}`, { waitUntil: 'domcontentloaded' });
     await q.fill('#auth-name', MEMBER);
@@ -454,8 +477,8 @@ const dropAll = async (ctx, names) => {
     await q.click('#auth-submit');
     await q.waitForSelector('#group-channels', { timeout: 15000 });
     await q.waitForSelector('#chat[data-phase="open"]', { timeout: 15000 });
-    const count = await q.textContent('#group-channels-count');
-    expect(/^1 of 20$/.test(count.trim()), `the channel count reads "${count}"`);
+    const count = await q.$$eval('#group-channels > li', (rows) => rows.length);
+    expect(count === 1, `the channel list has ${count} row(s)`);
     expect(await q.$('#group-members'), 'a member has no roster');
     // the api's lines are on the page before anything else is said
     await q.waitForFunction((t) => [...document.querySelectorAll('#chat-lines [data-id]')].some((l) => l.textContent.includes(t)), 'hello general ' + RUN, { timeout: 10000 });
@@ -471,8 +494,8 @@ const dropAll = async (ctx, names) => {
     const added = await maker.post(`/api/groups/${slug}/channels`, { data: { name: 'clips' } });
     expect(added.status() === 201, `adding clips got ${added.status()}`);
     await q.waitForSelector('#group-channel-clips', { timeout: 10000 });
-    const after = await q.textContent('#group-channels-count');
-    expect(/^2 of 20$/.test(after.trim()), `after the push the count reads "${after}"`);
+    const after = await q.$$eval('#group-channels > li', (rows) => rows.length);
+    expect(after === 2, `after the push the channel list has ${after} row(s)`);
     await q.click('#group-channel-clips');
     await q.waitForURL((u) => u.pathname === `/groups/${slug}/clips`, { timeout: 10000 });
     await q.waitForFunction(() => document.querySelector('#channel')?.textContent === '#clips', null, { timeout: 10000 });
@@ -531,7 +554,7 @@ const dropAll = async (ctx, names) => {
     return 'gone';
   });
 
-  await step('home and /groups offer create under the cap; the dialog makes one and lands on it; manage: private, a role added, renamed and deleted in place; at the cap home offers nothing; the tab lists it with leave and on the card, delete it', async () => {
+  await step('home and /groups offer create under the cap; the dialog makes one and lands on it; manage: private, a role added, renamed and deleted in place; a channel added from the list\'s dialog, moved up and deleted on the channels tab; at the cap home offers nothing; the tab lists it with leave and on the card, delete it', async () => {
     const q = await fresh();
     await q.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
     await q.fill('#auth-name', MAKER);
@@ -563,6 +586,9 @@ const dropAll = async (ctx, names) => {
     // the dialog is a rail of tabs; an owner lands on about, which holds the listing
     await q.waitForSelector('#group-manage[open] #manage-tab-about[aria-selected="true"]', { timeout: 5000 });
     await q.waitForSelector('#manage-panel-about #room-public[aria-pressed="true"]', { timeout: 5000 });
+    // the pictures are the owner's, so about offers them too: the square and the banner, each the click for a new one
+    expect(await q.$('#manage-panel-about #manage-icon-pick'), 'about has no picture pick for the owner');
+    expect(await q.$('#manage-panel-about #manage-banner-pick'), 'about has no banner pick for the owner');
     await q.click('#room-private');
     await q.waitForSelector('#group-manage[open] #room-private[aria-pressed="true"]', { timeout: 10000 });
     const room = await body(await maker.get(`/api/groups/${madeName}`));
@@ -590,6 +616,47 @@ const dropAll = async (ctx, names) => {
     expect((await q.inputValue('#role-name')) === 'helpers', 'the editor opened on another role');
     await q.click('#role-delete');
     await q.waitForFunction(() => !document.querySelector('#group-roles li[data-role="helpers"]'), null, { timeout: 10000 });
+    await q.click('#group-manage-close');
+    await q.waitForFunction(() => !document.querySelector('#group-manage'), null, { timeout: 5000 });
+    // a channel is added from the row under the list, not a box in it: the dialog takes the name (typed to the
+    // name rule) and a line about it, and the page is the new channel, which goes under general
+    expect(!(await q.$(`#channel-name-${madeName}`)), 'the channel list still has a name box');
+    await q.click('#group-channel-add');
+    await q.waitForSelector('#channel-make[open]', { timeout: 5000 });
+    await q.fill('#channel-make-name', 'Clips!');
+    expect((await q.inputValue('#channel-make-name')) === 'clips', `the name box reads "${await q.inputValue('#channel-make-name')}"`);
+    await q.fill('#channel-make-about', 'the best bits');
+    await q.click('#channel-make-submit');
+    await q.waitForURL((u) => u.pathname === `/groups/${madeName}/clips`, { timeout: 10000 });
+    await q.waitForFunction(() => !document.querySelector('#channel-make'), null, { timeout: 5000 });
+    const channelNames = () =>
+      q.$$eval('#group-channels > li', (rows) => rows.map((row) => (row.querySelector('a') || row.querySelector('[aria-current]')).textContent.trim().replace(/^#/, '')));
+    expect((await channelNames()).join(' ') === 'general clips', `the list reads ${(await channelNames()).join(' ')}`);
+    const clips = (await body(await maker.get(`/api/groups/${madeName}`))).channels.find((c) => c.name === 'clips');
+    expect(clips && clips.about === 'the best bits', `the api's clips ${JSON.stringify(clips)}`);
+    // the channels tab of manage: the rows in the list's order; up moves clips to the top, the api is told
+    // and the list on the left follows; delete asks first, and the channel on screen going moves the page to general
+    await q.click('#group-manage-open');
+    await q.waitForSelector('#group-manage[open] #manage-tab-channels', { timeout: 5000 });
+    await q.click('#manage-tab-channels');
+    await q.waitForSelector('#manage-panel-channels #manage-channels li[data-channel="clips"]', { timeout: 5000 });
+    const rowsBefore = await q.$$eval('#manage-channels li', (rows) => rows.map((row) => row.dataset.channel));
+    expect(rowsBefore.join(' ') === 'general clips', `the tab's rows read ${rowsBefore.join(' ')}`);
+    expect(!(await q.$('#channel-remove-general')), 'general has a delete');
+    const put = q.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === `/api/groups/${madeName}/channels`, { timeout: 10000 });
+    await q.click('#channel-up-clips');
+    const putRes = await put;
+    expect(putRes.status() === 200, `the move got ${putRes.status()}`);
+    await q.waitForFunction(() => document.querySelector('#manage-channels li')?.dataset.channel === 'clips', null, { timeout: 10000 });
+    expect((await channelNames()).join(' ') === 'clips general', `after the move the list reads ${(await channelNames()).join(' ')}`);
+    const movedRoom = await body(await maker.get(`/api/groups/${madeName}`));
+    expect(movedRoom.channels.map((c) => c.name).join(' ') === 'clips general', `the api lists ${movedRoom.channels.map((c) => c.name).join(' ')}`);
+    await q.click('#channel-remove-clips');
+    await q.waitForSelector('#manage-channel-delete-clips[open]', { timeout: 5000 });
+    await q.click('#manage-channel-delete-clips-yes');
+    await q.waitForURL((u) => u.pathname === `/groups/${madeName}`, { timeout: 10000 });
+    await q.waitForFunction(() => !document.querySelector('#group-channel-clips') && !document.querySelector('#manage-channels li[data-channel="clips"]'), null, { timeout: 10000 });
+    await q.waitForSelector('#group-manage[open]', { timeout: 5000 });
     await q.click('#group-manage-close');
     await q.waitForFunction(() => !document.querySelector('#group-manage'), null, { timeout: 5000 });
     // the maker owns one. under the cap home still offers create; owning as many as the cap allows, it does not

@@ -157,12 +157,24 @@ fn too_many_groups() -> ApiError {
 
 /// `GROUPS_PER_OWNER` from the environment: how many groups one login may own. Unset or
 /// empty is the default; anything that is not a count of one or more is said in the log and
-/// the default is used, since a cap of zero would let nobody make a group.
+/// the default is used, since a cap of zero would let nobody make a group. Never above
+/// `GROUPS_PER_MEMBER`: every group a login owns is one it is in, so a higher cap could not
+/// be reached, and the pages would offer `create` for a group the api refuses. More is said
+/// in the log and `GROUPS_PER_MEMBER` is used.
 pub(crate) fn groups_per_owner_from_env() -> i64 {
-    let Some(raw) = std::env::var("GROUPS_PER_OWNER").ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty()) else {
+    groups_per_owner_from(std::env::var("GROUPS_PER_OWNER").ok().as_deref())
+}
+
+/// The rule behind `groups_per_owner_from_env`, on the raw value, so it can be tested.
+fn groups_per_owner_from(raw: Option<&str>) -> i64 {
+    let Some(raw) = raw.map(str::trim).filter(|v| !v.is_empty()) else {
         return DEFAULT_GROUPS_PER_OWNER;
     };
     match raw.parse::<i64>() {
+        Ok(n) if n > GROUPS_PER_MEMBER => {
+            log::warn!("GROUPS_PER_OWNER={raw:?} is more than the {GROUPS_PER_MEMBER} groups a login may be in, using {GROUPS_PER_MEMBER}");
+            GROUPS_PER_MEMBER
+        }
         Ok(n) if n >= 1 => n,
         _ => {
             log::warn!("GROUPS_PER_OWNER={raw:?} is not a count of 1 or more, using {DEFAULT_GROUPS_PER_OWNER}");
@@ -506,8 +518,9 @@ pub(crate) struct ChannelView {
     made_by: Option<String>,
 }
 
-/// The channels of one server, oldest first (`general` first, made with the group), as the
-/// room answers them for `user`. The same rule as the explorer's: `can_delete` is who made the
+/// The channels of one server in their order (`position`, as the channels power last put them;
+/// oldest first until then, `general` first because it was made with the group), as the room
+/// answers them for `user`. The same rule as the explorer's: `can_delete` is who made the
 /// channel, or anyone with the channels power (an owner, that role, a site admin).
 pub(crate) async fn channels_of(s: &AppState, server: &str, user: Option<Uuid>, admin: bool) -> Result<Vec<ChannelView>, sqlx::Error> {
     let may_manage = match user {
@@ -517,7 +530,7 @@ pub(crate) async fn channels_of(s: &AppState, server: &str, user: Option<Uuid>, 
     let rows: Vec<(String, String, Option<Uuid>, Option<String>)> = sqlx::query_as(
         "SELECT c.name, c.about, c.created_by_id, maker.name FROM channels c
          LEFT JOIN streamers maker ON maker.id = c.created_by_id
-         WHERE c.server = $1 ORDER BY c.created_at, c.name",
+         WHERE c.server = $1 ORDER BY c.position, c.created_at, c.name",
     )
     .bind(server)
     .fetch_all(&s.db)
@@ -604,7 +617,7 @@ fn live_first(mut servers: Vec<ServerView>) -> Vec<ServerView> {
 /// `GET /api/explore`: every server (not `bot`) this login may see, split into the ones
 /// it is in and the public ones it is not. A private group it has not joined is left out.
 /// Inside each, a server with someone live comes first. `live` is those members'
-/// names. Channels oldest first, `general` first because it was made with the group.
+/// names. Channels in their order (`position`), as the room lists them.
 /// `groups_per_owner` is the cap on owning, so a page offers `create` only under it.
 async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let user = me.as_ref().map(|a| a.id);
@@ -645,7 +658,7 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
          LEFT JOIN streamers cm ON cm.id = c.created_by_id
          WHERE g.name <> $3
            AND (g.public OR EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1))
-         ORDER BY g.created_at, g.name, c.created_at NULLS LAST, c.name",
+         ORDER BY g.created_at, g.name, c.position NULLS LAST, c.created_at, c.name",
     )
     .bind(user)
     .bind(admin)
@@ -700,8 +713,11 @@ async fn create_channel(
     if n >= CHANNELS_PER_SERVER {
         return Err(ApiError::new(StatusCode::FORBIDDEN, format!("this server has {CHANNELS_PER_SERVER} channels already")));
     }
+    // after the last: the list is in the order it was put in, and a new channel joins its end
     let added = sqlx::query(
-        "INSERT INTO channels (server, name, about, created_by_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+        "INSERT INTO channels (server, name, about, created_by_id, position)
+         SELECT $1, $2, $3, $4, COALESCE(max(position), -1) + 1 FROM channels WHERE server = $1
+         ON CONFLICT DO NOTHING",
     )
     .bind(&server)
     .bind(&channel)
@@ -715,6 +731,64 @@ async fn create_channel(
     log::info!("{}: added #{channel} to {server}", who.name);
     tell(&s, &server, "channel", json!({ "channel": { "name": channel, "about": about, "made_by": who.name } })).await;
     Ok((StatusCode::CREATED, Json(json!({ "name": channel, "about": about, "can_delete": channel != GENERAL, "made_by": who.name }))))
+}
+
+#[derive(Deserialize)]
+struct ChannelOrder {
+    order: Vec<String>,
+}
+
+/// `PUT /api/groups/:group/channels` `{ order: [name, …] }`: the channels in this order, from
+/// the top. The channels power, and a member. Every name must be a channel of the server, once;
+/// a channel not named (one added since the page read the list) keeps its place after the
+/// named ones. → `{ order }`, the whole list as it now stands, which the `channel_order` fact
+/// carries too. 400 for a name that is not a channel or a name twice, 403 without the power.
+async fn reorder_channels(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<ChannelOrder>, JsonRejection>) -> ApiResult {
+    let who = me.ok_or_else(not_logged_in)?;
+    let Json(body) = body?;
+    let server = group_name(&group)?;
+    if server == BOT_GROUP {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "bot is not a server"));
+    }
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM groups WHERE name = $1)").bind(&server).fetch_one(&s.db).await?;
+    if !exists {
+        return Err(no_such_group());
+    }
+    if !member(&s.db, who.id, &server).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "join the server first"));
+    }
+    if !crate::group_mod::allows(&s, who.id, &server, crate::group_mod::CHANNELS).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "you can't move the channels"));
+    }
+    let current: Vec<String> = sqlx::query_scalar("SELECT name FROM channels WHERE server = $1 ORDER BY position, created_at, name").bind(&server).fetch_all(&s.db).await?;
+    let mut order: Vec<String> = Vec::with_capacity(current.len());
+    for raw in &body.order {
+        let name = raw.trim().to_lowercase();
+        if !current.contains(&name) {
+            return Err(ApiError::new(StatusCode::BAD_REQUEST, format!("no such channel: {raw}")));
+        }
+        if order.contains(&name) {
+            return Err(ApiError::new(StatusCode::BAD_REQUEST, format!("{name} is named twice")));
+        }
+        order.push(name);
+    }
+    // the rest as they stand, after the named ones
+    let rest: Vec<String> = current.into_iter().filter(|name| !order.contains(name)).collect();
+    order.extend(rest);
+    let positions: Vec<i32> = (0..order.len() as i32).collect();
+    sqlx::query(
+        "UPDATE channels c SET position = o.position
+         FROM unnest($2::text[], $3::int[]) AS o(name, position)
+         WHERE c.server = $1 AND c.name = o.name",
+    )
+    .bind(&server)
+    .bind(&order)
+    .bind(&positions)
+    .execute(&s.db)
+    .await?;
+    log::info!("{}: put the channels of {server} in order: {}", who.name, order.join(", "));
+    tell(&s, &server, "channel_order", json!({ "order": order })).await;
+    Ok(Json(json!({ "order": order })))
 }
 
 /// `DELETE /api/groups/:group/channels/:channel`: who made the channel, who made the server,
@@ -850,7 +924,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}", get(crate::group_mod::room).delete(remove))
         .route("/api/groups/{group}/join", post(join))
         .route("/api/groups/{group}/leave", post(leave))
-        .route("/api/groups/{group}/channels", post(create_channel))
+        .route("/api/groups/{group}/channels", post(create_channel).put(reorder_channels))
         .route("/api/groups/{group}/channels/{channel}", delete(delete_channel))
         .route("/api/groups/{group}/channels/{channel}/mute", put(mute_channel).delete(unmute_channel))
         .route("/api/groups/{group}/channels/{channel}/read", put(read_channel))
@@ -904,6 +978,20 @@ mod tests {
         assert_eq!(owned_cap_words(1), "a group already. one each");
         assert_eq!(owned_cap_words(2), "2 groups already. that is the cap");
         assert_eq!(owned_cap_words(5), "5 groups already. that is the cap");
+    }
+
+    #[test]
+    fn the_cap_on_owning_stays_within_the_cap_on_being_in() {
+        // every group a login owns is one it is in, so a cap above GROUPS_PER_MEMBER could
+        // never be reached: it is read as GROUPS_PER_MEMBER
+        assert_eq!(groups_per_owner_from(Some("10")), GROUPS_PER_MEMBER);
+        assert_eq!(groups_per_owner_from(Some("8")), 8);
+        assert_eq!(groups_per_owner_from(Some("2")), 2);
+        assert_eq!(groups_per_owner_from(Some("1")), 1);
+        assert_eq!(groups_per_owner_from(Some(" 3 ")), 3);
+        for raw in [None, Some(""), Some("  "), Some("0"), Some("-3"), Some("x")] {
+            assert_eq!(groups_per_owner_from(raw), DEFAULT_GROUPS_PER_OWNER, "{raw:?}");
+        }
     }
 
     #[test]

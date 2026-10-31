@@ -1,5 +1,5 @@
 import { RiArrowLeftSLine } from '@remixicon/react';
-import type { ReactNode } from 'react';
+import { type ReactNode, useLayoutEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 import { buttonClassName } from '@/shared-components/Button';
@@ -52,18 +52,42 @@ function TopActions() {
 /**
  * The page's title row and its width. One row: back and the title on the left, the bell and
  * go live on the right. Sticky: the row stays at the top of the window while the page scrolls
- * under it (the page's own colour, so what scrolls under is hidden), and globals.css keeps
- * scrolled-to things from landing under its first 4rem. Without a title (home) the row is the
- * bell and go live alone, exactly 4rem, and the page starts at the row's top rather than under
- * it: home's part headings are sticky and 4rem tall too (HomePage.tsx), so the one for the part
- * you are in stands at the row's left end, and the next part's pushes it out. Who you are is
- * not here: the sidebar is mounted once by the router's Shell, beside this column.
+ * under it (the page's own colour, so what scrolls under is hidden). The row is 4rem, and more
+ * when the title and the actions do not fit on one line (a phone, a tablet with a long title,
+ * a laptop at a larger text size): its height is measured into `--title-row` on <html>, which
+ * globals.css makes the page's `scroll-padding-top`, so scrolled-to things land under the row
+ * and not behind it, and which the room page sizes itself by (ServerRoom.tsx). Without a title
+ * (home) the row is the bell and go live alone, exactly 4rem (the variable is not set; 4rem is
+ * its fallback), and the page starts at the row's top rather than under it: home's part
+ * headings are sticky and 4rem tall too (HomePage.tsx), so the one for the part you are in
+ * stands at the row's left end, and the next part's pushes it out. Who you are is not here:
+ * the sidebar is mounted once by the router's Shell, beside this column.
  */
 export function PageFrame({ title, titleId, aside, wide = false, children }: PageFrameProps) {
   const titled = Boolean(title || aside);
+  const headerRef = useRef<HTMLElement | null>(null);
+
+  // the row's height, read rather than assumed: once before the first paint (a layout effect,
+  // so a page's own landing scroll already sees it), then on every change of its size (the
+  // title wrapping or not as the window or the text size changes). gone with the row
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    if (!titled || !header) return;
+    const root = document.documentElement;
+    const measure = () => root.style.setProperty('--title-row', `${header.getBoundingClientRect().height}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty('--title-row');
+    };
+  }, [titled]);
+
   return (
     <main className={cn('mx-auto px-5 pb-10', wide ? 'max-w-[1360px]' : 'max-w-[960px]')}>
       <header
+        ref={headerRef}
         className={cn('sticky top-0 z-30 flex items-center gap-4 bg-background py-3', titled ? 'mb-6 min-h-16 flex-wrap border-b border-primaryStroke' : 'h-16 -mb-16')}
       >
         {title && (

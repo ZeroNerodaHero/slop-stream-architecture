@@ -384,6 +384,7 @@ export function applyStoredTheme() {
  */
 export type TextSize = 80 | 90 | 100 | 110 | 125;
 
+/** The inline script in index.html holds this list too (less 100) and paints a kept size before the bundle runs; change both together. */
 export const TEXT_SIZES: readonly TextSize[] = [80, 90, 100, 110, 125];
 
 const storedTextSizeAtom = atomWithStorage<unknown>('settings.textSize', 100, undefined, { getOnInit: true });

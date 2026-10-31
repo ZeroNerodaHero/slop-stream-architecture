@@ -189,6 +189,13 @@ const MIGRATIONS: &[Migration] = &[
         present: "SELECT EXISTS (SELECT 1 FROM information_schema.columns
             WHERE table_schema = 'public' AND table_name = 'roles' AND column_name = 'id' AND data_type = 'uuid')",
     },
+    Migration {
+        version: 24,
+        name: "migrate-24.sql",
+        sql: include_str!("../migrations/migrate-24.sql"),
+        present: "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'channels' AND column_name = 'position')",
+    },
 ];
 
 /// Apply every migration that has not run. The chat process does not call this.

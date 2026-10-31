@@ -199,11 +199,13 @@ export function UserPanel() {
     return (
       <aside aria-label="you" data-side={side} className={COLUMN}>
         <Skeleton label="loading who you are" className={cn(panelClass(side), COLLAPSED)}>
-          <div className={cn('flex flex-1 pt-2', side === 'right' ? 'justify-end pr-[19px]' : 'pl-[19px]')}>
-            <Bone className="h-10 w-[42px]" />
+          <div className={cn('flex flex-1 pt-2', side === 'right' ? 'justify-end pr-[calc(1.25rem-1px)]' : 'pl-[calc(1.25rem-1px)]')}>
+            {/* the closed search box: 2.5rem tall, a face column wide (Friends.tsx) */}
+            <Bone className="h-10 w-[calc(2.5rem+2px)]" />
           </div>
-          <div className={cn('flex shrink-0 border-t border-primaryStroke py-2.5', side === 'right' ? 'justify-end pr-[19px]' : 'pl-[19px]')}>
-            <Bone className="h-[42px] w-[42px]" />
+          <div className={cn('flex shrink-0 border-t border-primaryStroke py-2.5', side === 'right' ? 'justify-end pr-[calc(1.25rem-1px)]' : 'pl-[calc(1.25rem-1px)]')}>
+            {/* your picture in its box: 2.5rem and the box's 1px border each side, like a row's face above */}
+            <Bone className="h-[calc(2.5rem+2px)] w-[calc(2.5rem+2px)]" />
           </div>
         </Skeleton>
       </aside>
@@ -273,10 +275,16 @@ export function UserPanel() {
         <div className="flex min-h-0 flex-1 flex-col">
           <Friends open={friendsOpen} side={side} onPick={closeFriends} />
         </div>
-        {/* your picture 19px in from the edge, open or closed: centered in the closed column, in line with the faces above. the
-            name block beside it is in the row closed too, invisible, so the row is one height in both states and the lists
-            above have the same room (Friends.tsx cuts them at whole rows of it) */}
-        <div className={cn('flex shrink-0 items-center gap-2 border-t border-primaryStroke py-2.5', mirrored ? 'flex-row-reverse pl-3 pr-[19px]' : 'pl-[19px] pr-3')}>
+        {/* your picture 1.25rem less its 1px border in from the edge (19px at the browser's size, the faces' inset in Friends.tsx), open or
+            closed: centered in the closed 5rem column at every text size, in line with the faces above. the name block beside it is in
+            the row closed too, invisible, so the row is one height in both states and the lists above have the same room (Friends.tsx
+            cuts them at whole rows of it) */}
+        <div
+          className={cn(
+            'flex shrink-0 items-center gap-2 border-t border-primaryStroke py-2.5',
+            mirrored ? 'flex-row-reverse pl-3 pr-[calc(1.25rem-1px)]' : 'pl-[calc(1.25rem-1px)] pr-3'
+          )}
+        >
           {/* the picture is a link to your own page, the way every face above is a link to theirs. not draggable: it must not lift off as a ghost */}
           {myPage ? (
             <Link id="you" to={myPage} aria-label={youLabel} title={youTitle} draggable={false} onClick={closeFriends} className={YOU}>

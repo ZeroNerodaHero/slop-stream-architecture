@@ -280,7 +280,7 @@ export interface GroupRoom {
   banner: number | null;
   perms: RolePerms;
   roles: GroupRole[];
-  /** The channels, oldest first. Absent on an older api. */
+  /** The channels in their order: as the channels power last put them, oldest first until then. Absent on an older api. */
   channels?: Channel[];
   /** The channels this login has muted (docs/notifications.md): no inbox row for their lines. Empty for nobody; absent on an older api. */
   muted?: string[];
@@ -519,8 +519,10 @@ export const api = {
   groupMessages: (name: string) => request<Record<string, ChatLine[]>>('GET', `/api/groups/${encodeURIComponent(name)}/messages`),
   /** Servers you are in, then the ones you can find. `bot` is not a server. See docs/groups.md. */
   explore: () => request<Explore>('GET', '/api/explore'),
-  /** Someone who may add a channel. 403 until they have joined, or without the power. */
-  createChannel: (server: string, name: string) => request<Channel>('POST', `/api/groups/${encodeURIComponent(server)}/channels`, { name }),
+  /** Someone who may add a channel. 403 until they have joined, or without the power. The new channel goes after the last. */
+  createChannel: (server: string, name: string, about = '') => request<Channel>('POST', `/api/groups/${encodeURIComponent(server)}/channels`, { name, about }),
+  /** The channels in this order, from the top. The channels power. A channel not named keeps its place after these. → the whole order as it now stands. */
+  setChannelOrder: (server: string, order: string[]) => request<{ order: string[] }>('PUT', `/api/groups/${encodeURIComponent(server)}/channels`, { order }),
   /** Who made the channel, or someone who may manage channels. `general` stays. */
   deleteChannel: (server: string, channel: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`),
   /** No inbox row for this channel's lines from now on, for this login (docs/notifications.md). 204, also when already muted. */
