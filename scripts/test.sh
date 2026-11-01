@@ -33,7 +33,8 @@
 #              panel (hover: who you follow, streaming first; search finds and follows), the watch page's button and count, home's people under
 #              the streams (online first) and the top search, a rename keeps the followers
 #   dms        direct messages: nobody 401, a stranger 403 until both follows are there, a friend's line kept and listed with its count of what is new,
-#              read marks, paging at 50, the window gets a line pushed and sends one back, a hidden window counts on the sidebar and a second tab agrees,
+#              read marks, paging at 50, a picture alone is a line (a bad, unknown or eleventh id refused), the window gets a line pushed and sends one back,
+#              draws a pushed picture and sends one picked from its picture button, a hidden window counts on the sidebar and a second tab agrees,
 #              a friend's watch page opens their thread from the button beside the chat button and a stranger's page has no such button,
 #              the lines are bubbles (yours right of theirs) until the chat tab's cards make them a log or blocks, kept in the browser
 #   notifications  the inbox under the bell: nobody 401, the settings save, a follow is a row in the followed inbox (once), a go-live over the api is one

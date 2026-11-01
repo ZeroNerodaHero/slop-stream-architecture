@@ -59,6 +59,7 @@ mod socket;
 
 use std::collections::{HashMap, HashSet};
 use std::env;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use auth::Me;
@@ -89,7 +90,15 @@ const GO_LIVE_GRACE_SECS: i64 = 20;
 /// is this old: longer than the key's ttl, so a merely slow heartbeat is never hit.
 const ZOMBIE_AFTER_SECS: i64 = 180;
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
+/// How long `live_set`'s answer stands for the lists. The sidebar asks for two lists at once
+/// on an open and one more a pause in the typing (follows.rs, groups.rs); a second is longer
+/// than any such burst and shorter than anyone notices a word being.
+const LIVE_SET_FRESH: Duration = Duration::from_secs(1);
 const WS_PATH: &str = "/ws";
+
+/// `live_set`'s last answer and when it came, one per process. Locked for a read or a write,
+/// never across an await.
+type LiveCache = Arc<Mutex<Option<(Instant, Arc<HashSet<String>>)>>>;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -116,6 +125,8 @@ pub(crate) struct AppState {
     /// How many groups one login may own (GROUPS_PER_OWNER; two unless set). Making one more,
     /// or being named owner of one more, is refused at the cap. See groups.rs.
     pub(crate) groups_per_owner: i64,
+    /// Who is live, as the lists last heard it (`live_set`).
+    live_cache: LiveCache,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -270,6 +281,24 @@ pub(crate) async fn video_live(s: &AppState) -> Option<HashSet<String>> {
         .ok()?;
     let names: Vec<String> = res.json().await.ok()?;
     Some(names.into_iter().collect())
+}
+
+/// Who is live right now, for a list of names (`follows::words`, the explorer's groups):
+/// video's word, else redis, kept `LIVE_SET_FRESH` so a burst of lists asks video once.
+/// Not for a word about one name now: go live, the watch grant and the sweeper ask video
+/// themselves, since a second-old answer could let a name go live twice.
+pub(crate) async fn live_set(s: &AppState) -> Result<Arc<HashSet<String>>, ApiError> {
+    if let Some((at, set)) = s.live_cache.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if at.elapsed() < LIVE_SET_FRESH {
+            return Ok(set.clone());
+        }
+    }
+    let set: Arc<HashSet<String>> = Arc::new(match video_live(s).await {
+        Some(connected) => connected,
+        None => redis_live(s).await?.into_iter().collect(),
+    });
+    *s.live_cache.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), set.clone()));
+    Ok(set)
 }
 
 /// The names of `video_live` with how many different addresses are receiving each one
@@ -1092,6 +1121,7 @@ async fn main() {
         ops_token,
         s3,
         groups_per_owner,
+        live_cache: Arc::default(),
     };
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))

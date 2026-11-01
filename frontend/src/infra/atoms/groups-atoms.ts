@@ -31,6 +31,10 @@ export const publicServersAtom = atom<Server[] | undefined>(undefined);
 let askingServers: Promise<void> | null = null;
 /** Bumped by `forgetMyServers`: an ask carries the stamp it was made under and lands only while that is still the current one. */
 let serversStamp = 0;
+/** When the explorer last answered, ms; 0 for never (or for a login since forgotten). */
+let serversAt = 0;
+/** An answer younger than this is good enough for the search: the open that came before the first letter asked already. */
+export const SERVERS_FRESH_MS = 10_000;
 
 /** Cheap, so every mount asks: `mine` depends on who is logged in, and others make groups too. */
 export async function loadGroups(): Promise<void> {
@@ -46,15 +50,18 @@ export async function loadGroups(): Promise<void> {
 /**
  * The explorer's answer again, for anyone: the servers you are in and the public ones you are
  * not, with who is live in each now. One ask at a time; a second caller waits for the first. An
- * answer for a login since forgotten is dropped.
+ * answer for a login since forgotten is dropped. `maxAgeMs`: an answer this young is kept
+ * instead of asking, for a caller that wants the lists complete rather than new.
  */
-export function loadServers(): Promise<void> {
+export function loadServers(maxAgeMs = 0): Promise<void> {
+  if (maxAgeMs > 0 && serversAt > 0 && Date.now() - serversAt < maxAgeMs) return Promise.resolve();
   if (!askingServers) {
     const stamp = serversStamp;
     askingServers = api
       .explore()
       .then((found) => {
         if (stamp !== serversStamp) return;
+        serversAt = Date.now();
         store.set(myServersAtom, found.yours);
         store.set(
           publicServersAtom,
@@ -86,6 +93,7 @@ export function loadMyServers(): Promise<void> {
 export function forgetMyServers() {
   serversStamp += 1;
   askingServers = null;
+  serversAt = 0;
   store.set(myServersAtom, undefined);
   store.set(publicServersAtom, undefined);
 }

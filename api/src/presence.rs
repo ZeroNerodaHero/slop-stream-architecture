@@ -206,21 +206,23 @@ pub(crate) async fn publish_renamed<C: AsyncCommands>(r: &mut C, old: &str, new:
 /// key; it goes to the sockets of both names, so the writer's other devices see it too.
 /// `from_id` is the writer's account, so the open thread still matches after a rename.
 /// The text rides in the fact: the stream is the one road to every gateway, and a thousand
-/// entries deep it is gone.
-pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, text: &str, at_ms: i64, from_id: &str) {
-    publish(
-        r,
-        &[
-            ("type", "dm".into()),
-            ("name", to.into()),
-            ("from", from.into()),
-            ("from_id", from_id.into()),
-            ("id", id.to_string()),
-            ("text", text.into()),
-            ("at", at_ms.to_string()),
-        ],
-    )
-    .await;
+/// entries deep it is gone. So do the pictures' ids (`images`, joined by commas, left out when
+/// there are none): the bytes stay in the bucket, the page fetches them by id.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, text: &str, images: &[String], at_ms: i64, from_id: &str) {
+    let mut fields = vec![
+        ("type", "dm".to_owned()),
+        ("name", to.to_owned()),
+        ("from", from.to_owned()),
+        ("from_id", from_id.to_owned()),
+        ("id", id.to_string()),
+        ("text", text.to_owned()),
+        ("at", at_ms.to_string()),
+    ];
+    if !images.is_empty() {
+        fields.push(("images", images.join(",")));
+    }
+    publish(r, &fields).await;
 }
 
 /// A login read a thread up to a line, on one device: its other devices drop their count.

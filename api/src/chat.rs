@@ -1395,11 +1395,13 @@ async fn history(s: &ChatState, name: &str) -> Result<Vec<Line>, redis::RedisErr
     Ok(lines)
 }
 
-/// Ten pictures on one line. The bytes stay in the bucket; the line names the ids.
+/// Ten pictures on one line. The bytes stay in the bucket; the line names the ids. A direct
+/// message (dms.rs) keeps the same cap, through `picture_ids`.
 const MAX_IMAGES: usize = 10;
 
-/// The ids a say named. `images` when it sent the set, otherwise the one `image`.
-fn picture_ids(image: Option<String>, images: Vec<String>) -> Result<Vec<String>, &'static str> {
+/// The ids a say named. `images` when it sent the set, otherwise the one `image`. Each must
+/// read as a uuid; a repeat is one picture. dms.rs reads a line's pictures with the same rule.
+pub(crate) fn picture_ids(image: Option<String>, images: Vec<String>) -> Result<Vec<String>, &'static str> {
     let raw = if images.is_empty() { image.into_iter().collect::<Vec<_>>() } else { images };
     if raw.len() > MAX_IMAGES {
         return Err("too many pictures");

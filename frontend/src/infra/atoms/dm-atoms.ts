@@ -196,6 +196,12 @@ function setThread(name: string, next: (prev: Thread | undefined) => Thread) {
   store.set(dmThreadsAtom, { ...threads, [name]: next(threads[name]) });
 }
 
+/** A line as the api or a frame gave it: `images` left off (an older api, a frame with no pictures) is no pictures. */
+function lineOf(line: Omit<DmLine, 'images'> & { images?: unknown }): DmLine {
+  const images = Array.isArray(line.images) ? line.images.filter((id): id is string => typeof id === 'string' && id.length > 0) : [];
+  return { id: line.id, from: line.from, text: line.text, at: line.at, images };
+}
+
 /** Both sets of lines as one, by id, oldest first: a page over the lines already here, a frame over a page. */
 function merge(a: DmLine[], b: DmLine[]): DmLine[] {
   const byId = new Map<number, DmLine>();
@@ -210,13 +216,13 @@ export async function loadThread(name: string): Promise<void> {
   const me = store.get(meAtom);
   loading.add(name);
   try {
-    const { lines } = await api.dmThread(name);
+    const lines = (await api.dmThread(name)).lines.map(lineOf);
     // logout cleared the threads. writing this page now would be the next login's chat, and `loaded` would keep their own open from asking
     if (store.get(meAtom) !== me) return;
     setThread(name, (prev) => ({ lines: merge(prev?.lines ?? [], lines), loaded: true, start: lines.length < PAGE }));
     if (viewing(name)) markRead(name);
   } catch (err) {
-    notice(`could not load the chat: ${messageOf(err)}`);
+    showDmNotice(`could not load the chat: ${messageOf(err)}`);
   } finally {
     loading.delete(name);
   }
@@ -230,13 +236,13 @@ export async function loadOlderDm(name: string): Promise<boolean> {
   const me = store.get(meAtom);
   loading.add(name);
   try {
-    const { lines } = await api.dmThread(name, oldest.id);
+    const lines = (await api.dmThread(name, oldest.id)).lines.map(lineOf);
     // logout cleared the threads. writing this page now would be the next login's chat, and `loaded` would keep their own open from asking
     if (store.get(meAtom) !== me) return false;
     setThread(name, (prev) => ({ lines: merge(lines, prev?.lines ?? []), loaded: true, start: lines.length < PAGE }));
     return lines.length > 0;
   } catch (err) {
-    notice(`could not load older lines: ${messageOf(err)}`);
+    showDmNotice(`could not load older lines: ${messageOf(err)}`);
     return false;
   } finally {
     loading.delete(name);
@@ -249,20 +255,21 @@ function append(name: string, line: DmLine) {
 }
 
 /**
- * A line to `name`: `POST /api/dm/<name>`. The api's answer goes in at once (the socket may be
- * down; the box must still work), and the same line coming back on the socket is dropped by
- * id. False, with the api's words under the box, when it was not kept: not friends, too long,
- * too fast.
+ * A line to `name`: `POST /api/dm/<name>`, the words and the pictures on it (`images`, the ids
+ * `api.uploadChatImage` returned; the words may be empty then). The api's answer goes in at
+ * once (the socket may be down; the box must still work), and the same line coming back on the
+ * socket is dropped by id. False, with the api's words under the box, when it was not kept:
+ * not friends, too long, too fast, a picture the upload never kept.
  */
-export async function sendDm(name: string, raw: string): Promise<boolean> {
+export async function sendDm(name: string, raw: string, images: string[] = []): Promise<boolean> {
   const text = raw.trim();
-  if (!text) return false;
+  if (!text && images.length === 0) return false;
   try {
-    const line = await api.sendDm(name, text);
-    append(name, { id: line.id, from: line.from, text: line.text, at: line.at });
+    const line = await api.sendDm(name, text, images);
+    append(name, lineOf(line));
     return true;
   } catch (err) {
-    notice(messageOf(err));
+    showDmNotice(messageOf(err));
     return false;
   }
 }
@@ -282,7 +289,8 @@ export function markRead(name: string) {
   api.readDm(name, last.id).catch(() => undefined);
 }
 
-function notice(text: string) {
+/** Words under the box for a few seconds: the api's refusal, a page that did not come, a picture that would not go up. */
+export function showDmNotice(text: string) {
   store.set(dmNoticeAtom, text);
   if (noticeTimer) clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => store.set(dmNoticeAtom, ''), NOTICE_MS);
@@ -306,9 +314,7 @@ function retarget(fromId: string, peer: string) {
     const next = { ...threads };
     delete next[old];
     const there = next[peer];
-    next[peer] = there
-      ? { lines: merge(there.lines, moved.lines), loaded: there.loaded || moved.loaded, start: there.start && moved.start }
-      : moved;
+    next[peer] = there ? { lines: merge(there.lines, moved.lines), loaded: there.loaded || moved.loaded, start: there.start && moved.start } : moved;
     store.set(dmThreadsAtom, next);
   }
   // the old tab becomes the new name, where it sat. a tab already wearing the new name goes, so this account is one tab
@@ -331,7 +337,7 @@ function retarget(fromId: string, peer: string) {
  * screen follow the new name before the read is decided. A frame with no `from_id` matches
  * the name, as before.
  */
-function arrived(frame: { id: number; from: string; to: string; text: string; at: number; from_id?: string }) {
+function arrived(frame: { id: number; from: string; to: string; text: string; at: number; from_id?: string; images?: string[] }) {
   const me = store.get(meAtom);
   if (!me || (frame.from !== me && frame.to !== me)) return;
   const peer = frame.from === me ? frame.to : frame.from;
@@ -341,7 +347,7 @@ function arrived(frame: { id: number; from: string; to: string; text: string; at
     // the api's words for them (the picture, the bio), behind the line
     void loadDms();
   }
-  append(peer, { id: frame.id, from: frame.from, text: frame.text, at: frame.at });
+  append(peer, lineOf(frame));
   if (frame.from === me) return;
   if (viewing(peer)) markRead(peer);
   else {

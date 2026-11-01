@@ -171,7 +171,8 @@ enum Out {
     /// `name` became `to`. To the account's own sockets and to `name`'s watchers.
     Renamed { name: String, to: String },
     /// A direct message (docs/dms.md), to the sockets of both names: every device of either sees the same line.
-    /// `from_id` is the writer's account. Absent when an older api wrote the fact.
+    /// `from_id` is the writer's account. Absent when an older api wrote the fact. `images` are the pictures on
+    /// the line, the ids `POST /api/chat-images` handed back; left off when there are none.
     Dm {
         id: i64,
         from: String,
@@ -180,6 +181,8 @@ enum Out {
         at: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
         from_id: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        images: Vec<String>,
     },
     /// `name` read its thread with `peer` up to `id` on some device. To `name`'s sockets: the others drop their count.
     /// `peer_id` is that account. Absent when an older api wrote the fact.
@@ -639,7 +642,8 @@ impl Gateway {
                 let (Some(from), Some(id), Some(text)): (Option<String>, Option<i64>, Option<String>) = (entry.get("from"), entry.get("id"), entry.get("text")) else { return };
                 let at: i64 = entry.get("at").unwrap_or(0);
                 let from_id: Option<String> = entry.get("from_id").filter(|id: &String| !id.is_empty());
-                self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id }).await;
+                let images = crate::chat::split_pictures(entry.get("images"));
+                self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id, images }).await;
             }
             // `name` read a thread somewhere: its other devices drop their count
             "dm_read" => {

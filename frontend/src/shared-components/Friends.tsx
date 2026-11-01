@@ -6,8 +6,8 @@ import { Link } from 'react-router-dom';
 import { type Followed, groupMatches, groupWords, type Server } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { dmUnreadAtom, openDm, showDms } from '@/infra/atoms/dm-atoms';
-import { followNoteAtom, followingAtom, loadFollowing, search, searchBusyAtom, searchQueryAtom, searchResultsAtom, unfollow } from '@/infra/atoms/follow-atoms';
-import { loadMyServers, loadServers, myServersAtom, publicServersAtom } from '@/infra/atoms/groups-atoms';
+import { followNoteAtom, followingAtom, loadFollowing, searchQueryAtom, searchResultsAtom, setSearchQuery, unfollow } from '@/infra/atoms/follow-atoms';
+import { loadMyServers, loadServers, myServersAtom, publicServersAtom, SERVERS_FRESH_MS } from '@/infra/atoms/groups-atoms';
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import {
   type PanelSide,
@@ -22,7 +22,6 @@ import {
   textSizeAtom
 } from '@/infra/atoms/settings-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
-import { store } from '@/infra/store';
 import { Face } from '@/shared-components/Face';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { GroupMark } from '@/shared-components/GroupMark';
@@ -35,7 +34,6 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { INPUT } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
-const SEARCH_WAIT_MS = 200;
 /** How long the pointer rests on a row before the person's card shows: past the panel's 100ms widening (UserPanel.tsx), so the card is measured against the open panel. */
 const PEEK_MS = 200;
 const ICON_BUTTON = 'shrink-0 border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
@@ -766,22 +764,24 @@ function groupHits(mine: Server[], others: Server[], query: string): Server[] {
 /**
  * What the box found, in place of the lists while it holds letters: the groups first, the rows
  * their list gives them (`groupHits`: yours, then the public ones, matched here from the
- * explorer's answer as it stands, so they are up on the letter), then the people the api found,
- * each with the buttons its list would give it. A friend has chat and the ×, someone else you
- * follow the × alone, and a name you do not follow the follow button. Who you follow is
- * `followingAtom`, the same answer the lists and the follow button read, so a click moves a row
- * from one shape to the next in place.
+ * explorer's answer as it stands, so they are up on the letter), then the people: what the box
+ * has in hand for these very letters (`searchResultsAtom`: the api's answer to them, or one to
+ * fewer letters cut down while it is asked), each with the buttons its list would give it. A
+ * friend has chat and the ×, someone else you follow the × alone, and a name you do not follow
+ * the follow button. Who you follow is `followingAtom`, the same answer the lists and the follow
+ * button read, so a click moves a row from one shape to the next in place. Nothing of either
+ * kind: `searching` until the api has answered these letters, `nothing called that` once it has.
  */
 function Results({ side, open, onPick, gap }: ListProps & { gap: number }) {
   const query = useAtomValue(searchQueryAtom);
-  const hits = useAtomValue(searchResultsAtom);
-  const busy = useAtomValue(searchBusyAtom);
+  const { hits, settled } = useAtomValue(searchResultsAtom);
   const following = useAtomValue(followingAtom);
   const mine = useAtomValue(myServersAtom);
   const others = useAtomValue(publicServersAtom);
-  const groups = groupHits(mine ?? [], others ?? [], query.trim().toLowerCase());
+  const letters = query.trim().toLowerCase();
+  const groups = useMemo(() => groupHits(mine ?? [], others ?? [], letters), [mine, others, letters]);
   if (groups.length === 0 && hits.length === 0) {
-    return <p className={cn(NOTE, 'text-textTertiary')}>{busy ? 'searching' : 'nothing called that'}</p>;
+    return <p className={cn(NOTE, 'text-textTertiary')}>{settled ? 'nothing called that' : 'searching'}</p>;
   }
   const known = new Map((following ?? []).map((f) => [f.name, f] as const));
   return (
@@ -843,11 +843,12 @@ interface FriendsProps {
  * rows are shared, and the caret before each icon folds its list to the icon line, this
  * browser's choice (settings.sidebarFolds). The site's one search: letters in the box put what they find where the
  * lists were, the groups first (yours, then the public ones; a group is matched here, from the
- * explorer's answer), then the people, each row with the buttons its list would give it, a
- * follow button for a name you do not follow; closing the panel empties it. Every open asks
- * `GET /api/following` again, and `GET /api/explore` for the groups while they are shown or
- * once there are letters in the box (nobody's too: the public groups are theirs to find), so
- * the words are now.
+ * explorer's answer), then the people (the api's answer to the letters as they stand, asked a
+ * beat after the last one and kept a short while, `setSearchQuery`), each row with the buttons
+ * its list would give it, a follow button for a name you do not follow; closing the panel
+ * empties it. Every open asks `GET /api/following` again, and `GET /api/explore` for the
+ * groups while they are shown, so the words are now; the first letter asks the explorer too
+ * unless that open just did (nobody's too: the public groups are theirs to find).
  */
 export function Friends({ open, side, onPick }: FriendsProps) {
   const me = useAtomValue(meAtom);
@@ -886,19 +887,14 @@ export function Friends({ open, side, onPick }: FriendsProps) {
     if (open) {
       void loadFollowing();
       if (groupsOn) void loadMyServers();
-    } else store.set(searchQueryAtom, '');
+    } else setSearchQuery('');
   }, [open, groupsOn]);
 
-  // the search, a beat after the last keystroke
+  // the first letter: the groups again, the public ones with them, so the hits have every group the letters could find. one ask a search, not a letter,
+  // and none when the open just before it asked (`SERVERS_FRESH_MS`); nobody's open asks nothing (`loadMyServers`), but their search does: the
+  // public groups are on their lists too
   useEffect(() => {
-    const t = window.setTimeout(() => void search(query), SEARCH_WAIT_MS);
-    return () => window.clearTimeout(t);
-  }, [query]);
-
-  // the first letter: the groups again, the public ones with them, so the hits have every group the letters could find. one ask a search, not a letter;
-  // nobody's open asks nothing (`loadMyServers`), but their search may: the public groups are on their lists too
-  useEffect(() => {
-    if (searching) void loadServers();
+    if (searching) void loadServers(SERVERS_FRESH_MS);
   }, [searching]);
 
   const list = me ? all : undefined;
@@ -977,7 +973,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
               id="friends-search"
               type="search"
               value={query}
-              onChange={(e) => store.set(searchQueryAtom, e.target.value)}
+              onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="find someone or a group"
               autoComplete="off"
               autoCapitalize="off"

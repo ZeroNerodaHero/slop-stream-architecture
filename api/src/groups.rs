@@ -614,12 +614,10 @@ struct ServerView {
     channels: Vec<ChannelView>,
 }
 
-/// Names video says are connected, or the `live:` keys when video cannot be asked.
+/// Names video says are connected, or the `live:` keys when video cannot be asked: the lists'
+/// shared answer (`live_set`), a second old at most.
 async fn live_names(s: &AppState) -> Result<Vec<String>, ApiError> {
-    if let Some(set) = crate::video_live(s).await {
-        return Ok(set.into_iter().collect());
-    }
-    crate::redis_live(s).await.map_err(Into::into)
+    Ok(crate::live_set(s).await?.iter().cloned().collect())
 }
 
 /// Which groups have which of these names in them. A name not live is never asked.

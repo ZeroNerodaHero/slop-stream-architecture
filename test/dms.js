@@ -1,8 +1,10 @@
 // Direct messages (docs/dms.md): a login writes a line to a friend. Nobody gets 401; a stranger
 // 403 until both follows are there; the line is kept, listed with its count of what is new, read;
-// the window in a browser gets the line pushed over the events socket and sends one back; a line
-// that comes while the window is hidden counts on the sidebar; two tabs of one login agree; a
-// friend's watch page has the line button beside the chat button, a stranger's does not.
+// a line carries pictures the room chat's way (a picture alone is kept, a bad, unknown or eleventh
+// id is refused); the window in a browser gets the line pushed over the events socket and sends
+// one back, draws a pushed picture and sends one picked from its picture button; a line that
+// comes while the window is hidden counts on the sidebar; two tabs of one login agree; a friend's
+// watch page has the line button beside the chat button, a stranger's does not.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node dms.js
 const { chromium, request } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
@@ -33,6 +35,11 @@ const body = async (res) => {
     return null;
   }
 };
+/** A jpeg by its first bytes: the upload checks the magic and the size, nothing more (chat_images.rs `kind`). */
+const JPEG_HEAD = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xd9]);
+/** A picture for a line, the page's way: the bytes to `POST /api/chat-images`, the id back. */
+const upload = (ctx, bytes) => ctx.post('/api/chat-images', { data: bytes, headers: { 'content-type': 'image/jpeg' } });
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 (async () => {
   const ann = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
@@ -117,6 +124,41 @@ const body = async (res) => {
     return '55 lines, two pages, 25 new for ann';
   });
 
+  /** The api's side of pictures. After the window's steps: a line of yours reads the thread for you, and those steps count on the 25 above. */
+  const picturesOverTheApi = async () => {
+    const up = await upload(ann, JPEG_HEAD);
+    expect(up.status() === 200, `the upload got ${up.status()}: ${JSON.stringify(await body(up))}`);
+    const pictureId = (await body(up)).id;
+    expect(UUID.test(pictureId || ''), `the upload handed back ${JSON.stringify(pictureId)}`);
+    const sent = await ann.post(`/api/dm/${BEN}`, { data: { text: '', images: [pictureId] } });
+    expect(sent.status() === 201, `a picture alone got ${sent.status()}: ${JSON.stringify(await body(sent))}`);
+    const line = await body(sent);
+    expect(line.text === '' && Array.isArray(line.images) && line.images.length === 1 && line.images[0] === pictureId, `the line: ${JSON.stringify(line)}`);
+    const thread = await body(await ben.get(`/api/dm/${ANN}`));
+    const last = thread.lines[thread.lines.length - 1];
+    expect(last.id === line.id && last.text === '' && last.images.length === 1 && last.images[0] === pictureId, `ben's thread ends with ${JSON.stringify(last)}`);
+    expect(thread.lines.every((l) => Array.isArray(l.images)), 'every line must carry images, [] for none');
+    const plain = thread.lines.find((l) => l.text === 'yes, hi');
+    expect(plain && plain.images.length === 0, `a line with no picture must say images: [], got ${JSON.stringify(plain)}`);
+    const list = await body(await ben.get('/api/dms'));
+    expect(list[0].last.id === line.id && list[0].last.images[0] === pictureId, `ben's list ends with ${JSON.stringify(list[0].last)}`);
+    // words with it, the picture named the say's old way (`image` alone)
+    const both = await body(await ann.post(`/api/dm/${BEN}`, { data: { text: 'see', image: pictureId } }));
+    expect(both && both.text === 'see' && both.images[0] === pictureId, `words and a picture: ${JSON.stringify(both)}`);
+    const bad = await ann.post(`/api/dm/${BEN}`, { data: { text: '', images: ['nope'] } });
+    const unknown = await ann.post(`/api/dm/${BEN}`, { data: { text: '', images: ['00000000-0000-4000-8000-000000000000'] } });
+    const many = await ann.post(`/api/dm/${BEN}`, { data: { text: '', images: Array.from({ length: 11 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`) } });
+    const nothing = await ann.post(`/api/dm/${BEN}`, { data: { text: '  ', images: [] } });
+    const said = async (res) => (await body(res))?.error || '';
+    expect(bad.status() === 400 && /bad picture/.test(await said(bad)), `a bad id got ${bad.status()} ${JSON.stringify(await body(bad))}`);
+    expect(unknown.status() === 400 && /no such picture/.test(await said(unknown)), `an unknown id got ${unknown.status()} ${JSON.stringify(await body(unknown))}`);
+    expect(many.status() === 400 && /too many pictures/.test(await said(many)), `eleven got ${many.status()} ${JSON.stringify(await body(many))}`);
+    expect(nothing.status() === 400 && /nothing to say/.test(await said(nothing)), `no words and no picture got ${nothing.status()} ${JSON.stringify(await body(nothing))}`);
+    const bytes = await anon.get(`/api/chat-images/${pictureId}`);
+    expect(bytes.status() === 200 && /image\/jpeg/.test(bytes.headers()['content-type'] || ''), `the picture reads back ${bytes.status()} ${bytes.headers()['content-type']}`);
+    return `picture ${pictureId.slice(0, 8)} on lines ${line.id} and ${both.id}`;
+  };
+
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const login = async (p, name) => {
@@ -161,6 +203,62 @@ const body = async (res) => {
     expect(last.from === ANN && last.text === 'yes, hi', `ben's thread ends with ${JSON.stringify(last)}`);
     expect((await annPage.inputValue('#friend-chat-text')) === '', 'the box empties after a send');
     return `line ${pushed.id} pushed, ${last.id} sent`;
+  });
+
+  await step('pictures in the window: a pushed picture line draws its <img>; a file picked goes up, waits in the strip, and goes alone as a line', async () => {
+    // real pictures, made by the browser: a jpeg for ben's upload over the api, a png for ann's pick (the page has to decode it to shrink it)
+    const [jpegUrl, pngUrl] = await annPage.evaluate(() => {
+      const c = document.createElement('canvas');
+      c.width = 64;
+      c.height = 48;
+      const x = c.getContext('2d');
+      x.fillStyle = '#4f8bff';
+      x.fillRect(0, 0, 64, 48);
+      x.fillStyle = '#ff7a4f';
+      x.fillRect(8, 8, 24, 24);
+      return [c.toDataURL('image/jpeg', 0.9), c.toDataURL('image/png')];
+    });
+    const JPEG = Buffer.from(jpegUrl.split(',')[1], 'base64');
+    const PNG = Buffer.from(pngUrl.split(',')[1], 'base64');
+    // ben sends a picture with a word: the frame carries the id, and the open window draws it under the words, read at once
+    const bensPicture = (await body(await upload(ben, JPEG))).id;
+    const pushed = await body(await ben.post(`/api/dm/${ANN}`, { data: { text: 'look', images: [bensPicture] } }));
+    expect(pushed && pushed.images && pushed.images[0] === bensPicture, `ben's line: ${JSON.stringify(pushed)}`);
+    // the <img> on the line, and the bytes decoded in it: the frame carried the id and the picture reads back through the page
+    const drawn = (sel) => {
+      const img = document.querySelector(sel);
+      return !!img && img.complete && img.naturalWidth > 0;
+    };
+    await annPage.waitForSelector(`#friend-chat-log p[data-id="${pushed.id}"] img`, { state: 'attached', timeout: 10000 });
+    await annPage.waitForFunction(drawn, `#friend-chat-log p[data-id="${pushed.id}"] img`, { timeout: 10000 });
+    const src = await annPage.getAttribute(`#friend-chat-log p[data-id="${pushed.id}"] img`, 'src');
+    expect((src || '').endsWith(`/api/chat-images/${bensPicture}`), `the pushed picture is drawn from ${src}`);
+    expect(((await annPage.textContent(`#friend-chat-log p[data-id="${pushed.id}"]`)) || '').includes('look'), 'the words stand with the picture');
+    expect(!(await annPage.$(`#friend-chat-unread-${BEN}`)), 'a picture line on screen must not count as new');
+    // ann picks a file from the window: it goes up at once and waits in the strip, and send comes on with nothing typed
+    expect(await annPage.isDisabled('#friend-chat-send'), 'send must be off with nothing typed and no picture');
+    await annPage.setInputFiles('#friend-chat-picture-file', { name: 'square.png', mimeType: 'image/png', buffer: PNG });
+    await annPage.waitForSelector('#friend-chat-picture-preview img', { state: 'attached', timeout: 15000 });
+    await annPage.waitForFunction(drawn, '#friend-chat-picture-preview img', { timeout: 10000 });
+    await annPage.waitForFunction(() => !document.querySelector('#friend-chat-send')?.disabled, null, { timeout: 5000 });
+    const annsPicture = ((await annPage.getAttribute('#friend-chat-picture-preview img', 'src')) || '').split('/').pop();
+    expect(UUID.test(annsPicture || ''), `the strip shows ${annsPicture}`);
+    const bytes = await anon.get(`/api/chat-images/${annsPicture}`);
+    expect(bytes.status() === 200 && /^image\/(webp|jpeg)$/.test(bytes.headers()['content-type'] || ''), `the picked picture reads back ${bytes.status()} ${bytes.headers()['content-type']}`);
+    // enter in the empty box: the picture goes alone, the strip empties, and the api has the line with the id and no words
+    await annPage.press('#friend-chat-text', 'Enter');
+    await annPage.waitForFunction(() => !document.querySelector('#friend-chat-picture-preview'), null, { timeout: 10000 });
+    await annPage.waitForFunction(
+      (id) => [...document.querySelectorAll('#friend-chat-log p[data-mine] img')].some((img) => (img.getAttribute('src') || '').endsWith(`/api/chat-images/${id}`)),
+      annsPicture,
+      { timeout: 10000 }
+    );
+    const bensThread = await body(await ben.get(`/api/dm/${ANN}`));
+    const last = bensThread.lines[bensThread.lines.length - 1];
+    expect(last.from === ANN && last.text === '' && last.images.length === 1 && last.images[0] === annsPicture, `ben's thread ends with ${JSON.stringify(last)}`);
+    expect((await annPage.inputValue('#friend-chat-text')) === '', 'the box stays empty');
+    expect(await annPage.isDisabled('#friend-chat-send'), 'send goes off again once the picture has gone');
+    return `ben's ${bensPicture.slice(0, 8)} pushed, ann's ${annsPicture.slice(0, 8)} sent as line ${last.id}`;
   });
 
   await step('hidden: a line that comes counts on the face, the sidebar and the api; shown again, it is read everywhere', async () => {
@@ -245,6 +343,8 @@ const body = async (res) => {
     await annPage.waitForFunction(() => !document.querySelector('#user-modal[open]'), null, { timeout: 5000 });
     return 'bubbles, a log, blocks, bubbles again';
   });
+
+  await step('pictures over the api: a picture alone is a line with its id and no words, read back everywhere; a bad id, an unknown one and eleven are refused', picturesOverTheApi);
 
   await step('a stranger again: unfollowed, the thread still reads but a line is refused with the words under the box; the line button goes', async () => {
     const undo = await ben.post(`/api/streamers/${ANN}/unfollow`);

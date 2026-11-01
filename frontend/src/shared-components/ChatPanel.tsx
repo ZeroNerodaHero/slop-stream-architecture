@@ -229,7 +229,8 @@ function Marks({ line, mine }: { line: ChatLine; mine: boolean }) {
   );
 }
 
-function pictureSrc(id: string): string {
+/** Where a chat picture is fetched from, by the id `POST /api/chat-images` handed back. */
+export function pictureSrc(id: string): string {
   return `/api/chat-images/${encodeURIComponent(id)}`;
 }
 
@@ -243,8 +244,9 @@ const THUMB_HOVER =
  * row share its width, cropped to fill their cells: three are two over one across the whole row,
  * five are three over two, eight are four over four. A click on any puts it over the whole page
  * (`PictureView`), in the window the chat is in: the page's, or the popped-out player's own.
+ * A direct message's pictures are drawn by the same (FriendChat.tsx).
  */
-function ChatImages({ ids }: { ids: string[] }) {
+export function ChatImages({ ids }: { ids: string[] }) {
   const [view, setView] = useState<{ at: number; host: HTMLElement } | null>(null);
 
   if (ids.length === 0) return null;
@@ -777,7 +779,7 @@ export function ChatPanel({ name, owner = null, embedded = false, search = true,
               <div id="chat-picture-preview" className="mb-2 flex flex-wrap gap-2">
                 {images.map((id) => (
                   <span key={id} className="relative">
-                    <img src={`/api/chat-images/${encodeURIComponent(id)}`} alt="" className="h-20 w-20 object-cover" />
+                    <img src={pictureSrc(id)} alt="" className="h-20 w-20 object-cover" />
                     <button
                       type="button"
                       aria-label="remove picture"

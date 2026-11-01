@@ -58,12 +58,13 @@ export interface Streamer {
   joined_at?: string | null;
 }
 
-/** One line of a direct message thread (docs/dms.md). `from` is the writer's name now; `at` unix milliseconds. */
+/** One line of a direct message thread (docs/dms.md). `from` is the writer's name now; `at` unix milliseconds; `images` the pictures on it, the ids from `POST /api/chat-images`, empty for none (an older api leaves it off; `dm-atoms` fills it). */
 export interface DmLine {
   id: number;
   from: string;
   text: string;
   at: number;
+  images: string[];
 }
 
 /** A thread the login is in, as `GET /api/dms` lists them, newest line first: the other side as the sidebar has people (`id` is that account), the last line, and how many of theirs are new. */
@@ -160,6 +161,24 @@ export interface SearchHit {
   live: boolean;
   presence: Presence;
   following: boolean;
+}
+
+/** `GET /api/search` answers this many at most (`SEARCH_LIMIT` in follows.rs). Fewer is every name the letters find. */
+export const SEARCH_LIMIT = 20;
+/** Letters fewer than this find names that start with them; from this many, names holding them anywhere (`SEARCH_ANYWHERE_FROM` in follows.rs). */
+export const SEARCH_ANYWHERE_FROM = 3;
+
+/** The letters the api searches by (`clean_query` in follows.rs): the name rule's, lowercased, 32 at most, the rest dropped. */
+export function cleanSearch(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '')
+    .slice(0, 32);
+}
+
+/** Does `name` answer the cleaned letters `q`, by the api's rule: starting with them under three, holding them from three. */
+export function nameMatches(name: string, q: string): boolean {
+  return q.length < SEARCH_ANYWHERE_FROM ? name.startsWith(q) : name.includes(q);
 }
 
 /** A group as worn on a chat line: enough to draw the badge. */
@@ -626,8 +645,8 @@ export const api = {
   /** One page of the thread with `name`, oldest first: the newest page, or the one before line `before`. A short page is the start. */
   dmThread: (name: string, before?: number) =>
     request<{ name: string; friends: boolean; lines: DmLine[] }>('GET', `/api/dm/${encodeURIComponent(name)}${before === undefined ? '' : `?before=${before}`}`),
-  /** A line to a friend. 201 with the line as kept; it also comes back on the events socket. 400 `too long`, 403 not friends, 429 `slow down`. */
-  sendDm: (name: string, text: string) => request<DmLine & { to: string }>('POST', `/api/dm/${encodeURIComponent(name)}`, { text }),
+  /** A line to a friend: the words, and the pictures on it (`uploadChatImage`'s ids, ten at most; the words may be empty then). 201 with the line as kept; it also comes back on the events socket. 400 `too long`, `nothing to say`, `no such picture`, 403 not friends, 429 `slow down`. */
+  sendDm: (name: string, text: string, images: string[] = []) => request<DmLine & { to: string }>('POST', `/api/dm/${encodeURIComponent(name)}`, { text, images }),
   /** The login has seen the thread with `name` up to that line. Its other devices hear it on the socket. */
   readDm: (name: string, id: number) => request<null>('PUT', `/api/dm/${encodeURIComponent(name)}/read`, { id }),
   /** The login's inbox, newest first, the last 30, and which kinds it keeps. 401 for nobody. See docs/notifications.md. */

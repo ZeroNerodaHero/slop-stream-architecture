@@ -231,6 +231,19 @@ const MIGRATIONS: &[Migration] = &[
         present: "SELECT EXISTS (SELECT 1 FROM information_schema.columns
             WHERE table_schema = 'public' AND table_name = 'channels' AND column_name = 'cooldown')",
     },
+    Migration {
+        version: 30,
+        name: "migrate-30.sql",
+        sql: include_str!("../migrations/migrate-30.sql"),
+        present: "SELECT to_regclass('public.streamers_name_trgm_idx') IS NOT NULL",
+    },
+    Migration {
+        version: 31,
+        name: "migrate-31.sql",
+        sql: include_str!("../migrations/migrate-31.sql"),
+        present: "SELECT EXISTS (SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'dms' AND column_name = 'image')",
+    },
 ];
 
 /// Apply every migration that has not run. The chat process does not call this.

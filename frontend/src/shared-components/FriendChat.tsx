@@ -1,4 +1,4 @@
-import { RiAddLine, RiCloseLine } from '@remixicon/react';
+import { RiAddLine, RiCloseLine, RiImageAddLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type CSSProperties,
@@ -12,8 +12,9 @@ import {
   useState
 } from 'react';
 
-import type { DmLine } from '@/infra/api';
+import { api, type DmLine, messageOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
+import { MAX_CHAT_IMAGES } from '@/infra/atoms/chat-atoms';
 import {
   type Dm,
   dmActiveAtom,
@@ -28,12 +29,15 @@ import {
   pickDm,
   removeDm,
   selectDm,
-  sendDm
+  sendDm,
+  showDmNotice
 } from '@/infra/atoms/dm-atoms';
 import { followingAtom } from '@/infra/atoms/follow-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { type DmStyle, dmStyleAtom, type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
+import { compressChatImage } from '@/infra/picture';
 import { Button } from '@/shared-components/Button';
+import { ChatImages, pictureSrc } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
 import { LinkedText } from '@/shared-components/LinkedText';
 import { panelClassName } from '@/shared-components/Panel';
@@ -372,14 +376,17 @@ interface LineProps {
  * the name is there for a reader alone. `blocks`: the first line of a run wears the writer's
  * face, their name and the time over the words, and the lines after it in the run stand under,
  * the time at the left as the minute turns. The same `<p>` whatever the shape: `data-id`,
- * `data-mine`, the full stamp as the title.
+ * `data-mine`, the full stamp as the title. The pictures on a line stand under its words in
+ * every shape, drawn the room chat's way (`ChatImages`: one as it is, more in a grid, a click
+ * puts one over the page); a line of pictures alone has no words to draw.
  */
 function Line({ line, mine, first, bucket, shape, avatar }: LineProps) {
-  const words = (
+  const words = line.text ? (
     <span className={cn('whitespace-pre-wrap [overflow-wrap:anywhere]', shape !== 'bubbles' && 'text-textSecondary')}>
       <LinkedText text={line.text} />
     </span>
-  );
+  ) : null;
+  const pictures = <ChatImages ids={line.images} />;
   if (shape === 'log') {
     return (
       <p data-id={line.id} data-mine={mine || undefined} title={stamp(line.at)} className="flex items-baseline gap-2 text-sm leading-snug">
@@ -387,6 +394,7 @@ function Line({ line, mine, first, bucket, shape, avatar }: LineProps) {
         <span className="min-w-0 flex-1">
           <span className={cn('mr-1.5 font-semibold', mine && 'text-primaryBlue')}>{line.from}</span>
           {words}
+          {pictures}
         </span>
       </p>
     );
@@ -408,6 +416,7 @@ function Line({ line, mine, first, bucket, shape, avatar }: LineProps) {
             </span>
           )}
           {words}
+          {pictures}
         </span>
       </p>
     );
@@ -422,9 +431,10 @@ function Line({ line, mine, first, bucket, shape, avatar }: LineProps) {
       <GutterClock at={line.at} shown={bucket} className="pt-2.5" />
       <span className={cn('flex min-w-0 flex-1', mine ? 'justify-end' : 'justify-start')}>
         {/* the box: a stroke and a fill, no shadow (no-box-shadow.mdc). yours wears the blue */}
-        <span className={cn('max-w-[85%] border px-2.5 py-1.5', mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary')}>
+        <span className={cn('relative max-w-[85%] border px-2.5 py-1.5', mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary')}>
           <span className="sr-only">{mine ? 'you' : line.from}: </span>
           {words}
+          {pictures}
         </span>
       </span>
     </p>
@@ -436,11 +446,14 @@ function Line({ line, mine, first, bucket, shape, avatar }: LineProps) {
  * friend down its side, dragged by its header, resized from a corner. The lines are the
  * api's: a page on opening a thread, older pages as you scroll up, new ones as they come on
  * the events socket, from either side and from your other devices. A thread keeps its
- * half-typed draft while another tab is shown. The × on the header hides the window and keeps
- * everything; the sidebar's chat button brings it back. With no tab shown, the friends to
- * pick from are where the thread would be, under `no chat` when there are no tabs at all.
- * The lines take the shape the chat tab picked (settings.dmStyle, `Line`): a log, bubbles,
- * or blocks; the log carries it as `data-style`.
+ * half-typed draft, and the pictures picked for its next line, while another tab is shown. The
+ * × on the header hides the window and keeps everything; the sidebar's chat button brings it
+ * back. With no tab shown, the friends to pick from are where the thread would be, under `no
+ * chat` when there are no tabs at all. The lines take the shape the chat tab picked
+ * (settings.dmStyle, `Line`): a log, bubbles, or blocks; the log carries it as `data-style`.
+ * A line may carry pictures, the room chat's way: the picture button beside the box
+ * (`#friend-chat-picture`) picks files, each is shrunk and put up at once and waits in a strip
+ * over the box with its × until the line goes; a line may be pictures alone.
  */
 export function FriendChat() {
   const me = useAtomValue(meAtom);
@@ -454,10 +467,15 @@ export function FriendChat() {
   const myAvatar = useAtomValue(myAvatarVersionAtom);
   const following = useAtomValue(followingAtom);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  /** Each thread's pictures waiting to go with its next line: the ids `POST /api/chat-images` handed back, kept like the draft while another tab is shown. */
+  const [pending, setPending] = useState<Record<string, string[]>>({});
   const [sending, setSending] = useState(false);
+  /** A picked picture is being shrunk and put up: the picture button waits, and so does send, so a line does not go without the picture meant for it. */
+  const [uploading, setUploading] = useState(false);
   const [box, setBox] = useState<Box | null>(parked);
   const ref = useRef<HTMLElement | null>(null);
   const input = useRef<HTMLInputElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
   const log = useRef<HTMLDivElement | null>(null);
   /** Ends the drag in progress: its window listeners go. `null` between drags. */
   const stop = useRef<(() => void) | null>(null);
@@ -479,6 +497,7 @@ export function FriendChat() {
   const thread = name ? threads[name] : undefined;
   const lines = thread?.lines ?? [];
   const draft = (name && drafts[name]) || '';
+  const pictures = (name && pending[name]) || [];
 
   useEffect(() => {
     parked = box;
@@ -532,6 +551,28 @@ export function FriendChat() {
     shownThread.current = name;
   }, [lines.length, name, open]);
 
+  // The newest line stays in view when the log changes shape after the lines did: a picture on a
+  // line finishes loading and the line grows, or the strip of picked pictures opens under the log
+  // and the log shrinks. Either would leave the view a picture short of the bottom. `load` does
+  // not bubble, so it is caught on its way down; the observer sees the log's own box change.
+  useEffect(() => {
+    const el = log.current;
+    if (!el) return;
+    const restick = () => {
+      if (stuck.current) el.scrollTop = el.scrollHeight;
+    };
+    const onLoad = (e: Event) => {
+      if (e.target instanceof HTMLImageElement) restick();
+    };
+    el.addEventListener('load', onLoad, true);
+    const watcher = new ResizeObserver(restick);
+    watcher.observe(el);
+    return () => {
+      el.removeEventListener('load', onLoad, true);
+      watcher.disconnect();
+    };
+  }, [name, open]);
+
   // the window going while a drag is on: its listeners go with it
   useEffect(() => () => stop.current?.(), []);
 
@@ -541,13 +582,53 @@ export function FriendChat() {
     if (name) setDrafts((prev) => ({ ...prev, [name]: text }));
   }
 
+  function setPictures(ids: string[]) {
+    if (name) setPending((prev) => ({ ...prev, [name]: ids }));
+  }
+
+  /**
+   * The files picked for the thread on screen, each shrunk and put up (`compressChatImage`,
+   * `POST /api/chat-images`) and its id kept for the next line; past the cap the rest are left,
+   * with a word under the box. The room chat's `pickPictures` (ChatPanel.tsx).
+   */
+  async function pickPictures(list: FileList | null) {
+    const files = list ? [...list] : [];
+    if (!name || files.length === 0 || uploading) return;
+    const forThread = name;
+    const room = MAX_CHAT_IMAGES - pictures.length;
+    const batch = files.slice(0, Math.max(0, room));
+    if (files.length > room) showDmNotice(`${MAX_CHAT_IMAGES} pictures at most`);
+    if (batch.length === 0) return;
+    setUploading(true);
+    try {
+      for (const file of batch) {
+        const blob = await compressChatImage(file);
+        const saved = await api.uploadChatImage(blob);
+        // into the thread the pick was for, even if another tab is shown by the time the upload lands
+        setPending((prev) => {
+          const have = prev[forThread] ?? [];
+          return have.includes(saved.id) || have.length >= MAX_CHAT_IMAGES ? prev : { ...prev, [forThread]: [...have, saved.id] };
+        });
+      }
+    } catch (err) {
+      showDmNotice(messageOf(err));
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+      input.current?.focus();
+    }
+  }
+
   async function send(e?: FormEvent) {
     e?.preventDefault();
-    if (!name || !draft.trim() || sending) return;
+    if (!name || (!draft.trim() && pictures.length === 0) || sending || uploading) return;
     setSending(true);
-    const sent = await sendDm(name, draft);
+    const sent = await sendDm(name, draft, pictures);
     setSending(false);
-    if (sent) setDraft('');
+    if (sent) {
+      setDraft('');
+      setPictures([]);
+    }
     input.current?.focus();
   }
 
@@ -673,10 +754,48 @@ export function FriendChat() {
               })}
             </div>
             <form onSubmit={(e) => void send(e)} className="border-t border-primaryStroke p-2">
-              <div className="flex items-center gap-2">
+              {/* the pictures going with the next line, each with its × (the room chat's strip, ChatPanel.tsx) */}
+              {pictures.length > 0 && (
+                <div id="friend-chat-picture-preview" className="mb-2 flex flex-wrap gap-2">
+                  {pictures.map((id) => (
+                    <span key={id} className="relative">
+                      <img src={pictureSrc(id)} alt="" className="h-16 w-16 object-cover" />
+                      <button
+                        type="button"
+                        aria-label="remove picture"
+                        className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center bg-black/70 text-white"
+                        onClick={() => setPictures(pictures.filter((have) => have !== id))}
+                      >
+                        <RiCloseLine aria-hidden size={14} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="relative flex items-center gap-2">
                 <label htmlFor="friend-chat-text" className="sr-only">
                   message {name}
                 </label>
+                <button
+                  type="button"
+                  id="friend-chat-picture"
+                  aria-label="picture"
+                  title={pictures.length >= MAX_CHAT_IMAGES ? `${MAX_CHAT_IMAGES} pictures at most` : 'picture'}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center text-textTertiary hover:text-textPrimary disabled:opacity-40"
+                  disabled={uploading || pictures.length >= MAX_CHAT_IMAGES}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <RiImageAddLine size={18} aria-hidden />
+                </button>
+                <input
+                  ref={fileRef}
+                  id="friend-chat-picture-file"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => void pickPictures(e.target.files)}
+                />
                 <input
                   ref={input}
                   id="friend-chat-text"
@@ -688,16 +807,22 @@ export function FriendChat() {
                       hideDms();
                     }
                   }}
-                  placeholder={`message ${name}`}
+                  placeholder={pictures.length > 0 ? 'say something with it, or just send' : `message ${name}`}
                   maxLength={MAX_CHARS + 50}
                   autoComplete="off"
                   className={cn(INPUT, 'py-1.5 text-sm')}
                 />
-                <Button id="friend-chat-send" type="submit" variant="primary" className="px-3 py-1.5 text-sm" disabled={!draft.trim() || left < 0 || sending}>
+                <Button
+                  id="friend-chat-send"
+                  type="submit"
+                  variant="primary"
+                  className="px-3 py-1.5 text-sm"
+                  disabled={(!draft.trim() && pictures.length === 0) || left < 0 || sending || uploading}
+                >
                   send
                 </Button>
               </div>
-              {/* the api's words when a line was not kept (not friends, too long, too fast), and the countdown once it matters */}
+              {/* the api's words when a line was not kept (not friends, too long, too fast) or a picture would not go up, and the countdown once it matters */}
               <div className="mt-1 flex items-center justify-between gap-2 text-xs">
                 <span id="friend-chat-notice" className="min-h-[1em] text-decrease" aria-live="polite">
                   {notice}

@@ -7,14 +7,16 @@
 //! any valid name, claimed or free, and a name with no row gets a bare one so there is an
 //! id to point at, the way a bio does. Counts are public, the list is the login's own.
 //!
-//! `GET /api/search?q=` finds names to follow: every streamers row whose name contains the
-//! letters, the exact one first, then the ones that start with them.
+//! `GET /api/search?q=` finds names to follow: every streamers row whose name starts with the
+//! letters (under three of them) or holds them anywhere (from three), the exact one first,
+//! then the ones that start with them. A trigram index on the name (migrate-30.sql) serves
+//! both shapes once the table outgrows a read of the whole of it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
@@ -23,10 +25,10 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::auth::{self, bump, Me};
+use crate::auth::{self, bump, client_ip, Me};
 use crate::notify;
 use crate::presence::{self, Presence, Status, SEEN_WINDOW_MS};
-use crate::{redis_live, video_live, ApiError, ApiResult, AppState, Name};
+use crate::{live_set, ApiError, ApiResult, AppState, Name};
 
 /// Names one login may follow. More than anyone watches.
 const FOLLOWS_PER_LOGIN: i64 = 500;
@@ -34,7 +36,18 @@ const FOLLOWS_PER_LOGIN: i64 = 500;
 const CHURN_PER_HOUR: i64 = 120;
 const CHURN_WINDOW_SECS: i64 = 3600;
 /// Search answers this many at most: the box is for finding one person, not listing everyone.
+/// The box knows the number (`SEARCH_LIMIT` in api.ts): an answer short of it is every name
+/// the letters find, and more letters are cut from it without asking.
 const SEARCH_LIMIT: i64 = 20;
+/// Letters fewer than this find names that start with them; from this many, names holding
+/// them anywhere. A trigram is three letters, so the index serves both; and `a` alone naming
+/// every row with an a in it was never an answer anyone wanted.
+const SEARCH_ANYWHERE_FROM: usize = 3;
+/// Searches per ip per minute. The box asks once a pause in the typing and keeps what it
+/// heard for half a minute, so a person makes a few dozen; a script walking the names is not
+/// the box.
+const SEARCH_PER_MINUTE: i64 = 180;
+const SEARCH_WINDOW_SECS: i64 = 60;
 /// Home's people: this many rows looked at (accounts first, newest change first), this many shown
 /// after the live ones are taken out and the rest sorted online first.
 const PEOPLE_SCAN: i64 = 300;
@@ -93,21 +106,17 @@ pub(crate) async fn stats(db: &PgPool, name: &str, me: Option<Uuid>) -> Result<S
 
 /// `live` and the presence word of every name in one go. Each name comes with the choice its
 /// row holds, read by the caller's own query (the list already joins `streamers`; nothing reads
-/// it twice). Then video's set once (else the keys) and one pipelined `ZCOUNT` per name, the two
-/// asked at the same time. The rule is presence.rs's; this is the same answer
-/// `GET /api/streamers/:name` gives, n times for the price of one round trip. The list of
-/// direct message threads (dms.rs) draws its faces with the same call.
+/// it twice). Then the live set (`live_set`: video's once, else the keys, kept a second across
+/// the lists) and one pipelined `ZCOUNT` per name, the two asked at the same time. The rule is
+/// presence.rs's; this is the same answer `GET /api/streamers/:name` gives, n times for the
+/// price of one round trip. The list of direct message threads (dms.rs) draws its faces with
+/// the same call.
 pub(crate) async fn words(s: &AppState, people: &[(String, Status)]) -> Result<HashMap<String, (bool, Presence)>, ApiError> {
     let mut out = HashMap::new();
     if people.is_empty() {
         return Ok(out);
     }
-    let live = async {
-        Ok::<HashSet<String>, ApiError>(match video_live(s).await {
-            Some(connected) => connected,
-            None => redis_live(s).await?.into_iter().collect(),
-        })
-    };
+    let live = live_set(s);
     let here = async {
         let mut r = s.redis.clone();
         let floor = presence::now_ms() - SEEN_WINDOW_MS;
@@ -258,33 +267,51 @@ struct SearchQuery {
 }
 
 /// The letters a search may hold: the name rule's, lowercased. Anything else is dropped, so
-/// `Alice!` finds `alice` and nothing is a wildcard (`position`, not `LIKE`, so `_` is a letter).
+/// `Alice!` finds `alice`, and `%` and `\` never reach the pattern (`search_pattern`).
 fn clean_query(raw: &str) -> String {
     raw.trim().to_lowercase().chars().filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_' || *c == '-').take(32).collect()
+}
+
+/// The `LIKE` pattern for a cleaned query: the letters at the start of a name, or anywhere in
+/// it from `SEARCH_ANYWHERE_FROM` letters. `_` is a letter in a name and a wildcard to `LIKE`,
+/// so it is escaped; the trigram index reads both shapes (migrate-30.sql). The query is ascii
+/// (`clean_query`), so its bytes are its letters.
+fn search_pattern(q: &str) -> String {
+    let letters = q.replace('_', "\\_");
+    if q.len() < SEARCH_ANYWHERE_FROM {
+        format!("{letters}%")
+    } else {
+        format!("%{letters}%")
+    }
 }
 
 /// name, verified, avatar, bio, following, status
 type HitRow = (String, bool, Option<i64>, String, bool, String);
 
-/// `GET /api/search?q=ali`: names holding the letters, the exact name first, then the ones that
-/// start with them, accounts before free names, 20 at most. `following` is for the login.
-async fn search(State(s): State<AppState>, Me(me): Me, q: Result<Query<SearchQuery>, QueryRejection>) -> ApiResult {
+/// `GET /api/search?q=ali`: names holding the letters (starting with them, under three), the
+/// exact name first, then the ones that start with them, accounts before free names, 20 at
+/// most. `following` is for the login. 429 past `SEARCH_PER_MINUTE` from one ip.
+async fn search(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, q: Result<Query<SearchQuery>, QueryRejection>) -> ApiResult {
     let Query(q) = q?;
     let q = clean_query(&q.q);
     if q.is_empty() {
         return Ok(Json(json!([])));
     }
+    if bump(&s, &format!("rl:search:ip:{}", client_ip(&headers)), SEARCH_WINDOW_SECS).await? > SEARCH_PER_MINUTE {
+        return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "too many searches. wait a minute"));
+    }
     let rows: Vec<HitRow> = sqlx::query_as(
         "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
                 EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $2 AND f.followed_id = s.id), s.status
          FROM streamers s
-         WHERE position($1 in s.name) > 0
+         WHERE s.name LIKE $4
          ORDER BY s.name = $1 DESC, starts_with(s.name, $1) DESC, (s.password_hash IS NOT NULL) DESC, s.name
          LIMIT $3",
     )
     .bind(&q)
     .bind(me.as_ref().map(|a| a.id))
     .bind(SEARCH_LIMIT)
+    .bind(search_pattern(&q))
     .fetch_all(&s.db)
     .await?;
     let people: Vec<(String, Status)> = rows.iter().map(|r| choice(&r.0, &r.5)).collect();
@@ -443,7 +470,18 @@ mod tests {
         assert_eq!(clean_query(" Ali ce! "), "alice");
         assert_eq!(clean_query("a_b-c"), "a_b-c");
         assert_eq!(clean_query("%"), "");
+        assert_eq!(clean_query("a\\b"), "ab");
         assert_eq!(clean_query(&"x".repeat(40)).len(), 32);
+    }
+
+    #[test]
+    fn few_letters_start_a_name_and_more_are_anywhere_in_it() {
+        assert_eq!(search_pattern("a"), "a%");
+        assert_eq!(search_pattern("al"), "al%");
+        assert_eq!(search_pattern("ali"), "%ali%");
+        // an underscore is a letter in a name, not LIKE's any-one-character
+        assert_eq!(search_pattern("a_"), "a\\_%");
+        assert_eq!(search_pattern("a_b_"), "%a\\_b\\_%");
     }
 
     #[test]
