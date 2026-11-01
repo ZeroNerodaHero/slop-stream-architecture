@@ -114,7 +114,14 @@ export async function setChannelOrder(server: string, order: string[]): Promise<
     await api.setChannelOrder(server, order);
   } catch (err) {
     const current = store.get(roomAtom);
-    if (current && current.name === server) store.set(roomAtom, { ...current, channels: sortChannels(current.channels ?? [], was.map((c) => c.name)) });
+    if (current && current.name === server)
+      store.set(roomAtom, {
+        ...current,
+        channels: sortChannels(
+          current.channels ?? [],
+          was.map((c) => c.name)
+        )
+      });
     throw err;
   }
 }
@@ -275,6 +282,9 @@ function apply(change: GroupChange): void {
       return;
     case 'channel_renamed':
       applyRename(room, change.channel, change.name);
+      return;
+    case 'channel_cooldown':
+      store.set(roomAtom, { ...room, channels: (room.channels ?? []).map((c) => (c.name === change.channel ? { ...c, cooldown: change.cooldown } : c)) });
       return;
     case 'channel_order':
       store.set(roomAtom, { ...room, channels: sortChannels(room.channels ?? [], change.order) });

@@ -411,6 +411,50 @@ function keptTo(room: GroupRoom, channel: string): GroupRole[] {
   return room.roles.filter((role) => (role.channels ?? []).includes(channel));
 }
 
+/**
+ * A channel's cooldown on the channels tab: a clock and the word (`off`, `30s`), which for the
+ * channels power opens the choices as a menu (HoverMenu; a pick puts it, `setChannelCooldown`),
+ * and for anyone else stands as it is, and only while there is one. On the page's list the
+ * clock alone, the word its tooltip (`words`).
+ */
+function CooldownMark({ item, canSet, onPick, words = false }: { item: Channel; canSet: boolean; onPick?: (seconds: number) => void; words?: boolean }) {
+  const seconds = item.cooldown ?? 0;
+  if (words) {
+    if (seconds === 0) return null;
+    const said = `cooldown ${cooldownWords(seconds)}`;
+    return (
+      <Tooltip content={said}>
+        <span role="img" aria-label={said} data-cooldown={seconds} className="flex shrink-0 text-textTertiary">
+          <RiTimeLine aria-hidden size={14} />
+        </span>
+      </Tooltip>
+    );
+  }
+  if (!canSet) {
+    if (seconds === 0) return null;
+    return (
+      <span data-cooldown={seconds} className="flex shrink-0 items-center gap-1 text-xs text-textTertiary">
+        <RiTimeLine aria-hidden size={14} />
+        {cooldownWords(seconds)}
+      </span>
+    );
+  }
+  return (
+    <HoverMenu
+      label={`cooldown of #${item.name}`}
+      items={(COOLDOWNS.includes(seconds) ? COOLDOWNS : [...COOLDOWNS, seconds].sort((a, b) => a - b)).map((s) => ({ key: String(s), label: cooldownWords(s) }))}
+      onPick={(key) => onPick?.(Number(key))}
+      className={cn(
+        'flex shrink-0 items-center gap-1 text-xs focus-visible:text-primaryBlue focus-visible:outline-none',
+        seconds > 0 ? 'text-textSecondary hover:text-textPrimary' : 'text-textTertiary hover:text-textPrimary'
+      )}
+    >
+      <RiTimeLine aria-hidden size={14} />
+      <span data-cooldown={seconds}>{cooldownWords(seconds)}</span>
+    </HoverMenu>
+  );
+}
+
 /** The mark on a channel kept to roles: a lock, the roles' names its tooltip. Nothing on a channel that is everyone's. */
 function KeptMark({ roles }: { roles: GroupRole[] }) {
   if (roles.length === 0) return null;
@@ -996,8 +1040,9 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
                 </Link>
               )}
               <KeptMark roles={keptTo(room, item.name)} />
+              <CooldownMark item={item} canSet={false} words />
               {canMute && (
-                <Tooltip content={isMuted ? 'muted: nothing from it reaches your bell. click to unmute' : 'mute: its lines stop reaching your bell'}>
+                <Tooltip content={isMuted ? 'unmute' : 'mute'}>
                   <button
                     id={`channel-mute-${item.name}`}
                     type="button"
@@ -2198,6 +2243,7 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
               {/* the api's rename rule is delete's: who made it, or the channels power, and never general */}
               <ChannelName item={item} channels={channels} editable={item.can_delete} onRename={(to) => void run(() => renameChannel(server, name, to))} />
               <KeptMark roles={keptTo(room, name)} />
+              <CooldownMark item={item} canSet={orders} onPick={(seconds) => void run(() => api.setChannelCooldown(server, name, seconds))} />
               {item.can_delete && (
                 <button id={`channel-remove-${name}`} type="button" className="shrink-0 text-sm text-decrease" onClick={() => setSure(name)}>
                   delete
@@ -2276,11 +2322,11 @@ function roleWords(role: GroupRole): string {
 /**
  * The roles, each a row: the name in its colour, the powers it carries and the channels kept
  * to it. A row within reach is the click: it opens in place as the name, the colour, the
- * powers and the channels, with save, cancel and delete; one is open at a time. The channels
- * (docs/groups.md): every channel but `general` as a box; ticked, the channel is kept to this
- * role, and seen by its holders, the roles that also tick it, the owners and the channels
- * power, and by nobody else; a channel no role ticks is everyone's. Beside each is who sees
- * it as the draft stands. `add role` makes one right away, called `new role` (numbered when
+ * powers, the cooldown and the channels, with save, cancel and delete; one is open at a time.
+ * The channels (docs/groups.md): every channel but `general` as a word, pressed when the
+ * channel is kept to this role, and then seen by its holders, the roles that also keep it, the
+ * owners and the channels power, and by nobody else; a channel no role keeps is everyone's.
+ * Who sees it as the draft stands is the word's tooltip. `add role` makes one right away, called `new role` (numbered when
  * that is taken), and opens it with the name selected, so what is typed next is its name. A
  * role is known by its id, not its name: a rename is a save like any other, and the open row
  * stays on its role whatever the socket says of it meanwhile; a role deleted under it closes it.
@@ -2544,40 +2590,30 @@ function RolesSection({ server, room, run }: ManageProps) {
                         {cooldownWords(seconds)}
                       </button>
                     ))}
-                    <span className="text-xs text-textTertiary">between lines, for whoever holds this role. owners wait for nobody.</span>
                   </div>
-                  <div className="flex flex-col gap-1.5">
+                  {/* the channels kept to this role: each a word, pressed (blue) when kept; who sees it as the draft stands is the tooltip */}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                     <span className="text-sm font-semibold text-textSecondary">channels</span>
                     {keepable.length === 0 ? (
-                      <p className="text-xs text-textTertiary">only #general so far, and general is everyone&apos;s. add a channel to keep one to a role.</p>
+                      <span className="text-xs text-textTertiary">only #general so far</span>
                     ) : (
-                      <>
-                        <p className="text-xs text-textTertiary">
-                          tick a channel to keep it to this role: its holders see it, with the roles that also tick it, the owners and the channels power, and nobody
-                          else. a channel no role ticks is everyone&apos;s.
-                        </p>
-                        <div className="flex flex-wrap gap-x-4 gap-y-1">
-                          {keepable.map((item) => (
-                            <label key={item.name} className="flex items-center gap-2">
-                              <input
-                                id={`role-channel-${item.name}`}
-                                type="checkbox"
-                                checked={open.channels.includes(item.name)}
-                                onChange={(e) =>
-                                  setDraft({
-                                    ...open,
-                                    channels: e.target.checked ? [...open.channels, item.name] : open.channels.filter((name) => name !== item.name)
-                                  })
-                                }
-                              />
+                      keepable.map((item) => {
+                        const kept = open.channels.includes(item.name);
+                        return (
+                          <Tooltip key={item.name} content={seers(item.name)}>
+                            <button
+                              id={`role-channel-${item.name}`}
+                              type="button"
+                              aria-pressed={kept}
+                              aria-label={`#${item.name}: ${seers(item.name)}`}
+                              onClick={() => setDraft({ ...open, channels: kept ? open.channels.filter((name) => name !== item.name) : [...open.channels, item.name] })}
+                              className={cn('text-sm font-semibold', kept ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
+                            >
                               #{item.name}
-                              <span id={`role-channel-${item.name}-who`} className="text-xs text-textTertiary">
-                                {seers(item.name)}
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-                      </>
+                            </button>
+                          </Tooltip>
+                        );
+                      })
                     )}
                   </div>
                   <div className="flex items-center gap-3">

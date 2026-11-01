@@ -830,38 +830,48 @@ impl From<&'static str> for Refused {
 const TIMED_OUT: &str = "timed out";
 /// The words for a login whose role has a cooldown, with the ms until the next line may go.
 const COOLDOWN: &str = "cooldown";
+/// The words for a channel with a cooldown, with the ms until this login's next line in it may go.
+const CHANNEL_COOLDOWN: &str = "channel cooldown";
 
-/// A member's standing in a server, for one line: whether they own it, the ms left on a
-/// timeout that is running, and the longest cooldown of their roles, in seconds (0: none).
-/// None: not a member.
-type Standing = (bool, Option<i64>, i32);
+/// A member's standing in a server, for one line: whether they own it, whether they hold the
+/// channels power, the ms left on a timeout that is running, the longest cooldown of their
+/// roles and the channel's own, in seconds (0: none). None: not a member.
+type Standing = (bool, bool, Option<i64>, i32, i32);
 
 /// An identified socket's line into `room`: in a server's channel only a member may speak, one
-/// who is not timed out (`timeouts`, the kick power's), and whose roles' cooldown has passed
-/// since their last line in the server (the longest cooldown of their roles; an owner and a
-/// site admin wait for nobody; the wait is a key in redis, `cd:<server>:<account>`, that lives
-/// the cooldown long); the pictures must be ones the api kept; then the line and the room's ttl
-/// in one atomic round trip (a room whose first line landed but whose expire did not would
-/// otherwise live forever), and the row for history on its own task. `Err` is what the socket
-/// hears, and the line is not kept.
+/// who is not timed out (`timeouts`, the kick power's), and whose cooldowns have passed: their
+/// roles' (the longest; a key in redis, `cd:<server>:<account>`, alive the cooldown long since
+/// their last line in the server) and the channel's own (`cdc:<room>:<account>`, since their
+/// last line in the channel); the line waits for whichever is longer. An owner and a site
+/// admin wait for nobody; the channels power, which sets a channel's cooldown, is not held by
+/// one, but waits on its roles' like anyone. The pictures must be ones the api kept;
+/// then the line and the room's ttl in one atomic round trip (a room whose first line landed
+/// but whose expire did not would otherwise live forever), and the row for history on its own
+/// task. `Err` is what the socket hears, and the line is not kept.
 async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: &str, images: &[String]) -> Result<(), Refused> {
-    let mut cooldown: Option<(String, i32)> = None;
+    // the cooldown keys this line sets, with their life in ms and the words when one is still alive
+    let mut cooldowns: Vec<(String, i64, &'static str)> = Vec::new();
     // a channel is open to read. talking is for people in the server.
     if let Some(server) = server {
         let Some(id) = w.user_id else { return Err("join the server first".into()) };
+        let channel = room.strip_prefix(server).and_then(|rest| rest.strip_prefix('/')).unwrap_or("");
         let standing: Result<Option<Standing>, sqlx::Error> = sqlx::query_as(
             "SELECT m.owner,
+                    EXISTS (SELECT 1 FROM role_members rm JOIN roles r ON r.id = rm.role_id
+                             WHERE rm.user_id = $1 AND r.group_name = $2 AND (r.perms & 4) <> 0),
                     (SELECT (EXTRACT(EPOCH FROM (t.until - now())) * 1000)::bigint FROM timeouts t
                       WHERE t.group_name = $2 AND t.user_id = $1 AND t.until > now()),
                     (SELECT COALESCE(max(r.cooldown), 0) FROM role_members rm JOIN roles r ON r.id = rm.role_id
-                      WHERE rm.user_id = $1 AND r.group_name = $2)
+                      WHERE rm.user_id = $1 AND r.group_name = $2),
+                    COALESCE((SELECT c.cooldown FROM channels c WHERE c.server = $2 AND c.name = $3), 0)
              FROM memberships m WHERE m.user_id = $1 AND m.group_name = $2",
         )
         .bind(id)
         .bind(server)
+        .bind(channel)
         .fetch_optional(&s.db)
         .await;
-        let (owner, timed_out, secs) = match standing {
+        let (owner, manages, timed_out, role_secs, channel_secs) = match standing {
             Ok(Some(standing)) => standing,
             Ok(None) => return Err("join the server first".into()),
             Err(e) => {
@@ -872,27 +882,43 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
         if let Some(ms) = timed_out {
             return Err(Refused::Wait(TIMED_OUT, ms.max(1) as u64));
         }
-        if secs > 0 && !owner && !s.is_admin(Some(w)) {
-            cooldown = Some((format!("cd:{server}:{id}"), secs));
+        // an owner and a site admin wait for nobody; the channels power, which sets a channel's cooldown, is not held by it
+        let free = owner || s.is_admin(Some(w));
+        if role_secs > 0 && !free {
+            cooldowns.push((format!("cd:{server}:{id}"), i64::from(role_secs) * 1000, COOLDOWN));
+        }
+        if channel_secs > 0 && !free && !manages {
+            cooldowns.push((format!("cdc:{room}:{id}"), i64::from(channel_secs) * 1000, CHANNEL_COOLDOWN));
         }
     }
     pictures_exist(&s.db, room, images).await?;
     // the face as the row has it this moment, so the line fanned out now wears the right one
     let avatar = face_now(&s.db, room, w).await.map(|v| v.to_string());
     let mut r = s.redis.clone();
-    // the cooldown: the key set for this line, unless the last line's is still there, in which case its time left is the wait
-    if let Some((key, secs)) = &cooldown {
-        let set: Result<Option<String>, _> = redis::cmd("SET").arg(key).arg("1").arg("PX").arg(i64::from(*secs) * 1000).arg("NX").query_async(&mut r).await;
-        match set {
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                let left: i64 = redis::cmd("PTTL").arg(key).query_async(&mut r).await.unwrap_or(1000);
-                return Err(Refused::Wait(COOLDOWN, left.max(1) as u64));
-            }
+    // the cooldowns: a key still alive from the last line is the wait (the longest, when both are);
+    // none alive, the keys are set for this line, each to live its cooldown long
+    if !cooldowns.is_empty() {
+        let mut look = redis::pipe();
+        for (key, _, _) in &cooldowns {
+            look.cmd("PTTL").arg(key);
+        }
+        let left: Vec<i64> = match look.query_async(&mut r).await {
+            Ok(left) => left,
             Err(e) => {
                 log::warn!("{room}: cooldown: {e}");
                 return Err("chat is down, try again".into());
             }
+        };
+        if let Some((ms, words)) = cooldowns.iter().zip(&left).filter(|(_, ms)| **ms > 0).map(|((_, _, words), ms)| (*ms, *words)).max() {
+            return Err(Refused::Wait(words, ms as u64));
+        }
+        let mut set = redis::pipe();
+        for (key, ms, _) in &cooldowns {
+            set.cmd("SET").arg(key).arg("1").arg("PX").arg(*ms).ignore();
+        }
+        if let Err(e) = set.query_async::<()>(&mut r).await {
+            log::warn!("{room}: cooldown: {e}");
+            return Err("chat is down, try again".into());
         }
     }
     // the badges as json, the picture's version and the account as text, and no field at

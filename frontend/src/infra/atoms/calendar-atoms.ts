@@ -1,16 +1,17 @@
 /**
  * The calendar on the watch page (docs/calendar.md): a week of the name's sessions from
  * `GET /api/streamers/:name/sessions?from=&to=`, as rows; `Calendar.tsx` turns them into blocks
- * in the viewer's zone. `page` 0 is the week ending today, 1 the week before, and so on.
- * The rows are asked again when the stream on screen starts or ends, so the open block appears
- * and closes with no reload, and when the strip is opened on another name or another page.
+ * in the viewer's zone. A week runs monday to sunday: `page` 0 is the one with today in it, 1
+ * the week before, and so on. The rows are asked again when the stream on screen starts or
+ * ends, so the open block appears and closes with no reload, and when the grid is opened on
+ * another name or another page.
  */
 
 import { atom } from 'jotai';
 
 import { api, type SessionRow } from '@/infra/api';
 import { watchNameAtom, watchPhaseAtom, type WatchPhase } from '@/infra/atoms/watch-atoms';
-import { addDays, DAYS, localMidnight } from '@/infra/calendar';
+import { addDays, DAYS, mondayOf } from '@/infra/calendar';
 import { store } from '@/infra/store';
 
 export type CalendarPhase = 'loading' | 'ready' | 'failed';
@@ -20,14 +21,15 @@ export interface CalendarState {
   page: number;
   rows: SessionRow[];
   phase: CalendarPhase;
+  /** When the rows landed, ms. The grid's clock is at least this, so a block that opened since its minute tick is drawn from its start. */
+  at: number;
 }
 
-export const calendarAtom = atom<CalendarState>({ name: '', page: 0, rows: [], phase: 'loading' });
+export const calendarAtom = atom<CalendarState>({ name: '', page: 0, rows: [], phase: 'loading', at: 0 });
 
-/** The week `page` names: `[first, first + 7 days)`, `first` a local midnight. */
+/** The week `page` names: monday to sunday, `[first, first + 7 days)`, `first` the monday's local midnight. */
 export function rangeOf(page: number, now: Date): { first: Date; last: Date; from: Date; to: Date } {
-  const today = localMidnight(now);
-  const first = addDays(today, -(DAYS - 1) - page * DAYS);
+  const first = addDays(mondayOf(now), -page * DAYS);
   return { first, last: addDays(first, DAYS - 1), from: first, to: addDays(first, DAYS) };
 }
 
@@ -38,15 +40,16 @@ export async function loadCalendar(name: string, page: number): Promise<void> {
   const mine = ++asking;
   const before = store.get(calendarAtom);
   // a page turn keeps the old rows on screen while the new ones come; a new name starts blank
-  store.set(calendarAtom, { name, page, rows: before.name === name ? before.rows : [], phase: 'loading' });
+  store.set(calendarAtom, { name, page, rows: before.name === name ? before.rows : [], phase: 'loading', at: before.at });
   const { from, to } = rangeOf(page, new Date());
   try {
     const rows = await api.sessions(name, from, to);
     if (mine !== asking) return;
-    store.set(calendarAtom, { name, page, rows, phase: 'ready' });
+    store.set(calendarAtom, { name, page, rows, phase: 'ready', at: Date.now() });
   } catch {
     if (mine !== asking) return;
-    store.set(calendarAtom, { name, page, rows: store.get(calendarAtom).rows, phase: 'failed' });
+    const was = store.get(calendarAtom);
+    store.set(calendarAtom, { name, page, rows: was.rows, phase: 'failed', at: was.at });
   }
 }
 

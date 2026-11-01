@@ -206,6 +206,8 @@ export interface Channel {
   can_delete: boolean;
   /** Who made it, as they are now. Null for `general`, and absent on an older api. A room keeps `can_delete` right as channels come and go. */
   made_by?: string | null;
+  /** Seconds a member waits between their lines here (docs/groups.md). 0 or absent: none. The owners and the channels power wait for nobody. */
+  cooldown?: number;
 }
 
 /** Channels on one server, `general` included. Matches `CHANNELS_PER_SERVER` in the api. */
@@ -559,6 +561,9 @@ export const api = {
     request<Channel>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`, { name }),
   /** Who made the channel, or someone who may manage channels. `general` stays. */
   deleteChannel: (server: string, channel: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`),
+  /** A member waits `seconds` (0 to 3600; 0 none) between their lines in the channel. The channels power. */
+  setChannelCooldown: (server: string, channel: string, seconds: number) =>
+    request<{ cooldown: number }>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/cooldown`, { seconds }),
   /** No inbox row for this channel's lines from now on, for this login (docs/notifications.md). 204, also when already muted. */
   muteChannel: (server: string, channel: string) => request<null>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/mute`),
   /** The channel's lines reach the bell again. 204, also when it was not muted. */
@@ -569,8 +574,7 @@ export const api = {
   /** Appearance, from the manage dialog. A private group stays off the lists. */
   setGroupPublic: (name: string, isPublic: boolean) => request<{ public: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/access`, { public: isPublic }),
   /** Appearance. Owners stay first; this is the order after them. */
-  setMemberOrder: (name: string, order: 'name' | 'newest' | 'oldest') =>
-    request<{ order: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/order`, { order }),
+  setMemberOrder: (name: string, order: 'name' | 'newest' | 'oldest') => request<{ order: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/order`, { order }),
   /** An owner (or a site admin), 403 for anyone else. The crop dialog made the jpeg. There is no remove: a group with a picture keeps one. */
   saveGroupIcon: (name: string, jpeg: Blob) => request<{ icon: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/icon`, jpeg),
   saveGroupBanner: (name: string, jpeg: Blob) => request<{ banner: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/banner`, jpeg),
@@ -635,10 +639,8 @@ export const api = {
   /** The status, one line beside the name: runs of whitespace become one space, 500 characters at most. `bio` on the wire. */
   saveBio: (name: string, bio: string) => request<{ name: string; bio: string }>('PUT', `/api/streamers/${name}`, { bio }),
   /** The page under that: `{ blocks: [{ type, id, x, y, z, w, h, r?, font?, size?, color?, bg?, stroke?, strokeColor?, align?, html? }] }`. Text html is written to the bucket. A line, a box, and a border have no file. */
-  aboutPage: (name: string) =>
-    request<{ blocks: PageWire[] }>('GET', `/api/streamers/${encodeURIComponent(name)}/about-page`),
-  saveAboutPage: (name: string, blocks: PageWire[]) =>
-    request<{ blocks: PageWire[] }>('PUT', `/api/streamers/${encodeURIComponent(name)}/about-page`, { blocks }),
+  aboutPage: (name: string) => request<{ blocks: PageWire[] }>('GET', `/api/streamers/${encodeURIComponent(name)}/about-page`),
+  saveAboutPage: (name: string, blocks: PageWire[]) => request<{ blocks: PageWire[] }>('PUT', `/api/streamers/${encodeURIComponent(name)}/about-page`, { blocks }),
   /** A picture, a clip, or a sound for that page. The bytes go to the bucket. `type` is `image`, `video`, or `sound`. */
   saveAboutFile: (name: string, type: 'image' | 'video' | 'sound', file: Blob) =>
     request<{ id: number; type: string; src: string }>('PUT', `/api/streamers/${encodeURIComponent(name)}/about-file?type=${type}`, file),

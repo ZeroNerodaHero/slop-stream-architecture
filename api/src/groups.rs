@@ -59,6 +59,8 @@ const MESSAGES_PER_CHANNEL: usize = 100;
 pub(crate) const GENERAL: &str = "general";
 /// Words the chat history routes already use, so a channel cannot be one of them.
 const RESERVED_CHANNELS: &[&str] = &["before", "search", "by", "around"];
+/// A channel's cooldown is seconds, none to an hour, like a role's.
+const MAX_CHANNEL_COOLDOWN_SECS: i32 = 3600;
 
 /// What a chat line carries for each group its speaker is in.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -548,6 +550,8 @@ pub(crate) struct ChannelView {
     /// Who made it, by the name they have now. Null for `general` (made with the group) and
     /// for a maker whose account is gone. A room keeps `can_delete` right as the facts come.
     made_by: Option<String>,
+    /// Seconds a member waits between their lines here (docs/groups.md). 0: none.
+    cooldown: i32,
 }
 
 /// The channels of one server in their order (`position`, as the channels power last put them;
@@ -561,19 +565,19 @@ pub(crate) async fn channels_of(s: &AppState, server: &str, user: Option<Uuid>, 
         None => false,
     };
     let sql = format!(
-        "SELECT c.name, c.about, c.created_by_id, maker.name FROM channels c
+        "SELECT c.name, c.about, c.created_by_id, maker.name, c.cooldown FROM channels c
          LEFT JOIN streamers maker ON maker.id = c.created_by_id
          WHERE c.server = $1 AND {} ORDER BY c.position, c.created_at, c.name",
         sees_sql("$2", "$3")
     );
-    let rows: Vec<(String, String, Option<Uuid>, Option<String>)> = sqlx::query_as(&sql).bind(server).bind(user).bind(admin).fetch_all(&s.db).await?;
+    let rows: Vec<(String, String, Option<Uuid>, Option<String>, i32)> = sqlx::query_as(&sql).bind(server).bind(user).bind(admin).fetch_all(&s.db).await?;
     Ok(rows
         .into_iter()
-        .map(|(name, about, made_by_id, made_by)| {
+        .map(|(name, about, made_by_id, made_by, cooldown)| {
             let mine = user.is_some() && made_by_id == user;
             let can_delete = name != GENERAL && (mine || may_manage || admin);
             // `general` was made with the group: nobody's channel in particular
-            ChannelView { can_delete, made_by: made_by.filter(|_| name != GENERAL), name, about }
+            ChannelView { can_delete, made_by: made_by.filter(|_| name != GENERAL), name, about, cooldown }
         })
         .collect())
 }
@@ -640,6 +644,53 @@ async fn live_members(db: &PgPool, names: &[String]) -> Result<HashMap<String, V
     Ok(by_group)
 }
 
+/// One row of the explorer's query: a server, and one of its channels (none for a server
+/// without one this login sees). By column name: more columns than a tuple takes.
+struct ExploreRow {
+    name: String,
+    badge: String,
+    color: String,
+    about: String,
+    members: i64,
+    mine: bool,
+    public: bool,
+    title: Option<String>,
+    tag: Option<i32>,
+    icon: Option<i64>,
+    banner: Option<i64>,
+    can_channels: bool,
+    channel: Option<String>,
+    channel_about: Option<String>,
+    can_delete: bool,
+    made_by: Option<String>,
+    cooldown: Option<i32>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for ExploreRow {
+    fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        use sqlx::Row;
+        Ok(Self {
+            name: row.try_get("name")?,
+            badge: row.try_get("badge")?,
+            color: row.try_get("color")?,
+            about: row.try_get("about")?,
+            members: row.try_get("members")?,
+            mine: row.try_get("mine")?,
+            public: row.try_get("public")?,
+            title: row.try_get("title")?,
+            tag: row.try_get("tag")?,
+            icon: row.try_get("icon")?,
+            banner: row.try_get("banner")?,
+            can_channels: row.try_get("can_channels")?,
+            channel: row.try_get("channel")?,
+            channel_about: row.try_get("channel_about")?,
+            can_delete: row.try_get("can_delete")?,
+            made_by: row.try_get("made_by")?,
+            cooldown: row.try_get("cooldown")?,
+        })
+    }
+}
+
 /// Someone live first, then the order the rows came in (oldest server first).
 fn live_first(mut servers: Vec<ServerView>) -> Vec<ServerView> {
     servers.sort_by(|a, b| a.live.is_empty().cmp(&b.live.is_empty()));
@@ -658,15 +709,14 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let mut living = live_members(&s.db, &live_names(&s).await?).await?;
     // the groups this login owns: up to the cap, the set so the page counts them
     let owned: Vec<String> = sqlx::query_scalar("SELECT group_name FROM memberships WHERE user_id = $1 AND owner").bind(user).fetch_all(&s.db).await?;
-    // name, badge, color, about, members, mine, public, title, tag, icon, banner,
-    // can add a channel, channel, channel about, can delete, channel maker
+    // one row per server and channel (a server without channels is one row with the channel columns null)
     let sql = format!(
         "SELECT g.name, g.badge, g.color, g.about,
-                (SELECT count(*) FROM memberships m WHERE m.group_name = g.name),
-                EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1),
+                (SELECT count(*) FROM memberships m WHERE m.group_name = g.name) AS members,
+                EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1) AS mine,
                 g.public, g.title, g.tag,
-                (EXTRACT(EPOCH FROM g.icon_at))::bigint,
-                (EXTRACT(EPOCH FROM g.banner_at))::bigint,
+                (EXTRACT(EPOCH FROM g.icon_at))::bigint AS icon,
+                (EXTRACT(EPOCH FROM g.banner_at))::bigint AS banner,
                 (
                     EXISTS (SELECT 1 FROM memberships om WHERE om.group_name = g.name AND om.user_id = $1 AND om.owner)
                     OR $2
@@ -674,8 +724,8 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
                         SELECT 1 FROM role_members rm JOIN roles r ON r.id = rm.role_id
                         WHERE r.group_name = g.name AND rm.user_id = $1 AND (r.perms & 4) <> 0
                     )
-                ),
-                c.name, c.about,
+                ) AS can_channels,
+                c.name AS channel, c.about AS channel_about,
                 COALESCE(c.name IS NOT NULL AND c.name <> 'general' AND (
                     c.created_by_id = $1 OR $2
                     OR EXISTS (SELECT 1 FROM memberships om WHERE om.group_name = g.name AND om.user_id = $1 AND om.owner)
@@ -683,8 +733,8 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
                         SELECT 1 FROM role_members rm JOIN roles r ON r.id = rm.role_id
                         WHERE r.group_name = g.name AND rm.user_id = $1 AND (r.perms & 4) <> 0
                     )
-                ), false),
-                cm.name
+                ), false) AS can_delete,
+                cm.name AS made_by, c.cooldown
          FROM groups g
          LEFT JOIN channels c ON c.server = g.name AND {}
          LEFT JOIN streamers cm ON cm.id = c.created_by_id
@@ -693,19 +743,39 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
          ORDER BY g.created_at, g.name, c.position NULLS LAST, c.created_at, c.name",
         sees_sql("$1", "$2")
     );
-    #[allow(clippy::type_complexity)]
-    let rows: Vec<(String, String, String, String, i64, bool, bool, Option<String>, Option<i32>, Option<i64>, Option<i64>, bool, Option<String>, Option<String>, bool, Option<String>)> =
-        sqlx::query_as(&sql).bind(user).bind(admin).bind(BOT_GROUP).fetch_all(&s.db).await?;
+    let rows: Vec<ExploreRow> = sqlx::query_as(&sql).bind(user).bind(admin).bind(BOT_GROUP).fetch_all(&s.db).await?;
     let mut servers: Vec<ServerView> = Vec::new();
-    for (name, badge, color, about, members, mine, public, title, tag, icon, banner, can_channels, channel, channel_about, can_delete, made_by) in rows {
-        if servers.last().is_none_or(|server| server.name != name) {
-            let live = living.remove(&name).unwrap_or_default();
-            let owner = owned.contains(&name);
-            servers.push(ServerView { name, badge, color, about, members, mine, owner, public, title, tag, icon, banner, can_channels, live, channels: Vec::new() });
+    for row in rows {
+        if servers.last().is_none_or(|server| server.name != row.name) {
+            let live = living.remove(&row.name).unwrap_or_default();
+            let owner = owned.contains(&row.name);
+            servers.push(ServerView {
+                name: row.name,
+                badge: row.badge,
+                color: row.color,
+                about: row.about,
+                members: row.members,
+                mine: row.mine,
+                owner,
+                public: row.public,
+                title: row.title,
+                tag: row.tag,
+                icon: row.icon,
+                banner: row.banner,
+                can_channels: row.can_channels,
+                live,
+                channels: Vec::new()
+            });
         }
-        if let Some(name) = channel {
-            let made_by = made_by.filter(|_| name != GENERAL);
-            servers.last_mut().unwrap().channels.push(ChannelView { name, about: channel_about.unwrap_or_default(), can_delete, made_by });
+        if let Some(name) = row.channel {
+            let made_by = row.made_by.filter(|_| name != GENERAL);
+            servers.last_mut().unwrap().channels.push(ChannelView {
+                name,
+                about: row.channel_about.unwrap_or_default(),
+                can_delete: row.can_delete,
+                made_by,
+                cooldown: row.cooldown.unwrap_or(0)
+            });
         }
     }
     let (yours, discover): (Vec<ServerView>, Vec<ServerView>) = servers.into_iter().partition(|server| server.mine);
@@ -760,8 +830,45 @@ async fn create_channel(
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     }
     log::info!("{}: added #{channel} to {server}", who.name);
-    tell(&s, &server, "channel", json!({ "channel": { "name": channel, "about": about, "made_by": who.name } })).await;
-    Ok((StatusCode::CREATED, Json(json!({ "name": channel, "about": about, "can_delete": channel != GENERAL, "made_by": who.name }))))
+    tell(&s, &server, "channel", json!({ "channel": { "name": channel, "about": about, "made_by": who.name, "cooldown": 0 } })).await;
+    Ok((StatusCode::CREATED, Json(json!({ "name": channel, "about": about, "can_delete": channel != GENERAL, "made_by": who.name, "cooldown": 0 }))))
+}
+
+#[derive(Deserialize)]
+struct ChannelCooldown {
+    seconds: i32,
+}
+
+/// `PUT /api/groups/:group/channels/:channel/cooldown` `{ seconds }`: a member waits that long
+/// between their lines in this channel (docs/groups.md), 0 (off) to an hour; beside a role's
+/// cooldown, the line waits for whichever is longer, and the owners, the channels power and a
+/// site admin wait for nobody. The channels power, and a member. → `{ cooldown }`, and a
+/// `channel_cooldown` fact (`channel`, `cooldown`) to every room open.
+async fn set_channel_cooldown(
+    State(s): State<AppState>,
+    Path((group, channel)): Path<(String, String)>,
+    Me(me): Me,
+    body: Result<Json<ChannelCooldown>, JsonRejection>,
+) -> ApiResult {
+    let who = me.ok_or_else(not_logged_in)?;
+    let Json(body) = body?;
+    let (server, channel) = channel_names(&group, &channel)?;
+    if !(0..=MAX_CHANNEL_COOLDOWN_SECS).contains(&body.seconds) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, format!("cooldown: 0 to {MAX_CHANNEL_COOLDOWN_SECS} seconds")));
+    }
+    if !member(&s.db, who.id, &server).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "join the server first"));
+    }
+    if !crate::group_mod::allows(&s, who.id, &server, crate::group_mod::CHANNELS).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "you can't set a channel's cooldown"));
+    }
+    let done = sqlx::query("UPDATE channels SET cooldown = $3 WHERE server = $1 AND name = $2").bind(&server).bind(&channel).bind(body.seconds).execute(&s.db).await?;
+    if done.rows_affected() == 0 {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel"));
+    }
+    log::info!("{}: the cooldown of #{channel} in {server} is {}s", who.name, body.seconds);
+    tell(&s, &server, "channel_cooldown", json!({ "channel": channel, "cooldown": body.seconds })).await;
+    Ok(Json(json!({ "cooldown": body.seconds })))
 }
 
 #[derive(Deserialize)]
@@ -1042,6 +1149,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}/leave", post(leave))
         .route("/api/groups/{group}/channels", post(create_channel).put(reorder_channels))
         .route("/api/groups/{group}/channels/{channel}", put(rename_channel).delete(delete_channel))
+        .route("/api/groups/{group}/channels/{channel}/cooldown", put(set_channel_cooldown))
         .route("/api/groups/{group}/channels/{channel}/mute", put(mute_channel).delete(unmute_channel))
         .route("/api/groups/{group}/channels/{channel}/read", put(read_channel))
         .route("/api/groups/{group}/messages", get(messages))

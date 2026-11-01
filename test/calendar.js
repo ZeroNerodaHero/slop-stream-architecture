@@ -3,8 +3,8 @@
 // a go-live opens a block the watcher sees live and growing, a stop closes it with `ended_by: stop`
 // and the heartbeat's time on the row, a connection that drops (the tab goes offline and away, no
 // stop) is closed by video within a beat of the last heartbeat and the two sessions a minute apart
-// draw as one block with a mark at the drop, the strip pages a week back and forward, an
-// account's rows are its own. Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node calendar.js
+// draw as one block as long as both and the gap, the grid is monday to sunday and pages a week
+// back and forward, an account's rows are its own. Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node calendar.js
 const { chromium, request } = require('playwright');
 const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
 const RUN = Date.now().toString(36).slice(-5);
@@ -97,14 +97,16 @@ const iso = (ms) => new Date(ms).toISOString();
     return `${list.length} row(s) without a range`;
   });
 
-  await step(`watcher: /watch/${NAME} offline has the about tab open and a calendar tab that loads the strip`, async () => {
+  await step(`watcher: /watch/${NAME} offline has the about tab open and a calendar tab that loads the grid, monday first`, async () => {
     await w.goto(`${BASE}/watch/${NAME}`, { waitUntil: 'domcontentloaded' });
     await w.waitForSelector('#tab-about[aria-selected="true"]', { timeout: 15000 });
-    expect((await w.$$('#calendar')).length === 0, 'the strip is on the page before its tab is opened');
+    expect((await w.$$('#calendar')).length === 0, 'the grid is on the page before its tab is opened');
     await w.click('#tab-calendar');
     await w.waitForSelector('#calendar[data-phase="ready"]', { timeout: 10000 });
-    const rows = await w.$$eval('#calendar-strip > div.grid', (els) => els.length);
-    expect(rows === 7, `${rows} day rows, want 7`);
+    const days = await w.$$eval('#calendar-strip [data-day]', (els) => els.length);
+    expect(days === 7, `${days} day columns, want 7`);
+    const heads = await w.$$eval('#calendar-strip [data-day-head]', (els) => els.map((e) => e.textContent.trim()));
+    expect(heads.length === 7 && /^mon/.test(heads[0]) && /^sun/.test(heads[6]), `the heads read ${JSON.stringify(heads)}, want monday to sunday`);
     const usually = (await w.textContent('#calendar-usually')).trim();
     expect(/^(streamed|has not streamed this week)/.test(usually), `the line reads "${usually}"`);
     expect(await w.$eval('#calendar-forward', (b) => b.disabled), 'forward is enabled on the current week');
@@ -124,26 +126,34 @@ const iso = (ms) => new Date(ms).toISOString();
     return `${before} ↔ ${after}`;
   });
 
-  await step(`go live as ${NAME}: an open row on the api, a live block on the watcher's strip, growing`, async () => {
+  /** the two rows of this run's stream: the one stop closes, and the one the drop closes seconds later; one block between them */
+  let stopped = null;
+  let dropped = null;
+
+  await step(`go live as ${NAME}: an open row on the api, a live block on the watcher's grid, growing`, async () => {
     await goLive(a);
     const open = await pollUntil(async () => openRow(await today(NAME)), (r) => !!r, { timeout: 10000, label: 'an open row' });
     expect(open.ended_by === null, `an open row says ended_by ${open.ended_by}`);
-    // the watcher plays on the pushed `live` (docs/status.md); the strip asks again on that same
+    // the watcher plays on the pushed `live` (docs/status.md); the grid asks again on that same
     // change of phase. a watcher still waiting here is the push missing, not the calendar
     await w.waitForFunction(() => /^watching$/.test(document.querySelector('#status')?.textContent?.trim() || ''), null, { timeout: 20000 }).catch(async () => {
       const status = await w.textContent('#status').catch(() => '?');
       throw new Error(`the watcher never played: #status reads "${(status || '').trim()}". the pushed live did not arrive (is video the build the api expects?)`);
     });
-    await w.waitForSelector('#calendar-strip button[data-live]', { timeout: 15000 });
+    await w.waitForSelector('#calendar-strip [data-block][data-live]', { timeout: 15000 });
     await w.waitForFunction(() => /^live now/.test(document.querySelector('#calendar-last')?.textContent || ''), null, { timeout: 5000 });
-    const label = await w.getAttribute('#calendar-strip button[data-live]', 'aria-label');
+    const label = await w.getAttribute('#calendar-strip [data-block][data-live]', 'aria-label');
     expect(/today/.test(label) && /now/.test(label) && /live/.test(label), `the live block says "${label}"`);
+    expect((await w.$$('#calendar-strip [data-block][data-live]')).length === 1, 'the live block is in more than one column at once');
     return `row ${open.id}: ${label}`;
   });
 
   await step('a heartbeat lands on the row (last_beat_at), then stop closes it: ended_by stop, the watcher\'s block closes', async () => {
     // the page beats every 15s; one must land before the stop so the row has a time to end at later
     const beaten = await pollUntil(async () => openRow(await today(NAME)), (r) => !!r && r.last_beat_at !== null, { timeout: 25000, label: 'a heartbeat on the row' });
+    // and the row runs half a minute: the grid hides a block under a minute, and this row with the
+    // dropped one after it must pass that together to be drawn as one
+    await sleep(Math.max(0, 35000 - (Date.now() - Date.parse(beaten.started_at))));
     await a.click('#stop');
     const row = await pollUntil(
       async () => (await today(NAME)).find((r) => r.id === beaten.id),
@@ -153,14 +163,17 @@ const iso = (ms) => new Date(ms).toISOString();
     expect(row.ended_by === 'stop', `ended_by ${row.ended_by}, want stop`);
     expect(new Date(row.last_beat_at) >= new Date(row.started_at), 'last_beat_at is before started_at');
     expect(new Date(row.ended_at) >= new Date(row.last_beat_at), 'ended_at is before the last beat');
-    await w.waitForSelector('#calendar-strip button[data-live]', { state: 'detached', timeout: 15000 });
+    await w.waitForSelector('#calendar-strip [data-block][data-live]', { state: 'detached', timeout: 15000 });
     await w.waitForFunction(() => /^last streamed/.test(document.querySelector('#calendar-last')?.textContent || ''), null, { timeout: 5000 });
+    stopped = row;
     return `row ${row.id} · ${Math.round((new Date(row.ended_at) - new Date(row.started_at)) / 1000)}s`;
   });
 
   await step('the drop: the tab goes offline and away without its stop call; video ends the row within a beat of its last heartbeat', async () => {
     await goLive(a);
     const open = await pollUntil(async () => openRow(await today(NAME)), (r) => !!r && r.last_beat_at !== null, { timeout: 30000, label: 'a heartbeat on the new row' });
+    // half a minute of it, for the same reason as the row before
+    await sleep(Math.max(0, 30000 - (Date.now() - Date.parse(open.started_at))));
     // no stop call can leave the page: the network goes, then the tab. video sees the socket go
     // and calls the api's stop itself. the browser still sends a close frame as the tab goes, so
     // video reads this as the page's own stop (`stop`); a wifi that drops sends none and reads `video`
@@ -177,17 +190,41 @@ const iso = (ms) => new Date(ms).toISOString();
     expect(late >= 0 && late < 40, `ended ${late}s after the last heartbeat (want under 40: a beat plus ice's 15s)`);
     ctxA = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] });
     a = await ctxA.newPage();
+    dropped = row;
     return `ended_by ${row.ended_by}, ${late.toFixed(1)}s after the last beat`;
   });
 
-  await step('two sessions under five minutes apart are one block with a mark at the drop', async () => {
-    // the watcher's strip re-asked on `ended`; the second session began inside five minutes of the first's end
-    await w.waitForSelector('#calendar-strip button[data-live]', { state: 'detached', timeout: 20000 });
-    await w.waitForSelector('#calendar-strip .drop', { timeout: 10000 });
-    const labels = await w.$$eval('#calendar-strip button', (els) => els.map((e) => e.getAttribute('aria-label')));
-    const merged = labels.find((l) => /dropped .*, back /.test(l || ''));
-    expect(merged, `no block says dropped and back; the blocks say ${JSON.stringify(labels)}`);
-    return merged;
+  await step('two sessions under five minutes apart are one block, from the first\'s start to the second\'s end, its length on it, no mark', async () => {
+    expect(stopped && dropped, 'the two rows are not both there to merge');
+    // the watcher's grid re-asked on `ended`; the second session began inside five minutes of the first's end
+    await w.waitForSelector('#calendar-strip [data-block][data-live]', { state: 'detached', timeout: 20000 });
+    const from = Date.parse(stopped.started_at);
+    const to = Date.parse(dropped.ended_at);
+    // the bars carry their start and end to the millisecond, the api's rows to the microsecond: a second of slack
+    const bars = () =>
+      w.$$eval('#calendar-strip [data-block]', (els) =>
+        els.map((e) => ({
+          start: Date.parse(e.getAttribute('data-start')),
+          end: Date.parse(e.getAttribute('data-end')),
+          text: e.textContent.trim(),
+          label: e.getAttribute('aria-label')
+        }))
+      );
+    // the block that has both rows in it. its start may be an older row's: a run a few minutes ago merges in too, by the same rule
+    const pieces = await pollUntil(bars, (all) => all.some((b) => b.start <= from + 1000 && b.end >= to - 1000), {
+      timeout: 10000,
+      label: `a block over rows ${stopped.id} and ${dropped.id} (${Math.round((to - from) / 1000)}s together)`
+    });
+    const over = pieces.filter((b) => b.start <= from + 1000 && b.end >= to - 1000);
+    // one piece unless the run crossed the watcher's midnight; the longer piece is the one with the length on it
+    const whole = over.find((b) => b.text) || over[0];
+    const m = Math.round((whole.end - whole.start) / 60000);
+    const want = m < 60 ? `${m}m` : m % 60 === 0 ? `${m / 60}h` : `${Math.floor(m / 60)}h ${m % 60}m`;
+    expect(whole.text === want, `the block says "${whole.text}", want "${want}": from its first second to its last, the gap counted`);
+    expect(!/dropped/.test(whole.label), `the block's words mention the drop: "${whole.label}"`);
+    expect((await w.$$('#calendar-strip .drop')).length === 0, 'a drop mark is on the grid');
+    expect(!pieces.some((b) => Math.abs(b.start - Date.parse(dropped.started_at)) < 1000), 'the second session is drawn as a block of its own');
+    return whole.label;
   });
 
   await step(`an account's rows are its own: ${ACCOUNT} goes live and stops over the api, and the range lists the row`, async () => {

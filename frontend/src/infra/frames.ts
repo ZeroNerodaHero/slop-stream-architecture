@@ -36,8 +36,10 @@ export type GroupChange =
   | { what: 'left'; who: string; by: 'leave' | 'kick'; members: number }
   | { what: 'banned'; who: string; reason: string; members: number }
   | { what: 'unbanned'; who: string }
-  | { what: 'channel'; channel: { name: string; about: string; made_by: string | null } }
+  | { what: 'channel'; channel: { name: string; about: string; made_by: string | null; cooldown?: number } }
   | { what: 'unchannel'; channel: string }
+  /** The channel's cooldown is `cooldown` seconds now (0: none). */
+  | { what: 'channel_cooldown'; channel: string; cooldown: number }
   /** The channel `channel` is called `name` now; its place in the order, its lines and its mutes went with it. */
   | { what: 'channel_renamed'; channel: string; name: string }
   /** The channels put in this order, every one of them, from the top. */
@@ -48,7 +50,10 @@ export type GroupChange =
   | { what: 'icon'; icon: number }
   | { what: 'banner'; banner: number }
   /** A role made or changed, whole: its powers, the channels kept to it (by name), and its cooldown (seconds; 0 none). The last two are absent from an older api: none. */
-  | { what: 'role'; role: HeldRole & { perms: { appearance: boolean; roles: boolean; channels: boolean; kick: boolean; ban: boolean }; channels?: string[]; cooldown?: number } }
+  | {
+      what: 'role';
+      role: HeldRole & { perms: { appearance: boolean; roles: boolean; channels: boolean; kick: boolean; ban: boolean }; channels?: string[]; cooldown?: number };
+    }
   /** `who` is timed out until `until` (unix seconds), or no longer (null). */
   | { what: 'timeout'; who: string; until: number | null }
   | { what: 'unrole'; id: string }

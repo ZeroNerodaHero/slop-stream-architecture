@@ -199,6 +199,7 @@ function agreeWithChat(current: Session, wait: number) {
 /** The chat's short words for a refusal, as the notice reads them. Anything else is said as it came. */
 const NOTICE_WORDS: Record<string, string> = {
   cooldown: 'your role has a cooldown between lines',
+  'channel cooldown': 'this channel has a cooldown between lines',
   'timed out': 'you are timed out here'
 };
 
@@ -532,9 +533,9 @@ function connect() {
         agreeWithChat(current, wait);
         refuse(wait);
       }
-      // a role's cooldown, or a timeout (docs/groups.md): the chat says how long, and the button
-      // counts it down; the bucket is not the matter, so it is left alone
-      if ((msg.error === 'cooldown' || msg.error === 'timed out') && typeof msg.wait === 'number' && msg.wait > 0) refuse(msg.wait);
+      // a role's or the channel's cooldown, or a timeout (docs/groups.md): the chat says how long,
+      // and the button counts it down; the bucket is not the matter, so it is left alone
+      if (msg.error in NOTICE_WORDS && typeof msg.wait === 'number' && msg.wait > 0) refuse(msg.wait);
       // the oldest line out was not taken: back into the box, unless something new is being typed
       if (/slow down|cooldown|timed out|chat is (busy|down)/.test(msg.error)) {
         const lost = inFlight.shift();

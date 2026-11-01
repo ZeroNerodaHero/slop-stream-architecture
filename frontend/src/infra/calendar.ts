@@ -1,20 +1,20 @@
 /**
  * The calendar's arithmetic (docs/calendar.md): the api's session rows become blocks (sessions
- * merged across a gap under five minutes: one stream that dropped), blocks become spans on day
- * rows (cut at the viewer's midnights), and a week of blocks becomes the line `streamed tuesday
- * and thursday around 8pm`. Pure; the viewer's clock and zone come in as arguments, and nothing
- * here reads one.
+ * merged across a gap under five minutes: one stream whose connection dropped, as long as the
+ * whole, gap and all), blocks become pieces on day columns (cut at the viewer's midnights), and
+ * a week of blocks becomes the line `streamed tuesday and thursday around 8pm`. Pure; the
+ * viewer's clock and zone come in as arguments, and nothing here reads one.
  */
 
 import type { SessionRow } from '@/infra/api';
 
 export const MIN_MS = 60_000;
 export const DAY_MS = 24 * 60 * MIN_MS;
-/** The strip: a week, today the bottom row. */
+/** The grid: a week, monday the first column. */
 export const DAYS = 7;
-/** Two sessions closer than this are one stream whose connection dropped: one block with a mark at the drop. */
+/** Two sessions closer than this are one stream whose connection dropped: one block, the gap inside it and counted. */
 export const GAP_MS = 5 * MIN_MS;
-/** A session shorter than this is a go-live whose negotiation failed. The log keeps it; the strip does not draw it. */
+/** A session shorter than this is a go-live whose negotiation failed. The log keeps it; the grid does not draw it. */
 export const FLOOR_MS = MIN_MS;
 
 export interface Block {
@@ -23,23 +23,23 @@ export interface Block {
   start: Date;
   /** Null: still open, drawn to now. */
   end: Date | null;
-  /** Where the connection went and when it was back, for a block made of more than one session. */
-  drops: { at: Date; back: Date }[];
   /** The sweeper closed the last session: its end is the last heartbeat, within one beat of the truth. */
   uncertain: boolean;
   /** Open under a name that is live now. */
   live: boolean;
 }
 
-/** A block's piece on one day row, in minutes from that day's midnight. */
+/** A block's piece on one day column, in minutes from that day's midnight. */
 export interface Span {
   block: Block;
-  /** The row, 0 the oldest. */
+  /** The column, 0 the week's monday. */
   day: number;
   from: number;
   to: number;
   /** The block's last piece: the one its end is drawn on. */
   last: boolean;
+  /** The block's longest piece on the grid: the one that says how long the whole ran. */
+  label: boolean;
 }
 
 export function localMidnight(d: Date): Date {
@@ -54,10 +54,18 @@ export function addDays(d: Date, n: number): Date {
   return r;
 }
 
+/** The monday of the week `d` is in, a local midnight. A week runs monday to sunday. */
+export function mondayOf(d: Date): Date {
+  return addDays(localMidnight(d), -((d.getDay() + 6) % 7));
+}
+
 /**
  * The rows as blocks, oldest first. A row still open belongs to a name that is live (`live`),
  * and runs to now; otherwise it is waiting for the sweeper and ends at its last heartbeat,
- * marked. Sessions a short gap apart merge; blocks under the floor are dropped.
+ * marked. Sessions a short gap apart merge into one block from the first's start to the last's
+ * end, so twenty minutes, three down and twenty more is one block of 43; blocks under the floor
+ * are dropped, except the live one: a stream that is on is not a negotiation that failed, and
+ * is drawn from its first second.
  */
 export function blocksOf(rows: SessionRow[], live: boolean, now: Date): Block[] {
   const sessions = rows
@@ -74,23 +82,26 @@ export function blocksOf(rows: SessionRow[], live: boolean, now: Date): Block[] 
     const last = blocks[blocks.length - 1];
     const lastEnd = last && !last.live ? (last.end ?? now) : null;
     if (last && lastEnd && s.start.getTime() - lastEnd.getTime() < GAP_MS) {
-      last.drops.push({ at: lastEnd, back: s.start });
       last.end = s.end;
       last.live = s.end === null;
       last.uncertain = s.by === 'sweep';
     } else {
-      blocks.push({ id: s.id, start: s.start, end: s.end, drops: [], uncertain: s.by === 'sweep', live: s.end === null });
+      blocks.push({ id: s.id, start: s.start, end: s.end, uncertain: s.by === 'sweep', live: s.end === null });
     }
   }
-  return blocks.filter((b) => (b.end ?? now).getTime() - b.start.getTime() >= FLOOR_MS);
+  return blocks.filter((b) => b.live || lengthOf(b, now) >= FLOOR_MS);
 }
 
-/** The block cut at the viewer's midnights: one piece per day row it touches, rows counted from `first` (a local midnight). */
+/**
+ * The block cut at the viewer's midnights: one piece per day column it touches, columns counted
+ * from `first` (a local midnight), the longest of them marked to carry the block's length.
+ */
 export function spansOf(b: Block, first: Date, now: Date): Span[] {
   const spans: Span[] = [];
-  const end = b.end ?? now;
+  const end = endOf(b, now);
   let cursor = b.start;
-  while (cursor < end) {
+  // at least one piece: a block that opened this second has no length yet, and is drawn at the least height
+  do {
     const dayStart = localMidnight(cursor);
     const next = addDays(dayStart, 1);
     const to = end < next ? end : next;
@@ -101,33 +112,22 @@ export function spansOf(b: Block, first: Date, now: Date): Span[] {
         day,
         from: (cursor.getTime() - dayStart.getTime()) / MIN_MS,
         to: Math.min(1440, (to.getTime() - dayStart.getTime()) / MIN_MS),
-        last: to.getTime() === end.getTime()
+        last: to.getTime() === end.getTime(),
+        label: false
       });
     }
     cursor = next;
-  }
+  } while (cursor < end);
+  const longest = spans.reduce<Span | null>((best, s) => (!best || s.to - s.from > best.to - best.from ? s : best), null);
+  if (longest) longest.label = true;
   return spans;
 }
 
-/** A drop, placed: the row and the minute the connection went. */
-export interface Drop {
-  day: number;
-  min: number;
-}
-
-/** The strip's rows: every block's spans by day, and every drop by day. `first` is row 0's midnight. */
-export function rowsOf(blocks: Block[], first: Date, now: Date): { spans: Span[][]; drops: Drop[] } {
-  const spans: Span[][] = Array.from({ length: DAYS }, () => []);
-  const drops: Drop[] = [];
-  for (const b of blocks) {
-    for (const span of spansOf(b, first, now)) spans[span.day]?.push(span);
-    for (const drop of b.drops) {
-      const dayStart = localMidnight(drop.at);
-      const day = Math.round((dayStart.getTime() - first.getTime()) / DAY_MS);
-      if (day >= 0 && day < DAYS) drops.push({ day, min: (drop.at.getTime() - dayStart.getTime()) / MIN_MS });
-    }
-  }
-  return { spans, drops };
+/** The grid's columns: every block's pieces by day. `first` is column 0's midnight, the week's monday. */
+export function columnsOf(blocks: Block[], first: Date, now: Date): Span[][] {
+  const columns: Span[][] = Array.from({ length: DAYS }, () => []);
+  for (const b of blocks) for (const span of spansOf(b, first, now)) columns[span.day]?.push(span);
+  return columns;
 }
 
 const SHORT_DAY = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
@@ -154,9 +154,9 @@ export function fmtDate(d: Date): string {
   return `${SHORT_MONTH[d.getMonth()]} ${d.getDate()}`;
 }
 
-/** `tue 14`, the row's label. */
-export function fmtRow(d: Date): string {
-  return `${SHORT_DAY[d.getDay()]} ${d.getDate()}`;
+/** `tue`, the column's head over its date. */
+export function fmtDow(d: Date): string {
+  return SHORT_DAY[d.getDay()] ?? '';
 }
 
 /** `3h 14m`, `45m`, `2h` */
@@ -173,8 +173,8 @@ function listOf(words: string[]): string {
 }
 
 /**
- * The line read off the week's blocks: the days with one, in the strip's order (`first` is the
- * top row's midnight; a block that began before it is on the top row, so it counts there), and
+ * The line read off the week's blocks: the days with one, monday first (`first` is the first
+ * column's midnight; a block that began before it is in that column, so it counts there), and
  * the median start rounded to the half hour. One week is too short to call a habit, so the line
  * says what happened: `streamed tuesday and thursday around 8pm`. The week that has today in it
  * is `this week`; an older page is `that week`.
@@ -192,15 +192,27 @@ export function usuallyOf(blocks: Block[], first: Date, now: Date): string {
   return `streamed ${on} around ${when}`;
 }
 
-/** What a block says of itself: the day, the hours, the length, the drops, how sure its end is. */
+/**
+ * Where the block ends: its end, or now for the open one. Never before its start: the viewer's
+ * clock can sit a second behind the api's, and the open block then began a moment from now.
+ */
+export function endOf(b: Block, now: Date): Date {
+  return b.end ?? (now > b.start ? now : b.start);
+}
+
+/** The block's length, the open one counted to now. */
+export function lengthOf(b: Block, now: Date): number {
+  return endOf(b, now).getTime() - b.start.getTime();
+}
+
+/** What a block says of itself: the day, the hours, the length, how sure its end is. */
 export function detailOf(b: Block, now: Date): string {
-  const end = b.end ?? now;
+  const end = endOf(b, now);
   const parts = [
     localMidnight(b.start).getTime() === localMidnight(now).getTime() ? 'today' : fmtDay(b.start),
     `${fmtTime(b.start)} – ${b.live ? 'now' : fmtTime(end)}`,
-    fmtDur(end.getTime() - b.start.getTime())
+    fmtDur(lengthOf(b, now))
   ];
-  for (const drop of b.drops) parts.push(`dropped ${fmtTime(drop.at)}, back ${fmtTime(drop.back)}`);
   if (b.uncertain) parts.push('ended by the sweeper, so the end is the last heartbeat');
   if (b.live) parts.push('live');
   return parts.join(' · ');
@@ -208,5 +220,5 @@ export function detailOf(b: Block, now: Date): string {
 
 /** The blocks' total length, the open one counted to now. */
 export function totalOf(blocks: Block[], now: Date): number {
-  return blocks.reduce((ms, b) => ms + (b.end ?? now).getTime() - b.start.getTime(), 0);
+  return blocks.reduce((ms, b) => ms + lengthOf(b, now), 0);
 }

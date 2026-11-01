@@ -790,6 +790,20 @@ const dropAll = async (ctx, names) => {
     const ownerSecond = await say(asOwnerPage, 'owner two ' + RUN);
     expect(ownerFirst.ok && ownerSecond.ok, `the owner's two lines: ${JSON.stringify(ownerFirst)} then ${JSON.stringify(ownerSecond)}`);
     expect((await maker.delete(`/api/groups/${slug}/roles/${slow.id}`)).status() === 204, 'deleting slow failed');
+    // the channel's own cooldown: the channels power sets it; the member's second line in general is refused, the owner's go; 0 lifts it
+    const memberSets = await member.put(`/api/groups/${slug}/channels/general/cooldown`, { data: { seconds: 30 } });
+    const tooLongChannel = await maker.put(`/api/groups/${slug}/channels/general/cooldown`, { data: { seconds: 3601 } });
+    const noChannel = await maker.put(`/api/groups/${slug}/channels/nosuch/cooldown`, { data: { seconds: 30 } });
+    const setChannel = await maker.put(`/api/groups/${slug}/channels/general/cooldown`, { data: { seconds: 30 } });
+    expect(memberSets.status() === 403 && tooLongChannel.status() === 400 && noChannel.status() === 404 && setChannel.status() === 200 && (await body(setChannel)).cooldown === 30, `general's cooldown: member ${memberSets.status()}, too long ${tooLongChannel.status()}, missing ${noChannel.status()}, owner ${setChannel.status()}`);
+    expect((await body(await member.get(`/api/groups/${slug}`))).channels.find((c) => c.name === 'general').cooldown === 30, 'the room does not say general has a cooldown');
+    const inChannel = await say(asMemberPage, 'channel one ' + RUN);
+    const inChannelAgain = await say(asMemberPage, 'channel two ' + RUN);
+    expect(inChannel.ok && inChannelAgain.error === 'channel cooldown' && inChannelAgain.wait > 0 && inChannelAgain.wait <= 30000, `the member in a cooled channel: ${JSON.stringify(inChannel)} then ${JSON.stringify(inChannelAgain)}`);
+    const ownerIn = await say(asOwnerPage, 'owner channel one ' + RUN);
+    const ownerInAgain = await say(asOwnerPage, 'owner channel two ' + RUN);
+    expect(ownerIn.ok && ownerInAgain.ok, `the owner in a cooled channel: ${JSON.stringify(ownerIn)} then ${JSON.stringify(ownerInAgain)}`);
+    expect((await maker.put(`/api/groups/${slug}/channels/general/cooldown`, { data: { seconds: 0 } })).status() === 200, 'lifting the channel cooldown failed');
     await asMemberPage.context().close();
     await asOwnerPage.context().close();
     return 'quiet for a minute, lifted; one line in 30s with the role, the owner unslowed';
@@ -1073,11 +1087,12 @@ const dropAll = async (ctx, names) => {
     await q.waitForSelector('#manage-panel-roles #role-add', { timeout: 5000 });
     await q.click('#role-add');
     await q.waitForSelector('#group-roles li[data-open] #role-channel-highlights', { timeout: 10000 });
-    expect(!(await q.$('#role-channel-general')), 'general has a box in the role editor');
-    expect((await q.textContent('#role-channel-highlights-who')).trim() === 'everyone', `before the tick #highlights is seen by "${await q.textContent('#role-channel-highlights-who')}"`);
+    expect(!(await q.$('#role-channel-general')), 'general has a word in the role editor');
+    // the channels are words, pressed when kept; who sees the channel is the word's label
+    expect((await q.getAttribute('#role-channel-highlights', 'aria-pressed')) === 'false' && /everyone/.test(await q.getAttribute('#role-channel-highlights', 'aria-label')), `before the press #highlights reads "${await q.getAttribute('#role-channel-highlights', 'aria-label')}"`);
     await q.fill('#role-name', 'staffers');
-    await q.check('#role-channel-highlights');
-    expect((await q.textContent('#role-channel-highlights-who')).trim() === 'only this role', `after the tick #highlights is seen by "${await q.textContent('#role-channel-highlights-who')}"`);
+    await q.click('#role-channel-highlights');
+    expect((await q.getAttribute('#role-channel-highlights', 'aria-pressed')) === 'true' && /only this role/.test(await q.getAttribute('#role-channel-highlights', 'aria-label')), `after the press #highlights reads "${await q.getAttribute('#role-channel-highlights', 'aria-label')}"`);
     await q.click('#role-save');
     await q.waitForSelector('#group-roles li[data-role="staffers"]:not([data-open])', { timeout: 10000 });
     const staffersRow = await q.textContent('#group-roles li[data-role="staffers"]');
@@ -1087,6 +1102,21 @@ const dropAll = async (ctx, names) => {
     expect(keptRoom.roles.find((r) => r.name === 'staffers').channels.join(' ') === 'highlights', `the api's role keeps ${JSON.stringify(keptRoom.roles)}`);
     await q.click('#manage-tab-channels');
     await q.waitForSelector('#manage-channels li[data-channel="highlights"] [aria-label="only staffers"]', { timeout: 5000 });
+    // the channel's cooldown from the clock on its row: a menu of the choices; 30s wears it on the row and the page's list; off takes it back
+    expect((await q.textContent('#manage-channels li[data-channel="highlights"] [data-cooldown="0"]')).trim() === 'off', 'the channel row does not read off');
+    await q.hover('[aria-label="cooldown of #highlights"]');
+    await q.waitForSelector('[role="menu"] [data-pick="30"]', { timeout: 5000 });
+    const cooldownPut = q.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === `/api/groups/${madeName}/channels/highlights/cooldown`, { timeout: 10000 });
+    await q.click('[role="menu"] [data-pick="30"]');
+    expect((await cooldownPut).status() === 200, 'setting the cooldown did not get 200');
+    await q.waitForSelector('#manage-channels li[data-channel="highlights"] [data-cooldown="30"]', { timeout: 10000 });
+    await q.waitForSelector('#group-channels [data-cooldown="30"]', { timeout: 10000 });
+    expect((await body(await maker.get(`/api/groups/${madeName}`))).channels.find((c) => c.name === 'highlights').cooldown === 30, 'the api does not say 30');
+    await q.hover('[aria-label="cooldown of #highlights"]');
+    await q.waitForSelector('[role="menu"] [data-pick="0"]', { timeout: 5000 });
+    await q.click('[role="menu"] [data-pick="0"]');
+    await q.waitForSelector('#manage-channels li[data-channel="highlights"] [data-cooldown="0"]', { timeout: 10000 });
+    expect(!(await q.$('#group-channels [data-cooldown]')), 'the page list still wears a clock');
     await q.click('#manage-tab-roles');
     await q.click('#group-roles li[data-role="staffers"] button');
     await q.waitForSelector('#group-roles li[data-role="staffers"][data-open] #role-delete', { timeout: 5000 });

@@ -37,9 +37,9 @@ the data, then, is there and has been. what is not: a route that returns a month
 - **a block is a session, and the calendar never invents one.** one row, one block. the calendar reads; the three closers write, as they do today.
 - **whose blocks.** a claimed name's calendar is its account's: `user_id = streamers.id`, set at go-live when the session is the account's own (`ids.md`: so a rename keeps the history as one list). a stranger who streamed anonymously under the name before it was claimed is not on it, the same line `verified` draws. a free name's calendar is the name's: `name = $1`, like its bio is anyone's.
 - **the open block.** `ended_at` null and the name live now: the block runs to now and grows while you look. `ended_at` null and the name not live (a row waiting for the sweep): drawn to the last heartbeat, marked as uncertain.
-- **instants on the wire, days on the screen.** `started_at` and `ended_at` are `timestamptz`, iso 8601 with `Z` in the json as today. days, weeks and "8pm" are the viewer's (`Intl.DateTimeFormat().resolvedOptions().timeZone`): a block crossing the viewer's midnight is split across two day rows by the page. the api knows nothing about days.
-- **short blocks.** a go-live whose negotiation failed is a row of a few seconds: the key is claimed and the row opened before video has the publisher. they stay in the table (the log is the log) and the grid hides blocks under 60s unless the owner asks (`show everything`).
-- **gaps.** two blocks with under 5 minutes between them are one stream that dropped. drawn as one block with a hairline at the drop; the detail lists the pieces. a rule for the eye, in the page, never in the table.
+- **instants on the wire, days on the screen.** `started_at` and `ended_at` are `timestamptz`, iso 8601 with `Z` in the json as today. days, weeks and "8pm" are the viewer's (`Intl.DateTimeFormat().resolvedOptions().timeZone`): a block crossing the viewer's midnight is split across two day columns by the page. the api knows nothing about days.
+- **short blocks.** a go-live whose negotiation failed is a row of a few seconds: the key is claimed and the row opened before video has the publisher. they stay in the table (the log is the log) and the grid hides blocks under 60s unless the owner asks (`show everything`). the open block under a name that is live is never hidden: it is drawn from its first second, at the least height, and grows.
+- **gaps.** two blocks with under 5 minutes between them are one stream that dropped. drawn as one block from the first's start to the second's end, the gap inside it and counted: twenty minutes, three down, twenty more is one block that says `43m`. nothing marks the drop. a rule for the eye, in the page, never in the table.
 - **a block starts at go-live**, a few seconds before the first frame reaches anyone (`status.md`: `GET /live` lists a name from the claim, before negotiation). accepted; nobody reads a calendar to the second.
 - **public.** who is streaming is on home for anyone while it happens; the record of it is as public as the bio. the token never leaves the api (`spec.md:213`'s rule for the route today).
 
@@ -71,7 +71,7 @@ sequenceDiagram
   P->>P: "connection failed" · the person presses start
   P->>A: POST go-live
   A->>D: a new row
-  Note over D: a new block. the grid draws the two as one with a hairline at the drop
+  Note over D: a new block. the grid draws the two as one, the gap inside it
 ```
 
 the one case that is not in the picture is video being down too (a deploy of video, a box that lost both): then nothing says the publisher left, the key lapses at 90s, and the sweeper ends the row on the first tick past 180s. that row's `ended_at` is today up to four minutes after the stream died, which on a calendar is a block that is a little too long. the column below is for exactly that row.
@@ -85,7 +85,7 @@ the one case that is not in the picture is video being down too (a deploy of vid
 ALTER TABLE sessions ADD COLUMN last_beat_at timestamptz;
 UPDATE sessions SET last_beat_at = COALESCE(ended_at, started_at) WHERE last_beat_at IS NULL;
 
--- how the block closed: stop | video | sweep. null while open. the hairline, and the owner's log.
+-- how the block closed: stop | video | sweep. null while open. the dashed end, and the owner's log.
 ALTER TABLE sessions ADD COLUMN ended_by text;
 
 -- a month of one account's blocks. the free name's range is the index that exists,
@@ -128,11 +128,11 @@ nothing else. `GET /api/streamers/:name` does not gain a count or a usual line; 
 
 ## pages
 
-**the grid.** a week: 7 day rows, oldest at the top and today at the bottom, each row 24 hours wide. a block is a bar on its row from its start hour to its end hour (`left` and `width` as percentages of the row, two spans for a block that crosses midnight, one on each row). days as rows and hours as columns is the point: every 8pm is the same column, so a person who streams at 8 is a vertical stripe you see before you read anything. a thin hour scale along the bottom in the viewer's clock (`12am · 6am · 12pm · 6pm`), the weekday short name and the date down the side in the viewer's locale, the monday line heavier. `‹ ›` step a week at a time (one request each), `today` comes back. the live block ends at a line that moves: a 60s tick re-renders the one row. blocks are the accent (`primaryBlue`); a block that ended by `sweep`, or is open under a name that is not live, is `textTertiary` with its end hatched; the hairline at a drop is `decrease`. never a colour alone: the detail says it.
+**the grid.** a week, monday to sunday: 7 day columns across, the hours of the day down, midnight at the top, 12px an hour. a block is a bar in its day's column from its start hour to its end hour (`top` and `height` as percentages of the day; a block that crosses midnight is a piece at the bottom of one column and a piece at the top of the next). days across and hours down is the point: every 8pm is the same height, so a person who streams at 8 is a row of bars you see before you read anything. the hour scale down the left in the viewer's clock, every three hours; the weekday short name and the date over each column, today's bright, today's column tinted. `‹ ›` step a week at a time (one request each), `today` comes back to the week with today in it. the live block ends at a line that moves: a 60s tick re-renders the grid. blocks are the accent (`primaryBlue`); a block that ended by `sweep`, or is open under a name that is not live, is `textTertiary` with its end dashed. never a colour alone: the words say it.
 
-**the detail.** pointer or focus on a block (`Tooltip.tsx`, the sidebar's shape): `tue oct 14 · 7:58pm – 11:12pm · 3h 14m`, and for a merged one `dropped 9:03pm, back 9:05pm`. `data-start`, `data-end`, `data-by` on the bar for the tests.
+**the length.** written on the bar, in the bar: `3h 14m`, `43m`. no tooltip, nothing to hover. a bar is at least 14px tall so the number fits, so a five-minute stream draws a little longer than it ran and says `5m`; a block in two columns has the number on the longer piece. the whole in words (`tue oct 14 · 7:58pm – 11:12pm · 3h 14m`) is the bar's `aria-label`, and the newest block's is the line under the grid. `data-block`, `data-live`, `data-start`, `data-end` on the bar for the tests.
 
-**the line.** `#calendar-usually`, from the week on screen, in the page: the days with a block, in the strip's order, and the median start rounded to the half hour. `streamed tuesday and thursday around 8pm` (the viewer's clock, so a watcher in another zone reads their own 8pm); all seven, `streamed every day around 8pm`. one week is too short to call a habit, so the line says what happened and claims no `usually`. none: `has not streamed this week`, or `did not stream that week` on an older page.
+**the line.** `#calendar-usually`, from the week on screen, in the page: the days with a block, monday first, and the median start rounded to the half hour. `streamed tuesday and thursday around 8pm` (the viewer's clock, so a watcher in another zone reads their own 8pm); all seven, `streamed every day around 8pm`. one week is too short to call a habit, so the line says what happened and claims no `usually`. none: `has not streamed this week`, or `did not stream that week` on an older page.
 
 **where.**
 
@@ -152,13 +152,13 @@ one column written per heartbeat, inside the round trip the heartbeat already ma
 `test/calendar.js`, after `presence` (it goes live and stops) and before `regress`. a login `cal<run>`, a free name `r8` where the presence tests leave it, and a second context as a watcher. the browser contexts get `timezoneId: 'America/Chicago'` so "8pm" and "midnight" mean something.
 
 1. `GET /api/streamers/cal/sessions?from=&to=` with 93 days is `[]`; 94 days 400; `to` before `from` 400; `from` alone 400; no params is the last 20 as before (`regress` keeps its check).
-2. go live as `cal`, 3s, stop: the range of today has one row with `started_at`, `ended_at`, `ended_by: 'stop'`, `last_beat_at` between them; `/watch/cal` as the watcher shows `#calendar` with one `.block` on the bottom row whose detail has today's date and a duration; `#usually` reads `streamed 1 time in the last month`.
+2. go live as `cal`, 3s, stop: the range of today has one row with `started_at`, `ended_at`, `ended_by: 'stop'`, `last_beat_at` between them; `/watch/cal` as the watcher shows `#calendar` with one `[data-block]` in today's column whose `aria-label` has today's date and a duration; `#usually` reads `streamed 1 time in the last month`.
 3. the drop: go live, `page.route('**/stop**', abort)` so the page cannot say stop, close the tab. within 25s the row has `ended_at`, `ended_by: 'video'`, and `ended_at − last_beat_at` under 20s. the watcher's block closed with no reload.
 4. the sweep's end: a row straight into postgres (`follows.md`'s step 8, `docker compose exec database psql`; off-box `SKIP`) open since 10 minutes ago with `last_beat_at` 6 minutes ago, under a free name with no key: after the next sweep (≤ 60s) `ended_at = last_beat_at`, `ended_by = 'sweep'`.
-5. midnight: a row inserted from 11:30pm to 12:30am in the context's zone is two spans, one on each of two rows, with one detail.
-6. the gap: two rows two minutes apart are one `.block` with a `.drop` hairline and a detail that says `dropped … back …`; two rows ten minutes apart are two blocks.
+5. midnight: a row inserted from 11:30pm to 12:30am in the context's zone is two pieces, the bottom of one column and the top of the next, one `aria-label`, the number on the longer.
+6. the gap: two rows two minutes apart are one `[data-block]` from the first's start to the second's end whose number is the whole, gap counted, and nothing says `dropped`; two rows ten minutes apart are two blocks.
 7. the floor: a 20s row is not drawn; `show everything` on the owner's profile tab draws it.
-8. live: the watcher on `/watch/cal` offline; `cal` goes live in the first context: a `.block[data-live]` appears within 3s and its width grows across a 60s wait (two measurements); stop: `data-live` goes and `ended_by` is `stop`.
+8. live: the watcher on `/watch/cal` offline; `cal` goes live in the first context: a `[data-block][data-live]` appears within 3s and its height grows across a 60s wait (two measurements); stop: `data-live` goes and `ended_by` is `stop`.
 9. whose: a stranger streams as a free name, then that name signs up and streams once: the account's calendar has one block, the free name's history (`?from&to` before the signup) has the stranger's. a rename (`ids.md`): the same list under the new name.
 10. cleanup: stop whatever is live; the inserted rows are under throwaway names and stay (the log is the log).
 
@@ -169,7 +169,7 @@ built:
 - `api/migrations/migrate-8.sql`, the three statements above, and its entry in `migrate.rs`.
 - `api/src/main.rs`: `heartbeat`'s check is the update; `stop` reads `by` (`StopQuery`); `sweep_once` and `go_live`'s cleanup set the two columns; `list_sessions` has the range (`RangeQuery`, 93 days, 1000 rows, the account's rows by `user_id` for a claimed name, a held name answers for the one it became) and the two fields, and the last 20 without one.
 - `video/src/main.rs`: `&by=` on the stop it posts: `stop` after a close frame from the page, `video` after a socket or a peer that just went (`end_session`). a `./scripts/deploy.sh video` (ends every stream, warns first): until it is deployed video's rows read `stop`, which is true enough.
-- `frontend/src/infra/calendar.ts` (the arithmetic, pure: blocks, spans, rows, the usually line, the detail), `atoms/calendar-atoms.ts` (the rows for a name and a page; asked again when the stream on screen starts or ends, and once more 3s after an end, since `ended` reaches the watcher a beat before the api has written the row), `shared-components/Calendar.tsx` (the strip), `api.ts` (`sessions`), `WatchPage.tsx` (the tabs; the strip is in the page only while its tab is open, so a page nobody looks at the calendar of makes no request).
+- `frontend/src/infra/calendar.ts` (the arithmetic, pure: blocks, their pieces by day column, the monday of a week, the usually line, the words for a block), `atoms/calendar-atoms.ts` (the rows for a name and a page, a page a monday-to-sunday week; asked again when the stream on screen starts or ends, and once more 3s after an end, since `ended` reaches the watcher a beat before the api has written the row), `shared-components/Calendar.tsx` (the grid), `api.ts` (`sessions`), `WatchPage.tsx` (the tabs; the grid is in the page only while its tab is open, so a page nobody looks at the calendar of makes no request).
 - `test/calendar.js`, in `scripts/test.sh` after `presence`.
 
 not yet: `user-modal/ProfileTab.tsx` (the totals, `show everything`), `spec.md`'s route row and database row.
@@ -203,11 +203,11 @@ not yet: `user-modal/ProfileTab.tsx` (the totals, `show everything`), `spec.md`'
 
 ## open questions
 
-1. **the shape.** the 28-day strip with hours across (the time of day lines up; the pattern is visible) or a month grid of day cells (how much per day). (recommendation: the strip. the question a watcher asks is "what time".)
-2. **the gap.** a dropped connection is back in under two minutes when the person is at the keyboard; a dinner break is thirty. (recommendation: 5 minutes, drawn as one block with the hairline. the detail always lists the pieces.)
+1. **the shape.** a week with the time of day as one axis (the time of day lines up; the pattern is visible) or a month grid of day cells (how much per day). (built: the week, days across and hours down, the way a calendar app draws one. the question a watcher asks is "what time".)
+2. **the gap.** a dropped connection is back in under two minutes when the person is at the keyboard; a dinner break is thirty. (built: 5 minutes, drawn as one block that counts the gap and marks nothing. a drop is the streamer's trouble, not the watcher's.)
 3. **the floor.** hide the failed go-lives, or draw them as ticks. (recommendation: hide under 60s by default; `show everything` on the owner's tab.)
 4. **while live.** the line under the bio, the strip under the bio, or nothing while the player is up. (recommendation: the line. the strip is a click away in the profile tab.)
 5. **the card.** `usually tue, thu ~8pm` on the person card. it makes one profile read now (`follows.md`), which says when the last stream ended but not the blocks; the line wants a month of rows, a second request. (recommendation: not now; `last live` says most of it. `later` has the shape if it is wanted.)
-6. **weeks start.** monday, or the viewer's locale's. (recommendation: monday; the labels are the locale's. `Intl.Locale.prototype.getWeekInfo` is not everywhere yet.)
+6. **weeks start.** monday, or the viewer's locale's. (built: monday, for everyone. `Intl.Locale.prototype.getWeekInfo` is not everywhere yet.)
 7. **free names.** the one rule (`accounts.md`) says a free name's calendar is anyone's streams under it. (recommendation: yes, by name, as its bio is; the account's by id, as its history is.)
 8. **how far back.** four weeks on the page, `‹` for older, forever in the table. (recommendation: as said. the table is small and the index makes any month one range.)

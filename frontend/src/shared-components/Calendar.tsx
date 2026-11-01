@@ -2,46 +2,52 @@ import { useAtomValue } from 'jotai';
 import { useEffect, useState } from 'react';
 
 import { calendarAtom, loadCalendar, rangeOf, watchIsLiveAtom } from '@/infra/atoms/calendar-atoms';
-import { addDays, blocksOf, detailOf, fmtDate, fmtDur, fmtRow, localMidnight, MIN_MS, rowsOf, totalOf, usuallyOf } from '@/infra/calendar';
+import { addDays, blocksOf, columnsOf, DAYS, detailOf, fmtClock, fmtDate, fmtDow, fmtDur, lengthOf, localMidnight, MIN_MS, totalOf, usuallyOf } from '@/infra/calendar';
 import { buttonClassName } from '@/shared-components/Button';
-import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/** The day labels' column, px. The hour lines and the scale start after it. */
-const LABEL_W = 58;
+/** The hour labels' column, px. The day columns start after it. */
+const LABEL_W = 36;
+/** An hour's height, px: the grid is 24 of these, and a one-hour stream is a bar this tall. */
+const HOUR_PX = 12;
+/**
+ * A bar is at least this tall, so its length is readable on it: a stream shorter than this
+ * draws a little longer than it ran, and the number on it is what ran.
+ */
+const MIN_PX = 14;
+/** The hour lines and their labels: every three hours. */
+const HOURS = [0, 3, 6, 9, 12, 15, 18, 21];
 const NAV = buttonClassName('secondary', 'px-2 py-0.5 text-xs');
-const HOURS: [number, string][] = [
-  [0, '12am'],
-  [25, '6am'],
-  [50, '12pm'],
-  [75, '6pm'],
-  [100, '12am']
-];
+const COLUMNS = { gridTemplateColumns: `${LABEL_W}px repeat(${DAYS}, minmax(0, 1fr))` };
 
 function pct(min: number): string {
   return `${(min / 1440) * 100}%`;
 }
 
 /**
- * When they stream (docs/calendar.md): a week of day rows, oldest at the top and today at the
- * bottom, each row 24 hours wide, a bar per stream from its start hour to its end hour. Days as
- * rows and hours as columns on purpose: every 8pm is the same column, so a person who streams
- * at 8 is a stripe you see before you read anything. The line above the strip says it in words.
- * Everything is the viewer's clock and zone: a block over the viewer's midnight is two pieces on
- * two rows. Blocks are the accent; one the sweeper closed is grey with a dashed end (its end is
- * the last heartbeat); a red mark is a connection that dropped and was back inside five minutes,
- * drawn as one block. The open block ends at a line that moves, once a minute.
+ * When they stream (docs/calendar.md): a week of day columns, monday first, and the hours of
+ * the day down the side, midnight at the top. A stream is a bar in its day's column from its
+ * start hour to its end hour, with how long it ran written on it. Days across and hours down
+ * on purpose: every 8pm is the same height, so a person who streams at 8 is a row of bars you
+ * see before you read anything. The line above the grid says it in words. Everything is the
+ * viewer's clock and zone: a block over the viewer's midnight is two pieces in two columns,
+ * the longer of them carrying the length. A connection that dropped and was back inside five
+ * minutes is nothing to see: the two sessions are one bar, the gap inside it and counted. Bars
+ * are the accent; one the sweeper closed is grey with a dashed end (its end is the last
+ * heartbeat). The open bar ends at a line that moves, once a minute.
  */
 export function Calendar({ name }: { name: string }) {
   const cal = useAtomValue(calendarAtom);
   const live = useAtomValue(watchIsLiveAtom);
   // the clock, in state: a render must not read one. once a minute the open block grows a step
-  const [now, setNow] = useState(() => new Date());
+  const [tick, setTick] = useState(() => new Date());
   useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), MIN_MS);
+    const t = setInterval(() => setTick(new Date()), MIN_MS);
     return () => clearInterval(t);
   }, []);
-  // the week ending today, for this name, each time the strip is shown: one request per open
+  // and never behind the rows: a block that opened since the last tick is drawn from its start, not a minute later
+  const now = cal.at > tick.getTime() ? new Date(cal.at) : tick;
+  // the week with today in it, for this name, each time the grid is shown: one request per open
   useEffect(() => {
     void loadCalendar(name, 0);
   }, [name]);
@@ -52,9 +58,9 @@ export function Calendar({ name }: { name: string }) {
   const { first, last } = rangeOf(page, now);
   const today = localMidnight(now);
   // a thousand rows at most, laid out on 7 days: cheap enough to do on every render (a render is an
-  // atom change or the minute tick, not a hover: the tooltips keep their own state)
+  // atom change or the minute tick)
   const blocks = blocksOf(rows, live, now);
-  const byDay = rowsOf(blocks, first, now);
+  const columns = columnsOf(blocks, first, now);
 
   const newest = blocks[blocks.length - 1];
   const total = totalOf(blocks, now);
@@ -90,71 +96,76 @@ export function Calendar({ name }: { name: string }) {
         )}
       </div>
 
-      <div id="calendar-strip" className="relative mt-3 border-b border-primaryStroke">
-        <div aria-hidden className="pointer-events-none absolute inset-y-0 right-0" style={{ left: LABEL_W }}>
-          {[25, 50, 75].map((p) => (
-            <span key={p} className="absolute inset-y-0 border-l border-primaryStroke" style={{ left: `${p}%` }} />
-          ))}
-        </div>
-        {byDay.spans.map((spans, d) => {
-          const day = addDays(first, d);
-          const isToday = day.getTime() === today.getTime();
-          const monday = day.getDay() === 1;
-          return (
-            <div
-              key={d}
-              className={cn('grid h-7 border-t', monday ? 'border-secondaryStroke' : 'border-primaryStroke')}
-              style={{ gridTemplateColumns: `${LABEL_W}px minmax(0, 1fr)` }}
-            >
+      <div id="calendar-strip" className="mt-3">
+        {/* the days' heads, today's the bright one: the weekday over the date where the columns are narrow, beside it where they are not */}
+        <div className="grid" style={COLUMNS}>
+          <span />
+          {columns.map((_, d) => {
+            const day = addDays(first, d);
+            const isToday = day.getTime() === today.getTime();
+            return (
               <span
+                key={d}
+                data-day-head
                 className={cn(
-                  'whitespace-nowrap pr-1.5 text-xs leading-[27px]',
-                  isToday ? 'font-semibold text-textPrimary' : monday ? 'text-textSecondary' : 'text-textTertiary'
+                  'flex flex-col items-center pb-1 text-xs leading-tight sm:flex-row sm:justify-center sm:gap-1',
+                  isToday ? 'font-semibold text-textPrimary' : 'text-textTertiary'
                 )}
               >
-                {isToday ? 'today' : fmtRow(day)}
+                <span>{fmtDow(day)}</span>
+                <span>{day.getDate()}</span>
               </span>
-              <div className="relative">
-                {spans.map((s, i) => {
+            );
+          })}
+        </div>
+        {/* the hours down the side, a column per day: a bar from its start to its end, its length on it */}
+        <div className="relative grid border-y border-r border-primaryStroke" style={{ ...COLUMNS, height: 24 * HOUR_PX }}>
+          <div aria-hidden className="relative text-[10px] leading-none text-textTertiary">
+            {HOURS.map((h) => (
+              <span key={h} className="absolute right-1.5 -translate-y-1/2" style={{ top: pct(h * 60) }}>
+                {fmtClock(h, 0)}
+              </span>
+            ))}
+          </div>
+          {columns.map((spans, d) => {
+            const day = addDays(first, d);
+            const isToday = day.getTime() === today.getTime();
+            return (
+              <div key={d} data-day={d} className={cn('relative border-l border-primaryStroke', isToday && 'bg-backgroundSecondary')}>
+                {HOURS.slice(1).map((h) => (
+                  <span key={h} aria-hidden className="pointer-events-none absolute inset-x-0 border-t border-primaryStroke" style={{ top: pct(h * 60) }} />
+                ))}
+                {spans.map((s) => {
                   const b = s.block;
-                  const detail = detailOf(b, now);
+                  const height = `max(${MIN_PX}px, ${pct(s.to - s.from)})`;
+                  // a piece that runs to midnight hangs from the bottom, so the least height grows it up into its day and not out of it
+                  const at = s.to >= 1440 ? { bottom: 0, height } : { top: pct(s.from), height };
                   return (
-                    <Tooltip key={`${b.id}-${i}`} content={detail} at="top">
-                      <button
-                        type="button"
-                        aria-label={detail}
-                        data-live={b.live || undefined}
-                        data-uncertain={b.uncertain || undefined}
-                        data-start={b.start.toISOString()}
-                        data-end={b.end?.toISOString()}
-                        className={cn(
-                          'block absolute inset-y-[3px] cursor-default border-0 p-0 outline-offset-1 focus-visible:outline focus-visible:outline-1 focus-visible:outline-textPrimary',
-                          b.uncertain ? 'bg-textTertiary' : 'bg-primaryBlue',
-                          s.last && b.live && 'border-r-2 border-solid border-textPrimary',
-                          s.last && b.uncertain && 'border-r-[3px] border-dashed border-textSecondary'
-                        )}
-                        style={{ left: pct(s.from), width: `max(2px, ${((s.to - s.from) / 1440) * 100}%)` }}
-                      />
-                    </Tooltip>
+                    <div
+                      key={`${b.id}-${s.day}`}
+                      role="img"
+                      aria-label={detailOf(b, now)}
+                      data-block
+                      data-live={b.live || undefined}
+                      data-uncertain={b.uncertain || undefined}
+                      data-start={b.start.toISOString()}
+                      data-end={b.end?.toISOString()}
+                      className={cn(
+                        'absolute inset-x-[3px] overflow-hidden px-0.5 pt-[2px] text-[10px] font-semibold leading-none text-background sm:px-1',
+                        b.uncertain ? 'bg-textTertiary' : 'bg-primaryBlue',
+                        s.last && b.live && 'border-b-2 border-solid border-textPrimary',
+                        s.last && b.uncertain && 'border-b-2 border-dashed border-textSecondary'
+                      )}
+                      style={at}
+                    >
+                      {s.label && fmtDur(lengthOf(b, now))}
+                    </div>
                   );
                 })}
-                {byDay.drops
-                  .filter((x) => x.day === d)
-                  .map((x, i) => (
-                    <span key={i} aria-hidden className="drop pointer-events-none absolute inset-y-[3px] w-[2px] bg-decrease" style={{ left: pct(x.min) }} />
-                  ))}
               </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div aria-hidden className="relative h-4 text-[10px] text-textTertiary" style={{ marginLeft: LABEL_W }}>
-        {HOURS.map(([p, label]) => (
-          <span key={p} className="absolute" style={{ left: `${p}%`, transform: p === 0 ? undefined : p === 100 ? 'translateX(-100%)' : 'translateX(-50%)' }}>
-            {label}
-          </span>
-        ))}
+            );
+          })}
+        </div>
       </div>
 
       {newest && (
@@ -165,15 +176,11 @@ export function Calendar({ name }: { name: string }) {
 
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-textTertiary">
         <span className="inline-flex items-center gap-1.5">
-          <span aria-hidden className="inline-block h-2 w-2.5 bg-primaryBlue" />
+          <span aria-hidden className="inline-block h-3 w-2 bg-primaryBlue" />
           streamed
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span aria-hidden className="inline-block h-2 w-[2px] bg-decrease" />
-          dropped and back inside five minutes
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span aria-hidden className="inline-block h-2 w-3.5 border-r-[3px] border-dashed border-textSecondary bg-textTertiary" />
+          <span aria-hidden className="inline-block h-4 w-2 border-b-2 border-dashed border-textSecondary bg-textTertiary" />
           ended by the sweeper
         </span>
       </div>
