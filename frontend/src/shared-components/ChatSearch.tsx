@@ -31,7 +31,7 @@ export interface ChatSearch {
 
 /**
  * The words of a room search, and the filters on them, for a box the caller draws: the chat
- * panel's under its header, the group room's in the page header. `input` is that box, for the
+ * panel's under its header, the group room's over the roster. `input` is that box, for the
  * focus a filter word hands back to it. Submitting asks the room on screen (`searchRoom`); the
  * hits are the panel's results list either way.
  */

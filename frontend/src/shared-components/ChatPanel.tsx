@@ -100,7 +100,7 @@ interface ChatPanelProps {
   owner?: Owner | null;
   /** Inside another box (the corner player): no stroke or minimum height of its own, and no header or search box, which a panel this small has no room for. The lines and the text box alone. */
   embedded?: boolean;
-  /** The search box under the header. Off where the page has one of its own (the group room's header, `ChatSearch.tsx`): the hits land in this panel's results list either way. */
+  /** The search box under the header. Off where the page has one of its own (the group room's roster, `ChatSearch.tsx`): the hits land in this panel's results list either way. */
   search?: boolean;
   /**
    * A group's channel: `name` is the server, this the channel on screen. One socket for every

@@ -60,7 +60,7 @@ import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
 import { Button, buttonClassName } from '@/shared-components/Button';
-import { SearchFilters, useChatSearch } from '@/shared-components/ChatSearch';
+import { type ChatSearch, SearchFilters, useChatSearch } from '@/shared-components/ChatSearch';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Face } from '@/shared-components/Face';
 import { GroupMark } from '@/shared-components/GroupMark';
@@ -527,40 +527,43 @@ function LiveFace({ name }: { name: string }) {
 }
 
 /**
- * The room's search box, in the header between the gear and leave: the channel on screen is
- * asked for the words on enter or the glass, and the filter words stand under the box while it
- * has the focus (ChatSearch.tsx). The hits are the chat panel's results list, as they would be
- * from its own box, which this page leaves out (`search={false}`).
+ * The room's search box, the roster's first row: one box for a member and for a line. The
+ * words narrow the roster under it as they are typed (`Roster`, which holds them); enter, or
+ * the glass, asks the channel on screen for them, and the filter words stand under the box
+ * while it has the focus (ChatSearch.tsx). The hits are the chat panel's results list, as they
+ * would be from its own box, which the page leaves out while this one is up (`search={!roster}`).
+ * Escape empties the box, and the roster is whole again.
  */
-function RoomSearch({ channel }: { channel: string }) {
-  const input = useRef<HTMLInputElement | null>(null);
-  const search = useChatSearch(input);
+function RoomSearch({ channel, search, input }: { channel: string; search: ChatSearch; input: RefObject<HTMLInputElement | null> }) {
   return (
-    <form id="room-search-form" onSubmit={search.submit} className="group/search relative">
-      <label htmlFor="room-search" className="sr-only">
-        search #{channel}
+    <form id="group-search-form" onSubmit={search.submit} className="group/search relative shrink-0">
+      <label htmlFor="group-search" className="sr-only">
+        search members and #{channel}
       </label>
       <input
         ref={input}
-        id="room-search"
+        id="group-search"
         value={search.query}
         onChange={(e) => search.setQuery(e.target.value)}
-        placeholder={`search #${channel}`}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') search.setQuery('');
+        }}
+        placeholder={`members or #${channel}`}
         autoComplete="off"
         autoCapitalize="off"
         spellCheck={false}
-        className="h-7 w-48 border border-primaryStroke bg-background pl-7 pr-2 text-sm text-textPrimary placeholder:text-textTertiary"
+        className="h-8 w-full border border-primaryStroke bg-background pl-8 pr-2 text-sm text-textPrimary placeholder:text-textTertiary"
       />
       <button
-        id="room-search-go"
+        id="group-search-go"
         type="submit"
         aria-label="search"
-        className="absolute left-0 top-0 flex h-7 w-7 items-center justify-center text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none"
+        className="absolute left-0 top-0 flex h-8 w-8 items-center justify-center text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none"
       >
         <RiSearchLine aria-hidden size={14} />
       </button>
       <SearchFilters
-        id="room-search-filters"
+        id="group-search-filters"
         search={search}
         className="absolute left-0 right-0 top-full z-10 mt-1 hidden border border-primaryStroke bg-backgroundSecondary px-2 py-1 group-focus-within/search:flex"
       />
@@ -903,7 +906,6 @@ export function ServerPage() {
                   </button>
                 </Tooltip>
               )}
-              <RoomSearch channel={channel} />
               {!mine && me && (
                 <Button id="group-join" variant="primary" className="px-3 py-1.5 text-sm" disabled={busy} onClick={() => void join()}>
                   join
@@ -972,9 +974,10 @@ export function ServerPage() {
               )}
             </div>
             <div className={cn('min-w-0', ROOM_HEIGHT)}>
-              <ChatPanel name={server} channel={channel} search={false} className="h-full" />
+              {/* the search box is the roster's (RoomSearch); a stranger, with no roster, has the panel's own */}
+              <ChatPanel name={server} channel={channel} search={!roster} className="h-full" />
             </div>
-            {roster && <Roster room={room} />}
+            {roster && <Roster room={room} channel={channel} />}
           </div>
           {managing && <ManageDialog server={server} channel={channel} room={room} me={me ?? null} onClose={() => setManaging(false)} />}
         </>
@@ -1269,36 +1272,34 @@ function Member({ member, live, ownerRole }: { member: GroupMember; live: boolea
 }
 
 /**
- * The right of the room, for a member: who is in. The heading row, with a search icon at its
- * far right; then each member (`Member`), owners first, then the group's order (room-atoms
- * sorts). The icon slides a search bar in from the right, over the names and the roles, and
- * the heading is pushed out to the left ahead of it: the two are one strip, the heading then
- * the bar, each the width of the row, slid along by a row's width. Focus leaving the row (a
- * click anywhere else, a tab past the icon), escape, or the icon again slides it back, and
- * what was typed goes with it, so the list is whole again under the heading. The row stays
- * put while the list scrolls, with no bar on it. Nothing here acts: what a power does is in
- * the manage dialog, from the header.
+ * What the roster is matched on, from the words in the search box: the plain words, and the
+ * name after `from:`, so the list narrows to who is being asked for as the name is typed. The
+ * other filters (`has:image`, the days) are the lines' alone, and leave the list whole.
  */
-function Roster({ room }: { room: GroupRoom }) {
+function rosterQuery(query: string): string {
+  return query
+    .split(/\s+/)
+    .map((word) => word.replace(/^from:/i, ''))
+    .filter((word) => word && !/^(has|before|after):/i.test(word))
+    .join(' ')
+    .toLowerCase();
+}
+
+/**
+ * The right of the room, for a member: who is in. The room's search box first, its own row
+ * (`RoomSearch`): the words in it narrow the names and the roles under it as they are typed
+ * (`rosterQuery`), and enter asks the channel for them, so one box finds a member or a line.
+ * Then the heading, and each member (`Member`), owners first, then the group's order
+ * (room-atoms sorts). The box and the heading stay put while the list scrolls. Nothing here
+ * acts: what a power does is in the manage dialog, from the header.
+ */
+function Roster({ room, channel }: { room: GroupRoom; channel: string }) {
   const members = room.roster ?? [];
   const live = room.live ?? [];
-  const [query, setQuery] = useState('');
-  const [searching, setSearching] = useState(false);
   const input = useRef<HTMLInputElement | null>(null);
-  const opener = useRef<HTMLButtonElement | null>(null);
-  const q = query.trim().toLowerCase();
+  const search = useChatSearch(input);
+  const q = rosterQuery(search.query);
   const shown = q ? members.filter((member) => member.name.toLowerCase().includes(q) || member.roles.some((role) => role.name.toLowerCase().includes(q))) : members;
-
-  // typed in as soon as it is on its way: once the bar is out of its inert state. no scroll:
-  // the row was just clicked, so it is in view, and the bar is still off to the right
-  useEffect(() => {
-    if (searching) input.current?.focus({ preventScroll: true });
-  }, [searching]);
-
-  function close() {
-    setSearching(false);
-    setQuery('');
-  }
 
   return (
     <aside
@@ -1306,64 +1307,10 @@ function Roster({ room }: { room: GroupRoom }) {
       aria-label="members"
       className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-4 text-sm', SIDE_INSET, ROSTER_HEIGHT)}
     >
-      <div
-        className="flex h-8 shrink-0 items-center gap-2"
-        onBlur={(e) => {
-          if (searching && !e.currentTarget.contains(e.relatedTarget)) close();
-        }}
-      >
-        {/* the window: a row's width, clipping the strip. `clip`, not `hidden`: a focus in the clipped bar must not scroll it */}
-        <div className="min-w-0 flex-1 overflow-clip">
-          <div className={cn('flex transition-transform duration-150 ease-out motion-reduce:transition-none', searching && '-translate-x-full')}>
-            <h3 className="flex h-8 w-full shrink-0 items-center gap-1 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-textTertiary">
-              members <span className="font-normal normal-case tracking-normal">{room.members}</span>
-            </h3>
-            {members.length > 0 && (
-              // in the document while it is away, so it can slide in; inert, so it is out of the tab order and off a reader
-              <div className="w-full shrink-0" inert={searching ? undefined : true}>
-                <label htmlFor="group-members-search" className="sr-only">
-                  find a member
-                </label>
-                <input
-                  ref={input}
-                  id="group-members-search"
-                  type="search"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Escape') return;
-                    close();
-                    opener.current?.focus();
-                  }}
-                  placeholder="search members"
-                  autoComplete="off"
-                  autoCapitalize="off"
-                  spellCheck={false}
-                  className={cn(INPUT, 'h-8 w-full py-0 text-sm')}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-        {members.length > 0 && (
-          <Tooltip content={searching ? 'close search' : 'search members'}>
-            <button
-              ref={opener}
-              id="group-members-search-open"
-              type="button"
-              aria-label={searching ? 'close search' : 'search members'}
-              aria-expanded={searching}
-              aria-controls="group-members-search"
-              // the press takes no focus from the bar: with it open, the click closes, and does not first blur it shut and then open it again
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => (searching ? close() : setSearching(true))}
-              className={cn(ICON_BUTTON, searching ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
-            >
-              <RiSearchLine aria-hidden size={16} />
-            </button>
-          </Tooltip>
-        )}
-      </div>
+      <RoomSearch channel={channel} search={search} input={input} />
+      <h3 className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-textTertiary">
+        members <span className="font-normal normal-case tracking-normal">{room.members}</span>
+      </h3>
       {room.roster === null && <p className="text-textTertiary">the roster is for members.</p>}
       {q && shown.length === 0 && (
         <p id="group-members-nobody" className="text-textTertiary">
