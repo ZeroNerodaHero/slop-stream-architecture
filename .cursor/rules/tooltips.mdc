@@ -1,0 +1,38 @@
+---
+description: An icon with no words beside it says its name on hover and focus, with the site's Tooltip (or ControlTip over a video), never the browser's title alone
+globs: frontend/src/**/*.tsx
+alwaysApply: false
+---
+
+# An icon alone says what it is
+
+A control or a mark drawn as an icon with no words beside it — a `Ri*` glyph, an inline `<svg>`, a `✓`, a `×`, a `+` — gets two things: an `aria-label` (its name for a screen reader) and a tooltip with that name, shown on hover and on keyboard focus. This is every icon-only thing: a remove `×` on a card, a drag handle, a `+` that opens a menu, the back caret, a status mark like the green `✓` or the live square.
+
+The tooltip is the site's, not the browser's. `title=` alone is not it: it waits a second, never shows on keyboard focus or touch, and looks like the OS. Where a `Tooltip` goes on, any `title` comes off.
+
+- On the page: `<Tooltip content="…">` from `shared-components/Tooltip.tsx`. It wraps the control (`display: contents`, so the control's own layout and `absolute` placement stand), draws into the body (or the open `<dialog>`), stays in the window, and hides on Escape.
+- Over a video or a picture (dark glass chips): `IconButton`, or `ControlTip` inside a control with `group/control relative`, from `shared-components/VideoControls.tsx`. It reads white on black, where the page's box would not.
+- An icon *beside its word* (a menu row, a tab, "log out") needs nothing: the word is the name.
+- A `+` that opens a menu on hover puts its name as the first line of the menu instead: a tooltip would fight the menu for the hover.
+- Hide the tooltip while it would be in the way: `content={dragging ? null : 'drag to resize'}`, `content={open ? null : 'add a source'}`. Nothing is shown for a null `content`.
+
+```tsx
+// ❌ BAD — a glyph with no name, or a name only the browser's slow title gives
+<button type="button" onClick={remove}><RiCloseLine aria-hidden size={16} /></button>
+<button type="button" aria-label="replace" title="replace" onClick={replace}><RiRefreshLine aria-hidden size={16} /></button>
+
+// ✅ GOOD — the name for the reader, the same name on hover and focus
+<Tooltip content="remove">
+  <button type="button" aria-label="remove" onClick={remove}><RiCloseLine aria-hidden size={16} /></button>
+</Tooltip>
+
+// ✅ GOOD — over the picture
+<IconButton label="picture in picture" onClick={toCorner}><PipIcon /></IconButton>
+
+// ✅ GOOD — a mark, not a control
+<Tooltip content="has an account: this really is them">
+  <span role="img" aria-label="has an account" className="text-increase">✓</span>
+</Tooltip>
+```
+
+The about tab's edit chrome (`About.tsx`: move, replace, remove, resize, the `+`, the four kinds) is the pattern in full: an `Icon` helper that is `Tooltip` around a labelled button.

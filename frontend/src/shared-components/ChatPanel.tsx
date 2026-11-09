@@ -60,10 +60,11 @@ import {
   takeScrollPlan,
   visibleChatLinesAtom
 } from '@/infra/atoms/chat-atoms';
-import { chatFacesAtom, hideBotsAtom, setHideBots } from '@/infra/atoms/settings-atoms';
+import { type ChatStyle, chatStyleAtom, hideBotsAtom, setHideBots } from '@/infra/atoms/settings-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
-import { SearchFilters, useChatSearch } from '@/shared-components/ChatSearch';
+import { ChatLineShape, placeOf } from '@/shared-components/ChatLine';
+import { comboProps, SearchFilters, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
 import { LinkedText } from '@/shared-components/LinkedText';
 import { LiveMark } from '@/shared-components/LiveMark';
@@ -71,7 +72,7 @@ import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { Tooltip } from '@/shared-components/Tooltip';
-import { CHIP_BUTTON } from '@/shared-components/VideoControls';
+import { CHIP_BUTTON, ControlTip } from '@/shared-components/VideoControls';
 import { compressChatImage } from '@/infra/picture';
 import { cn } from '@/utils/cn';
 
@@ -79,7 +80,7 @@ import { cn } from '@/utils/cn';
 const STUCK_PX = 40;
 /** How long the pointer rests on a name before the speaker's card shows: a pause, not a pass over the names while reading. */
 const PEEK_MS = 300;
-/** How many grey lines stand in the room before its past has landed: enough to fill the panel, the rest clipped. A server's blocks are twice as tall, so half as many. */
+/** How many grey lines stand in the room before its past has landed: enough to fill the panel, the rest clipped. Blocks are twice as tall, so half as many. */
 const LINES_GUESS = 16;
 /** The grey lines' shapes, cycled: the name's width, then the words'. Uneven, so the grey reads as talk and not as a table. */
 const LINE_SHAPES: readonly (readonly [name: string, words: string])[] = [
@@ -100,15 +101,28 @@ interface ChatPanelProps {
   owner?: Owner | null;
   /** Inside another box (the corner player): no stroke or minimum height of its own, and no header or search box, which a panel this small has no room for. The lines and the text box alone. */
   embedded?: boolean;
-  /** The search box under the header. Off where the page has one of its own (the group room's roster, `ChatSearch.tsx`): the hits land in this panel's results list either way. */
+  /**
+   * The search box under the header (`ChatSearch.tsx`). A group's alone: the room page asks for
+   * it when a stranger has no roster to carry the box, and leaves it off for a member, whose box
+   * is the roster's first row. A stream's chat has none; its results list still shows a speaker's
+   * lines. The hits land in this panel's results list whichever box asked.
+   */
   search?: boolean;
   /**
    * A group's channel: `name` is the server, this the channel on screen. One socket for every
    * channel of the server (`openServerChat`); a change of channel is `showChannel`, no socket
-   * and no history. The header is the channel, and a line is a block (the face, the name
-   * above the text) instead of one paragraph. The ids and the data attributes stay.
+   * and no history. The header is the channel. The lines are the same as a stream's, in the
+   * shape this browser picked; the ids and the data attributes stay.
    */
   channel?: string;
+  /**
+   * A group's channels as this viewer sees them, for the search: its box offers them after
+   * `channel:`, and without that word a search is every one of them, each hit saying which it
+   * is in. A stream has none.
+   */
+  channels?: readonly string[];
+  /** A hit from another channel of the group was opened: the page puts that channel in its address (the lines have moved already, `openLine`). */
+  onChannel?: (channel: string) => void;
   className?: string;
 }
 
@@ -148,23 +162,17 @@ function useCountdown(until: number): number {
 }
 
 /**
- * The chat next to the video. Lines newest at the bottom, a nick box until you
- * have one (or a login), then one row: a picture, the text, send. Each line wears its
- * speaker's group badges, and starts with their face (a setting of this browser,
- * on unless the chat tab of the user modal turned it off: the picture when the line is a login's
- * or the streamer's, the letter their name makes otherwise); the robot in the
- * header hides the bots' lines (a setting too, the chat tab has it as well). Joins on mount, leaves on
- * unmount; a change of `owner` (going live, stopping) or of the login reconnects
- * through `openChat`. One at a time: the chat atoms hold one room, and the ids
+ * The chat next to the video, and a group channel's. Lines newest at the bottom, a nick box
+ * until you have one (or a login), then one row: a picture, the text, send. The lines take the
+ * shape this browser picked (settings.chatStyle, the chat tab's cards, drawn by ChatLine.tsx
+ * as a friend's chat is: a log, bubbles, or blocks; `#chat-lines` carries it as `data-style`),
+ * each wearing its speaker's group badges after the name; the blocks' face is the picture when
+ * the line is a login's or the streamer's, the letter their name makes otherwise. The robot in
+ * the header hides the bots' lines (a setting too, the chat tab has it as well). Joins on
+ * mount, leaves on unmount; a change of `owner` (going live, stopping) or of the login
+ * reconnects through `openChat`. One at a time: the chat atoms hold one room, and the ids
  * here are the ones the tests key on.
  */
-/** Unix ms on the line, drawn as a clock. A line with no time says nothing. */
-function saidAt(at: number): string {
-  if (!at) return '';
-  const when = new Date(at);
-  if (Number.isNaN(when.getTime())) return '';
-  return when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
 
 /**
  * The speaker's name. A login's opens that account's lines. When the line is really that
@@ -374,8 +382,16 @@ function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
       )}
       {/* everything under the picture: the grey with a little of the blue in it */}
       <div className="flex-1 bg-primaryBlue/10" />
-      <button type="button" id="chat-picture-close" aria-label="close" className={cn(CHIP_BUTTON, 'absolute right-3 top-3 h-10 w-10 justify-center')} onClick={close}>
+      {/* chips over the picture: their names read on it the video controls' way (ControlTip), not the page's */}
+      <button
+        type="button"
+        id="chat-picture-close"
+        aria-label="close"
+        className={cn(CHIP_BUTTON, 'group/control absolute right-3 top-3 h-10 w-10 justify-center')}
+        onClick={close}
+      >
         <RiCloseLine aria-hidden size={24} />
+        <ControlTip at="below-right">close</ControlTip>
       </button>
       {many && (
         <>
@@ -383,19 +399,21 @@ function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
             type="button"
             id="chat-picture-prev"
             aria-label="previous picture"
-            className={cn(CHIP_BUTTON, 'absolute left-3 top-1/2 h-12 w-12 -translate-y-1/2 justify-center')}
+            className={cn(CHIP_BUTTON, 'group/control absolute left-3 top-1/2 h-12 w-12 -translate-y-1/2 justify-center')}
             onClick={() => onStep(-1)}
           >
             <RiArrowLeftSLine aria-hidden size={32} />
+            <ControlTip at="above-left">previous picture</ControlTip>
           </button>
           <button
             type="button"
             id="chat-picture-next"
             aria-label="next picture"
-            className={cn(CHIP_BUTTON, 'absolute right-3 top-1/2 h-12 w-12 -translate-y-1/2 justify-center')}
+            className={cn(CHIP_BUTTON, 'group/control absolute right-3 top-1/2 h-12 w-12 -translate-y-1/2 justify-center')}
             onClick={() => onStep(1)}
           >
             <RiArrowRightSLine aria-hidden size={32} />
+            <ControlTip at="above-right">next picture</ControlTip>
           </button>
         </>
       )}
@@ -403,65 +421,46 @@ function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
   );
 }
 
-function ServerLine({ line, mine, faces }: { line: ChatLine; mine: boolean; faces: boolean }) {
-  return (
-    <div
-      data-id={line.id}
-      data-streamer={line.streamer || undefined}
-      data-verified={line.verified || undefined}
-      data-bot={isBotLine(line) || undefined}
-      data-groups={line.groups.length ? line.groups.map((g) => g.name).join(' ') : undefined}
-      data-mine={mine || undefined}
-      className="my-3 flex gap-3 [overflow-wrap:anywhere]"
-    >
-      {faces && <Face name={line.from} version={line.avatar} className="h-10 w-10 text-sm" />}
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-          <Speaker line={line} />
-          <Marks line={line} mine={mine} />
-          <time className="text-xs text-textTertiary" dateTime={line.at ? new Date(line.at).toISOString() : undefined}>
-            {saidAt(line.at)}
-          </time>
-        </div>
-        {line.text && (
-          <p className="mt-0.5 whitespace-pre-wrap">
-            <LinkedText text={line.text} />
-          </p>
-        )}
-        <ChatImages ids={line.images} />
-      </div>
-    </div>
-  );
-}
-
 /**
- * What stands in the lines' place while the room's past is on its way: grey lines in their
- * shape, so the panel reads as a chat that has not arrived and not as one with nothing in it.
- * A stream's are one line each, the face, a name, some words; a server's are the block (the
- * face beside the name over the words). Clipped to the panel, never scrolled, and no <p>, so
- * nothing that keys on `#chat-lines p` takes a grey line for a said one.
+ * What stands in the lines' place while the room's past is on its way: grey lines in the shape
+ * the lines will take, so the panel reads as a chat that has not arrived and not as one with
+ * nothing in it. A log's are one line each, the time, a name, some words; bubbles are a box a
+ * side at a time; blocks are the face beside the name over the words. Clipped to the panel,
+ * never scrolled, and no <p>, so nothing that keys on `#chat-lines p` takes a grey line for a
+ * said one.
  */
-function ChatSkeleton({ server, faces }: { server: boolean; faces: boolean }) {
-  const rows = server ? LINES_GUESS / 2 : LINES_GUESS;
+function ChatSkeleton({ shape }: { shape: ChatStyle }) {
+  const rows = shape === 'blocks' ? LINES_GUESS / 2 : LINES_GUESS;
   return (
-    <Skeleton id="chat-loading" label="loading the chat" className="h-full overflow-hidden">
+    <Skeleton id="chat-loading" label="loading the chat" className="flex h-full flex-col gap-1 overflow-hidden">
       {Array.from({ length: rows }, (_, i) => {
         const [name, words] = LINE_SHAPES[i % LINE_SHAPES.length] ?? ['w-16', 'w-1/2'];
-        if (server) {
+        if (shape === 'blocks') {
           return (
-            <div key={i} className="my-3 flex gap-3">
-              {faces && <Bone className="h-10 w-10 shrink-0" />}
-              <div className="flex min-w-0 flex-1 flex-col gap-2 py-1">
+            <div key={i} className="my-1 flex gap-2.5">
+              <Bone className="h-8 w-8 shrink-0" />
+              <div className="flex min-w-0 flex-1 flex-col gap-2 py-0.5">
                 <Bone className={cn('h-3.5', name)} />
                 <Bone className={cn('h-3.5', words)} />
               </div>
             </div>
           );
         }
+        if (shape === 'bubbles') {
+          // the box on one side or the other, the way two people's lines fall
+          return (
+            <div key={i} className="flex gap-2.5">
+              <Bone className="h-3 w-8 shrink-0 self-center" />
+              <div className={cn('flex min-w-0 flex-1', i % 3 === 2 ? 'justify-end' : 'justify-start')}>
+                <Bone className={cn('h-8', words)} />
+              </div>
+            </div>
+          );
+        }
         // one line of text-base leading-snug tall, the way a said line is
         return (
-          <div key={i} className="my-1 flex h-[1.375rem] items-center gap-1.5">
-            {faces && <Bone className="h-5 w-5 shrink-0" />}
+          <div key={i} className="flex h-[1.375rem] items-center gap-2">
+            <Bone className="h-3 w-8 shrink-0" />
             <Bone className={cn('h-3.5 shrink-0', name)} />
             <Bone className={cn('h-3.5', words)} />
           </div>
@@ -471,7 +470,7 @@ function ChatSkeleton({ server, faces }: { server: boolean; faces: boolean }) {
   );
 }
 
-export function ChatPanel({ name, owner = null, embedded = false, search = true, channel, className }: ChatPanelProps) {
+export function ChatPanel({ name, owner = null, embedded = false, search = false, channel, channels, onChannel, className }: ChatPanelProps) {
   const server = channel !== undefined;
   const listRef = useRef<HTMLDivElement | null>(null);
   // height before the last paint, so prepending older lines can put the same pixels back
@@ -480,15 +479,16 @@ export function ChatPanel({ name, owner = null, embedded = false, search = true,
   const stuck = useRef(true);
   const shown = useRef(0);
   const searchRef = useRef<HTMLInputElement | null>(null);
-  const searching = useChatSearch(searchRef);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const lines = useAtomValue(visibleChatLinesAtom);
+  // the box completes `from:` with who has spoken here, and `channel:` with the group's channels
+  const searching = useChatSearch(searchRef, undefined, { names: [...new Set(lines.map((line) => line.from))], channels });
   const total = useAtomValue(chatLinesAtom).length;
   const loaded = useAtomValue(chatLoadedAtom);
   const hideBots = useAtomValue(hideBotsAtom);
   const hiddenBots = useAtomValue(hiddenBotLinesAtom);
-  const faces = useAtomValue(chatFacesAtom);
+  const shape = useAtomValue(chatStyleAtom);
   const count = useAtomValue(chatCountAtom);
   const phase = useAtomValue(chatPhaseAtom);
   const draft = useAtomValue(chatDraftAtom);
@@ -623,17 +623,17 @@ export function ChatPanel({ name, owner = null, embedded = false, search = true,
 
       {!embedded && search && (
         <form id="chat-search-form" onSubmit={searching.submit} className="border-b border-primaryStroke px-3 py-2">
-          <div className="flex gap-2">
+          {/* `relative`: the label is sr-only, and the list of what the word could be hangs under the box (relative-parent.mdc) */}
+          <div className="relative flex gap-2">
             <label htmlFor="chat-search" className="sr-only">
-              search this room
+              {server ? 'search this group' : 'search this room'}
             </label>
             <input
               ref={searchRef}
               id="chat-search"
-              value={searching.query}
-              onChange={(e) => searching.setQuery(e.target.value)}
-              placeholder="search this room"
-              autoComplete="off"
+              {...comboProps(searching, 'chat-search-list')}
+              onKeyDown={(e) => void searching.onKeyDown(e)}
+              placeholder={server ? 'search every channel' : 'search this room'}
               className="min-w-0 flex-1 border border-primaryStroke bg-background px-2 py-1 text-sm"
             />
             <button
@@ -644,6 +644,7 @@ export function ChatPanel({ name, owner = null, embedded = false, search = true,
             >
               search
             </button>
+            <SearchSuggestions id="chat-search-list" search={searching} />
           </div>
           {/* the filters, as words under the box */}
           <SearchFilters id="chat-search-filters" search={searching} className="mt-1" />
@@ -668,20 +669,30 @@ export function ChatPanel({ name, owner = null, embedded = false, search = true,
               key={line.id}
               type="button"
               data-id={line.id}
-              onClick={() => void openLine(line.id)}
+              data-channel={line.channel}
+              onClick={() => {
+                // a server's hit from another channel: the lines move there now, and the page's address follows
+                if (line.channel !== undefined && line.channel !== channel) onChannel?.(line.channel);
+                void openLine(line.id, line.channel);
+              }}
               className="block w-full truncate py-0.5 text-left [overflow-wrap:anywhere]"
             >
+              {/* where the hit is, when it is not here: a server's search is every channel's */}
+              {line.channel !== undefined && line.channel !== channel && <span className="mr-1.5 text-textTertiary">#{line.channel}</span>}
               <span className="font-semibold text-primaryBlue">{line.from}</span>
               <span className="text-textSecondary">: {line.text}</span>
               {/* a hit for its pictures may have no words: the picture mark says what is there */}
               {line.images.length > 0 && (
-                <span
-                  className="ml-1 inline-flex items-center gap-0.5 align-middle text-textTertiary"
-                  title={line.images.length === 1 ? 'a picture' : `${line.images.length} pictures`}
-                >
-                  <RiImageLine aria-hidden size={12} />
-                  {line.images.length > 1 && <span className="text-xs tabular-nums">{line.images.length}</span>}
-                </span>
+                <Tooltip content={line.images.length === 1 ? 'a picture' : `${line.images.length} pictures`}>
+                  <span
+                    role="img"
+                    aria-label={line.images.length === 1 ? 'a picture' : `${line.images.length} pictures`}
+                    className="ml-1 inline-flex items-center gap-0.5 align-middle text-textTertiary"
+                  >
+                    <RiImageLine aria-hidden size={12} />
+                    {line.images.length > 1 && <span className="text-xs tabular-nums">{line.images.length}</span>}
+                  </span>
+                </Tooltip>
               )}
             </button>
           ))}
@@ -700,41 +711,56 @@ export function ChatPanel({ name, owner = null, embedded = false, search = true,
         id="chat-lines"
         role="log"
         aria-live="polite"
-        data-faces={faces || undefined}
-        // its scroll is its own: the top of the history does not scroll the page under it (the room page snaps between its views)
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-2 text-base leading-snug"
+        data-style={shape}
+        // its scroll is its own: the top of the history does not scroll the page under it (the room page snaps between its views).
+        // a column: a log is a line each at an even gap; bubbles stand close within a minute and apart between minutes, blocks close within a run and apart between runs (ChatLine.tsx)
+        className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-4 py-2 text-base leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
       >
-        {waiting && <ChatSkeleton server={server} faces={faces} />}
+        {waiting && <ChatSkeleton shape={shape} />}
         {!waiting && lines.length === 0 && (
           <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>
         )}
-        {lines.map((line) => {
+        {lines.map((line, i) => {
           // ours by name and by kind, since a nick may wear a free room's name: the streamer's lines wear `streamer`, a login's `verified`, a nick's neither
           const mine = line.from === myName && (asStreamer ? line.streamer : me ? line.verified : !line.verified && !line.streamer);
-          if (server) return <ServerLine key={line.id} line={line} mine={mine} faces={faces} />;
+          // a run is one speaker's lines in a row: the same name of the same kind, since a nick may wear a name a login holds elsewhere
+          const prev = lines[i - 1];
+          const same = prev !== undefined && prev.from === line.from && prev.verified === line.verified && prev.streamer === line.streamer;
           return (
-            <p
+            <ChatLineShape
               key={line.id}
-              data-id={line.id}
-              data-streamer={line.streamer || undefined}
-              data-verified={line.verified || undefined}
-              data-bot={isBotLine(line) || undefined}
-              data-groups={line.groups.length ? line.groups.map((g) => g.name).join(' ') : undefined}
-              data-mine={mine || undefined}
-              className="my-1 [overflow-wrap:anywhere]"
-            >
-              {/* the face: inline, one line tall, so the row stays one paragraph of text and a long line wraps under it */}
-              {faces && <Face name={line.from} version={line.avatar} className="mr-1.5 inline-flex h-5 w-5 align-middle text-[11px]" />}
-              <Speaker line={line} />
-              <span className="ml-0.5 inline-flex items-center gap-1 align-middle">
-                <Marks line={line} mine={mine} />
-              </span>
-              <span className="text-textSecondary">: </span>
-              <span className="whitespace-pre-wrap">
-                <LinkedText text={line.text} />
-              </span>
-              <ChatImages ids={line.images} />
-            </p>
+              shape={shape}
+              mine={mine}
+              at={line.at}
+              name={line.from}
+              crowd
+              who={
+                <>
+                  <Speaker line={line} />
+                  <span className="ml-1 inline-flex items-center gap-1 align-middle">
+                    <Marks line={line} mine={mine} />
+                  </span>
+                </>
+              }
+              face={<Face name={line.from} version={line.avatar} className="h-8 w-8 text-sm" />}
+              words={
+                line.text ? (
+                  <span className="whitespace-pre-wrap">
+                    <LinkedText text={line.text} />
+                  </span>
+                ) : null
+              }
+              pictures={<ChatImages ids={line.images} />}
+              attrs={{
+                'data-id': line.id,
+                'data-streamer': line.streamer || undefined,
+                'data-verified': line.verified || undefined,
+                'data-bot': isBotLine(line) || undefined,
+                'data-groups': line.groups.length ? line.groups.map((g) => g.name).join(' ') : undefined,
+                'data-mine': mine || undefined
+              }}
+              {...placeOf(line.at, prev?.at, same)}
+            />
           );
         })}
       </div>
@@ -780,30 +806,33 @@ export function ChatPanel({ name, owner = null, embedded = false, search = true,
                 {images.map((id) => (
                   <span key={id} className="relative">
                     <img src={pictureSrc(id)} alt="" className="h-20 w-20 object-cover" />
-                    <button
-                      type="button"
-                      aria-label="remove picture"
-                      className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center bg-black/70 text-white"
-                      onClick={() => removeChatImage(id)}
-                    >
-                      <RiCloseLine aria-hidden size={14} />
-                    </button>
+                    <Tooltip content="remove">
+                      <button
+                        type="button"
+                        aria-label="remove picture"
+                        className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center bg-black/70 text-white"
+                        onClick={() => removeChatImage(id)}
+                      >
+                        <RiCloseLine aria-hidden size={14} />
+                      </button>
+                    </Tooltip>
                   </span>
                 ))}
               </div>
             )}
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                id="chat-picture"
-                aria-label="picture"
-                title={images.length >= MAX_CHAT_IMAGES ? `${MAX_CHAT_IMAGES} pictures at most` : 'picture'}
-                className="flex h-10 w-10 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
-                disabled={uploading || images.length >= MAX_CHAT_IMAGES}
-                onClick={() => fileRef.current?.click()}
-              >
-                <RiImageAddLine size={20} aria-hidden />
-              </button>
+              <Tooltip content={images.length >= MAX_CHAT_IMAGES ? `${MAX_CHAT_IMAGES} pictures at most` : 'add a picture'}>
+                <button
+                  type="button"
+                  id="chat-picture"
+                  aria-label="picture"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
+                  disabled={uploading || images.length >= MAX_CHAT_IMAGES}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <RiImageAddLine size={20} aria-hidden />
+                </button>
+              </Tooltip>
               <input ref={fileRef} id="chat-picture-file" type="file" accept="image/*" multiple className="hidden" onChange={(e) => void pickPictures(e.target.files)} />
               <input
                 id="chat-text"

@@ -5,6 +5,7 @@ import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD } from '@/
 import { isDummyName } from '@/infra/names';
 import { Face } from '@/shared-components/Face';
 import { TestBadge } from '@/shared-components/TestBadge';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 /** A name, its ✓ when it has an account, the test badge for a fake stream. */
@@ -13,9 +14,11 @@ export function Who({ name, verified, className }: { name: string; verified: boo
     <span className={cn('flex min-w-0 items-center gap-1.5', className)}>
       <span className="truncate font-semibold">{name}</span>
       {verified && (
-        <span className="shrink-0 text-increase" title="has an account: this really is them">
-          ✓
-        </span>
+        <Tooltip content="has an account: this really is them">
+          <span role="img" aria-label="has an account" className="shrink-0 text-increase">
+            ✓
+          </span>
+        </Tooltip>
       )}
       {isDummyName(name) && <TestBadge />}
     </span>

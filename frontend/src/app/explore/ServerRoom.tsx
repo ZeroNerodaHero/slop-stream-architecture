@@ -60,7 +60,7 @@ import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
 import { Button, buttonClassName } from '@/shared-components/Button';
-import { type ChatSearch, SearchFilters, useChatSearch } from '@/shared-components/ChatSearch';
+import { type ChatSearch, comboProps, SearchFilters, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Face } from '@/shared-components/Face';
 import { GroupMark } from '@/shared-components/GroupMark';
@@ -379,6 +379,10 @@ function HoverMenu({
             }}
             className="fixed left-0 top-0 z-[60] flex min-w-32 flex-col border border-primaryStroke bg-backgroundSecondary py-1 text-sm"
           >
+            {/* what the menu is, said in it: the plus it hangs off is an icon alone, and a tooltip would fight the menu for the hover (tooltips.mdc) */}
+            <li role="none" className="px-3 pb-1 pt-0.5 text-xs text-textTertiary">
+              {label}
+            </li>
             {items.map((item) => (
               <li key={item.key} role="none">
                 <button
@@ -529,44 +533,49 @@ function LiveFace({ name }: { name: string }) {
 /**
  * The room's search box, the roster's first row: one box for a member and for a line. The
  * words narrow the roster under it as they are typed (`Roster`, which holds them); enter, or
- * the glass, asks the channel on screen for them, and the filter words stand under the box
- * while it has the focus (ChatSearch.tsx). The hits are the chat panel's results list, as they
- * would be from its own box, which the page leaves out while this one is up (`search={!roster}`).
- * Escape empties the box, and the roster is whole again.
+ * the glass, asks the group for them, every channel this login sees unless `channel:<name>`
+ * names one, and the filter words stand under the box while it has the focus (ChatSearch.tsx).
+ * What a filter's word could be (`from:` a member, `channel:` a channel, `has:` its kinds) is
+ * offered under the box as it is typed, over the filter words while there is something to
+ * offer. The hits are the chat panel's results list, as they would be from its own box, which
+ * the page leaves out while this one is up (`search={!roster}`). Escape takes the list down,
+ * then empties the box, and the roster is whole again.
  */
-function RoomSearch({ channel, search, input }: { channel: string; search: ChatSearch; input: RefObject<HTMLInputElement | null> }) {
+function RoomSearch({ search, input }: { search: ChatSearch; input: RefObject<HTMLInputElement | null> }) {
   return (
     <form id="group-search-form" onSubmit={search.submit} className="group/search relative shrink-0">
       <label htmlFor="group-search" className="sr-only">
-        search members and #{channel}
+        search members and every channel
       </label>
       <input
         ref={input}
         id="group-search"
-        value={search.query}
-        onChange={(e) => search.setQuery(e.target.value)}
+        {...comboProps(search, 'group-search-list')}
         onKeyDown={(e) => {
+          if (search.onKeyDown(e)) return;
           if (e.key === 'Escape') search.setQuery('');
         }}
-        placeholder={`members or #${channel}`}
-        autoComplete="off"
+        placeholder="members or every channel"
         autoCapitalize="off"
         spellCheck={false}
         className="h-8 w-full border border-primaryStroke bg-background pl-8 pr-2 text-sm text-textPrimary placeholder:text-textTertiary"
       />
-      <button
-        id="group-search-go"
-        type="submit"
-        aria-label="search"
-        className="absolute left-0 top-0 flex h-8 w-8 items-center justify-center text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none"
-      >
-        <RiSearchLine aria-hidden size={14} />
-      </button>
+      <Tooltip content="search">
+        <button
+          id="group-search-go"
+          type="submit"
+          aria-label="search"
+          className="absolute left-0 top-0 flex h-8 w-8 items-center justify-center text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none"
+        >
+          <RiSearchLine aria-hidden size={14} />
+        </button>
+      </Tooltip>
       <SearchFilters
         id="group-search-filters"
         search={search}
         className="absolute left-0 right-0 top-full z-10 mt-1 hidden border border-primaryStroke bg-backgroundSecondary px-2 py-1 group-focus-within/search:flex"
       />
+      <SearchSuggestions id="group-search-list" search={search} />
     </form>
   );
 }
@@ -974,10 +983,17 @@ export function ServerPage() {
               )}
             </div>
             <div className={cn('min-w-0', ROOM_HEIGHT)}>
-              {/* the search box is the roster's (RoomSearch); a stranger, with no roster, has the panel's own */}
-              <ChatPanel name={server} channel={channel} search={!roster} className="h-full" />
+              {/* the search box is the roster's (RoomSearch); a stranger, with no roster, has the panel's own. a search is every channel's: a hit opened in another one moves the page there */}
+              <ChatPanel
+                name={server}
+                channel={channel}
+                search={!roster}
+                channels={channels.map((item) => item.name)}
+                onChannel={(to) => navigate(to === 'general' ? `/groups/${server}` : `/groups/${server}/${to}`)}
+                className="h-full"
+              />
             </div>
-            {roster && <Roster room={room} channel={channel} />}
+            {roster && <Roster room={room} />}
           </div>
           {managing && <ManageDialog server={server} channel={channel} room={room} me={me ?? null} onClose={() => setManaging(false)} />}
         </>
@@ -1274,13 +1290,13 @@ function Member({ member, live, ownerRole }: { member: GroupMember; live: boolea
 /**
  * What the roster is matched on, from the words in the search box: the plain words, and the
  * name after `from:`, so the list narrows to who is being asked for as the name is typed. The
- * other filters (`has:image`, the days) are the lines' alone, and leave the list whole.
+ * other filters (`has:image`, the days, the channel) are the lines' alone, and leave the list whole.
  */
 function rosterQuery(query: string): string {
   return query
     .split(/\s+/)
     .map((word) => word.replace(/^from:/i, ''))
-    .filter((word) => word && !/^(has|before|after):/i.test(word))
+    .filter((word) => word && !/^(has|before|after|channel|in):/i.test(word))
     .join(' ')
     .toLowerCase();
 }
@@ -1288,16 +1304,17 @@ function rosterQuery(query: string): string {
 /**
  * The right of the room, for a member: who is in. The room's search box first, its own row
  * (`RoomSearch`): the words in it narrow the names and the roles under it as they are typed
- * (`rosterQuery`), and enter asks the channel for them, so one box finds a member or a line.
+ * (`rosterQuery`), and enter asks the group for them, so one box finds a member or a line.
+ * The box completes `from:` with the members and `channel:` with the channels this login sees.
  * Then the heading, and each member (`Member`), owners first, then the group's order
  * (room-atoms sorts). The box and the heading stay put while the list scrolls. Nothing here
  * acts: what a power does is in the manage dialog, from the header.
  */
-function Roster({ room, channel }: { room: GroupRoom; channel: string }) {
+function Roster({ room }: { room: GroupRoom }) {
   const members = room.roster ?? [];
   const live = room.live ?? [];
   const input = useRef<HTMLInputElement | null>(null);
-  const search = useChatSearch(input);
+  const search = useChatSearch(input, undefined, { names: members.map((member) => member.name), channels: (room.channels ?? []).map((item) => item.name) });
   const q = rosterQuery(search.query);
   const shown = q ? members.filter((member) => member.name.toLowerCase().includes(q) || member.roles.some((role) => role.name.toLowerCase().includes(q))) : members;
 
@@ -1307,7 +1324,7 @@ function Roster({ room, channel }: { room: GroupRoom; channel: string }) {
       aria-label="members"
       className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-4 text-sm', SIDE_INSET, ROSTER_HEIGHT)}
     >
-      <RoomSearch channel={channel} search={search} input={input} />
+      <RoomSearch search={search} input={input} />
       <h3 className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-textTertiary">
         members <span className="font-normal normal-case tracking-normal">{room.members}</span>
       </h3>
@@ -1566,16 +1583,18 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
 
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {/* pinned over the pane: the pane scrolls under it */}
-        <button
-          id="group-manage-close"
-          type="button"
-          aria-label="close"
-          aria-keyshortcuts="Escape"
-          onClick={close}
-          className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue"
-        >
-          <RiCloseLine aria-hidden size={20} />
-        </button>
+        <Tooltip content="close" at="left">
+          <button
+            id="group-manage-close"
+            type="button"
+            aria-label="close"
+            aria-keyshortcuts="Escape"
+            onClick={close}
+            className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue"
+          >
+            <RiCloseLine aria-hidden size={20} />
+          </button>
+        </Tooltip>
         {/* keyed on the tab: a fresh pane starts at the top with its own form state */}
         <div
           key={tab ?? 'none'}
@@ -2171,21 +2190,22 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
               )}
             >
               {orders && (
-                <button
-                  id={`channel-drag-${name}`}
-                  type="button"
-                  aria-label={`move #${name}: drag, or the arrow keys`}
-                  aria-keyshortcuts="ArrowUp ArrowDown"
-                  title="drag to move"
-                  onPointerDown={(e) => startDrag(e, name, i)}
-                  onKeyDown={(e) => keyMove(e, name, i)}
-                  className={cn(
-                    'shrink-0 touch-none select-none border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke hover:text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none',
-                    held ? 'cursor-grabbing' : 'cursor-grab'
-                  )}
-                >
-                  <RiDraggable aria-hidden size={18} />
-                </button>
+                <Tooltip content={held ? null : 'drag to move'}>
+                  <button
+                    id={`channel-drag-${name}`}
+                    type="button"
+                    aria-label={`move #${name}: drag, or the arrow keys`}
+                    aria-keyshortcuts="ArrowUp ArrowDown"
+                    onPointerDown={(e) => startDrag(e, name, i)}
+                    onKeyDown={(e) => keyMove(e, name, i)}
+                    className={cn(
+                      'shrink-0 touch-none select-none border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke hover:text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none',
+                      held ? 'cursor-grabbing' : 'cursor-grab'
+                    )}
+                  >
+                    <RiDraggable aria-hidden size={18} />
+                  </button>
+                </Tooltip>
               )}
               {/* the api's rename rule is delete's: who made it, or the channels power, and never general */}
               <ChannelName item={item} channels={channels} editable={item.can_delete} onRename={(to) => void run(() => renameChannel(server, name, to))} />

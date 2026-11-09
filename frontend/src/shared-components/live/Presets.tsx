@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { applyPresetNamed, forgetPreset, livePanelsAtom, savedPresetsAtom, savePreset, setLivePanel, sourcesAtom } from '@/infra/atoms/publish-atoms';
 import { type Preset, PRESETS, rolesOf } from '@/infra/scene';
 import { Collapsible } from '@/shared-components/live/Collapsible';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 /** A preset's name as an id: `screen + face` is `preset-screen-face`. */
@@ -27,15 +28,17 @@ function Chip({ preset, whole, saved }: { preset: Preset; whole: boolean; saved:
         {preset.name}
       </button>
       {saved && (
-        <button
-          id={`${presetId(preset.name)}-forget`}
-          type="button"
-          aria-label={`forget the preset ${preset.name}`}
-          onClick={() => forgetPreset(preset.name)}
-          className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary opacity-0 transition-opacity duration-150 hover:border-decrease hover:text-decrease focus-visible:opacity-100 focus-visible:outline-none group-hover/chip:opacity-100"
-        >
-          <RiCloseLine aria-hidden size={10} />
-        </button>
+        <Tooltip content="forget this preset">
+          <button
+            id={`${presetId(preset.name)}-forget`}
+            type="button"
+            aria-label={`forget the preset ${preset.name}`}
+            onClick={() => forgetPreset(preset.name)}
+            className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary opacity-0 transition-opacity duration-150 hover:border-decrease hover:text-decrease focus-visible:opacity-100 focus-visible:outline-none group-hover/chip:opacity-100"
+          >
+            <RiCloseLine aria-hidden size={10} />
+          </button>
+        </Tooltip>
       )}
     </span>
   );

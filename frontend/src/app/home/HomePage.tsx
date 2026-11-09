@@ -21,6 +21,7 @@ import { PersonRow } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { TestBadge } from '@/shared-components/TestBadge';
 import { ViewerCount } from '@/shared-components/ViewerCount';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 import { ago, since } from '@/utils/since';
 
@@ -206,9 +207,11 @@ function Card({
             <h2 className="flex min-w-0 items-center text-xl font-semibold leading-tight">
               <span className="truncate">{stream.name}</span>
               {stream.verified && (
-                <span className="ml-1.5 shrink-0 text-increase" title="has an account: this really is them">
-                  ✓
-                </span>
+                <Tooltip content="has an account: this really is them">
+                  <span role="img" aria-label="has an account" className="ml-1.5 shrink-0 text-increase">
+                    ✓
+                  </span>
+                </Tooltip>
               )}
               {isDummyName(stream.name) && (
                 <span className="shrink-0">

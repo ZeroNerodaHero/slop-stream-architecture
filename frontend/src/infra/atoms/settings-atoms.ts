@@ -242,39 +242,28 @@ export function setHideBots(hide: boolean) {
 }
 
 /**
- * Each line starts with its speaker's face: the picture of a login or of the streamer, else
- * the letter the name makes (the stand-in every list uses, GeneratedAvatar.tsx). On unless
- * this browser turned it off; off, a line is the name and the words alone.
+ * The shape of the lines in every chat: a stream's, a group channel's, and a chat with a
+ * friend (ChatLine.tsx draws it for the panel and the window alike; docs/chat.md). `log`: one
+ * line each, the time, the name, then the words, nothing offset, the most lines on screen.
+ * `bubbles` (the default): each line in a box of its own, yours on the right and theirs on the
+ * left (in a room, under their name; a thread's two sides say who). `blocks`: the face (the
+ * picture of a login or the streamer, else the letter the name makes, GeneratedAvatar.tsx),
+ * the name and the time over the words, and one person's lines in a row under one head. The
+ * faces are the blocks': no shape has a switch of its own for them.
  */
-const storedChatFacesAtom = atomWithStorage<unknown>('settings.chatFaces', true, undefined, { getOnInit: true });
-/** Read: a boolean, whatever localstorage holds. Anything but a stored `false` is on. */
-export const chatFacesAtom = atom((get) => get(storedChatFacesAtom) !== false);
+export type ChatStyle = 'log' | 'bubbles' | 'blocks';
 
-export function setChatFaces(on: boolean) {
-  store.set(storedChatFacesAtom, on);
-}
+export const CHAT_STYLES: readonly ChatStyle[] = ['log', 'bubbles', 'blocks'];
 
-/**
- * The shape of the lines in a chat with a friend, the chat window's (docs/dms.md,
- * FriendChat.tsx). `log`: one line each, the time, the name, then the words, nothing offset,
- * the most lines on screen. `bubbles` (the default): each line in a box of its own, yours on
- * the right and theirs on the left, no names (the sides say who). `blocks`: the face, the name
- * and the time over the words, and one person's lines in a row under one head. The room chat
- * is not this: its lines have one shape (docs/chat.md).
- */
-export type DmStyle = 'log' | 'bubbles' | 'blocks';
-
-export const DM_STYLES: readonly DmStyle[] = ['log', 'bubbles', 'blocks'];
-
-const storedDmStyleAtom = atomWithStorage<string>('settings.dmStyle', 'bubbles', undefined, { getOnInit: true });
-/** Read: always one of DM_STYLES, whatever localstorage holds. */
-export const dmStyleAtom = atom((get) => {
-  const style = get(storedDmStyleAtom);
-  return (DM_STYLES as readonly string[]).includes(style) ? (style as DmStyle) : 'bubbles';
+const storedChatStyleAtom = atomWithStorage<string>('settings.chatStyle', 'bubbles', undefined, { getOnInit: true });
+/** Read: always one of CHAT_STYLES, whatever localstorage holds. */
+export const chatStyleAtom = atom((get) => {
+  const style = get(storedChatStyleAtom);
+  return (CHAT_STYLES as readonly string[]).includes(style) ? (style as ChatStyle) : 'bubbles';
 });
 
-export function setDmStyle(style: DmStyle) {
-  store.set(storedDmStyleAtom, style);
+export function setChatStyle(style: ChatStyle) {
+  store.set(storedChatStyleAtom, style);
 }
 
 /**

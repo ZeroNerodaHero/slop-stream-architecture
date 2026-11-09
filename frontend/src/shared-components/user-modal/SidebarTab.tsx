@@ -4,6 +4,7 @@ import { type KeyboardEvent, type PointerEvent, useRef, useState } from 'react';
 
 import { type PanelSide, type SidebarList, moveSidebarList, panelSideAtom, setPanelSide, setSidebarListOn, sidebarListsAtom } from '@/infra/atoms/settings-atoms';
 import { CHECKBOX, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 const PANEL_SIDE_OPTIONS: readonly { side: PanelSide; label: string; detail: string }[] = [
@@ -108,21 +109,22 @@ function SidebarLists() {
               !on && 'text-textTertiary'
             )}
           >
-            <button
-              id={`sidebar-list-${list}-drag`}
-              type="button"
-              aria-label={`move ${label}: drag, or the arrow keys`}
-              aria-keyshortcuts="ArrowUp ArrowDown"
-              title="drag to move"
-              onPointerDown={(e) => startDrag(e, list, i)}
-              onKeyDown={(e) => keyMove(e, list, i)}
-              className={cn(
-                'shrink-0 touch-none select-none border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke hover:text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none',
-                dragging === list ? 'cursor-grabbing' : 'cursor-grab'
-              )}
-            >
-              <RiDraggable aria-hidden size={18} />
-            </button>
+            <Tooltip content={dragging === list ? null : 'drag to move'}>
+              <button
+                id={`sidebar-list-${list}-drag`}
+                type="button"
+                aria-label={`move ${label}: drag, or the arrow keys`}
+                aria-keyshortcuts="ArrowUp ArrowDown"
+                onPointerDown={(e) => startDrag(e, list, i)}
+                onKeyDown={(e) => keyMove(e, list, i)}
+                className={cn(
+                  'shrink-0 touch-none select-none border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke hover:text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none',
+                  dragging === list ? 'cursor-grabbing' : 'cursor-grab'
+                )}
+              >
+                <RiDraggable aria-hidden size={18} />
+              </button>
+            </Tooltip>
             <span className={cn('shrink-0', on ? 'text-primaryBlue' : 'text-textTertiary')}>
               <Icon aria-hidden size={24} />
             </span>

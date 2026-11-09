@@ -36,6 +36,8 @@ export interface ChatLine {
   image?: string | null;
   /** Every picture on the line, the ids from `POST /api/chat-images`. Empty when there are none. */
   images: string[];
+  /** On a search hit of a server alone: the channel the line is in, since a server's search spans every channel the viewer sees (`searchRoom`). */
+  channel?: string;
 }
 
 /** The automatic group a socket that says `bot: true` wears. The hide switch keys on it. */
@@ -411,6 +413,8 @@ export function closeChat(reset = true) {
   session = null;
   inFlight.length = 0;
   resetHistory();
+  // the hits were this room's, or this server's: not the next one's
+  clearResults();
   if (reset) {
     store.set(chatLinesAtom, []);
     store.set(chatLoadedAtom, false);
@@ -662,8 +666,7 @@ function resetHistory() {
   following = true;
   store.set(chatPinnedAtom, false);
   store.set(chatBehindAtom, 0);
-  store.set(chatResultsAtom, null);
-  store.set(chatResultsForAtom, '');
+  // the hits stay: a server's are every channel's, and a hit opened in another channel is still on the list (`closeChat` clears them)
 }
 
 /** The view sits on the newest line, or the reader has scrolled up. */
@@ -711,14 +714,20 @@ export async function loadOlder() {
   }
 }
 
-/** Matches in this room, newest first. Off, the server says history is not kept. */
+/**
+ * Matches, newest first: a stream's room, or a server's, which is every channel the viewer
+ * sees unless `channel:<name>` among the words names one (each hit then says its channel,
+ * `ChatLine.channel`). Asked of the channel on screen; a change of channel meanwhile does not
+ * drop the answer, since it is the server's. Off, the server says history is not kept.
+ */
 export async function searchRoom(raw: string) {
   const name = httpRoom();
+  const server = session?.server ?? null;
   const q = raw.trim();
   if (!name || !q) return;
   try {
     const lines = await chatGet(`/chat/${chatPath(name)}/search?q=${encodeURIComponent(q)}`);
-    if (httpRoom() !== name) return;
+    if (server ? session?.server !== server : httpRoom() !== name) return;
     store.set(chatResultsAtom, lines);
     store.set(chatResultsForAtom, q);
   } catch (err) {
@@ -749,9 +758,12 @@ export function clearResults() {
 
 /**
  * Put `id` in view. Already loaded: just scroll. Otherwise load the window around it
- * and leave the live tail parked, so "latest" comes back to it.
+ * and leave the live tail parked, so "latest" comes back to it. `inChannel`, a server's hit
+ * from another channel (a server's search spans them): that channel on screen first, the way
+ * the channel list would put it; the page's address follows (ChatPanel's `onChannel`).
  */
-export async function openLine(id: string) {
+export async function openLine(id: string, inChannel?: string) {
+  if (inChannel !== undefined && session?.server && inChannel !== channel) showChannel(inChannel);
   const name = httpRoom();
   if (!name) return;
   if (store.get(chatLinesAtom).some((l) => l.id === id)) {

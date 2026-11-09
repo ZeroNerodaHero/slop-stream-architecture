@@ -4,8 +4,10 @@
  * them a page at a time, sends new ones over http, hears them come back on the events socket
  * (to every device of both sides, so a line sent here lands in your other tabs too), and
  * counts what is new. One window, a tab per friend down its side; it hides and shows with
- * its tabs kept, and with no tab shown it offers the friends to pick from. Same shape as the
- * other atom modules: atoms for what renders, action functions for every transition.
+ * its tabs kept, and with no tab shown it offers the friends to pick from. A thread is
+ * searched over http too (`searchDm`), and a hit is put in view by loading the pages back to
+ * it (`openDmLine`). Same shape as the other atom modules: atoms for what renders, action
+ * functions for every transition.
  */
 
 import { atom } from 'jotai';
@@ -54,6 +56,14 @@ export const dmThreadsAtom = atom<Record<string, Thread>>({});
 export const dmNoticeAtom = atom('');
 /** New lines across every thread: the number on the sidebar's chat button. */
 export const dmUnreadAtom = atom((get) => get(dmsAtom).reduce((n, d) => n + d.unread, 0));
+
+/** A search's hits, newest first, and the thread and the words they are for. Null when the list is closed. The window shows them under its header while that thread is the one on screen. */
+export const dmResultsAtom = atom<{ name: string; query: string; lines: DmLine[] } | null>(null);
+/** A line to put in view (`openDmLine`): the window's log centres it once it is drawn. `n` makes a second jump to the same line a new one. */
+export const dmJumpAtom = atom<{ name: string; id: number; n: number } | null>(null);
+let jumps = 0;
+/** Which search the hits are for. Every search, close of the list, and logout is a new one; an answer to an older one is dropped. */
+let asks = 0;
 
 /** Threads with a page in flight. */
 const loading = new Set<string>();
@@ -128,6 +138,7 @@ export function removeDm(name: string) {
   const rest = dms.filter((d) => d.name !== name);
   store.set(dmsAtom, rest);
   if (store.get(dmActiveAtom) === name) store.set(dmActiveAtom, rest[Math.min(at, rest.length - 1)]?.name ?? null);
+  if (store.get(dmResultsAtom)?.name === name) clearDmResults();
 }
 
 /**
@@ -158,7 +169,10 @@ export function closeAllDms() {
   store.set(dmOpenAtom, false);
   store.set(dmThreadsAtom, {});
   store.set(dmNoticeAtom, '');
+  store.set(dmResultsAtom, null);
+  store.set(dmJumpAtom, null);
   loading.clear();
+  asks++;
 }
 
 // ---- the api ---------------------------------------------------------------------------------
@@ -289,6 +303,62 @@ export function markRead(name: string) {
   api.readDm(name, last.id).catch(() => undefined);
 }
 
+/**
+ * The lines of the thread with `name` that match the box (`GET /api/dm/:name/search`: the words,
+ * a quoted phrase, the filters among them), newest first, into `dmResultsAtom`. A refusal (a
+ * filter that wants a value, an empty box) is the api's words under the box, and the list closes.
+ * The answer is kept only while it is still the one asked for: another search since, the list
+ * closed, or a change of login, and it is dropped, a refusal too.
+ */
+export async function searchDm(name: string, raw: string): Promise<void> {
+  const q = raw.trim();
+  if (!q) return;
+  const ask = ++asks;
+  const me = store.get(meAtom);
+  // a newer search, the list closed, or another login since: this answer is not the one wanted
+  const stale = () => ask !== asks || store.get(meAtom) !== me;
+  try {
+    const lines = (await api.searchDm(name, q)).lines.map(lineOf);
+    if (stale()) return;
+    store.set(dmResultsAtom, { name, query: q, lines });
+  } catch (err) {
+    if (stale()) return;
+    store.set(dmResultsAtom, null);
+    showDmNotice(messageOf(err));
+  }
+}
+
+/** The hits off the screen: the list's close, the search box closing. An answer still on its way is not wanted either. */
+export function clearDmResults() {
+  asks++;
+  store.set(dmResultsAtom, null);
+}
+
+/**
+ * Line `id` of the thread with `name` in view: a hit clicked. The thread's lines are one run
+ * from the newest back, so the pages before the oldest on screen are asked for one after
+ * another (`loadOlderDm`) until the line is among them, or the thread's start is; then the
+ * window centres it (`dmJumpAtom`). A line already loaded is centred at once. Nothing when the
+ * line is not in the thread (gone, or another login's hits).
+ */
+export async function openDmLine(name: string, id: number): Promise<void> {
+  const lines = () => store.get(dmThreadsAtom)[name]?.lines ?? [];
+  const loaded = () => lines().some((l) => l.id === id);
+  while (!loaded()) {
+    const thread = store.get(dmThreadsAtom)[name];
+    const oldest = thread?.lines[0];
+    // the line would be among the loaded ones already, or there is nothing older to ask for
+    if (!thread?.loaded || thread.start || !oldest || oldest.id < id) break;
+    // a page is on its way for the scroll: wait for it rather than give up
+    if (loading.has(name)) {
+      await new Promise((done) => setTimeout(done, 100));
+      continue;
+    }
+    if (!(await loadOlderDm(name))) break;
+  }
+  if (loaded()) store.set(dmJumpAtom, { name, id, n: ++jumps });
+}
+
 /** Words under the box for a few seconds: the api's refusal, a page that did not come, a picture that would not go up. */
 export function showDmNotice(text: string) {
   store.set(dmNoticeAtom, text);
@@ -327,6 +397,8 @@ function retarget(fromId: string, peer: string) {
     })
   );
   if (store.get(dmActiveAtom) === old) store.set(dmActiveAtom, peer);
+  const results = store.get(dmResultsAtom);
+  if (results?.name === old) store.set(dmResultsAtom, { ...results, name: peer });
 }
 
 /**

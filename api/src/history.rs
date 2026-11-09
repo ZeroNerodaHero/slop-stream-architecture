@@ -18,7 +18,9 @@
 //! the stream, otherwise postgres. the panel scrolls to that id.
 //!
 //! A server channel is the same four reads with the room `server/channel`:
-//! `/chat/<server>/<channel>/before`, `search`, `by/<account>`, `around/<id>`.
+//! `/chat/<server>/<channel>/before`, `search`, `by/<account>`, `around/<id>`. Its search is
+//! the server's: every channel the caller sees at once (groups.rs `visible_channels`), each hit
+//! saying which channel it is in, unless `channel:<name>` among the words names one.
 
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -27,7 +29,7 @@ use axum::Router;
 use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveTime, Utc};
 use redis::streams::StreamRangeReply;
 use redis::AsyncCommands;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -46,6 +48,10 @@ const WINDOW: usize = 40;
 const SEARCH_LIMIT: i64 = 50;
 /// A search's box, in unicode scalars: filters and words together.
 const SEARCH_CHARS: usize = 200;
+/// A link, for `has:link`, as the panel draws one (LinkedText.tsx): `http(s)://` or `www.` at the
+/// start of a word. The rooms keep it as a column (`has_link`, migrate-22.sql, this same regex);
+/// a direct message thread, too small for a column of its own, reads it over the text (dms.rs).
+pub(crate) const LINK: &str = r"(^|[^[:alnum:]])(https?://|www\.)[^[:space:]]";
 /// A link to a video, for `has:video`: a postgres regex (case-insensitive) over the text of the
 /// lines that have a link (`has_link`, migrate-22.sql). The host or the file type has to sit
 /// inside a link of that same shape, so a video-looking word beside an unrelated link
@@ -54,16 +60,17 @@ const SEARCH_CHARS: usize = 200;
 /// `clip.mp4.` and `(…/clip.mp4)` are videos and `x.movie` and `clip.mp4.example.com/a` are not.
 /// The chat keeps no videos of its own, so this is the hosts people paste, and the file types a
 /// browser plays. Not the schema's: a host is added here.
-const VIDEO_LINK: &str = r"(^|[^[:alnum:]])(https?://|www\.)[^[:space:]]*(youtube\.com/(watch|shorts|live|embed)|youtu\.be/|twitch\.tv/videos/|clips\.twitch\.tv/|twitch\.tv/[^/[:space:]]+/clip/|vimeo\.com/[0-9]|streamable\.com/|kick\.com/[^[:space:]]*/clips?/|tiktok\.com/|\.(mp4|webm|mov|m3u8)([?#]|[[:punct:]]*([[:space:]]|$)))";
+pub(crate) const VIDEO_LINK: &str = r"(^|[^[:alnum:]])(https?://|www\.)[^[:space:]]*(youtube\.com/(watch|shorts|live|embed)|youtu\.be/|twitch\.tv/videos/|clips\.twitch\.tv/|twitch\.tv/[^/[:space:]]+/clip/|vimeo\.com/[0-9]|streamable\.com/|kick\.com/[^[:space:]]*/clips?/|tiktok\.com/|\.(mp4|webm|mov|m3u8)([?#]|[[:punct:]]*([[:space:]]|$)))";
 
-/// A line's columns, with its speaker's picture as it is now (`LineRow`). The row keeps no
-/// picture: a read joins `streamers` for it, by account for a verified line (so a rename
-/// keeps it for the hold's length; after it, the letter: the name the page fetches by leads
-/// elsewhere) and by name for the streamer's. A nick's line joins nothing: it is nobody's
-/// picture, whoever holds that name later. A line out of redis gets the same from
-/// `chat::with_faces`, so the two sides of the window agree.
+/// A line's columns, with its speaker's picture as it is now (`LineRow`), and its room last (a
+/// server's search spans channels, and says which one a hit is in). The row keeps no picture:
+/// a read joins `streamers` for it, by account for a verified line (so a rename keeps it for
+/// the hold's length; after it, the letter: the name the page fetches by leads elsewhere) and
+/// by name for the streamer's. A nick's line joins nothing: it is nobody's picture, whoever
+/// holds that name later. A line out of redis gets the same from `chat::with_faces`, so the
+/// two sides of the window agree.
 const LINE_COLUMNS: &str = "l.id, l.at, l.speaker, l.user_id, l.\"text\", l.streamer, l.verified, l.badges, l.image,
-                            (EXTRACT(EPOCH FROM COALESCE(u.avatar_at, r.avatar_at)))::bigint";
+                            (EXTRACT(EPOCH FROM COALESCE(u.avatar_at, r.avatar_at)))::bigint, l.room";
 const LINE_TABLES: &str = "chat_lines l
                            LEFT JOIN streamers u ON l.verified AND u.id = l.user_id
                                AND (u.name = l.speaker OR EXISTS (SELECT 1 FROM held_names h WHERE h.user_id = u.id AND h.name = l.speaker AND h.until > now()))
@@ -81,18 +88,31 @@ pub(crate) fn routes() -> Router<ChatState> {
         .route("/chat/{server}/{channel}/around/{id}", get(around_channel))
 }
 
-/// The room key of a server's channel, once it is there and this caller sees it (groups.rs
-/// `may_see`: a channel kept to roles they do not hold reads `no such channel`, like one that
-/// is not there). The caller is the login the cookie names, or nobody.
-async fn room_of_channel(s: &ChatState, headers: &HeaderMap, server: &str, channel: &str) -> Result<String, ApiError> {
-    let (server, room) = crate::groups::channel_room(&s.db, server, channel).await?;
+/// Who is reading: the login the cookie names (or nobody), and whether they are a site admin,
+/// who sees every channel.
+async fn viewer(s: &ChatState, headers: &HeaderMap) -> Result<(Option<Uuid>, bool), ApiError> {
     let me = crate::auth::whoami_readonly(&s.db, headers).await?;
     let user = me.as_ref().map(|a| a.id);
+    Ok((user, user.is_some_and(|id| s.is_admin_id(id))))
+}
+
+/// The room key of a server's channel, once it is there and this viewer sees it (groups.rs
+/// `may_see`: a channel kept to roles they do not hold reads `no such channel`, like one that
+/// is not there). `server` and `channel` as the url has them; the clean server name comes back
+/// with the room.
+async fn seen_room(s: &ChatState, viewer: (Option<Uuid>, bool), server: &str, channel: &str) -> Result<(String, String), ApiError> {
+    let (server, room) = crate::groups::channel_room(&s.db, server, channel).await?;
     let channel = room.strip_prefix(server.as_str()).and_then(|rest| rest.strip_prefix('/')).unwrap_or("");
-    if !crate::groups::may_see(&s.db, &server, channel, user, user.is_some_and(|id| s.is_admin_id(id))).await? {
+    if !crate::groups::may_see(&s.db, &server, channel, viewer.0, viewer.1).await? {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel"));
     }
-    Ok(room)
+    Ok((server, room))
+}
+
+/// The room key of a server's channel for the login the cookie names (`seen_room`).
+async fn room_of_channel(s: &ChatState, headers: &HeaderMap, server: &str, channel: &str) -> Result<String, ApiError> {
+    let who = viewer(s, headers).await?;
+    Ok(seen_room(s, who, server, channel).await?.1)
 }
 
 async fn before_channel(
@@ -106,14 +126,30 @@ async fn before_channel(
     Ok(json_lines(older(&s, &room, &id).await?))
 }
 
+/// A server's search, from the channel on screen: every channel this viewer sees, or the one
+/// `channel:<name>` names (`no such channel` for one they do not see, like one that is not
+/// there). The channel in the path must be one they see, as for every read of it.
 async fn search_channel(
     State(s): State<ChatState>,
     Path((server, channel)): Path<(String, String)>,
     headers: HeaderMap,
     Query(q): Query<SearchQuery>,
 ) -> Result<JsonLines, ApiError> {
-    let room = room_of_channel(&s, &headers, &server, &channel).await?;
-    search_room(&s, &room, &q.q).await
+    if !s.persist {
+        return Err(not_kept());
+    }
+    let search = read_search(&q.q)?;
+    let who = viewer(&s, &headers).await?;
+    let (server, _) = seen_room(&s, who, &server, &channel).await?;
+    let rooms: Vec<String> = match &search.channel {
+        Some(name) => vec![seen_room(&s, who, &server, name).await?.1],
+        None => crate::groups::visible_channels(&s.db, &server, who.0, who.1)
+            .await?
+            .into_iter()
+            .map(|name| format!("{server}/{name}"))
+            .collect(),
+    };
+    search_rooms(&s, &rooms, &search, Some(&server)).await
 }
 
 async fn by_channel(
@@ -204,10 +240,11 @@ async fn search(State(s): State<ChatState>, Name(room): Name, Query(q): Query<Se
     search_room(&s, &room, &q.q).await
 }
 
-async fn search_room(s: &ChatState, room: &str, q: &str) -> Result<JsonLines, ApiError> {
-    if !s.persist {
-        return Err(not_kept());
-    }
+/// The box as a search: trimmed, at most `SEARCH_CHARS`, its filters taken out from among the
+/// words (`parse_search`), and asking for something. 400 `too long`, `say what to look for`,
+/// or a filter's own words when its value will not read. A room's box and a direct message
+/// thread's (dms.rs) are read the same way.
+pub(crate) fn read_search(q: &str) -> Result<Search, ApiError> {
     let q = q.trim();
     if q.chars().count() > SEARCH_CHARS {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "too long"));
@@ -216,6 +253,24 @@ async fn search_room(s: &ChatState, room: &str, q: &str) -> Result<JsonLines, Ap
     if search.words.is_empty() && !search.filtered() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "say what to look for"));
     }
+    Ok(search)
+}
+
+/// A stream's room: one room, and `channel:` has nothing to name.
+async fn search_room(s: &ChatState, room: &str, q: &str) -> Result<JsonLines, ApiError> {
+    if !s.persist {
+        return Err(not_kept());
+    }
+    let search = read_search(q)?;
+    if search.channel.is_some() {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "channel: is for a group's chat"));
+    }
+    search_rooms(s, &[room.to_owned()], &search, None).await
+}
+
+/// The lines of `rooms` that match, newest first, 50 at most. `server`: the rooms are its
+/// channels, and each hit says which (`Hit::channel`); a stream's room says none.
+async fn search_rooms(s: &ChatState, rooms: &[String], search: &Search, server: Option<&str>) -> Result<JsonLines, ApiError> {
     // `from:` is the name's account too, when it has one: a login's line is its account's
     // whatever name it was said under (a rename), and the account's lines are all its names'
     let account: Option<Uuid> = match &search.from {
@@ -227,8 +282,8 @@ async fn search_room(s: &ChatState, room: &str, q: &str) -> Result<JsonLines, Ap
         }
         None => None,
     };
-    let (sql, binds) = search_sql(&search, account);
-    let mut query = sqlx::query_as::<_, LineRow>(&sql).bind(room);
+    let (sql, binds) = search_sql(search, account);
+    let mut query = sqlx::query_as::<_, LineRow>(&sql).bind(rooms.to_vec());
     for bind in binds {
         query = match bind {
             Bind::Text(text) => query.bind(text),
@@ -237,26 +292,51 @@ async fn search_room(s: &ChatState, room: &str, q: &str) -> Result<JsonLines, Ap
         };
     }
     let rows: Vec<LineRow> = query.bind(SEARCH_LIMIT).fetch_all(&s.db).await?;
-    Ok(json_lines(rows.into_iter().map(line_of).collect()))
+    Ok(json_hits(rows.into_iter().map(|row| hit_of(row, server)).collect()))
+}
+
+/// A search hit: the line, and for a server's search the channel it is in, so the page can
+/// open it there. A stream's hits say no channel.
+#[derive(Serialize)]
+struct Hit {
+    #[serde(flatten)]
+    line: Line,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: Option<String>,
+}
+
+/// The row as a hit: its room's channel when the search is a server's (the room is `server/channel`).
+fn hit_of(row: LineRow, server: Option<&str>) -> Hit {
+    let channel = server.and_then(|server| row.10.strip_prefix(server).and_then(|rest| rest.strip_prefix('/')).map(str::to_owned));
+    Hit { line: line_of(row), channel }
+}
+
+fn json_hits(hits: Vec<Hit>) -> JsonLines {
+    axum::Json(json!({ "lines": hits }))
 }
 
 /// What the one box asked for: the words looked for, and the filters taken out from among them.
 #[derive(Debug, Default, PartialEq)]
-struct Search {
+pub(crate) struct Search {
     /// The words as typed, filters removed, for `websearch_to_tsquery`. Empty with filters alone.
-    words: String,
+    pub(crate) words: String,
     /// `from:<name>`, lower case: lines said under that name, and its account's under any name.
-    from: Option<String>,
+    pub(crate) from: Option<String>,
+    /// `channel:<name>` (or `in:`), a group's: lines in that one channel, where without it a
+    /// server's search spans every channel the caller sees. Nothing to name in a stream's room
+    /// or a friend's thread, which refuse it. Not a search on its own: a channel's lines are
+    /// its tail, not a thing looked for.
+    pub(crate) channel: Option<String>,
     /// `has:image` (or `picture`): a line with a picture on it.
-    image: bool,
+    pub(crate) image: bool,
     /// `has:link` (or `url`): a line with a link in its words.
-    link: bool,
+    pub(crate) link: bool,
     /// `has:video` (or `clip`): a line with a link to a video (`VIDEO_LINK`).
-    video: bool,
+    pub(crate) video: bool,
     /// `before:<day>`: said before that day began (utc).
-    before: Option<DateTime<Utc>>,
+    pub(crate) before: Option<DateTime<Utc>>,
     /// `after:<day>`: said once that day was over (utc), so the day itself is out, as on discord.
-    after: Option<DateTime<Utc>>,
+    pub(crate) after: Option<DateTime<Utc>>,
 }
 
 impl Search {
@@ -270,7 +350,7 @@ impl Search {
 /// is still a phrase; the phrase ends at its closing `"` even mid-word (`world",`), as
 /// `websearch_to_tsquery` reads it. A known key with nothing after the colon, or a value it
 /// cannot read, is a 400 that says what the key wants.
-fn parse_search(q: &str) -> Result<Search, ApiError> {
+pub(crate) fn parse_search(q: &str) -> Result<Search, ApiError> {
     let mut search = Search::default();
     let mut words: Vec<&str> = Vec::new();
     let mut quoted = false;
@@ -296,6 +376,14 @@ fn parse_search(q: &str) -> Result<Search, ApiError> {
                     return Err(bad("a name, like from:bob"));
                 }
                 search.from = Some(name);
+            }
+            "channel" | "in" => {
+                // `#general` as the page writes a channel, or bare
+                let name = value.trim_start_matches('#').to_lowercase();
+                if !valid_name(&name) {
+                    return Err(bad(&format!("a channel, like {key}:general")));
+                }
+                search.channel = Some(name);
             }
             "has" => match value.to_ascii_lowercase().as_str() {
                 "image" | "picture" => search.image = true,
@@ -325,8 +413,9 @@ fn parse_search(q: &str) -> Result<Search, ApiError> {
     Ok(search)
 }
 
-/// A value the search binds after the room ($1), in the order `search_sql` named them.
-enum Bind {
+/// A value the search binds after the room ($1), in the order `search_sql` named them. A thread's
+/// search (dms.rs) binds the same three kinds after its pair.
+pub(crate) enum Bind {
     Text(String),
     Id(Uuid),
     At(DateTime<Utc>),
@@ -338,10 +427,11 @@ fn placeholder(binds: &mut Vec<Bind>, bind: Bind) -> String {
     format!("${}", binds.len() + 1)
 }
 
-/// The query for a search: the room, then one clause per thing asked, each bound in the order
-/// returned, and the limit last. `simple`: the words as written, not stems; websearch so a
-/// quoted phrase stays a phrase. `has:image` and `has:link` are the partial indexes of
-/// migrate-22.sql; `has:video` is a regex over the linked lines; the dates are the room index.
+/// The query for a search: the rooms (one, or a server's channels, as a text array), then one
+/// clause per thing asked, each bound in the order returned, and the limit last. `simple`: the
+/// words as written, not stems; websearch so a quoted phrase stays a phrase. `has:image` and
+/// `has:link` are the partial indexes of migrate-22.sql; `has:video` is a regex over the linked
+/// lines; the dates are the room index.
 fn search_sql(search: &Search, account: Option<Uuid>) -> (String, Vec<Bind>) {
     let mut binds = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
@@ -379,7 +469,7 @@ fn search_sql(search: &Search, account: Option<Uuid>) -> (String, Vec<Bind>) {
         clauses.push(format!("l.at >= {at}"));
     }
     let limit = binds.len() + 2;
-    let mut sql = format!("SELECT {LINE_COLUMNS} FROM {LINE_TABLES} WHERE l.room = $1");
+    let mut sql = format!("SELECT {LINE_COLUMNS} FROM {LINE_TABLES} WHERE l.room = ANY($1)");
     for clause in &clauses {
         sql.push_str(" AND ");
         sql.push_str(clause);
@@ -530,10 +620,10 @@ async fn pg_side(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, side: Sid
 }
 
 /// `LINE_COLUMNS`, in order: `image` is the picture ids on the line (one, or several joined by
-/// commas), and the last is the speaker's face the join found.
-type LineRow = (String, DateTime<Utc>, String, Option<Uuid>, String, bool, bool, Value, Option<String>, Option<i64>);
+/// commas), then the speaker's face the join found, and the room last.
+type LineRow = (String, DateTime<Utc>, String, Option<Uuid>, String, bool, bool, Value, Option<String>, Option<i64>, String);
 
-fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, avatar): LineRow) -> Line {
+fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, avatar, _room): LineRow) -> Line {
     let groups = serde_json::from_value::<Vec<Badge>>(badges).unwrap_or_default();
     let images = crate::chat::split_pictures(image);
     let image = images.first().cloned();
@@ -643,6 +733,35 @@ mod tests {
     }
 
     #[test]
+    fn a_channel_is_a_filter_of_a_servers_search_and_not_a_search_on_its_own() {
+        let s = parse_search("channel:Clips hello").unwrap();
+        assert_eq!(s.channel.as_deref(), Some("clips"), "a channel name is lower case, as the url has it");
+        assert_eq!(s.words, "hello");
+        assert_eq!(parse_search("in:#general gg").unwrap().channel.as_deref(), Some("general"), "`in:` and the page's `#` read the same");
+        assert!(!parse_search("channel:clips").unwrap().filtered(), "a channel alone names no lines to look for");
+        assert!(read_search("channel:clips").is_err());
+        assert!(read_search("channel:clips has:image").is_ok(), "a filter beside it is a search");
+        let want = |q: &str| parse_search(q).err().map(|e| e.message().to_owned()).unwrap_or_default();
+        assert_eq!(want("channel:"), "channel: wants a channel, like channel:general");
+        assert_eq!(want("in:a!b"), "in: wants a channel, like in:general");
+    }
+
+    #[test]
+    fn a_hit_says_its_channel_for_a_servers_search_alone() {
+        let row = |room: &str| -> LineRow {
+            ("1729000000000-0".to_owned(), DateTime::from_timestamp_millis(1729000000000).unwrap(), "bob".to_owned(), None, "hi".to_owned(), false, false, json!([]), None, None, room.to_owned())
+        };
+        assert_eq!(hit_of(row("vip/clips"), Some("vip")).channel.as_deref(), Some("clips"));
+        assert_eq!(hit_of(row("alice"), None).channel, None, "a stream's room has no channel");
+        let text = serde_json::to_string(&hit_of(row("vip/clips"), Some("vip"))).unwrap();
+        let hit: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(hit["channel"], "clips");
+        assert_eq!(hit["from"], "bob", "the line's own fields stand beside it");
+        let text = serde_json::to_string(&hit_of(row("alice"), None)).unwrap();
+        assert!(!text.contains("channel"), "no channel key on a stream's hit: {text}");
+    }
+
+    #[test]
     fn a_quoted_phrase_is_never_a_filter() {
         let s = parse_search("\"from: the top\" rope").unwrap();
         assert_eq!(s.words, "\"from: the top\" rope");
@@ -699,7 +818,7 @@ mod tests {
         let id = Uuid::nil();
         let s = parse_search("from:bob has:video hello before:2026-10-30").unwrap();
         let (sql, binds) = search_sql(&s, Some(id));
-        assert!(sql.starts_with(&format!("SELECT {LINE_COLUMNS} FROM {LINE_TABLES} WHERE l.room = $1")));
+        assert!(sql.starts_with(&format!("SELECT {LINE_COLUMNS} FROM {LINE_TABLES} WHERE l.room = ANY($1)")), "the rooms are one array, a stream's one or a server's channels");
         assert!(sql.contains("l.search @@ websearch_to_tsquery('simple', $2)"));
         assert!(sql.contains("(lower(l.speaker) = $3 OR l.user_id = $4)"));
         assert!(sql.contains("l.has_link") && sql.contains("l.\"text\" ~* $5"));
@@ -790,7 +909,7 @@ mod tests {
             None => None,
         };
         let (sql, binds) = search_sql(&search, account);
-        let mut query = sqlx::query_as::<_, LineRow>(&sql).bind(room);
+        let mut query = sqlx::query_as::<_, LineRow>(&sql).bind(vec![room.to_owned()]);
         for bind in binds {
             query = match bind {
                 Bind::Text(text) => query.bind(text),

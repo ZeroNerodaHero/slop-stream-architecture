@@ -19,6 +19,7 @@ import { store } from '@/infra/store';
 import { Face } from '@/shared-components/Face';
 import { Friends } from '@/shared-components/Friends';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 /** Closed: a column of pictures. Open: wide enough for the names. The page sits in what's left. */
@@ -58,16 +59,11 @@ function Dot() {
 /** The messages inspector, one click from every page while its setting is on (docs/status.md). An icon alone: the line is full. */
 function InspectorOpener() {
   return (
-    <button
-      id="inspector-open"
-      type="button"
-      aria-label="messages"
-      title="messages: the frames this browser gets"
-      onClick={openInspector}
-      className={cn(ACTION, 'align-middle hover:no-underline')}
-    >
-      <RiTerminalBoxLine aria-hidden size={ICON} />
-    </button>
+    <Tooltip content="messages: the frames this browser gets">
+      <button id="inspector-open" type="button" aria-label="messages" onClick={openInspector} className={cn(ACTION, 'align-middle hover:no-underline')}>
+        <RiTerminalBoxLine aria-hidden size={ICON} />
+      </button>
+    </Tooltip>
   );
 }
 
@@ -80,21 +76,22 @@ function InspectorOpener() {
  */
 function SettingsOpener({ className }: { className?: string }) {
   return (
-    <button
-      id="settings"
-      type="button"
-      aria-label="settings"
-      aria-haspopup="dialog"
-      title="settings"
-      onClick={(e) => {
-        e.currentTarget.focus();
-        store.set(friendsOpenAtom, false);
-        openUserModal('appearance');
-      }}
-      className={cn(ACTION, 'align-middle hover:no-underline', className)}
-    >
-      <RiSettings3Line aria-hidden size={ICON} />
-    </button>
+    <Tooltip content="settings">
+      <button
+        id="settings"
+        type="button"
+        aria-label="settings"
+        aria-haspopup="dialog"
+        onClick={(e) => {
+          e.currentTarget.focus();
+          store.set(friendsOpenAtom, false);
+          openUserModal('appearance');
+        }}
+        className={cn(ACTION, 'align-middle hover:no-underline', className)}
+      >
+        <RiSettings3Line aria-hidden size={ICON} />
+      </button>
+    </Tooltip>
   );
 }
 
@@ -326,9 +323,11 @@ export function UserPanel() {
                   <span id="me" className="truncate font-semibold">
                     {me}
                   </span>
-                  <span className="shrink-0 text-increase" title="logged in: this name is yours">
-                    ✓
-                  </span>
+                  <Tooltip content="logged in: this name is yours">
+                    <span role="img" aria-label="logged in" className="shrink-0 text-increase">
+                      ✓
+                    </span>
+                  </Tooltip>
                 </Link>
                 {/* leading-5, not tight: tight is 17.5px on text-sm, and a half pixel here puts the whole footer, and the column over it, off the pixel grid.
                     a flex row, so the gear sits at the far end, away from the picture on either side */}

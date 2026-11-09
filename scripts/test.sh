@@ -23,7 +23,7 @@
 #              the room is one answer (channels, live, the roster for members, the bans) plus the last lines of every channel, a watcher of group:<name> hears a channel
 #              added, the channels put in order, one renamed (its mute and lines following) and one deleted, the server's one chat socket carries every channel's lines and
 #              fills from since, a channel kept to a role is hidden from a member without it everywhere (the room, explore, messages, both sockets, the history,
-#              the inbox) and seen with it, and the roles power cannot unlock what it cannot see; the page switches channels with no reload, refetch or socket;
+#              the inbox, the group's search, which spans every channel seen and narrows to one with channel:) and seen with it, and the roles power cannot unlock what it cannot see; the page switches channels with no reload, refetch or socket;
 #              a channel is added from the list's dialog and moved, renamed in place and deleted on the manage dialog's channels tab, and kept to a role from
 #              the roles tab (the lock on both lists); the owner role is the roles tab's first row (a crown, every power locked), renamed by the owner, the
 #              crowns on the roster and the header following, and a custom role cannot take its name; the members tab hands the group on (transfer ownership
@@ -33,10 +33,11 @@
 #              panel (hover: who you follow, streaming first; search finds and follows), the watch page's button and count, home's people under
 #              the streams (online first) and the top search, a rename keeps the followers
 #   dms        direct messages: nobody 401, a stranger 403 until both follows are there, a friend's line kept and listed with its count of what is new,
-#              read marks, paging at 50, a picture alone is a line (a bad, unknown or eleventh id refused), the window gets a line pushed and sends one back,
+#              read marks, paging at 50, a thread searched with the chat's words and filters (from: is one of the two), a picture alone is a line (a bad,
+#              unknown or eleventh id refused), the window gets a line pushed and sends one back, searches from the glass on its header and a hit pages back to its line,
 #              draws a pushed picture and sends one picked from its picture button, a hidden window counts on the sidebar and a second tab agrees,
 #              a friend's watch page opens their thread from the button beside the chat button and a stranger's page has no such button,
-#              the lines are bubbles (yours right of theirs) until the chat tab's cards make them a log or blocks, kept in the browser
+#              the lines are bubbles (yours right of theirs) until the chat tab's cards make them a log or blocks, the room's lines following (one setting for every chat), kept in the browser
 #   notifications  the inbox under the bell: nobody 401, the settings save, a follow is a row in the followed inbox (once), a go-live over the api is one
 #              live row per follower who keeps it, a friend's newest line is the one unread dm row and reading the thread reads it, the bell counts
 #              on two tabs and opening the list reads everything (the other tab drops by push), a pushed row is read at once, the tab's switch, 30 kept;

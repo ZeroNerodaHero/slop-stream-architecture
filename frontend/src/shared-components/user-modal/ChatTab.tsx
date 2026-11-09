@@ -4,17 +4,15 @@ import type { ReactNode } from 'react';
 
 import {
   type ChatSide,
-  type DmStyle,
+  type ChatStyle,
   type PipChatPlace,
-  chatFacesAtom,
   chatSideAtom,
-  dmStyleAtom,
+  chatStyleAtom,
   hideBotsAtom,
   linkWarningAtom,
   pipChatPlaceAtom,
-  setChatFaces,
   setChatSide,
-  setDmStyle,
+  setChatStyle,
   setHideBots,
   setLinkWarning,
   setPipChatPlace
@@ -117,17 +115,6 @@ const BOT_OPTIONS: readonly { hide: boolean; id: string; label: string; detail: 
   }
 ];
 
-/** The faces: before every name, or not. */
-const FACE_OPTIONS: readonly { on: boolean; id: string; label: string; detail: string }[] = [
-  {
-    on: true,
-    id: 'chat-faces-on',
-    label: 'show the faces',
-    detail: 'the picture before every name: a login\u2019s, or the streamer\u2019s. a name without one gets its letter'
-  },
-  { on: false, id: 'chat-faces-off', label: 'names only', detail: 'the name and the words alone. a little more room for the words' }
-];
-
 /** A link in a line: a word first, or the new tab at once. */
 const LINK_OPTIONS: readonly { ask: boolean; id: string; label: string; detail: string; icon: ReactNode }[] = [
   {
@@ -146,41 +133,23 @@ const LINK_OPTIONS: readonly { ask: boolean; id: string; label: string; detail: 
   }
 ];
 
-/** The three lines the faces cards draw: a name for the letter and its colour, a width for the words. */
-const PREVIEW_LINES: readonly { name: string; words: string }[] = [
-  { name: 'ann', words: 'w-3/5' },
-  { name: 'bob', words: 'w-2/5' },
-  { name: 'cy', words: 'w-1/2' }
-];
-
-/** The chat in miniature: three lines, each a face (or not), a name and some words. */
-function FacesPreview({ on }: { on: boolean }) {
-  return (
-    <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-2.5 border border-primaryStroke bg-background px-3">
-      {PREVIEW_LINES.map(({ name, words }) => (
-        <span key={name} className="flex items-center gap-1.5">
-          {on && <GeneratedAvatar name={name} className="h-4 w-4 text-[9px]" />}
-          <span className="h-1.5 w-8 shrink-0 bg-primaryBlue" />
-          <span className={cn('h-1.5 bg-textTertiary', words)} />
-        </span>
-      ))}
-    </span>
-  );
-}
-
-/** The three shapes a chat with a friend can take (docs/dms.md). The card's picture is the thread. */
-const DM_STYLE_OPTIONS: readonly { style: DmStyle; label: string; detail: string }[] = [
+/** The three shapes every chat's lines can take (docs/chat.md, ChatLine.tsx). The card's picture is the chat. */
+const STYLE_OPTIONS: readonly { style: ChatStyle; label: string; detail: string }[] = [
   { style: 'log', label: 'a log', detail: 'one line each: the time, the name, then the words. nothing offset, and the most lines on screen' },
   {
     style: 'bubbles',
     label: 'bubbles',
-    detail: 'each line in a box of its own: yours on the right, theirs on the left. a minute\u2019s lines stand together, the time at the left once'
+    detail: 'each line in a box of its own: yours on the right, theirs on the left, under their name in a room. a minute\u2019s lines stand together, the time at the left once'
   },
-  { style: 'blocks', label: 'blocks', detail: 'the face, the name and the time over the words. one person\u2019s lines in a row stand together under one head' }
+  {
+    style: 'blocks',
+    label: 'blocks',
+    detail: 'the face (their picture, or the letter their name makes), the name and the time over the words. one person\u2019s lines in a row stand together under one head'
+  }
 ];
 
-/** The three lines the direct message cards draw: who said each (ann, or you), and a width for the words. Your two in a row are one run, one minute. */
-const DM_PREVIEW_LINES: readonly { mine: boolean; words: string }[] = [
+/** The three lines the cards draw: who said each (ann, or you), and a width for the words. Your two in a row are one run, one minute. */
+const PREVIEW_LINES: readonly { mine: boolean; words: string }[] = [
   { mine: false, words: 'w-3/5' },
   { mine: true, words: 'w-2/5' },
   { mine: true, words: 'w-1/2' }
@@ -197,18 +166,18 @@ function PreviewName({ mine }: { mine: boolean }) {
 }
 
 /**
- * A chat with a friend in miniature, in one of its three shapes: a bar for the words, a shorter
- * one for a name, a face where the shape has one, a box where it has one. The same three lines
- * on every card, so the shapes are compared and not the words.
+ * A chat in miniature, in one of its three shapes: a bar for the words, a shorter one for a
+ * name, a face where the shape has one, a box where it has one. The same three lines on every
+ * card, so the shapes are compared and not the words.
  */
-function DmStylePreview({ style }: { style: DmStyle }) {
+function StylePreview({ style }: { style: ChatStyle }) {
   if (style === 'bubbles') {
     return (
       <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-1.5 border border-primaryStroke bg-background px-3">
-        {DM_PREVIEW_LINES.map(({ mine, words }, i) => (
+        {PREVIEW_LINES.map(({ mine, words }, i) => (
           <span key={i} className="flex items-center gap-1.5">
             {/* the time at the left, on the first line of a minute: your second line is in the same minute as your first */}
-            <PreviewClock shown={DM_PREVIEW_LINES[i - 1]?.mine !== mine} />
+            <PreviewClock shown={PREVIEW_LINES[i - 1]?.mine !== mine} />
             <span className={cn('flex min-w-0 flex-1', mine ? 'justify-end' : 'justify-start')}>
               <span
                 className={cn(
@@ -228,8 +197,8 @@ function DmStylePreview({ style }: { style: DmStyle }) {
   if (style === 'blocks') {
     return (
       <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-1.5 border border-primaryStroke bg-background px-3">
-        {DM_PREVIEW_LINES.map(({ mine, words }, i) => {
-          const first = DM_PREVIEW_LINES[i - 1]?.mine !== mine;
+        {PREVIEW_LINES.map(({ mine, words }, i) => {
+          const first = PREVIEW_LINES[i - 1]?.mine !== mine;
           return (
             <span key={i} className="flex items-start gap-1.5">
               {first ? <GeneratedAvatar name={mine ? 'bob' : 'ann'} className="h-4 w-4 text-[9px]" /> : <span className="h-4 w-4 shrink-0" />}
@@ -250,7 +219,7 @@ function DmStylePreview({ style }: { style: DmStyle }) {
   }
   return (
     <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-2.5 border border-primaryStroke bg-background px-3">
-      {DM_PREVIEW_LINES.map(({ mine, words }, i) => (
+      {PREVIEW_LINES.map(({ mine, words }, i) => (
         <span key={i} className="flex items-center gap-1.5">
           <PreviewClock />
           <PreviewName mine={mine} />
@@ -263,16 +232,15 @@ function DmStylePreview({ style }: { style: DmStyle }) {
 
 /**
  * This browser's settings for the chat: where it sits on the watch page and the go live page,
- * where it opens on the corner player, whether the bots' lines show, whether the lines wear
- * faces, the shape of the lines in a chat with a friend, whether a link asks before it opens.
+ * where it opens on the corner player, whether the bots' lines show, the shape of the lines in
+ * every chat (a stream's, a group channel's, a friend's), whether a link asks before it opens.
  * The chat behind the modal follows every change at once, so the cards are their own preview.
  */
 export function ChatTab() {
   const chatSide = useAtomValue(chatSideAtom);
   const pipChat = useAtomValue(pipChatPlaceAtom);
   const hideBots = useAtomValue(hideBotsAtom);
-  const faces = useAtomValue(chatFacesAtom);
-  const dmStyle = useAtomValue(dmStyleAtom);
+  const chatStyle = useAtomValue(chatStyleAtom);
   const linkWarning = useAtomValue(linkWarningAtom);
   return (
     <div className="divide-y divide-primaryStroke">
@@ -334,49 +302,26 @@ export function ChatTab() {
       </fieldset>
 
       <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
-        <legend className={SECTION_TITLE}>faces</legend>
+        <legend className={SECTION_TITLE}>the lines</legend>
         <p className="mt-1 text-textSecondary">
-          each line can start with its speaker's face: the picture a login or the streamer has on their page, else the letter their name makes, the same stand-in the
-          lists use. a nick with no account always gets the letter.
-        </p>
-        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {FACE_OPTIONS.map(({ on, id, label, detail }) => (
-            <OptionCard
-              key={id}
-              id={id}
-              name="chat-faces"
-              checked={on === faces}
-              onChange={() => setChatFaces(on)}
-              picture={<FacesPreview on={on} />}
-              label={label}
-              detail={detail}
-            />
-          ))}
-        </div>
-        <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every room. a chat that is open follows as you pick.</p>
-      </fieldset>
-
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
-        <legend className={SECTION_TITLE}>direct messages</legend>
-        <p className="mt-1 text-textSecondary">
-          how a chat with a friend draws its lines, in the chat window beside the sidebar. each card is the thread in that shape: the same three lines, two of them
-          yours.
+          how every chat draws its lines: a stream's, a group channel's, and a chat with a friend in the window beside the sidebar. each card is the chat in that
+          shape: the same three lines, two of them yours.
         </p>
         <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {DM_STYLE_OPTIONS.map(({ style, label, detail }) => (
+          {STYLE_OPTIONS.map(({ style, label, detail }) => (
             <OptionCard
               key={style}
-              id={`dm-style-${style}`}
-              name="dm-style"
-              checked={style === dmStyle}
-              onChange={() => setDmStyle(style)}
-              picture={<DmStylePreview style={style} />}
+              id={`chat-style-${style}`}
+              name="chat-style"
+              checked={style === chatStyle}
+              onChange={() => setChatStyle(style)}
+              picture={<StylePreview style={style} />}
               label={label}
               detail={detail}
             />
           ))}
         </div>
-        <p className="mt-4 text-sm text-textTertiary">kept in this browser. a chat window that is open follows as you pick. the rooms keep their own shape.</p>
+        <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every chat. one that is open follows as you pick.</p>
       </fieldset>
 
       <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">

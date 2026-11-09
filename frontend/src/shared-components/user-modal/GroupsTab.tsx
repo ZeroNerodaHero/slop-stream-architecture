@@ -22,6 +22,7 @@ import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { Section, Status } from '@/shared-components/user-modal/parts';
 
 /** The buttons in a row of the list: a size down from the pane's. */
@@ -61,9 +62,11 @@ export function GroupsTab() {
         {me ? (
           <p id="my-badges" className="flex flex-wrap items-center gap-1 font-semibold">
             <span className="text-primaryBlue">{me}</span>
-            <span className="text-increase" title="logged in: this name is yours">
-              ✓
-            </span>
+            <Tooltip content="logged in: this name is yours">
+              <span role="img" aria-label="logged in" className="text-increase">
+                ✓
+              </span>
+            </Tooltip>
             {mine.map((group) => (
               <Badge key={group.name} group={group} className="ml-1" />
             ))}

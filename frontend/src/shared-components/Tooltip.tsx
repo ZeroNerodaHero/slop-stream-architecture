@@ -10,6 +10,8 @@ export type TooltipAt = 'top' | 'bottom' | 'left' | 'right';
 const GAP = 8;
 /** The least it keeps from the edge of the window. */
 const EDGE = 4;
+/** The side it falls to when the asked one has no room in the window. */
+const OPPOSITE: Record<TooltipAt, TooltipAt> = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' };
 /**
  * The box: the page's stroke on the secondary background and no shadow, like every floating box
  * over this page of boxes (PersonCard.tsx has the same). Over the open sidebar (z-40) and the
@@ -21,7 +23,7 @@ const TIP =
 interface TooltipProps {
   /** What shows while the pointer or the keyboard focus is on the children: a word, or any JSX. Nothing: no tooltip. */
   content: ReactNode;
-  /** Which side of the children it goes on. Pushed back in when that side would put it off the window. */
+  /** Which side of the children it goes on: above unless said. The other side when that one has no room in the window. */
   at?: TooltipAt;
   /** The id the tests key on, when one is needed. */
   id?: string;
@@ -57,7 +59,10 @@ function hostOf(wrapper: HTMLElement): HTMLElement {
 
 /**
  * A tooltip: `content` beside the children while the pointer rests on them or the keyboard
- * focus is in them (not the focus a click leaves behind), on the side `at` says, 8px off.
+ * focus is in them (not the focus a click leaves behind), 8px off, above unless `at` says
+ * another side. When that side has no room in the window it goes on the opposite one instead
+ * (the title row is pinned to the window's top edge, so above its caret and bell there is none,
+ * and theirs go under), and then it is pushed back in from the edges whatever the side.
  * Escape hides it. The children are laid out as if it were not there. The box is drawn into
  * the body, `fixed`, so no scrolling list clips it and it sits over every panel, and it follows
  * the children through a scroll or a resize; inside a modal <dialog> it is drawn into the
@@ -75,8 +80,9 @@ export function Tooltip({ content, at = 'top', id, className, children }: Toolti
   const [host, setHost] = useState<HTMLElement | null>(null);
   const shown = (hover || focus) && !!content;
 
-  // placed before it is painted: beside the children on the asked side, then kept in the
-  // window. again on any scroll and on a resize while it shows, and when its content changes size
+  // placed before it is painted: beside the children on the asked side, or the opposite one when
+  // the asked side has no room, then kept in the window. again on any scroll and on a resize
+  // while it shows, and when its content changes size
   useLayoutEffect(() => {
     const el = tip.current;
     if (!shown || !el) return;
@@ -85,13 +91,27 @@ export function Tooltip({ content, at = 'top', id, className, children }: Toolti
       if (!box) return;
       const w = el.offsetWidth;
       const h = el.offsetHeight;
+      // clientWidth, not innerWidth: the window's scrollbar is not room
+      const vw = document.documentElement.clientWidth;
+      const vh = document.documentElement.clientHeight;
       const midX = (box.left + box.right - w) / 2;
       const midY = (box.top + box.bottom - h) / 2;
-      const [x, y] =
-        at === 'top' ? [midX, box.top - GAP - h] : at === 'bottom' ? [midX, box.bottom + GAP] : at === 'left' ? [box.left - GAP - w, midY] : [box.right + GAP, midY];
-      // clientWidth, not innerWidth: the window's scrollbar is not room
-      el.style.left = `${Math.max(EDGE, Math.min(x, document.documentElement.clientWidth - w - EDGE))}px`;
-      el.style.top = `${Math.max(EDGE, Math.min(y, document.documentElement.clientHeight - h - EDGE))}px`;
+      const spot = (side: TooltipAt): [number, number] =>
+        side === 'top'
+          ? [midX, box.top - GAP - h]
+          : side === 'bottom'
+            ? [midX, box.bottom + GAP]
+            : side === 'left'
+              ? [box.left - GAP - w, midY]
+              : [box.right + GAP, midY];
+      // room along the side's own axis: across it the clamp below centres what it can
+      const room = (side: TooltipAt) => {
+        const [x, y] = spot(side);
+        return side === 'top' || side === 'bottom' ? y >= EDGE && y + h <= vh - EDGE : x >= EDGE && x + w <= vw - EDGE;
+      };
+      const [x, y] = spot(room(at) || !room(OPPOSITE[at]) ? at : OPPOSITE[at]);
+      el.style.left = `${Math.max(EDGE, Math.min(x, vw - w - EDGE))}px`;
+      el.style.top = `${Math.max(EDGE, Math.min(y, vh - h - EDGE))}px`;
     };
     place();
     const grew = new ResizeObserver(place);

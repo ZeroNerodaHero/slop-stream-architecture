@@ -20,6 +20,7 @@ import { identityChanged } from '@/infra/atoms/profile-atoms';
 import { cleanName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { BUTTON, Field, INPUT, PasswordInput, Section, Status } from '@/shared-components/user-modal/parts';
 
 /**
@@ -141,9 +142,11 @@ function LoggedIn({ me }: { me: string }) {
       <Section title="account">
         <p className="flex items-center gap-2 font-semibold">
           logged in as <span>{me}</span>
-          <span className="text-increase" title="logged in: this name is yours">
-            ✓
-          </span>
+          <Tooltip content="logged in: this name is yours">
+            <span role="img" aria-label="logged in" className="text-increase">
+              ✓
+            </span>
+          </Tooltip>
         </p>
         <p className="text-sm text-textTertiary">a login lasts 30 days on each device.</p>
       </Section>

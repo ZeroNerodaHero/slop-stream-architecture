@@ -46,7 +46,7 @@ import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
-import { demoAbout, dummyPage } from '@/infra/about';
+import { dummyPage } from '@/infra/about';
 import { api } from '@/infra/api';
 import { cleanName, isDummyName } from '@/infra/names';
 import { store } from '@/infra/store';
@@ -67,6 +67,7 @@ import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { StreamTile } from '@/shared-components/StreamTile';
 import { TestBadge } from '@/shared-components/TestBadge';
 import { IconButton, MailIcon, PipIcon, SoundControl, revealClassName } from '@/shared-components/VideoControls';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 /** The sentence under the word while they are not live: why to wait, or not. */
@@ -193,8 +194,8 @@ export function WatchPage() {
   // page), this stream cannot go there too, and the button says so. the other way round, start
   // on the go live page ends a stream kept in the corner (publish-atoms' goLive)
   const cornerTaken = useAtomValue(publishPipAtom);
-  // a fake stream gets a page from its name. anyone else gets the sample, until they build their own.
-  const about = useMemo(() => (isDummyName(name) ? dummyPage(name, { offline }) : demoAbout(name, { offline, thumbs: [] })), [name, offline]);
+  // a fake stream gets a page from its name. anyone else's is read from the api.
+  const about = useMemo(() => (isDummyName(name) ? dummyPage(name, { offline }) : null), [name, offline]);
 
   // Mount only: start watching the name in the url (or take back the stream picture in picture
   // kept alive), and on the way out stop, unless picture in picture keeps it going in the corner.
@@ -246,9 +247,11 @@ export function WatchPage() {
           {name && <Face name={name} version={avatar} className="mr-3 inline-flex align-middle" />}
           {name}
           {verified && (
-            <span className="ml-2 text-increase" title="has an account: this really is them">
-              ✓
-            </span>
+            <Tooltip content="has an account: this really is them">
+              <span role="img" aria-label="has an account" className="ml-2 text-increase">
+                ✓
+              </span>
+            </Tooltip>
           )}
           {isDummyName(name) && <TestBadge />}
           {/* the word beside the name (docs/status.md): the square and the word, from the events socket.
@@ -487,7 +490,7 @@ export function WatchPage() {
             </div>
             <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} className="pt-4">
               {tab === 'about' ? (
-                <About name={name} doc={about} edit={mine} sample={!isDummyName(name)} />
+                <About key={name} name={name} doc={about} edit={mine} />
               ) : tab === 'calendar' ? (
                 <Calendar name={name} />
               ) : (

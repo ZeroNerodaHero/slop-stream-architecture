@@ -20,6 +20,7 @@ import {
 } from '@/infra/atoms/inspector-atoms';
 import { eventsPhaseAtom, eventsTransportAtom } from '@/infra/events';
 import type { FrameEntry } from '@/infra/frames';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 /** The box look, the corner player's FRAME: a stroke on the box colour. */
@@ -184,50 +185,54 @@ function InspectorPanel() {
           /events {phase} · {transport === 'worker' ? 'one socket for the browser' : transport === 'tab' ? 'a socket for this tab' : 'no socket'}
         </span>
         <span className="ml-auto flex items-center gap-1">
-          <button
-            id="inspector-pause"
-            type="button"
-            aria-pressed={paused}
-            aria-label={paused ? 'resume' : 'pause'}
-            title={paused ? 'resume' : 'pause the view (the recorder goes on)'}
-            onClick={toggleInspectorPaused}
-            className={cn(
-              'flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue',
-              paused && 'border-primaryBlue text-primaryBlue'
-            )}
-          >
-            {paused ? <RiPlayLine aria-hidden size={16} /> : <RiPauseLine aria-hidden size={16} />}
-          </button>
-          <button
-            id="inspector-copy"
-            type="button"
-            aria-label="copy as json"
-            title={copied ? 'copied' : 'copy the shown rows as json'}
-            onClick={copy}
-            className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
-          >
-            <RiFileCopyLine aria-hidden size={16} />
-          </button>
-          <button
-            id="inspector-clear"
-            type="button"
-            aria-label="clear"
-            title="clear"
-            onClick={clearFrames}
-            className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
-          >
-            <RiDeleteBinLine aria-hidden size={16} />
-          </button>
-          <button
-            id="inspector-close"
-            type="button"
-            aria-label="close"
-            title="close"
-            onClick={closeInspector}
-            className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
-          >
-            <RiCloseLine aria-hidden size={18} />
-          </button>
+          <Tooltip content={paused ? 'resume' : 'pause the view (the recorder goes on)'}>
+            <button
+              id="inspector-pause"
+              type="button"
+              aria-pressed={paused}
+              aria-label={paused ? 'resume' : 'pause'}
+              onClick={toggleInspectorPaused}
+              className={cn(
+                'flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue',
+                paused && 'border-primaryBlue text-primaryBlue'
+              )}
+            >
+              {paused ? <RiPlayLine aria-hidden size={16} /> : <RiPauseLine aria-hidden size={16} />}
+            </button>
+          </Tooltip>
+          <Tooltip content={copied ? 'copied' : 'copy the shown rows as json'}>
+            <button
+              id="inspector-copy"
+              type="button"
+              aria-label="copy as json"
+              onClick={copy}
+              className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
+            >
+              <RiFileCopyLine aria-hidden size={16} />
+            </button>
+          </Tooltip>
+          <Tooltip content="clear">
+            <button
+              id="inspector-clear"
+              type="button"
+              aria-label="clear"
+              onClick={clearFrames}
+              className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
+            >
+              <RiDeleteBinLine aria-hidden size={16} />
+            </button>
+          </Tooltip>
+          <Tooltip content="close">
+            <button
+              id="inspector-close"
+              type="button"
+              aria-label="close"
+              onClick={closeInspector}
+              className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
+            >
+              <RiCloseLine aria-hidden size={18} />
+            </button>
+          </Tooltip>
         </span>
       </header>
 

@@ -109,18 +109,21 @@ function AddMenu() {
 
   return (
     <div ref={root} className="relative mr-1">
-      <button
-        id="add-source"
-        type="button"
-        aria-label="add a source"
-        aria-expanded={open}
-        aria-haspopup="menu"
-        aria-controls="add-source-menu"
-        onClick={() => setOpen((v) => !v)}
-        className={cn(ICON_BUTTON, open && 'border-primaryBlue text-primaryBlue')}
-      >
-        <RiAddLine aria-hidden size={18} />
-      </button>
+      {/* the name while the menu is shut; open, the menu says what is there */}
+      <Tooltip content={open ? null : 'add a source'}>
+        <button
+          id="add-source"
+          type="button"
+          aria-label="add a source"
+          aria-expanded={open}
+          aria-haspopup="menu"
+          aria-controls="add-source-menu"
+          onClick={() => setOpen((v) => !v)}
+          className={cn(ICON_BUTTON, open && 'border-primaryBlue text-primaryBlue')}
+        >
+          <RiAddLine aria-hidden size={18} />
+        </button>
+      </Tooltip>
       {open && (
         <div
           id="add-source-menu"
@@ -202,15 +205,17 @@ function AddMenu() {
                     >
                       <img src={api.assetUrl(name, asset.id)} alt="" draggable={false} className="h-full w-full object-contain" />
                     </button>
-                    <button
-                      id={`library-delete-${asset.id}`}
-                      type="button"
-                      aria-label="delete this picture"
-                      className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary opacity-0 transition-opacity duration-150 hover:border-decrease hover:text-decrease focus-visible:opacity-100 focus-visible:outline-none group-hover/pic:opacity-100"
-                      onClick={() => void deleteImage(asset.id)}
-                    >
-                      <RiCloseLine aria-hidden size={10} />
-                    </button>
+                    <Tooltip content="delete this picture">
+                      <button
+                        id={`library-delete-${asset.id}`}
+                        type="button"
+                        aria-label="delete this picture"
+                        className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary opacity-0 transition-opacity duration-150 hover:border-decrease hover:text-decrease focus-visible:opacity-100 focus-visible:outline-none group-hover/pic:opacity-100"
+                        onClick={() => void deleteImage(asset.id)}
+                      >
+                        <RiCloseLine aria-hidden size={10} />
+                      </button>
+                    </Tooltip>
                   </li>
                 ))}
               </ul>

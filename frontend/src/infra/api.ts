@@ -526,7 +526,7 @@ function ownerQuery(owner: Owner): string {
   return `session=${owner.session}&token=${owner.token}`;
 }
 
-interface PageWire {
+export interface PageWire {
   type: 'text' | 'image' | 'video' | 'sound' | 'line' | 'box' | 'border';
   id: number;
   x: number;
@@ -649,6 +649,8 @@ export const api = {
   sendDm: (name: string, text: string, images: string[] = []) => request<DmLine & { to: string }>('POST', `/api/dm/${encodeURIComponent(name)}`, { text, images }),
   /** The login has seen the thread with `name` up to that line. Its other devices hear it on the socket. */
   readDm: (name: string, id: number) => request<null>('PUT', `/api/dm/${encodeURIComponent(name)}/read`, { id }),
+  /** The lines of the thread with `name` that match, newest first, 50 at most. The box is the room chat's (`ChatSearch.tsx`): words, a quoted phrase, and the filters among them. 400 with the words when it cannot be read. */
+  searchDm: (name: string, q: string) => request<{ lines: DmLine[] }>('GET', `/api/dm/${encodeURIComponent(name)}/search?q=${encodeURIComponent(q)}`),
   /** The login's inbox, newest first, the last 30, and which kinds it keeps. 401 for nobody. See docs/notifications.md. */
   notifications: () => request<{ settings: NotifySettings; items: Notification[] }>('GET', '/api/notifications'),
   /** The login has seen its inbox up to that row. Its other devices hear it on the socket. */

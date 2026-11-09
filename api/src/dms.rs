@@ -14,6 +14,12 @@
 //! `POST /api/chat-images` keeps it, the line names the ids (`images`, ten at most), and the
 //! row keeps them joined by commas in `image`, as a chat line does. The words may be empty
 //! when there is a picture.
+//!
+//! A thread is searched the room chat's way too (`GET /api/dm/:name/search?q=`, history.rs
+//! `read_search`: the words, a quoted phrase, and the filters among them), over its own rows
+//! alone: the pair bounds a thread to a few thousand lines at most, so the words are matched
+//! as `to_tsvector` over the text and a link is the rooms' regex over it, with no column or
+//! index of their own.
 
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{Query, State};
@@ -27,12 +33,15 @@ use uuid::Uuid;
 
 use crate::auth::{self, bump, Account, Me};
 use crate::chat::{clean_text, picture_ids, split_pictures, MAX_TEXT_CHARS};
+use crate::history::{self, Bind, Search};
 use crate::presence::{self, Presence};
 use crate::{chat_images, follows, notify};
 use crate::{ApiError, ApiResult, AppState, Name};
 
 /// Lines in one page of a thread. A shorter page is the start of the thread.
 const PAGE: i64 = 50;
+/// Hits a search of a thread answers, newest first: the room search's number (history.rs).
+const SEARCH_LIMIT: i64 = 50;
 /// Threads `GET /api/dms` lists, the newest first. More than a column of faces shows.
 const THREADS: i64 = 100;
 /// Lines per login per minute: a conversation, even a quick one, not a flood.
@@ -111,6 +120,105 @@ async fn thread(State(s): State<AppState>, Name(name): Name, Me(me): Me, q: Resu
     rows.reverse();
     let friends = follows::friends(&s.db, me.id, other.id).await?;
     Ok(Json(json!({ "name": other.name, "friends": friends, "lines": rows.iter().map(line_json).collect::<Vec<_>>() })))
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: String,
+}
+
+/// `GET /api/dm/:name/search?q=`: the lines of the thread with `name` that match, newest first,
+/// 50 at most, `{ lines: [{ id, from, text, at, images }] }`, a line as the thread has it. The
+/// box is the room chat's (history.rs `read_search`): the words, a quoted phrase, and the filters
+/// among them, `from:<name>` (one of the two; anyone else finds nothing), `has:image`,
+/// `has:link`, `has:video`, `before:<day>`, `after:<day>`. 400 `say what to look for` for an
+/// empty box, `too long` past 200 characters, and a filter's own words when its value will not
+/// read; 401 nobody; 400 `that is you` and 403 for a name with no account, as the thread is. A
+/// thread reads whether or not the two are still friends, and so does its search.
+async fn search(State(s): State<AppState>, Name(name): Name, Me(me): Me, q: Result<Query<SearchQuery>, QueryRejection>) -> ApiResult {
+    let me = me.ok_or_else(not_logged_in)?;
+    let Query(q) = q?;
+    let search = history::read_search(&q.q)?;
+    if search.channel.is_some() {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "channel: is for a group's chat"));
+    }
+    let other = peer(&s.db, &me, name).await?;
+    // `from:` names one of the two, by the name they have now or one held for them after a rename
+    // (docs/ids.md). anyone else wrote nothing in this thread
+    let from = match &search.from {
+        Some(asked) => {
+            let now = auth::renamed_to(&s.db, asked).await?.unwrap_or_else(|| asked.clone());
+            match [&me, &other].into_iter().find(|a| a.name == now) {
+                Some(who) => Some(who.id),
+                None => return Ok(Json(json!({ "lines": [] }))),
+            }
+        }
+        None => None,
+    };
+    let (sql, binds) = search_sql(&search, from);
+    let mut query = sqlx::query_as::<_, LineRow>(&sql).bind(me.id).bind(other.id);
+    for bind in binds {
+        query = match bind {
+            Bind::Text(text) => query.bind(text),
+            Bind::Id(id) => query.bind(id),
+            Bind::At(at) => query.bind(at),
+        };
+    }
+    let rows: Vec<LineRow> = query.bind(SEARCH_LIMIT).fetch_all(&s.db).await?;
+    Ok(Json(json!({ "lines": rows.iter().map(line_json).collect::<Vec<_>>() })))
+}
+
+/// The query for a search of a thread: the pair ($1, $2), then one clause per thing asked, each
+/// bound in the order returned, and the limit last. The thread index narrows the rows to the
+/// pair first; the rest is read off each row (`to_tsvector` over the words, the rooms' link
+/// regex, `history::LINK`, over the text for `has:link`, `VIDEO_LINK` for `has:video`), since
+/// a thread is a few thousand lines at most and a column for each would cost more than it saves.
+fn search_sql(search: &Search, from: Option<Uuid>) -> (String, Vec<Bind>) {
+    let mut binds: Vec<Bind> = Vec::new();
+    let mut clauses: Vec<String> = Vec::new();
+    // the next placeholder: the pair is $1 and $2, so a bind pushed here is $(its count + 2)
+    let mut placeholder = |bind: Bind| {
+        binds.push(bind);
+        format!("${}", binds.len() + 2)
+    };
+    if !search.words.is_empty() {
+        let words = placeholder(Bind::Text(search.words.clone()));
+        clauses.push(format!("to_tsvector('simple', d.text) @@ websearch_to_tsquery('simple', {words})"));
+    }
+    if let Some(id) = from {
+        let id = placeholder(Bind::Id(id));
+        clauses.push(format!("d.from_id = {id}"));
+    }
+    if search.image {
+        clauses.push("d.image IS NOT NULL".to_owned());
+    }
+    if search.link || search.video {
+        let link = placeholder(Bind::Text(history::LINK.to_owned()));
+        clauses.push(format!("d.text ~* {link}"));
+    }
+    if search.video {
+        let hosts = placeholder(Bind::Text(history::VIDEO_LINK.to_owned()));
+        clauses.push(format!("d.text ~* {hosts}"));
+    }
+    if let Some(at) = search.before {
+        let at = placeholder(Bind::At(at));
+        clauses.push(format!("d.sent_at < {at}"));
+    }
+    if let Some(at) = search.after {
+        let at = placeholder(Bind::At(at));
+        clauses.push(format!("d.sent_at >= {at}"));
+    }
+    let limit = binds.len() + 3;
+    let mut sql = "SELECT d.id, f.name, d.text, (EXTRACT(EPOCH FROM d.sent_at) * 1000)::bigint, d.image
+         FROM dms d JOIN streamers f ON f.id = d.from_id
+         WHERE LEAST(d.from_id, d.to_id) = LEAST($1, $2) AND GREATEST(d.from_id, d.to_id) = GREATEST($1, $2)"
+        .to_owned();
+    for clause in &clauses {
+        sql.push_str(" AND ");
+        sql.push_str(clause);
+    }
+    sql.push_str(&format!(" ORDER BY d.id DESC LIMIT ${limit}"));
+    (sql, binds)
 }
 
 #[derive(Deserialize)]
@@ -262,4 +370,44 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/dms", get(list))
         .route("/api/dm/{name}", get(thread).post(send))
         .route("/api/dm/{name}/read", put(read))
+        .route("/api/dm/{name}/search", get(search))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+
+    fn utc(day: &str) -> DateTime<Utc> {
+        NaiveDate::parse_from_str(day, "%Y-%m-%d").unwrap().and_time(NaiveTime::MIN).and_utc()
+    }
+
+    #[test]
+    fn the_query_binds_the_pair_then_each_thing_asked_and_the_limit_last() {
+        let id = Uuid::nil();
+        let s = history::parse_search("from:bob has:video hello before:2026-10-30").unwrap();
+        let (sql, binds) = search_sql(&s, Some(id));
+        assert!(sql.contains("LEAST(d.from_id, d.to_id) = LEAST($1, $2) AND GREATEST(d.from_id, d.to_id) = GREATEST($1, $2)"));
+        assert!(sql.contains("to_tsvector('simple', d.text) @@ websearch_to_tsquery('simple', $3)"));
+        assert!(sql.contains("d.from_id = $4"));
+        assert!(sql.contains("d.text ~* $5") && sql.contains("d.text ~* $6"), "a video is a link first, then a video link: {sql}");
+        assert!(sql.contains("d.sent_at < $7"));
+        assert!(sql.ends_with("ORDER BY d.id DESC LIMIT $8"));
+        assert_eq!(binds.len(), 5);
+        assert!(matches!(&binds[0], Bind::Text(w) if w == "hello"));
+        assert!(matches!(&binds[1], Bind::Id(i) if *i == id));
+        assert!(matches!(&binds[2], Bind::Text(re) if re == history::LINK));
+        assert!(matches!(&binds[3], Bind::Text(re) if re == history::VIDEO_LINK));
+        assert!(matches!(&binds[4], Bind::At(at) if *at == utc("2026-10-30")));
+
+        // pictures bind nothing: the pair and the limit alone. words and a day are a bind each
+        let s = history::parse_search("has:image").unwrap();
+        let (sql, binds) = search_sql(&s, None);
+        assert!(sql.contains("AND d.image IS NOT NULL ORDER BY d.id DESC LIMIT $3"));
+        assert!(binds.is_empty());
+        let s = history::parse_search("hi there after:2026-10-01").unwrap();
+        let (sql, binds) = search_sql(&s, None);
+        assert!(sql.contains("d.sent_at >= $4") && sql.ends_with("LIMIT $5"));
+        assert_eq!(binds.len(), 2);
+    }
 }

@@ -25,6 +25,7 @@ import { NotificationsTab } from '@/shared-components/user-modal/NotificationsTa
 import { ProfileTab } from '@/shared-components/user-modal/ProfileTab';
 import { SecurityTab } from '@/shared-components/user-modal/SecurityTab';
 import { SidebarTab } from '@/shared-components/user-modal/SidebarTab';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> = {
@@ -221,16 +222,18 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       {/* pinned over the pane, discord's esc: the pane scrolls under it */}
       <div className="absolute right-4 top-4 z-10 flex flex-col items-center gap-1">
-        <button
-          id="user-modal-close"
-          type="button"
-          aria-label="close"
-          aria-keyshortcuts="Escape"
-          onClick={onClose}
-          className="flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue"
-        >
-          <RiCloseLine aria-hidden size={20} />
-        </button>
+        <Tooltip content="close" at="left">
+          <button
+            id="user-modal-close"
+            type="button"
+            aria-label="close"
+            aria-keyshortcuts="Escape"
+            onClick={onClose}
+            className="flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue"
+          >
+            <RiCloseLine aria-hidden size={20} />
+          </button>
+        </Tooltip>
         <span aria-hidden className="hidden text-[10px] font-semibold uppercase tracking-wider text-textTertiary sm:block">
           esc
         </span>

@@ -1,3 +1,4 @@
+import { RiUserAddLine, RiUserFollowLine, RiUserUnfollowLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useState } from 'react';
 
@@ -17,10 +18,15 @@ interface FollowButtonProps {
   onChange?: (following: boolean) => void;
 }
 
+/** The glyph and its word, one line. */
+const LABEL = 'inline-flex items-center justify-center gap-1.5';
+
 /**
- * `follow`, or `following` for a name the login follows (`unfollow` while pointed at, so the
- * word says what the click does). For nobody it opens the security tab: an account is what a
- * follow hangs off. See docs/follows.md.
+ * `follow` with the add glyph in the blue fill, or, for a name the login follows, `following`
+ * with the check glyph in the page's box, which turns to `unfollow` with the cross glyph, in red,
+ * while pointed at, so the word says what the click does. The same box in every state: a
+ * follow does not turn the button into bare words. For nobody it opens the security tab: an
+ * account is what a follow hangs off. See docs/follows.md.
  */
 export function FollowButton({ id, name, small, className, onChange }: FollowButtonProps) {
   const me = useAtomValue(meAtom);
@@ -38,11 +44,16 @@ export function FollowButton({ id, name, small, className, onChange }: FollowBut
     setBusy(true);
     const ok = following ? await unfollow(name) : await follow(name);
     setBusy(false);
-    if (ok) onChange?.(!following);
+    if (!ok) return;
+    // the pointer is still on the button: let it read `following` until it leaves and comes back,
+    // rather than flip straight to a red `unfollow` under the click that followed
+    setHover(false);
+    onChange?.(!following);
   }
 
   if (mine) return null;
-  const word = following ? (hover ? 'unfollow' : 'following') : 'follow';
+  const size = small ? 14 : 16;
+  const unfollowing = following && hover;
   // dim while the request is out, but not `disabled`: chrome drops focus from a disabled button and
   // stops counting the pointer as over it, which reads as leaving the sidebar this button sits in
   return (
@@ -59,13 +70,29 @@ export function FollowButton({ id, name, small, className, onChange }: FollowBut
       onBlur={() => setHover(false)}
       className={cn(
         small ? 'px-2.5 py-1 text-sm' : 'px-3 py-1.5 text-sm',
-        following && 'border-transparent bg-transparent text-primaryBlue hover:border-transparent hover:bg-transparent',
-        following && hover && 'text-decrease',
+        unfollowing && 'border-decrease text-decrease hover:border-decrease',
         busy && 'opacity-40',
         className
       )}
     >
-      {word}
+      {following ? (
+        // both words in one cell: the box keeps the wider one's width and does not wobble as they swap
+        <span className="grid">
+          <span className={cn(LABEL, 'col-start-1 row-start-1', hover && 'invisible')}>
+            <RiUserFollowLine aria-hidden size={size} />
+            following
+          </span>
+          <span className={cn(LABEL, 'col-start-1 row-start-1', !hover && 'invisible')}>
+            <RiUserUnfollowLine aria-hidden size={size} />
+            unfollow
+          </span>
+        </span>
+      ) : (
+        <span className={LABEL}>
+          <RiUserAddLine aria-hidden size={size} />
+          follow
+        </span>
+      )}
     </Button>
   );
 }

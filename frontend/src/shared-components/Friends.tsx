@@ -214,7 +214,11 @@ function RailFace({ name, avatar, presence }: { name: string; avatar: number | n
   return (
     <span className="relative block shrink-0">
       <Face name={name} version={avatar} />
-      {presence === 'streaming' && <LiveMark aria-hidden data-streaming title="streaming" className="absolute -bottom-1 -left-1 border border-background" />}
+      {presence === 'streaming' && (
+        <Tooltip content="streaming">
+          <LiveMark role="img" aria-label="streaming" data-streaming className="absolute -bottom-1 -left-1 border border-background" />
+        </Tooltip>
+      )}
       <span aria-hidden data-presence={presence} className={cn('absolute -bottom-1 -right-1 h-3.5 w-3.5 border-2 border-background', PRESENCE_SQUARE[presence])} />
     </span>
   );
@@ -511,47 +515,48 @@ function Divider({ value, min, max, above, below, onMove, pitch, gap, open, side
   const drag = useRef<{ y: number; from: number } | null>(null);
   const draggable = min < max;
   return (
-    <div
-      role="separator"
-      aria-orientation="horizontal"
-      aria-label={`rows for ${above}, the rest for ${below}`}
-      aria-valuemin={min}
-      aria-valuemax={max}
-      aria-valuenow={value}
-      tabIndex={draggable ? 0 : -1}
-      title={draggable ? 'drag: a row more for one list, one fewer for the other' : undefined}
-      onPointerDown={(e) => {
-        if (!draggable) return;
-        e.preventDefault();
-        e.currentTarget.setPointerCapture(e.pointerId);
-        drag.current = { y: e.clientY, from: value };
-      }}
-      onPointerMove={(e) => {
-        if (drag.current) onMove(drag.current.from + Math.round((e.clientY - drag.current.y) / pitch));
-      }}
-      onPointerUp={() => {
-        drag.current = null;
-      }}
-      onPointerCancel={() => {
-        drag.current = null;
-      }}
-      onKeyDown={(e) => {
-        if (!draggable || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
-        e.preventDefault();
-        onMove(value + (e.key === 'ArrowUp' ? -1 : 1));
-      }}
-      className={cn(
-        "group relative flex shrink-0 touch-none select-none outline-none transition-[margin-bottom] before:absolute before:inset-x-0 before:-inset-y-2 before:content-['']",
-        SLIDE,
-        draggable && 'cursor-row-resize',
-        open ? INSET[side] : COLUMN
-      )}
-      style={{ height: LINE_PX, marginBottom: gap }}
-    >
-      <span
-        className={cn('h-px bg-primaryStroke transition-colors group-hover:bg-secondaryStroke group-focus-visible:bg-primaryBlue', open ? 'w-full' : 'mx-auto w-6')}
-      />
-    </div>
+    <Tooltip content={draggable ? 'drag: a row more for one list, one fewer for the other' : null}>
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label={`rows for ${above}, the rest for ${below}`}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={value}
+        tabIndex={draggable ? 0 : -1}
+        onPointerDown={(e) => {
+          if (!draggable) return;
+          e.preventDefault();
+          e.currentTarget.setPointerCapture(e.pointerId);
+          drag.current = { y: e.clientY, from: value };
+        }}
+        onPointerMove={(e) => {
+          if (drag.current) onMove(drag.current.from + Math.round((e.clientY - drag.current.y) / pitch));
+        }}
+        onPointerUp={() => {
+          drag.current = null;
+        }}
+        onPointerCancel={() => {
+          drag.current = null;
+        }}
+        onKeyDown={(e) => {
+          if (!draggable || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+          e.preventDefault();
+          onMove(value + (e.key === 'ArrowUp' ? -1 : 1));
+        }}
+        className={cn(
+          "group relative flex shrink-0 touch-none select-none outline-none transition-[margin-bottom] before:absolute before:inset-x-0 before:-inset-y-2 before:content-['']",
+          SLIDE,
+          draggable && 'cursor-row-resize',
+          open ? INSET[side] : COLUMN
+        )}
+        style={{ height: LINE_PX, marginBottom: gap }}
+      >
+        <span
+          className={cn('h-px bg-primaryStroke transition-colors group-hover:bg-secondaryStroke group-focus-visible:bg-primaryBlue', open ? 'w-full' : 'mx-auto w-6')}
+        />
+      </div>
+    </Tooltip>
   );
 }
 

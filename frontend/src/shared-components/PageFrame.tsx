@@ -4,6 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 
 import { buttonClassName } from '@/shared-components/Button';
 import { NotificationsBell } from '@/shared-components/Notifications';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 interface PageFrameProps {
@@ -17,15 +18,17 @@ interface PageFrameProps {
 }
 
 /**
- * Back to the stream list, to the left of a page's title: a caret and the word.
- * A crash reloads the document, because the router may be what broke.
- * The tests click `header a[href="/"]`.
+ * Back to the stream list, to the left of a page's title: a caret alone, named `home` for
+ * screen readers and on hover (tooltips.mdc). A crash reloads the document, because the router
+ * may be what broke. The tests click `header a[href="/"]`.
  */
 export function HomeLink({ reload = false }: { reload?: boolean }) {
   return (
-    <Link id="home" to="/" reloadDocument={reload || undefined} className={buttonClassName('secondary', 'shrink-0 gap-1 px-3 py-1.5 text-sm')}>
-      <RiArrowLeftSLine aria-hidden size={18} />
-    </Link>
+    <Tooltip content="home">
+      <Link id="home" to="/" aria-label="home" reloadDocument={reload || undefined} className={buttonClassName('secondary', 'shrink-0 gap-1 px-3 py-1.5 text-sm')}>
+        <RiArrowLeftSLine aria-hidden size={18} />
+      </Link>
+    </Tooltip>
   );
 }
 

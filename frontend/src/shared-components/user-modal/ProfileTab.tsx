@@ -46,6 +46,7 @@ import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { BUTTON, Field, INPUT, OptionCard, PasswordInput, SECTION_TITLE, Section, Status } from '@/shared-components/user-modal/parts';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 /**
@@ -220,9 +221,11 @@ export function ProfileTab() {
             <p className="flex items-center gap-2 text-xl font-semibold leading-tight">
               <span className={cn('truncate', !name && 'font-normal text-textTertiary')}>{me ?? (nick || 'pick a name')}</span>
               {me ? (
-                <span className="shrink-0 text-increase" title="logged in: this name is yours">
-                  ✓
-                </span>
+                <Tooltip content="logged in: this name is yours">
+                  <span role="img" aria-label="logged in" className="shrink-0 text-increase">
+                    ✓
+                  </span>
+                </Tooltip>
               ) : (
                 <span className="shrink-0 border border-primaryStroke px-1.5 text-xs font-semibold uppercase leading-5 tracking-wider text-textTertiary">guest</span>
               )}
@@ -231,15 +234,15 @@ export function ProfileTab() {
                 badges.map((group) => {
                   const words = groupWords(group);
                   return (
-                  <button
-                    key={group.name}
-                    type="button"
-                    onClick={() => pickTab('groups')}
-                    className="shrink-0"
-                    title={`in the group ${words.title}${words.tag ? ` #${words.tag}` : ''}. groups are in the next tab`}
-                  >
-                    <Badge group={group} />
-                  </button>
+                    <button
+                      key={group.name}
+                      type="button"
+                      onClick={() => pickTab('groups')}
+                      className="shrink-0"
+                      title={`in the group ${words.title}${words.tag ? ` #${words.tag}` : ''}. groups are in the next tab`}
+                    >
+                      <Badge group={group} />
+                    </button>
                   );
                 })}
             </p>
@@ -249,7 +252,13 @@ export function ProfileTab() {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             {avatar !== null && (
-              <button id="profile-avatar-remove" type="button" className="text-base font-semibold text-textTertiary disabled:opacity-40" disabled={!canEdit} onClick={() => void removeMyAvatar()}>
+              <button
+                id="profile-avatar-remove"
+                type="button"
+                className="text-base font-semibold text-textTertiary disabled:opacity-40"
+                disabled={!canEdit}
+                onClick={() => void removeMyAvatar()}
+              >
                 remove picture
               </button>
             )}
@@ -302,9 +311,11 @@ export function ProfileTab() {
           <>
             <p className="flex items-center gap-2 font-semibold">
               <span id="profile-me">{me}</span>
-              <span className="text-increase" title="logged in: this name is yours">
-                ✓
-              </span>
+              <Tooltip content="logged in: this name is yours">
+                <span role="img" aria-label="logged in" className="text-increase">
+                  ✓
+                </span>
+              </Tooltip>
             </p>
             <Rename me={me} />
           </>
@@ -367,7 +378,13 @@ export function ProfileTab() {
           />
         </Field>
         <div className="flex flex-wrap items-center gap-3">
-          <button id="profile-save-bio" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={!canEdit} onClick={() => void saveMyBio()}>
+          <button
+            id="profile-save-bio"
+            type="button"
+            className="text-base font-semibold text-primaryBlue disabled:opacity-40"
+            disabled={!canEdit}
+            onClick={() => void saveMyBio()}
+          >
             save status
           </button>
           <span id="profile-bio-count" className={cn('text-sm tabular-nums text-textTertiary', left < 20 && 'text-decrease')}>
@@ -429,7 +446,13 @@ export function ProfileTab() {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             {offline !== null && (
-              <button id="profile-offline-remove" type="button" className="text-base font-semibold text-textTertiary disabled:opacity-40" disabled={!canEdit} onClick={() => void removeMyOffline()}>
+              <button
+                id="profile-offline-remove"
+                type="button"
+                className="text-base font-semibold text-textTertiary disabled:opacity-40"
+                disabled={!canEdit}
+                onClick={() => void removeMyOffline()}
+              >
                 remove picture
               </button>
             )}
@@ -463,7 +486,13 @@ export function ProfileTab() {
           />
         </Field>
         <div className="flex flex-wrap items-center gap-3">
-          <button id="profile-save-offline-note" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={!canEdit} onClick={() => void saveMyOfflineNote()}>
+          <button
+            id="profile-save-offline-note"
+            type="button"
+            className="text-base font-semibold text-primaryBlue disabled:opacity-40"
+            disabled={!canEdit}
+            onClick={() => void saveMyOfflineNote()}
+          >
             save line
           </button>
           <Status id="profile-offline-note-status" text={offlineNoteStatus || (canEdit ? '' : whyNot)} />

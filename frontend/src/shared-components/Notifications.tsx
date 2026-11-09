@@ -25,6 +25,7 @@ import { Face } from '@/shared-components/Face';
 import { panelClassName } from '@/shared-components/Panel';
 import { Who } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 import { ago } from '@/utils/since';
 
@@ -64,25 +65,27 @@ export function NotificationsBell() {
   const open = useAtomValue(notificationsOpenAtom);
   const unread = useAtomValue(unreadNotificationsAtom);
   return (
-    <button
-      id="notifications"
-      type="button"
-      aria-label={unread > 0 ? `notifications, ${unread} new` : 'notifications'}
-      aria-haspopup="dialog"
-      aria-expanded={open}
-      aria-controls={open ? 'notifications-panel' : undefined}
-      title={unread > 0 ? `notifications: ${unread} new` : 'notifications'}
-      data-unread={unread || undefined}
-      onClick={toggleNotifications}
-      className={cn(buttonClassName('secondary', 'relative px-2.5 py-2'), open && 'border-primaryBlue text-primaryBlue')}
-    >
-      <RiNotification3Line aria-hidden size={18} />
-      {unread > 0 && (
-        <span id="notifications-unread" aria-hidden className={COUNT}>
-          {unread > 99 ? '99+' : unread}
-        </span>
-      )}
-    </button>
+    // the name while the panel is shut; open, the panel's title says it
+    <Tooltip content={open ? null : unread > 0 ? `notifications: ${unread} new` : 'notifications'}>
+      <button
+        id="notifications"
+        type="button"
+        aria-label={unread > 0 ? `notifications, ${unread} new` : 'notifications'}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={open ? 'notifications-panel' : undefined}
+        data-unread={unread || undefined}
+        onClick={toggleNotifications}
+        className={cn(buttonClassName('secondary', 'relative px-2.5 py-2'), open && 'border-primaryBlue text-primaryBlue')}
+      >
+        <RiNotification3Line aria-hidden size={18} />
+        {unread > 0 && (
+          <span id="notifications-unread" aria-hidden className={COUNT}>
+            {unread > 99 ? '99+' : unread}
+          </span>
+        )}
+      </button>
+    </Tooltip>
   );
 }
 
@@ -325,13 +328,17 @@ function NotificationsList() {
           notifications
         </h2>
         {me && (
-          <button id="notifications-settings" type="button" aria-label="notification settings" title="which kinds are kept" onClick={toSettings} className={ICON_BUTTON}>
-            <RiSettings3Line aria-hidden size={16} />
-          </button>
+          <Tooltip content="which kinds are kept">
+            <button id="notifications-settings" type="button" aria-label="notification settings" onClick={toSettings} className={ICON_BUTTON}>
+              <RiSettings3Line aria-hidden size={16} />
+            </button>
+          </Tooltip>
         )}
-        <button id="notifications-close" type="button" aria-label="close" title="close" onClick={closeNotifications} className={ICON_BUTTON}>
-          <RiCloseLine aria-hidden size={18} />
-        </button>
+        <Tooltip content="close">
+          <button id="notifications-close" type="button" aria-label="close" onClick={closeNotifications} className={ICON_BUTTON}>
+            <RiCloseLine aria-hidden size={18} />
+          </button>
+        </Tooltip>
       </header>
 
       {!me ? (

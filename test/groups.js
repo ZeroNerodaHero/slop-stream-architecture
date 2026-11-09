@@ -642,9 +642,43 @@ const dropAll = async (ctx, names) => {
     await new Promise((r) => setTimeout(r, 1500));
     const inboxAfter = await body(await member.get('/api/notifications'));
     expect(inboxAfter.items.some((i) => i.kind === 'chat' && i.room === `${slug}/staff` && /staff again/.test(i.text)), `with the role no row came: ${JSON.stringify(inboxAfter.items.filter((i) => i.kind === 'chat'))}`);
+    // the search is the group's: every channel this viewer sees at once, each hit saying its channel, unless `channel:` names one.
+    // asked of the channel on screen (general here); with history not kept there is nothing to search, and the rest is not tried
+    const search = async (ctx, q) => {
+      const res = await ctx.get(`/chat/${slug}/general/search?q=${encodeURIComponent(q)}`);
+      const answer = await body(res);
+      return { status: res.status(), lines: (answer && answer.lines) || [], error: answer && answer.error };
+    };
+    const kept = await search(maker, RUN);
+    const searchable = !(kept.status === 404 && /not kept/.test(kept.error || ''));
+    if (searchable) {
+      expect(kept.status === 200, `the owner's search got ${kept.status} ${JSON.stringify(kept.error)}`);
+      const channelsHit = new Set(kept.lines.map((l) => l.channel));
+      expect(channelsHit.has('general') && channelsHit.has('staff'), `the owner's search found channels ${[...channelsHit].join(' ')} (want general and staff: every channel at once)`);
+      expect(kept.lines.every((l) => typeof l.channel === 'string'), "every hit of a group's search says its channel");
+      const withRole = await search(member, RUN);
+      expect(withRole.lines.some((l) => l.channel === 'staff'), `with the role the member's search found ${JSON.stringify(withRole.lines.map((l) => l.channel))}`);
+      const one = await search(member, `${RUN} channel:staff`);
+      expect(one.lines.length >= 2 && one.lines.every((l) => l.channel === 'staff'), `channel:staff found ${JSON.stringify(one.lines.map((l) => [l.channel, l.text]))}`);
+      const general = await search(member, `${RUN} in:#general`);
+      expect(general.lines.length === 1 && general.lines[0].channel === 'general', `in:#general found ${JSON.stringify(general.lines.map((l) => [l.channel, l.text]))}`);
+      const nosuch = await search(member, `${RUN} channel:nosuch`);
+      expect(nosuch.status === 404, `channel:nosuch got ${nosuch.status}`);
+      const alone = await search(member, 'channel:staff');
+      expect(alone.status === 400 && /say what/.test(alone.error || ''), `a channel alone got ${alone.status} ${JSON.stringify(alone.error)}`);
+      const stream = await anon.get(`/chat/${ROOM}/search?q=${encodeURIComponent('hi channel:general')}`);
+      expect(stream.status() === 400 && /group/.test((await body(stream))?.error || ''), `channel: on a stream's room got ${stream.status()} ${JSON.stringify(await body(stream))}`);
+    }
     // the roles power cannot unlock what it cannot see: the role taken back, a role with the roles power cannot name staff
     const taken = await maker.delete(`/api/groups/${slug}/roles/${staffers.id}/members/${MEMBER}`);
     expect(taken.status() === 204, `taking the role got ${taken.status()}`);
+    // and without the role the search leaves staff out, named or not
+    if (searchable) {
+      const withoutRole = await search(member, RUN);
+      expect(withoutRole.lines.length >= 1 && withoutRole.lines.every((l) => l.channel !== 'staff'), `without the role the member's search found ${JSON.stringify(withoutRole.lines.map((l) => l.channel))} (staff must be out)`);
+      const named = await search(member, `${RUN} channel:staff`);
+      expect(named.status === 404, `channel:staff for a member who does not see it got ${named.status}`);
+    }
     const shapers = await body(await maker.post(`/api/groups/${slug}/roles`, { data: { name: 'shapers', color: '#f2cc60', perms: { roles: true } } }));
     expect(UUID.test(shapers.id) && shapers.channels.length === 0, `the shapers role ${JSON.stringify(shapers)}`);
     expect((await maker.post(`/api/groups/${slug}/roles/${shapers.id}/members`, { data: { name: MEMBER } })).status() === 204, 'giving shapers failed');
@@ -659,7 +693,7 @@ const dropAll = async (ctx, names) => {
     await asOwnerPage.context().close();
     for (const id of [staffers.id, shapers.id]) await maker.delete(`/api/groups/${slug}/roles/${id}`);
     expect((await maker.delete(`/api/groups/${slug}/channels/staff`)).status() === 204, 'deleting staff failed');
-    return 'hidden from the member everywhere, seen with the role, the roles power cannot unlock it';
+    return `hidden from the member everywhere, seen with the role, the roles power cannot unlock it${searchable ? '; the search spans the channels seen' : '; history not kept, the search not tried'}`;
   });
 
   await step('the owner role: a word on the group, owner until an owner renames it; a custom role cannot take it, nor it a custom role\'s', async () => {

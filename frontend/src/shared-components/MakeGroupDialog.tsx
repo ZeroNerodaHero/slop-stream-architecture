@@ -12,6 +12,7 @@ import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { PicturePick } from '@/shared-components/PicturePick';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary';
@@ -195,15 +196,16 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
         />
         <div className="flex flex-wrap items-center gap-2">
           {SWATCHES.map((swatch) => (
-            <button
-              key={swatch}
-              type="button"
-              aria-label={swatch}
-              aria-pressed={swatch === color}
-              onClick={() => setColor(swatch)}
-              style={{ backgroundColor: swatch }}
-              className={cn('h-8 w-8 border-2', swatch === color ? 'border-textPrimary' : 'border-transparent')}
-            />
+            <Tooltip key={swatch} content={swatch}>
+              <button
+                type="button"
+                aria-label={swatch}
+                aria-pressed={swatch === color}
+                onClick={() => setColor(swatch)}
+                style={{ backgroundColor: swatch }}
+                className={cn('h-8 w-8 border-2', swatch === color ? 'border-textPrimary' : 'border-transparent')}
+              />
+            </Tooltip>
           ))}
           <input
             id="groups-make-color"
