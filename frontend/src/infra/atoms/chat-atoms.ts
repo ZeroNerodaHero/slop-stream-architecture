@@ -119,7 +119,7 @@ export const visibleChatLinesAtom = atom((get) => {
 /** How many lines the switch is holding back right now. 0 while it is off. */
 export const hiddenBotLinesAtom = atom((get) => (get(hideBotsAtom) ? get(chatLinesAtom).filter(isBotLine).length : 0));
 
-/** Search hits, or one account's lines, newest first. Null when the list is closed. */
+/** Search hits, or one account's lines, newest first; the panel shows them where its lines are. Null when the pane is closed. */
 export const chatResultsAtom = atom<ChatLine[] | null>(null);
 /** The query, or the account name, that `chatResultsAtom` is for. */
 export const chatResultsForAtom = atom('');
@@ -666,7 +666,7 @@ function resetHistory() {
   following = true;
   store.set(chatPinnedAtom, false);
   store.set(chatBehindAtom, 0);
-  // the hits stay: a server's are every channel's, and a hit opened in another channel is still on the list (`closeChat` clears them)
+  // the hits stay: a server's are every channel's, so a change of channel from the list leaves the pane up (`closeChat` clears them; a hit picked clears them in the panel, so the lines it put in view are seen)
 }
 
 /** The view sits on the newest line, or the reader has scrolled up. */

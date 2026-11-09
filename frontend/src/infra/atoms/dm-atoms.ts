@@ -57,7 +57,7 @@ export const dmNoticeAtom = atom('');
 /** New lines across every thread: the number on the sidebar's chat button. */
 export const dmUnreadAtom = atom((get) => get(dmsAtom).reduce((n, d) => n + d.unread, 0));
 
-/** A search's hits, newest first, and the thread and the words they are for. Null when the list is closed. The window shows them under its header while that thread is the one on screen. */
+/** A search's hits, newest first, and the thread and the words they are for. Null when the pane is closed. The window shows them where the lines are while that thread is the one on screen. */
 export const dmResultsAtom = atom<{ name: string; query: string; lines: DmLine[] } | null>(null);
 /** A line to put in view (`openDmLine`): the window's log centres it once it is drawn. `n` makes a second jump to the same line a new one. */
 export const dmJumpAtom = atom<{ name: string; id: number; n: number } | null>(null);
@@ -328,7 +328,7 @@ export async function searchDm(name: string, raw: string): Promise<void> {
   }
 }
 
-/** The hits off the screen: the list's close, the search box closing. An answer still on its way is not wanted either. */
+/** The hits off the screen and the lines back: the pane's close, a hit picked, the search box closing. An answer still on its way is not wanted either. */
 export function clearDmResults() {
   asks++;
   store.set(dmResultsAtom, null);

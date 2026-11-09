@@ -358,10 +358,11 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 /// `GET /api/groups/:group`: the whole room in one answer. The group, its roles, what the
-/// login may do, its channels, who in it is live, and (for a member or a site admin) the
-/// roster, and (for the ban power) the bans. `roster` and `bans` are null for someone who
-/// may not see them. The page loads this once and then follows the `group` facts on the
-/// events socket (docs/groups.md); nothing here is asked again on a channel change.
+/// login may do, its channels, who in it is live, the roster (anyone's on a public group; a
+/// member's or a site admin's on a private one), and (for the ban power) the bans. `roster`
+/// and `bans` are null for someone who may not see them. The page loads this once and then
+/// follows the `group` facts on the events socket (docs/groups.md); nothing here is asked
+/// again on a channel change.
 pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
     let group = server(&s.db, &group).await?;
     let user = me.as_ref().map(|a| a.id);
@@ -393,8 +394,9 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, M
     let live = groups::live_in(&s, &group).await?;
     // the channels this login has muted (docs/notifications.md): its own, so the list can say so
     let muted = groups::muted_in(&s.db, user, &group).await?;
-    // the roster is for members and site admins, the bans for the ban power: null otherwise
-    let roster = if mine || admin { Some(members_of(&s.db, &group, &member_order).await?) } else { None };
+    // the roster is anyone's on a public group (the lines say who talks there anyway), and a member's or a
+    // site admin's on a private one, whose people chose not to be listed; the bans are the ban power's. null otherwise
+    let roster = if public || mine || admin { Some(members_of(&s.db, &group, &member_order).await?) } else { None };
     let bans = if powers & BAN != 0 { Some(bans_of(&s.db, &group).await?) } else { None };
     Ok(Json(json!({
         "name": group,
@@ -852,13 +854,17 @@ async fn members_of(db: &sqlx::PgPool, group: &str, order: &str) -> Result<Vec<V
     Ok(out.collect())
 }
 
+/// `GET /api/groups/:group/members`: the roster on its own, the room's rule: anyone's on a
+/// public group; on a private one a member's or a site admin's (401 for nobody, 403 otherwise).
 async fn list_members(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
-    let who = me.ok_or_else(login)?;
     let group = server(&s.db, &group).await?;
-    if !groups::member(&s.db, who.id, &group).await? && !s.admins.iter().any(|a| a.id == who.id) {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "join the group first"));
+    let (public, order): (bool, String) = sqlx::query_as("SELECT public, member_order FROM groups WHERE name = $1").bind(&group).fetch_one(&s.db).await?;
+    if !public {
+        let who = me.ok_or_else(login)?;
+        if !groups::member(&s.db, who.id, &group).await? && !s.admins.iter().any(|a| a.id == who.id) {
+            return Err(ApiError::new(StatusCode::FORBIDDEN, "join the group first"));
+        }
     }
-    let order: String = sqlx::query_scalar("SELECT member_order FROM groups WHERE name = $1").bind(&group).fetch_one(&s.db).await?;
     Ok(Json(Value::Array(members_of(&s.db, &group, &order).await?)))
 }
 

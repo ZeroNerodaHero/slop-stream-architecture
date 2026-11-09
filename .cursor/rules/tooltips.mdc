@@ -6,9 +6,13 @@ alwaysApply: false
 
 # An icon alone says what it is
 
-A control or a mark drawn as an icon with no words beside it — a `Ri*` glyph, an inline `<svg>`, a `✓`, a `×`, a `+` — gets two things: an `aria-label` (its name for a screen reader) and a tooltip with that name, shown on hover and on keyboard focus. This is every icon-only thing: a remove `×` on a card, a drag handle, a `+` that opens a menu, the back caret, a status mark like the green `✓` or the live square.
+A control or a mark drawn as an icon with no words beside it — a `Ri*` glyph, an inline `<svg>`, a `✓`, a `×`, a `+` — gets two things: an `aria-label` (its name for a screen reader) and a tooltip with that name, shown on hover and on keyboard focus. This is every icon-only thing: a remove `×` on a card, a drag handle, a `+` that opens a menu, a status mark like the green `✓` or the live square.
 
 The tooltip is the site's, not the browser's. `title=` alone is not it: it waits a second, never shows on keyboard focus or touch, and looks like the OS. Where a `Tooltip` goes on, any `title` comes off.
+
+A tooltip goes **above** its control. `Tooltip` does that unasked; pass `at` only for a control in a corner where above is wrong (the `×` pinned at the top right of a dialog takes `at="left"`). When the asked side has no room in the window the tooltip falls to the opposite side on its own, so never pass `at="bottom"` to get one out of the way of the window's edge.
+
+**The one exception: the back caret** (`HomeLink` in `PageFrame.tsx`, the `<` at the left of a page's title). It keeps its `aria-label="home"` and has no tooltip, and no `title` either. The title row is pinned to the top edge of the window, so above the caret there is no room for a tooltip, and under it is the page: nowhere a `home` could sit reads right. Do not put one back.
 
 - On the page: `<Tooltip content="…">` from `shared-components/Tooltip.tsx`. It wraps the control (`display: contents`, so the control's own layout and `absolute` placement stand), draws into the body (or the open `<dialog>`), stays in the window, and hides on Escape.
 - Over a video or a picture (dark glass chips): `IconButton`, or `ControlTip` inside a control with `group/control relative`, from `shared-components/VideoControls.tsx`. It reads white on black, where the page's box would not.

@@ -919,7 +919,7 @@ async fn watch(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult
     Ok(Json(json!({
         "url": WS_PATH, "name": name, "bio": p.bio, "live": live, "verified": verified, "avatar": p.avatar, "presence": presence,
         "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials, "about": p.about,
-        "followers": follows.followers, "following": follows.following,
+        "followers": follows.followers, "following": follows.following, "joined_at": p.joined,
     })))
 }
 

@@ -9,6 +9,7 @@ import {
   canRetryAtom,
   clearChoice,
   followersAtom,
+  joinedAtom,
   leaveWatchPage,
   markAutoplayBlocked,
   markPlaying,
@@ -176,6 +177,7 @@ export function WatchPage() {
   const offlineNote = useAtomValue(offlineNoteAtom);
   const followers = useAtomValue(followersAtom);
   const socials = useAtomValue(socialsAtom);
+  const joined = useAtomValue(joinedAtom);
   // my own page: the socials tab edits the links in place (SocialsEditor.tsx)
   const mine = useAtomValue(myNameAtom) === name;
   const phase = useAtomValue(watchPhaseAtom);
@@ -455,9 +457,10 @@ export function WatchPage() {
         )}
 
         {/* under the player: the about tab (the page of their own, docs/about.md), the calendar
-            (when they stream, docs/calendar.md) and the socials (where else to find them,
-            docs/socials.md). the grant brought the links, no request; on my own page the socials
-            tab edits them in place. a tab's content is only in the page while it is open */}
+            (when they stream, docs/calendar.md) and the socials (where else to find them, and
+            since when they are here, docs/socials.md). the grant brought the links and the date,
+            no request; on my own page the socials tab edits the links in place. a tab's content
+            is only in the page while it is open */}
         {name && phase !== 'bad-name' && (
           <div
             id="watch-tabs"
@@ -494,7 +497,7 @@ export function WatchPage() {
               ) : tab === 'calendar' ? (
                 <Calendar name={name} />
               ) : (
-                <SocialsTab name={name} doc={socials} mine={mine} />
+                <SocialsTab name={name} doc={socials} joined={joined} mine={mine} />
               )}
             </div>
           </div>

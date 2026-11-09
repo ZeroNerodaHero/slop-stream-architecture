@@ -124,7 +124,8 @@ pub(crate) struct Profile {
     pub(crate) offline_note: String,
     /// When the account was made: the row's `created_at`, for a claimed name only (a free
     /// name's row is made by whoever first saves a bio or follows it, and says nothing about
-    /// a person). The person card's `joined`. None for a free name.
+    /// a person). `joined_at` on the profile read and the watch grant: the socials tab's
+    /// `joined october 2026` (docs/socials.md). None for a free name.
     pub(crate) joined: Option<DateTime<Utc>>,
     /// Where else to find them: the links under the player, as the row keeps them. The empty document for none.
     pub(crate) socials: Socials,

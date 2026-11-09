@@ -39,6 +39,7 @@ import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { SOCIAL_ICON, SOCIAL_ICON_PX, Socials } from '@/shared-components/Socials';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
+import { monthOf } from '@/utils/since';
 
 /** The two ways the links can sit. The card's picture is the strip in miniature. */
 const LAYOUT_OPTIONS: readonly { layout: SocialsLayout; label: string; detail: string }[] = [
@@ -319,18 +320,22 @@ interface SocialsTabProps {
   name: string;
   /** Their links as the grant gave them (watch-atoms), already through `cleanSocials`. */
   doc: SocialsDoc;
+  /** When the account behind the name was made (rfc3339), as the grant gave it. `null`: a free name, nothing to say. */
+  joined: string | null;
   /** My own page: the strip offers the editor, which opens under it. */
   mine: boolean;
 }
 
 /**
- * The socials tab under the player (docs/socials.md): the strip, and on my own page the
- * editor under it. While the editor is open the strip is the draft as the save will keep it
- * (a row that is not a link yet is left out), so what is being edited is what is on the page;
- * `done` folds the editor and the strip is the saved document again (the draft is kept for the
- * next time). Opening it loads my profile, so the draft and the api's rule are the name's I am.
+ * The socials tab under the player (docs/socials.md): a line saying when they joined (an
+ * account's `created_at`, the month; the day on hover; nothing for a free name, which nobody
+ * joined), the strip, and on my own page the editor under it. While the editor is open the
+ * strip is the draft as the save will keep it (a row that is not a link yet is left out), so
+ * what is being edited is what is on the page; `done` folds the editor and the strip is the
+ * saved document again (the draft is kept for the next time). Opening it loads my profile, so
+ * the draft and the api's rule are the name's I am.
  */
-export function SocialsTab({ name, doc, mine }: SocialsTabProps) {
+export function SocialsTab({ name, doc, joined, mine }: SocialsTabProps) {
   const [opened, setOpened] = useState(false);
   const draft = useAtomValue(profileSocialsAtom);
   const canEdit = useAtomValue(canEditProfileAtom);
@@ -348,8 +353,19 @@ export function SocialsTab({ name, doc, mine }: SocialsTabProps) {
 
   return (
     <div className="flex flex-col gap-5">
-      {/* an empty draft while editing: the editor's own box says so, not two of them */}
-      {(!editing || shown.links.length > 0) && <Socials name={name} doc={shown} onEdit={mine && !editing ? open : undefined} />}
+      <div className="flex flex-col gap-3">
+        {/* here since when: the month, in the viewer's time zone; the whole date on hover and in `dateTime` */}
+        {joined && (
+          <p id="socials-joined" className="text-sm text-textSecondary">
+            joined{' '}
+            <time dateTime={joined} title={new Date(joined).toLocaleDateString()}>
+              {monthOf(joined)}
+            </time>
+          </p>
+        )}
+        {/* an empty draft while editing: the editor's own box says so, not two of them */}
+        {(!editing || shown.links.length > 0) && <Socials name={name} doc={shown} onEdit={mine && !editing ? open : undefined} />}
+      </div>
       {editing && <SocialsEditor canEdit={canEdit} whyNot={whyNot} onDone={() => setOpened(false)} />}
     </div>
   );

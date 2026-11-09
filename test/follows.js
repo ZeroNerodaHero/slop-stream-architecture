@@ -79,6 +79,8 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     expect(made >= 0 && made < 60 * 1000, `joined_at ${mine.joined_at} is ${Math.round(made / 1000)}s old`);
     const grant = await body(await fan.post(`/api/streams/${STAR}/watch`));
     expect(grant.followers === 1 && grant.following === true, `the grant: ${JSON.stringify(grant)}`);
+    // the socials tab's `joined` line reads the grant, not the profile: the same date on both
+    expect(grant.joined_at === mine.joined_at, `the grant says joined_at ${JSON.stringify(grant.joined_at)}, the profile ${JSON.stringify(mine.joined_at)}`);
     return `followers 1, following true (the grant too); joined just now`;
   });
 

@@ -20,7 +20,7 @@
 #   auth       sign up, log in, log out, a claimed name is only its owner's, verified chat lines, 429 after 10 tries
 #   groups     bot is built in, a login makes a group, another joins and leaves, badges on chat lines, a bot's lines wear BOT and the panel hides them, only the maker deletes, the groups tab;
 #              the pictures are the owner's whatever the roles say (no remove) and a role reaches only the powers its holder has;
-#              the room is one answer (channels, live, the roster for members, the bans) plus the last lines of every channel, a watcher of group:<name> hears a channel
+#              the room is one answer (channels, live, the roster for anyone while public and for members once private, the bans) plus the last lines of every channel, a watcher of group:<name> hears a channel
 #              added, the channels put in order, one renamed (its mute and lines following) and one deleted, the server's one chat socket carries every channel's lines and
 #              fills from since, a channel kept to a role is hidden from a member without it everywhere (the room, explore, messages, both sockets, the history,
 #              the inbox, the group's search, which spans every channel seen and narrows to one with channel:) and seen with it, and the roles power cannot unlock what it cannot see; the page switches channels with no reload, refetch or socket;

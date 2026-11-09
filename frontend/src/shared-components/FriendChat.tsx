@@ -1,4 +1,4 @@
-import { RiAddLine, RiCloseLine, RiImageAddLine, RiImageLine, RiSearchLine } from '@remixicon/react';
+import { RiAddLine, RiCloseLine, RiImageAddLine, RiSearchLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type CSSProperties,
@@ -42,9 +42,9 @@ import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatStyleAtom, type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { compressChatImage } from '@/infra/picture';
 import { Button } from '@/shared-components/Button';
-import { ChatLineShape, placeOf, stamp } from '@/shared-components/ChatLine';
+import { ChatLineShape, placeOf } from '@/shared-components/ChatLine';
 import { ChatImages, pictureSrc } from '@/shared-components/ChatPanel';
-import { comboProps, SearchFilters, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
+import { comboProps, SearchFilters, SearchHit, SearchResults, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
 import { LinkedText } from '@/shared-components/LinkedText';
 import { panelClassName } from '@/shared-components/Panel';
@@ -330,8 +330,10 @@ function Picker({ dms }: { dms: Dm[] }) {
  * half-typed draft, and the pictures picked for its next line, while another tab is shown. The
  * header is the name alone, the glass and the ×: the glass opens a search box under it
  * (`#friend-chat-search`, the room chat's words and filter words, `ChatSearch.tsx`) that asks
- * the thread on screen (`searchDm`); the hits stand under the box (`#friend-chat-results`), and
- * one clicked is put in view, the pages back to it loaded as needed (`openDmLine`). The ×
+ * the thread on screen (`searchDm`); the hits take the lines' whole place (`#friend-chat-results`,
+ * `SearchResults`, the lines kept under it unseen), and one clicked puts the lines back with
+ * it in view, the pages back to it loaded as needed (`openDmLine`); `close` puts them back as
+ * they were. The ×
  * hides the window and keeps everything; the sidebar's chat button brings it back. With no tab
  * shown, the friends to pick from are where the thread would be, under `no chat` when there
  * are no tabs at all. The lines take the shape the chat tab picked for every chat
@@ -393,13 +395,23 @@ export function FriendChat() {
   const lines = thread?.lines ?? [];
   const draft = (name && drafts[name]) || '';
   const pictures = (name && pending[name]) || [];
-  // the box's words and the filter words, the room chat's; submitting asks the thread on screen. `from:` is one of the two
+  // the hits over the lines: a search's, while the thread it asked is the one on screen
+  const hits = results?.name === name ? results : null;
+  // the box's words and the filter words, the room chat's; submitting asks the thread on screen. `from:` is one of the two, each with their face
   const search = useChatSearch(
     searchInput,
     (q) => {
       if (name) void searchDm(name, q);
     },
-    { names: me && name ? [me, name] : [] }
+    {
+      people:
+        me && name
+          ? [
+              { name: me, avatar: myAvatar },
+              { name, avatar: dm?.avatar ?? null }
+            ]
+          : []
+    }
   );
   // a logout, or a change of login, drops everything (docs/dms.md). the box and its words are this component's
   // own state, out of `closeAllDms`'s reach, so they go here, in the render that sees the new login (not an
@@ -719,88 +731,79 @@ export function FriendChat() {
                 <SearchFilters id="friend-chat-search-filters" search={search} className="mt-1" />
               </form>
             )}
-            {/* the hits, newest first, while the thread they are of is the one on screen: the name (yours in blue) and the words, the picture mark for pictures. one clicked is put in view */}
-            {results?.name === name && (
-              <div id="friend-chat-results" className="max-h-36 shrink-0 overflow-y-auto border-b border-primaryStroke px-2.5 py-1 text-sm">
-                <div className="flex items-center justify-between gap-2 py-0.5 text-xs text-textTertiary">
-                  <span className="truncate">{results.query}</span>
-                  <button id="friend-chat-results-close" type="button" onClick={clearDmResults} className="shrink-0 font-semibold text-textSecondary">
-                    close
-                  </button>
-                </div>
-                {results.lines.length === 0 && (
-                  <p id="friend-chat-results-empty" className="py-0.5 text-textTertiary">
-                    nothing
+            {/* the lines, and over them the hits while there are any. `relative`: the pane is `absolute` in it (relative-parent.mdc) */}
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              {/* the lines in the shape picked: a log is a line each at an even gap; bubbles stand close within a minute and apart between minutes, blocks close within a run and apart between runs (ChatLine.tsx).
+                  under the hits they keep their place unseen (`invisible`), so the scroll, the refs and the listeners hold and a line coming meanwhile lands at the bottom */}
+              <div
+                id="friend-chat-log"
+                ref={log}
+                onScroll={onScroll}
+                role="log"
+                aria-live="polite"
+                data-style={shape}
+                className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto p-2.5 text-sm', shape === 'log' ? 'gap-1' : 'gap-0.5', hits && 'invisible')}
+              >
+                {!thread?.loaded && lines.length === 0 && <p className="text-textTertiary">loading</p>}
+                {thread?.loaded && lines.length === 0 && (
+                  <p id="friend-chat-empty" className="text-textTertiary">
+                    nothing yet. say hi to {name}: only the two of you see this.
                   </p>
                 )}
-                {results.lines.map((line) => (
-                  <button
-                    key={line.id}
-                    type="button"
-                    data-id={line.id}
-                    title={stamp(line.at)}
-                    onClick={() => void openDmLine(name, line.id)}
-                    className="block w-full truncate py-0.5 text-left"
-                  >
-                    <span className={cn('font-semibold', line.from === me && 'text-primaryBlue')}>{line.from}</span>
-                    <span className="text-textSecondary">: {line.text}</span>
-                    {line.images.length > 0 && (
-                      <Tooltip content={line.images.length === 1 ? 'a picture' : `${line.images.length} pictures`}>
-                        <span
-                          role="img"
-                          aria-label={line.images.length === 1 ? 'a picture' : `${line.images.length} pictures`}
-                          className="ml-1 inline-flex items-center gap-0.5 align-middle text-textTertiary"
-                        >
-                          <RiImageLine aria-hidden size={12} />
-                          {line.images.length > 1 && <span className="text-xs tabular-nums">{line.images.length}</span>}
-                        </span>
-                      </Tooltip>
-                    )}
-                  </button>
-                ))}
+                {lines.map((line, i) => {
+                  const mine = line.from === me;
+                  const prev = lines[i - 1];
+                  return (
+                    <ChatLineShape
+                      key={line.id}
+                      shape={shape}
+                      mine={mine}
+                      at={line.at}
+                      name={line.from}
+                      who={<span className={cn('font-semibold', mine && 'text-primaryBlue')}>{line.from}</span>}
+                      face={<Face name={line.from} version={mine ? myAvatar : (dm?.avatar ?? null)} className="h-8 w-8 text-sm" />}
+                      words={
+                        line.text ? (
+                          <span className="whitespace-pre-wrap">
+                            <LinkedText text={line.text} />
+                          </span>
+                        ) : null
+                      }
+                      pictures={<ChatImages ids={line.images} />}
+                      attrs={{ 'data-id': line.id, 'data-mine': mine || undefined }}
+                      {...placeOf(line.at, prev?.at, prev?.from === line.from)}
+                    />
+                  );
+                })}
               </div>
-            )}
-            {/* the lines in the shape picked: a log is a line each at an even gap; bubbles stand close within a minute and apart between minutes, blocks close within a run and apart between runs (ChatLine.tsx) */}
-            <div
-              id="friend-chat-log"
-              ref={log}
-              onScroll={onScroll}
-              role="log"
-              aria-live="polite"
-              data-style={shape}
-              className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto p-2.5 text-sm', shape === 'log' ? 'gap-1' : 'gap-0.5')}
-            >
-              {!thread?.loaded && lines.length === 0 && <p className="text-textTertiary">loading</p>}
-              {thread?.loaded && lines.length === 0 && (
-                <p id="friend-chat-empty" className="text-textTertiary">
-                  nothing yet. say hi to {name}: only the two of you see this.
-                </p>
+              {/* the hits, newest first, where the lines were, while the thread they are of is the one on screen (ChatSearch.tsx): the name (yours in blue) and the words, the picture mark for pictures. one clicked puts the lines back with it in view; close puts them back as they were, the focus in the box for the next words */}
+              {hits && (
+                <SearchResults
+                  id="friend-chat-results"
+                  label={hits.query}
+                  count={hits.lines.length}
+                  onClose={() => {
+                    clearDmResults();
+                    searchInput.current?.focus();
+                  }}
+                  className="absolute inset-0 text-sm"
+                >
+                  {hits.lines.map((line) => (
+                    <SearchHit
+                      key={line.id}
+                      id={line.id}
+                      at={line.at}
+                      who={<span className={cn('font-semibold', line.from === me && 'text-primaryBlue')}>{line.from}</span>}
+                      text={line.text}
+                      images={line.images.length}
+                      onClick={() => {
+                        clearDmResults();
+                        void openDmLine(name, line.id);
+                      }}
+                    />
+                  ))}
+                </SearchResults>
               )}
-              {lines.map((line, i) => {
-                const mine = line.from === me;
-                const prev = lines[i - 1];
-                return (
-                  <ChatLineShape
-                    key={line.id}
-                    shape={shape}
-                    mine={mine}
-                    at={line.at}
-                    name={line.from}
-                    who={<span className={cn('font-semibold', mine && 'text-primaryBlue')}>{line.from}</span>}
-                    face={<Face name={line.from} version={mine ? myAvatar : (dm?.avatar ?? null)} className="h-8 w-8 text-sm" />}
-                    words={
-                      line.text ? (
-                        <span className="whitespace-pre-wrap">
-                          <LinkedText text={line.text} />
-                        </span>
-                      ) : null
-                    }
-                    pictures={<ChatImages ids={line.images} />}
-                    attrs={{ 'data-id': line.id, 'data-mine': mine || undefined }}
-                    {...placeOf(line.at, prev?.at, prev?.from === line.from)}
-                  />
-                );
-              })}
             </div>
             <form onSubmit={(e) => void send(e)} className="border-t border-primaryStroke p-2">
               {/* the pictures going with the next line, each with its × (the room chat's strip, ChatPanel.tsx) */}

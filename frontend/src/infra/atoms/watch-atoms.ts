@@ -70,6 +70,8 @@ export const offlineNoteAtom = atom('');
 export const followersAtom = atom<number | null>(null);
 /** Where else to find them (docs/socials.md), as the grant said, cleaned. The empty document until it has, and on an older api. */
 export const socialsAtom = atom<Socials>(EMPTY_SOCIALS);
+/** When the account behind the name was made (rfc3339), for the socials tab's `joined` line. `null` for a free name, until the grant says, and on an older api. */
+export const joinedAtom = atom<string | null>(null);
 /**
  * The main <video>'s stream: the sound and the big picture. One MediaStream for the attempt
  * whose video track is swapped as the big slot changes, so the element never rebinds and the
@@ -364,6 +366,8 @@ async function start(name: string): Promise<void> {
   store.set(offlineNoteAtom, grant.offline_note ?? '');
   store.set(followersAtom, typeof grant.followers === 'number' ? grant.followers : null);
   store.set(socialsAtom, cleanSocials(grant.socials));
+  // a date the browser can read, or nothing: a row written by hand must not put `joined undefined NaN` on a page
+  store.set(joinedAtom, typeof grant.joined_at === 'string' && !Number.isNaN(Date.parse(grant.joined_at)) ? grant.joined_at : null);
   // the word beside the name: the socket's while it is open (it is told on `watch` and on every
   // change, and a grant answered a beat behind a push must not undo the push); the grant's otherwise
   if (grant.presence && store.get(eventsPhaseAtom) !== 'open') presenceChanged(name, grant.presence);
@@ -608,5 +612,6 @@ export function endWatch() {
   store.set(offlineNoteAtom, '');
   store.set(followersAtom, null);
   store.set(socialsAtom, EMPTY_SOCIALS);
+  store.set(joinedAtom, null);
   setPhase('loading', 'loading');
 }

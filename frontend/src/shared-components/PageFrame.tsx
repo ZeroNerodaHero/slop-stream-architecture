@@ -4,7 +4,6 @@ import { Link, useLocation } from 'react-router-dom';
 
 import { buttonClassName } from '@/shared-components/Button';
 import { NotificationsBell } from '@/shared-components/Notifications';
-import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 interface PageFrameProps {
@@ -19,16 +18,16 @@ interface PageFrameProps {
 
 /**
  * Back to the stream list, to the left of a page's title: a caret alone, named `home` for
- * screen readers and on hover (tooltips.mdc). A crash reloads the document, because the router
- * may be what broke. The tests click `header a[href="/"]`.
+ * screen readers and for nobody else. The one icon without a tooltip (tooltips.mdc): the row
+ * is pinned to the window's top edge, so above the caret there is no room for one, and under
+ * it is the page. A crash reloads the document, because the router may be what broke. The
+ * tests click `header a[href="/"]`.
  */
 export function HomeLink({ reload = false }: { reload?: boolean }) {
   return (
-    <Tooltip content="home">
-      <Link id="home" to="/" aria-label="home" reloadDocument={reload || undefined} className={buttonClassName('secondary', 'shrink-0 gap-1 px-3 py-1.5 text-sm')}>
-        <RiArrowLeftSLine aria-hidden size={18} />
-      </Link>
-    </Tooltip>
+    <Link id="home" to="/" aria-label="home" reloadDocument={reload || undefined} className={buttonClassName('secondary', 'shrink-0 gap-1 px-3 py-1.5 text-sm')}>
+      <RiArrowLeftSLine aria-hidden size={18} />
+    </Link>
   );
 }
 

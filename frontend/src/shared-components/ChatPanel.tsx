@@ -1,4 +1,4 @@
-import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine, RiImageLine, RiRobot2Line } from '@remixicon/react';
+import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine, RiRobot2Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -64,7 +64,7 @@ import { type ChatStyle, chatStyleAtom, hideBotsAtom, setHideBots } from '@/infr
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ChatLineShape, placeOf } from '@/shared-components/ChatLine';
-import { comboProps, SearchFilters, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
+import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
 import { LinkedText } from '@/shared-components/LinkedText';
 import { LiveMark } from '@/shared-components/LiveMark';
@@ -99,28 +99,18 @@ interface ChatPanelProps {
   name: string;
   /** The streamer's own grant. With it, our lines are marked. */
   owner?: Owner | null;
-  /** Inside another box (the corner player): no stroke or minimum height of its own, and no header or search box, which a panel this small has no room for. The lines and the text box alone. */
+  /** Inside another box (the corner player): no stroke or minimum height of its own, and no header, which a panel this small has no room for. The lines and the text box alone. */
   embedded?: boolean;
-  /**
-   * The search box under the header (`ChatSearch.tsx`). A group's alone: the room page asks for
-   * it when a stranger has no roster to carry the box, and leaves it off for a member, whose box
-   * is the roster's first row. A stream's chat has none; its results list still shows a speaker's
-   * lines. The hits land in this panel's results list whichever box asked.
-   */
-  search?: boolean;
   /**
    * A group's channel: `name` is the server, this the channel on screen. One socket for every
    * channel of the server (`openServerChat`); a change of channel is `showChannel`, no socket
    * and no history. The header is the channel. The lines are the same as a stream's, in the
-   * shape this browser picked; the ids and the data attributes stay.
+   * shape this browser picked; the ids and the data attributes stay. The panel has no search
+   * box of its own: a group's is the roster's first row (ServerRoom.tsx `RoomSearch`), and the
+   * hits land here, in the lines' place (`#chat-results`); a stream's chat is not searched,
+   * though the same pane shows a speaker's lines.
    */
   channel?: string;
-  /**
-   * A group's channels as this viewer sees them, for the search: its box offers them after
-   * `channel:`, and without that word a search is every one of them, each hit saying which it
-   * is in. A stream has none.
-   */
-  channels?: readonly string[];
   /** A hit from another channel of the group was opened: the page puts that channel in its address (the lines have moved already, `openLine`). */
   onChannel?: (channel: string) => void;
   className?: string;
@@ -470,7 +460,7 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
   );
 }
 
-export function ChatPanel({ name, owner = null, embedded = false, search = false, channel, channels, onChannel, className }: ChatPanelProps) {
+export function ChatPanel({ name, owner = null, embedded = false, channel, onChannel, className }: ChatPanelProps) {
   const server = channel !== undefined;
   const listRef = useRef<HTMLDivElement | null>(null);
   // height before the last paint, so prepending older lines can put the same pixels back
@@ -478,12 +468,9 @@ export function ChatPanel({ name, owner = null, embedded = false, search = false
   // true while the view sits at the newest line. someone who scrolled up to read is left there.
   const stuck = useRef(true);
   const shown = useRef(0);
-  const searchRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const lines = useAtomValue(visibleChatLinesAtom);
-  // the box completes `from:` with who has spoken here, and `channel:` with the group's channels
-  const searching = useChatSearch(searchRef, undefined, { names: [...new Set(lines.map((line) => line.from))], channels });
   const total = useAtomValue(chatLinesAtom).length;
   const loaded = useAtomValue(chatLoadedAtom);
   const hideBots = useAtomValue(hideBotsAtom);
@@ -621,148 +608,109 @@ export function ChatPanel({ name, owner = null, embedded = false, search = false
         </header>
       )}
 
-      {!embedded && search && (
-        <form id="chat-search-form" onSubmit={searching.submit} className="border-b border-primaryStroke px-3 py-2">
-          {/* `relative`: the label is sr-only, and the list of what the word could be hangs under the box (relative-parent.mdc) */}
-          <div className="relative flex gap-2">
-            <label htmlFor="chat-search" className="sr-only">
-              {server ? 'search this group' : 'search this room'}
-            </label>
-            <input
-              ref={searchRef}
-              id="chat-search"
-              {...comboProps(searching, 'chat-search-list')}
-              onKeyDown={(e) => void searching.onKeyDown(e)}
-              placeholder={server ? 'search every channel' : 'search this room'}
-              className="min-w-0 flex-1 border border-primaryStroke bg-background px-2 py-1 text-sm"
-            />
+      {/* the lines (and `latest` over them while the view is off the tail), and over those the hits while there are any. `relative`: the pane is `absolute` in it (relative-parent.mdc) */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {/* under the hits the lines keep their place unseen (`invisible`), so the scroll, the ref and the plan hold and a line coming meanwhile lands at the bottom */}
+        <div className={cn('flex min-h-0 flex-1 flex-col', results && 'invisible')}>
+          {pinned && (
             <button
-              id="chat-search-go"
-              type="submit"
-              disabled={!searching.query.trim() || phase !== 'open'}
-              className="shrink-0 text-sm font-semibold text-primaryBlue disabled:opacity-40"
-            >
-              search
-            </button>
-            <SearchSuggestions id="chat-search-list" search={searching} />
-          </div>
-          {/* the filters, as words under the box */}
-          <SearchFilters id="chat-search-filters" search={searching} className="mt-1" />
-        </form>
-      )}
-
-      {results && (
-        <div id="chat-results" className="max-h-40 overflow-y-auto border-b border-primaryStroke px-3 py-1 text-sm">
-          <div className="flex items-center justify-between gap-2 py-1 text-textTertiary">
-            <span className="truncate">{resultsFor}</span>
-            <button id="chat-results-close" type="button" onClick={clearResults} className="shrink-0 font-semibold text-textSecondary">
-              close
-            </button>
-          </div>
-          {results.length === 0 && (
-            <p id="chat-results-empty" className="py-1 text-textTertiary">
-              nothing
-            </p>
-          )}
-          {results.map((line) => (
-            <button
-              key={line.id}
+              id="chat-latest"
               type="button"
-              data-id={line.id}
-              data-channel={line.channel}
-              onClick={() => {
-                // a server's hit from another channel: the lines move there now, and the page's address follows
-                if (line.channel !== undefined && line.channel !== channel) onChannel?.(line.channel);
-                void openLine(line.id, line.channel);
-              }}
-              className="block w-full truncate py-0.5 text-left [overflow-wrap:anywhere]"
+              onClick={backToLatest}
+              className="w-full shrink-0 border-b border-primaryStroke px-3 py-1 text-sm font-semibold text-primaryBlue"
             >
-              {/* where the hit is, when it is not here: a server's search is every channel's */}
-              {line.channel !== undefined && line.channel !== channel && <span className="mr-1.5 text-textTertiary">#{line.channel}</span>}
-              <span className="font-semibold text-primaryBlue">{line.from}</span>
-              <span className="text-textSecondary">: {line.text}</span>
-              {/* a hit for its pictures may have no words: the picture mark says what is there */}
-              {line.images.length > 0 && (
-                <Tooltip content={line.images.length === 1 ? 'a picture' : `${line.images.length} pictures`}>
-                  <span
-                    role="img"
-                    aria-label={line.images.length === 1 ? 'a picture' : `${line.images.length} pictures`}
-                    className="ml-1 inline-flex items-center gap-0.5 align-middle text-textTertiary"
-                  >
-                    <RiImageLine aria-hidden size={12} />
-                    {line.images.length > 1 && <span className="text-xs tabular-nums">{line.images.length}</span>}
-                  </span>
-                </Tooltip>
-              )}
+              latest{behind > 0 ? ` · ${behind} new` : ''}
             </button>
-          ))}
+          )}
+
+          <div
+            ref={listRef}
+            onScroll={onScroll}
+            id="chat-lines"
+            role="log"
+            aria-live="polite"
+            data-style={shape}
+            // its scroll is its own: the top of the history does not scroll the page under it (the room page snaps between its views).
+            // a column: a log is a line each at an even gap; bubbles stand close within a minute and apart between minutes, blocks close within a run and apart between runs (ChatLine.tsx)
+            className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-4 py-2 text-base leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
+          >
+            {waiting && <ChatSkeleton shape={shape} />}
+            {!waiting && lines.length === 0 && (
+              <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>
+            )}
+            {lines.map((line, i) => {
+              // ours by name and by kind, since a nick may wear a free room's name: the streamer's lines wear `streamer`, a login's `verified`, a nick's neither
+              const mine = line.from === myName && (asStreamer ? line.streamer : me ? line.verified : !line.verified && !line.streamer);
+              // a run is one speaker's lines in a row: the same name of the same kind, since a nick may wear a name a login holds elsewhere
+              const prev = lines[i - 1];
+              const same = prev !== undefined && prev.from === line.from && prev.verified === line.verified && prev.streamer === line.streamer;
+              return (
+                <ChatLineShape
+                  key={line.id}
+                  shape={shape}
+                  mine={mine}
+                  at={line.at}
+                  name={line.from}
+                  crowd
+                  who={
+                    <>
+                      <Speaker line={line} />
+                      <span className="ml-1 inline-flex items-center gap-1 align-middle">
+                        <Marks line={line} mine={mine} />
+                      </span>
+                    </>
+                  }
+                  face={<Face name={line.from} version={line.avatar} className="h-8 w-8 text-sm" />}
+                  words={
+                    line.text ? (
+                      <span className="whitespace-pre-wrap">
+                        <LinkedText text={line.text} />
+                      </span>
+                    ) : null
+                  }
+                  pictures={<ChatImages ids={line.images} />}
+                  attrs={{
+                    'data-id': line.id,
+                    'data-streamer': line.streamer || undefined,
+                    'data-verified': line.verified || undefined,
+                    'data-bot': isBotLine(line) || undefined,
+                    'data-groups': line.groups.length ? line.groups.map((g) => g.name).join(' ') : undefined,
+                    'data-mine': mine || undefined
+                  }}
+                  {...placeOf(line.at, prev?.at, same)}
+                />
+              );
+            })}
+          </div>
         </div>
-      )}
 
-      {pinned && (
-        <button id="chat-latest" type="button" onClick={backToLatest} className="w-full border-b border-primaryStroke px-3 py-1 text-sm font-semibold text-primaryBlue">
-          latest{behind > 0 ? ` · ${behind} new` : ''}
-        </button>
-      )}
-
-      <div
-        ref={listRef}
-        onScroll={onScroll}
-        id="chat-lines"
-        role="log"
-        aria-live="polite"
-        data-style={shape}
-        // its scroll is its own: the top of the history does not scroll the page under it (the room page snaps between its views).
-        // a column: a log is a line each at an even gap; bubbles stand close within a minute and apart between minutes, blocks close within a run and apart between runs (ChatLine.tsx)
-        className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-4 py-2 text-base leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
-      >
-        {waiting && <ChatSkeleton shape={shape} />}
-        {!waiting && lines.length === 0 && (
-          <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>
+        {/* the hits, or one speaker's lines, newest first, where the lines were (ChatSearch.tsx). one clicked puts the lines back with it in view; close puts them back as they were */}
+        {results && (
+          <SearchResults id="chat-results" label={resultsFor} count={results.length} onClose={clearResults} className="absolute inset-0 text-base">
+            {results.map((line) => {
+              // where the hit is, when it is not here: a server's search is every channel's
+              const elsewhere = line.channel !== undefined && line.channel !== channel ? line.channel : null;
+              return (
+                <SearchHit
+                  key={line.id}
+                  id={line.id}
+                  at={line.at}
+                  attrs={{ 'data-channel': line.channel }}
+                  before={elsewhere !== null && <span className="mr-1.5 text-textTertiary">#{elsewhere}</span>}
+                  who={<span className="font-semibold text-primaryBlue">{line.from}</span>}
+                  text={line.text}
+                  images={line.images.length}
+                  onClick={() => {
+                    // a server's hit from another channel: the lines move there now, and the page's address follows
+                    if (elsewhere !== null) onChannel?.(elsewhere);
+                    clearResults();
+                    void openLine(line.id, line.channel);
+                  }}
+                />
+              );
+            })}
+          </SearchResults>
         )}
-        {lines.map((line, i) => {
-          // ours by name and by kind, since a nick may wear a free room's name: the streamer's lines wear `streamer`, a login's `verified`, a nick's neither
-          const mine = line.from === myName && (asStreamer ? line.streamer : me ? line.verified : !line.verified && !line.streamer);
-          // a run is one speaker's lines in a row: the same name of the same kind, since a nick may wear a name a login holds elsewhere
-          const prev = lines[i - 1];
-          const same = prev !== undefined && prev.from === line.from && prev.verified === line.verified && prev.streamer === line.streamer;
-          return (
-            <ChatLineShape
-              key={line.id}
-              shape={shape}
-              mine={mine}
-              at={line.at}
-              name={line.from}
-              crowd
-              who={
-                <>
-                  <Speaker line={line} />
-                  <span className="ml-1 inline-flex items-center gap-1 align-middle">
-                    <Marks line={line} mine={mine} />
-                  </span>
-                </>
-              }
-              face={<Face name={line.from} version={line.avatar} className="h-8 w-8 text-sm" />}
-              words={
-                line.text ? (
-                  <span className="whitespace-pre-wrap">
-                    <LinkedText text={line.text} />
-                  </span>
-                ) : null
-              }
-              pictures={<ChatImages ids={line.images} />}
-              attrs={{
-                'data-id': line.id,
-                'data-streamer': line.streamer || undefined,
-                'data-verified': line.verified || undefined,
-                'data-bot': isBotLine(line) || undefined,
-                'data-groups': line.groups.length ? line.groups.map((g) => g.name).join(' ') : undefined,
-                'data-mine': mine || undefined
-              }}
-              {...placeOf(line.at, prev?.at, same)}
-            />
-          );
-        })}
       </div>
 
       <footer className="border-t border-primaryStroke p-3">

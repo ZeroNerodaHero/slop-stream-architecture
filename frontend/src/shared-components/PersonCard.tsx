@@ -15,7 +15,8 @@ const GAP = 4;
 
 /**
  * Enough of somebody for the card. The sidebar's rows and the chat window's tabs hold all of
- * it; a chat line holds the name, the ✓ and the picture, and the card asks the api for the rest.
+ * it; a chat line holds the name, the ✓ and the picture, a group's roster those and the word,
+ * and the card asks the api for the rest.
  */
 export interface CardPerson {
   name: string;
@@ -97,12 +98,13 @@ interface PersonCardProps {
  * the face with the presence square on its corner, the name, then their status under the two.
  * Streaming, a frame of the stream (StreamStill.tsx, kept a few seconds old) stands between
  * the name and the status, the card's width: the preview of what they are streaming, the
- * sidebar's small one made big. The sidebar's rows, the chat window's tabs and a chat line's speaker all show it. A row holds
- * all of it (the following list, a search's hits, the open chats), so the card is up at once;
- * a chat line holds the name, the ✓ and the picture alone, and the word and the status come
- * from one `GET /api/streamers/:name` asked when the card shows (follow-atoms keeps the answer
- * a while, so hovering the same name again asks nothing). Until it answers, or when it does
- * not, the face has no square and there is no status. Not for pressing. Drawn into the body
+ * sidebar's small one made big. The sidebar's rows, the chat window's tabs, a chat line's
+ * speaker and a group's roster (ServerRoom.tsx) all show it. A row holds all of it (the
+ * following list, a search's hits, the open chats), so the card is up at once; a chat line
+ * holds the name, the ✓ and the picture alone, a roster's row those and the word, and what is
+ * missing comes from one `GET /api/streamers/:name` asked when the card shows (follow-atoms
+ * keeps the answer a while, so hovering the same name again asks nothing). Until it answers,
+ * or when it does not, the face has no square and there is no status. Not for pressing. Drawn into the body
  * (no list clips it, and a window's transform does not move it), it goes out on the side away
  * from the edge, kept on screen, and hangs down from the row in the top half of the screen and
  * up from it in the bottom half.

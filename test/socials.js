@@ -185,10 +185,15 @@ const shown = (page, box = '#socials') =>
     // a link with a label wears it; one without wears the kind's word
     expect(links[0].text === 'youtube', `the unlabelled link reads "${links[0].text}"`);
     expect(links[1].text === 'my site', `the labelled link reads "${links[1].text}"`);
+    // over the strip: since when the account is here, the month in words, the whole date on the <time>
+    const joinedLine = ((await w.textContent('#socials-joined')) || '').trim();
+    expect(/^joined [a-z]+ \d{4}$/.test(joinedLine), `the joined line reads "${joinedLine}"`);
+    const joinedAt = (await body(await anon.get(`/api/streamers/${ME}`)))?.joined_at;
+    expect(joinedAt && (await w.getAttribute('#socials-joined time', 'datetime')) === joinedAt, `the <time> says ${await w.getAttribute('#socials-joined time', 'datetime')}, the profile ${joinedAt}`);
     // not my page: no way into the editor here
     expect((await w.$$('#socials-edit')).length === 0, 'a watcher is offered the editor');
     expect(elsewhere.length === 0, `the page fetched ${JSON.stringify(elsewhere)}`);
-    return `${links.length} links, ${DOC.layout}/${DOC.size}, nothing fetched elsewhere`;
+    return `${links.length} links, ${DOC.layout}/${DOC.size}, ${joinedLine}, nothing fetched elsewhere`;
   });
 
   await step('the about tab and back: the links are out of the page under the other tab, and come back as they were', async () => {

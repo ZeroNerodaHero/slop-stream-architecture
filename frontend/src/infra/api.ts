@@ -322,7 +322,7 @@ export interface GroupRoom {
   muted?: string[];
   /** Members streaming right now. Absent on an older api. */
   live?: string[];
-  /** The roster, for a member or a site admin. Null for anyone else; absent on an older api. */
+  /** The roster: anyone's on a public group, a member's or a site admin's on a private one. Null for anyone else; absent on an older api. */
   roster?: GroupMember[] | null;
   /** Who is banned, for the ban power. Null for anyone else; absent on an older api. */
   bans?: GroupBan[] | null;
@@ -410,6 +410,8 @@ export interface WatchGrant {
   /** How many follow the name, and whether the asking login does (docs/follows.md). Absent on an older api. */
   followers?: number;
   following?: boolean;
+  /** When the account was made, rfc3339, for the socials tab's `joined` line; null for a free name. Absent on an older api. */
+  joined_at?: string | null;
 }
 
 /**

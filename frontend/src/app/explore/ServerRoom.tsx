@@ -31,7 +31,8 @@ import {
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
-  type RefObject
+  type RefObject,
+  type SyntheticEvent
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -66,6 +67,7 @@ import { Face } from '@/shared-components/Face';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { PresenceSquare } from '@/shared-components/PersonRow';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
@@ -97,6 +99,8 @@ const ABOUT_CAP = 200;
  * it may not pass.
  */
 const ROOM_GRID = 'grid snap-start items-start gap-4 py-[7px] -mb-10';
+/** The room's three columns on a wide screen: the channels, the chat, the roster. The skeleton has the same, so the chat lands at its width. */
+const ROOM_COLUMNS = 'lg:grid-cols-[200px_minmax(0,1fr)_240px]';
 const ROOM_HEIGHT = 'h-[calc(100dvh-var(--title-row,4rem)-14px)] min-h-[420px]';
 const SIDE_INSET = 'mt-[7px]';
 const ROSTER_HEIGHT = 'max-h-[calc(100dvh-var(--title-row,4rem)-28px)]';
@@ -531,15 +535,15 @@ function LiveFace({ name }: { name: string }) {
 }
 
 /**
- * The room's search box, the roster's first row: one box for a member and for a line. The
- * words narrow the roster under it as they are typed (`Roster`, which holds them); enter, or
- * the glass, asks the group for them, every channel this login sees unless `channel:<name>`
- * names one, and the filter words stand under the box while it has the focus (ChatSearch.tsx).
- * What a filter's word could be (`from:` a member, `channel:` a channel, `has:` its kinds) is
- * offered under the box as it is typed, over the filter words while there is something to
- * offer. The hits are the chat panel's results list, as they would be from its own box, which
- * the page leaves out while this one is up (`search={!roster}`). Escape takes the list down,
- * then empties the box, and the roster is whole again.
+ * The room's search box, the roster's first row, for everyone in the room, member or guest:
+ * one box for a member and for a line. The words narrow the roster under it as they are typed
+ * (`Roster`, which holds them); enter, or the glass, asks the group for them, every channel
+ * this login sees unless `channel:<name>` names one, and the filter words stand under the box
+ * while it has the focus (ChatSearch.tsx). What a filter's word could be (`from:` a member,
+ * with their face, `channel:` a channel, `has:` its kinds) is offered under the box as it is
+ * typed, over the filter words while there is something to offer. The hits are the chat
+ * panel's, a pane where its lines were (`SearchResults`); the panel has no box of its own.
+ * Escape takes the list down, then empties the box, and the roster is whole again.
  */
 function RoomSearch({ search, input }: { search: ChatSearch; input: RefObject<HTMLInputElement | null> }) {
   return (
@@ -591,10 +595,10 @@ function GroupName({ words }: { words: { title: string; tag: string | null } }) 
 
 /**
  * The room's shape in grey while it is asked for: the banner with the picture over its foot,
- * the title and the line about it, then the channels beside the chat (the roster's column is
- * not guessed at: it is a member's, and the chat only narrows when it comes). The answer lands
- * on top of this instead of under a word. `gridRef` is the room's place: the page scrolls to
- * it while this shows, so the room lands where the window already is.
+ * the title and the line about it, then the channels, the chat, and the roster's column (the
+ * search box, the heading, a few faces: it is everyone's, so the chat lands at its width). The
+ * answer lands on top of this instead of under a word. `gridRef` is the room's place: the page
+ * scrolls to it while this shows, so the room lands where the window already is.
  */
 function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }) {
   return (
@@ -611,7 +615,7 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
         <Bone className="h-6 w-56 max-w-full" />
         <Bone className="h-4 w-80 max-w-full" />
       </div>
-      <div ref={gridRef} className={cn(ROOM_GRID, 'lg:grid-cols-[200px_minmax(0,1fr)]')}>
+      <div ref={gridRef} className={cn(ROOM_GRID, ROOM_COLUMNS)}>
         <div className={cn('flex flex-col gap-1.5', SIDE_INSET)}>
           <Bone className="mb-1 h-3 w-24" />
           {Array.from({ length: 3 }, (_, i) => (
@@ -623,6 +627,16 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
           <Bone className="h-4 w-1/2" />
           <Bone className="h-4 w-3/4" />
           <Bone className="mt-auto h-10" />
+        </div>
+        <div className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-4', SIDE_INSET)}>
+          <Bone className="h-8" />
+          <Bone className="h-3 w-20" />
+          {Array.from({ length: 3 }, (_, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <Bone className="h-8 w-8 shrink-0" />
+              <Bone className={cn('h-3', i === 1 ? 'w-16' : 'w-24')} />
+            </div>
+          ))}
         </div>
       </div>
     </Skeleton>
@@ -819,7 +833,6 @@ export function ServerPage() {
   const mine = room.mine;
   const noChannel = !found;
   const power = room.owner || POWERS.some((item) => room.perms[item.key]);
-  const roster = mine || power || !!room.roster;
   // the gear: a tab to show. a power, or a channel of this login's own to delete (the channels tab)
   const canManage = power || managesChannels(room);
   const lastMember = mine && room.members <= 1;
@@ -964,7 +977,7 @@ export function ServerPage() {
             </div>
           </div>
           {actionError && <p className="mb-4 text-sm text-decrease">{actionError}</p>}
-          <div id="group-room" ref={roomRef} className={cn(ROOM_GRID, roster ? 'lg:grid-cols-[200px_minmax(0,1fr)_240px]' : 'lg:grid-cols-[200px_minmax(0,1fr)]')}>
+          <div id="group-room" ref={roomRef} className={cn(ROOM_GRID, ROOM_COLUMNS)}>
             <div className={cn('flex min-w-0 flex-col gap-6', SIDE_INSET)}>
               <ChannelList server={server} channel={channel} room={room} me={me ?? null} onError={setActionError} />
               {/* the cameras, under the channels. with every camera off the list stands alone: nothing says so */}
@@ -983,17 +996,15 @@ export function ServerPage() {
               )}
             </div>
             <div className={cn('min-w-0', ROOM_HEIGHT)}>
-              {/* the search box is the roster's (RoomSearch); a stranger, with no roster, has the panel's own. a search is every channel's: a hit opened in another one moves the page there */}
+              {/* the search box is the roster's (RoomSearch), for a member and a guest alike; the hits land in the panel. a search is every channel's: a hit opened in another one moves the page there */}
               <ChatPanel
                 name={server}
                 channel={channel}
-                search={!roster}
-                channels={channels.map((item) => item.name)}
                 onChannel={(to) => navigate(to === 'general' ? `/groups/${server}` : `/groups/${server}/${to}`)}
                 className="h-full"
               />
             </div>
-            {roster && <Roster room={room} />}
+            <Roster room={room} />
           </div>
           {managing && <ManageDialog server={server} channel={channel} room={room} me={me ?? null} onClose={() => setManaging(false)} />}
         </>
@@ -1244,45 +1255,74 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
   );
 }
 
+/** How long the pointer rests on a member before their card shows: a pause, not a pass down the roster. The sidebar's (Friends.tsx). */
+const PEEK_MS = 200;
+
 /**
  * One member of the roster: the face with the presence square on its corner (the sidebar's
  * way, docs/status.md; the word for a reader), the name, the crown on an owner (OwnerMark, the
  * owner role's name its tooltip), `live` on one whose camera is up, the roles they hold in
  * their colours. The word is the events socket's: room-atoms holds every name on the roster
- * while the room is up.
+ * while the room is up. The whole row is one link to their page, the sidebar's row's way, and
+ * the pointer resting on it, or the focus landing in it, puts the person's card (PersonCard.tsx,
+ * the sidebar's) beside the roster: the face with the word on it, the name, the frame while
+ * they stream, their status. The row holds the name, the picture and the word; the status is
+ * the card's one profile read.
  */
 function Member({ member, live, ownerRole }: { member: GroupMember; live: boolean; ownerRole: string }) {
   const presence = useAtomValue(presenceOfAtom(member.name));
+  const peek = usePeek(PEEK_MS);
+  const show = (e: SyntheticEvent<HTMLElement>) => peek.show(e.currentTarget, e.currentTarget.closest('#group-roster'));
   return (
-    <li data-member={member.name} data-owner={member.owner || undefined} data-presence={presence} className="flex items-center gap-2">
-      <span className="relative flex shrink-0">
-        <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8 shrink-0" />
-        <PresenceSquare presence={presence} className="border-backgroundSecondary" />
-        <span className="sr-only">{PRESENCE_WORD[presence]}</span>
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex flex-wrap items-center gap-x-2">
-          <span className="truncate font-semibold">{member.name}</span>
-          {member.owner && <OwnerMark name={ownerRole} />}
-          {timedOut(member) && (
-            <Tooltip content={`timed out until ${untilWords(member.timeout ?? 0)}`}>
-              <span role="img" aria-label={`timed out until ${untilWords(member.timeout ?? 0)}`} data-timed-out className="flex shrink-0 text-textTertiary">
-                <RiTimeLine aria-hidden size={14} />
-              </span>
-            </Tooltip>
-          )}
-          {live && <span className="text-xs uppercase text-primaryBlue">live</span>}
+    <li
+      data-member={member.name}
+      data-owner={member.owner || undefined}
+      data-presence={presence}
+      className="flex"
+      onPointerEnter={show}
+      onPointerLeave={(e) => peek.leave(e.currentTarget)}
+      onFocus={show}
+      onBlur={peek.blur}
+    >
+      <Link
+        to={`/watch/${encodeURIComponent(member.name)}`}
+        // streaming: the page holds the player's box from its first paint (WatchPage.tsx)
+        state={presence === 'streaming' ? { live: true } : undefined}
+        // not draggable: the face must not lift off the row as a ghost link
+        draggable={false}
+        className="flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue"
+      >
+        <span className="relative flex shrink-0">
+          <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8 shrink-0" />
+          <PresenceSquare presence={presence} className="border-backgroundSecondary" />
+          <span className="sr-only">{PRESENCE_WORD[presence]}</span>
         </span>
-        {member.roles.length > 0 && (
-          <span className="flex flex-wrap gap-x-2 text-xs">
-            {member.roles.map((role) => (
-              <span key={role.id} style={{ color: role.color }}>
-                {role.name}
-              </span>
-            ))}
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-x-2">
+            <span className="truncate font-semibold">{member.name}</span>
+            {member.owner && <OwnerMark name={ownerRole} />}
+            {timedOut(member) && (
+              <Tooltip content={`timed out until ${untilWords(member.timeout ?? 0)}`}>
+                <span role="img" aria-label={`timed out until ${untilWords(member.timeout ?? 0)}`} data-timed-out className="flex shrink-0 text-textTertiary">
+                  <RiTimeLine aria-hidden size={14} />
+                </span>
+              </Tooltip>
+            )}
+            {live && <span className="text-xs uppercase text-primaryBlue">live</span>}
           </span>
-        )}
-      </span>
+          {member.roles.length > 0 && (
+            <span className="flex flex-wrap gap-x-2 text-xs">
+              {member.roles.map((role) => (
+                <span key={role.id} style={{ color: role.color }}>
+                  {role.name}
+                </span>
+              ))}
+            </span>
+          )}
+        </span>
+      </Link>
+      {/* every member is a login, so the ✓ is theirs; the word is the row's, and the status the card asks for */}
+      {peek.at && <PersonCard id={`roster-peek-${member.name}`} person={{ name: member.name, verified: true, avatar: member.avatar ?? null, presence }} at={peek.at} />}
     </li>
   );
 }
@@ -1302,19 +1342,25 @@ function rosterQuery(query: string): string {
 }
 
 /**
- * The right of the room, for a member: who is in. The room's search box first, its own row
- * (`RoomSearch`): the words in it narrow the names and the roles under it as they are typed
- * (`rosterQuery`), and enter asks the group for them, so one box finds a member or a line.
- * The box completes `from:` with the members and `channel:` with the channels this login sees.
- * Then the heading, and each member (`Member`), owners first, then the group's order
- * (room-atoms sorts). The box and the heading stay put while the list scrolls. Nothing here
- * acts: what a power does is in the manage dialog, from the header.
+ * The right of the room, for everyone in it: who is in. The room's search box first, its own
+ * row (`RoomSearch`): the words in it narrow the names and the roles under it as they are
+ * typed (`rosterQuery`), and enter asks the group for them, so one box finds a member or a
+ * line. The box completes `from:` with the members, each with their face, and `channel:` with
+ * the channels this login sees. Then the heading with the count, and each member (`Member`),
+ * owners first, then the group's order (room-atoms sorts). The api gives the list to anyone on
+ * a public group and to members on a private one (docs/groups.md); a private group's guest
+ * gets the box, the count and a word for the rest. The box and the heading stay put while the
+ * list scrolls. A row is the way to the member's page, their card on hover (`Member`). Nothing
+ * here acts on a member: what a power does is in the manage dialog, from the header.
  */
 function Roster({ room }: { room: GroupRoom }) {
   const members = room.roster ?? [];
   const live = room.live ?? [];
   const input = useRef<HTMLInputElement | null>(null);
-  const search = useChatSearch(input, undefined, { names: members.map((member) => member.name), channels: (room.channels ?? []).map((item) => item.name) });
+  const search = useChatSearch(input, undefined, {
+    people: members.map((member) => ({ name: member.name, avatar: member.avatar ?? null })),
+    channels: (room.channels ?? []).map((item) => item.name)
+  });
   const q = rosterQuery(search.query);
   const shown = q ? members.filter((member) => member.name.toLowerCase().includes(q) || member.roles.some((role) => role.name.toLowerCase().includes(q))) : members;
 
@@ -1328,7 +1374,11 @@ function Roster({ room }: { room: GroupRoom }) {
       <h3 className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-textTertiary">
         members <span className="font-normal normal-case tracking-normal">{room.members}</span>
       </h3>
-      {room.roster === null && <p className="text-textTertiary">the roster is for members.</p>}
+      {!room.roster && (
+        <p id="group-members-private" className="text-textTertiary">
+          this group is private: who is in it is for its members.
+        </p>
+      )}
       {q && shown.length === 0 && (
         <p id="group-members-nobody" className="text-textTertiary">
           nobody by that name.

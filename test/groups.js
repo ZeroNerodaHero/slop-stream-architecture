@@ -5,7 +5,7 @@
 // The pictures are the owner's whatever the roles say (no remove), and a role reaches only the
 // powers its holder has. A role is known by a uuid, and the manage dialog changes one in place:
 // add role makes one and opens it, a save renames it, the row opens it again, delete is in there.
-// The room: one answer with the channels, who is live, the roster (members only) and the bans,
+// The room: one answer with the channels, who is live, the roster (anyone's on a public group, the members' on a private one) and the bans,
 // and the last lines of every channel; a watcher of `group:<name>` on the events socket hears a
 // channel added, the channels put in order (the channels power; the whole order on the fact)
 // and one deleted; the `*` chat socket carries every channel's lines with the channel on them
@@ -250,7 +250,7 @@ const dropAll = async (ctx, names) => {
     return `owner 200, member 403, remove ${remove.status()}; ban out of reach, the owner untouched`;
   });
 
-  await step('the room is one answer: channels, live, the roster for a member, null for a guest; messages has every channel', async () => {
+  await step('the room is one answer: channels, live, the roster for anyone while public and for a member once private; messages has every channel', async () => {
     const mine = await body(await maker.get(`/api/groups/${slug}`));
     expect(mine && Array.isArray(mine.channels) && mine.channels.some((c) => c.name === 'general' && c.can_delete === false), `the maker's channels ${JSON.stringify(mine && mine.channels)}`);
     expect(Array.isArray(mine.live), `live ${JSON.stringify(mine.live)}`);
@@ -263,15 +263,29 @@ const dropAll = async (ctx, names) => {
     expect(Array.isArray(mine.bans) && mine.bans.length === 0, `the maker's bans ${JSON.stringify(mine.bans)}`);
     const theirs = await body(await member.get(`/api/groups/${slug}`));
     expect(Array.isArray(theirs.roster) && theirs.roster.length === 2 && theirs.bans === null, `the member's roster ${JSON.stringify(theirs.roster)} bans ${JSON.stringify(theirs.bans)}`);
+    // the group is public: who is in it is anyone's, the lines say who talks there anyway. the bans stay the ban power's
     const guest = await body(await anon.get(`/api/groups/${slug}`));
-    expect(guest.roster === null && guest.bans === null && Array.isArray(guest.channels) && guest.members === 2, `a guest's room ${JSON.stringify(guest)}`);
+    expect(Array.isArray(guest.roster) && guest.roster.length === 2 && guest.bans === null && Array.isArray(guest.channels) && guest.members === 2, `a guest's room ${JSON.stringify(guest)}`);
+    const guestList = await anon.get(`/api/groups/${slug}/members`);
+    expect(guestList.status() === 200 && (await body(guestList)).length === 2, `a guest's GET members on a public group got ${guestList.status()}`);
+    // private: the members chose not to be listed, so the roster is theirs alone (and a site admin's); nobody is sent to log in
+    const hidden = await maker.put(`/api/groups/${slug}/access`, { data: { public: false } });
+    expect(hidden.status() === 200, `making it private got ${hidden.status()}`);
+    const privateGuest = await body(await anon.get(`/api/groups/${slug}`));
+    expect(privateGuest.roster === null && privateGuest.public === false && privateGuest.members === 2, `a guest's private room ${JSON.stringify(privateGuest)}`);
+    const nobodyList = await anon.get(`/api/groups/${slug}/members`);
+    expect(nobodyList.status() === 401, `GET members on a private group for nobody got ${nobodyList.status()}`);
+    const stillTheirs = await body(await member.get(`/api/groups/${slug}`));
+    expect(Array.isArray(stillTheirs.roster) && stillTheirs.roster.length === 2, `the member's private roster ${JSON.stringify(stillTheirs.roster)}`);
+    const shown = await maker.put(`/api/groups/${slug}/access`, { data: { public: true } });
+    expect(shown.status() === 200, `making it public again got ${shown.status()}`);
     const lines = await anon.get(`/api/groups/${slug}/messages`);
     const byChannel = await body(lines);
     expect(lines.status() === 200 && byChannel && Array.isArray(byChannel.general) && Object.keys(byChannel).length === guest.channels.length, `messages got ${lines.status()} ${JSON.stringify(byChannel)}`);
     const bot = await anon.get('/api/groups/bot/messages');
     const none = await anon.get(`/api/groups/nosuch${RUN}/messages`);
     expect(bot.status() === 404 && none.status() === 404, `bot ${bot.status()}, no such ${none.status()}`);
-    return `${guest.channels.length} channel(s), roster for members only`;
+    return `${guest.channels.length} channel(s), the roster anyone's while public, the members' once private`;
   });
 
   // the pages: a member's lines wear the badge, a bot's wear BOT, and the panel hides the bots

@@ -61,8 +61,8 @@ function hostOf(wrapper: HTMLElement): HTMLElement {
  * A tooltip: `content` beside the children while the pointer rests on them or the keyboard
  * focus is in them (not the focus a click leaves behind), 8px off, above unless `at` says
  * another side. When that side has no room in the window it goes on the opposite one instead
- * (the title row is pinned to the window's top edge, so above its caret and bell there is none,
- * and theirs go under), and then it is pushed back in from the edges whatever the side.
+ * (the title row is pinned to the window's top edge, so above its bell there is none, and the
+ * bell's goes under), and then it is pushed back in from the edges whatever the side.
  * Escape hides it. The children are laid out as if it were not there. The box is drawn into
  * the body, `fixed`, so no scrolling list clips it and it sits over every panel, and it follows
  * the children through a scroll or a resize; inside a modal <dialog> it is drawn into the

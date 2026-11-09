@@ -18,6 +18,19 @@ export function clock(at: number): string {
   return new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 }
 
+/**
+ * The clock of a search hit, short: the time for a line said today, the day for an older one
+ * (`8 Nov`, and the year with it when it is not this one), since hits reach back through the
+ * whole room where the lines on screen are a stretch of one evening. The full stamp is the title.
+ */
+export function when(at: number): string {
+  if (!at) return '';
+  const then = new Date(at);
+  const now = new Date();
+  if (then.toDateString() === now.toDateString()) return clock(at);
+  return then.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: then.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
+}
+
 /** The minute a line fell in. Lines of one person in one minute are a bucket: one time at the left for all of them. */
 const minuteOf = (at: number) => Math.floor(at / 60_000);
 

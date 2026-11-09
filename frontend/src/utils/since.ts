@@ -28,3 +28,15 @@ export function ago(iso: string, now: number): string {
   const days = Math.floor(hours / 24);
   return `${days} ${days === 1 ? 'day' : 'days'} ago`;
 }
+
+/** The site's own words, lowercase like the calendar's (`infra/calendar.ts`), not the locale's: the page reads the same everywhere. */
+const LONG_MONTH = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+
+/**
+ * The month something happened, in the viewer's time zone: "october 2026". No clock: a month
+ * does not age the way `ago` does. The socials tab says when an account was made with it.
+ */
+export function monthOf(iso: string): string {
+  const d = new Date(iso);
+  return `${LONG_MONTH[d.getMonth()]} ${d.getFullYear()}`;
+}
