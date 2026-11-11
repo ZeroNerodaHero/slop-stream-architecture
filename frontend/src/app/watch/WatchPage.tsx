@@ -1,5 +1,5 @@
 import { useAtomValue } from 'jotai';
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
 import {
@@ -70,6 +70,7 @@ import { TestBadge } from '@/shared-components/TestBadge';
 import { IconButton, MailIcon, PipIcon, SoundControl, revealClassName } from '@/shared-components/VideoControls';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
+import { roveTabs } from '@/utils/tabs';
 
 /** The sentence under the word while they are not live: why to wait, or not. */
 const NOT_LIVE_WORDS: Record<Presence, string> = {
@@ -82,7 +83,6 @@ const NOT_LIVE_WORDS: Record<Presence, string> = {
 /** Under the player: their page (docs/about.md), when they stream (docs/calendar.md), and where else to find them (docs/socials.md). In this order. */
 type WatchTab = 'about' | 'calendar' | 'socials';
 const WATCH_TABS: readonly WatchTab[] = ['about', 'calendar', 'socials'];
-const TAB_STEP: Record<string, number | undefined> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
 /**
  * The document itself was served for a stream's page: the api put its card inside `#root`, a
@@ -103,20 +103,6 @@ function hintedLive(state: unknown): boolean {
  * player's box, the status line under the name) is let go at `done`.
  */
 type Ask = 'before' | 'asking' | 'done';
-
-/** Arrows move the focus along the tabs and open the one landed on; Home and End go to the ends. The user modal's tabs do the same. */
-function roveTabs(e: KeyboardEvent<HTMLDivElement>) {
-  const tabs = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
-  const i = tabs.indexOf(e.target as HTMLButtonElement);
-  if (i < 0) return;
-  const step = TAB_STEP[e.key];
-  const next = step !== undefined ? (i + step + tabs.length) % tabs.length : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : -1;
-  const button = tabs[next];
-  if (next < 0 || !button) return;
-  e.preventDefault();
-  button.click();
-  button.focus();
-}
 
 /**
  * Beside the chat's button, wherever that is on the page: a line to the streamer (docs/dms.md),

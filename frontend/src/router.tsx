@@ -16,6 +16,7 @@ import { FriendChat } from '@/shared-components/FriendChat';
 import { Inspector } from '@/shared-components/Inspector';
 import { MiniPlayer } from '@/shared-components/MiniPlayer';
 import { Notifications } from '@/shared-components/Notifications';
+import { ProfilePopup } from '@/shared-components/ProfilePopup';
 import { UserModal } from '@/shared-components/UserModal';
 import { UserPanel } from '@/shared-components/UserPanel';
 import { cn } from '@/utils/cn';
@@ -25,7 +26,8 @@ import { cn } from '@/utils/cn';
  * and you at the bottom of it, with the settings gear at the end of your line; collapsed beside the page, open it covers the
  * streams), the picture in picture players (bottom right of the page: a stream you watch, your own while live), the user
  * modal the gear opens, the notifications list the bell opens (the bell and go live are the right end of every page's
- * title row: PageFrame.tsx), and the crop dialog every picked picture passes through (CropDialog.tsx).
+ * title row: PageFrame.tsx), the profile popup a click on a group's member or a chat's speaker opens (ProfilePopup.tsx),
+ * and the crop dialog every picked picture passes through (CropDialog.tsx).
  */
 function Shell() {
   const side = useAtomValue(panelSideAtom);
@@ -39,6 +41,7 @@ function Shell() {
       <FriendChat />
       <Notifications />
       <UserModal />
+      <ProfilePopup />
       <CropDialog />
       <Inspector />
     </div>

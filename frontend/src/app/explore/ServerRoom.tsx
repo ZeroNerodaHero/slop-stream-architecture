@@ -31,8 +31,7 @@ import {
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
-  type RefObject,
-  type SyntheticEvent
+  type RefObject
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -42,6 +41,7 @@ import { meAtom } from '@/infra/atoms/auth-atoms';
 import { reconnectChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
+import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
 import {
   channelRenamedAtom,
   enterRoom,
@@ -55,6 +55,7 @@ import {
   setChannelMuted,
   setChannelOrder
 } from '@/infra/atoms/room-atoms';
+import { profilePopupEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { cleanName, isValidName } from '@/infra/names';
 import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
@@ -1263,25 +1264,29 @@ const PEEK_MS = 200;
  * way, docs/status.md; the word for a reader), the name, the crown on an owner (OwnerMark, the
  * owner role's name its tooltip), `live` on one whose camera is up, the roles they hold in
  * their colours. The word is the events socket's: room-atoms holds every name on the roster
- * while the room is up. The whole row is one link to their page, the sidebar's row's way, and
- * the pointer resting on it, or the focus landing in it, puts the person's card (PersonCard.tsx,
- * the sidebar's) beside the roster: the face with the word on it, the name, the frame while
- * they stream, their status. The row holds the name, the picture and the word; the status is
- * the card's one profile read.
+ * while the room is up. The whole row is one link to their page, the sidebar's row's way. A
+ * click on it shows them over the room instead (ProfilePopup.tsx: who they are, their stream
+ * while they are live, their page, and the button that goes there), unless this browser turned
+ * that off (settings.profilePopup): then the click is the link's, as is a click with a key
+ * held either way (the browser's own: their page in a tab of its own). The pointer resting on
+ * the row, or the keyboard's focus landing in it, puts the person's card (PersonCard.tsx, the
+ * sidebar's) beside the roster: the face with the word on it, the name, the frame while they
+ * stream, their status. The row holds the name, the picture and the word; the status is the
+ * card's one profile read, which the popup opens whole from.
  */
 function Member({ member, live, ownerRole }: { member: GroupMember; live: boolean; ownerRole: string }) {
   const presence = useAtomValue(presenceOfAtom(member.name));
+  const popup = useAtomValue(profilePopupEnabledAtom);
   const peek = usePeek(PEEK_MS);
-  const show = (e: SyntheticEvent<HTMLElement>) => peek.show(e.currentTarget, e.currentTarget.closest('#group-roster'));
   return (
     <li
       data-member={member.name}
       data-owner={member.owner || undefined}
       data-presence={presence}
       className="flex"
-      onPointerEnter={show}
+      onPointerEnter={(e) => peek.show(e.currentTarget, e.currentTarget.closest('#group-roster'))}
       onPointerLeave={(e) => peek.leave(e.currentTarget)}
-      onFocus={show}
+      onFocus={(e) => peek.focus(e, e.currentTarget.closest('#group-roster'))}
       onBlur={peek.blur}
     >
       <Link
@@ -1290,6 +1295,13 @@ function Member({ member, live, ownerRole }: { member: GroupMember; live: boolea
         state={presence === 'streaming' ? { live: true } : undefined}
         // not draggable: the face must not lift off the row as a ghost link
         draggable={false}
+        aria-haspopup={popup ? 'dialog' : undefined}
+        onClick={(e) => {
+          if (!popup || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          // every member is a login, so the ✓ is theirs
+          openProfilePopup({ name: member.name, verified: true, avatar: member.avatar ?? null });
+        }}
         className="flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue"
       >
         <span className="relative flex shrink-0">
@@ -1350,8 +1362,9 @@ function rosterQuery(query: string): string {
  * owners first, then the group's order (room-atoms sorts). The api gives the list to anyone on
  * a public group and to members on a private one (docs/groups.md); a private group's guest
  * gets the box, the count and a word for the rest. The box and the heading stay put while the
- * list scrolls. A row is the way to the member's page, their card on hover (`Member`). Nothing
- * here acts on a member: what a power does is in the manage dialog, from the header.
+ * list scrolls. A click on a row shows the member over the room, or goes to their page where
+ * this browser said so; their card on hover (`Member`). Nothing here acts on a member: what a
+ * power does is in the manage dialog, from the header.
  */
 function Roster({ room }: { room: GroupRoom }) {
   const members = room.roster ?? [];

@@ -28,7 +28,8 @@
 #              the roles tab (the lock on both lists); the owner role is the roles tab's first row (a crown, every power locked), renamed by the owner, the
 #              crowns on the roster and the header following, and a custom role cannot take its name; the members tab hands the group on (transfer ownership
 #              asks first; the crown moves, the old owner stays a member) and has no box to name a second owner; a timeout (the kick power) keeps a member's
-#              lines out of the chat until it ends or is lifted, and a role's cooldown spaces its holders' lines (the owner unslowed), both refused with a wait
+#              lines out of the chat until it ends or is lifted, and a role's cooldown spaces its holders' lines (the owner unslowed), both refused with a wait;
+#              a click on a member, or on a name in the chat, shows them over the room (the profile popup), and the chat tab's people cards turn that off
 #   follows    a login follows names: counts and the flag on a profile, the list with its words, a free name gets a row, the box over the corner
 #              panel (hover: who you follow, streaming first; search finds and follows), the watch page's button and count, home's people under
 #              the streams (online first) and the top search, a rename keeps the followers

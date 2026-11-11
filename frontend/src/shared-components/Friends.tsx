@@ -37,7 +37,7 @@ import { cn } from '@/utils/cn';
 /** How long the pointer rests on a row before the person's card shows: past the panel's 100ms widening (UserPanel.tsx), so the card is measured against the open panel. */
 const PEEK_MS = 200;
 const ICON_BUTTON = 'shrink-0 border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
-/** A line of words where a list would be: nobody yet, the pointer to an account. */
+/** A line of words where a list would be: nobody yet, a list that is switched off. */
 const NOTE = 'px-3 py-3 text-sm text-textSecondary';
 /** How many grey squares stand in the face column before the list has answered. */
 const FACES_GUESS = 4;
@@ -853,7 +853,10 @@ interface FriendsProps {
  * its list would give it, a follow button for a name you do not follow; closing the panel
  * empties it. Every open asks `GET /api/following` again, and `GET /api/explore` for the
  * groups while they are shown, so the words are now; the first letter asks the explorer too
- * unless that open just did (nobody's too: the public groups are theirs to find).
+ * unless that open just did (nobody's too: the public groups are theirs to find). A guest has
+ * the following list alone: the names this browser keeps (follow-atoms.ts), each with what its
+ * profile read says, asked on every open as a login's list is; nobody in it is a friend, and
+ * the groups are a login's.
  */
 export function Friends({ open, side, onPick }: FriendsProps) {
   const me = useAtomValue(meAtom);
@@ -902,9 +905,9 @@ export function Friends({ open, side, onPick }: FriendsProps) {
     if (searching) void loadServers(SERVERS_FRESH_MS);
   }, [searching]);
 
-  const list = me ? all : undefined;
-  const friends = list?.filter((f) => f.mutual) ?? [];
-  const rest = list?.filter((f) => !f.mutual) ?? [];
+  // a guest's list is this browser's own (follow-atoms.ts): names it keeps, none of them a friend, and the groups are a login's
+  const friends = all?.filter((f) => f.mutual) ?? [];
+  const rest = all?.filter((f) => !f.mutual) ?? [];
   const groups = me ? (servers ?? []) : [];
   const holds: Record<SidebarList, number> = { friends: friends.length, following: rest.length, groups: groups.length };
   // the lists in the stack: the ones switched on that hold something, in the order settings put them
@@ -921,22 +924,14 @@ export function Friends({ open, side, onPick }: FriendsProps) {
   );
   const spacing = spend(fit, searching ? [] : rows);
 
-  // a login whose lists have not answered (the groups only while shown): grey squares where the faces go, closed and open alike
-  const loading = !!me && (list === undefined || (groupsOn && servers === undefined));
+  // the lists have not answered (a login's groups only while shown; a guest's names, until each has been asked about once): grey squares where
+  // the faces go, closed and open alike
+  const loading = all === undefined || (!!me && groupsOn && servers === undefined);
   // where the lists would be, when there are none to show: words, open only
   let words: ReactNode = null;
-  if (!me) {
-    words = (
-      <p className={NOTE}>
-        following is for accounts: who is streaming, right here, every time you look.{' '}
-        <button type="button" onClick={() => openUserModal('security')} className="text-primaryBlue underline-offset-2 hover:underline">
-          sign up or log in
-        </button>
-        . searching works anyway.
-      </p>
-    );
-  } else if (!loading && blocks.length === 0) {
-    // everyone is in a list that is switched off; or nobody yet, and the way to someone (or to a group, when the people lists are off)
+  if (!loading && blocks.length === 0) {
+    // everyone is in a list that is switched off; or nobody yet, and the way to someone (or to a group, when the people lists are off: a login's
+    // way, a guest joins none)
     if (choices.some((c) => !c.on && holds[c.list] > 0)) {
       words = (
         <p className={NOTE}>
@@ -946,8 +941,9 @@ export function Friends({ open, side, onPick }: FriendsProps) {
           </button>
         </p>
       );
-    } else if (choices.some((c) => c.on && c.list !== 'groups')) {
-      words = <p className={NOTE}>nobody yet. find someone above.</p>;
+    } else if (!me || choices.some((c) => c.on && c.list !== 'groups')) {
+      // a guest is told where the list lives: no account holds it, so another browser has another
+      words = <p className={NOTE}>nobody yet. find someone above.{!me && ' who you follow is kept in this browser.'}</p>;
     } else {
       words = (
         <p className={NOTE}>

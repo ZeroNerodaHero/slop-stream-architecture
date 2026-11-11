@@ -2,8 +2,8 @@
 // (with when they joined and were last live, which stay on the wire), the list with its words,
 // search, a free name gets a row, the box over the corner panel (hover shows who you follow,
 // streaming first; a row's card is the face with the word on it and their status; the search box finds and follows),
-// the watch page's button and count, a rename keeps the followers, home's recently offline once
-// star stops, unfollow.
+// the watch page's button and count, a guest's follow kept in the browser alone, a rename keeps the
+// followers, home's recently offline once star stops, unfollow.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node follows.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
@@ -253,7 +253,7 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     return `${people.length} people, ${pal} ${word}; the search went to /watch/${pal}`;
   });
 
-  await step('nobody hovering sees the search and the pointer to an account; the button leads to it', async () => {
+  await step('a guest follows from the box, in the browser alone: kept over a reload with the word the api gives, the api told nothing, unfollowed from the row', async () => {
     const p = await fresh();
     await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await p.hover('#user-panel');
@@ -261,9 +261,26 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     await p.fill('#friends-search', STAR);
     await p.waitForSelector(`#result-${STAR}`, { timeout: 10000 });
     await p.click(`#result-follow-${STAR}`);
-    await p.waitForSelector('#sec-name', { timeout: 10000 });
+    // followed here: the row wears the lists' × in place of the button, and no window asks for an account
+    await p.waitForSelector(`#result-unfollow-${STAR}`, { timeout: 10000 });
+    expect(!(await p.$('#sec-name')), 'the security tab opened for a follow that needs no account');
+    // kept in the browser: a reload has the name in the following list (the closed column holds the rows too), with the word the api gives it
+    await p.reload({ waitUntil: 'domcontentloaded' });
+    await p.waitForSelector(`#friends-list #friend-${STAR}`, { timeout: 15000 });
+    const theirs = await body(await anon.get(`/api/streamers/${STAR}`));
+    const word = await p.$eval(`#friend-${STAR}`, (el) => el.closest('li')?.dataset.presence || '');
+    expect(word === theirs.presence, `the row reads ${word}, the api says ${theirs.presence}`);
+    // the api heard nothing: fan is still star's one follower
+    expect(theirs.followers === 1, `a guest's follow moved the count: ${theirs.followers} followers`);
+    // the row's × takes the name off the list, and out of the browser
+    await p.hover('#user-panel');
+    await p.waitForSelector(`#friend-unfollow-${STAR}`, { timeout: 10000 });
+    await p.click(`#friend-unfollow-${STAR}`);
+    await p.waitForSelector(`#friend-${STAR}`, { state: 'detached', timeout: 10000 });
+    const kept = await p.evaluate(() => localStorage.getItem('follows'));
+    expect(kept === '[]', `the browser still keeps ${kept}`);
     await p.close();
-    return 'the security tab opened';
+    return `${STAR} followed in the browser, ${word} after a reload, still 1 follower`;
   });
 
   await step('a rename keeps the followers (the edge points at the id): the list says the new name', async () => {

@@ -12,6 +12,8 @@
 // and fills from `since`; the page switches channels with no reload, no refetch and no new
 // socket, and a channel deleted under it is said on the page. A channel is added from the
 // row under the list through a dialog, and the manage dialog's channels tab moves and deletes.
+// A click on a member, or on a name in the chat, shows them over the room (the profile popup,
+// docs/follows.md), unless the chat tab's people cards turned that off for the browser.
 // The sidebar's search box finds the group by its letters, its row above the people's, and
 // the row goes to its page.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node groups.js
@@ -909,6 +911,68 @@ const dropAll = async (ctx, names) => {
     expect(!(await q.$('#group-channel-clips')), 'the deleted channel is still listed');
     await q.close();
     return 'switched twice, nothing asked, nothing opened';
+  });
+
+  await step('a click on a member shows them over the room (the profile popup), and so does a name in the chat; its button goes to their page; turned off, the row is the link it was', async () => {
+    const q = await fresh();
+    await q.goto(`${BASE}/login?next=/groups/${slug}`, { waitUntil: 'domcontentloaded' });
+    await q.fill('#auth-name', MEMBER);
+    await q.fill('#auth-password', PW);
+    await q.click('#auth-submit');
+    const row = `#group-members li[data-member="${MAKER}"] a`;
+    await q.waitForSelector(row, { timeout: 15000 });
+    // the popup is what a click does unless this browser said otherwise: the room stays under it
+    await q.click(row);
+    await q.waitForSelector(`#profile-popup[open][data-name="${MAKER}"]`, { timeout: 10000 });
+    expect(new URL(q.url()).pathname === `/groups/${slug}`, `the click left the room for ${q.url()}`);
+    // their page without the chat: the head, the follow button with the count, the page's three tabs each with its own read
+    await q.waitForSelector('#profile-popup-tabs', { timeout: 15000 });
+    const title = (await q.textContent('#profile-popup-title')) || '';
+    expect(title.includes(MAKER), `the popup's head reads "${title}"`);
+    expect((await q.$('#profile-popup-follow')) && (await q.$('#profile-popup-followers')), 'the popup has no follow button, or no count beside it');
+    expect(!(await q.$('#profile-popup #chat')), 'the popup has a chat in it');
+    await q.click('#profile-popup-tab-calendar');
+    await q.waitForSelector('#profile-popup-calendar[data-phase="ready"]', { timeout: 15000 });
+    await q.click('#profile-popup-tab-socials');
+    await q.waitForSelector('#profile-popup-socials', { timeout: 10000 });
+    // escape closes it, and the focus is back on the row that was clicked
+    await q.keyboard.press('Escape');
+    await q.waitForSelector('#profile-popup', { state: 'detached', timeout: 5000 });
+    const back = await q.evaluate(() => document.activeElement?.closest('li')?.dataset.member || '');
+    expect(back === MAKER, `after escape the focus is on ${back || 'nothing in the roster'}`);
+    // a name in the chat opens it too, with the way to that account's lines there (what the click did before the popup)
+    const name = '#chat-lines [data-verified="true"] [data-from]';
+    await q.waitForSelector(name, { timeout: 15000 });
+    const speaker = await q.getAttribute(name, 'data-from');
+    await q.click(name);
+    await q.waitForSelector(`#profile-popup[open][data-name="${speaker}"]`, { timeout: 10000 });
+    await q.waitForSelector('#profile-popup-lines', { timeout: 5000 });
+    await q.click('#profile-popup-close');
+    await q.waitForSelector('#profile-popup', { state: 'detached', timeout: 5000 });
+    // the button goes to their page, and the popup goes with the room
+    await q.click(row);
+    await q.waitForSelector('#profile-popup-page', { timeout: 10000 });
+    await q.click('#profile-popup-page');
+    await q.waitForURL((u) => u.pathname === `/watch/${MAKER}`, { timeout: 10000 });
+    await q.waitForSelector('#profile-popup', { state: 'detached', timeout: 5000 });
+    // the chat tab's people cards turn it off (kept in the browser): then a member's row is the link to their page it was
+    await q.goto(`${BASE}/groups/${slug}`, { waitUntil: 'domcontentloaded' });
+    await q.waitForSelector(row, { timeout: 15000 });
+    await q.hover('#user-panel');
+    await q.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+    await q.click('#settings');
+    await q.click('#tab-chat');
+    await q.waitForSelector('#people-popup', { state: 'attached', timeout: 5000 });
+    expect(await q.isChecked('#people-popup'), 'the popup is not the card that is on to begin with');
+    await q.click('label[for="people-page"]');
+    expect((await q.evaluate(() => localStorage.getItem('settings.profilePopup'))) === 'false', 'the choice was not kept in the browser');
+    await q.click('#user-modal-close');
+    await q.waitForSelector('#user-modal', { state: 'detached', timeout: 5000 });
+    await q.click(row);
+    await q.waitForURL((u) => u.pathname === `/watch/${MAKER}`, { timeout: 10000 });
+    expect(!(await q.$('#profile-popup')), 'the popup opened with the setting off');
+    await q.close();
+    return `${MAKER} over the room, ${speaker} from the chat; off, the row went to /watch/${MAKER}`;
   });
 
   await step('the sidebar search: letters find the group, its row first and the people under it; the row goes to its page', async () => {

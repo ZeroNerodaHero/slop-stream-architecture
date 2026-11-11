@@ -1,7 +1,7 @@
 import { useAtomValue } from 'jotai';
 import { useEffect, useState } from 'react';
 
-import { calendarAtom, loadCalendar, rangeOf, watchIsLiveAtom } from '@/infra/atoms/calendar-atoms';
+import { type CalendarScope, calendarAtomOf, loadCalendar, rangeOf, watchIsLiveAtom } from '@/infra/atoms/calendar-atoms';
 import { addDays, blocksOf, columnsOf, DAYS, detailOf, fmtClock, fmtDate, fmtDow, fmtDur, lengthOf, localMidnight, MIN_MS, totalOf, usuallyOf } from '@/infra/calendar';
 import { buttonClassName } from '@/shared-components/Button';
 import { cn } from '@/utils/cn';
@@ -24,6 +24,16 @@ function pct(min: number): string {
   return `${(min / 1440) * 100}%`;
 }
 
+interface CalendarProps {
+  name: string;
+  /** Whose rows: the watch page's (the default), or the profile popup's over it. */
+  scope?: CalendarScope;
+  /** They are streaming right now, for a caller that knows it some other way than the stream on screen (the popup has their word). Not given: the stream on screen says. */
+  live?: boolean;
+  /** The grid's id, and the start of every id in it (`<id>-back`, `<id>-range`…). The watch page's is `calendar`, the tests' handle. */
+  id?: string;
+}
+
 /**
  * When they stream (docs/calendar.md): a week of day columns, monday first, and the hours of
  * the day down the side, midnight at the top. A stream is a bar in its day's column from its
@@ -34,11 +44,14 @@ function pct(min: number): string {
  * the longer of them carrying the length. A connection that dropped and was back inside five
  * minutes is nothing to see: the two sessions are one bar, the gap inside it and counted. Bars
  * are the accent; one the sweeper closed is grey with a dashed end (its end is the last
- * heartbeat). The open bar ends at a line that moves, once a minute.
+ * heartbeat). The open bar ends at a line that moves, once a minute. The watch page's tab, and
+ * the profile popup's (ProfilePopup.tsx), which may stand over that page: the popup's grid has
+ * rows of its own (`scope`), ids of its own (`id`), and its own word for whether they are live.
  */
-export function Calendar({ name }: { name: string }) {
-  const cal = useAtomValue(calendarAtom);
-  const live = useAtomValue(watchIsLiveAtom);
+export function Calendar({ name, scope = 'page', live: said, id = 'calendar' }: CalendarProps) {
+  const cal = useAtomValue(calendarAtomOf(scope));
+  const watching = useAtomValue(watchIsLiveAtom);
+  const live = said ?? watching;
   // the clock, in state: a render must not read one. once a minute the open block grows a step
   const [tick, setTick] = useState(() => new Date());
   useEffect(() => {
@@ -49,8 +62,8 @@ export function Calendar({ name }: { name: string }) {
   const now = cal.at > tick.getTime() ? new Date(cal.at) : tick;
   // the week with today in it, for this name, each time the grid is shown: one request per open
   useEffect(() => {
-    void loadCalendar(name, 0);
-  }, [name]);
+    void loadCalendar(name, 0, scope);
+  }, [name, scope]);
 
   const mine = cal.name === name;
   const page = mine ? cal.page : 0;
@@ -66,37 +79,37 @@ export function Calendar({ name }: { name: string }) {
   const total = totalOf(blocks, now);
 
   return (
-    <div id="calendar" data-page={page} data-phase={mine ? cal.phase : 'loading'}>
+    <div id={id} data-page={page} data-phase={mine ? cal.phase : 'loading'}>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span id="calendar-usually" className="font-semibold">
+        <span id={`${id}-usually`} className="font-semibold">
           {mine && cal.phase === 'ready' ? usuallyOf(blocks, first, now) : mine && cal.phase === 'failed' ? 'cannot load the calendar' : 'loading'}
         </span>
         <span className="text-sm text-textTertiary">your time</span>
         {blocks.length > 0 && (
-          <span id="calendar-total" className="ml-auto text-base text-textSecondary">
+          <span id={`${id}-total`} className="ml-auto text-base text-textSecondary">
             {blocks.length} {blocks.length === 1 ? 'stream' : 'streams'} · {fmtDur(total)}
           </span>
         )}
       </div>
 
       <div className="mt-3 flex items-center gap-2 text-base">
-        <button id="calendar-back" type="button" aria-label="a week back" className={NAV} onClick={() => void loadCalendar(name, page + 1)}>
+        <button id={`${id}-back`} type="button" aria-label="a week back" className={NAV} onClick={() => void loadCalendar(name, page + 1, scope)}>
           ‹
         </button>
-        <span id="calendar-range" className="min-w-[7.5rem] text-center text-textSecondary">
+        <span id={`${id}-range`} className="min-w-[7.5rem] text-center text-textSecondary">
           {fmtDate(first)} – {fmtDate(last)}
         </span>
-        <button id="calendar-forward" type="button" aria-label="a week on" className={NAV} disabled={page === 0} onClick={() => void loadCalendar(name, page - 1)}>
+        <button id={`${id}-forward`} type="button" aria-label="a week on" className={NAV} disabled={page === 0} onClick={() => void loadCalendar(name, page - 1, scope)}>
           ›
         </button>
         {page > 0 && (
-          <button id="calendar-today" type="button" className={NAV} onClick={() => void loadCalendar(name, 0)}>
+          <button id={`${id}-today`} type="button" className={NAV} onClick={() => void loadCalendar(name, 0, scope)}>
             today
           </button>
         )}
       </div>
 
-      <div id="calendar-strip" className="mt-3">
+      <div id={`${id}-strip`} className="mt-3">
         {/* the days' heads, today's the bright one: the weekday over the date where the columns are narrow, beside it where they are not */}
         <div className="grid" style={COLUMNS}>
           <span />
@@ -169,7 +182,7 @@ export function Calendar({ name }: { name: string }) {
       </div>
 
       {newest && (
-        <p id="calendar-last" className="mt-1.5 text-base text-textSecondary">
+        <p id={`${id}-last`} className="mt-1.5 text-base text-textSecondary">
           {newest.live ? 'live now' : 'last streamed'} · {detailOf(newest, now)}
         </p>
       )}

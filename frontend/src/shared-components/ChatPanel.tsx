@@ -1,6 +1,7 @@
 import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine, RiRobot2Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
+  type FocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type SyntheticEvent,
   type UIEvent,
@@ -60,7 +61,8 @@ import {
   takeScrollPlan,
   visibleChatLinesAtom
 } from '@/infra/atoms/chat-atoms';
-import { type ChatStyle, chatStyleAtom, hideBotsAtom, setHideBots } from '@/infra/atoms/settings-atoms';
+import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
+import { type ChatStyle, chatStyleAtom, hideBotsAtom, profilePopupEnabledAtom, setHideBots } from '@/infra/atoms/settings-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ChatLineShape, placeOf } from '@/shared-components/ChatLine';
@@ -165,35 +167,49 @@ function useCountdown(until: number): number {
  */
 
 /**
- * The speaker's name. A login's opens that account's lines. When the line is really that
- * name's (a login's, or the streamer's; an anonymous nick is nobody), the pointer resting on
- * the name, or the focus landing on it, puts the person's card (PersonCard.tsx, the sidebar's)
- * beside the chat: the face with the word on it, the name, their status. No `title` beside
- * it: two boxes for one name is one too many. The colour says who the line is really from:
- * the streamer green, a login blue, an anonymous nick red (no card for it, so its `title`
- * says why).
+ * The speaker's name. When the line is really that name's (a login's, or the streamer's; an
+ * anonymous nick is nobody), a click on it shows them over the page (ProfilePopup.tsx: who
+ * they are, their stream while they are live, their page, and the button that goes there),
+ * and the pointer resting on the name, or the keyboard's focus landing on it, puts the
+ * person's card (PersonCard.tsx, the sidebar's) beside the chat: the face with the word on
+ * it, the name, their status. Where this browser turned the popup off (settings.profilePopup),
+ * and in a chat that is in a window of its own (the popped out player, infra/popout.ts: the
+ * popup is the page's, under that window), a login's name opens that account's lines here
+ * instead, which the popup has as `their lines here`. No `title` beside it: two boxes for
+ * one name is one too many. The colour says who the line is really from: the streamer green,
+ * a login blue, an anonymous nick red (no card for it, so its `title` says why).
  */
 function Speaker({ line }: { line: ChatLine }) {
   const peek = usePeek(PEEK_MS);
+  const popup = useAtomValue(profilePopupEnabledAtom);
   const someone = line.verified || line.streamer;
-  const show = (e: SyntheticEvent<HTMLElement>) => peek.show(e.currentTarget, e.currentTarget.closest('#chat'));
   const watched = someone
-    ? { onPointerEnter: show, onPointerLeave: (e: SyntheticEvent<HTMLElement>) => peek.leave(e.currentTarget), onFocus: show, onBlur: peek.blur }
+    ? {
+        onPointerEnter: (e: SyntheticEvent<HTMLElement>) => peek.show(e.currentTarget, e.currentTarget.closest('#chat')),
+        onPointerLeave: (e: SyntheticEvent<HTMLElement>) => peek.leave(e.currentTarget),
+        onFocus: (e: FocusEvent<HTMLElement>) => peek.focus(e, e.currentTarget.closest('#chat')),
+        onBlur: peek.blur
+      }
     : {};
   const color = line.streamer ? 'text-increase' : line.verified ? 'text-primaryBlue' : 'text-decrease';
+  const press = (name: HTMLElement) => {
+    if (popup && name.ownerDocument === document) openProfilePopup({ name: line.from, verified: line.verified, avatar: line.avatar, lines: line.verified });
+    else if (line.verified) void showSpeaker(line.from);
+  };
   return (
     <>
-      {line.verified ? (
+      {line.verified || (popup && line.streamer) ? (
         <span
           {...watched}
           role="button"
           tabIndex={0}
+          aria-haspopup={popup ? 'dialog' : undefined}
           data-from={line.from}
-          onClick={() => void showSpeaker(line.from)}
+          onClick={(e) => press(e.currentTarget)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
-              void showSpeaker(line.from);
+              press(e.currentTarget);
             }
           }}
           className={cn('cursor-pointer font-semibold', color)}

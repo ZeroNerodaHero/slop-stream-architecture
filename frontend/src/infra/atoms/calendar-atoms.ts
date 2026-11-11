@@ -4,10 +4,12 @@
  * in the viewer's zone. A week runs monday to sunday: `page` 0 is the one with today in it, 1
  * the week before, and so on. The rows are asked again when the stream on screen starts or
  * ends, so the open block appears and closes with no reload, and when the grid is opened on
- * another name or another page.
+ * another name or another page. The profile popup (ProfilePopup.tsx) has the same grid for
+ * whoever it is about, over a page that may be showing its own: each has its own rows
+ * (`CalendarScope`), so the one does not blank the other.
  */
 
-import { atom } from 'jotai';
+import { atom, type PrimitiveAtom } from 'jotai';
 
 import { api, type SessionRow } from '@/infra/api';
 import { watchNameAtom, watchPhaseAtom, type WatchPhase } from '@/infra/atoms/watch-atoms';
@@ -25,7 +27,19 @@ export interface CalendarState {
   at: number;
 }
 
-export const calendarAtom = atom<CalendarState>({ name: '', page: 0, rows: [], phase: 'loading', at: 0 });
+/** Whose grid: the watch page's, or the profile popup's over it. */
+export type CalendarScope = 'page' | 'popup';
+
+const blank = (): CalendarState => ({ name: '', page: 0, rows: [], phase: 'loading', at: 0 });
+const calendars: Record<CalendarScope, PrimitiveAtom<CalendarState>> = { page: atom(blank()), popup: atom(blank()) };
+
+/** The watch page's grid. */
+export const calendarAtom = calendars.page;
+
+/** The grid of one scope: `calendarAtom` for the page, the popup's own for the popup. */
+export function calendarAtomOf(scope: CalendarScope): PrimitiveAtom<CalendarState> {
+  return calendars[scope];
+}
 
 /** The week `page` names: monday to sunday, `[first, first + 7 days)`, `first` the monday's local midnight. */
 export function rangeOf(page: number, now: Date): { first: Date; last: Date; from: Date; to: Date } {
@@ -33,23 +47,24 @@ export function rangeOf(page: number, now: Date): { first: Date; last: Date; fro
   return { first, last: addDays(first, DAYS - 1), from: first, to: addDays(first, DAYS) };
 }
 
-let asking = 0;
+const asking: Record<CalendarScope, number> = { page: 0, popup: 0 };
 
-/** The rows for `name`'s `page`. A newer ask wins; the one it overtook is dropped when it lands. */
-export async function loadCalendar(name: string, page: number): Promise<void> {
-  const mine = ++asking;
-  const before = store.get(calendarAtom);
+/** The rows for `name`'s `page`, into the grid of `scope`. A newer ask for that grid wins; the one it overtook is dropped when it lands. */
+export async function loadCalendar(name: string, page: number, scope: CalendarScope = 'page'): Promise<void> {
+  const grid = calendars[scope];
+  const mine = ++asking[scope];
+  const before = store.get(grid);
   // a page turn keeps the old rows on screen while the new ones come; a new name starts blank
-  store.set(calendarAtom, { name, page, rows: before.name === name ? before.rows : [], phase: 'loading', at: before.at });
+  store.set(grid, { name, page, rows: before.name === name ? before.rows : [], phase: 'loading', at: before.at });
   const { from, to } = rangeOf(page, new Date());
   try {
     const rows = await api.sessions(name, from, to);
-    if (mine !== asking) return;
-    store.set(calendarAtom, { name, page, rows, phase: 'ready', at: Date.now() });
+    if (mine !== asking[scope]) return;
+    store.set(grid, { name, page, rows, phase: 'ready', at: Date.now() });
   } catch {
-    if (mine !== asking) return;
-    const was = store.get(calendarAtom);
-    store.set(calendarAtom, { name, page, rows: was.rows, phase: 'failed', at: was.at });
+    if (mine !== asking[scope]) return;
+    const was = store.get(grid);
+    store.set(grid, { name, page, rows: was.rows, phase: 'failed', at: was.at });
   }
 }
 

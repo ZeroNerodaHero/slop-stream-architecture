@@ -517,10 +517,13 @@ interface AboutProps {
   doc: AboutDoc | null;
   /** My own page: it edits. */
   edit?: boolean;
+  /** The page's id. `about-<name>` unless given, the watch page's and the tests' handle; the profile popup, which may stand over that very page, gives its own. */
+  id?: string;
 }
 
 /** Keyed on the name by the caller: another name is another page, read fresh. */
-export function About({ name, doc, edit = false }: AboutProps) {
+export function About({ name, doc, edit = false, id }: AboutProps) {
+  const box = id ?? `about-${name}`;
   const [rows, setRows] = useState<Row[]>(() => (doc ? dummyRows(doc) : []));
   const [loaded, setLoaded] = useState(doc !== null);
   /** The api did not answer for the page. Not an empty page: no editor, and nothing saves off it. */
@@ -854,7 +857,7 @@ export function About({ name, doc, edit = false }: AboutProps) {
   // the api did not answer: the same line for a viewer and the owner, and no editor. an empty page it is not
   if (failed) {
     return (
-      <p id={`about-${name}`} data-failed className="text-textSecondary">
+      <p id={box} data-failed className="text-textSecondary">
         could not load the page.{' '}
         <button id="about-retry" type="button" className={ADD} onClick={() => setFailed(false)}>
           try again
@@ -870,13 +873,13 @@ export function About({ name, doc, edit = false }: AboutProps) {
   if (shown.length === 0 && !editing) {
     if (!edit) {
       return (
-        <p id={`about-${name}`} className="text-textSecondary">
+        <p id={box} className="text-textSecondary">
           {name} hasn't made a page yet.
         </p>
       );
     }
     return (
-      <div id={`about-${name}`} className={cn(DASHED, 'flex h-40 flex-col items-center justify-center gap-2')}>
+      <div id={box} className={cn(DASHED, 'flex h-40 flex-col items-center justify-center gap-2')}>
         <RiPencilLine size={28} aria-hidden className="text-textTertiary" />
         <span className="text-textSecondary">nothing here yet</span>
         <span className="flex items-center gap-2.5">
@@ -906,7 +909,7 @@ export function About({ name, doc, edit = false }: AboutProps) {
 
   return (
     <div>
-      <section id={`about-${name}`} aria-label={`about ${name}`} className={cn('flex flex-col', editing ? 'gap-6' : 'gap-4')}>
+      <section id={box} aria-label={`about ${name}`} className={cn('flex flex-col', editing ? 'gap-6' : 'gap-4')}>
         {shown.map((row, r) => (
           <div key={row.key} className="flex flex-col gap-1.5">
             {editing && (

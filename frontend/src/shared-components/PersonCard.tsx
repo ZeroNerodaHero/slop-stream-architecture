@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 
 import { loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
 import { type Presence, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
+import { profilePopupAtom } from '@/infra/atoms/profile-popup-atoms';
 import type { PanelSide } from '@/infra/atoms/settings-atoms';
 import { Face } from '@/shared-components/Face';
 import { PresenceSquare, Who } from '@/shared-components/PersonRow';
@@ -53,21 +54,34 @@ export function usePeek(delay: number) {
   };
   // a row that goes while its timer runs: nothing shows
   useEffect(() => clear, []);
+  const show = (row: Element, column: Element | null) => {
+    if (!column) return;
+    clear();
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      if (!row.isConnected) return;
+      setAt({
+        row: row.getBoundingClientRect(),
+        column: column.getBoundingClientRect(),
+        host: row.closest<HTMLElement>('dialog:modal') ?? row.ownerDocument.body
+      });
+    }, delay);
+  };
   return {
     at,
     /** The pointer or the focus arrived on `row`, which sits in `column`. */
-    show(row: Element, column: Element | null) {
-      if (!column) return;
-      clear();
-      timer.current = window.setTimeout(() => {
-        timer.current = null;
-        if (!row.isConnected) return;
-        setAt({
-          row: row.getBoundingClientRect(),
-          column: column.getBoundingClientRect(),
-          host: row.closest<HTMLElement>('dialog:modal') ?? row.ownerDocument.body
-        });
-      }, delay);
+    show,
+    /**
+     * The keyboard's focus arrived in `row`, for a row whose click opens the profile popup (a
+     * roster's member, a chat's speaker): `show`, but not for the focus that click leaves on
+     * the row, nor for the focus the popup hands back to it as it closes. Neither is somebody
+     * arriving to look, and the card would stand there until the focus moved on.
+     */
+    focus(e: FocusEvent<HTMLElement>, column: Element | null) {
+      if (!e.target.matches(':focus-visible')) return;
+      // from inside the popup, not from any dialog: a watch page's chat is in one of its own (ChatSlot.tsx), and the focus moving from name to name there is an arrival
+      if (e.relatedTarget instanceof Element && e.relatedTarget.closest('#profile-popup')) return;
+      show(e.currentTarget, column);
     },
     /** The pointer left `row`. The card stays while the focus is still in it. */
     leave(row: Element) {
@@ -111,10 +125,13 @@ interface PersonCardProps {
  */
 export function PersonCard({ id, person, at, side }: PersonCardProps) {
   const peek = useAtomValue(peeksAtom)[person.name]?.card;
+  // the profile popup is up (a click on this row opened it, like as not): the page under it is not being pointed at, and a card left there would show through, dimmed
+  const covered = useAtomValue(profilePopupAtom) !== null;
   const asks = person.bio === undefined || person.presence === undefined;
   useEffect(() => {
     if (asks) void loadPeek(person.name);
   }, [person.name, asks]);
+  if (covered) return null;
   // a renamed login's old lines: the name's row is a free name's for the hold, so its word and status are not this person's
   const known = person.verified && peek && !peek.verified ? undefined : peek;
   const bio = person.bio ?? known?.bio ?? '';

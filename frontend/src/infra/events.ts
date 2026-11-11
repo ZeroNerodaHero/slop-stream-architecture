@@ -365,6 +365,15 @@ export function releasePresence(name: string): void {
   if (!wanted(name)) link?.unwatch(name);
 }
 
+/**
+ * Whether `name` is on the socket for this tab right now (a page watches it, a list holds it).
+ * Then the word the atoms have for it is now's. A name that is not keeps whatever word it had
+ * when it was last let go, which may be an old one: the profile popup asks before it trusts it.
+ */
+export function wantsPresence(name: string): boolean {
+  return wanted(name);
+}
+
 // the inspector setting is this browser's and the worker is the browser's: it follows at once
 store.sub(inspectorEnabledAtom, () => link?.inspector(store.get(inspectorEnabledAtom)));
 

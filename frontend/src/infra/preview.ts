@@ -1,5 +1,6 @@
 /**
- * Muted camera previews for the home page, beside the one watched stream.
+ * Muted camera previews for the home page, a group's live members and the profile popup,
+ * beside the one watched stream.
  *
  * The watch page and the corner player share one connection (`watch-atoms`). These are
  * their own peers, so a card playing on home does not hang up a stream in the corner.
@@ -43,7 +44,12 @@ const sessions = new Map<string, Session>();
 const retries = new Map<string, number>();
 /** The next wait after a drop, per name. Absent is the first. */
 const backoff = new Map<string, number>();
+/** Every camera wanted right now: the page's and the profile popup's. */
 let wanted = new Set<string>();
+/** The cameras the page under everything wants (`setHomePreviews`). */
+let pageWants: readonly string[] = [];
+/** The one the profile popup shows over that page (`setPopupPreview`), or none. */
+let popupWants: string | null = null;
 
 function publish(name: string, stream: MediaStream | null) {
   const current = store.get(previewStreamsAtom);
@@ -63,7 +69,24 @@ function publish(name: string, stream: MediaStream | null) {
  * A name that stays in the set keeps its connection. Anything else is hung up.
  */
 export function setHomePreviews(names: readonly string[]) {
-  const next = new Set(names);
+  pageWants = names;
+  want();
+}
+
+/**
+ * The camera the profile popup shows (ProfilePopup.tsx: somebody streaming, looked at over
+ * whatever page is under it), or null when it has none. Beside the page's own, not instead
+ * of them: the popup closing leaves the page's cameras as they were.
+ */
+export function setPopupPreview(name: string | null) {
+  popupWants = name;
+  want();
+}
+
+/** The page's cameras and the popup's are the ones wanted: a name still among them keeps its connection, anything else is hung up, a new one is started. */
+function want() {
+  const next = new Set(pageWants);
+  if (popupWants !== null) next.add(popupWants);
   wanted = next;
   for (const name of sessions.keys()) {
     if (!next.has(name)) stop(name);

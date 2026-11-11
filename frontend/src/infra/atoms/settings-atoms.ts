@@ -3,10 +3,10 @@
  * page, where it sits on the corner player, which corner the you panel sits in, which lists
  * it shows in what order and which of them are folded, whether the bots' lines show, whether
  * the lines wear faces, the shape of the lines in a chat with a friend, whether a link asks
- * before it opens, the theme, and how big the pages are. Not part of the account: a
- * laptop and a phone can each have their own. Same shape as the other
- * atom modules: atoms for what renders, action functions to change it. The modal that edits
- * them is user-modal-atoms.ts.
+ * before it opens, whether a click on somebody shows them in a popup, the theme, and how big
+ * the pages are. Not part of the account: a laptop and a phone can each have their own. Same
+ * shape as the other atom modules: atoms for what renders, action functions to change it. The
+ * modal that edits them is user-modal-atoms.ts.
  */
 
 import { atom } from 'jotai';
@@ -278,6 +278,21 @@ export const linkWarningAtom = atom((get) => get(storedLinkWarningAtom) !== fals
 
 export function setLinkWarning(on: boolean) {
   store.set(storedLinkWarningAtom, on);
+}
+
+/**
+ * A click on somebody, in a group's roster or on their name in a chat, shows them in a popup
+ * over the page (ProfilePopup.tsx, docs/follows.md): who they are, their stream while they
+ * are live, their page, and a button to go there. On unless this browser turned it off: then
+ * a member's row is the way to their page and a login's name in a chat lists that account's
+ * lines there, what each did before there was a popup.
+ */
+const storedProfilePopupAtom = atomWithStorage<unknown>('settings.profilePopup', true, undefined, { getOnInit: true });
+/** Read: a boolean, whatever localstorage holds. Anything but a stored `false` is on. */
+export const profilePopupEnabledAtom = atom((get) => get(storedProfilePopupAtom) !== false);
+
+export function setProfilePopupEnabled(on: boolean) {
+  store.set(storedProfilePopupAtom, on);
 }
 
 // ---- theme ---------------------------------------------------------------------------------

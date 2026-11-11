@@ -1,4 +1,4 @@
-import { RiExternalLinkLine, RiEyeOffLine, RiRobot2Line, RiShieldCheckLine } from '@remixicon/react';
+import { RiArrowRightUpLine, RiExternalLinkLine, RiEyeOffLine, RiProfileLine, RiRobot2Line, RiShieldCheckLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import type { ReactNode } from 'react';
 
@@ -11,11 +11,13 @@ import {
   hideBotsAtom,
   linkWarningAtom,
   pipChatPlaceAtom,
+  profilePopupEnabledAtom,
   setChatSide,
   setChatStyle,
   setHideBots,
   setLinkWarning,
-  setPipChatPlace
+  setPipChatPlace,
+  setProfilePopupEnabled
 } from '@/infra/atoms/settings-atoms';
 import { GeneratedAvatar } from '@/shared-components/GeneratedAvatar';
 import { OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
@@ -133,6 +135,24 @@ const LINK_OPTIONS: readonly { ask: boolean; id: string; label: string; detail: 
   }
 ];
 
+/** A click on somebody, a member in a group's roster or a name in a chat: them in a popup over the page (ProfilePopup.tsx), or where the click went before there was one. */
+const PEOPLE_OPTIONS: readonly { popup: boolean; id: string; label: string; detail: string; icon: ReactNode }[] = [
+  {
+    popup: true,
+    id: 'people-popup',
+    label: 'show them in a popup',
+    detail: 'a click on someone opens them over the page you are on: how they are, their stream while they are live, their page under it, and a button that goes there',
+    icon: <RiProfileLine aria-hidden size={28} />
+  },
+  {
+    popup: false,
+    id: 'people-page',
+    label: 'go to their page',
+    detail: 'a click on a member of a group goes straight to their page, and a name in a chat lists what that account said there',
+    icon: <RiArrowRightUpLine aria-hidden size={28} />
+  }
+];
+
 /** The three shapes every chat's lines can take (docs/chat.md, ChatLine.tsx). The card's picture is the chat. */
 const STYLE_OPTIONS: readonly { style: ChatStyle; label: string; detail: string }[] = [
   { style: 'log', label: 'a log', detail: 'one line each: the time, the name, then the words. nothing offset, and the most lines on screen' },
@@ -233,14 +253,16 @@ function StylePreview({ style }: { style: ChatStyle }) {
 /**
  * This browser's settings for the chat: where it sits on the watch page and the go live page,
  * where it opens on the corner player, whether the bots' lines show, the shape of the lines in
- * every chat (a stream's, a group channel's, a friend's), whether a link asks before it opens.
- * The chat behind the modal follows every change at once, so the cards are their own preview.
+ * every chat (a stream's, a group channel's, a friend's), what a click on somebody in a chat or
+ * in a group's roster does, whether a link asks before it opens. The chat behind the modal
+ * follows every change at once, so the cards are their own preview.
  */
 export function ChatTab() {
   const chatSide = useAtomValue(chatSideAtom);
   const pipChat = useAtomValue(pipChatPlaceAtom);
   const hideBots = useAtomValue(hideBotsAtom);
   const chatStyle = useAtomValue(chatStyleAtom);
+  const profilePopup = useAtomValue(profilePopupEnabledAtom);
   const linkWarning = useAtomValue(linkWarningAtom);
   return (
     <div className="divide-y divide-primaryStroke">
@@ -322,6 +344,26 @@ export function ChatTab() {
           ))}
         </div>
         <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every chat. one that is open follows as you pick.</p>
+      </fieldset>
+
+      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+        <legend className={SECTION_TITLE}>people</legend>
+        <p className="mt-1 text-textSecondary">what a click on someone does: a member in a group's list, or a name in a chat.</p>
+        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {PEOPLE_OPTIONS.map(({ popup, id, label, detail, icon }) => (
+            <OptionCard
+              key={id}
+              id={id}
+              name="people"
+              checked={popup === profilePopup}
+              onChange={() => setProfilePopupEnabled(popup)}
+              picture={icon}
+              label={label}
+              detail={detail}
+            />
+          ))}
+        </div>
+        <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every group and every chat.</p>
       </fieldset>
 
       <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">

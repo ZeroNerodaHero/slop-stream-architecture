@@ -37,7 +37,11 @@ export const presenceChoiceAtom = atom<PresenceChoice>('online');
 /** What the last pick did: `saving`, `saved`, `not saved: <why>`. */
 export const presenceChoiceNoteAtom = atom('');
 
-const presencesAtom = atom<ReadonlyMap<string, Presence>>(new Map());
+/**
+ * The words the socket has said, by name. A name not in it has not been heard about: `presenceOfAtom` reads that as offline, and the profile popup,
+ * which has a profile read to fall back on, reads the map itself to tell the two apart.
+ */
+export const presencesAtom = atom<ReadonlyMap<string, Presence>>(new Map());
 const perName = new Map<string, Atom<Presence>>();
 
 /** The word of one name, as the socket last said. One atom per name, made once (a new atom per render would never settle). */

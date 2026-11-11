@@ -138,14 +138,15 @@ export function UserPanel() {
   // who I follow, the groups I am in, my chats and my inbox: a login's, once the login is known and whenever
   // it changes (in, out, a rename). the watch page's follow button and the number on the corner read the
   // first; the sidebar's groups list the second; the chat window the third; the bell at the top right the
-  // fourth. another login's are not this one's, and a guest has none.
+  // fourth. another login's are not this one's, and a guest has none but who it follows: names kept in this
+  // browser (follow-atoms.ts), asked about once the page knows nobody is logged in.
   useEffect(() => {
     forgetFollowing();
     forgetMyServers();
     closeAllDms();
     forgetNotifications();
+    if (me !== undefined) void loadFollowing();
     if (me) {
-      void loadFollowing();
       void loadMyServers();
       void loadDms();
       void loadNotifications();
