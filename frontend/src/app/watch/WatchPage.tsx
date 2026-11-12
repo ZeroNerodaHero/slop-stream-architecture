@@ -57,6 +57,7 @@ import { FollowButton } from '@/shared-components/FollowButton';
 import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
+import { OfflinePicture } from '@/shared-components/OfflinePicture';
 import { panelClassName } from '@/shared-components/Panel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { SceneView } from '@/shared-components/SceneView';
@@ -303,15 +304,7 @@ export function WatchPage() {
               </Skeleton>
             ) : (
               <>
-                {offline !== null && (
-                  <img
-                    id="offline-picture"
-                    src={api.offlineUrl(name, offline)}
-                    alt=""
-                    draggable={false}
-                    className="mb-3 aspect-video w-full border border-primaryStroke bg-black object-cover"
-                  />
-                )}
+                {offline !== null && <OfflinePicture id="offline-picture" src={api.offlineUrl(name, offline)} className="mb-3 w-full" />}
                 <div id="profile" className={cn(panelClassName('flex flex-wrap items-center gap-6 p-6'))} data-presence={presence}>
                   <Face name={name} version={avatar} className="h-28 w-28 text-5xl" />
                   <div className="min-w-0 flex-1">

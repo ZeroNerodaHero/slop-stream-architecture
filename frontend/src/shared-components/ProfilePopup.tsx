@@ -21,6 +21,7 @@ import { buttonClassName } from '@/shared-components/Button';
 import { Calendar } from '@/shared-components/Calendar';
 import { Face } from '@/shared-components/Face';
 import { FollowButton } from '@/shared-components/FollowButton';
+import { OfflinePicture } from '@/shared-components/OfflinePicture';
 import { Who, Word } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { Socials } from '@/shared-components/Socials';
@@ -340,15 +341,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             {live ? (
               <LiveStream name={name} onGo={close} />
             ) : (
-              offline !== null && (
-                <img
-                  id="profile-popup-offline"
-                  src={api.offlineUrl(name, offline)}
-                  alt=""
-                  draggable={false}
-                  className="aspect-video w-full border border-primaryStroke bg-black object-cover"
-                />
-              )
+              offline !== null && <OfflinePicture id="profile-popup-offline" src={api.offlineUrl(name, offline)} className="w-full" />
             )}
             {!live && card.offline_note && (
               <p id="profile-popup-offline-note" className={cn('[overflow-wrap:anywhere]', offline !== null && 'mt-3')}>
