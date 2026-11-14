@@ -24,6 +24,7 @@ import {
 import { modelSurvivesHiddenTab, type RigInfo, type RigPart } from '@/infra/face';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { LoadBar, readerWords } from '@/shared-components/live/ModelLoading';
+import { Select } from '@/shared-components/Select';
 import { CHECKBOX } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -141,22 +142,17 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
         </label>
       </div>
       {cameras.length > 1 && (
-        <label htmlFor="face-camera" className="relative flex min-w-0 items-center gap-1.5 text-xs text-textSecondary">
+        <div className="flex min-w-0 items-center gap-1.5 text-xs text-textSecondary">
           <span className="shrink-0">reads</span>
-          <select
+          <Select
             id="face-camera"
+            label="the camera that reads your face"
             value={cameras.some((c) => c.id === camera) ? camera : ''}
-            onChange={(e) => void setFaceCamera(e.target.value)}
-            className="min-w-0 flex-1 border border-primaryStroke bg-background px-1.5 py-1 text-xs text-textPrimary"
-          >
-            <option value="">the browser's camera</option>
-            {cameras.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.label}
-              </option>
-            ))}
-          </select>
-        </label>
+            options={[{ value: '', label: "the browser's camera" }, ...cameras.map((c) => ({ value: c.id, label: c.label }))]}
+            onChange={(id) => void setFaceCamera(id)}
+            className="min-w-0 flex-1"
+          />
+        </div>
       )}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <button id="model-change" type="button" className={ACTION} onClick={onChange}>

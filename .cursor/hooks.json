@@ -5,6 +5,10 @@
       {
         "command": ".cursor/hooks/no-box-shadow.sh",
         "matcher": "Write|StrReplace|Edit"
+      },
+      {
+        "command": ".cursor/hooks/no-native-select.sh",
+        "matcher": "Write|StrReplace|Edit"
       }
     ]
   }
