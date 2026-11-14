@@ -34,6 +34,7 @@ import {
   libraryAtom,
   livePanelsAtom,
   modelAtom,
+  modelLoadingAtom,
   moveSourceTo,
   placeImage,
   publishPhaseAtom,
@@ -539,6 +540,7 @@ export function Sources() {
   const open = useAtomValue(livePanelsAtom).sources;
   const status = useAtomValue(sourceStatusAtom);
   const phase = useAtomValue(publishPhaseAtom);
+  const modelLoading = useAtomValue(modelLoadingAtom);
   const [picking, setPicking] = useState(false);
   // nothing opened: the camera was refused or is missing, or the mic was (mic only, kept from last time). the way out is the other start
   const cameraRefused = phase === 'camera-blocked' || phase === 'no-camera';
@@ -559,7 +561,10 @@ export function Sources() {
       >
         {sources.length === 0 ? (
           <div className="px-3 py-3 text-sm text-textTertiary">
-            <p>{micRefused ? 'the mic shows up here once it is on' : 'the camera shows up here once it is on'}</p>
+            {/* a visit that comes back to a model has no camera on its way: the preview says how far along the model is */}
+            <p>
+              {modelLoading ? 'your model shows up here once it is on' : micRefused ? 'the mic shows up here once it is on' : 'the camera shows up here once it is on'}
+            </p>
             {/* the camera refused, or missing: the mic alone still makes a stream, with the avatar for a face. the other way round, the camera */}
             {cameraRefused && (
               <button id="mic-only" type="button" className="mt-2 text-sm font-semibold text-primaryBlue" onClick={() => void startMic()}>

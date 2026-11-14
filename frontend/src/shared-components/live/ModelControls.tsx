@@ -106,7 +106,7 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
       </p>
       {coming && <LoadBar loaded={coming.loaded} total={coming.total} label="loading the face reader" />}
       {rig && (
-        <p id="model-rig" data-kind={rig.kind} className="text-xs text-textTertiary">
+        <p id="model-rig" data-kind={rig.kind} data-parts={rig.parts.join(' ')} className="text-xs text-textTertiary">
           {rigWords(rig)}
         </p>
       )}

@@ -19,7 +19,7 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import type { KeptModel } from '@/infra/model-store';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
-import { LoadBar, loadFraction, loadWords } from '@/shared-components/live/ModelLoading';
+import { LoadBar, loadFraction, loadWords, loadWordsShort } from '@/shared-components/live/ModelLoading';
 import { KeptPicture, LetterTile } from '@/shared-components/live/ModelPicture';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -44,8 +44,8 @@ interface CardProps {
 /**
  * One model: its picture, its name, a line about it. The whole card is the pick. While it is
  * the one loading, its picture is under a veil with how far along it is (a percentage when
- * there are bytes to count, a bar either way) and its line says what is happening; the other
- * cards wait, dimmed.
+ * there are bytes to count, a bar either way) and its line says what is happening in a word
+ * or two (the picker's last line has the sentence); the other cards wait, dimmed.
  */
 function Card({ id, name, detail, picture, on, load, disabled, onPick }: CardProps) {
   const fraction = load ? loadFraction(load) : null;
@@ -74,7 +74,7 @@ function Card({ id, name, detail, picture, on, load, disabled, onPick }: CardPro
       </span>
       <span className="block min-w-0 px-2 py-1.5">
         <span className={cn('block truncate text-sm font-semibold', on || load ? 'text-primaryBlue' : 'text-textPrimary')}>{name}</span>
-        <span className="block truncate text-xs text-textTertiary">{(load ? loadWords(load) : detail) || '\u00a0'}</span>
+        <span className="block truncate text-xs text-textTertiary">{(load ? loadWordsShort(load) : detail) || '\u00a0'}</span>
       </span>
     </button>
   );
@@ -154,6 +154,7 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
           <h3 id="model-demos-title" className={SECTION_TITLE}>
             demo models
           </h3>
+          {demos.length > 0 && <p className="mt-1 text-sm text-textTertiary">the site's own. one is downloaded the first time it is worn, then kept in this browser.</p>}
           {demos.length === 0 ? (
             <p id="model-demos-none" className="mt-2 text-sm text-textTertiary">
               none on this server yet. a file of your own works the same.
@@ -244,7 +245,12 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
         </section>
 
         {/* what the pick is doing, or why it did not come. not read out as it changes: the megabytes would be a sentence a second */}
-        <p id="model-status" data-step={load?.step} className={cn('min-h-5 text-sm', !load && status ? 'text-decrease' : 'text-textSecondary')} aria-live={load ? 'off' : 'polite'}>
+        <p
+          id="model-status"
+          data-step={load?.step}
+          className={cn('min-h-5 text-sm', !load && status ? 'text-decrease' : 'text-textSecondary')}
+          aria-live={load ? 'off' : 'polite'}
+        >
           {load ? `${load.choice.name}: ${loadWords(load)}` : status}
         </p>
       </div>

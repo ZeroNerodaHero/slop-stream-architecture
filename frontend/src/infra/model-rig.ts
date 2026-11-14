@@ -48,11 +48,11 @@ const LOOK_PITCH = 14;
 /** This many of the reader's 52 among a model's expressions is perfect sync. Fewer is a model that shares a name or two. */
 const ARKIT_ENOUGH = 26;
 /**
- * A broad smile narrows the eyes into arcs: from here up, and this far at the most. Not all the
- * way: a model that shut its eyes for every grin would spend a cheerful stream with them shut.
+ * A broad smile narrows the eyes: from here up, and this far at the most. A little of the way
+ * only: further, the lids come down flat long before they curve, and a grin looks half asleep.
  */
 const EYE_SMILE_FROM = 0.75;
-const EYE_SMILE_MOST = 0.6;
+const EYE_SMILE_MOST = 0.35;
 /**
  * A whole face from one number (`happy`, `angry`): eased in from `MOOD_FROM`. A model that says
  * a mood is all or nothing gets it switched instead, on over `MOOD_ON` and off again under

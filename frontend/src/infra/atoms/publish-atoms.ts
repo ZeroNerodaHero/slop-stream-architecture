@@ -833,6 +833,10 @@ async function putModelOn(choice: ModelChoice, file: ArrayBuffer, opened: Opened
   old?.stop();
   modelSession = session;
   faceCamera = camera;
+  // what was set while it loaded went to the model it takes the place of: this one hears it now
+  session.setMirror(store.get(faceMirrorAtom));
+  session.setExpressions(store.get(faceExpressionsAtom));
+  session.setBackground(store.get(modelBackgroundAtom));
   store.set(modelAtom, choice);
   store.set(modelRigAtom, session.rig);
   store.set(storedModelAtom, choice.kind === 'kept' && choice.id < 0 ? null : choice);

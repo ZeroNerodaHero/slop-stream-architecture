@@ -58,7 +58,10 @@
 #              gets it on the sound with nothing on video and the avatar moves with the voice on both sides, the + puts the camera back live
 #   vtuber     a 3d model as the face cam: the api lists the bucket's demo models (a name, a licence, a thumbnail; the file a glb), the + has
 #              `model` and its picker shows that shelf, a .vrm from the computer is read in the page and kept in that browser, a file that is
-#              no model (or points outside itself) is refused in words; the model's picture is the preview's and, live, the watcher's (read
+#              no model (or points outside itself) is refused in words; a model on its way on says how far along it is, on its card and over
+#              the preview; a demo model is downloaded once and kept in that browser (its card says so, a reload asks the server for
+#              nothing); the page says what of the model a face moves, with the expressions switch only where there are brows or a smile;
+#              the model's picture is the preview's and, live, the watcher's (read
 #              off the colour behind it), and the camera's own track goes to no sender and no <video> on the page: on a pick, on a reload
 #              with the model kept, and when its worker dies mid stream (mic only); `use the camera` asks first. the fake camera has no
 #              face in it (`no face in view`); FACE_CLIP=<a face .mjpeg or .y4m> feeds it one, and then the reader's numbers must move

@@ -28,6 +28,13 @@ export function loadWords({ step, loaded, total }: Pick<ModelLoad, 'step' | 'loa
   return bytes ? `downloading · ${bytes}` : 'opening it';
 }
 
+/** The same in a word or two, for a card too narrow for the sentence: the megabytes while they come, then what is being done. */
+export function loadWordsShort({ step, loaded, total }: Pick<ModelLoad, 'step' | 'loaded' | 'total'>): string {
+  if (step === 'reader') return 'face reader';
+  if (step === 'model') return 'building';
+  return bytesWords(loaded, total) || 'opening';
+}
+
 /** How much of a step is done, 0 to 1. `null`: no telling (a step that counts nothing, or bytes of a whole nobody said). */
 export function loadFraction({ loaded, total }: { loaded: number; total: number }): number | null {
   return total > 0 ? Math.min(1, loaded / total) : null;

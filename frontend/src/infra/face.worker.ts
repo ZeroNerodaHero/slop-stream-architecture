@@ -41,9 +41,17 @@ const ours = (target: string): boolean => {
   }
 };
 const plainFetch = scope.fetch.bind(scope);
+/** An answer asked for ahead of time, for whoever fetches that url next (`fetchReaderFiles`): the reader's own loader, which is then handed it instead of asking again. */
+let early: { url: string; answer: Promise<Response> } | null = null;
 scope.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
   const target = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-  return ours(target) ? plainFetch(input, init) : Promise.reject(new TypeError(`the face worker fetches from this site only, not ${target}`));
+  if (!ours(target)) return Promise.reject(new TypeError(`the face worker fetches from this site only, not ${target}`));
+  if (early && new URL(target, scope.location.href).href === early.url) {
+    const { answer } = early;
+    early = null;
+    return answer;
+  }
+  return plainFetch(input, init);
 };
 const plainOpen = XMLHttpRequest.prototype.open;
 XMLHttpRequest.prototype.open = function (this: XMLHttpRequest, method: string, url: string | URL, ...rest: unknown[]) {
@@ -67,6 +75,7 @@ let cameraReader: ReadableStreamDefaultReader<VideoFrame> | null = null;
 const tracker = new FaceTracker();
 /** The pose the model is drawn toward: the last reading's, or rest. */
 let pose: Pose = restPose();
+const REST: Pose = restPose();
 let stopped = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let interval = 1000 / 30;
@@ -86,16 +95,16 @@ const counts = { drawn: 0, reads: 0, readMs: 0, since: 0 };
 // ---- how far along -----------------------------------------------------------------------------
 /** Where this is on its way to a model with a face (`face-wire.ts`). `null` once the reader is up, or has given up. */
 let step: LoadStep | null = 'model';
-/** The reader's files as they come down: bytes so far, and each file's size once its answer says one (`null` before, 0 when it does not say). */
-const coming = { loaded: 0, sizes: [] as (number | null)[], toldAt: 0 };
+/** The reader's two files as they come down: bytes so far, and each one's size once its answer says one (`null` before, 0 when it does not say). */
+const coming = { loaded: 0, sizes: [null, null] as (number | null)[], toldAt: 0 };
 /** The page is told at most this often while bytes come: a megabyte is a few dozen pieces. */
 const TELL_MS = 100;
 
-/** Say where this is. `now`: a change of step, said at once; without it, a few times a second. */
+/** Say where this is. `now`: a change of step, said at once; without it (bytes came), a few times a second, and only once the bytes are what is waited for. */
 function tellLoading(now = false) {
   if (!step || stopped) return;
   const at = performance.now();
-  if (!now && at - coming.toldAt < TELL_MS) return;
+  if (!now && (step !== 'reader' || at - coming.toldAt < TELL_MS)) return;
   coming.toldAt = at;
   // the whole is known only when every file has said its size
   const total = coming.sizes.every((size) => size !== null && size > 0) ? coming.sizes.reduce<number>((sum, size) => sum + (size ?? 0), 0) : 0;
@@ -103,32 +112,27 @@ function tellLoading(now = false) {
 }
 
 /**
- * One of the reader's files, fetched here so its bytes are counted on the way: the reader's
- * own fetch says nothing until it is done, and a few megabytes on a slow line is a long nothing.
+ * An answer's body, counted as it comes: the reader's own fetch says nothing until it is done,
+ * and a few megabytes on a slow line is a long nothing. `slot`: which of `coming.sizes` is
+ * this file's. `keep`: the bytes are handed back (the weights, which the reader is given);
+ * without it they are only counted.
  */
-async function fetchCounted(url: string): Promise<Uint8Array> {
-  const slot = coming.sizes.push(null) - 1;
-  const res = await scope.fetch(url);
-  if (!res.ok) throw new Error(`http ${res.status}`);
+async function countBody(res: Response, slot: number, keep: boolean): Promise<Uint8Array | null> {
   // a length is the body's own only when nothing packed the body on the way (a server's gzip)
-  coming.sizes[slot] = res.headers.get('content-encoding') ? 0 : Number(res.headers.get('content-length')) || 0;
-  if (!res.body) {
-    const whole = new Uint8Array(await res.arrayBuffer());
-    coming.loaded += whole.length;
-    tellLoading();
-    return whole;
-  }
+  coming.sizes[slot] = !res.ok || res.headers.get('content-encoding') ? 0 : Number(res.headers.get('content-length')) || 0;
+  if (!res.ok || !res.body) throw new Error(`http ${res.status}`);
   const reader = res.body.getReader();
   const pieces: Uint8Array[] = [];
   let size = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    pieces.push(value);
+    if (keep) pieces.push(value);
     size += value.length;
     coming.loaded += value.length;
     tellLoading();
   }
+  if (!keep) return null;
   const whole = new Uint8Array(size);
   let at = 0;
   for (const piece of pieces) {
@@ -139,20 +143,32 @@ async function fetchCounted(url: string): Promise<Uint8Array> {
 }
 
 /**
- * The reader's two big files, started on their way while the model is still being made: the
- * weights, kept (the reader is handed them), and the wasm, fetched for the count and for the
- * browser's cache, which the reader's own loader then finds it in. That loader has to fetch it
- * itself: a browser keeps the compiled code of a wasm it streamed from its cache, and compiles
- * one handed over as bytes again on every visit.
+ * The reader's two big files, started on their way while the model is still being made: that
+ * is this thread's work, and these are the network's.
+ *
+ * The weights are fetched and kept: the reader is handed the bytes. The wasm has to be fetched
+ * by the reader's own loader, which compiles it as it streams in; so it is asked for here,
+ * counted on a copy of the answer, and the answer itself is left for the loader, which gets it
+ * when it asks for that url (`early`). One download, begun early, and its megabytes seen.
+ * Resolves with the weights, or `null` when they did not come: the reader then tries itself.
  */
 function fetchReaderFiles(msg: Extract<ToFaceWorker, { type: 'start' }>): Promise<Uint8Array | null> {
-  const weights = fetchCounted(msg.weights);
-  const wasm = fetchCounted(msg.wasm.binary);
-  // counted or not, the reader is still tried: its own fetch may get what this one did not
-  return Promise.all([weights, wasm]).then(
-    ([bytes]) => bytes,
-    () => null
-  );
+  const url = new URL(msg.wasm.binary, scope.location.href).href;
+  // as the loader would have asked
+  const answer = plainFetch(url, { credentials: 'same-origin' });
+  early = { url, answer };
+  answer
+    .then((res) => countBody(res.clone(), 0, false))
+    .catch(() => {
+      // it did not come, or broke off: the whole is not known, and the reader's own try says the rest
+      coming.sizes[0] = 0;
+    });
+  return plainFetch(msg.weights)
+    .then((res) => countBody(res, 1, true))
+    .catch(() => {
+      coming.sizes[1] = 0;
+      return null;
+    });
 }
 
 function say(next: FaceState, why?: string) {
@@ -287,18 +303,20 @@ function tick() {
 
 function sendStats(now: number) {
   const seconds = (now - counts.since) / 1000;
+  // with no face in view the pose still holds the last one it saw, and the model is on its way home: what it is asked for is rest
+  const asked = pose.face ? pose : REST;
   const degrees = (radians: number) => Math.round((radians * 180) / Math.PI);
-  const mood = moodOf(pose.shapes);
+  const mood = moodOf(asked.shapes);
   const stats: ModelStats = {
     fps: Math.round(counts.drawn / seconds),
     reads: Math.round(counts.reads / seconds),
     readMs: counts.reads ? Math.round(counts.readMs / counts.reads) : 0,
     face: pose.face,
-    yaw: degrees(pose.yaw),
-    pitch: degrees(pose.pitch),
-    roll: degrees(pose.roll),
-    mouth: Math.round(pose.shapes[shapeIndex('jawOpen')]! * 100),
-    blink: Math.round(((pose.shapes[shapeIndex('eyeBlinkLeft')]! + pose.shapes[shapeIndex('eyeBlinkRight')]!) / 2) * 100),
+    yaw: degrees(asked.yaw),
+    pitch: degrees(asked.pitch),
+    roll: degrees(asked.roll),
+    mouth: Math.round(asked.shapes[shapeIndex('jawOpen')]! * 100),
+    blink: Math.round(((asked.shapes[shapeIndex('eyeBlinkLeft')]! + asked.shapes[shapeIndex('eyeBlinkRight')]!) / 2) * 100),
     smile: Math.round(mood.smile * 100),
     brows: Math.round((mood.browUp - mood.browDown) * 100)
   };
@@ -344,10 +362,9 @@ async function loadReader(msg: Extract<ToFaceWorker, { type: 'start' }>, files: 
   }
   if (classic === msg.wasm.module) console.warn(`face reader: a ${classic ? 'classic' : 'module'} worker handed the ${msg.wasm.module ? 'module' : 'classic'} loader`);
   const fileset = { wasmLoaderPath: msg.wasm.loader, wasmBinaryPath: msg.wasm.binary };
+  // the weights are here (or did not come). the wasm may still be on its way: it goes on being counted while the reader waits for it
   const weights = await files;
   if (stopped) return;
-  // every byte is here: what is left is the reader starting, which says nothing on the way
-  tellLoading(true);
   const options = (delegate: 'GPU' | 'CPU') => ({
     baseOptions: weights ? { modelAssetBuffer: weights, delegate } : { modelAssetPath: msg.weights, delegate },
     runningMode: 'VIDEO' as const,

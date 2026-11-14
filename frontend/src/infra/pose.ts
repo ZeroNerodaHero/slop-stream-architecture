@@ -117,8 +117,8 @@ const both = (shapes: ArrayLike<number>, left: Shape, right: Shape) => (at(shape
  * The mood in a pose's `shapes`. Of the reader's scores for the upper face and the corners of
  * the mouth, these are the ones that move with a real face: `mouthFrown`, `cheekSquint` and
  * `noseSneer` stay at nothing whatever the face does, so there is no frown and no sad here.
- * Lowered brows win over the rest: teeth bared in anger score as a smile, and brows pulled
- * down over raised inner ends as raised.
+ * The brows are the one score less the other, so a face that scores both ways is neither.
+ * A scowl takes the smile with it: teeth bared in anger score as a smile.
  */
 export function moodOf(shapes: ArrayLike<number>): Mood {
   const down = both(shapes, 'browDownLeft', 'browDownRight');
@@ -151,7 +151,15 @@ const TOP_SMILE = 0.8;
 const TOP_WIDE = 0.2;
 const TOP_DEFAULT = 0.6;
 const TOPS: readonly number[] = SHAPES.map((name) =>
-  name.startsWith('eyeBlink') ? TOP_BLINK : name === 'jawOpen' ? TOP_JAW : name.startsWith('mouthSmile') ? TOP_SMILE : name.startsWith('eyeWide') ? TOP_WIDE : TOP_DEFAULT
+  name.startsWith('eyeBlink')
+    ? TOP_BLINK
+    : name === 'jawOpen'
+      ? TOP_JAW
+      : name.startsWith('mouthSmile')
+        ? TOP_SMILE
+        : name.startsWith('eyeWide')
+          ? TOP_WIDE
+          : TOP_DEFAULT
 );
 /**
  * A floor follows its score after the resting second too, so a rest taken mid-word mends

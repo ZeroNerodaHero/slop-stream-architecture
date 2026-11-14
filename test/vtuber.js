@@ -5,10 +5,14 @@
 //
 // What is checked: the api's three routes for the demo models; the picker (the shelf as the api
 // lists it, a file from the computer kept in this browser and put up nowhere, a bad file refused
-// in words); the model's picture in the preview and, live, on a watcher's page; the one rule,
-// that the camera's own track goes to the face reader and to nothing else (no sender, no <video>
-// on the page), on a pick, on a reload with a model kept, and when the model's worker dies mid
-// stream (mic only, never the camera); and that the way back to the camera asks first.
+// in words); a model on its way on says how far along it is, on its card and over the preview;
+// a demo model is downloaded once and kept in this browser (the picker says so, and the next
+// pick and the next visit ask the server for nothing); the page says what of a model's face the
+// reader can move, and offers the expressions switch only on a model with brows or a smile; the
+// model's picture in the preview and, live, on a watcher's page; the one rule, that the camera's
+// own track goes to the face reader and to nothing else (no sender, no <video> on the page), on
+// a pick, on a reload with a model kept, and when the model's worker dies mid stream (mic only,
+// never the camera); and that the way back to the camera asks first.
 //
 // Which picture is which is read off its corners: the model is drawn on a flat colour the
 // streamer picks, and the test picks one no camera makes. The face reader's state and numbers
@@ -124,10 +128,22 @@ const waitFace = (p, state, timeout = 45000) => p.waitForFunction((state) => doc
 // Before any of the page's code, on the publisher: every track a sender is given and every video
 // track a <video> is given, by the label of what it came from. A camera's label is the camera's
 // name; the model's track has another. `connected`: the <video> is on the page (the face
-// reader's own, on a browser where the page feeds it, never is).
+// reader's own, on a browser where the page feeds it, never is). And every step the two loading
+// things went through (the picked card's veil, the preview's), as they went: a model out of
+// this browser is on in under a second, faster than a test can look.
 function recordTracks() {
   window.__sent = [];
   window.__shown = [];
+  window.__loading = [];
+  const noteLoading = () => {
+    for (const [what, sel] of [['card', '#model-card-loading'], ['preview', '#model-loading']]) {
+      const step = document.querySelector(sel)?.dataset.step;
+      const line = `${what}:${step ?? 'gone'}`;
+      const last = window.__loading.filter((l) => l.startsWith(`${what}:`)).pop();
+      if (last !== line && (step || last)) window.__loading.push(line);
+    }
+  };
+  new MutationObserver(noteLoading).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-step'] });
   const add = RTCPeerConnection.prototype.addTransceiver;
   RTCPeerConnection.prototype.addTransceiver = function (trackOrKind, init) {
     if (typeof trackOrKind !== 'string') window.__sent.push({ how: 'addTransceiver', kind: trackOrKind.kind, label: trackOrKind.label });
@@ -153,6 +169,18 @@ function recordTracks() {
 /** Where the camera's own track went, on this page load: the senders and the <video>s on the page that were given it. */
 const cameraWent = (p, label) =>
   p.evaluate((label) => ({ sent: window.__sent.filter((s) => s.kind === 'video' && s.label === label), shown: window.__shown.filter((s) => s.connected && s.label === label), senders: window.__sent.filter((s) => s.kind === 'video').length }), label);
+
+/** The steps the two loading things went through since the last ask, each in order (`file`, `model`, `reader`, `gone`): `{ card, preview }`. */
+const loadingSeen = (p) =>
+  p.evaluate(() => {
+    const seen = window.__loading.splice(0);
+    const of = (what) => seen.filter((l) => l.startsWith(`${what}:`)).map((l) => l.split(':')[1]);
+    return { card: of('card'), preview: of('preview') };
+  });
+/** They were shown, in the order a load goes, and are not shown any more. The reader's step is there only when the reader is slower than the model. */
+const wentThrough = (steps) => ['file,model,gone', 'file,model,reader,gone'].includes(steps.join());
+/** A demo model's file as the page asks for it: `/api/models/<id>`, with or without a `?v=`, and not its thumbnail. */
+const isFileOf = (id) => (r) => new URL(r.url).pathname === `/api/models/${id}`;
 
 /** A glb's bytes around `json`: the 12 byte header, then the json chunk, padded to four. */
 function glb(json) {
@@ -183,8 +211,14 @@ function glb(json) {
   const pub = await pubContext.newPage();
   const w = await (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();
 
-  /** The api's list of demo models, as step one read it. */
+  /** The api's list of demo models, as step one read it, smallest first. */
   let demos = [];
+  /**
+   * The demo model the publisher wears: the second smallest, when there is more than one. The
+   * smallest of the repo's own (orion) is the file the test also picks from the computer, and a
+   * model with no face to move: the next one up has brows and a smile, and so the switch for them.
+   */
+  let wear = null;
   /** The camera's track as the page first had it: what must never be sent or shown while a model is on. */
   let camera = null;
   /** No webgl in this browser on this machine: nothing can draw a model, and the steps that need one say so. */
@@ -223,6 +257,7 @@ function glb(json) {
       expect(gone.status() === 404, `GET ${url} is ${gone.status()}, not 404`);
     }
     demos = [...list].sort((a, b) => a.bytes - b.bytes);
+    wear = demos[Math.min(1, demos.length - 1)] ?? null;
     if (!demos.length) return 'none in the bucket (./scripts/models.sh puts random-media/vrms there): the shelf is empty, the rest wears a file';
     const small = demos[0];
     const file = await pubContext.request.get(`${BASE}/api/models/${small.id}?v=${small.v}`);
@@ -258,8 +293,11 @@ function glb(json) {
       return `camera "${camera.label}"; the picker says there are no demo models here`;
     }
     await pub.waitForSelector('#model-demos li', { timeout: 5000 });
-    const cards = await pub.$$eval('#model-demos button', (els) => els.map((el) => ({ id: el.id.replace('model-demo-', ''), name: el.querySelector('span span')?.textContent.trim(), picture: !!el.querySelector('img') })));
+    const cards = await pub.$$eval('#model-demos button', (els) =>
+      els.map((el) => ({ id: el.id.replace('model-demo-', ''), name: el.querySelector('span span')?.textContent.trim(), picture: !!el.querySelector('img'), kept: el.closest('li').dataset.kept }))
+    );
     expect(cards.length === demos.length && demos.every((m) => cards.some((c) => c.id === m.id && c.name === m.name && c.picture === m.thumb)), `the cards are ${JSON.stringify(cards)}`);
+    expect(cards.every((c) => c.kept === 'false'), `a new browser has a demo model downloaded already: ${JSON.stringify(cards)}`);
     await pub.waitForFunction(() => [...document.querySelectorAll('#model-demos img')].every((i) => i.complete && i.naturalWidth > 0), null, { timeout: 15000 });
     return `camera "${camera.label}"; ${cards.length} cards, their thumbnails drawn`;
   });
@@ -281,21 +319,43 @@ function glb(json) {
   });
 
   await step(
-    'a model is picked: its picture takes the camera\'s place in the preview, 1280 wide, on the colour behind it',
+    'a model is picked: its card and the preview say how far along it is, then its picture takes the camera\'s place, 1280 wide, on the colour behind it',
     drawn(async () => {
-      if (demos.length) await pub.click(`#model-demo-${demos[0].id}`);
+      await loadingSeen(pub);
+      if (wear) await pub.click(`#model-demo-${wear.id}`);
       else await pub.setInputFiles('#model-file', OWN_FILE);
       await waitWorn();
+      const { card, preview: over } = await loadingSeen(pub);
+      expect(wentThrough(over), `over the preview the loading went ${over.join(' > ') || 'unseen'}`);
+      // a demo model has its card from the start; a file from the computer gets one only once it is kept
+      if (wear) expect(wentThrough(card), `on its card the loading went ${card.join(' > ') || 'unseen'}`);
       await pub.waitForFunction((id) => document.querySelector('#preview')?.srcObject?.getVideoTracks()[0]?.id !== id && document.querySelector('#preview').videoWidth === 1280, camera.id, { timeout: 15000 });
       const now = await trackOf(pub, '#preview');
       expect(now.label !== camera.label, `the preview still plays the camera ("${now.label}")`);
       const px = await waitPicture(pub, '#preview', DARK);
       const name = (await pub.textContent('#model-name')).trim();
-      expect(name === (demos.length ? demos[0].name : 'Orion'), `the model is called "${name}"`);
+      expect(name === (wear ? wear.name : 'Orion'), `the model is called "${name}"`);
       await waitStatus(pub, /^model ready$/);
       const kept = JSON.parse(await pub.evaluate(() => localStorage.getItem('settings.model')));
       expect(kept && kept.name === name, `kept for next time: ${JSON.stringify(kept)}`);
-      return `${name} · ${fmtPx(px)} · ${await framesFlow(pub, '#preview')}`;
+      return `loading ${over.join(' > ')} · ${name} · ${fmtPx(px)} · ${await framesFlow(pub, '#preview')}`;
+    })
+  );
+
+  await step(
+    'the page says what of this model a face moves, and has the expressions switch only where there are brows or a smile to move',
+    drawn(async () => {
+      const rig = await pub.$eval('#model-rig', (el) => ({ kind: el.dataset.kind, parts: el.dataset.parts.split(' ').filter(Boolean), words: el.textContent.trim() }));
+      expect(['arkit', 'shapes', 'presets', 'none'].includes(rig.kind) && rig.words !== '', `the model's face is ${JSON.stringify(rig)}`);
+      expect((await pub.getAttribute('#face-status', 'data-rig')) === rig.kind, 'the face status names another kind of face');
+      const moods = rig.parts.includes('brows') || rig.parts.includes('smile');
+      expect(((await pub.$('#face-expressions')) !== null) === moods, `the expressions switch is ${moods ? 'missing' : 'there with nothing to switch'}: ${JSON.stringify(rig)}`);
+      if (!moods) return `${rig.kind}: "${rig.words}", no switch`;
+      await pub.uncheck('#face-expressions');
+      expect((await pub.evaluate(() => localStorage.getItem('settings.faceExpressions'))) === 'false', 'the switch is not kept');
+      await pub.check('#face-expressions');
+      expect((await pub.evaluate(() => localStorage.getItem('settings.faceExpressions'))) === 'true', 'the switch is not kept');
+      return `${rig.kind}: "${rig.words}", the switch off and on again`;
     })
   );
 
@@ -317,6 +377,31 @@ function glb(json) {
       if (FACE_CLIP) expect(seen.size >= 3, `the head did not move in 6 s: ${[...seen].join(' ')}`);
       else expect(last.face === 'lost' && last.yaw === 0 && last.mouth === 0, `with no face the reader says ${JSON.stringify(last)}`);
       return `"${last.words}" · drawn ${last.fps}/s, read ${last.reads}/s${FACE_CLIP ? ` · ${seen.size} head poses in 6 s, the mouth up to ${mouth}%` : ''}`;
+    })
+  );
+
+  await step(
+    'a demo model is downloaded once: the picker says so, and a reload opens it out of this browser, with the server asked for nothing',
+    drawn(async () => {
+      if (!wear) return { skip: 'no demo models in the bucket' };
+      const worn = wear;
+      const asks = () => asked.filter(isFileOf(worn.id)).length;
+      // one by the page for the pick (step one's own check of the file was the test's, not the page's)
+      const before = asks();
+      await openPicker();
+      await pub.waitForFunction((id) => document.querySelector(`#model-demo-${id}`)?.closest('li').dataset.kept === 'true', worn.id, { timeout: 10000 });
+      const line = await pub.$eval(`#model-demo-${worn.id}`, (el) => el.querySelector(':scope > span:last-child > span:last-child').textContent);
+      expect(/downloaded$/.test(line), `its card says "${line}"`);
+      await closePicker();
+      await pub.reload({ waitUntil: 'domcontentloaded' });
+      await pub.waitForSelector('#model-controls', { timeout: 90000 });
+      await waitStatus(pub, /^model ready$/);
+      expect((await pub.textContent('#model-name')).trim() === worn.name, `the model is called "${await pub.textContent('#model-name')}"`);
+      expect(asks() === before, `the page asked the server for the file ${asks() - before} more time(s)`);
+      const { preview: over } = await loadingSeen(pub);
+      expect(wentThrough(over), `over the preview the loading went ${over.join(' > ') || 'unseen'}`);
+      await waitPicture(pub, '#preview', DARK);
+      return `"${line}" · after the reload: loading ${over.join(' > ')}, ${asks() - before} requests for the file`;
     })
   );
 
@@ -352,7 +437,11 @@ function glb(json) {
       const kept = await pub.evaluate(() => ({ colour: localStorage.getItem('settings.modelBackground'), mirror: localStorage.getItem('settings.faceMirror') }));
       expect(kept.colour === JSON.stringify('#ff00ff') && kept.mirror === 'false', `kept: ${JSON.stringify(kept)}`);
       await pub.check('#face-mirror');
-      expect((await pub.$('#model-controls')) !== null && (await face(pub)).fps >= 15, 'the model stopped');
+      expect((await pub.$('#model-controls')) !== null, 'the model went');
+      // the worker says how it is doing twice a second, and this model has only just gone on
+      await pub.waitForFunction(() => Number(document.querySelector('#face-status')?.dataset.fps) >= 15, null, { timeout: 5000 }).catch(() => {
+        throw new Error('the model is not being drawn');
+      });
       return fmtPx(px);
     })
   );
@@ -458,6 +547,8 @@ function glb(json) {
       await pub.reload({ waitUntil: 'domcontentloaded' });
       await pub.waitForSelector('#model-controls', { timeout: 90000 });
       await waitStatus(pub, /^model ready$/);
+      const { preview: over } = await loadingSeen(pub);
+      expect(wentThrough(over), `over the preview the loading went ${over.join(' > ') || 'unseen'}`);
       const px = await waitPicture(pub, '#preview', MAGENTA);
       const went = await cameraWent(pub, camera.label);
       expect(went.shown.length === 0, `a <video> on the page was given the camera's track: ${JSON.stringify(went.shown)}`);
