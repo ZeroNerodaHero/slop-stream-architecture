@@ -317,6 +317,28 @@ async fn send(
 }
 
 impl Store {
+    /// A bucket at `endpoint` (a stand-in on this machine), for a test that needs one.
+    #[cfg(test)]
+    pub(crate) fn for_test(endpoint: &str) -> Store {
+        Store {
+            http: reqwest::Client::new(),
+            endpoint: endpoint.to_owned(),
+            bucket: "stream".into(),
+            region: "us-east-1".into(),
+            access_key: "test".into(),
+            secret_key: "test".into(),
+            path_style: true,
+            local: false,
+        }
+    }
+
+    /// The same bucket with a longer wait per request. The usual 10 s is for pictures; a demo
+    /// model is tens of megabytes on its way to a bucket that may be far away (models.rs).
+    pub(crate) fn with_timeout(mut self, timeout: Duration) -> Store {
+        self.http = reqwest::Client::builder().timeout(timeout).build().expect("http client");
+        self
+    }
+
     fn target(&self, key: Option<&str>) -> Result<Target, String> {
         let (scheme, host) = split_endpoint(&self.endpoint)?;
         let key_path = match key {

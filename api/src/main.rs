@@ -27,8 +27,9 @@
 //! The tables are the files in `api/migrations`, applied in order at boot (migrate.rs).
 //!
 //! The same binary run as `api chat` is the text chat server (chat.rs),
-//! `api monitor` watches the other boxes from a box of its own (monitor.rs), and
-//! `api passwd <name>` resets a password.
+//! `api monitor` watches the other boxes from a box of its own (monitor.rs),
+//! `api passwd <name>` resets a password, and `api models <dir>` puts a folder of demo
+//! `.vrm` models into the bucket for the go live page's picker (models.rs).
 //!
 //! One route is html, not json: `GET /watch/<name>` (profile.rs), so a shared
 //! watch link gets a preview card with the name, picture, bio and live status.
@@ -49,6 +50,7 @@ mod groups;
 mod history;
 mod home;
 mod migrate;
+mod models;
 mod monitor;
 mod notify;
 mod presence;
@@ -132,6 +134,13 @@ pub(crate) struct AppState {
 impl FromRef<AppState> for PgPool {
     fn from_ref(s: &AppState) -> PgPool {
         s.db.clone()
+    }
+}
+
+/// The bucket alone, for routes that want nothing else (models.rs).
+impl FromRef<AppState> for s3::Store {
+    fn from_ref(s: &AppState) -> s3::Store {
+        s.s3.clone()
     }
 }
 
@@ -933,6 +942,7 @@ fn router(state: AppState) -> Router {
         .merge(follows::routes())
         .merge(dms::routes())
         .merge(chat_images::routes())
+        .merge(models::routes())
         .merge(notify::routes())
         .merge(presence::routes())
         .merge(debug::routes())
@@ -995,6 +1005,17 @@ async fn main() {
     // `api monitor` runs on a box of its own, with no postgres and no redis: before either is touched
     if env::args().nth(1).as_deref() == Some("monitor") {
         monitor::run().await.expect("monitor");
+        return;
+    }
+
+    // `api models <dir>`: the folder of demo models into the bucket, for the go live page's
+    // picker (models.rs; scripts/models.sh runs it). the bucket only: before postgres and redis
+    if env::args().nth(1).as_deref() == Some("models") {
+        let args: Vec<String> = env::args().skip(2).collect();
+        if let Err(e) = models::upload(&args).await {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
         return;
     }
 

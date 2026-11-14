@@ -9,6 +9,7 @@ import {
   RiEyeOffLine,
   RiFocus3Line,
   RiImageLine,
+  RiUserSmileLine,
   RiUserVoiceLine,
   RiVidiconLine
 } from '@remixicon/react';
@@ -33,6 +34,7 @@ import {
   isPublishingAtom,
   libraryAtom,
   livePanelsAtom,
+  modelAtom,
   placeImage,
   publishPhaseAtom,
   removeSource,
@@ -58,6 +60,8 @@ import type { Source } from '@/infra/scene';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { Collapsible, ICON_BUTTON } from '@/shared-components/live/Collapsible';
+import { ModelControls } from '@/shared-components/live/ModelControls';
+import { ModelDialog } from '@/shared-components/live/ModelDialog';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
@@ -77,11 +81,12 @@ function Thumb({ id, streamAtom }: { id: string; streamAtom: Atom<MediaStream | 
 
 /**
  * The `+`: a menu with what can be added, before start or live. The camera, while it is off
- * (mic only); the avatar (the streamer's picture, moving with their voice; one), a screen or
- * window (three at most), a picture, and the pictures this name put up before, offered again
- * under the upload. Escape and a press outside close it.
+ * (mic only); a model (docs/vtuber.md: a 3d model in the camera's place, moved by the
+ * streamer's face; `onModel` opens its picker); the avatar (the streamer's picture, moving with
+ * their voice; one), a screen or window (three at most), a picture, and the pictures this name
+ * put up before, offered again under the upload. Escape and a press outside close it.
  */
-function AddMenu() {
+function AddMenu({ onModel }: { onModel: () => void }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -145,6 +150,19 @@ function AddMenu() {
               <RiVidiconLine aria-hidden size={16} /> camera
             </button>
           )}
+          <button
+            id="add-model"
+            role="menuitem"
+            type="button"
+            title="a 3d model in the camera's place, moved by your face"
+            className={MENU_ITEM}
+            onClick={() => {
+              setOpen(false);
+              onModel();
+            }}
+          >
+            <RiUserSmileLine aria-hidden size={16} /> model
+          </button>
           <button
             id="add-avatar"
             role="menuitem"
@@ -247,7 +265,10 @@ function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
   const name = useAtomValue(streamNameAtom);
   const avatar = useAtomValue(myAvatarVersionAtom);
   const hasMic = useAtomValue(hasMicAtom);
-  const Icon = ICONS[source.kind];
+  // a model in the camera's place (docs/vtuber.md): the camera's row is the model's, under the model's name
+  const model = useAtomValue(modelAtom);
+  const worn = source.kind === 'camera' ? model : null;
+  const Icon = worn ? RiUserSmileLine : ICONS[source.kind];
   const fill = source.fit ? source.fit === 'cover' : source.kind === 'camera';
   // the camera's × turns it off (mic only); not without a mic, since nothing would be left to stream
   const canRemove = source.kind !== 'camera' || hasMic;
@@ -258,9 +279,11 @@ function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
         ? 'remove (the upload stays in your pictures)'
         : source.kind === 'avatar'
           ? 'remove (the + brings it back)'
-          : hasMic
-            ? 'turn the camera off: mic only, your avatar stands in'
-            : 'no mic: the camera is all there is';
+          : !hasMic
+            ? `no mic: the ${worn ? 'model' : 'camera'} is all there is`
+            : worn
+              ? 'take the model off: mic only, your avatar stands in'
+              : 'turn the camera off: mic only, your avatar stands in';
   return (
     <li className={cn(ROW, selected ? ROW_ON : ROW_OFF)}>
       <button
@@ -280,7 +303,9 @@ function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
           <Thumb id={`source-${source.id}-video`} streamAtom={streamAtom} />
         )}
         <Icon aria-hidden size={16} className="shrink-0" />
-        <span className="min-w-0 flex-1 truncate">{source.label}</span>
+        <span id={worn ? 'source-model-name' : undefined} className="min-w-0 flex-1 truncate">
+          {worn ? worn.name : source.label}
+        </span>
       </button>
       {/* the eye reports state, so it is always there; the rest comes up with the pointer or the keys */}
       <Tooltip
@@ -340,7 +365,7 @@ function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
           <button
             id={`source-remove-${source.id}`}
             type="button"
-            aria-label={source.kind === 'screen' ? 'stop sharing' : source.kind === 'camera' ? 'turn the camera off' : 'remove'}
+            aria-label={source.kind === 'screen' ? 'stop sharing' : worn ? 'take the model off' : source.kind === 'camera' ? 'turn the camera off' : 'remove'}
             disabled={!canRemove}
             onClick={() => removeSource(source.id)}
             className={cn(ICON_BUTTON, 'hover:border-decrease hover:text-decrease')}
@@ -408,13 +433,16 @@ function StartStop() {
  * of the array, the way a layers panel reads). Each row selects its layer; the eye puts it on
  * or off the stream; the arrows move it through the stack; `×` stops a share, removes a
  * picture or the avatar, turns the camera off. The `+` adds. Folded, it is a rail, with start
- * (or stop) still at its foot.
+ * (or stop) still at its foot. With a model in the camera's place (docs/vtuber.md) its face
+ * reader's words and controls sit under the list, and the picker is this panel's to open: from
+ * the `+`, and from `another model`.
  */
 export function Sources() {
   const sources = useAtomValue(sourcesAtom);
   const open = useAtomValue(livePanelsAtom).sources;
   const status = useAtomValue(sourceStatusAtom);
   const phase = useAtomValue(publishPhaseAtom);
+  const [picking, setPicking] = useState(false);
   const hasCamera = sources.some((s) => s.kind === 'camera');
   // nothing opened: the camera was refused or is missing, or the mic was (mic only, kept from last time). the way out is the other start
   const cameraRefused = phase === 'camera-blocked' || phase === 'no-camera';
@@ -425,7 +453,14 @@ export function Sources() {
       aria-label="sources"
       className={cn('shrink-0 transition-[width] duration-150 motion-reduce:transition-none', open ? 'w-full lg:w-60' : 'w-full lg:w-auto')}
     >
-      <Collapsible id="sources-panel" title="sources" open={open} onToggle={() => setLivePanel('sources', !open)} aside={<AddMenu />} footer={<StartStop />}>
+      <Collapsible
+        id="sources-panel"
+        title="sources"
+        open={open}
+        onToggle={() => setLivePanel('sources', !open)}
+        aside={<AddMenu onModel={() => setPicking(true)} />}
+        footer={<StartStop />}
+      >
         {sources.length === 0 ? (
           <div className="px-3 py-3 text-sm text-textTertiary">
             <p>{micRefused ? 'the mic shows up here once it is on' : 'the camera shows up here once it is on'}</p>
@@ -448,6 +483,7 @@ export function Sources() {
             ))}
           </ul>
         )}
+        <ModelControls onChange={() => setPicking(true)} />
         <p className="px-3 py-2 text-xs text-textTertiary">drag a layer to move it, pull a corner to resize. arrow keys nudge, shift frees the shape</p>
         {status && (
           <p id="source-status" className="px-3 pb-2 text-xs text-textSecondary" aria-live="polite">
@@ -455,6 +491,8 @@ export function Sources() {
           </p>
         )}
       </Collapsible>
+      {/* outside the panel: a folded panel has no body, and the picker is asked for from its header's + */}
+      {picking && <ModelDialog onClose={() => setPicking(false)} />}
     </aside>
   );
 }

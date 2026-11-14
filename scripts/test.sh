@@ -56,6 +56,12 @@
 #              watcher draws the same frame; a slot left off it is a tile; the mixer's mic and master bars move; a share mid-stream needs no
 #              renegotiation; a late watcher sees it all; mic only: the camera's × leaves the mic alone with the avatar for a face, a watcher
 #              gets it on the sound with nothing on video and the avatar moves with the voice on both sides, the + puts the camera back live
+#   vtuber     a 3d model as the face cam: the api lists the bucket's demo models (a name, a licence, a thumbnail; the file a glb), the + has
+#              `model` and its picker shows that shelf, a .vrm from the computer is read in the page and kept in that browser, a file that is
+#              no model (or points outside itself) is refused in words; the model's picture is the preview's and, live, the watcher's (read
+#              off the colour behind it), and the camera's own track goes to no sender and no <video> on the page: on a pick, on a reload
+#              with the model kept, and when its worker dies mid stream (mic only); `use the camera` asks first. the fake camera has no
+#              face in it (`no face in view`); FACE_CLIP=<a face .mjpeg or .y4m> feeds it one, and then the reader's numbers must move
 #   presence   a tab open is online over the events socket, do not disturb and appear offline reach a watcher pushed, live is streaming and
 #              the watcher plays on the push (no poll, no player flashing on an offline name), two tabs share one socket and the last
 #              closing is offline at once, a claimed name is refused, the inspector shows the frames
@@ -163,6 +169,7 @@ run errors
 run pip
 run live-pip
 run screen
+run vtuber
 run presence
 run calendar
 run about

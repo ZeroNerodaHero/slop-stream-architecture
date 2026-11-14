@@ -181,6 +181,27 @@ export function nameMatches(name: string, q: string): boolean {
   return q.length < SEARCH_ANYWHERE_FROM ? name.startsWith(q) : name.includes(q);
 }
 
+/**
+ * One of the site's demo models (docs/vtuber.md), as `GET /api/models` lists them: a .vrm in the
+ * bucket anyone may wear on the go live page. The name, the author and the licence are the
+ * file's own words about itself.
+ */
+export interface DemoModel {
+  /** The url: a-z 0-9 - _. */
+  id: string;
+  name: string;
+  /** Empty when the file does not say. */
+  author: string;
+  licence: string;
+  /** `0` (vrm 0.x) or `1` (vrm 1.0). */
+  vrm: string;
+  bytes: number;
+  /** The `?v=` of its urls. */
+  v: string;
+  /** It has a thumbnail (`demoModelThumbUrl`). */
+  thumb: boolean;
+}
+
 /** A group as worn on a chat line: enough to draw the badge. */
 export interface GroupBadge {
   name: string;
@@ -682,6 +703,11 @@ export const api = {
   listAssets: (name: string) => request<{ assets: { id: number; mime: string; bytes: number }[] }>('GET', `/api/streamers/${name}/assets`),
   /** An id is never reused and the bytes never change, so this url caches for good. */
   assetUrl: (name: string, id: number) => `/api/streamers/${encodeURIComponent(name)}/assets/${id}`,
+  /** The site's demo models (docs/vtuber.md), for the go live page's picker. An api from before them answers 404: no demo models, which is nothing to say. */
+  demoModels: () => request<{ models: DemoModel[] }>('GET', '/api/models'),
+  /** `v` is the start of the file's hash, so the bytes behind one url never change and it caches for good. */
+  demoModelUrl: (model: Pick<DemoModel, 'id' | 'v'>) => `/api/models/${encodeURIComponent(model.id)}?v=${encodeURIComponent(model.v)}`,
+  demoModelThumbUrl: (model: Pick<DemoModel, 'id' | 'v'>) => `/api/models/${encodeURIComponent(model.id)}/thumb?v=${encodeURIComponent(model.v)}`,
   /** The jpeg itself as the body. The page has already made it 1920x1080 and under 1 mb. */
   saveOffline: (name: string, jpeg: Blob) => request<{ name: string; offline: number }>('PUT', `/api/streamers/${name}/offline`, jpeg),
   deleteOffline: (name: string) => request<null>('DELETE', `/api/streamers/${name}/offline`),

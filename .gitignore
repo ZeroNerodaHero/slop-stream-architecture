@@ -9,6 +9,8 @@ frontend/dist/
 .deployed
 # the data migrations (scripts/migrate-scripts/) that have run on this machine, by scripts/migrate.sh
 .migrated
+# what random-media/vrms held when scripts/models.sh last put it in the bucket here
+.models
 
 # seed.sh: the names and passwords it made (local only)
 .seeded-users

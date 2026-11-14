@@ -7,15 +7,17 @@
 import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
-import { ApiError, api, type Owner, messageOf, statusOf } from '@/infra/api';
+import { ApiError, api, type DemoModel, type Owner, messageOf, statusOf } from '@/infra/api';
 import { loadMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { endWatch, pipAtom } from '@/infra/atoms/watch-atoms';
+import { type FaceState, type ModelSession, type ModelStats, startModel } from '@/infra/face';
 import { type Mixer, openMixer } from '@/infra/mixer';
+import { forgetKept, keepModel, type KeptModel, keptFile, listKept } from '@/infra/model-store';
 import { cleanName, isValidName } from '@/infra/names';
-import { SCENE_PICTURE, THUMB_PICTURE } from '@/infra/picture';
+import { centredRect, cutPicture, SCENE_PICTURE, THUMB_PICTURE } from '@/infra/picture';
 import { type Box, connectRelay, type Fit, isVideoLayer, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
 import {
@@ -40,6 +42,7 @@ import {
 } from '@/infra/scene';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
+import { readVrm } from '@/infra/vrm';
 import type { Tone } from '@/shared-components/StatusLine';
 
 /** `mic-ready`, `mic-blocked` and `no-mic` are the mic-only start's (docs/screen.md): the mic alone, with the avatar for a face. */
@@ -199,6 +202,61 @@ const storedMixAtom = atomWithStorage<unknown>('settings.mixer', null, undefined
 export const mixerOpenAtom = atom(false);
 /** The mixer is sending. False while its context is suspended (made outside a click, interrupted): the stream is silent then, and a click resumes it. */
 export const mixerRunningAtom = atom(true);
+
+// ---- the model (docs/vtuber.md): a .vrm in the camera's place, moved by the streamer's face -------
+
+/** Which model: one of the site's demo models (the bucket's, by id), or one this browser keeps (the streamer's own file, by its id in `model-store.ts`; under 0 it could not be kept and is this visit's only). */
+export type ModelChoice = { kind: 'demo'; id: string; v: string; name: string } | { kind: 'kept'; id: number; name: string };
+/** The model whose picture is in the camera's slot. `null`: the camera's own picture, or none. */
+export const modelAtom = atom<ModelChoice | null>(null);
+/** A model is being fetched, read and drawn for the first time. One at a time. */
+export const modelLoadingAtom = atom(false);
+/** The picker's one line of words: why a file was refused. '' for nothing to say. */
+export const modelStatusAtom = atom('');
+/**
+ * The face reader, as the streamer is told. `idle` with no model on. `no-camera` and
+ * `camera-blocked`: there is nothing to read a face from, and the model breathes and blinks on
+ * its own. The rest are the reader's own (`FaceState`).
+ */
+export type FaceReading = FaceState | 'idle' | 'no-camera' | 'camera-blocked';
+export const faceAtom = atom<FaceReading>('idle');
+/** How the model is doing, twice a second: frames drawn, faces read, where the head is asked to turn. Null with no model on. */
+export const faceStatsAtom = atom<ModelStats | null>(null);
+/** The cameras a face can be read from. The browser names them once one has been allowed. */
+export const faceCamerasAtom = atom<{ id: string; label: string }[]>([]);
+/** The site's demo models, as the api lists them. Empty until asked, and on an api from before them. */
+export const demoModelsAtom = atom<DemoModel[]>([]);
+/** The models this browser keeps, newest first. */
+export const keptModelsAtom = atom<KeptModel[]>([]);
+/** Behind the model when the streamer has picked no colour: the dark theme's panel. */
+const MODEL_BACKGROUND = '#181b22';
+/** The model worn last: the next visit opens it and never puts the camera's own picture in the preview. Cleared by the camera's ×, by the real camera, and by a file that is gone. */
+const storedModelAtom = atomWithStorage<unknown>('settings.model', null, undefined, { getOnInit: true });
+const storedFaceCameraAtom = atomWithStorage<unknown>('settings.faceCamera', '', undefined, { getOnInit: true });
+const storedFaceMirrorAtom = atomWithStorage<unknown>('settings.faceMirror', true, undefined, { getOnInit: true });
+const storedModelBackgroundAtom = atomWithStorage<unknown>('settings.modelBackground', MODEL_BACKGROUND, undefined, { getOnInit: true });
+/** The camera picked to read the face from, by the browser's id for it. '': the browser's own choice. */
+export const faceCameraAtom = atom((get) => {
+  const id = get(storedFaceCameraAtom);
+  return typeof id === 'string' ? id : '';
+});
+/** The model moves like a mirror: on unless turned off. */
+export const faceMirrorAtom = atom((get) => get(storedFaceMirrorAtom) !== false);
+/** The flat colour behind the model, `#rrggbb`. */
+export const modelBackgroundAtom = atom((get) => {
+  const colour = get(storedModelBackgroundAtom);
+  return typeof colour === 'string' && /^#[0-9a-f]{6}$/i.test(colour) ? colour : MODEL_BACKGROUND;
+});
+/** A `ModelChoice` from anything (localstorage), or `null`. One that could not be kept is not one to come back to. */
+function validModelChoice(raw: unknown): ModelChoice | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const c = raw as Record<string, unknown>;
+  if (typeof c.name !== 'string') return null;
+  if (c.kind === 'demo' && typeof c.id === 'string' && /^[a-z0-9_-]{1,48}$/.test(c.id) && typeof c.v === 'string')
+    return { kind: 'demo', id: c.id, v: c.v, name: c.name };
+  if (c.kind === 'kept' && typeof c.id === 'number' && Number.isInteger(c.id) && c.id >= 0) return { kind: 'kept', id: c.id, name: c.name };
+  return null;
+}
 export const publishPhaseAtom = atom<PublishPhase>('camera-off');
 /** The upload, sampled from the peer once a second while a publish is up. Null once it stops. */
 export const publishStatsAtom = atom<StreamStats | null>(null);
@@ -257,6 +315,15 @@ let cameraSender: RTCRtpSender | null = null;
 let screenSenders: RTCRtpSender[] = [];
 /** The mix, from the start click to the end of the camera (`endLive`); a stop in between keeps it, with the mic in it. */
 let mixer: Mixer | null = null;
+/** The model on the camera's slot: its worker, and the track whose picture it is (`cameraAtom`'s video track while it is on). */
+let modelSession: ModelSession | null = null;
+/**
+ * The camera the face is read from while a model is on. Handed to the face reader and to
+ * nothing else: never in `cameraAtom`, never in a sender. Its picture does not leave the page.
+ */
+let faceCamera: MediaStreamTrack | null = null;
+/** Bumped whenever the model changes or goes: a word from an older model's worker is nobody's. */
+let modelToken = 0;
 /** The camera's cap right now, for the stats badge. */
 let cameraCap = VIDEO_MAX_BITRATE;
 /** Pictures added this visit, for their ids. */
@@ -328,9 +395,15 @@ export async function enterLivePage(): Promise<void> {
   await commitStreamName();
 }
 
-/** The page's arrival: the camera and the mic, or, kept from last time (`settings.micOnly`), the mic alone. */
+/**
+ * The page's arrival: the camera and the mic; or, kept from last time, the mic alone
+ * (`settings.micOnly`) or a model (`settings.model`), whose camera goes to the face reader and
+ * whose own picture is never in the preview.
+ */
 export async function startCamera(): Promise<void> {
   if (store.get(cameraAtom)) return;
+  const kept = validModelChoice(store.get(storedModelAtom));
+  if (kept) return startWithModel(kept);
   if (store.get(micOnlyAtom)) return startMic();
   // the permission prompt can outlive the page. an answer that comes after leaving is not ours to keep.
   const generation = liveGeneration;
@@ -395,10 +468,15 @@ export async function startMic(): Promise<void> {
  * there is none, back on the stream if it was off), filling the frame when it is all there is.
  * Live, the camera's section goes quiet (`replaceTrack(null)`) and the watchers are told slot 0
  * is not live. Kept for the next visit. Not without a mic: nothing would be left to stream.
+ * A model in the camera's place goes the same way, and its face reader's camera with it.
  */
 export function cameraOff() {
   const camera = store.get(cameraAtom);
   if (!camera || !store.get(hasCameraAtom) || !store.get(hasMicAtom)) return;
+  if (modelSession) {
+    dropModel();
+    store.set(storedModelAtom, null);
+  }
   camera.getVideoTracks().forEach((track) => track.stop());
   store.set(cameraAtom, new MediaStream(camera.getAudioTracks()));
   cameraSender?.replaceTrack(null).catch(() => undefined);
@@ -421,6 +499,8 @@ export async function cameraOn(): Promise<void> {
   const had = store.get(cameraAtom);
   if (store.get(hasCameraAtom)) return;
   store.set(storedMicOnlyAtom, false);
+  // the camera was asked for by name: a model kept from an earlier visit is not what starts
+  store.set(storedModelAtom, null);
   if (!had) return startCamera();
   const generation = liveGeneration;
   let picture: MediaStream;
@@ -477,6 +557,439 @@ function ensureAvatarSource() {
 export function addAvatar() {
   ensureAvatarSource();
   store.set(selectedSourceAtom, AVATAR_ID);
+}
+
+// ---- the model's actions (docs/vtuber.md) --------------------------------------------------------
+
+/** A file that is not where it was said to be: the choice that named it is forgotten. Anything else (the server not answering) may be there next time. */
+class ModelGone extends Error {}
+
+/** What the reader's camera is asked for: small and steady. The reader looks at 256 pixels of face; the rest of a big frame is work for nothing. */
+const faceVideo = (deviceId: string): MediaTrackConstraints => ({
+  width: { ideal: 640 },
+  height: { ideal: 480 },
+  frameRate: { ideal: 30 },
+  ...(deviceId && { deviceId: { exact: deviceId } })
+});
+
+/**
+ * A camera for the face reader: the one picked, else the browser's own choice. `null`, with
+ * the reason in `faceAtom`, when there is none to have.
+ */
+async function openFaceCamera(): Promise<MediaStreamTrack | null> {
+  const picked = store.get(faceCameraAtom);
+  for (const deviceId of picked ? [picked, ''] : ['']) {
+    try {
+      return (await navigator.mediaDevices.getUserMedia({ video: faceVideo(deviceId) })).getVideoTracks()[0] ?? null;
+    } catch (err) {
+      const name = err instanceof DOMException ? err.name : '';
+      // the camera picked on an earlier visit is not plugged in today: the browser's choice instead
+      if (deviceId && (name === 'OverconstrainedError' || name === 'NotFoundError')) continue;
+      store.set(faceAtom, name === 'NotAllowedError' ? 'camera-blocked' : 'no-camera');
+      return null;
+    }
+  }
+  store.set(faceAtom, 'no-camera');
+  return null;
+}
+
+/** The cameras by name, for the picker. The browser gives the names only after a camera was allowed. */
+async function refreshFaceCameras() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    store.set(
+      faceCamerasAtom,
+      devices.filter((d) => d.kind === 'videoinput' && d.deviceId).map((d, i) => ({ id: d.deviceId, label: d.label || `camera ${i + 1}` }))
+    );
+  } catch {
+    // the list stays as it was
+  }
+}
+
+/** The bytes of a model that was picked before: out of this browser, or from the bucket. Throws words. */
+async function modelFile(choice: ModelChoice): Promise<ArrayBuffer> {
+  if (choice.kind === 'kept') {
+    const file = await keptFile(choice.id);
+    if (!file) throw new ModelGone('that model is not kept in this browser any more. pick the file again');
+    return file;
+  }
+  let res: Response;
+  try {
+    res = await fetch(api.demoModelUrl(choice));
+  } catch {
+    throw new Error('could not reach the server for that model');
+  }
+  if (res.status === 404) throw new ModelGone('that demo model is gone. pick another');
+  if (!res.ok) throw new Error(`could not load that model (http ${res.status})`);
+  return res.arrayBuffer();
+}
+
+/**
+ * The model and its face reader go: the track with its picture ends, the worker closes, and
+ * the camera the face was read from is let go (the light goes off). What the stream shows
+ * instead is the caller's to settle.
+ */
+function dropModel() {
+  modelToken++;
+  modelSession?.stop();
+  modelSession = null;
+  faceCamera?.stop();
+  faceCamera = null;
+  store.set(modelAtom, null);
+  store.set(faceAtom, 'idle');
+  store.set(faceStatsAtom, null);
+}
+
+/**
+ * A model that broke while it was on (the drawing was lost, its worker died). Never the
+ * camera: what is left is the mic and the picture avatar, the way the camera's × leaves it,
+ * and kept that way so the next visit does not open the camera's own picture unasked. With no
+ * mic there is nothing left to stream, and a stream that is up ends.
+ */
+function modelStopped(why: string) {
+  if (store.get(hasMicAtom)) {
+    cameraOff();
+  } else {
+    const had = store.get(cameraAtom);
+    dropModel();
+    store.set(storedModelAtom, null);
+    store.set(storedMicOnlyAtom, true);
+    had?.getTracks().forEach((track) => track.stop());
+    store.set(cameraAtom, null);
+    dropSource('cam');
+    if (store.get(isPublishingAtom)) stopLive('the model stopped, and there is no mic', 'failed', { report: false });
+    else setPhase('no-mic', 'no mic');
+  }
+  store.set(sourceStatusAtom, `the model stopped: ${why}`);
+}
+
+/**
+ * `file` on the stream as `choice`: read, drawn in its worker, and its track put where the
+ * camera's picture goes (the stream's own stream and, live, the camera's section, with
+ * `replaceTrack`: nothing renegotiated). `cameraOn` with a different track, and the same
+ * layout: the camera source by the rules, the picture avatar off the stream.
+ *
+ * The face is read from the camera that is on, when one is (it leaves the stream for the
+ * reader and is not opened twice); from the one the last model had; else from one opened for
+ * it. With none to have the model still goes on, and breathes and blinks on its own.
+ *
+ * False, with the reason in `modelStatusAtom`, when the file cannot be made a model of:
+ * whatever the picture was before stays as it is. `opened`: the mic and the reader's camera
+ * of a start with nothing open yet (`openForModel`). They are the caller's until this says
+ * true, and no other camera is asked for, not even when that one is `null`.
+ */
+async function putModelOn(choice: ModelChoice, file: ArrayBuffer, opened: OpenedForModel | null = null): Promise<boolean> {
+  const generation = liveGeneration;
+  try {
+    readVrm(file);
+  } catch (err) {
+    store.set(modelStatusAtom, messageOf(err));
+    return false;
+  }
+  const before = store.get(cameraAtom);
+  const old = modelSession;
+  const faceWas = store.get(faceAtom);
+  const live = (track: MediaStreamTrack | null | undefined) => (track && track.readyState === 'live' ? track : null);
+  // the real camera's own track, while no model is on yet: it is what the reader gets
+  const own = old ? null : live(before?.getVideoTracks()[0]);
+  const camera = opened ? live(opened.camera) : (live(faceCamera) ?? own ?? (await openFaceCamera()));
+  // a camera this call opened is this call's to let go when the model does not come
+  const ours = !opened && camera !== null && camera !== faceCamera && camera !== own;
+  const token = ++modelToken;
+  const mine = () => token === modelToken;
+  if (camera) store.set(faceAtom, 'starting');
+  else if (store.get(faceAtom) === 'idle') store.set(faceAtom, 'no-camera');
+
+  let session: ModelSession;
+  try {
+    session = await startModel({
+      model: file,
+      camera,
+      mirror: store.get(faceMirrorAtom),
+      background: store.get(modelBackgroundAtom),
+      // with no camera the reader has nothing to say and the word stays `no camera`, until the picker gives it one
+      onState: (face) => mine() && (camera || faceCamera) && store.set(faceAtom, face),
+      onStats: (stats) => mine() && store.set(faceStatsAtom, stats),
+      onFailed: (why) => mine() && modelStopped(why)
+    });
+  } catch (err) {
+    if (ours) camera.stop();
+    if (mine()) {
+      store.set(modelStatusAtom, messageOf(err));
+      // whatever was on is still on, and its reader says what it said
+      store.set(faceAtom, faceWas);
+    }
+    return false;
+  }
+  // the page was left, or the picture changed under it (the camera's ×, another pick), while the model was loading
+  const stale = () => generation !== liveGeneration || !mine() || store.get(cameraAtom) !== before;
+  const giveUp = () => {
+    session.stop();
+    if (ours) camera.stop();
+    if (mine()) store.set(faceAtom, faceWas);
+    return false;
+  };
+  if (stale()) return giveUp();
+  session.track.contentHint = 'motion';
+  // live: the camera's section carries the model from here. before the stream's own stream changes, so nothing of the camera follows it out
+  if (cameraSender) await cameraSender.replaceTrack(session.track).catch(() => undefined);
+  if (stale()) return giveUp();
+  const sound = before?.getAudioTracks() ?? opened?.mic?.getAudioTracks() ?? [];
+  store.set(cameraAtom, new MediaStream([...sound, session.track]));
+  // the old model's picture ends; the real camera's track, if that is what was on, lives on as the reader's
+  old?.stop();
+  modelSession = session;
+  faceCamera = camera;
+  store.set(modelAtom, choice);
+  store.set(storedModelAtom, choice.kind === 'kept' && choice.id < 0 ? null : choice);
+  store.set(storedMicOnlyAtom, false);
+  store.set(modelStatusAtom, '');
+  store.set(sourceStatusAtom, '');
+  setSources(store.get(sourcesAtom).map((s) => (s.kind === 'avatar' ? { ...s, shown: false } : s)));
+  ensureCameraSource();
+  if (!store.get(isPublishingAtom)) setPhase('camera-ready', sound.length ? 'model ready' : 'model ready, no mic');
+  slotsChanged();
+  void refreshFaceCameras();
+  return true;
+}
+
+/** What a model that starts with nothing open is given: the sound, and a camera for its reader. Either can be missing. */
+interface OpenedForModel {
+  mic: MediaStream | null;
+  camera: MediaStreamTrack | null;
+}
+
+/**
+ * The mic and the reader's camera, asked for together (one prompt). The pair refused, or the
+ * camera picked last time gone: each on its own, so the other still comes. No camera leaves
+ * the reason in `faceAtom`.
+ */
+async function openForModel(): Promise<OpenedForModel> {
+  try {
+    const both = await navigator.mediaDevices.getUserMedia({ video: faceVideo(store.get(faceCameraAtom)), audio: true });
+    return { mic: new MediaStream(both.getAudioTracks()), camera: both.getVideoTracks()[0] ?? null };
+  } catch {
+    const mic = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => null);
+    return { mic, camera: await openFaceCamera() };
+  }
+}
+
+/** What `openForModel` opened and no model took: the camera's light goes off, the mic closes. */
+function letGoOf(opened: OpenedForModel) {
+  opened.camera?.stop();
+  opened.mic?.getTracks().forEach((track) => track.stop());
+}
+
+/**
+ * The page's arrival with a model kept from last time: the mic and the reader's camera are
+ * asked for together (one prompt), the camera's track goes to the reader, and what goes into
+ * the stream's own stream is the mic and the model. The camera's own picture is never in the
+ * preview, not for a frame. A model that cannot be had (the file is gone, it will not load)
+ * leaves the mic alone with the picture avatar, kept that way.
+ */
+async function startWithModel(choice: ModelChoice): Promise<void> {
+  const generation = liveGeneration;
+  store.set(modelLoadingAtom, true);
+  store.set(publishMessageAtom, 'getting your model');
+  const [file, opened] = await Promise.all([modelFile(choice).catch((err: unknown) => (err instanceof Error ? err : new Error(String(err)))), openForModel()]);
+  // the page was left, or something else was opened (the +'s camera), while this was on its way: what was opened here is nobody's
+  const overtaken = () => generation !== liveGeneration || store.get(cameraAtom) !== null;
+  const abandon = () => {
+    letGoOf(opened);
+    if (generation !== liveGeneration) return;
+    store.set(modelLoadingAtom, false);
+    if (!modelSession) store.set(faceAtom, 'idle');
+  };
+  if (overtaken()) return abandon();
+  const on = !(file instanceof Error) && (await putModelOn(choice, file, opened));
+  if (on) {
+    store.set(modelLoadingAtom, false);
+    return;
+  }
+  if (overtaken()) return abandon();
+  // no model: the mic alone, the way mic only starts, and no camera's picture
+  const why = file instanceof Error ? file.message : store.get(modelStatusAtom);
+  opened.camera?.stop();
+  store.set(modelLoadingAtom, false);
+  store.set(faceAtom, 'idle');
+  if (file instanceof ModelGone) store.set(storedModelAtom, null);
+  store.set(modelStatusAtom, '');
+  if (!opened.mic || opened.mic.getAudioTracks().length === 0) {
+    setPhase('no-mic', 'no mic');
+  } else {
+    store.set(storedMicOnlyAtom, true);
+    store.set(cameraAtom, opened.mic);
+    ensureAvatarSource();
+    setPhase('mic-ready', 'mic ready');
+  }
+  store.set(sourceStatusAtom, `no model: ${why}`);
+}
+
+/** A small square jpeg of a model's own thumbnail, for the picker's shelf of kept models. */
+async function smallThumb(picture: Blob): Promise<Blob | null> {
+  try {
+    const bitmap = await createImageBitmap(picture);
+    try {
+      return await cutPicture(bitmap, centredRect(bitmap.width, bitmap.height, 1), 128, 128, 'image/jpeg', 0.8);
+    } finally {
+      bitmap.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One pick at a time: fetched (or read), then put on. The picker shows `modelLoadingAtom` and
+ * `modelStatusAtom`. With nothing open yet (the camera was refused, or there is none), the mic
+ * and a camera for the reader are asked for here, after the file is known to be a model: so a
+ * model picked there has a voice, and one that will not load leaves nothing open behind it.
+ */
+async function pickModel(choice: () => Promise<{ choice: ModelChoice; file: ArrayBuffer }>): Promise<boolean> {
+  if (store.get(modelLoadingAtom)) return false;
+  const generation = liveGeneration;
+  store.set(modelLoadingAtom, true);
+  store.set(modelStatusAtom, '');
+  try {
+    const picked = await choice();
+    if (generation !== liveGeneration) return false;
+    if (store.get(cameraAtom)) return await putModelOn(picked.choice, picked.file);
+    readVrm(picked.file);
+    const opened = await openForModel();
+    const on = generation === liveGeneration && store.get(cameraAtom) === null && (await putModelOn(picked.choice, picked.file, opened));
+    if (!on) {
+      letGoOf(opened);
+      if (generation === liveGeneration && !modelSession) store.set(faceAtom, 'idle');
+    }
+    return on;
+  } catch (err) {
+    if (generation === liveGeneration) store.set(modelStatusAtom, messageOf(err));
+    return false;
+  } finally {
+    if (generation === liveGeneration) store.set(modelLoadingAtom, false);
+  }
+}
+
+/** The picker opened: the site's demo models and the ones this browser keeps. An api from before the demo models has none, which is nothing to say. */
+export async function loadModelLibrary(): Promise<void> {
+  void listKept().then((kept) => store.set(keptModelsAtom, kept));
+  try {
+    store.set(demoModelsAtom, (await api.demoModels()).models ?? []);
+  } catch {
+    store.set(demoModelsAtom, []);
+  }
+}
+
+/** One of the site's demo models, from the bucket. */
+export function pickDemoModel(model: DemoModel): Promise<boolean> {
+  const choice: ModelChoice = { kind: 'demo', id: model.id, v: model.v, name: model.name };
+  return pickModel(async () => ({ choice, file: await modelFile(choice) }));
+}
+
+/** One this browser keeps. */
+export function pickKeptModel(model: KeptModel): Promise<boolean> {
+  const choice: ModelChoice = { kind: 'kept', id: model.id, name: model.name };
+  return pickModel(async () => ({ choice, file: await modelFile(choice) }));
+}
+
+/**
+ * The streamer's own file. It is read here, kept in this browser for next time (a browser that
+ * cannot keep it still wears it for the visit), and goes nowhere else: nothing is put up.
+ */
+export function pickModelFile(picked: File): Promise<boolean> {
+  return pickModel(async () => {
+    const file = await picked.arrayBuffer();
+    const info = readVrm(file);
+    const name = info.name || picked.name.replace(/\.[^.]+$/, '') || 'model';
+    const kept = await keepModel(picked, { name, author: info.author }, info.thumbnail ? await smallThumb(info.thumbnail) : null);
+    if (kept) store.set(keptModelsAtom, await listKept());
+    return { choice: { kind: 'kept', id: kept?.id ?? -1, name }, file };
+  });
+}
+
+/** The shelf's ×: the file goes from this browser. One that is on stays on for the visit. */
+export async function forgetKeptModel(id: number): Promise<void> {
+  await forgetKept(id);
+  store.set(keptModelsAtom, await listKept());
+  const kept = validModelChoice(store.get(storedModelAtom));
+  if (kept?.kind === 'kept' && kept.id === id) store.set(storedModelAtom, null);
+}
+
+/**
+ * The model's row: back to the camera's own picture. The camera is asked for first, so a
+ * camera that says no leaves the model where it is; then its track takes the model's place
+ * (live, with `replaceTrack`), the layer staying where it was. The page asks before it calls
+ * this on a stream that is up: watchers see a face from here.
+ */
+export async function backToCamera(): Promise<void> {
+  const had = store.get(cameraAtom);
+  const session = modelSession;
+  if (!session || !had) return;
+  const generation = liveGeneration;
+  let picture: MediaStream;
+  try {
+    picture = await navigator.mediaDevices.getUserMedia({ video: CAMERA_VIDEO });
+  } catch (err) {
+    if (generation === liveGeneration) store.set(sourceStatusAtom, err instanceof DOMException && err.name === 'NotAllowedError' ? 'camera blocked' : 'no camera');
+    return;
+  }
+  if (generation !== liveGeneration || modelSession !== session || store.get(cameraAtom) !== had) {
+    picture.getTracks().forEach((track) => track.stop());
+    return;
+  }
+  const track = picture.getVideoTracks()[0]!;
+  track.contentHint = 'motion';
+  if (cameraSender) await cameraSender.replaceTrack(track).catch(() => undefined);
+  store.set(cameraAtom, new MediaStream([...had.getAudioTracks(), track]));
+  dropModel();
+  store.set(storedModelAtom, null);
+  store.set(sourceStatusAtom, '');
+  if (!store.get(isPublishingAtom)) setPhase('camera-ready', store.get(hasMicAtom) ? 'camera ready' : 'camera ready, no mic');
+  slotsChanged();
+}
+
+/** The model moves like a mirror, or like the person a camera sees. Kept. */
+export function setFaceMirror(mirror: boolean) {
+  store.set(storedFaceMirrorAtom, mirror);
+  modelSession?.setMirror(mirror);
+}
+
+/** The flat colour behind the model, `#rrggbb`. Kept. */
+export function setModelBackground(colour: string) {
+  if (!/^#[0-9a-f]{6}$/i.test(colour)) return;
+  store.set(storedModelBackgroundAtom, colour);
+  modelSession?.setBackground(colour);
+}
+
+/** `rest face`: the face as it is now is the resting one, from the next readings. */
+export function restFace() {
+  modelSession?.rest();
+}
+
+/** Another camera to read the face from. Kept; one that will not open leaves the reader on the camera it has. */
+export async function setFaceCamera(deviceId: string): Promise<void> {
+  store.set(storedFaceCameraAtom, deviceId);
+  const session = modelSession;
+  if (!session) return;
+  const was = store.get(faceAtom);
+  const next = await openFaceCamera();
+  if (modelSession !== session) {
+    next?.stop();
+    return;
+  }
+  if (!next) {
+    store.set(faceAtom, was);
+    store.set(sourceStatusAtom, 'that camera would not open');
+    return;
+  }
+  const old = faceCamera;
+  faceCamera = next;
+  session.setCamera(next);
+  old?.stop();
+  // a model that had no camera to read (`no camera`, `camera blocked`) has one now: the reader's next word says what it sees
+  store.set(faceAtom, was === 'on' ? 'on' : 'lost');
+  store.set(sourceStatusAtom, '');
+  void refreshFaceCameras();
 }
 
 export async function goLive(): Promise<void> {
@@ -1165,6 +1678,10 @@ export function endLive() {
   store.set(publishPipAtom, false);
   liveGeneration++;
   stopLive();
+  // the model's worker and the camera its face was read from: the kept choice stays, for the next visit
+  dropModel();
+  store.set(modelLoadingAtom, false);
+  store.set(modelStatusAtom, '');
   // the mix goes before the mic it was reading; the source tracks are the camera's to stop, below
   unwatchMixer();
   mixer?.close();
