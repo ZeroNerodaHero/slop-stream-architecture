@@ -1,8 +1,9 @@
 /**
  * The model, drawn (docs/vtuber.md): one scene with one vrm in it, framed as a bust, and one
  * `draw(pose, dt)` that moves it toward a pose and paints a frame onto the canvas it was given.
- * It runs in the face worker, on an `OffscreenCanvas`; nothing in here knows about a camera, a
- * track or the page. `three` and `@pixiv/three-vrm` are imported here and nowhere else, so they
+ * The head, the neck and the lean are here; the face is `model-rig.ts`'s. It runs in the face
+ * worker, on an `OffscreenCanvas`; nothing in here knows about a camera, a track or the page.
+ * `three` and `@pixiv/three-vrm` are imported here and in the rig and nowhere else, so they
  * are in the worker's bundle and in no page's.
  *
  * A vrm 0.x model faces the other way from a 1.0 one. `VRMUtils.rotateVRM0` turns the whole
@@ -14,13 +15,19 @@ import { type VRM, VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import { AmbientLight, Box3, Color, DirectionalLight, LoadingManager, type Object3D, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-import { type Pose, type Shape, SHAPE_COUNT, shapeIndex } from '@/infra/pose';
+import type { RigInfo } from '@/infra/face-wire';
+import { buildRig } from '@/infra/model-rig';
+import { type Pose, SHAPE_COUNT } from '@/infra/pose';
 
 export interface ModelScene {
+  /** What of this model's face the reader can move. */
+  readonly rig: RigInfo;
   /** One frame: the model moved toward `pose` and painted. `dt` is the seconds since the last one. */
   draw(pose: Pose, dt: number): void;
   /** The flat colour behind the model, as css (`#1b1d26`). Video has no see-through. */
   setBackground(css: string): void;
+  /** The brows, the smile and the wide eyes move the model too, or only the mouth, the blinks and the eyes do. */
+  setExpressions(on: boolean): void;
   /** The model and the webgl context go. */
   dispose(): void;
 }
@@ -47,15 +54,6 @@ const HOME_S = 0.35;
 /** A breath: this long, this deep. */
 const BREATH_S = 4.2;
 const BREATH = 0.012;
-/** With no face to read, a blink this long every few seconds. */
-const BLINK_S = 0.16;
-const BLINK_EVERY_MIN_S = 2.4;
-const BLINK_EVERY_MAX_S = 5.5;
-/** Two eyes that close about as far as each other are one blink: a reader's two readings of it differ by noise. */
-const SAME_BLINK = 0.25;
-/** Eyes all the way to one side, in degrees. */
-const LOOK_YAW = 22;
-const LOOK_PITCH = 14;
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -78,6 +76,9 @@ export async function createModelScene(canvas: OffscreenCanvas, file: ArrayBuffe
 
   VRMUtils.removeUnnecessaryVertices(gltf.scene);
   VRMUtils.combineSkeletons(gltf.scene);
+  // the face, and what will move it. before the morphs are combined: that keeps only the ones an
+  // expression uses, and the rig makes expressions of its own out of the model's raw ones
+  const rig = buildRig(vrm, gltf);
   VRMUtils.combineMorphs(vrm);
   VRMUtils.rotateVRM0(vrm);
   // the bones move the mesh out of the box it was culled by
@@ -124,21 +125,17 @@ export async function createModelScene(canvas: OffscreenCanvas, file: ArrayBuffe
   camera.position.set(at.x, centre, at.z + (high - low) / 2 / Math.tan((FOV * Math.PI) / 360));
   camera.lookAt(at.x, centre, at.z);
 
-  const expressions = vrm.expressionManager;
-  const has = (name: string) => !!expressions?.getExpression(name);
-  const eachEye = has('blinkLeft') && has('blinkRight');
   /** Where the model is now, eased toward the pose every frame. */
   const now = { yaw: 0, pitch: 0, roll: 0, x: 0, z: 0, shapes: new Float32Array(SHAPE_COUNT) };
   let clock = 0;
-  let nextBlink = BLINK_EVERY_MIN_S;
   let settled = false;
 
-  const shape = (name: Shape) => now.shapes[shapeIndex(name)]!;
   const turn = (b: Object3D | null, share: number, extraPitch = 0) => {
     b?.rotation.set((now.pitch * share + extraPitch) * side, now.yaw * share, now.roll * share * side);
   };
 
   return {
+    rig: rig.info,
     draw(pose, dt) {
       clock += dt;
       // toward the face while there is one, and home when there is not
@@ -157,50 +154,8 @@ export async function createModelScene(canvas: OffscreenCanvas, file: ArrayBuffe
       // the head moved to its left leans the body to its left; toward the camera leans it forward
       spine?.rotation.set(clamp(now.z * LEAN, -MAX_LEAN, MAX_LEAN) * side, 0, clamp(-now.x * LEAN, -MAX_LEAN, MAX_LEAN) * side);
 
-      if (expressions) {
-        // the mouth: one mouth, so the vowels together are never more than all the way open
-        let aa = shape('jawOpen');
-        let oh = shape('mouthFunnel');
-        let ou = shape('mouthPucker');
-        // the wide vowel: the upper lip up off the teeth. (the reader's `mouthStretch` never moves on a talking face)
-        let ih = (shape('mouthUpperUpLeft') + shape('mouthUpperUpRight')) / 2;
-        const sum = aa + oh + ou + ih;
-        if (sum > 1) {
-          aa /= sum;
-          oh /= sum;
-          ou /= sum;
-          ih /= sum;
-        }
-        expressions.setValue('aa', aa);
-        expressions.setValue('oh', oh);
-        expressions.setValue('ou', ou);
-        expressions.setValue('ih', ih);
-
-        // the blinks: the face's, or with no face to read one of its own every few seconds
-        let left = shape('eyeBlinkLeft');
-        let right = shape('eyeBlinkRight');
-        if (!pose.face) {
-          if (clock >= nextBlink + BLINK_S) nextBlink = clock + BLINK_EVERY_MIN_S + Math.random() * (BLINK_EVERY_MAX_S - BLINK_EVERY_MIN_S);
-          const through = (clock - nextBlink) / BLINK_S;
-          left = right = Math.max(left, through > 0 && through < 1 ? 1 - Math.abs(through * 2 - 1) : 0);
-        } else if (Math.abs(left - right) < SAME_BLINK) {
-          left = right = (left + right) / 2;
-        }
-        if (eachEye) {
-          expressions.setValue('blinkLeft', left);
-          expressions.setValue('blinkRight', right);
-        } else {
-          expressions.setValue('blink', (left + right) / 2);
-        }
-      }
-
-      if (vrm.lookAt) {
-        // out for one eye is in for the other. positive yaw is the model's own left, negative pitch is up
-        const yaw = (shape('eyeLookOutLeft') - shape('eyeLookInLeft') + shape('eyeLookInRight') - shape('eyeLookOutRight')) / 2;
-        const up = (shape('eyeLookUpLeft') + shape('eyeLookUpRight') - shape('eyeLookDownLeft') - shape('eyeLookDownRight')) / 2;
-        vrm.lookAt.yaw = clamp(yaw, -1, 1) * LOOK_YAW;
-        vrm.lookAt.pitch = clamp(-up, -1, 1) * LOOK_PITCH;
-      }
+      // the face: the mouth, the blinks, the eyes, and what else this model has (model-rig.ts)
+      rig.apply(now.shapes, pose.face, clock);
 
       vrm.update(dt);
       if (!settled) {
@@ -212,6 +167,9 @@ export async function createModelScene(canvas: OffscreenCanvas, file: ArrayBuffe
     },
     setBackground(css) {
       scene.background = new Color(css);
+    },
+    setExpressions(on) {
+      rig.moods = on;
     },
     dispose() {
       VRMUtils.deepDispose(vrm.scene);

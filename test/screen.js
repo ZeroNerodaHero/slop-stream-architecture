@@ -1,6 +1,6 @@
 // The scene (docs/screen.md): on the go live page the camera, the shared screens and the
 // pictures are sources in a sidebar and layers over a 16:9 preview; the layers are dragged,
-// resized from a corner, ordered, hidden and arranged with presets, and every watcher's player
+// resized from a corner, ordered and hidden, and every watcher's player
 // draws the same frame from the fractions the slots frame carries. A video source left off the
 // stream is a tile for watchers, as every screen used to be. Screens are shared into slots
 // offered empty when going live, so nobody renegotiates; a watcher arriving mid-stream gets the
@@ -94,6 +94,18 @@ async function waitOrder(p, want, timeout = 5000) {
   }
   throw new Error(`the layers are ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
 }
+/** A source's row taken by the handle at its left end and dragged `rows` rows down the sidebar (negative: up). The rows are the stack, top first: a row down is one layer back. */
+async function dragRow(p, id, rows) {
+  const handle = await (await p.$(`#source-drag-${id}`)).boundingBox();
+  // a row to the next, the measure the page takes at the press
+  const pitch = await p.$$eval('#source-list > li', (els) => els[1].getBoundingClientRect().top - els[0].getBoundingClientRect().top);
+  const x = handle.x + handle.width / 2;
+  const y = handle.y + handle.height / 2;
+  await p.mouse.move(x, y);
+  await p.mouse.down();
+  await p.mouse.move(x, y + rows * pitch, { steps: 8 });
+  await p.mouse.up();
+}
 /** A meter's bar over 1.5s (or an avatar's `data-voice`): its peak and how many different readings it gave. The fake mic beeps about twice a second. */
 async function meter(p, sel, ms = 1500, attr = 'aria-valuenow') {
   const t0 = Date.now();
@@ -168,15 +180,13 @@ const MOVED = { x: 0.43, y: 0.414, w: 0.25, h: 0.25 };
 const SIZED = { x: 0.43, y: 0.414, w: 0.4, h: 0.4 };
 /** A second screen's own corner, bottom left (infra/scene.ts). */
 const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
-/** `face + screen`: the screen bottom right, a third wide. */
-const SCREEN_CORNER = { x: 0.647, y: 0.631, w: 0.333, h: 0.333 };
 
 (async () => {
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
   const pubContext = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] });
-  // the arrangement, the presets, the panels and the faders are this browser's (localstorage): start clean, whatever an earlier run left
+  // the arrangement, the panels and the faders are this browser's (localstorage): start clean, whatever an earlier run left
   await pubContext.addInitScript(() => {
-    for (const key of ['settings.lastArrangement', 'settings.scenePresets', 'settings.livePanels', 'settings.mixer', 'settings.cameraLayout', 'settings.micOnly']) localStorage.removeItem(key);
+    for (const key of ['settings.lastArrangement', 'settings.livePanels', 'settings.mixer', 'settings.cameraLayout', 'settings.micOnly']) localStorage.removeItem(key);
   });
   const pub = await pubContext.newPage();
   const newWatcher = async () => {
@@ -317,14 +327,21 @@ const SCREEN_CORNER = { x: 0.647, y: 0.631, w: 0.333, h: 0.333 };
     return `mine ${fmt(mine)} · theirs ${fmt(theirs)}`;
   });
 
-  await step('the order follows the sidebar: the picture sent back goes under the camera on both sides, and comes forward again', async () => {
-    await pub.click('#source-down-i1');
+  await step("the order follows the sidebar: the picture's row dragged down by its handle goes under the camera on both sides, dragged back up it is over it again, and the handle's arrow keys do the same", async () => {
+    await dragRow(pub, 'i1', 1);
     await waitOrder(pub, ['s1', 'i1', 'cam']);
     await waitOrder(w, ['s1', 'i1', 'cam']);
-    await pub.click('#source-up-i1');
+    await dragRow(pub, 'i1', -1);
     await waitOrder(pub, ['s1', 'cam', 'i1']);
     await waitOrder(w, ['s1', 'cam', 'i1']);
-    return 'down, then up';
+    await pub.focus('#source-drag-i1');
+    await pub.keyboard.press('ArrowDown');
+    await waitOrder(pub, ['s1', 'i1', 'cam']);
+    await waitOrder(w, ['s1', 'i1', 'cam']);
+    await pub.keyboard.press('ArrowUp');
+    await waitOrder(pub, ['s1', 'cam', 'i1']);
+    await waitOrder(w, ['s1', 'cam', 'i1']);
+    return 'dragged down and up, then the keys';
   });
 
   await step('the eye: the camera taken off the stream is a tile for the watcher, and put back it is where it was', async () => {
@@ -339,30 +356,6 @@ const SCREEN_CORNER = { x: 0.647, y: 0.631, w: 0.333, h: 0.333 };
     await waitBox(w, 'cam', SIZED, 5000);
     await waitTiles(w, []);
     return 'beside, then back';
-  });
-
-  await step('presets: saved under a name; `face + screen` swaps the two; the saved one puts the frame back, and is kept in this browser', async () => {
-    await pub.click('#save-preset');
-    await pub.fill('#preset-name', 'mine');
-    await pub.click('#preset-save');
-    await pub.waitForSelector('#preset-mine', { timeout: 2000 });
-    await pub.click('#preset-face-screen');
-    await waitBox(pub, 'cam', FULL, 2000);
-    await waitBox(pub, 's1', SCREEN_CORNER, 2000);
-    await waitOrder(pub, ['cam', 's1', 'i1']);
-    await waitBox(w, 'cam', FULL, 5000);
-    await waitBox(w, 's1', SCREEN_CORNER, 5000);
-    // the big <video> is the camera now, the screen a copy in its corner
-    await w.waitForFunction((id) => document.querySelector('#layer-cam #video')?.srcObject?.getVideoTracks()[0]?.id === id, track.camera, { timeout: 5000 });
-    expect((await trackId(w, '#layer-s1-video')) === track.screen1, 'the screen layer does not play the screen track');
-    await pub.click('#preset-mine');
-    await waitBox(pub, 's1', FULL, 2000);
-    await waitBox(pub, 'cam', SIZED, 2000);
-    await waitBox(w, 's1', FULL, 5000);
-    await waitBox(w, 'cam', SIZED, 5000);
-    const kept = await pub.evaluate(() => JSON.parse(localStorage.getItem('settings.scenePresets') || '[]').map((p) => p.name));
-    expect(kept.includes('mine'), `localstorage holds ${JSON.stringify(kept)}`);
-    return 'face + screen, then mine';
   });
 
   await step("the mixer's bars move with the fake mic: the mic's and the master's", async () => {

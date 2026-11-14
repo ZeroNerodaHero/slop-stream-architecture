@@ -52,7 +52,7 @@
 #   live-pip   picture in picture for the broadcast: leaving /live (a plain home click, or the button) keeps your camera in a corner and the stream up for watchers,
 #              you can watch someone else meanwhile (their page's picture in picture is disabled: one corner at a time), the corner has your chat, coming back takes
 #              the stream over, × asks first (no keeps streaming) and then stops and frees the corner, a page load stops, leaving with nothing on air puts nothing in the corner, start closes a stream watched in the corner
-#   screen     the scene: screens and pictures are layers over the go live page's preview (drag, corner resize, order, hide, presets) and every
+#   screen     the scene: screens and pictures are layers over the go live page's preview (drag, corner resize, order, hide) and every
 #              watcher draws the same frame; a slot left off it is a tile; the mixer's mic and master bars move; a share mid-stream needs no
 #              renegotiation; a late watcher sees it all; mic only: the camera's × leaves the mic alone with the avatar for a face, a watcher
 #              gets it on the sound with nothing on video and the avatar moves with the voice on both sides, the + puts the camera back live

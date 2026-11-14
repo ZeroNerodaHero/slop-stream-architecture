@@ -2,23 +2,28 @@ import { useAtomValue } from 'jotai';
 import { useState } from 'react';
 
 import {
+  backToCamera,
   faceAtom,
   faceCameraAtom,
   faceCamerasAtom,
+  faceExpressionsAtom,
   faceMirrorAtom,
   type FaceReading,
   faceStatsAtom,
   isPublishingAtom,
   modelAtom,
   modelBackgroundAtom,
+  modelRigAtom,
+  readerLoadAtom,
   restFace,
   setFaceCamera,
+  setFaceExpressions,
   setFaceMirror,
-  setModelBackground,
-  backToCamera
+  setModelBackground
 } from '@/infra/atoms/publish-atoms';
-import { modelSurvivesHiddenTab } from '@/infra/face';
+import { modelSurvivesHiddenTab, type RigInfo, type RigPart } from '@/infra/face';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
+import { LoadBar, readerWords } from '@/shared-components/live/ModelLoading';
 import { CHECKBOX } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -33,23 +38,38 @@ const WORDS: Record<FaceReading, string> = {
   'camera-blocked': 'camera blocked. the model moves on its own'
 };
 const ACTION = 'text-xs font-semibold text-primaryBlue disabled:opacity-40';
+const PART: Record<RigPart, string> = { eyes: 'eyes', blink: 'blinks', mouth: 'mouth', brows: 'brows', smile: 'smile' };
+
+/** What of this model a face can move, in a line. A model is told apart by what its file has, not by anything the streamer does. */
+function rigWords(rig: RigInfo): string {
+  if (rig.kind === 'none') return `this model has no face to move: only its head ${rig.parts.includes('eyes') ? 'and eyes turn' : 'turns'}`;
+  if (rig.kind === 'arkit') return 'a perfect sync model: your whole face moves it';
+  const parts = ['head', ...rig.parts.map((part) => PART[part])];
+  return `your face moves its ${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
 
 /**
  * Under the sources while a model is in the camera's place (docs/vtuber.md): what the face
- * reader is doing, and the few things to set. `mirror` (the model moves like a mirror, or like
- * the person a camera sees), `rest face` (the face as it is now is the resting one), the
- * colour behind the model, which camera reads the face when there is more than one, another
- * model, and the way back to the camera's own picture, which asks first on a stream that is up:
- * watchers would see a face from there.
+ * reader is doing (with a bar while it is still coming down), what of this model a face can
+ * move, and the few things to set. `mirror` (the model moves like a mirror, or like the person
+ * a camera sees), `expressions` (the brows and the smile move it too; only on a model that has
+ * them), `rest face` (the face as it is now is the resting one), the colour behind the model,
+ * which camera reads the face when there is more than one, another model, and the way back to
+ * the camera's own picture, which asks first on a stream that is up: watchers would see a face
+ * from there.
  *
  * The reader's numbers ride on `#face-status` as data attributes (where the head is asked to
- * turn, the jaw, the blink, frames a second) for the test, which reads those and never pixels.
+ * turn, the jaw, the blink, the smile, the brows, frames a second, and what kind of face the
+ * model has) for the test, which reads those and never pixels.
  */
 export function ModelControls({ onChange }: { onChange: () => void }) {
   const model = useAtomValue(modelAtom);
   const face = useAtomValue(faceAtom);
   const stats = useAtomValue(faceStatsAtom);
+  const rig = useAtomValue(modelRigAtom);
+  const readerLoad = useAtomValue(readerLoadAtom);
   const mirror = useAtomValue(faceMirrorAtom);
+  const expressions = useAtomValue(faceExpressionsAtom);
   const background = useAtomValue(modelBackgroundAtom);
   const cameras = useAtomValue(faceCamerasAtom);
   const camera = useAtomValue(faceCameraAtom);
@@ -57,6 +77,9 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
   const [asking, setAsking] = useState(false);
   if (!model) return null;
   const quiet = face === 'on' || face === 'starting';
+  // the reader is still coming down after the model went on: how much of it is here
+  const coming = face === 'starting' ? readerLoad : null;
+  const hasMoods = rig !== null && (rig.parts.includes('brows') || rig.parts.includes('smile'));
   return (
     <div id="model-controls" className="flex flex-col gap-2 border-t border-primaryStroke px-3 py-2.5">
       {/* the row above is too narrow for a name beside its buttons: the model's name is said here */}
@@ -71,13 +94,22 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
         data-roll={stats?.roll ?? 0}
         data-mouth={stats?.mouth ?? 0}
         data-blink={stats?.blink ?? 0}
+        data-smile={stats?.smile ?? 0}
+        data-brows={stats?.brows ?? 0}
         data-fps={stats?.fps ?? 0}
         data-reads={stats?.reads ?? 0}
+        data-rig={rig?.kind}
         className={cn('text-xs', quiet ? 'text-textSecondary' : 'text-textPrimary')}
-        aria-live="polite"
+        aria-live={coming ? 'off' : 'polite'}
       >
-        {WORDS[face]}
+        {coming ? readerWords(coming.loaded, coming.total) : WORDS[face]}
       </p>
+      {coming && <LoadBar loaded={coming.loaded} total={coming.total} label="loading the face reader" />}
+      {rig && (
+        <p id="model-rig" data-kind={rig.kind} className="text-xs text-textTertiary">
+          {rigWords(rig)}
+        </p>
+      )}
       {!modelSurvivesHiddenTab() && (
         <p id="face-hidden-note" className="text-xs text-textTertiary">
           in this browser the model stops moving while this tab is hidden
@@ -88,6 +120,12 @@ export function ModelControls({ onChange }: { onChange: () => void }) {
           <input id="face-mirror" type="checkbox" checked={mirror} onChange={(e) => setFaceMirror(e.target.checked)} className={CHECKBOX} />
           mirror
         </label>
+        {hasMoods && (
+          <label htmlFor="face-expressions" className="relative flex items-center gap-1.5 text-xs text-textSecondary">
+            <input id="face-expressions" type="checkbox" checked={expressions} onChange={(e) => setFaceExpressions(e.target.checked)} className={CHECKBOX} />
+            expressions
+          </label>
+        )}
         <button id="face-rest" type="button" className={ACTION} onClick={restFace}>
           rest face
         </button>

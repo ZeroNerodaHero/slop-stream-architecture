@@ -119,7 +119,7 @@ export function imageBox(ratio: number): Box {
 /** A picture's `ratio` from its natural size: the frame is 16:9, so a square picture's box is 9/16 as wide as it is tall. */
 export const ratioOf = (naturalWidth: number, naturalHeight: number) => thousandth((naturalWidth / Math.max(1, naturalHeight)) * (9 / 16));
 
-// ---- presets: geometry by role, so one applies to whatever sources there are --------------------
+// ---- arrangements: geometry by role, so one applies to whatever sources there are ---------------
 
 /** The camera, and the screens by their rank among the live screens (slot order). */
 export type Role = 'camera' | 'screen1' | 'screen2' | 'screen3';
@@ -130,47 +130,20 @@ export interface Preset {
   boxes: PresetBox[];
 }
 
-export const PRESETS: readonly Preset[] = [
-  { name: 'face', boxes: [{ role: 'camera', ...FULL }] },
-  { name: 'screen', boxes: [{ role: 'screen1', ...FULL }] },
-  {
-    name: 'screen + face',
-    boxes: [
-      { role: 'screen1', ...FULL },
-      { role: 'camera', ...CORNER }
-    ]
-  },
-  {
-    name: 'face + screen',
-    boxes: [
-      { role: 'camera', ...FULL },
-      { role: 'screen1', x: 0.647, y: 0.631, w: 0.333, h: 0.333 }
-    ]
-  },
-  {
-    name: 'side by side',
-    boxes: [
-      { role: 'screen1', x: 0, y: 0.25, w: 0.5, h: 0.5 },
-      { role: 'camera', x: 0.5, y: 0.25, w: 0.5, h: 0.5 }
-    ]
-  },
-  {
-    name: 'three up',
-    boxes: [
-      { role: 'screen1', x: 0, y: 0.167, w: 0.667, h: 0.667 },
-      { role: 'camera', x: 0.667, y: 0.167, w: 0.333, h: 0.333 },
-      { role: 'screen2', x: 0.667, y: 0.5, w: 0.333, h: 0.333 }
-    ]
-  }
-];
-/** Saved presets this browser keeps, at most. */
-export const MAX_SAVED_PRESETS = 12;
+/** What the first screen beside the face makes when this browser has kept no arrangement of its own: the screen the frame, the face in its corner. */
+const SCREEN_AND_FACE: Preset = {
+  name: 'screen + face',
+  boxes: [
+    { role: 'screen1', ...FULL },
+    { role: 'camera', ...CORNER }
+  ]
+};
 const ROLES: readonly Role[] = ['camera', 'screen1', 'screen2', 'screen3'];
 
 /**
  * The role a source plays: the camera, or the n-th screen by slot. The avatar is the face of a
- * stream with no camera, so it is the camera's role then (`face`, `screen + face` and the rules
- * lay a mic-only stream out like any other); beside a camera it has none. A picture has none.
+ * stream with no camera, so it is the camera's role then (the rules lay a mic-only stream out
+ * like any other); beside a camera it has none. A picture has none.
  */
 export function roleOf(source: Source, sources: readonly Source[]): Role | null {
   if (source.kind === 'camera') return 'camera';
@@ -181,27 +154,23 @@ export function roleOf(source: Source, sources: readonly Source[]): Role | null 
   return rank >= 0 && rank < 3 ? (`screen${rank + 1}` as Role) : null;
 }
 
-/** The roles present: a preset whose roles are all here is whole; the strip dims the others. */
-export const rolesOf = (sources: readonly Source[]): Set<Role> => new Set(sources.map((s) => roleOf(s, sources)).filter((r): r is Role => r !== null));
-
-/** The sources the rules and the presets lay out: those with a role. The rest (a picture, the avatar beside a camera) stay where they are put. */
+/** The sources the rules lay out: those with a role. The rest (a picture, the avatar beside a camera) stay where they are put. */
 const laidOut = (sources: readonly Source[]): Source[] => sources.filter((s) => roleOf(s, sources) !== null);
 
 /**
  * The preset laid onto the sources. Its layers replace the ones there, in its order; a role
  * with no source is skipped; a source with a role it does not list goes off the stream, its box
- * kept. `reveal` (a click on the strip) puts the listed sources on the stream even if they were
- * off; without it (the rules below) a source the streamer took off stays off and only boxes
- * change. Pictures (and the avatar beside a camera) keep their boxes and their place: those
- * under the lowest placed source stay under (a background), the rest stay above (a border, a logo).
+ * kept. A source the streamer took off the stream stays off: only its box changes. Pictures
+ * (and the avatar beside a camera) keep their boxes and their place: those under the lowest
+ * placed source stay under (a background), the rest stay above (a border, a logo).
  */
-export function applyPreset(sources: readonly Source[], preset: Preset, reveal: boolean): Source[] {
+function applyPreset(sources: readonly Source[], preset: Preset): Source[] {
   const videos = laidOut(sources);
   const placed: Source[] = [];
   for (const b of preset.boxes) {
     const source = videos.find((v) => roleOf(v, sources) === b.role && !placed.some((p) => p.id === v.id));
     if (!source) continue;
-    placed.push({ ...source, box: { x: b.x, y: b.y, w: b.w, h: b.h }, fit: b.fit, shown: reveal || source.shown });
+    placed.push({ ...source, box: { x: b.x, y: b.y, w: b.w, h: b.h }, fit: b.fit });
   }
   const rest = videos.filter((v) => !placed.some((p) => p.id === v.id)).map((v) => ({ ...v, shown: false }));
   const lowest = sources.findIndex((s) => videos.includes(s));
@@ -247,23 +216,22 @@ export function validPreset(raw: unknown): Preset | null {
  * alone fills the frame. The first screen beside the face makes `screen + face`, or the
  * arrangement this browser last had for a screen and the face (`last`). A third or later picture
  * takes a corner of its own and moves nothing else: the streamer is in another tab picking the
- * share, and a reflow then is a jump nobody asked for (`three up` is one click away). The avatar
- * added beside a camera has no role: it arrives centred, like a picture.
+ * share, and a reflow then is a jump nobody asked for. The avatar added beside a camera has no
+ * role: it arrives centred, like a picture.
  */
 export function arrangedAfterAdd(sources: readonly Source[], added: Source, last: Preset | null): Source[] {
   const videos = laidOut(sources);
   if (!videos.some((v) => v.id === added.id)) return sources.map((s) => (s.id === added.id ? { ...s, box: imageBox(AVATAR_BOX_RATIO), shown: true } : s));
   if (videos.length === 1) return sources.map((s) => (s.id === added.id ? { ...s, box: FULL, shown: true } : s));
   if (videos.length === 2 && added.kind === 'screen') {
-    const preset = last && last.boxes.some((b) => b.role === 'screen1') ? last : PRESETS.find((p) => p.name === 'screen + face');
-    return preset ? applyPreset(sources, preset, false) : [...sources];
+    return applyPreset(sources, last && last.boxes.some((b) => b.role === 'screen1') ? last : SCREEN_AND_FACE);
   }
   const role = roleOf(added, sources);
   const box = role === 'screen2' ? SECOND_SCREEN : role === 'screen3' ? THIRD_SCREEN : CORNER;
   return sources.map((s) => (s.id === added.id ? { ...s, box, shown: true } : s));
 }
 
-/** A source with a role went. One left fills the frame; otherwise nothing moves (a hole is the streamer's to fix with one click). */
+/** A source with a role went. One left fills the frame; otherwise nothing moves (a hole is the streamer's to fix). */
 export function arrangedAfterRemove(sources: readonly Source[]): Source[] {
   const videos = laidOut(sources);
   if (videos.length !== 1) return [...sources];

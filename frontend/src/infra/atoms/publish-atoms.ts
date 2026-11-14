@@ -13,25 +13,21 @@ import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { endWatch, pipAtom } from '@/infra/atoms/watch-atoms';
-import { type FaceState, type ModelSession, type ModelStats, startModel } from '@/infra/face';
+import { type FaceState, type LoadStep, type ModelSession, type ModelStats, type RigInfo, startModel } from '@/infra/face';
 import { type Mixer, openMixer } from '@/infra/mixer';
-import { forgetKept, keepModel, type KeptModel, keptFile, listKept } from '@/infra/model-store';
+import { forgetKept, keepDemo, keepForGood, keepModel, type KeptModel, keptDemoFile, keptFile, listKept, listKeptDemos, pruneKeptDemos } from '@/infra/model-store';
 import { cleanName, isValidName } from '@/infra/names';
 import { centredRect, cutPicture, SCENE_PICTURE, THUMB_PICTURE } from '@/infra/picture';
 import { type Box, connectRelay, type Fit, isVideoLayer, SCREEN_SLOTS, type SlotInfo, viewersOf, waitForIceGathering } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
 import {
-  applyPreset,
   arrangedAfterAdd,
   arrangedAfterRemove,
   AVATAR_ID,
   FULL,
   imageBox,
   isVideoSource,
-  MAX_SAVED_PRESETS,
   movedBox,
-  type Preset,
-  PRESETS,
   presetOf,
   ratioOf,
   resizedBox,
@@ -155,33 +151,20 @@ export const libraryAtom = atom<{ id: number; mime: string }[]>([]);
 export const sourceStatusAtom = atom('');
 /** The avatar is a source already: one is all there is (it is the streamer's own picture). */
 export const hasAvatarAtom = atom((get) => get(sourcesAtom).some((s) => s.kind === 'avatar'));
-/** The presets this browser saved, as `infra/scene.ts` presets. */
-const storedPresetsAtom = atomWithStorage<unknown>('settings.scenePresets', [], undefined, { getOnInit: true });
-/** Read: well-formed presets only, whatever localstorage holds. */
-export const savedPresetsAtom = atom<Preset[]>((get) => {
-  const raw = get(storedPresetsAtom);
-  return Array.isArray(raw)
-    ? raw
-        .map(validPreset)
-        .filter((p): p is Preset => p !== null)
-        .slice(0, MAX_SAVED_PRESETS)
-    : [];
-});
 /** The arrangement of the camera and a screen this browser last had: what the first share makes again next time. */
 const storedLastAtom = atomWithStorage<unknown>('settings.lastArrangement', null, undefined, { getOnInit: true });
 const lastArrangementAtom = atom((get) => validPreset(get(storedLastAtom)));
-/** Which of the page's three panels are open. Kept. */
+/** Which of the page's two panels are open. Kept. */
 export interface LivePanels {
   sources: boolean;
-  presets: boolean;
   sound: boolean;
 }
-const storedPanelsAtom = atomWithStorage<unknown>('settings.livePanels', { sources: true, presets: true, sound: true }, undefined, { getOnInit: true });
-/** Read: three booleans, whatever localstorage holds. */
+const storedPanelsAtom = atomWithStorage<unknown>('settings.livePanels', { sources: true, sound: true }, undefined, { getOnInit: true });
+/** Read: two booleans, whatever localstorage holds. */
 export const livePanelsAtom = atom<LivePanels>((get) => {
   const raw = get(storedPanelsAtom);
   const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  return { sources: p.sources !== false, presets: p.presets !== false, sound: p.sound !== false };
+  return { sources: p.sources !== false, sound: p.sound !== false };
 });
 
 // ---- the sound (infra/mixer.ts): what everyone hears, and what goes into it ---------------------
@@ -209,8 +192,23 @@ export const mixerRunningAtom = atom(true);
 export type ModelChoice = { kind: 'demo'; id: string; v: string; name: string } | { kind: 'kept'; id: number; name: string };
 /** The model whose picture is in the camera's slot. `null`: the camera's own picture, or none. */
 export const modelAtom = atom<ModelChoice | null>(null);
-/** A model is being fetched, read and drawn for the first time. One at a time. */
-export const modelLoadingAtom = atom(false);
+/**
+ * A model on its way on: whose, and how far along. One at a time. `file`: its bytes are coming,
+ * down from the server (`loaded` of `total` bytes) or out of this browser. `model`: the file
+ * is being made a model of. `reader`: the model stands and the face reader is coming down and
+ * starting; it is waited for a few seconds, and joins on its own when it is the slower.
+ * `total` 0: not known.
+ */
+export interface ModelLoad {
+  choice: ModelChoice;
+  step: 'file' | LoadStep;
+  loaded: number;
+  total: number;
+}
+export const modelLoadAtom = atom<ModelLoad | null>(null);
+export const modelLoadingAtom = atom((get) => get(modelLoadAtom) !== null);
+/** The face reader's own files, still coming with the model already on: bytes so far, of how many (0: not known). Null once it is up. */
+export const readerLoadAtom = atom<{ loaded: number; total: number } | null>(null);
 /** The picker's one line of words: why a file was refused. '' for nothing to say. */
 export const modelStatusAtom = atom('');
 /**
@@ -222,18 +220,23 @@ export type FaceReading = FaceState | 'idle' | 'no-camera' | 'camera-blocked';
 export const faceAtom = atom<FaceReading>('idle');
 /** How the model is doing, twice a second: frames drawn, faces read, where the head is asked to turn. Null with no model on. */
 export const faceStatsAtom = atom<ModelStats | null>(null);
+/** What of the model's face the reader can move (`model-rig.ts`). Null with no model on. */
+export const modelRigAtom = atom<RigInfo | null>(null);
 /** The cameras a face can be read from. The browser names them once one has been allowed. */
 export const faceCamerasAtom = atom<{ id: string; label: string }[]>([]);
 /** The site's demo models, as the api lists them. Empty until asked, and on an api from before them. */
 export const demoModelsAtom = atom<DemoModel[]>([]);
 /** The models this browser keeps, newest first. */
 export const keptModelsAtom = atom<KeptModel[]>([]);
+/** The demo models this browser keeps, and which version of each (the api's `v`): one that is here opens with nothing to download. */
+export const keptDemosAtom = atom<ReadonlyMap<string, string>>(new Map<string, string>());
 /** Behind the model when the streamer has picked no colour: the dark theme's panel. */
 const MODEL_BACKGROUND = '#181b22';
 /** The model worn last: the next visit opens it and never puts the camera's own picture in the preview. Cleared by the camera's ×, by the real camera, and by a file that is gone. */
 const storedModelAtom = atomWithStorage<unknown>('settings.model', null, undefined, { getOnInit: true });
 const storedFaceCameraAtom = atomWithStorage<unknown>('settings.faceCamera', '', undefined, { getOnInit: true });
 const storedFaceMirrorAtom = atomWithStorage<unknown>('settings.faceMirror', true, undefined, { getOnInit: true });
+const storedFaceExpressionsAtom = atomWithStorage<unknown>('settings.faceExpressions', true, undefined, { getOnInit: true });
 const storedModelBackgroundAtom = atomWithStorage<unknown>('settings.modelBackground', MODEL_BACKGROUND, undefined, { getOnInit: true });
 /** The camera picked to read the face from, by the browser's id for it. '': the browser's own choice. */
 export const faceCameraAtom = atom((get) => {
@@ -242,6 +245,8 @@ export const faceCameraAtom = atom((get) => {
 });
 /** The model moves like a mirror: on unless turned off. */
 export const faceMirrorAtom = atom((get) => get(storedFaceMirrorAtom) !== false);
+/** The brows, the smile and the wide eyes move the model too, not only the mouth and the blinks: on unless turned off. */
+export const faceExpressionsAtom = atom((get) => get(storedFaceExpressionsAtom) !== false);
 /** The flat colour behind the model, `#rrggbb`. */
 export const modelBackgroundAtom = atom((get) => {
   const colour = get(storedModelBackgroundAtom);
@@ -606,13 +611,28 @@ async function refreshFaceCameras() {
   }
 }
 
-/** The bytes of a model that was picked before: out of this browser, or from the bucket. Throws words. */
-async function modelFile(choice: ModelChoice): Promise<ArrayBuffer> {
-  if (choice.kind === 'kept') {
-    const file = await keptFile(choice.id);
-    if (!file) throw new ModelGone('that model is not kept in this browser any more. pick the file again');
-    return file;
-  }
+/** The load that is on moves along, when it is still `choice`'s: a word from one that was overtaken changes nothing. */
+function loadStep(choice: ModelChoice, step: ModelLoad['step'], loaded = 0, total = 0) {
+  if (store.get(modelLoadAtom)?.choice === choice) store.set(modelLoadAtom, { choice, step, loaded, total });
+}
+
+/** `choice`'s load is over, however it went. */
+function endLoad(choice: ModelChoice) {
+  if (store.get(modelLoadAtom)?.choice === choice) store.set(modelLoadAtom, null);
+}
+
+async function refreshKeptDemos() {
+  store.set(keptDemosAtom, new Map((await listKeptDemos()).map((demo) => [demo.id, demo.v])));
+}
+
+/** The picker is told how a download is going at most this often: a megabyte is a few dozen pieces. */
+const DOWNLOAD_TELL_MS = 80;
+
+/**
+ * A demo model's file from the server, counted as it comes (`modelLoadAtom`). `bytes`: its size
+ * as the api's list has it, for when the answer does not say. Throws words.
+ */
+async function downloadDemo(choice: ModelChoice & { kind: 'demo' }, bytes: number): Promise<ArrayBuffer> {
   let res: Response;
   try {
     res = await fetch(api.demoModelUrl(choice));
@@ -621,7 +641,63 @@ async function modelFile(choice: ModelChoice): Promise<ArrayBuffer> {
   }
   if (res.status === 404) throw new ModelGone('that demo model is gone. pick another');
   if (!res.ok) throw new Error(`could not load that model (http ${res.status})`);
-  return res.arrayBuffer();
+  const total = Number(res.headers.get('content-length')) || bytes;
+  loadStep(choice, 'file', 0, total);
+  if (!res.body) return res.arrayBuffer();
+  const reader = res.body.getReader();
+  const pieces: Uint8Array[] = [];
+  let loaded = 0;
+  let toldAt = 0;
+  for (;;) {
+    let piece: ReadableStreamReadResult<Uint8Array>;
+    try {
+      piece = await reader.read();
+    } catch {
+      throw new Error('the download of that model broke off. pick it again');
+    }
+    if (piece.done) break;
+    pieces.push(piece.value);
+    loaded += piece.value.length;
+    const now = performance.now();
+    if (now - toldAt >= DOWNLOAD_TELL_MS) {
+      toldAt = now;
+      loadStep(choice, 'file', loaded, total);
+    }
+  }
+  loadStep(choice, 'file', loaded, total || loaded);
+  const file = new Uint8Array(loaded);
+  let at = 0;
+  for (const piece of pieces) {
+    file.set(piece, at);
+    at += piece.length;
+  }
+  return file.buffer;
+}
+
+/**
+ * The bytes of a model: one of their own out of this browser, or a demo model, out of this
+ * browser when it was worn here before and down from the bucket when not. A demo that came
+ * down is kept (`model-store.ts`), so the next time it opens at once and with the server away.
+ * `bytes`: a demo's size as the api's list has it, when the caller knows. Throws words.
+ */
+async function modelFile(choice: ModelChoice, bytes = 0): Promise<ArrayBuffer> {
+  if (choice.kind === 'kept') {
+    const file = await keptFile(choice.id);
+    if (!file) throw new ModelGone('that model is not kept in this browser any more. pick the file again');
+    return file;
+  }
+  const kept = await keptDemoFile(choice.id, choice.v);
+  if (kept) return kept;
+  const file = await downloadDemo(choice, bytes);
+  try {
+    readVrm(file);
+  } catch {
+    // not a model: `putModelOn` says why, and nothing of it is kept
+    return file;
+  }
+  // a copy, made now: the bytes themselves are handed to the worker and are gone from here after that
+  void keepDemo(choice.id, choice.v, new Blob([file])).then((ok) => (ok ? refreshKeptDemos() : undefined));
+  return file;
 }
 
 /**
@@ -636,6 +712,8 @@ function dropModel() {
   faceCamera?.stop();
   faceCamera = null;
   store.set(modelAtom, null);
+  store.set(modelRigAtom, null);
+  store.set(readerLoadAtom, null);
   store.set(faceAtom, 'idle');
   store.set(faceStatsAtom, null);
 }
@@ -706,9 +784,20 @@ async function putModelOn(choice: ModelChoice, file: ArrayBuffer, opened: Opened
       model: file,
       camera,
       mirror: store.get(faceMirrorAtom),
+      expressions: store.get(faceExpressionsAtom),
       background: store.get(modelBackgroundAtom),
-      // with no camera the reader has nothing to say and the word stays `no camera`, until the picker gives it one
-      onState: (face) => mine() && (camera || faceCamera) && store.set(faceAtom, face),
+      onLoading: (step, loaded, total) => {
+        if (!mine()) return;
+        // the picker's bar while it waits for this model; the controls' once the model is on and its reader is still coming
+        loadStep(choice, step, loaded, total);
+        store.set(readerLoadAtom, step === 'reader' ? { loaded, total } : null);
+      },
+      onState: (face) => {
+        if (!mine()) return;
+        if (face !== 'starting') store.set(readerLoadAtom, null);
+        // with no camera the reader has nothing to say and the word stays `no camera`, until the picker gives it one
+        if (camera || faceCamera) store.set(faceAtom, face);
+      },
       onStats: (stats) => mine() && store.set(faceStatsAtom, stats),
       onFailed: (why) => mine() && modelStopped(why)
     });
@@ -718,6 +807,7 @@ async function putModelOn(choice: ModelChoice, file: ArrayBuffer, opened: Opened
       store.set(modelStatusAtom, messageOf(err));
       // whatever was on is still on, and its reader says what it said
       store.set(faceAtom, faceWas);
+      store.set(readerLoadAtom, null);
     }
     return false;
   }
@@ -726,7 +816,10 @@ async function putModelOn(choice: ModelChoice, file: ArrayBuffer, opened: Opened
   const giveUp = () => {
     session.stop();
     if (ours) camera.stop();
-    if (mine()) store.set(faceAtom, faceWas);
+    if (mine()) {
+      store.set(faceAtom, faceWas);
+      store.set(readerLoadAtom, null);
+    }
     return false;
   };
   if (stale()) return giveUp();
@@ -741,6 +834,7 @@ async function putModelOn(choice: ModelChoice, file: ArrayBuffer, opened: Opened
   modelSession = session;
   faceCamera = camera;
   store.set(modelAtom, choice);
+  store.set(modelRigAtom, session.rig);
   store.set(storedModelAtom, choice.kind === 'kept' && choice.id < 0 ? null : choice);
   store.set(storedMicOnlyAtom, false);
   store.set(modelStatusAtom, '');
@@ -789,28 +883,31 @@ function letGoOf(opened: OpenedForModel) {
  */
 async function startWithModel(choice: ModelChoice): Promise<void> {
   const generation = liveGeneration;
-  store.set(modelLoadingAtom, true);
+  store.set(modelLoadAtom, { choice, step: 'file', loaded: 0, total: 0 });
   store.set(publishMessageAtom, 'getting your model');
+  // one of their own has its picture on this browser's shelf: the preview shows it while the model loads
+  if (choice.kind === 'kept') void listKept().then((kept) => store.set(keptModelsAtom, kept));
   const [file, opened] = await Promise.all([modelFile(choice).catch((err: unknown) => (err instanceof Error ? err : new Error(String(err)))), openForModel()]);
   // the page was left, or something else was opened (the +'s camera), while this was on its way: what was opened here is nobody's
   const overtaken = () => generation !== liveGeneration || store.get(cameraAtom) !== null;
   const abandon = () => {
     letGoOf(opened);
     if (generation !== liveGeneration) return;
-    store.set(modelLoadingAtom, false);
+    endLoad(choice);
     if (!modelSession) store.set(faceAtom, 'idle');
   };
   if (overtaken()) return abandon();
+  loadStep(choice, 'model');
   const on = !(file instanceof Error) && (await putModelOn(choice, file, opened));
   if (on) {
-    store.set(modelLoadingAtom, false);
+    endLoad(choice);
     return;
   }
   if (overtaken()) return abandon();
   // no model: the mic alone, the way mic only starts, and no camera's picture
   const why = file instanceof Error ? file.message : store.get(modelStatusAtom);
   opened.camera?.stop();
-  store.set(modelLoadingAtom, false);
+  endLoad(choice);
   store.set(faceAtom, 'idle');
   if (file instanceof ModelGone) store.set(storedModelAtom, null);
   store.set(modelStatusAtom, '');
@@ -840,23 +937,31 @@ async function smallThumb(picture: Blob): Promise<Blob | null> {
 }
 
 /**
- * One pick at a time: fetched (or read), then put on. The picker shows `modelLoadingAtom` and
- * `modelStatusAtom`. With nothing open yet (the camera was refused, or there is none), the mic
- * and a camera for the reader are asked for here, after the file is known to be a model: so a
- * model picked there has a voice, and one that will not load leaves nothing open behind it.
+ * One pick at a time: fetched (or read), then put on. The picker and the preview show how far
+ * along it is (`modelLoadAtom`) and, when it does not come, why (`modelStatusAtom`). `first`
+ * is the model as it is known when the pick is made; `fetchIt` hands back its bytes, and the
+ * choice as it stands by then (a file of their own has its place on the shelf only once it is
+ * kept). With nothing open yet (the camera was refused, or there is none), the mic and a
+ * camera for the reader are asked for here, after the file is known to be a model: so a model
+ * picked there has a voice, and one that will not load leaves nothing open behind it.
  */
-async function pickModel(choice: () => Promise<{ choice: ModelChoice; file: ArrayBuffer }>): Promise<boolean> {
-  if (store.get(modelLoadingAtom)) return false;
+async function pickModel(first: ModelChoice, fetchIt: () => Promise<{ choice: ModelChoice; file: ArrayBuffer }>): Promise<boolean> {
+  if (store.get(modelLoadAtom)) return false;
   const generation = liveGeneration;
-  store.set(modelLoadingAtom, true);
+  let choice = first;
+  store.set(modelLoadAtom, { choice, step: 'file', loaded: 0, total: 0 });
   store.set(modelStatusAtom, '');
+  /** This pick is still the one that is loading: the page was not left, and nothing took its place. */
+  const ours = () => generation === liveGeneration && store.get(modelLoadAtom)?.choice === choice;
   try {
-    const picked = await choice();
-    if (generation !== liveGeneration) return false;
-    if (store.get(cameraAtom)) return await putModelOn(picked.choice, picked.file);
+    const picked = await fetchIt();
+    if (!ours()) return false;
+    choice = picked.choice;
+    store.set(modelLoadAtom, { choice, step: 'model', loaded: 0, total: 0 });
+    if (store.get(cameraAtom)) return await putModelOn(choice, picked.file);
     readVrm(picked.file);
     const opened = await openForModel();
-    const on = generation === liveGeneration && store.get(cameraAtom) === null && (await putModelOn(picked.choice, picked.file, opened));
+    const on = ours() && store.get(cameraAtom) === null && (await putModelOn(choice, picked.file, opened));
     if (!on) {
       letGoOf(opened);
       if (generation === liveGeneration && !modelSession) store.set(faceAtom, 'idle');
@@ -866,43 +971,62 @@ async function pickModel(choice: () => Promise<{ choice: ModelChoice; file: Arra
     if (generation === liveGeneration) store.set(modelStatusAtom, messageOf(err));
     return false;
   } finally {
-    if (generation === liveGeneration) store.set(modelLoadingAtom, false);
+    endLoad(choice);
   }
 }
 
-/** The picker opened: the site's demo models and the ones this browser keeps. An api from before the demo models has none, which is nothing to say. */
+/**
+ * The picker opened: the site's demo models, and what this browser keeps of them and of the
+ * streamer's own. An api from before the demo models has none, which is nothing to say. The
+ * list is what there is: a kept file of a demo that left it, or that is another version there
+ * now, goes, and the next pick brings the new one down.
+ */
 export async function loadModelLibrary(): Promise<void> {
   void listKept().then((kept) => store.set(keptModelsAtom, kept));
+  void refreshKeptDemos();
+  let models: DemoModel[];
   try {
-    store.set(demoModelsAtom, (await api.demoModels()).models ?? []);
+    models = (await api.demoModels()).models ?? [];
   } catch {
     store.set(demoModelsAtom, []);
+    return;
   }
+  store.set(demoModelsAtom, models);
+  // the model to come back to follows its file: a kept choice that named the old version would download the new one on every visit and keep it under the old name
+  const worn = validModelChoice(store.get(storedModelAtom));
+  const listed = worn?.kind === 'demo' ? models.find((model) => model.id === worn.id) : undefined;
+  if (worn?.kind === 'demo' && listed && listed.v !== worn.v) store.set(storedModelAtom, { kind: 'demo', id: listed.id, v: listed.v, name: listed.name });
+  store.set(keptDemosAtom, new Map((await pruneKeptDemos(models)).map((demo) => [demo.id, demo.v])));
 }
 
-/** One of the site's demo models, from the bucket. */
+/** One of the site's demo models: out of this browser when it was worn here before, else down from the bucket. */
 export function pickDemoModel(model: DemoModel): Promise<boolean> {
   const choice: ModelChoice = { kind: 'demo', id: model.id, v: model.v, name: model.name };
-  return pickModel(async () => ({ choice, file: await modelFile(choice) }));
+  return pickModel(choice, async () => ({ choice, file: await modelFile(choice, model.bytes) }));
 }
 
-/** One this browser keeps. */
+/** One of their own that this browser keeps. */
 export function pickKeptModel(model: KeptModel): Promise<boolean> {
   const choice: ModelChoice = { kind: 'kept', id: model.id, name: model.name };
-  return pickModel(async () => ({ choice, file: await modelFile(choice) }));
+  return pickModel(choice, async () => ({ choice, file: await modelFile(choice) }));
 }
 
 /**
  * The streamer's own file. It is read here, kept in this browser for next time (a browser that
- * cannot keep it still wears it for the visit), and goes nowhere else: nothing is put up.
+ * cannot keep it still wears it for the visit), and goes nowhere else: nothing is put up. The
+ * browser is asked to keep what is kept here for good: this one cannot be downloaded again.
  */
 export function pickModelFile(picked: File): Promise<boolean> {
-  return pickModel(async () => {
+  const named = picked.name.replace(/\.[^.]+$/, '') || 'model';
+  return pickModel({ kind: 'kept', id: -1, name: named }, async () => {
     const file = await picked.arrayBuffer();
     const info = readVrm(file);
-    const name = info.name || picked.name.replace(/\.[^.]+$/, '') || 'model';
+    const name = info.name || named;
     const kept = await keepModel(picked, { name, author: info.author }, info.thumbnail ? await smallThumb(info.thumbnail) : null);
-    if (kept) store.set(keptModelsAtom, await listKept());
+    if (kept) {
+      store.set(keptModelsAtom, await listKept());
+      void keepForGood();
+    }
     return { choice: { kind: 'kept', id: kept?.id ?? -1, name }, file };
   });
 }
@@ -952,6 +1076,12 @@ export async function backToCamera(): Promise<void> {
 export function setFaceMirror(mirror: boolean) {
   store.set(storedFaceMirrorAtom, mirror);
   modelSession?.setMirror(mirror);
+}
+
+/** The brows, the smile and the wide eyes move the model too, or only the mouth, the blinks and the eyes do. Kept. */
+export function setFaceExpressions(on: boolean) {
+  store.set(storedFaceExpressionsAtom, on);
+  modelSession?.setExpressions(on);
 }
 
 /** The flat colour behind the model, `#rrggbb`. Kept. */
@@ -1209,7 +1339,7 @@ function slotsChanged() {
   void tuneSenders();
 }
 
-// ---- the scene's actions: the sidebar, the preview and the presets strip all come through here ----
+// ---- the scene's actions: the sidebar and the preview both come through here ----------------------
 
 /**
  * The sources changed: the preview follows at once; the watchers are told within SCENE_SEND_MS
@@ -1277,7 +1407,7 @@ export function toggleSource(id: string) {
   withSource(id, (s) => ({ ...s, shown: !s.shown }));
 }
 
-/** The row's arrows: one step up (towards the front) or down the stack. */
+/** The `[` and `]` keys on a layer of the preview: one step up (towards the front) or down the stack. */
 export function reorderSource(id: string, dir: 'up' | 'down') {
   const sources = [...store.get(sourcesAtom)];
   const i = sources.findIndex((s) => s.id === id);
@@ -1285,6 +1415,22 @@ export function reorderSource(id: string, dir: 'up' | 'down') {
   if (i < 0 || j < 0 || j >= sources.length) return;
   [sources[i], sources[j]] = [sources[j]!, sources[i]!];
   setSources(sources);
+}
+
+/**
+ * The row's handle, dragged or stepped with its arrow keys: the source put at `to` in the stack
+ * (0 is the bottom), stopped at the stack's two ends. Already there, nothing changes: a drag
+ * asks for the same place many times a second.
+ */
+export function moveSourceTo(id: string, to: number) {
+  const sources = store.get(sourcesAtom);
+  const from = sources.findIndex((s) => s.id === id);
+  const source = sources[from];
+  const at = Math.max(0, Math.min(sources.length - 1, to));
+  if (!source || at === from) return;
+  const next = sources.filter((s) => s.id !== id);
+  next.splice(at, 0, source);
+  setSources(next);
 }
 
 /** `fill` or `whole`, on a video source. */
@@ -1310,27 +1456,6 @@ export function removeSource(id: string) {
   if (source.kind === 'screen' && source.slot !== undefined) stopScreen(source.slot - 1);
   else if (source.kind === 'camera') cameraOff();
   else dropSource(id);
-}
-
-/** A chip of the presets strip: built in or saved, by name. The listed sources come onto the stream. */
-export function applyPresetNamed(name: string) {
-  const preset = [...PRESETS, ...store.get(savedPresetsAtom)].find((p) => p.name === name);
-  if (preset) setSources(applyPreset(store.get(sourcesAtom), preset, true));
-}
-
-/** `save as preset`: the arrangement on the stream right now, under `name`; a saved one of that name is replaced. */
-export function savePreset(raw: string) {
-  const name = raw.trim().slice(0, 32);
-  if (!name || PRESETS.some((p) => p.name === name)) return;
-  const kept = store.get(savedPresetsAtom).filter((p) => p.name !== name);
-  store.set(storedPresetsAtom, [...kept, presetOf(name, store.get(sourcesAtom))].slice(-MAX_SAVED_PRESETS));
-}
-
-export function forgetPreset(name: string) {
-  store.set(
-    storedPresetsAtom,
-    store.get(savedPresetsAtom).filter((p) => p.name !== name)
-  );
 }
 
 export function setLivePanel(name: keyof LivePanels, open: boolean) {
@@ -1680,7 +1805,7 @@ export function endLive() {
   stopLive();
   // the model's worker and the camera its face was read from: the kept choice stays, for the next visit
   dropModel();
-  store.set(modelLoadingAtom, false);
+  store.set(modelLoadAtom, null);
   store.set(modelStatusAtom, '');
   // the mix goes before the mic it was reading; the source tracks are the camera's to stop, below
   unwatchMixer();

@@ -45,8 +45,8 @@ import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Mixer } from '@/shared-components/live/Mixer';
-import { Presets } from '@/shared-components/live/Presets';
 import { Sources } from '@/shared-components/live/Sources';
+import { ModelLoading } from '@/shared-components/live/ModelLoading';
 import { MicMeter } from '@/shared-components/MicMeter';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { panelClassName } from '@/shared-components/Panel';
@@ -142,6 +142,8 @@ export function LivePage() {
                   main={{ id: 'preview', streamAtom: previewStreamAtom, videoRef: previewRef, slot: previewSlot, muted: true }}
                   edit={edit}
                 />
+                {/* a model on its way on (docs/vtuber.md): its picture and how far along it is, where the model will be */}
+                <ModelLoading />
                 {/* top left, while the stream is up: the mic, as loud as it is right now, read off the mixer once
                     that is up (the key: a chip mounted before it opens would otherwise keep its own reader);
                     beside it, once live, how the upload is going (up on its own while something limits it) */}
@@ -161,7 +163,6 @@ export function LivePage() {
                   )}
                 </div>
               </div>
-              <Presets />
               {publishing && <Mixer />}
             </div>
           </div>

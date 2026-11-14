@@ -23,7 +23,7 @@ interface CollapsibleProps {
 }
 
 /**
- * A panel of the go live page that folds to its header: the sources, the presets, the sound.
+ * A panel of the go live page that folds to its header: the sources, the sound.
  * The body is there or not (no height to animate, the lists vary), the way every panel in the
  * app shows and hides. Which are open is kept per browser (publish-atoms' `livePanelsAtom`).
  * A footer does not fold with it: what sits there (start, stop) must not go with a click on

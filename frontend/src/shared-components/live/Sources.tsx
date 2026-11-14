@@ -1,10 +1,9 @@
 import {
   RiAddLine,
-  RiArrowDownLine,
-  RiArrowUpLine,
   RiAspectRatioLine,
   RiCloseLine,
   RiComputerLine,
+  RiDraggable,
   RiEyeLine,
   RiEyeOffLine,
   RiFocus3Line,
@@ -14,7 +13,7 @@ import {
   RiVidiconLine
 } from '@remixicon/react';
 import { type Atom, useAtomValue } from 'jotai';
-import { useEffect, useRef, useState } from 'react';
+import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react';
 
 import { api } from '@/infra/api';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
@@ -35,10 +34,10 @@ import {
   libraryAtom,
   livePanelsAtom,
   modelAtom,
+  moveSourceTo,
   placeImage,
   publishPhaseAtom,
   removeSource,
-  reorderSource,
   screenShareSupported,
   screenStreamAtom,
   selectedSourceAtom,
@@ -66,10 +65,12 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
 
-/** A row: the selected one wears the rail's mark, a blue edge on a lifted ground. */
-const ROW = 'group/row flex h-10 w-full min-w-0 items-center gap-2 border-l-2 pl-1.5 pr-1 text-left text-sm leading-tight transition-colors duration-150';
+/** A row: the selected one wears the rail's mark, a blue edge on a lifted ground. Its handle sits against that edge, so the row's own inset there is thin. */
+const ROW = 'group/row flex h-10 w-full min-w-0 items-center gap-2 border-l-2 pl-0.5 pr-1 text-left text-sm leading-tight transition-colors duration-150';
 const ROW_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
 const ROW_OFF = 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary';
+/** A row's handle: an icon button as narrow as its dots, taken hold of rather than pressed (a finger on it scrolls no page and selects no words). */
+const HANDLE = cn(ICON_BUTTON, 'w-5 touch-none select-none');
 const MENU_ITEM =
   'flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-textSecondary transition-colors duration-150 hover:bg-backgroundTertiary hover:text-textPrimary focus-visible:bg-backgroundTertiary focus-visible:text-textPrimary focus-visible:outline-none disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-textSecondary';
 
@@ -259,7 +260,20 @@ function AddMenu({ onModel }: { onModel: () => void }) {
 
 const ICONS = { camera: RiVidiconLine, screen: RiComputerLine, image: RiImageLine, avatar: RiUserVoiceLine } as const;
 
-function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
+interface RowProps {
+  source: Source;
+  hasCamera: boolean;
+  /** The pointer has its handle: the row is on its way through the stack. */
+  held: boolean;
+  /** A press on the handle. */
+  onGrab: (e: ReactPointerEvent<HTMLButtonElement>) => void;
+  /** An arrow key on the handle: a row up the list (1, towards the front) or down it (-1). */
+  onStep: (by: 1 | -1) => void;
+}
+
+function Row({ source, hasCamera, held, onGrab, onStep }: RowProps) {
+  // the keys moved the row and its handle still has them: no tooltip, it would be left over where the row was
+  const [stepped, setStepped] = useState(false);
   const selected = useAtomValue(selectedSourceAtom) === source.id;
   const streamAtom = source.kind === 'camera' ? cameraAtom : screenStreamAtom((source.slot ?? 1) - 1);
   const name = useAtomValue(streamNameAtom);
@@ -268,6 +282,7 @@ function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
   // a model in the camera's place (docs/vtuber.md): the camera's row is the model's, under the model's name
   const model = useAtomValue(modelAtom);
   const worn = source.kind === 'camera' ? model : null;
+  const label = worn ? worn.name : source.label;
   const Icon = worn ? RiUserSmileLine : ICONS[source.kind];
   const fill = source.fit ? source.fit === 'cover' : source.kind === 'camera';
   // the camera's × turns it off (mic only); not without a mic, since nothing would be left to stream
@@ -286,6 +301,26 @@ function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
               : 'turn the camera off: mic only, your avatar stands in';
   return (
     <li className={cn(ROW, selected ? ROW_ON : ROW_OFF)}>
+      {/* the handle says a row can be moved, so like the eye it is always there */}
+      <Tooltip content={held || stepped ? null : 'drag to move forward or back'}>
+        <button
+          id={`source-drag-${source.id}`}
+          type="button"
+          aria-label={`move ${label} forward or back: drag, or the arrow keys`}
+          aria-keyshortcuts="ArrowUp ArrowDown"
+          onPointerDown={onGrab}
+          onKeyDown={(e) => {
+            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+            e.preventDefault();
+            setStepped(true);
+            onStep(e.key === 'ArrowUp' ? 1 : -1);
+          }}
+          onBlur={() => setStepped(false)}
+          className={cn(HANDLE, held ? 'cursor-grabbing border-primaryBlue text-primaryBlue' : 'cursor-grab')}
+        >
+          <RiDraggable aria-hidden size={16} />
+        </button>
+      </Tooltip>
       <button
         id={`source-${source.id}`}
         type="button"
@@ -304,7 +339,7 @@ function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
         )}
         <Icon aria-hidden size={16} className="shrink-0" />
         <span id={worn ? 'source-model-name' : undefined} className="min-w-0 flex-1 truncate">
-          {worn ? worn.name : source.label}
+          {label}
         </span>
       </button>
       {/* the eye reports state, so it is always there; the rest comes up with the pointer or the keys */}
@@ -351,16 +386,6 @@ function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
             </button>
           </Tooltip>
         )}
-        <Tooltip content="forward">
-          <button id={`source-up-${source.id}`} type="button" aria-label="bring forward" onClick={() => reorderSource(source.id, 'up')} className={ICON_BUTTON}>
-            <RiArrowUpLine aria-hidden size={16} />
-          </button>
-        </Tooltip>
-        <Tooltip content="back">
-          <button id={`source-down-${source.id}`} type="button" aria-label="send back" onClick={() => reorderSource(source.id, 'down')} className={ICON_BUTTON}>
-            <RiArrowDownLine aria-hidden size={16} />
-          </button>
-        </Tooltip>
         <Tooltip content={removeWords}>
           <button
             id={`source-remove-${source.id}`}
@@ -375,6 +400,78 @@ function Row({ source, hasCamera }: { source: Source; hasCamera: boolean }) {
         </Tooltip>
       </span>
     </li>
+  );
+}
+
+/**
+ * The rows, top of the stack first (the sources are kept bottom first). A row is taken by the
+ * handle at its left end and dragged up or down the stack: it follows the pointer a row at a
+ * time, and the frame follows it, here at once and for the watchers within a beat. The arrow
+ * keys on the handle do the same, a row a press. A row taken hold of is the selected one, as a
+ * layer of the preview is. The drag is this list's own, so it goes with the list (the last
+ * source gone, the panel folded) and a new list starts with none.
+ */
+function SourceList({ sources }: { sources: Source[] }) {
+  const rows = useRef<HTMLUListElement | null>(null);
+  const drag = useRef<{ pointerId: number; id: string; y: number; from: number; pitch: number } | null>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const hasCamera = sources.some((s) => s.kind === 'camera');
+
+  /** `at`: the source's place in the stack, 0 the bottom. A row down the list is one place down the stack. */
+  function startDrag(e: ReactPointerEvent<HTMLButtonElement>, id: string, at: number) {
+    // the primary button only, and one drag at a time: a second finger on another handle takes nothing over
+    if (e.button !== 0 || drag.current) return;
+    const ul = rows.current;
+    const items = ul ? Array.from(ul.children) : [];
+    const first = items[0]?.getBoundingClientRect();
+    const second = items[1]?.getBoundingClientRect();
+    if (!ul || !first) return;
+    e.preventDefault();
+    // the list holds the pointer, not the handle: a row dragged is taken out of the document and put back
+    // by the reorder, and the browser lets go of a node that leaves. the drag ends with the capture, whatever ends it
+    ul.setPointerCapture(e.pointerId);
+    // a row to the next: the distance between two rows' tops, or the one row's height when there is one
+    drag.current = { pointerId: e.pointerId, id, y: e.clientY, from: at, pitch: second ? second.top - first.top : first.height };
+    setDragging(id);
+    selectSource(id);
+  }
+  function moveDrag(e: ReactPointerEvent<HTMLUListElement>) {
+    const d = drag.current;
+    // the drag is the pointer's that began it: another finger resting on the list neither steers nor ends it
+    if (!d || e.pointerId !== d.pointerId) return;
+    // against where the press began, whole and not step by step: a pointer that went past the list's end and came back finds its row under it again
+    moveSourceTo(d.id, d.from - Math.round((e.clientY - d.y) / d.pitch));
+  }
+  function endDrag(e: ReactPointerEvent<HTMLUListElement>) {
+    if (drag.current && e.pointerId !== drag.current.pointerId) return;
+    drag.current = null;
+    setDragging(null);
+  }
+
+  return (
+    <ul
+      id="source-list"
+      ref={rows}
+      onPointerMove={moveDrag}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onLostPointerCapture={endDrag}
+      className={cn('m-0 list-none divide-y divide-primaryStroke p-0', dragging && 'cursor-grabbing')}
+    >
+      {[...sources].reverse().map((source, row) => {
+        const at = sources.length - 1 - row;
+        return (
+          <Row
+            key={source.id}
+            source={source}
+            hasCamera={hasCamera}
+            held={dragging === source.id}
+            onGrab={(e) => startDrag(e, source.id, at)}
+            onStep={(by) => moveSourceTo(source.id, at + by)}
+          />
+        );
+      })}
+    </ul>
   );
 }
 
@@ -430,12 +527,12 @@ function StartStop() {
 /**
  * The sources, beside the preview: the camera (or the avatar standing in for it, mic only),
  * the shared screens and the pictures, top of the stack first (the row order is the reverse
- * of the array, the way a layers panel reads). Each row selects its layer; the eye puts it on
- * or off the stream; the arrows move it through the stack; `×` stops a share, removes a
- * picture or the avatar, turns the camera off. The `+` adds. Folded, it is a rail, with start
- * (or stop) still at its foot. With a model in the camera's place (docs/vtuber.md) its face
- * reader's words and controls sit under the list, and the picker is this panel's to open: from
- * the `+`, and from `another model`.
+ * of the array, the way a layers panel reads). Each row selects its layer; the handle at its
+ * left end drags it up or down the stack; the eye puts it on or off the stream; `×` stops a
+ * share, removes a picture or the avatar, turns the camera off. The `+` adds. Folded, it is a
+ * rail, with start (or stop) still at its foot. With a model in the camera's place
+ * (docs/vtuber.md) its face reader's words and controls sit under the list, and the picker is
+ * this panel's to open: from the `+`, and from `another model`.
  */
 export function Sources() {
   const sources = useAtomValue(sourcesAtom);
@@ -443,7 +540,6 @@ export function Sources() {
   const status = useAtomValue(sourceStatusAtom);
   const phase = useAtomValue(publishPhaseAtom);
   const [picking, setPicking] = useState(false);
-  const hasCamera = sources.some((s) => s.kind === 'camera');
   // nothing opened: the camera was refused or is missing, or the mic was (mic only, kept from last time). the way out is the other start
   const cameraRefused = phase === 'camera-blocked' || phase === 'no-camera';
   const micRefused = phase === 'mic-blocked' || phase === 'no-mic';
@@ -477,11 +573,7 @@ export function Sources() {
             )}
           </div>
         ) : (
-          <ul id="source-list" className="m-0 list-none divide-y divide-primaryStroke p-0">
-            {[...sources].reverse().map((source) => (
-              <Row key={source.id} source={source} hasCamera={hasCamera} />
-            ))}
-          </ul>
+          <SourceList sources={sources} />
         )}
         <ModelControls onChange={() => setPicking(true)} />
         <p className="px-3 py-2 text-xs text-textTertiary">drag a layer to move it, pull a corner to resize. arrow keys nudge, shift frees the shape</p>

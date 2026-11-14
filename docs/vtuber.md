@@ -143,7 +143,7 @@ its camera: the one that is on when the model is picked (it leaves the stream fo
 - **`×` on its row** is mic only, as the camera's is. **`use the camera`** opens the camera first, so one that says no leaves the model on; live, it asks first (`#real-camera-confirm`).
 - **`stop`** leaves the model in the preview, as it leaves the camera. **leaving the page** with nothing on air ends the worker and lets the reader's camera go. with a stream up the model goes on in the corner: the worker is a module's, like the peer connection.
 
-after that nothing knows the difference. the preview shows what watchers get, because it plays the track that is sent. the presets and the rules treat it as the camera. `tuneSenders` sends it small in a corner. the box cuts the thumbnail from it, so the home card is the model.
+after that nothing knows the difference. the preview shows what watchers get, because it plays the track that is sent. the rules treat it as the camera. `tuneSenders` sends it small in a corner. the box cuts the thumbnail from it, so the home card is the model.
 
 ## the hidden tab
 

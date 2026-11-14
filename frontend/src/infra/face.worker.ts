@@ -23,9 +23,9 @@
 
 import { FaceLandmarker, type FaceLandmarkerResult } from '@mediapipe/tasks-vision';
 
-import type { FaceState, FromFaceWorker, ModelStats, ToFaceWorker } from '@/infra/face-wire';
+import type { FaceState, FromFaceWorker, LoadStep, ModelStats, ToFaceWorker } from '@/infra/face-wire';
 import { createModelScene, type ModelScene } from '@/infra/model-draw';
-import { FaceTracker, type Pose, type Reading, restPose, SHAPE_COUNT, SHAPES, shapeIndex } from '@/infra/pose';
+import { FaceTracker, moodOf, type Pose, type Reading, restPose, SHAPE_COUNT, SHAPES, shapeIndex } from '@/infra/pose';
 
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -82,6 +82,78 @@ const READ_SHARE = 1.6;
 let faceSeenAt = 0;
 let state: FaceState = 'starting';
 const counts = { drawn: 0, reads: 0, readMs: 0, since: 0 };
+
+// ---- how far along -----------------------------------------------------------------------------
+/** Where this is on its way to a model with a face (`face-wire.ts`). `null` once the reader is up, or has given up. */
+let step: LoadStep | null = 'model';
+/** The reader's files as they come down: bytes so far, and each file's size once its answer says one (`null` before, 0 when it does not say). */
+const coming = { loaded: 0, sizes: [] as (number | null)[], toldAt: 0 };
+/** The page is told at most this often while bytes come: a megabyte is a few dozen pieces. */
+const TELL_MS = 100;
+
+/** Say where this is. `now`: a change of step, said at once; without it, a few times a second. */
+function tellLoading(now = false) {
+  if (!step || stopped) return;
+  const at = performance.now();
+  if (!now && at - coming.toldAt < TELL_MS) return;
+  coming.toldAt = at;
+  // the whole is known only when every file has said its size
+  const total = coming.sizes.every((size) => size !== null && size > 0) ? coming.sizes.reduce<number>((sum, size) => sum + (size ?? 0), 0) : 0;
+  post({ type: 'loading', step, loaded: step === 'reader' ? coming.loaded : 0, total: step === 'reader' ? total : 0 });
+}
+
+/**
+ * One of the reader's files, fetched here so its bytes are counted on the way: the reader's
+ * own fetch says nothing until it is done, and a few megabytes on a slow line is a long nothing.
+ */
+async function fetchCounted(url: string): Promise<Uint8Array> {
+  const slot = coming.sizes.push(null) - 1;
+  const res = await scope.fetch(url);
+  if (!res.ok) throw new Error(`http ${res.status}`);
+  // a length is the body's own only when nothing packed the body on the way (a server's gzip)
+  coming.sizes[slot] = res.headers.get('content-encoding') ? 0 : Number(res.headers.get('content-length')) || 0;
+  if (!res.body) {
+    const whole = new Uint8Array(await res.arrayBuffer());
+    coming.loaded += whole.length;
+    tellLoading();
+    return whole;
+  }
+  const reader = res.body.getReader();
+  const pieces: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    pieces.push(value);
+    size += value.length;
+    coming.loaded += value.length;
+    tellLoading();
+  }
+  const whole = new Uint8Array(size);
+  let at = 0;
+  for (const piece of pieces) {
+    whole.set(piece, at);
+    at += piece.length;
+  }
+  return whole;
+}
+
+/**
+ * The reader's two big files, started on their way while the model is still being made: the
+ * weights, kept (the reader is handed them), and the wasm, fetched for the count and for the
+ * browser's cache, which the reader's own loader then finds it in. That loader has to fetch it
+ * itself: a browser keeps the compiled code of a wasm it streamed from its cache, and compiles
+ * one handed over as bytes again on every visit.
+ */
+function fetchReaderFiles(msg: Extract<ToFaceWorker, { type: 'start' }>): Promise<Uint8Array | null> {
+  const weights = fetchCounted(msg.weights);
+  const wasm = fetchCounted(msg.wasm.binary);
+  // counted or not, the reader is still tried: its own fetch may get what this one did not
+  return Promise.all([weights, wasm]).then(
+    ([bytes]) => bytes,
+    () => null
+  );
+}
 
 function say(next: FaceState, why?: string) {
   if (next === state && !why) return;
@@ -216,6 +288,7 @@ function tick() {
 function sendStats(now: number) {
   const seconds = (now - counts.since) / 1000;
   const degrees = (radians: number) => Math.round((radians * 180) / Math.PI);
+  const mood = moodOf(pose.shapes);
   const stats: ModelStats = {
     fps: Math.round(counts.drawn / seconds),
     reads: Math.round(counts.reads / seconds),
@@ -225,7 +298,9 @@ function sendStats(now: number) {
     pitch: degrees(pose.pitch),
     roll: degrees(pose.roll),
     mouth: Math.round(pose.shapes[shapeIndex('jawOpen')]! * 100),
-    blink: Math.round(((pose.shapes[shapeIndex('eyeBlinkLeft')]! + pose.shapes[shapeIndex('eyeBlinkRight')]!) / 2) * 100)
+    blink: Math.round(((pose.shapes[shapeIndex('eyeBlinkLeft')]! + pose.shapes[shapeIndex('eyeBlinkRight')]!) / 2) * 100),
+    smile: Math.round(mood.smile * 100),
+    brows: Math.round((mood.browUp - mood.browDown) * 100)
   };
   counts.drawn = counts.reads = counts.readMs = 0;
   counts.since = now;
@@ -255,8 +330,11 @@ function shutdown() {
   scene = null;
 }
 
-/** The reader, on the gpu where it can be, else on the cpu. It never stops a model: with no reader the model breathes and blinks. */
-async function loadReader(msg: Extract<ToFaceWorker, { type: 'start' }>) {
+/**
+ * The reader, on the gpu where it can be, else on the cpu. It never stops a model: with no
+ * reader the model breathes and blinks. `files`: its weights on their way (`fetchReaderFiles`).
+ */
+async function loadReader(msg: Extract<ToFaceWorker, { type: 'start' }>, files: Promise<Uint8Array | null>) {
   // a worker built one way and handed the other loader: say which, the reader's own error does not
   let classic = true;
   try {
@@ -266,8 +344,12 @@ async function loadReader(msg: Extract<ToFaceWorker, { type: 'start' }>) {
   }
   if (classic === msg.wasm.module) console.warn(`face reader: a ${classic ? 'classic' : 'module'} worker handed the ${msg.wasm.module ? 'module' : 'classic'} loader`);
   const fileset = { wasmLoaderPath: msg.wasm.loader, wasmBinaryPath: msg.wasm.binary };
+  const weights = await files;
+  if (stopped) return;
+  // every byte is here: what is left is the reader starting, which says nothing on the way
+  tellLoading(true);
   const options = (delegate: 'GPU' | 'CPU') => ({
-    baseOptions: { modelAssetPath: msg.weights, delegate },
+    baseOptions: weights ? { modelAssetBuffer: weights, delegate } : { modelAssetPath: msg.weights, delegate },
     runningMode: 'VIDEO' as const,
     numFaces: 1,
     outputFaceBlendshapes: true,
@@ -295,8 +377,10 @@ async function loadReader(msg: Extract<ToFaceWorker, { type: 'start' }>) {
     }
     landmarker = made;
     faceSeenAt = performance.now();
+    step = null;
     say('lost');
   } catch (err) {
+    step = null;
     say('off', wordsOf(err));
   }
 }
@@ -307,6 +391,9 @@ const READER_WAIT_MS = 4000;
 async function start(msg: Extract<ToFaceWorker, { type: 'start' }>) {
   interval = 1000 / Math.min(60, Math.max(5, msg.fps));
   tracker.mirror = msg.mirror;
+  tellLoading(true);
+  // the reader's files come down while the model is made: the one is the network's work, the other this thread's
+  const files = fetchReaderFiles(msg);
   try {
     canvas = new OffscreenCanvas(msg.width, msg.height);
     canvas.addEventListener('webglcontextlost', () => fail('the drawing was lost (the gpu let go of it)'));
@@ -316,6 +403,7 @@ async function start(msg: Extract<ToFaceWorker, { type: 'start' }>) {
       scene = null;
       return;
     }
+    scene.setExpressions(msg.expressions);
     sink = msg.sink ? msg.sink.getWriter() : null;
     // the first frame before `ready`: the track has a picture in it by the time it is put in the camera's slot
     scene.draw(pose, 0);
@@ -326,10 +414,12 @@ async function start(msg: Extract<ToFaceWorker, { type: 'start' }>) {
   }
   // the reader loads on this thread, and while it does nothing is drawn: wait for it (not for long) before
   // saying `ready`, so the model does not go on the stream and then stand still for its first second
-  const reader = loadReader(msg);
+  step = 'reader';
+  tellLoading(true);
+  const reader = loadReader(msg, files);
   await Promise.race([reader, new Promise((resolve) => setTimeout(resolve, READER_WAIT_MS))]);
-  if (stopped) return;
-  post({ type: 'ready' });
+  if (stopped || !scene) return;
+  post({ type: 'ready', rig: scene.rig });
   lastDraw = nextDraw = counts.since = performance.now();
   nextDraw += interval;
   timer = setTimeout(tick, interval);
@@ -351,6 +441,7 @@ scope.onmessage = (e: MessageEvent<ToFaceWorker>) => {
   } else if (msg.type === 'set') {
     if (msg.mirror !== undefined) tracker.mirror = msg.mirror;
     if (msg.background !== undefined) scene?.setBackground(msg.background);
+    if (msg.expressions !== undefined) scene?.setExpressions(msg.expressions);
   } else if (msg.type === 'rest') tracker.rest();
   else if (msg.type === 'stop') {
     shutdown();

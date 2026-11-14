@@ -6,6 +6,9 @@
  * From a reading to a pose: the resting face is taken off (the first second of a face, or
  * `rest()`), left and right are swapped for a mirror, each score is stretched to 0..1 (a real
  * blink or an open jaw does not score all the way to 1) and every number is smoothed.
+ *
+ * `moodOf` is what a pose says beyond the mouth and the blinks, as the few things this reader
+ * can be believed on: the brows up or down, a smile, eyes wide.
  */
 
 /** The 52 scores, in arkit's order: the names a face reader and a "perfect sync" model share. */
@@ -96,30 +99,98 @@ export interface Pose {
 
 export const restPose = (): Pose => ({ face: false, yaw: 0, pitch: 0, roll: 0, x: 0, y: 0, z: 0, shapes: new Float32Array(SHAPE_COUNT) });
 
+/** What a face is doing besides talking and blinking, each 0..1. The brows are one or the other, never both. */
+export interface Mood {
+  browUp: number;
+  browDown: number;
+  smile: number;
+  /** The eyes opened wide. */
+  wide: number;
+}
+
+/** Brows drawn down this far are thinking, or the light: nothing is made of them. */
+const SCOWL_FROM = 0.15;
+const at = (shapes: ArrayLike<number>, name: Shape) => shapes[INDEX.get(name)!] ?? 0;
+const both = (shapes: ArrayLike<number>, left: Shape, right: Shape) => (at(shapes, left) + at(shapes, right)) / 2;
+
+/**
+ * The mood in a pose's `shapes`. Of the reader's scores for the upper face and the corners of
+ * the mouth, these are the ones that move with a real face: `mouthFrown`, `cheekSquint` and
+ * `noseSneer` stay at nothing whatever the face does, so there is no frown and no sad here.
+ * Lowered brows win over the rest: teeth bared in anger score as a smile, and brows pulled
+ * down over raised inner ends as raised.
+ */
+export function moodOf(shapes: ArrayLike<number>): Mood {
+  const down = both(shapes, 'browDownLeft', 'browDownRight');
+  const up = Math.max(at(shapes, 'browInnerUp'), both(shapes, 'browOuterUpLeft', 'browOuterUpRight'));
+  // a scowl is the one look that is wrong to wear by mistake: the first of it is let go
+  const browDown = clamp01((down - up - SCOWL_FROM) / (1 - SCOWL_FROM));
+  const smile = clamp01(both(shapes, 'mouthSmileLeft', 'mouthSmileRight') * (1 - browDown));
+  return {
+    browUp: clamp01(up - down),
+    browDown,
+    smile,
+    // raised brows open the eyes a little on their own: under a smile that is the smile's
+    wide: clamp01(both(shapes, 'eyeWideLeft', 'eyeWideRight') * (1 - smile) * (1 - browDown))
+  };
+}
+
 /** The frames the resting face is taken from: under a second of a camera. */
 const REST_FRAMES = 20;
 /** Room noise on a score: under this much above its floor it is nothing. */
 const DEAD = 0.02;
 /**
  * Where each kind of score tops out on a real face: past it the shape is all the way on. Read
- * off a face talking to a camera, not guessed: a jaw in ordinary speech scores 0.15 and 0.3 is
- * loud, a blink peaks near 0.65 over open eyes that already score 0.2.
+ * off faces talking to a camera, not guessed: a jaw in ordinary speech scores 0.15 and 0.3 is
+ * loud, a blink peaks near 0.65 over open eyes that already score 0.2, a plain smile scores
+ * 0.6 and a broad one 0.9, and eyes as wide as they go barely reach 0.2.
  */
 const TOP_BLINK = 0.5;
 const TOP_JAW = 0.35;
+const TOP_SMILE = 0.8;
+const TOP_WIDE = 0.2;
 const TOP_DEFAULT = 0.6;
-const TOPS: readonly number[] = SHAPES.map((name) => (name.startsWith('eyeBlink') ? TOP_BLINK : name === 'jawOpen' ? TOP_JAW : TOP_DEFAULT));
+const TOPS: readonly number[] = SHAPES.map((name) =>
+  name.startsWith('eyeBlink') ? TOP_BLINK : name === 'jawOpen' ? TOP_JAW : name.startsWith('mouthSmile') ? TOP_SMILE : name.startsWith('eyeWide') ? TOP_WIDE : TOP_DEFAULT
+);
 /**
  * A floor follows its score after the resting second too, so a rest taken mid-word mends
- * itself: down fast and up slowly. The mouth's floors sit at the least the score has been (a
- * shut mouth is the lowest it goes); the rest sit low in their usual range, where open eyes and
- * a brow at ease are, not at the one widest stare. Per reading.
+ * itself: `[down, up]`, how much of the way it goes per reading.
+ *
+ * - The mouth's floors sit at the least the score has been: a shut mouth is the lowest it goes.
+ * - The eyes' sit low in their usual range, where open eyes are, and follow in seconds: how open
+ *   an eye scores moves with the light and with the head.
+ * - The brows' and wide eyes' sit where the face usually is, and get there in about fifteen
+ *   seconds either way. Some people talk with their brows drawn down the whole time, and a
+ *   model that scowled through a stream for it would be wrong: what shows is the brows leaving
+ *   where they usually are, for the few seconds a look lasts.
+ * - A smile's sits at the least it has been and hardly rises at all: someone who smiles for a
+ *   minute should have a model that smiles for a minute.
  */
-const MOUTH_FALL = 0.2;
-const MOUTH_RISE = 0.0003;
-const FACE_FALL = 0.003;
-const FACE_RISE = 0.001;
-const IS_MOUTH: readonly boolean[] = SHAPES.map((name) => name.startsWith('jaw') || name.startsWith('mouth'));
+const MOUTH: readonly [number, number] = [0.2, 0.0003];
+const EYES: readonly [number, number] = [0.003, 0.001];
+const BROWS: readonly [number, number] = [0.0022, 0.0022];
+const SMILE: readonly [number, number] = [0.2, 0.0001];
+const isSmile = (name: string) => name.startsWith('mouthSmile');
+const isHeld = (name: string) => name.startsWith('brow') || name.startsWith('eyeWide') || name.startsWith('cheek') || name.startsWith('nose');
+const FOLLOW: readonly (readonly [number, number])[] = SHAPES.map((name) =>
+  isSmile(name) ? SMILE : isHeld(name) ? BROWS : name.startsWith('jaw') || name.startsWith('mouth') ? MOUTH : EYES
+);
+/**
+ * How far over its floor a score is all the way on. For the mouth and the eyes, what is left
+ * under the top: narrow eyes rest high and still have to shut. For a look that is held, the
+ * same distance whatever the floor: a floor that has climbed to where the brows usually are
+ * must not turn what little is left above it into a full scowl.
+ */
+const SPAN_FROM_ZERO: readonly boolean[] = SHAPES.map((name) => isSmile(name) || isHeld(name));
+/**
+ * The brows' floors settle faster at first: the resting second is one second, and the face
+ * someone has when a model comes on is not always the one they talk with. For the first
+ * readings a floor is close to the average of what it has seen; by `1 / BROWS[1]` readings
+ * (fifteen seconds) it follows at its own pace.
+ */
+const SETTLING: readonly boolean[] = SHAPES.map(isHeld);
+const SETTLE_FROM = 60;
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
 /**
@@ -196,6 +267,8 @@ export class FaceTracker {
   private home: { head: number[]; floors: Float32Array } | null = null;
   /** The readings the resting face is being taken from. */
   private sample: { head: number[][]; shapes: Float32Array[] } = { head: [], shapes: [] };
+  /** Readings since the resting face was taken. */
+  private since = 0;
   private readonly headFilters = [
     new OneEuro(1.2, 0.5),
     new OneEuro(1.2, 0.5),
@@ -204,9 +277,9 @@ export class FaceTracker {
     new OneEuro(0.6, 0.02),
     new OneEuro(0.4, 0.02)
   ];
-  // the mouth and the blinks are quick, the rest of a face is not
+  // the mouth and the blinks are quick, the rest of a face is not: a smile is a mood, not a word
   private readonly shapeFilters = SHAPES.map((name) =>
-    name.startsWith('eyeBlink') || name.startsWith('jaw') || name.startsWith('mouth') ? new OneEuro(5, 3) : new OneEuro(2, 1)
+    name.startsWith('eyeBlink') || name.startsWith('jaw') || (name.startsWith('mouth') && !isSmile(name)) ? new OneEuro(5, 3) : new OneEuro(2, 1)
   );
 
   /** Take the resting face again, from the next readings. */
@@ -246,7 +319,9 @@ export class FaceTracker {
         )
       };
       this.sample = { head: [], shapes: [] };
+      this.since = 0;
     }
+    const settle = 1 / (SETTLE_FROM + this.since++);
     const t = now / 1000;
     const side = this.mirror ? -1 : 1;
     const { head: home, floors } = this.home;
@@ -259,9 +334,10 @@ export class FaceTracker {
     for (let i = 0; i < SHAPE_COUNT; i++) {
       const score = reading.shapes[i]!;
       const gap = score - floors[i]!;
-      floors[i]! += gap * (gap < 0 ? (IS_MOUTH[i] ? MOUTH_FALL : FACE_FALL) : IS_MOUTH[i] ? MOUTH_RISE : FACE_RISE);
+      const follow = FOLLOW[i]![gap < 0 ? 0 : 1];
+      floors[i]! += gap * (SETTLING[i] ? Math.max(follow, settle) : follow);
       const floor = floors[i]!;
-      const raw = clamp01((score - floor - DEAD) / Math.max(0.05, TOPS[i]! - floor - DEAD));
+      const raw = clamp01((score - floor - DEAD) / Math.max(0.05, TOPS[i]! - DEAD - (SPAN_FROM_ZERO[i] ? 0 : floor)));
       // the score lands on its twin's place under a mirror: the subject's left eye is the picture's right
       pose.shapes[this.mirror ? TWIN[i]! : i] = clamp01(this.shapeFilters[i]!.next(raw, t));
     }

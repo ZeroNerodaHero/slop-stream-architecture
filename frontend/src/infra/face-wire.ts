@@ -9,6 +9,27 @@
  */
 export type FaceState = 'starting' | 'on' | 'lost' | 'off';
 
+/**
+ * What a model's face can be moved by (`model-rig.ts`), told once when the model is ready.
+ * `arkit`: it has the reader's own 52 scores as expressions ("perfect sync") and takes each as
+ * it is. `shapes`: its face mesh has brows, eyes and a smile of its own, and expressions were
+ * made of them. `presets`: only what every vrm promises, the vowels, the blinks and the moods.
+ * `none`: nothing on its face moves; the head still turns.
+ */
+export type RigKind = 'arkit' | 'shapes' | 'presets' | 'none';
+/** A part of a face the reader moves on this model. The head is not here: it always turns. */
+export type RigPart = 'eyes' | 'blink' | 'mouth' | 'brows' | 'smile';
+export interface RigInfo {
+  kind: RigKind;
+  parts: RigPart[];
+}
+
+/**
+ * Where a model is on its way to being worn, inside the worker: `model` while the file is
+ * made a model of and drawn once, `reader` while the face reader comes down and starts.
+ */
+export type LoadStep = 'model' | 'reader';
+
 /** How the worker is doing, twice a second: for the status line, and for the test. */
 export interface ModelStats {
   /** Frames drawn a second. */
@@ -24,6 +45,9 @@ export interface ModelStats {
   /** The jaw and the blink of the pose, 0 to 100. */
   mouth: number;
   blink: number;
+  /** The smile of the pose, 0 to 100, and its brows: up to 100 raised, down to -100 drawn down. */
+  smile: number;
+  brows: number;
 }
 
 /** Where the reader's wasm is: its loader script and its binary, and which kind of worker the loader is for. */
@@ -44,6 +68,8 @@ export type ToFaceWorker =
       fps: number;
       background: string;
       mirror: boolean;
+      /** The brows, the smile and the wide eyes move the model too, not only the mouth and the blinks. */
+      expressions: boolean;
       wasm: FaceWasm;
       /** The reader's weights (`face_landmarker.task`), by url. */
       weights: string;
@@ -56,14 +82,20 @@ export type ToFaceWorker =
   | { type: 'frames'; frames: ReadableStream<VideoFrame> | null }
   /** One camera frame, from a page that reads them itself. Answered with `want`. */
   | { type: 'frame'; bitmap: ImageBitmap }
-  | { type: 'set'; mirror?: boolean; background?: string }
+  | { type: 'set'; mirror?: boolean; background?: string; expressions?: boolean }
   /** Take the resting face again. */
   | { type: 'rest' }
   | { type: 'stop' };
 
 export type FromFaceWorker =
+  /**
+   * How far along: sent as the step changes and, in `reader`, as the reader's files come down
+   * (`loaded` of `total` bytes; `total` 0 when the server does not say). It goes on after
+   * `ready` for a reader that is slower than the model waits for.
+   */
+  | { type: 'loading'; step: LoadStep; loaded: number; total: number }
   /** The model is loaded and its first frame is drawn. */
-  | { type: 'ready' }
+  | { type: 'ready'; rig: RigInfo }
   /** The model could not be loaded, or the drawing was lost: nothing more comes. */
   | { type: 'failed'; why: string }
   | { type: 'state'; face: FaceState; why?: string }

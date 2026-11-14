@@ -19,13 +19,13 @@
  */
 
 import weights from '@/assets/face_landmarker.task?url';
-import type { FaceState, FromFaceWorker, ModelStats, ToFaceWorker } from '@/infra/face-wire';
+import type { FaceState, FromFaceWorker, LoadStep, ModelStats, RigInfo, ToFaceWorker } from '@/infra/face-wire';
 // the worker as vite builds it (see events.ts). the lint strips the query and finds no default
 // export in the worker file; vite's own typing says there is one
 // oxlint-disable-next-line import/default -- `?worker` is vite's: the default export is the worker's constructor
 import FaceWorker from '@/infra/face.worker?worker';
 
-export type { FaceState, ModelStats } from '@/infra/face-wire';
+export type { FaceState, LoadStep, ModelStats, RigInfo, RigPart } from '@/infra/face-wire';
 
 /** The model's picture: the camera's own size (publish-atoms' `CAMERA_VIDEO`) and rate. */
 const WIDTH = 1280;
@@ -52,8 +52,16 @@ export interface ModelOptions {
   /** The camera the face is read from. `null`: none, and the model breathes and blinks on its own. Never sent anywhere. */
   camera: MediaStreamTrack | null;
   mirror: boolean;
+  /** The brows, the smile and the wide eyes move the model too, not only the mouth and the blinks. */
+  expressions: boolean;
   /** The flat colour behind the model, as css. */
   background: string;
+  /**
+   * How far along, inside the worker: the file being made a model of (`model`), then the face
+   * reader coming down and starting (`reader`, with `loaded` of `total` bytes; `total` 0 when
+   * the server does not say). The reader's goes on after the model is on, when it is the slower.
+   */
+  onLoading: (step: LoadStep, loaded: number, total: number) => void;
   onState: (face: FaceState, why?: string) => void;
   onStats: (stats: ModelStats) => void;
   /** The model stopped after it had started: the drawing was lost, the worker died. Nothing more comes from it. */
@@ -65,10 +73,13 @@ export interface ModelSession {
   readonly track: MediaStreamTrack;
   /** Which of the two ways this browser got. */
   readonly path: 'worker' | 'page';
+  /** What of this model's face the reader can move (`model-rig.ts`). */
+  readonly rig: RigInfo;
   /** Another camera to read the face from, or none. */
   setCamera(camera: MediaStreamTrack | null): void;
   setMirror(mirror: boolean): void;
   setBackground(css: string): void;
+  setExpressions(on: boolean): void;
   /** Take the resting face again. */
   rest(): void;
   stop(): void;
@@ -172,9 +183,11 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
     track.stop();
   };
 
-  const session: ModelSession = {
+  const session: ModelSession & { rig: RigInfo } = {
     track,
     path,
+    // the worker says what it found when the model is ready: nobody has the session before that
+    rig: { kind: 'none', parts: [] },
     setCamera(camera) {
       if (stopped) return;
       const frames = framesOf(camera);
@@ -183,6 +196,7 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
     },
     setMirror: (mirror) => void (!stopped && send({ type: 'set', mirror })),
     setBackground: (background) => void (!stopped && send({ type: 'set', background })),
+    setExpressions: (expressions) => void (!stopped && send({ type: 'set', expressions })),
     rest: () => void (!stopped && send({ type: 'rest' })),
     stop
   };
@@ -205,8 +219,10 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
       if (msg.type === 'ready') {
         ready = true;
         clearTimeout(timeout);
+        session.rig = msg.rig;
         resolve(session);
-      } else if (msg.type === 'failed') {
+      } else if (msg.type === 'loading') options.onLoading(msg.step, msg.loaded, msg.total);
+      else if (msg.type === 'failed') {
         clearTimeout(timeout);
         giveUp(msg.why);
       } else if (msg.type === 'state') options.onState(msg.face, msg.why);
@@ -233,6 +249,7 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
         fps: FPS,
         background: options.background,
         mirror: options.mirror,
+        expressions: options.expressions,
         wasm,
         weights,
         frames,
