@@ -17,8 +17,9 @@
 // Which picture is which is read off its corners: the model is drawn on a flat colour the
 // streamer picks, and the test picks one no camera makes. The face reader's state and numbers
 // are read off #face-status (data-face, data-reads, data-fps, ...), never off the picture.
-// Chrome's fake camera has no face in it, so the reader says `no face in view` and the model
-// moves on its own. FACE_CLIP=/path/to/a/face.mjpeg feeds it one, and then the numbers must move.
+// Chrome's fake camera has no face in it, so the reader says `no face in view`, its light beside
+// the model's name is red, and the model moves on its own. FACE_CLIP=/path/to/a/face.mjpeg feeds
+// it one, and then the numbers must move and the light is green.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node vtuber.js
 const { chromium } = require('playwright');
 const fs = require('fs');
@@ -124,6 +125,31 @@ const fmtPx = (px) => `corners ${hex(px.left)} ${hex(px.right)}, middle ${hex(px
 // ---- the face reader, off #face-status ----
 const face = (p) => p.$eval('#face-status', (el) => ({ face: el.dataset.face, yaw: Number(el.dataset.yaw), pitch: Number(el.dataset.pitch), roll: Number(el.dataset.roll), mouth: Number(el.dataset.mouth), fps: Number(el.dataset.fps), reads: Number(el.dataset.reads), words: el.textContent.trim() }));
 const waitFace = (p, state, timeout = 45000) => p.waitForFunction((state) => document.querySelector('#face-status')?.dataset.face === state, state, { timeout });
+/**
+ * The reader's light beside the model's name, as someone looking sees it, with the state it is for: which of
+ * the theme's colours it is (`green`, `red`, or the css colour when neither) and the words that stand beside
+ * it. Words kept for a screen reader alone have a box of one pixel, and are not counted.
+ */
+const light = (p) =>
+  p.$eval('#face-status', (el) => {
+    const theme = getComputedStyle(document.documentElement);
+    const of = (name) => `rgb(${theme.getPropertyValue(name).trim().split(/\s+/).join(', ')})`;
+    const colour = getComputedStyle(el.querySelector('#face-light')).backgroundColor;
+    const texts = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let shown = '';
+    for (let node = texts.nextNode(); node; node = texts.nextNode()) {
+      const box = node.parentElement.getBoundingClientRect();
+      if (box.width > 1 && box.height > 1) shown += node.textContent;
+    }
+    return { face: el.dataset.face, colour: colour === of('--increase') ? 'green' : colour === of('--decrease') ? 'red' : colour, shown: shown.trim() };
+  });
+/** A switch drawn as an icon (`aria-pressed`): pressed until it is on, or off. */
+async function press(p, sel, on) {
+  if ((await p.getAttribute(sel, 'aria-pressed')) !== String(on)) await p.click(sel);
+  await p.waitForFunction(([sel, want]) => document.querySelector(sel)?.getAttribute('aria-pressed') === want, [sel, String(on)], { timeout: 5000 }).catch(() => {
+    throw new Error(`${sel} is not ${on ? 'on' : 'off'} after a press`);
+  });
+}
 
 // Before any of the page's code, on the publisher: every track a sender is given and every video
 // track a <video> is given, by the label of what it came from. A camera's label is the camera's
@@ -351,16 +377,18 @@ function glb(json) {
       const moods = rig.parts.includes('brows') || rig.parts.includes('smile');
       expect(((await pub.$('#face-expressions')) !== null) === moods, `the expressions switch is ${moods ? 'missing' : 'there with nothing to switch'}: ${JSON.stringify(rig)}`);
       if (!moods) return `${rig.kind}: "${rig.words}", no switch`;
-      await pub.uncheck('#face-expressions');
+      await press(pub, '#face-expressions', false);
       expect((await pub.evaluate(() => localStorage.getItem('settings.faceExpressions'))) === 'false', 'the switch is not kept');
-      await pub.check('#face-expressions');
+      await press(pub, '#face-expressions', true);
       expect((await pub.evaluate(() => localStorage.getItem('settings.faceExpressions'))) === 'true', 'the switch is not kept');
       return `${rig.kind}: "${rig.words}", the switch off and on again`;
     })
   );
 
   await step(
-    FACE_CLIP ? 'the face reader finds the face in the clip, and the head and the mouth it reads move' : 'the face reader is up and reading frames: no face in the fake camera, so `no face in view` and a model that moves on its own',
+    FACE_CLIP
+      ? 'the face reader finds the face in the clip, the head and the mouth it reads move, and the light beside the name is green and wordless'
+      : 'the face reader is up and reading frames: no face in the fake camera, so a red light that says `no face`, and a model that moves on its own',
     drawn(async () => {
       await waitFace(pub, FACE_CLIP ? 'on' : 'lost');
       const seen = new Set();
@@ -376,7 +404,12 @@ function glb(json) {
       expect(last.fps >= 15, `the model is drawn ${last.fps} times a second`);
       if (FACE_CLIP) expect(seen.size >= 3, `the head did not move in 6 s: ${[...seen].join(' ')}`);
       else expect(last.face === 'lost' && last.yaw === 0 && last.mouth === 0, `with no face the reader says ${JSON.stringify(last)}`);
-      return `"${last.words}" · drawn ${last.fps}/s, read ${last.reads}/s${FACE_CLIP ? ` · ${seen.size} head poses in 6 s, the mouth up to ${mouth}%` : ''}`;
+      // the light goes by the state it was read with: a clip's face can be out of view for a moment
+      const lit = await light(pub);
+      expect(lit.face === 'on' || lit.face === 'lost', `the reader went ${lit.face}`);
+      const want = lit.face === 'on' ? { colour: 'green', shown: '' } : { colour: 'red', shown: 'no face' };
+      expect(lit.colour === want.colour && lit.shown === want.shown, `${lit.face}: the light is ${lit.colour} and says "${lit.shown}", not ${want.colour} and "${want.shown}"`);
+      return `"${last.words}" · a ${lit.colour} light${lit.shown ? ` that says "${lit.shown}"` : ''} · drawn ${last.fps}/s, read ${last.reads}/s${FACE_CLIP ? ` · ${seen.size} head poses in 6 s, the mouth up to ${mouth}%` : ''}`;
     })
   );
 
@@ -432,11 +465,11 @@ function glb(json) {
     drawn(async () => {
       await pub.fill('#model-background', hex(MAGENTA));
       const px = await waitPicture(pub, '#preview', MAGENTA, true, 5000);
-      await pub.uncheck('#face-mirror');
+      await press(pub, '#face-mirror', false);
       await pub.click('#face-rest');
       const kept = await pub.evaluate(() => ({ colour: localStorage.getItem('settings.modelBackground'), mirror: localStorage.getItem('settings.faceMirror') }));
       expect(kept.colour === JSON.stringify('#ff00ff') && kept.mirror === 'false', `kept: ${JSON.stringify(kept)}`);
-      await pub.check('#face-mirror');
+      await press(pub, '#face-mirror', true);
       expect((await pub.$('#model-controls')) !== null, 'the model went');
       // the worker says how it is doing twice a second, and this model has only just gone on
       await pub.waitForFunction(() => Number(document.querySelector('#face-status')?.dataset.fps) >= 15, null, { timeout: 5000 }).catch(() => {
