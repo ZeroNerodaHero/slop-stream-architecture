@@ -64,12 +64,12 @@ flowchart LR
 
 `random-media/vrms`: four models to try it with, about 50 mb together. each `.vrm` has a 256×256 `.jpg` beside it, its thumbnail in the picker.
 
-| file | what | from | its own meta says |
-|---|---|---|---|
-| `sendagaya-shino.vrm` | 15.1 mb, vrm 0.x, a vroid studio β sample | `madjin/vrm-samples`, `vroid/beta/Sendagaya_Shino.vrm` | `CC0`, anyone may wear it |
-| `hairsample-male.vrm` | 18.5 mb, vrm 0.x, a vroid studio β sample | `madjin/vrm-samples`, `vroid/beta/HairSample_Male.vrm` | `CC0`, anyone may wear it |
-| `orion.vrm` | 6.1 mb, vrm 0.x, by polygonal mind. not a face: a low-poly head, no blink and no mouth shapes, so only its head moves | `madjin/vrm-samples`, `Avatar_Orion.vrm` | `CC0`, anyone may wear it |
-| `seed-san.vrm` | 10.9 mb, vrm 1.0, by virtualcast, inc.: the vrm consortium's own sample | `vrm-c/vrm-specification`, `samples/Seed-san/vrm/Seed-san.vrm` | vrm public license 1.0: anyone may wear it, it may be passed on, **credit is required** |
+| file                  | what                                                                                                                  | from                                                           | its own meta says                                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `sendagaya-shino.vrm` | 15.1 mb, vrm 0.x, a vroid studio β sample                                                                             | `madjin/vrm-samples`, `vroid/beta/Sendagaya_Shino.vrm`         | `CC0`, anyone may wear it                                                               |
+| `hairsample-male.vrm` | 18.5 mb, vrm 0.x, a vroid studio β sample                                                                             | `madjin/vrm-samples`, `vroid/beta/HairSample_Male.vrm`         | `CC0`, anyone may wear it                                                               |
+| `orion.vrm`           | 6.1 mb, vrm 0.x, by polygonal mind. not a face: a low-poly head, no blink and no mouth shapes, so only its head moves | `madjin/vrm-samples`, `Avatar_Orion.vrm`                       | `CC0`, anyone may wear it                                                               |
+| `seed-san.vrm`        | 10.9 mb, vrm 1.0, by virtualcast, inc.: the vrm consortium's own sample                                               | `vrm-c/vrm-specification`, `samples/Seed-san/vrm/Seed-san.vrm` | vrm public license 1.0: anyone may wear it, it may be passed on, **credit is required** |
 
 the licence was read out of each file before it was taken, and only files that say they may be passed on are here. the picker shows the author and the licence on each card. seed-san's credit is the streamer's to give when they wear it on a stream.
 
@@ -86,11 +86,11 @@ the folder is not in `.dockerignore`: that file is in `image-paths`, and a chang
 
 **out of the bucket** (`api/src/models.rs`):
 
-| | | |
-|---|---|---|
-| GET | `/api/models` | `{ models: [{ id, name, author, licence, vrm: "0" or "1", bytes, v, thumb }] }`, `no-cache`. nothing put up yet is `{ models: [] }`. the bucket not answering is 502 `could not load the models` |
-| GET | `/api/models/:id` | the file, `model/gltf-binary`, `nosniff`. the page asks with `?v=<v>`, the start of the hash of the file and its thumbnail, so the answer is `immutable`. the page asks once: it keeps the file itself (`kept in the browser`, below). 404 `no such model` |
-| GET | `/api/models/:id/thumb` | the thumbnail, its type by its first bytes (png, jpeg, webp). 404 when it has none |
+|     |                         |                                                                                                                                                                                                                                                            |
+| --- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET | `/api/models`           | `{ models: [{ id, name, author, licence, vrm: "0" or "1", bytes, v, thumb }] }`, `no-cache`. nothing put up yet is `{ models: [] }`. the bucket not answering is 502 `could not load the models`                                                           |
+| GET | `/api/models/:id`       | the file, `model/gltf-binary`, `nosniff`. the page asks with `?v=<v>`, the start of the hash of the file and its thumbnail, so the answer is `immutable`. the page asks once: it keeps the file itself (`kept in the browser`, below). 404 `no such model` |
+| GET | `/api/models/:id/thumb` | the thumbnail, its type by its first bytes (png, jpeg, webp). 404 when it has none                                                                                                                                                                         |
 
 anyone may read these: they are the site's own files. nothing writes to the bucket but `api models`, which is a command on the box, not a route.
 
@@ -106,11 +106,11 @@ a `.vrm` is a glb (gltf 2.0 in one binary) with standard bones, standard express
 
 `infra/model-store.ts`: indexeddb, the database `models`.
 
-| store | what | how many |
-|---|---|---|
-| `meta` | their own models: a name, an author, a size, a small picture | five. the oldest goes |
+| store   | what                                                                                                               | how many                             |
+| ------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------ |
+| `meta`  | their own models: a name, an author, a size, a small picture                                                       | five. the oldest goes                |
 | `demos` | the demo models that came down: the id, which version of the file (the api's `v`), its size, when it was last worn | eight. the one worn longest ago goes |
-| `files` | the bytes of both: under the number `meta` gave, or under `demo:<id>` | |
+| `files` | the bytes of both: under the number `meta` gave, or under `demo:<id>`                                              |                                      |
 
 - **their own file** is kept when it is picked. the same file picked again replaces itself. the picker's `yours` shelf offers them, each with a `×` to forget it.
 - **a demo model** is kept once it has come down and is a model. from then its card says `downloaded`, a pick reads it out of the browser, and so does the next visit: the server is asked for nothing, and the model opens with the server away.
@@ -141,12 +141,12 @@ the gains and the floors were set on recordings of what the reader says, frame b
 
 **from the pose to the model.** the head is `infra/model-draw.ts`'s: its turn is shared between the head (half), the neck and a little of the chest, and stopped at about 40° to a side and 30° up, down or tipped; the lean moves the spine. the face is `infra/model-rig.ts`'s, which looks once at what a model has and settles how the scores reach it:
 
-| kind | a model that | what moves |
-|---|---|---|
-| `arkit` | has the reader's own 52 as expressions ("perfect sync"): 26 or more of them, spelt `eyeBlinkLeft`, `EyeBlinkLeft` or `eyeBlink_L` | each score goes to the expression of its name. nothing is worked out |
-| `shapes` | has brows, eyes and a smile as morphs of its face mesh. every model out of vroid studio does (`Fcl_BRW_Surprised`, `Fcl_BRW_Angry`, `Fcl_MTH_Fun`, `Fcl_EYE_Joy`, `Fcl_EYE_Surprised`), and others are found by plain names for the brows (`brow_up`, `brow_down`) | the vowels and the blinks, and expressions made here of those morphs: the brows up, the brows down (the eyes narrow with them), a smile, eyes narrowed a little by a broad smile, eyes wide |
-| `presets` | has only what a vrm promises | the vowels and the blinks. a clear smile is `happy` and brows drawn hard down are `angry`, as whole faces |
-| `none` | binds nothing to its expressions (`orion`) | the head |
+| kind      | a model that                                                                                                                                                                                                                                                       | what moves                                                                                                                                                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `arkit`   | has the reader's own 52 as expressions ("perfect sync"): 26 or more of them, spelt `eyeBlinkLeft`, `EyeBlinkLeft` or `eyeBlink_L`                                                                                                                                  | each score goes to the expression of its name. nothing is worked out                                                                                                                        |
+| `shapes`  | has brows, eyes and a smile as morphs of its face mesh. every model out of vroid studio does (`Fcl_BRW_Surprised`, `Fcl_BRW_Angry`, `Fcl_MTH_Fun`, `Fcl_EYE_Joy`, `Fcl_EYE_Surprised`), and others are found by plain names for the brows (`brow_up`, `brow_down`) | the vowels and the blinks, and expressions made here of those morphs: the brows up, the brows down (the eyes narrow with them), a smile, eyes narrowed a little by a broad smile, eyes wide |
+| `presets` | has only what a vrm promises                                                                                                                                                                                                                                       | the vowels and the blinks. a clear smile is `happy` and brows drawn hard down are `angry`, as whole faces                                                                                   |
+| `none`    | binds nothing to its expressions (`orion`)                                                                                                                                                                                                                         | the head                                                                                                                                                                                    |
 
 - **the mouth**: `aa` from `jawOpen`, `oh` from `mouthFunnel`, `ou` from `mouthPucker`, `ih` from the upper lip, never more than all the way open together. the blinks, and where the eyes look.
 - **a part a `shapes` model lacks falls back to the preset**: seed-san has brows by name and no smile morph, so its smile is `happy`.
@@ -161,11 +161,11 @@ the gains and the floors were set on recordings of what the reader says, frame b
 
 a model on its way on says how far along it is (`modelLoadAtom`), in three steps:
 
-| step | what is happening | what is shown |
-|---|---|---|
-| `file` | the bytes come: down from the server, or out of the browser | `downloading · 8.2 of 15 mb` and a bar that fills; `opening it` for one the browser keeps |
-| `model` | the file is made a model of and drawn once, in the worker | `building the model`, a bar with no end |
-| `reader` | the face reader comes down and starts | `getting the face reader · 9 of 15 mb`, then `starting the face reader` |
+| step     | what is happening                                           | what is shown                                                                             |
+| -------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `file`   | the bytes come: down from the server, or out of the browser | `downloading · 8.2 of 15 mb` and a bar that fills; `opening it` for one the browser keeps |
+| `model`  | the file is made a model of and drawn once, in the worker   | `building the model`, a bar with no end                                                   |
+| `reader` | the face reader comes down and starts                       | `getting the face reader · 9 of 15 mb`, then `starting the face reader`                   |
 
 - **where.** on the picked card, a veil with the percentage and a bar; on the picker's last line, the words. over the preview (`live/ModelLoading.tsx`), the model's picture, its name, the bar and the words: what a visit that comes back to a kept model sees, and what is left when the picker is closed part of the way.
 - **the model does not wait long for its reader**: four seconds, then it goes on. the rest of the reader's download shows under the model's name, in the controls.
@@ -198,10 +198,10 @@ after that nothing knows the difference. the preview shows what watchers get, be
 
 a hidden tab gets no animation frames at all, and its timers run once a second, peer connection or not. a window fully covered by another counts as hidden too (chrome, on windows and mac), which is one screen with a game on top. a worker's timers and a camera's frames are not held back. so the whole loop is in the worker (`infra/face.worker.ts`), and `infra/face.ts` connects it one of two ways:
 
-| path | browser | camera frames in | the drawing out | tab hidden |
-|---|---|---|---|---|
-| `worker` | chrome, edge | `MediaStreamTrackProcessor` on the page, its `readable` handed to the worker | `MediaStreamTrackGenerator` on the page, its `writable` handed to the worker: it writes `new VideoFrame(canvas)` itself | should go on. **not checked** |
-| `page` | the rest | the page posts each frame in, from a `<video>` nobody sees | the worker posts each drawn frame back, the page paints it on a canvas, `captureStream` | stops, and `#face-hidden-note` says so |
+| path     | browser      | camera frames in                                                             | the drawing out                                                                                                         | tab hidden                             |
+| -------- | ------------ | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `worker` | chrome, edge | `MediaStreamTrackProcessor` on the page, its `readable` handed to the worker | `MediaStreamTrackGenerator` on the page, its `writable` handed to the worker: it writes `new VideoFrame(canvas)` itself | should go on. **not checked**          |
+| `page`   | the rest     | the page posts each frame in, from a `<video>` nobody sees                   | the worker posts each drawn frame back, the page paints it on a canvas, `captureStream`                                 | stops, and `#face-hidden-note` says so |
 
 chrome's two are its own early api, not the standard, and may change. safari's standard ones (the processor and a `VideoTrackGenerator` made in the worker) are not wired: safari gets `page`. `localStorage['settings.modelPath'] = 'page'` asks for the second path on a browser that has the first, to look at it.
 
@@ -216,17 +216,17 @@ measured side by side, 90 seconds each, twice: without the two a watcher's playe
 
 measured on an apple m4 max in chrome 157, the model as the whole frame, a face in front of the camera, six minutes. an ordinary laptop will do worse: to measure.
 
-| who | what | how much |
-|---|---|---|
-| the streamer, once | the reader's wasm, its loader, its weights, the worker's file | 11.2 mb (3.3 gzipped), 322 kb (78), 3.8 mb, 860 kb (219). cached, only when a model goes on. on a later visit the reader starts in under a tenth of a second |
-| the streamer, once a model | a demo model's file | 6 to 18 mb, then kept in the browser |
-| the streamer, running | the reader | about 10 ms a reading, 30 a second, on the gpu |
-| | the drawing | 30 a second, held |
-| | the encode | 1280×720 at 30, 1.8 ms a frame, up to the 2.5 Mbps a camera gets |
-| | the page itself | its main thread 2 to 4% busy, its memory flat |
-| a watcher | nothing new | |
-| the box, the disk | nothing new | a camera's bits |
-| the bucket | the demo models | about 50 mb |
+| who                        | what                                                          | how much                                                                                                                                                     |
+| -------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| the streamer, once         | the reader's wasm, its loader, its weights, the worker's file | 11.2 mb (3.3 gzipped), 322 kb (78), 3.8 mb, 860 kb (219). cached, only when a model goes on. on a later visit the reader starts in under a tenth of a second |
+| the streamer, once a model | a demo model's file                                           | 6 to 18 mb, then kept in the browser                                                                                                                         |
+| the streamer, running      | the reader                                                    | about 10 ms a reading, 30 a second, on the gpu                                                                                                               |
+|                            | the drawing                                                   | 30 a second, held                                                                                                                                            |
+|                            | the encode                                                    | 1280×720 at 30, 1.8 ms a frame, up to the 2.5 Mbps a camera gets                                                                                             |
+|                            | the page itself                                               | its main thread 2 to 4% busy, its memory flat                                                                                                                |
+| a watcher                  | nothing new                                                   |                                                                                                                                                              |
+| the box, the disk          | nothing new                                                   | a camera's bits                                                                                                                                              |
+| the bucket                 | the demo models                                               | about 50 mb                                                                                                                                                  |
 
 what it gives up:
 
@@ -267,26 +267,26 @@ the watch page: nothing.
 
 ## where the code is
 
-| where | what |
-|---|---|
-| `random-media/vrms/` | the demo models and their thumbnails |
-| `scripts/models.sh`, `scripts/deploy.sh` | the folder into the bucket; deploy runs it when the folder changed |
-| `api/src/models.rs`, `api/src/main.rs`, `api/src/s3.rs` | the three routes, `api models <dir>`, the glb reader, a longer wait for a big file |
-| `frontend/package.json` | `three`, `@pixiv/three-vrm`, `@types/three`, `@mediapipe/tasks-vision` (pinned) |
-| `frontend/src/assets/face_landmarker.task` | the reader's weights |
-| `src/infra/vrm.ts` | the file read: is it a vrm, nothing outside it, its name, author, licence and thumbnail |
-| `src/infra/model-store.ts` | the files this browser keeps: their own, and the demo models that came down |
-| `src/infra/pose.ts` | the reader's scores to a pose: rest, mirror, gain, smoothing; and the mood in a pose |
-| `src/infra/model-draw.ts` | the scene and `draw(pose, dt)`: the head, the neck, the lean |
-| `src/infra/model-rig.ts` | the face: what a model has, the expressions made of its morphs, what drives them each frame |
-| `src/infra/face.worker.ts`, `face-wire.ts` | the worker: reads, draws, makes the frames; and what it and the page say to each other |
-| `src/infra/face-wasm.classic.ts`, `face-wasm.module.ts` | the reader's loader: a build's worker is a classic script and the dev server's a module, and each wants its own |
-| `src/infra/face.ts` | starts the worker, picks the path, hands back the track |
-| `src/infra/atoms/publish-atoms.ts` | the model's atoms and actions, a load and how far along it is, the arrival with a model kept, the teardown |
-| `src/infra/api.ts` | `demoModels`, `demoModelUrl`, `demoModelThumbUrl` |
-| `src/shared-components/live/ModelDialog.tsx`, `ModelControls.tsx`, `Sources.tsx` | the picker, the face's controls, `model` in the `+` and the row |
-| `src/shared-components/live/ModelLoading.tsx`, `ModelPicture.tsx` | the bar and the words of a load, the panel over the preview; a model's picture from what was picked |
-| `test/vtuber.js`, `scripts/test.sh` | the test |
+| where                                                                            | what                                                                                                            |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `random-media/vrms/`                                                             | the demo models and their thumbnails                                                                            |
+| `scripts/models.sh`, `scripts/deploy.sh`                                         | the folder into the bucket; deploy runs it when the folder changed                                              |
+| `api/src/models.rs`, `api/src/main.rs`, `api/src/s3.rs`                          | the three routes, `api models <dir>`, the glb reader, a longer wait for a big file                              |
+| `frontend/package.json`                                                          | `three`, `@pixiv/three-vrm`, `@types/three`, `@mediapipe/tasks-vision` (pinned)                                 |
+| `frontend/src/assets/face_landmarker.task`                                       | the reader's weights                                                                                            |
+| `src/infra/vrm.ts`                                                               | the file read: is it a vrm, nothing outside it, its name, author, licence and thumbnail                         |
+| `src/infra/model-store.ts`                                                       | the files this browser keeps: their own, and the demo models that came down                                     |
+| `src/infra/pose.ts`                                                              | the reader's scores to a pose: rest, mirror, gain, smoothing; and the mood in a pose                            |
+| `src/infra/model-draw.ts`                                                        | the scene and `draw(pose, dt)`: the head, the neck, the lean                                                    |
+| `src/infra/model-rig.ts`                                                         | the face: what a model has, the expressions made of its morphs, what drives them each frame                     |
+| `src/infra/face.worker.ts`, `face-wire.ts`                                       | the worker: reads, draws, makes the frames; and what it and the page say to each other                          |
+| `src/infra/face-wasm.classic.ts`, `face-wasm.module.ts`                          | the reader's loader: a build's worker is a classic script and the dev server's a module, and each wants its own |
+| `src/infra/face.ts`                                                              | starts the worker, picks the path, hands back the track                                                         |
+| `src/infra/atoms/publish-atoms.ts`                                               | the model's atoms and actions, a load and how far along it is, the arrival with a model kept, the teardown      |
+| `src/infra/api.ts`                                                               | `demoModels`, `demoModelUrl`, `demoModelThumbUrl`                                                               |
+| `src/shared-components/live/ModelDialog.tsx`, `ModelControls.tsx`, `Sources.tsx` | the picker, the face's controls, `model` in the `+` and the row                                                 |
+| `src/shared-components/live/ModelLoading.tsx`, `ModelPicture.tsx`                | the bar and the words of a load, the panel over the preview; a model's picture from what was picked             |
+| `test/vtuber.js`, `scripts/test.sh`                                              | the test                                                                                                        |
 
 ## what was run, and what was not
 
