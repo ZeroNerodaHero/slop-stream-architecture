@@ -45,6 +45,7 @@ import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Mixer } from '@/shared-components/live/Mixer';
+import { Rigging } from '@/shared-components/live/Rigging';
 import { Sources } from '@/shared-components/live/Sources';
 import { ModelLoading } from '@/shared-components/live/ModelLoading';
 import { MicMeter } from '@/shared-components/MicMeter';
@@ -163,6 +164,8 @@ export function LivePage() {
                   )}
                 </div>
               </div>
+              {/* under the picture that is sent, while a model is on: what the face reader sees of the streamer, on this page only (docs/vtuber.md) */}
+              <Rigging />
               {publishing && <Mixer />}
             </div>
           </div>

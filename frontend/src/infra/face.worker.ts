@@ -21,9 +21,9 @@
  * lock on that door.
  */
 
-import { FaceLandmarker, type FaceLandmarkerResult } from '@mediapipe/tasks-vision';
+import { FaceLandmarker, type FaceLandmarkerResult, type NormalizedLandmark } from '@mediapipe/tasks-vision';
 
-import type { FaceState, FromFaceWorker, LoadStep, ModelStats, ToFaceWorker } from '@/infra/face-wire';
+import type { FaceLines, FaceMarks, FaceState, FromFaceWorker, LoadStep, ModelStats, ToFaceWorker } from '@/infra/face-wire';
 import { createModelScene, type ModelScene } from '@/infra/model-draw';
 import { FaceTracker, moodOf, type Pose, type Reading, restPose, SHAPE_COUNT, SHAPES, shapeIndex } from '@/infra/pose';
 
@@ -91,6 +91,75 @@ const READ_SHARE = 1.6;
 let faceSeenAt = 0;
 let state: FaceState = 'starting';
 const counts = { drawn: 0, reads: 0, readMs: 0, since: 0 };
+
+// ---- the reader's marks, for the page to draw (the rigging panel) -------------------------------
+/** The page wants every reading's points (`set`): it has the rigging panel open. Not asked for, nothing of them leaves this thread. */
+let marksWanted = false;
+/** The page has been told which points join into what. */
+let linesTold = false;
+
+/** The reader's own lists of joins (two ends each), flattened to pairs of places among the points. */
+function pairs(...lists: { start: number; end: number }[][]): Uint16Array {
+  const out = new Uint16Array(lists.reduce((sum, list) => sum + list.length, 0) * 2);
+  let at = 0;
+  for (const list of lists) {
+    for (const join of list) {
+      out[at++] = join.start;
+      out[at++] = join.end;
+    }
+  }
+  return out;
+}
+
+/** Which points join into what. The reader knows; the page, which draws them, has none of the reader in it. */
+function linesOf(): FaceLines {
+  return {
+    mesh: pairs(FaceLandmarker.FACE_LANDMARKS_TESSELATION),
+    outline: pairs(FaceLandmarker.FACE_LANDMARKS_FACE_OVAL),
+    features: pairs(
+      FaceLandmarker.FACE_LANDMARKS_LEFT_EYE,
+      FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE,
+      FaceLandmarker.FACE_LANDMARKS_LEFT_EYEBROW,
+      FaceLandmarker.FACE_LANDMARKS_RIGHT_EYEBROW,
+      FaceLandmarker.FACE_LANDMARKS_LIPS
+    ),
+    irises: pairs(FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS, FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS)
+  };
+}
+
+/**
+ * The pose in whole numbers, as the page shows them: degrees, and 0 to 100. With no face in
+ * view the pose still holds the last one it saw, and the model is on its way home: what it is
+ * asked for is rest.
+ */
+function numbersOf(): Pick<ModelStats, 'yaw' | 'pitch' | 'roll' | 'mouth' | 'blink' | 'smile' | 'brows'> {
+  const asked = pose.face ? pose : REST;
+  const degrees = (radians: number) => Math.round((radians * 180) / Math.PI);
+  const mood = moodOf(asked.shapes);
+  return {
+    yaw: degrees(asked.yaw),
+    pitch: degrees(asked.pitch),
+    roll: degrees(asked.roll),
+    mouth: Math.round(asked.shapes[shapeIndex('jawOpen')]! * 100),
+    blink: Math.round(((asked.shapes[shapeIndex('eyeBlinkLeft')]! + asked.shapes[shapeIndex('eyeBlinkRight')]!) / 2) * 100),
+    smile: Math.round(mood.smile * 100),
+    brows: Math.round((mood.browUp - mood.browDown) * 100)
+  };
+}
+
+/** One reading's points, and what the pose made of them, to the page. `found`: the reader's points for the face in this frame; none with no face. */
+function tellMarks(found: NormalizedLandmark[] | undefined) {
+  let points: Float32Array | null = null;
+  if (found) {
+    points = new Float32Array(found.length * 2);
+    for (let i = 0; i < found.length; i++) {
+      points[i * 2] = found[i]!.x;
+      points[i * 2 + 1] = found[i]!.y;
+    }
+  }
+  const marks: FaceMarks = { points, ...numbersOf() };
+  post({ type: 'marks', marks }, points ? [points.buffer] : []);
+}
 
 // ---- how far along -----------------------------------------------------------------------------
 /** Where this is on its way to a model with a face (`face-wire.ts`). `null` once the reader is up, or has given up. */
@@ -205,9 +274,11 @@ function read(image: VideoFrame | ImageBitmap) {
   if (began - lastReadAt < readTakes * READ_SHARE) return;
   lastReadAt = began;
   lastStamp = Math.max(lastStamp + 1, began);
+  let result: FaceLandmarkerResult;
   let reading: Reading | null = null;
   try {
-    reading = readingOf(landmarker.detectForVideo(image, lastStamp));
+    result = landmarker.detectForVideo(image, lastStamp);
+    reading = readingOf(result);
   } catch (err) {
     // one frame the reader choked on is not the end of the reader
     console.warn('face reader:', wordsOf(err));
@@ -218,6 +289,8 @@ function read(image: VideoFrame | ImageBitmap) {
   counts.readMs += now - began;
   readTakes = readTakes ? readTakes * 0.8 + (now - began) * 0.2 : now - began;
   pose = tracker.update(reading, now);
+  // the points the scores came from, for the page that asked to draw them
+  if (marksWanted) tellMarks(reading ? result.faceLandmarks[0] : undefined);
   if (reading) {
     faceSeenAt = now;
     say('on');
@@ -303,22 +376,12 @@ function tick() {
 
 function sendStats(now: number) {
   const seconds = (now - counts.since) / 1000;
-  // with no face in view the pose still holds the last one it saw, and the model is on its way home: what it is asked for is rest
-  const asked = pose.face ? pose : REST;
-  const degrees = (radians: number) => Math.round((radians * 180) / Math.PI);
-  const mood = moodOf(asked.shapes);
   const stats: ModelStats = {
     fps: Math.round(counts.drawn / seconds),
     reads: Math.round(counts.reads / seconds),
     readMs: counts.reads ? Math.round(counts.readMs / counts.reads) : 0,
     face: pose.face,
-    yaw: degrees(asked.yaw),
-    pitch: degrees(asked.pitch),
-    roll: degrees(asked.roll),
-    mouth: Math.round(asked.shapes[shapeIndex('jawOpen')]! * 100),
-    blink: Math.round(((asked.shapes[shapeIndex('eyeBlinkLeft')]! + asked.shapes[shapeIndex('eyeBlinkRight')]!) / 2) * 100),
-    smile: Math.round(mood.smile * 100),
-    brows: Math.round((mood.browUp - mood.browDown) * 100)
+    ...numbersOf()
   };
   counts.drawn = counts.reads = counts.readMs = 0;
   counts.since = now;
@@ -459,6 +522,13 @@ scope.onmessage = (e: MessageEvent<ToFaceWorker>) => {
     if (msg.mirror !== undefined) tracker.mirror = msg.mirror;
     if (msg.background !== undefined) scene?.setBackground(msg.background);
     if (msg.expressions !== undefined) scene?.setExpressions(msg.expressions);
+    if (msg.marks !== undefined) {
+      marksWanted = msg.marks;
+      if (marksWanted && !linesTold) {
+        linesTold = true;
+        post({ type: 'lines', lines: linesOf() });
+      }
+    }
   } else if (msg.type === 'rest') tracker.rest();
   else if (msg.type === 'stop') {
     shutdown();

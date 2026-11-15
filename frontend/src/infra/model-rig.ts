@@ -15,11 +15,14 @@
  *
  * `buildRig` runs before `VRMUtils.combineMorphs`: that keeps only the morphs some expression
  * uses, and the ones made here have to be among them.
+ *
+ * A model that is no vrm (a glb, an fbx) promises nothing: it has morphs, named the way the
+ * tool that made it names them. `expressionsOf` gives it the expressions a vrm would have, out
+ * of those names, and from there it is a model like any other.
  */
 
-import { type VRM, VRMExpression, VRMExpressionMorphTargetBind } from '@pixiv/three-vrm';
+import { type VRM, VRMExpression, VRMExpressionManager, VRMExpressionMorphTargetBind } from '@pixiv/three-vrm';
 import type { Mesh } from 'three';
-import type { GLTF } from 'three/addons/loaders/GLTFLoader.js';
 
 import type { RigInfo, RigPart } from '@/infra/face-wire';
 import { type Mood, moodOf, type Shape, SHAPE_COUNT, SHAPES, shapeIndex } from '@/infra/pose';
@@ -79,10 +82,12 @@ function spellings(shape: Shape): string[] {
 }
 
 /** One morph target, on one primitive of a mesh. */
-interface Target {
+export interface Target {
   mesh: Mesh;
   index: number;
 }
+/** Every morph target of a model by the name its file gives it, on every primitive that has it (`model-load.ts` reads them). */
+export type MorphTargets = ReadonlyMap<string, Target[]>;
 
 /** The expressions made here, and their names: no model's own can be in their way. */
 type Made = 'browUp' | 'browDown' | 'smile' | 'eyeSmile' | 'eyeWide';
@@ -92,51 +97,95 @@ const NAME: Record<Made, string> = { browUp: 'rig:browUp', browDown: 'rig:browDo
  * wins. A way is morph targets by the end of their names, each with how much of it; the first
  * of a way has to be there, the others come along when they are. Vroid studio's names first
  * (`Face.M_F00_000_00_Fcl_BRW_Angry`: most vrm files come out of it), then the plain names
- * other tools write for the brows.
+ * other tools write, then mmd's, which a model made for vrchat often carries too.
  */
 const SOURCES: Record<Made, readonly (readonly (readonly [RegExp, number])[])[]> = {
-  browUp: [[[/Fcl_BRW_Surprised$/, 1]], [[/brow[_ ]?up$/i, 1]]],
+  browUp: [[[/Fcl_BRW_Surprised$/, 1]], [[/brow[_ ]?up$/i, 1]], [[/^上$/, 1]]],
   // brows drawn down narrow the eyes with them
   browDown: [
     [
       [/Fcl_BRW_Angry$/, 1],
       [/Fcl_EYE_Angry$/, 0.5]
     ],
-    [[/brow[_ ]?down$/i, 1]]
+    [[/brow[_ ]?down$/i, 1]],
+    [[/^怒り$/, 1]]
   ],
-  smile: [[[/Fcl_MTH_Fun$/, 1]]],
-  eyeSmile: [[[/Fcl_EYE_Joy$/, 1]]],
-  eyeWide: [[[/Fcl_EYE_Surprised$/, 1]]]
+  smile: [[[/Fcl_MTH_Fun$/, 1]], [[/(^|[._ ])mouth[_ ]?smile$/i, 1]], [[/^(にやり|にっこり|口角上げ)$/, 1]]],
+  eyeSmile: [[[/Fcl_EYE_Joy$/, 1]], [[/(^|[._ ])eyes?[_ ]?smile$/i, 1]], [[/^笑い$/, 1]]],
+  eyeWide: [[[/Fcl_EYE_Surprised$/, 1]], [[/^びっくり$/, 1]]]
 };
 
-/** Every morph target of the model by its name, on every primitive that has it. The names are the file's own (`extras.targetNames`), on a mesh or on each of its primitives. */
-function targetsOf(vrm: VRM, gltf: GLTF): Map<string, Target[]> {
-  const json = gltf.parser.json as { meshes?: { extras?: { targetNames?: unknown }; primitives?: { extras?: { targetNames?: unknown } }[] }[] };
-  const targets = new Map<string, Target[]>();
-  vrm.scene.traverse((object) => {
-    const mesh = object as Mesh;
-    const count = mesh.isMesh ? (mesh.morphTargetInfluences?.length ?? 0) : 0;
-    if (count === 0) return;
-    // the loader notes which of a mesh's primitives an object is, which its typings do not say
-    const where = gltf.parser.associations.get(mesh) as { meshes?: number; primitives?: number } | undefined;
-    const def = where?.meshes === undefined ? undefined : json.meshes?.[where.meshes];
-    const names = def?.extras?.targetNames ?? def?.primitives?.[where?.primitives ?? 0]?.extras?.targetNames;
-    if (!Array.isArray(names)) return;
-    names.forEach((name: unknown, index) => {
-      if (typeof name !== 'string' || index >= count) return;
-      const hits = targets.get(name);
-      if (hits) hits.push({ mesh, index });
-      else targets.set(name, [{ mesh, index }]);
-    });
-  });
-  return targets;
+/** The expressions a vrm promises that the reader moves: the vowels, the blinks, and the two moods the rig falls back on. */
+type Promised = 'aa' | 'ih' | 'ou' | 'ee' | 'oh' | 'blink' | 'blinkLeft' | 'blinkRight' | 'happy' | 'angry';
+/**
+ * What other tools call them, each name as `called` leaves it, and the first a model has is the
+ * one: vrchat's visemes (`vrc.v_aa`), oculus's (`viseme_aa`), vroid's own morphs (`Fcl_MTH_A`),
+ * mmd's (`あ`, `まばたき`, `ウィンク２`), then the plain words a model made by hand has
+ * (`lip_a`, `mouthOpen`, `face_happy`). Mmd's `ウィンク` shuts the left eye with a smile in
+ * it, and `ウィンク２` shuts it plainly: the plain one first.
+ */
+const CALLED: Record<Promised, readonly string[]> = {
+  aa: ['vaa', 'visemeaa', 'fclmtha', 'あ', 'aa', 'a', 'lipa', 'moutha', 'mouthopen', 'jawopen'],
+  ih: ['vih', 'visemei', 'fclmthi', 'い', 'ih', 'i', 'lipi', 'mouthi'],
+  ou: ['vou', 'visemeu', 'fclmthu', 'う', 'ou', 'u', 'lipu', 'mouthu'],
+  ee: ['ve', 'visemee', 'fclmthe', 'え', 'ee', 'e', 'lipe', 'mouthe'],
+  oh: ['voh', 'visemeo', 'fclmtho', 'お', 'oh', 'o', 'lipo', 'moutho'],
+  blink: ['blink', 'fcleyeclose', 'まばたき', '瞬き', 'eyesclosed', 'eyeclose', 'eyeblink'],
+  blinkLeft: ['blinkleft', 'blinkl', 'fcleyeclosel', 'ウィンク2', 'ウィンク', 'winkleft', 'winkl', 'eyeblinkleft', 'eyeblinkl'],
+  blinkRight: ['blinkright', 'blinkr', 'fcleyecloser', 'ウィンク2右', 'ウィンク右', 'winkright', 'winkr', 'eyeblinkright', 'eyeblinkr'],
+  happy: ['happy', 'joy', 'facehappy', 'fclalljoy'],
+  angry: ['angry', 'faceangry', 'fclallangry']
+};
+/**
+ * A morph's name as the lists above have it: what a tool put before a dot gone (`blendShape1.`),
+ * wide and narrow letters made one kind, and nothing left but letters and digits.
+ */
+const called = (name: string) =>
+  name
+    .slice(name.lastIndexOf('.') + 1)
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, '');
+
+/**
+ * The expressions of a model that is no vrm, made of its morphs by their names: each of the
+ * reader's 52 it has, under the reader's own name (enough of them and it is perfect sync), and
+ * the vowels and blinks a vrm promises, from what other tools call them. What it has no morph
+ * for is not made, and the rig finds the model without it.
+ */
+export function expressionsOf(targets: MorphTargets): VRMExpressionManager {
+  const manager = new VRMExpressionManager();
+  const byName = new Map<string, Target[]>();
+  for (const [name, hits] of targets) byName.set(called(name), [...(byName.get(called(name)) ?? []), ...hits]);
+  const make = (name: string, hits: Target[] | undefined) => {
+    if (!hits) return;
+    const expression = new VRMExpression(name);
+    for (const hit of hits) expression.addBind(new VRMExpressionMorphTargetBind({ primitives: [hit.mesh], index: hit.index, weight: 1 }));
+    manager.registerExpression(expression);
+  };
+  for (const shape of SHAPES) {
+    make(
+      shape,
+      spellings(shape)
+        .map((spelling) => byName.get(spelling))
+        .find((hits) => hits !== undefined)
+    );
+  }
+  for (const promised of Object.keys(CALLED) as Promised[]) {
+    // vroid's morphs keep their mesh's name in front in some files (`Face.M_F00_000_00_Fcl_MTH_A`): those are told by their ends
+    const name =
+      CALLED[promised].find((known) => byName.has(known)) ??
+      [...byName.keys()].find((own) => CALLED[promised].some((known) => known.startsWith('fcl') && own.endsWith(known)));
+    make(promised, name === undefined ? undefined : byName.get(name));
+  }
+  return manager;
 }
 
 /**
  * The model's face, looked at once. Makes the expressions a `shapes` model gets (they are
  * registered with the model's own), and hands back what drives all of them each frame.
  */
-export function buildRig(vrm: VRM, gltf: GLTF): FaceRig {
+export function buildRig(vrm: VRM, targets: MorphTargets): FaceRig {
   const expressions = vrm.expressionManager ?? null;
   /** An expression that is there and moves something: a model can list `happy` and bind nothing to it. */
   const bound = (name: string) => (expressions?.getExpression(name)?.binds.length ?? 0) > 0;
@@ -157,9 +206,10 @@ export function buildRig(vrm: VRM, gltf: GLTF): FaceRig {
   // ---- the brows, the eyes and a smile, made of the face mesh's own morphs ------------------
   const made = new Set<Made>();
   if (expressions && !isArkit) {
-    const targets = targetsOf(vrm, gltf);
     const find = (pattern: RegExp) => [...targets].filter(([name]) => pattern.test(name)).flatMap(([, hits]) => hits);
     for (const key of Object.keys(SOURCES) as Made[]) {
+      // the eyes a smile narrows go with the smile made here (it is made first). a model whose smile is a whole face, `happy`, has that face's eyes
+      if (key === 'eyeSmile' && !made.has('smile')) continue;
       for (const way of SOURCES[key]) {
         if (find(way[0]![0]).length === 0) continue;
         const expression = new VRMExpression(NAME[key]);

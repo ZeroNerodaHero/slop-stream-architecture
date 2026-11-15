@@ -25,6 +25,7 @@ import {
   chatCanSendAtom,
   chatCountAtom,
   chatDraftAtom,
+  chatGuestAtom,
   chatImagesAtom,
   chatLinesAtom,
   chatLoadedAtom,
@@ -39,9 +40,9 @@ import {
   chatTierAtom,
   chatWaitAtom,
   clearResults,
-  closeChat,
   hiddenBotLinesAtom,
   isBotLine,
+  leaveChat,
   loadOlder,
   MAX_CHAT_IMAGES,
   nickAtom,
@@ -54,6 +55,7 @@ import {
   sendChat,
   setChatDraft,
   setChatFollowing,
+  setChatGuest,
   setNick,
   showChannel,
   showNotice,
@@ -103,6 +105,14 @@ interface ChatPanelProps {
   owner?: Owner | null;
   /** Inside another box (the corner player): no stroke or minimum height of its own, and no header, which a panel this small has no room for. The lines and the text box alone. */
   embedded?: boolean;
+  /**
+   * A second panel on a room the page's own panel already holds open: the popped out player's
+   * chat, over the go live page, whose chat is that same room. It draws the room and neither
+   * joins nor leaves it, and the page's panel draws nothing while this one is up, so there is
+   * still one room, one socket and one list on screen. The lines and a half typed line are the
+   * same ones on both sides of the move: nothing reconnects.
+   */
+  guest?: boolean;
   /**
    * A group's channel: `name` is the server, this the channel on screen. One socket for every
    * channel of the server (`openServerChat`); a change of channel is `showChannel`, no socket
@@ -161,9 +171,11 @@ function useCountdown(until: number): number {
  * each wearing its speaker's group badges after the name; the blocks' face is the picture when
  * the line is a login's or the streamer's, the letter their name makes otherwise. The robot in
  * the header hides the bots' lines (a setting too, the chat tab has it as well). Joins on
- * mount, leaves on unmount; a change of `owner` (going live, stopping) or of the login
- * reconnects through `openChat`. One at a time: the chat atoms hold one room, and the ids
- * here are the ones the tests key on.
+ * mount, leaves on unmount (a room the next panel takes over right away stays open,
+ * `leaveChat`: the chat going with the player into a window of its own is not a reconnect); a
+ * change of `owner` (going live, stopping) or of the login reconnects through `openChat`. One
+ * at a time: the chat atoms hold one room, and the ids here are the ones the tests key on. A
+ * `guest` is a second panel on that one room, and the first draws nothing while it is up.
  */
 
 /**
@@ -476,7 +488,7 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
   );
 }
 
-export function ChatPanel({ name, owner = null, embedded = false, channel, onChannel, className }: ChatPanelProps) {
+export function ChatPanel({ name, owner = null, embedded = false, guest = false, channel, onChannel, className }: ChatPanelProps) {
   const server = channel !== undefined;
   const listRef = useRef<HTMLDivElement | null>(null);
   // height before the last paint, so prepending older lines can put the same pixels back
@@ -512,16 +524,27 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, onCha
   const shake = useAtomValue(chatShakeAtom);
   // a send refused for the rate: the seconds until the next line may go, on the send button
   const wait = useCountdown(useAtomValue(chatWaitAtom));
+  // a guest is drawing this room somewhere else: this panel, the one that holds the room open, stands aside
+  const aside = useAtomValue(chatGuestAtom) && !guest;
 
   // The inputs that change while mounted: the owner (going live) and the login.
   // Nothing opens until /api/me has answered, so the first hello is the right one.
   // A server is one socket for every channel: the channel is not one of these inputs.
+  // A guest opens nothing: the room is the page's panel's. And going is not yet a close: the
+  // room may be the next panel's to take over, a moment from now (`leaveChat`).
   useEffect(() => {
-    if (me === undefined) return;
+    if (me === undefined || guest) return;
     if (channel !== undefined) openServerChat(name, channel);
     else openChat(name, owner);
-    return () => closeChat();
-  }, [name, owner?.session, owner?.token, me, server]);
+    return leaveChat;
+  }, [name, owner?.session, owner?.token, me, server, guest]);
+
+  // A guest says it is up for as long as it is, and the panel that holds the room stands aside.
+  useEffect(() => {
+    if (!guest) return;
+    setChatGuest(true);
+    return () => setChatGuest(false);
+  }, [guest]);
 
   // The channel on screen, for a server: a swap of what is shown, nothing opened or asked.
   useEffect(() => {
@@ -535,7 +558,11 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, onCha
   // A layout effect: the store fires before react has put the new lines in the dom.
   useLayoutEffect(() => {
     const el = listRef.current;
-    if (!el) return;
+    if (!el) {
+      // standing aside for a guest: there is no list. the one that comes back is a new one, and starts at the newest line
+      shown.current = 0;
+      return;
+    }
     const plan = takeScrollPlan();
     if (plan === 'keep') {
       el.scrollTop += el.scrollHeight - hold.current;
@@ -552,7 +579,7 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, onCha
     }
     shown.current = lines.length;
     hold.current = el.scrollHeight;
-  }, [lines, total, scrollTick]);
+  }, [lines, total, scrollTick, aside]);
 
   function onScroll(e: UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;
@@ -593,6 +620,21 @@ export function ChatPanel({ name, owner = null, embedded = false, channel, onCha
   const waiting = !loaded && total === 0 && (server || me === undefined || phase !== 'off');
   // the name the server echoes our own lines under: the stream's when we are the streamer, else the login or nick
   const myName = asStreamer ? name : speaker;
+
+  // the room is being drawn in the player's own window: the panel's box, and where the chat went. the tab is
+  // behind another while that window is up, so this is seen only where a browser leaves the window open
+  if (aside) {
+    return (
+      <aside
+        id="chat"
+        data-phase={phase}
+        data-away=""
+        className={embedded ? cn('flex flex-col', className) : panelClassName(cn('flex min-h-[320px] flex-col', className))}
+      >
+        <p className="m-auto px-6 text-center text-textTertiary">the chat is out in your stream's window. it is back here when that closes.</p>
+      </aside>
+    );
+  }
 
   return (
     <aside id="chat" data-phase={phase} className={embedded ? cn('flex flex-col', className) : panelClassName(cn('flex min-h-[320px] flex-col', className))}>

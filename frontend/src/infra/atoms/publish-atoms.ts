@@ -13,8 +13,9 @@ import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { endWatch, pipAtom } from '@/infra/atoms/watch-atoms';
-import { type FaceState, type LoadStep, type ModelSession, type ModelStats, type RigInfo, startModel } from '@/infra/face';
+import { type FaceLines, type FaceMarks, type FaceState, type LoadStep, type ModelSession, type ModelStats, type RigInfo, startModel } from '@/infra/face';
 import { type Mixer, openMixer } from '@/infra/mixer';
+import { readModel } from '@/infra/model-file';
 import { forgetKept, keepDemo, keepForGood, keepModel, type KeptModel, keptDemoFile, keptFile, listKept, listKeptDemos, pruneKeptDemos } from '@/infra/model-store';
 import { cleanName, isValidName } from '@/infra/names';
 import { centredRect, cutPicture, SCENE_PICTURE, THUMB_PICTURE } from '@/infra/picture';
@@ -38,7 +39,6 @@ import {
 } from '@/infra/scene';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
-import { readVrm } from '@/infra/vrm';
 import type { Tone } from '@/shared-components/StatusLine';
 
 /** `mic-ready`, `mic-blocked` and `no-mic` are the mic-only start's (docs/screen.md): the mic alone, with the avatar for a face. */
@@ -120,6 +120,15 @@ export interface SharedScreen {
   label: string;
 }
 export const screensAtom = atom<SharedScreen[]>([]);
+/** The browser's picker for a screen is up, or its pick is on its way into a slot (`shareScreen`). */
+const screenPickingAtom = atom(false);
+/**
+ * A screen is shared, or is about to be: on from before the browser's picker opens. What a
+ * share of this page must not carry (the camera's own picture in the rigging panel, with a
+ * model on) leaves the page by this and not by `screensAtom`: a screen is among those only
+ * once its track is in a sender, and what it first saw of the page has gone out by then.
+ */
+export const screenMaySeePageAtom = atom((get) => get(screenPickingAtom) || get(screensAtom).length > 0);
 /** The shared screens' streams by screen slot, for the previews. A stream is not render data, so they are bound imperatively (`VideoFrame`). */
 const screenStreamAtoms = Array.from({ length: SCREEN_SLOTS }, () => atom<MediaStream | null>(null));
 /** For a screen slot that does not exist (never: slots come from `screenSenders`, which has SCREEN_SLOTS): an atom that stays empty. */
@@ -154,17 +163,18 @@ export const hasAvatarAtom = atom((get) => get(sourcesAtom).some((s) => s.kind =
 /** The arrangement of the camera and a screen this browser last had: what the first share makes again next time. */
 const storedLastAtom = atomWithStorage<unknown>('settings.lastArrangement', null, undefined, { getOnInit: true });
 const lastArrangementAtom = atom((get) => validPreset(get(storedLastAtom)));
-/** Which of the page's two panels are open. Kept. */
+/** Which of the page's panels are open: the sources, the rigging (under the preview while a model is on), the sound. Kept. */
 export interface LivePanels {
   sources: boolean;
+  rig: boolean;
   sound: boolean;
 }
-const storedPanelsAtom = atomWithStorage<unknown>('settings.livePanels', { sources: true, sound: true }, undefined, { getOnInit: true });
-/** Read: two booleans, whatever localstorage holds. */
+const storedPanelsAtom = atomWithStorage<unknown>('settings.livePanels', { sources: true, rig: true, sound: true }, undefined, { getOnInit: true });
+/** Read: a boolean each, whatever localstorage holds. One it has never heard of is open. */
 export const livePanelsAtom = atom<LivePanels>((get) => {
   const raw = get(storedPanelsAtom);
   const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  return { sources: p.sources !== false, sound: p.sound !== false };
+  return { sources: p.sources !== false, rig: p.rig !== false, sound: p.sound !== false };
 });
 
 // ---- the sound (infra/mixer.ts): what everyone hears, and what goes into it ---------------------
@@ -186,7 +196,7 @@ export const mixerOpenAtom = atom(false);
 /** The mixer is sending. False while its context is suspended (made outside a click, interrupted): the stream is silent then, and a click resumes it. */
 export const mixerRunningAtom = atom(true);
 
-// ---- the model (docs/vtuber.md): a .vrm in the camera's place, moved by the streamer's face -------
+// ---- the model (docs/vtuber.md): a 3d model in the camera's place, moved by the streamer's face -------
 
 /** Which model: one of the site's demo models (the bucket's, by id), or one this browser keeps (the streamer's own file, by its id in `model-store.ts`; under 0 it could not be kept and is this visit's only). */
 export type ModelChoice = { kind: 'demo'; id: string; v: string; name: string } | { kind: 'kept'; id: number; name: string };
@@ -224,6 +234,14 @@ export const faceStatsAtom = atom<ModelStats | null>(null);
 export const modelRigAtom = atom<RigInfo | null>(null);
 /** The cameras a face can be read from. The browser names them once one has been allowed. */
 export const faceCamerasAtom = atom<{ id: string; label: string }[]>([]);
+/**
+ * The camera the face is read from, as a stream, for the rigging panel (`live/Rigging.tsx`)
+ * and for nothing else: the one place its picture is shown, on the streamer's own page. It is
+ * in no sender, so it is on no stream. Null with no model on, and with no camera to read.
+ */
+export const readerCameraAtom = atom<MediaStream | null>(null);
+/** Which of the reader's points join into what, once a face worker has said (`face-wire.ts`). The same for every model. */
+export const faceLinesAtom = atom<FaceLines | null>(null);
 /** The site's demo models, as the api lists them. Empty until asked, and on an api from before them. */
 export const demoModelsAtom = atom<DemoModel[]>([]);
 /** The models this browser keeps, newest first. */
@@ -238,6 +256,7 @@ const storedFaceCameraAtom = atomWithStorage<unknown>('settings.faceCamera', '',
 const storedFaceMirrorAtom = atomWithStorage<unknown>('settings.faceMirror', true, undefined, { getOnInit: true });
 const storedFaceExpressionsAtom = atomWithStorage<unknown>('settings.faceExpressions', true, undefined, { getOnInit: true });
 const storedModelBackgroundAtom = atomWithStorage<unknown>('settings.modelBackground', MODEL_BACKGROUND, undefined, { getOnInit: true });
+const storedRigPictureAtom = atomWithStorage<unknown>('settings.rigPicture', true, undefined, { getOnInit: true });
 /** The camera picked to read the face from, by the browser's id for it. '': the browser's own choice. */
 export const faceCameraAtom = atom((get) => {
   const id = get(storedFaceCameraAtom);
@@ -247,6 +266,8 @@ export const faceCameraAtom = atom((get) => {
 export const faceMirrorAtom = atom((get) => get(storedFaceMirrorAtom) !== false);
 /** The brows, the smile and the wide eyes move the model too, not only the mouth and the blinks: on unless turned off. */
 export const faceExpressionsAtom = atom((get) => get(storedFaceExpressionsAtom) !== false);
+/** The rigging panel has the camera's picture under the reader's marks: on unless turned off, which leaves the marks alone. */
+export const rigPictureAtom = atom((get) => get(storedRigPictureAtom) !== false);
 /** The flat colour behind the model, `#rrggbb`. */
 export const modelBackgroundAtom = atom((get) => {
   const colour = get(storedModelBackgroundAtom);
@@ -323,10 +344,13 @@ let mixer: Mixer | null = null;
 /** The model on the camera's slot: its worker, and the track whose picture it is (`cameraAtom`'s video track while it is on). */
 let modelSession: ModelSession | null = null;
 /**
- * The camera the face is read from while a model is on. Handed to the face reader and to
- * nothing else: never in `cameraAtom`, never in a sender. Its picture does not leave the page.
+ * The camera the face is read from while a model is on. Handed to the face reader, and shown
+ * in one place, the rigging panel (`readerCameraAtom`): never in `cameraAtom`, never in a
+ * sender. Its picture does not leave the page.
  */
 let faceCamera: MediaStreamTrack | null = null;
+/** Who draws the reader's marks (`watchFaceMarks`): the worker sends them while there is anyone. */
+const marksListeners = new Set<(marks: FaceMarks) => void>();
 /** Bumped whenever the model changes or goes: a word from an older model's worker is nobody's. */
 let modelToken = 0;
 /** The camera's cap right now, for the stats badge. */
@@ -690,7 +714,7 @@ async function modelFile(choice: ModelChoice, bytes = 0): Promise<ArrayBuffer> {
   if (kept) return kept;
   const file = await downloadDemo(choice, bytes);
   try {
-    readVrm(file);
+    readModel(file);
   } catch {
     // not a model: `putModelOn` says why, and nothing of it is kept
     return file;
@@ -711,6 +735,7 @@ function dropModel() {
   modelSession = null;
   faceCamera?.stop();
   faceCamera = null;
+  store.set(readerCameraAtom, null);
   store.set(modelAtom, null);
   store.set(modelRigAtom, null);
   store.set(readerLoadAtom, null);
@@ -759,7 +784,7 @@ function modelStopped(why: string) {
 async function putModelOn(choice: ModelChoice, file: ArrayBuffer, opened: OpenedForModel | null = null): Promise<boolean> {
   const generation = liveGeneration;
   try {
-    readVrm(file);
+    readModel(file);
   } catch (err) {
     store.set(modelStatusAtom, messageOf(err));
     return false;
@@ -799,6 +824,10 @@ async function putModelOn(choice: ModelChoice, file: ArrayBuffer, opened: Opened
         if (camera || faceCamera) store.set(faceAtom, face);
       },
       onStats: (stats) => mine() && store.set(faceStatsAtom, stats),
+      onLines: (lines) => store.set(faceLinesAtom, lines),
+      onMarks: (marks) => {
+        if (mine()) for (const listener of marksListeners) listener(marks);
+      },
       onFailed: (why) => mine() && modelStopped(why)
     });
   } catch (err) {
@@ -833,6 +862,9 @@ async function putModelOn(choice: ModelChoice, file: ArrayBuffer, opened: Opened
   old?.stop();
   modelSession = session;
   faceCamera = camera;
+  // the rigging panel's picture: the reader's camera, on this page and nowhere else
+  store.set(readerCameraAtom, camera ? new MediaStream([camera]) : null);
+  if (marksListeners.size > 0) session.setMarks(true);
   // what was set while it loaded went to the model it takes the place of: this one hears it now
   session.setMirror(store.get(faceMirrorAtom));
   session.setExpressions(store.get(faceExpressionsAtom));
@@ -963,7 +995,7 @@ async function pickModel(first: ModelChoice, fetchIt: () => Promise<{ choice: Mo
     choice = picked.choice;
     store.set(modelLoadAtom, { choice, step: 'model', loaded: 0, total: 0 });
     if (store.get(cameraAtom)) return await putModelOn(choice, picked.file);
-    readVrm(picked.file);
+    readModel(picked.file);
     const opened = await openForModel();
     const on = ours() && store.get(cameraAtom) === null && (await putModelOn(choice, picked.file, opened));
     if (!on) {
@@ -1024,7 +1056,7 @@ export function pickModelFile(picked: File): Promise<boolean> {
   const named = picked.name.replace(/\.[^.]+$/, '') || 'model';
   return pickModel({ kind: 'kept', id: -1, name: named }, async () => {
     const file = await picked.arrayBuffer();
-    const info = readVrm(file);
+    const info = readModel(file);
     const name = info.name || named;
     const kept = await keepModel(picked, { name, author: info.author }, info.thumbnail ? await smallThumb(info.thumbnail) : null);
     if (kept) {
@@ -1100,6 +1132,25 @@ export function restFace() {
   modelSession?.rest();
 }
 
+/**
+ * The reader's marks, one call a reading, for as long as someone listens: the rigging panel
+ * while it is open. The worker sends them only then. Not an atom: thirty a second is a
+ * canvas's to draw, not react's to render. Returns the way to stop listening.
+ */
+export function watchFaceMarks(listener: (marks: FaceMarks) => void): () => void {
+  marksListeners.add(listener);
+  modelSession?.setMarks(true);
+  return () => {
+    marksListeners.delete(listener);
+    if (marksListeners.size === 0) modelSession?.setMarks(false);
+  };
+}
+
+/** The rigging panel's eye: the camera's picture under the marks, or the marks alone. Kept. */
+export function setRigPicture(on: boolean) {
+  store.set(storedRigPictureAtom, on);
+}
+
 /** Another camera to read the face from. Kept; one that will not open leaves the reader on the camera it has. */
 export async function setFaceCamera(deviceId: string): Promise<void> {
   store.set(storedFaceCameraAtom, deviceId);
@@ -1118,6 +1169,7 @@ export async function setFaceCamera(deviceId: string): Promise<void> {
   }
   const old = faceCamera;
   faceCamera = next;
+  store.set(readerCameraAtom, new MediaStream([next]));
   session.setCamera(next);
   old?.stop();
   // a model that had no camera to read (`no camera`, `camera blocked`) has one now: the reader's next word says what it sees
@@ -1273,6 +1325,9 @@ async function pickDisplay(): Promise<MediaStream | null> {
   }
 }
 
+/** The pickers that are up: one, unless the button was pressed again under the first. */
+let screenPicks = 0;
+
 /**
  * The share button and the + menu: the browser's picker, one screen (or window, or tab) per
  * press, into the first free screen slot. The picker closed without a choice is nothing. Sharp
@@ -1281,9 +1336,23 @@ async function pickDisplay(): Promise<MediaStream | null> {
  * slot's section now; before start it waits in the slot and the section is offered with it
  * (`goLive`). Either way the new screen is a source, put into the scene by the rules
  * (`arrangedAfterAdd`), so the frame can be laid out before anyone sees it.
+ *
+ * `screenMaySeePageAtom` is on from here, before the picker opens, until the pick is among
+ * the screens or came to nothing: the share may be of this very page, and what it must not
+ * carry has to be off the page before there is a share to see it.
  */
 export async function shareScreen(): Promise<void> {
   if (!store.get(canShareScreenAtom)) return;
+  store.set(screenPickingAtom, ++screenPicks > 0);
+  try {
+    await sharePicked();
+  } finally {
+    store.set(screenPickingAtom, --screenPicks > 0);
+  }
+}
+
+/** `shareScreen`'s work: the picker, and its pick into a slot. */
+async function sharePicked(): Promise<void> {
   const generation = liveGeneration;
   const display = await pickDisplay();
   if (!display) return;

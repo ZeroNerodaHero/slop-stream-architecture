@@ -1,5 +1,5 @@
 /**
- * The models this browser keeps (docs/vtuber.md), in indexeddb: the streamer's own .vrm files,
+ * The models this browser keeps (docs/vtuber.md), in indexeddb: the streamer's own model files,
  * so the one they wore last is there on the next visit and the picker can offer the others
  * again, and the site's demo models as they were downloaded, so one worn before opens at once,
  * with nothing to download and with the server away. Nothing here goes to the api: a person's

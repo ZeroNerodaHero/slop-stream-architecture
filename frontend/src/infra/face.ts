@@ -1,8 +1,9 @@
 /**
- * A model as a camera (docs/vtuber.md): a .vrm's bytes and a camera's track in, one video
+ * A model as a camera (docs/vtuber.md): a model file's bytes and a camera's track in, one video
  * track out, whose picture is the model moving with the face in front of that camera. The
  * track is what `publish-atoms.ts` puts where the camera's picture would go; the camera's own
- * track is handed to the face reader here and to nothing else.
+ * track is handed to the face reader here. Its picture is shown in one place, the rigging panel
+ * on the streamer's own page (`readerCameraAtom`), and sent nowhere.
  *
  * The work is the face worker's (`face.worker.ts`). This file starts it, and connects it to
  * the camera and to a track, one of two ways:
@@ -19,13 +20,13 @@
  */
 
 import weights from '@/assets/face_landmarker.task?url';
-import type { FaceState, FromFaceWorker, LoadStep, ModelStats, RigInfo, ToFaceWorker } from '@/infra/face-wire';
+import type { FaceLines, FaceMarks, FaceState, FromFaceWorker, LoadStep, ModelStats, RigInfo, ToFaceWorker } from '@/infra/face-wire';
 // the worker as vite builds it (see events.ts). the lint strips the query and finds no default
 // export in the worker file; vite's own typing says there is one
 // oxlint-disable-next-line import/default -- `?worker` is vite's: the default export is the worker's constructor
 import FaceWorker from '@/infra/face.worker?worker';
 
-export type { FaceState, LoadStep, ModelStats, RigInfo, RigPart } from '@/infra/face-wire';
+export type { FaceLines, FaceMarks, FaceState, LoadStep, ModelStats, RigInfo, RigPart } from '@/infra/face-wire';
 
 /** The model's picture: the camera's own size (publish-atoms' `CAMERA_VIDEO`) and rate. */
 const WIDTH = 1280;
@@ -47,7 +48,7 @@ declare global {
 }
 
 export interface ModelOptions {
-  /** The .vrm's bytes, already read by `infra/vrm.ts`. Handed to the worker: gone from the caller after this. */
+  /** The model file's bytes, already read by `infra/model-file.ts`. Handed to the worker: gone from the caller after this. */
   model: ArrayBuffer;
   /** The camera the face is read from. `null`: none, and the model breathes and blinks on its own. Never sent anywhere. */
   camera: MediaStreamTrack | null;
@@ -64,6 +65,10 @@ export interface ModelOptions {
   onLoading: (step: LoadStep, loaded: number, total: number) => void;
   onState: (face: FaceState, why?: string) => void;
   onStats: (stats: ModelStats) => void;
+  /** Which of the reader's points join into what: once, the first time the marks are asked for (`setMarks`). */
+  onLines: (lines: FaceLines) => void;
+  /** One reading's points and numbers, for as long as the marks are asked for. */
+  onMarks: (marks: FaceMarks) => void;
   /** The model stopped after it had started: the drawing was lost, the worker died. Nothing more comes from it. */
   onFailed: (why: string) => void;
 }
@@ -80,6 +85,8 @@ export interface ModelSession {
   setMirror(mirror: boolean): void;
   setBackground(css: string): void;
   setExpressions(on: boolean): void;
+  /** The reader's points come with every reading (`onMarks`), or stop coming: on while something draws them (the rigging panel). */
+  setMarks(on: boolean): void;
   /** Take the resting face again. */
   rest(): void;
   stop(): void;
@@ -197,6 +204,7 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
     setMirror: (mirror) => void (!stopped && send({ type: 'set', mirror })),
     setBackground: (background) => void (!stopped && send({ type: 'set', background })),
     setExpressions: (expressions) => void (!stopped && send({ type: 'set', expressions })),
+    setMarks: (marks) => void (!stopped && send({ type: 'set', marks })),
     rest: () => void (!stopped && send({ type: 'rest' })),
     stop
   };
@@ -227,6 +235,8 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
         giveUp(msg.why);
       } else if (msg.type === 'state') options.onState(msg.face, msg.why);
       else if (msg.type === 'stats') options.onStats(msg.stats);
+      else if (msg.type === 'lines') options.onLines(msg.lines);
+      else if (msg.type === 'marks') options.onMarks(msg.marks);
       else if (msg.type === 'bitmap') {
         if (paint) paint(msg.bitmap);
         else msg.bitmap.close();

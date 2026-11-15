@@ -163,7 +163,9 @@ function WatchCorner() {
  * untouched: the peer, the socket and the camera are the same module handles the page uses.
  * The × is stop, after a yes (a box in a corner is easy to close by habit, and this one ends
  * the stream for everyone): your stream ends and the camera goes, as if you had pressed stop
- * on the page.
+ * on the page. While the stream is up the player also follows you out of the tab: leave the
+ * tab, from the go live page too, and it is in a window of its own over the other tabs and
+ * apps, back when the tab is (CornerPlayer `popOutOnLeave`; where the browser does that).
  */
 function LiveCorner() {
   const pip = useAtomValue(publishPipAtom);
@@ -189,6 +191,8 @@ function LiveCorner() {
     <CornerPlayer
       prefix="live-pip"
       visible={pip && name !== '' && !isLivePage(pathname)}
+      // on air, the player follows you out of the tab: from the go live page too, where it is otherwise not shown
+      popOutOnLeave={publishing && name !== ''}
       label={`${name}, your stream, picture in picture`}
       name={name}
       to="/live"
@@ -205,7 +209,16 @@ function LiveCorner() {
         imageUrl: (asset) => api.assetUrl(name, asset),
         avatar: { name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined }
       }}
-      chat={{ name, owner, place: pipChat, open: cornerChat === 'live-pip', pageHasChat: hasOwnChat(pathname), onToggle: () => toggleCornerChat('live-pip') }}
+      // the go live page's chat is this same room: out in the window the player may show it too
+      chat={{
+        name,
+        owner,
+        place: pipChat,
+        open: cornerChat === 'live-pip',
+        pageHasChat: hasOwnChat(pathname),
+        pageChatIsOurs: isLivePage(pathname),
+        onToggle: () => toggleCornerChat('live-pip')
+      }}
       closeLabel="stop streaming"
       onClose={endLive}
       // × here ends the stream for everyone watching, from a box in a corner: a yes or no first

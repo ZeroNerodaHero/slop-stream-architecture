@@ -129,6 +129,12 @@ export const chatPinnedAtom = atom(false);
 export const chatBehindAtom = atom(0);
 /** Bumped when the panel should scroll and the lines themselves did not change. */
 export const chatScrollAtom = atom(0);
+/**
+ * A second panel is drawing the room: the player's own window, over a page whose own chat is
+ * that same room (ChatPanel `guest`). Still one room and one socket: the page's panel holds
+ * them and draws nothing while this is on, and the guest neither joins nor leaves.
+ */
+export const chatGuestAtom = atom(false);
 
 /** One page of older lines. A short page is the end. Matches `PAGE` in history.rs. */
 const OLDER_PAGE = 50;
@@ -160,6 +166,8 @@ interface Session {
   /** The server, when this socket is every channel of one. */
   server: string | null;
   owner: Owner | null;
+  /** The login the socket said hello as; `null` for a nick, or the streamer's grant alone. A panel that takes the room as someone else is a new hello, not a hand-over (`openChat`). */
+  me: string | null;
   ws: WebSocket | null;
   timer: ReturnType<typeof setTimeout> | null;
   /** The page's copy of the chat's bucket for this speaker in this room: the tokens in it as of `at` (unix ms). A reconnect keeps it, as the chat does; a new session is a new room or a new name, and a full one. */
@@ -167,6 +175,8 @@ interface Session {
 }
 
 let session: Session | null = null;
+/** Running while the room's last panel has just gone and the room is still open (`leaveChat`): the close, `LEAVE_MS` out, unless another panel takes the room first. */
+let leaving: ReturnType<typeof setTimeout> | null = null;
 let notice: ReturnType<typeof setTimeout> | null = null;
 
 /** The tier a session's lines are on: the streamer's grant or a login is the login's, a nick the other. */
@@ -175,7 +185,7 @@ function tierOf(owner: Owner | null): ChatTier {
 }
 
 function newSession(name: string, server: string | null, owner: Owner | null): Session {
-  return { name, server, owner, ws: null, timer: null, bucket: { tokens: tierOf(owner).burst, at: Date.now() } };
+  return { name, server, owner, me: null, ws: null, timer: null, bucket: { tokens: tierOf(owner).burst, at: Date.now() } };
 }
 
 /** A token out of the page's bucket, or how long (ms) until there is one. */
@@ -267,10 +277,53 @@ export function removeChatImage(id: string) {
  * Calling it again for the same room with a different owner reconnects.
  */
 export function openChat(name: string, owner: Owner | null = null) {
-  if (session && session.name === name && sameOwner(session.owner, owner) && session.ws) return;
+  // the same room, open, as the same speaker: nothing to do. when a panel left it a moment ago, this is the hand-over
+  // that keeps it. a login that changed meanwhile is not the same speaker: that one says hello again, below
+  if (session && session.name === name && sameOwner(session.owner, owner) && session.ws && session.me === (store.get(meAtom) ?? null)) {
+    if (leaving) clearTimeout(leaving);
+    leaving = null;
+    return;
+  }
+  settleLeave();
   closeChat(false);
   session = newSession(name, null, owner);
   connect();
+}
+
+/**
+ * How long a room stays open after its last panel went. Long enough for the next panel to
+ * arrive when it is a commit or two behind the one that took the last away (leaving the go
+ * live page turns the corner player on from an effect's cleanup, so its chat mounts a render
+ * later), short enough that nobody is in a room they have left.
+ */
+const LEAVE_MS = 100;
+
+/**
+ * A panel is gone from the room. The room closes, unless another panel takes the same room
+ * within `LEAVE_MS`: the chat moving with the player between the page and a window of its own
+ * (or between the player's chat and the page's, for the same stream) is one panel unmounting
+ * and another mounting, and a close between the two would be a reconnect, the lines asked for
+ * again and a half typed line lost. Another room opening meanwhile closes this one at once.
+ */
+export function leaveChat() {
+  if (!session || leaving) return;
+  leaving = setTimeout(() => {
+    leaving = null;
+    closeChat();
+  }, LEAVE_MS);
+}
+
+/** The next open is not for the room a panel just left (another room, or the same one as someone else): that one closes now, as it always did, before the next opens. */
+function settleLeave() {
+  if (!leaving) return;
+  clearTimeout(leaving);
+  leaving = null;
+  closeChat();
+}
+
+/** A guest panel came up, or went (ChatPanel `guest`): the panel that holds the room stands aside for as long. */
+export function setChatGuest(on: boolean) {
+  store.set(chatGuestAtom, on);
 }
 
 /**
@@ -279,6 +332,7 @@ export function openChat(name: string, owner: Owner | null = null) {
  * server starts over, shelf and all. Later changes of channel are `showChannel`'s.
  */
 export function openServerChat(server: string, show: string) {
+  settleLeave();
   if (session?.server === server && session.ws) {
     showChannel(show);
     return;
@@ -486,6 +540,7 @@ function connect() {
   store.set(chatPhaseAtom, 'connecting');
   const ws = new WebSocket(relayUrl(`/chat/${chatPath(current.name)}`));
   current.ws = ws;
+  current.me = me;
 
   ws.onopen = () => {
     // a login needs no nick: the cookie went with the handshake and the server names us

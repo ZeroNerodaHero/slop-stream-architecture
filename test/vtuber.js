@@ -1,22 +1,30 @@
-// The model as a face cam (docs/vtuber.md): on the go live page a streamer picks a 3d model (a
-// .vrm: one of the site's demo models out of the bucket, or a file of their own), their browser
+// The model as a face cam (docs/vtuber.md): on the go live page a streamer picks a 3d model (one
+// of the site's demo models out of the bucket, or a file of their own), their browser
 // reads their face from the camera and draws the model moving with it, and that drawing is sent
 // where the camera's picture would go. To the box and to a watcher it is a camera.
 //
 // What is checked: the api's three routes for the demo models; the picker (the shelf as the api
 // lists it, a file from the computer kept in this browser and put up nowhere, a bad file refused
-// in words); a model on its way on says how far along it is, on its card and over the preview;
+// in words, the other sites it names as links); a file that is no vrm, a .glb or an .fbx out of
+// another tool, worn by the names of its bones and its shapes, and refused in words when it has
+// no head or keeps its pictures in other files; a model on its way on says how far along it is,
+// on its card and over the preview;
 // a demo model is downloaded once and kept in this browser (the picker says so, and the next
 // pick and the next visit ask the server for nothing); the page says what of a model's face the
 // reader can move, and offers the expressions switch only on a model with brows or a smile; the
-// model's picture in the preview and, live, on a watcher's page; the one rule, that the camera's
-// own track goes to the face reader and to nothing else (no sender, no <video> on the page), on
-// a pick, on a reload with a model kept, and when the model's worker dies mid stream (mic only,
-// never the camera); and that the way back to the camera asks first.
+// model's picture in the preview and, live, on a watcher's page; the rigging panel under the
+// preview (the camera's picture with the reader's marks on it and the numbers they become, its
+// eye, its fold, and its picture off the page before a shared screen could see it, before start
+// and live, for as long as the screen is shared); the one rule, that the
+// camera's own track goes to the face reader, is shown in the rigging panel and nowhere else on
+// the page, and is in no sender, on a pick, on a reload with a model kept, and when the model's
+// worker dies mid stream (mic only, never the camera); and that the way back to the camera asks
+// first.
 //
 // Which picture is which is read off its corners: the model is drawn on a flat colour the
 // streamer picks, and the test picks one no camera makes. The face reader's state and numbers
-// are read off #face-status (data-face, data-reads, data-fps, ...), never off the picture.
+// are read off #face-status (data-face, data-reads, data-fps, ...), and the rigging's off
+// #rig-marks (data-points, data-frames) and its bars, never off the picture.
 // Chrome's fake camera has no face in it, so the reader says `no face in view`, its light beside
 // the model's name is red, and the model moves on its own. FACE_CLIP=/path/to/a/face.mjpeg feeds
 // it one, and then the numbers must move and the light is green.
@@ -30,10 +38,29 @@ const FACE_CLIP = process.env.FACE_CLIP ? path.resolve(process.env.FACE_CLIP) : 
 // swiftshader: a machine with no gpu (a server running its own tests) still gets a webgl to draw the model with.
 // no audio output: the mixer's meters are read off a web audio graph, which stands still on a machine whose
 // speakers are asleep (a laptop with its screen off); a sink that plays to nobody keeps it running anywhere
-const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors', '--enable-unsafe-swiftshader', '--disable-audio-output'];
+// the screen that is shared for a moment is picked by chrome itself (as in screen.js)
+const ARGS = [
+  '--use-fake-device-for-media-stream',
+  '--use-fake-ui-for-media-stream',
+  '--ignore-certificate-errors',
+  '--enable-unsafe-swiftshader',
+  '--disable-audio-output',
+  '--auto-select-desktop-capture-source=Entire screen'
+];
 if (FACE_CLIP) ARGS.push(`--use-file-for-fake-video-capture=${FACE_CLIP}`);
 /** The file "from the computer": the smallest of the repo's demo models. */
 const OWN_FILE = path.join(__dirname, '..', 'random-media', 'vrms', 'orion.vrm');
+/**
+ * A model that is no vrm, the kind of file another tool writes: a puppet made of boxes on a skeleton whose bones
+ * are named the plain way (Head, Neck, Chest, LeftArm, ...), with two shapes (Blink, MouthOpen) and one small
+ * picture for its colours. The same puppet as a glb, as an fbx with the picture inside it, and as an fbx with the
+ * picture left outside. fixtures/puppet.py is the blender script that made all three.
+ */
+const PUPPET = {
+  glb: path.join(__dirname, 'fixtures', 'puppet.glb'),
+  fbx: path.join(__dirname, 'fixtures', 'puppet.fbx'),
+  loose: path.join(__dirname, 'fixtures', 'puppet-loose.fbx')
+};
 const results = []; // 'pass' | 'fail' | 'skip'
 // fn returns a string (shown after PASS) or { skip: 'why' } when it could not check anything
 async function step(name, fn) {
@@ -154,13 +181,27 @@ async function press(p, sel, on) {
 // Before any of the page's code, on the publisher: every track a sender is given and every video
 // track a <video> is given, by the label of what it came from. A camera's label is the camera's
 // name; the model's track has another. `connected`: the <video> is on the page (the face
-// reader's own, on a browser where the page feeds it, never is). And every step the two loading
-// things went through (the picked card's veil, the preview's), as they went: a model out of
-// this browser is on in under a second, faster than a test can look.
+// reader's own, on a browser where the page feeds it, never is). What the rigging panel's
+// <video> was playing (`rig`) at the two moments a share of this page could first carry it out:
+// when the browser's picker hands a screen over (`__picked`), and when a track is given to a
+// sender. And every step the two loading things went through (the picked card's veil, the
+// preview's), as they went: a model out of this browser is on in under a second, faster than a
+// test can look.
 function recordTracks() {
   window.__sent = [];
   window.__shown = [];
+  window.__picked = [];
   window.__loading = [];
+  const rigPlays = () => document.querySelector('#rig-video')?.srcObject?.getVideoTracks()[0]?.label ?? null;
+  const pick = navigator.mediaDevices?.getDisplayMedia;
+  if (pick) {
+    navigator.mediaDevices.getDisplayMedia = async function (...options) {
+      const display = await pick.apply(this, options);
+      // before the page hears of it: this runs first, the page's own `await` after
+      window.__picked.push({ label: display.getVideoTracks()[0]?.label ?? null, rig: rigPlays() });
+      return display;
+    };
+  }
   const noteLoading = () => {
     for (const [what, sel] of [['card', '#model-card-loading'], ['preview', '#model-loading']]) {
       const step = document.querySelector(sel)?.dataset.step;
@@ -172,12 +213,12 @@ function recordTracks() {
   new MutationObserver(noteLoading).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-step'] });
   const add = RTCPeerConnection.prototype.addTransceiver;
   RTCPeerConnection.prototype.addTransceiver = function (trackOrKind, init) {
-    if (typeof trackOrKind !== 'string') window.__sent.push({ how: 'addTransceiver', kind: trackOrKind.kind, label: trackOrKind.label });
+    if (typeof trackOrKind !== 'string') window.__sent.push({ how: 'addTransceiver', kind: trackOrKind.kind, label: trackOrKind.label, rig: rigPlays() });
     return add.call(this, trackOrKind, init);
   };
   const replace = RTCRtpSender.prototype.replaceTrack;
   RTCRtpSender.prototype.replaceTrack = function (track) {
-    if (track) window.__sent.push({ how: 'replaceTrack', kind: track.kind, label: track.label });
+    if (track) window.__sent.push({ how: 'replaceTrack', kind: track.kind, label: track.label, rig: rigPlays() });
     return replace.call(this, track);
   };
   const srcObject = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'srcObject');
@@ -192,9 +233,42 @@ function recordTracks() {
     }
   });
 }
-/** Where the camera's own track went, on this page load: the senders and the <video>s on the page that were given it. */
+/**
+ * Where the camera's own track went, on this page load: the senders that were given it (`sent`),
+ * how many times the rigging panel's <video> was (`rig`: the one place its picture is shown),
+ * and any other <video> on the page that was (`elsewhere`).
+ */
 const cameraWent = (p, label) =>
-  p.evaluate((label) => ({ sent: window.__sent.filter((s) => s.kind === 'video' && s.label === label), shown: window.__shown.filter((s) => s.connected && s.label === label), senders: window.__sent.filter((s) => s.kind === 'video').length }), label);
+  p.evaluate((label) => {
+    const shown = window.__shown.filter((s) => s.connected && s.label === label);
+    return {
+      sent: window.__sent.filter((s) => s.kind === 'video' && s.label === label),
+      rig: shown.filter((s) => s.el === 'rig-video').length,
+      elsewhere: shown.filter((s) => s.el !== 'rig-video'),
+      senders: window.__sent.filter((s) => s.kind === 'video').length
+    };
+  }, label);
+/** The rigging panel's marks: how many points it last drew, how many times it has drawn, how far its view is in on the face. */
+const rigMarks = (p) => p.$eval('#rig-marks', (el) => ({ points: Number(el.dataset.points), frames: Number(el.dataset.frames), zoom: Number(el.dataset.zoom) }));
+/** And its numbers, in the order they stand: the five bars (0 to 100), then the head's turn, nod and tilt in degrees. */
+const rigNumbers = (p) =>
+  p.evaluate(() => [
+    ...['mouth', 'blink', 'smile', 'brows-up', 'brows-down'].map((id) => Number(document.querySelector(`#rig-${id}`).getAttribute('aria-valuenow'))),
+    ...['turn', 'nod', 'tilt'].map((id) => Number(document.querySelector(`#rig-${id}`).dataset.value))
+  ]);
+/** The last screen the browser's picker handed over: its track's label, and what the rigging panel's <video> was playing at that moment (`rig`). */
+const lastPick = (p) => p.evaluate(() => window.__picked[window.__picked.length - 1] ?? null);
+/** The shared screen taken away again, if it is still there: a step that failed with it on would fail the steps after it for the wrong reason. */
+const dropScreen = async (p) => {
+  if ((await p.$('#source-remove-s1')) === null) return;
+  await p.click('#source-remove-s1');
+  await p.waitForSelector('#source-s1', { state: 'detached', timeout: 5000 });
+};
+/** Until the rigging panel's <video> plays `label`'s track, or (null) nothing at all. */
+const waitRigPicture = (p, label, timeout = 10000) =>
+  p.waitForFunction((label) => (document.querySelector('#rig-video')?.srcObject?.getVideoTracks()[0]?.label ?? null) === label, label, { timeout }).catch(() => {
+    throw new Error(`the rigging panel's picture is not ${label === null ? 'gone' : `"${label}"`}`);
+  });
 
 /** The steps the two loading things went through since the last ask, each in order (`file`, `model`, `reader`, `gone`): `{ card, preview }`. */
 const loadingSeen = (p) =>
@@ -328,6 +402,18 @@ function glb(json) {
     return `camera "${camera.label}"; ${cards.length} cards, their thumbnails drawn`;
   });
 
+  await step('the picker names a few other sites that have models to download, each a link that opens in a tab of its own and is asked for nothing until it is clicked', async () => {
+    const places = await pub.$$eval('#model-places a', (els) => els.map((a) => ({ name: a.textContent.trim(), href: a.href, target: a.target, rel: a.rel })));
+    expect(places.length >= 3, `the picker lists ${places.length} places`);
+    for (const place of places) {
+      const safe = /^https:\/\//.test(place.href) && place.target === '_blank' && /\bnoopener\b/.test(place.rel) && /\bnoreferrer\b/.test(place.rel);
+      expect(safe, `not a link that leaves the way a link should: ${JSON.stringify(place)}`);
+    }
+    const hosts = places.map((place) => new URL(place.href).host);
+    expect(!asked.some((r) => hosts.includes(new URL(r.url).host)), 'the page asked one of those sites for something with nobody clicking');
+    return places.map((place) => place.name).join(', ');
+  });
+
   await step('a file that is no model, and a model that points outside its own file, are each refused in words: nothing changes', async () => {
     const before = await trackOf(pub, '#preview');
     await pub.setInputFiles('#model-file', { name: 'notes.vrm', mimeType: 'application/octet-stream', buffer: Buffer.from('this is not a model') });
@@ -341,6 +427,23 @@ function glb(json) {
     expect((await pub.$('#model-dialog[open]')) !== null, 'the picker closed on a refused file');
     expect((await trackOf(pub, '#preview')).id === before.id && (await pub.$('#model-controls')) === null, 'something changed on the stream');
     expect(!asked.some((r) => r.url.includes('example.com')), 'the page asked example.com for the model\'s buffer');
+    return `"${first}" · "${second}"`;
+  });
+
+  await step('a .glb with nothing called a head, and an .fbx whose pictures are in other files, are each refused in words, and neither is kept', async () => {
+    const before = await trackOf(pub, '#preview');
+    // a glb with no vrm in it is a model by the names of its bones, and this one is a cube with no bone at all
+    const cube = glb({ asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ name: 'Cube' }] });
+    await pub.setInputFiles('#model-file', { name: 'cube.glb', mimeType: 'model/gltf-binary', buffer: cube });
+    await pub.waitForFunction(() => /nothing called a head/.test(document.querySelector('#model-status')?.textContent || ''), null, { timeout: 5000 });
+    const first = (await pub.textContent('#model-status')).trim();
+    // only the one file is picked: an fbx that names its pictures by where they were on its maker's disk would be drawn bare
+    await pub.setInputFiles('#model-file', PUPPET.loose);
+    await pub.waitForFunction(() => /pictures in other files/.test(document.querySelector('#model-status')?.textContent || ''), null, { timeout: 5000 });
+    const second = (await pub.textContent('#model-status')).trim();
+    expect((await pub.$('#model-dialog[open]')) !== null, 'the picker closed on a refused file');
+    expect((await trackOf(pub, '#preview')).id === before.id && (await pub.$('#model-controls')) === null, 'something changed on the stream');
+    expect((await pub.$$('#model-kept button[id^="model-kept-"]')).length === 0, 'a refused file is on the shelf');
     return `"${first}" · "${second}"`;
   });
 
@@ -414,6 +517,90 @@ function glb(json) {
   );
 
   await step(
+    FACE_CLIP
+      ? "the rigging, under the preview: the camera's picture with the reader's marks on the face and the numbers moving, an eye for the marks alone, a fold"
+      : "the rigging, under the preview: the camera's picture with no face to mark and the numbers at rest, an eye for the marks alone, a fold",
+    drawn(async () => {
+      await pub.waitForSelector('#rig-body', { timeout: 5000 });
+      const boxes = await pub.evaluate(() => {
+        const box = (sel) => {
+          const r = document.querySelector(sel).getBoundingClientRect();
+          return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), bottom: Math.round(r.bottom) };
+        };
+        return { scene: box('#scene'), rig: box('#rig') };
+      });
+      expect(boxes.rig.top >= boxes.scene.bottom && Math.abs(boxes.rig.left - boxes.scene.left) <= 1 && Math.abs(boxes.rig.right - boxes.scene.right) <= 1, `the rigging is not under the preview: ${JSON.stringify(boxes)}`);
+      // its picture is the camera's own: the one place on the page that has it
+      await waitRigPicture(pub, camera.label);
+      await pub.waitForFunction(() => document.querySelector('#rig-video').videoWidth > 0, null, { timeout: 10000 });
+      let said;
+      if (FACE_CLIP) {
+        await pub.waitForFunction(() => Number(document.querySelector('#rig-marks')?.dataset.points) > 400, null, { timeout: 20000 });
+        const a = await rigMarks(pub);
+        const seen = new Set();
+        for (let i = 0; i < 12; i++) {
+          await sleep(250);
+          seen.add((await rigNumbers(pub)).join());
+        }
+        const b = await rigMarks(pub);
+        expect(b.frames - a.frames >= 15, `the marks were drawn ${b.frames - a.frames} times in 3 s`);
+        expect(seen.size >= 3, `the numbers did not move in 3 s: ${[...seen].join(' | ')}`);
+        said = `${b.points} points on the face, drawn ${b.frames - a.frames} times in 3 s, the numbers read ${seen.size} ways, the view ${b.zoom} times in on the face`;
+      } else {
+        await pub.waitForFunction(() => document.querySelector('#rig-words')?.textContent === 'no face in view', null, { timeout: 20000 });
+        const marks = await rigMarks(pub);
+        const numbers = await rigNumbers(pub);
+        expect(marks.points === 0 && marks.zoom === 1 && numbers.every((n) => n === 0), `with no face the rigging draws ${marks.points} points, ${marks.zoom} times in, and says ${numbers.join()}`);
+        said = '"no face in view", no points, every number at rest, the whole frame';
+      }
+      // the eye: the marks alone, and the camera in no <video> at all. kept
+      await press(pub, '#rig-picture', false);
+      await waitRigPicture(pub, null);
+      expect((await pub.evaluate(() => localStorage.getItem('settings.rigPicture'))) === 'false', 'the eye is not kept');
+      await press(pub, '#rig-picture', true);
+      await waitRigPicture(pub, camera.label);
+      // folded, nothing of it is on the page, and it stays folded
+      await pub.click('#rig-toggle');
+      await pub.waitForSelector('#rig-body', { state: 'detached', timeout: 5000 });
+      expect(JSON.parse(await pub.evaluate(() => localStorage.getItem('settings.livePanels'))).rig === false, 'the fold is not kept');
+      await pub.click('#rig-toggle');
+      await waitRigPicture(pub, camera.label);
+      const went = await cameraWent(pub, camera.label);
+      expect(went.sent.length === 0, `the camera's track went to a sender: ${JSON.stringify(went.sent)}`);
+      return `${said} · "${(await pub.textContent('#rig-note')).trim()}"`;
+    })
+  );
+
+  await step(
+    "a screen is shared: the rigging's picture is off the page before the browser hands the screen over, and for as long as it is shared, so a share of this page cannot carry the camera out; then it is back",
+    drawn(async () => {
+      await pub.click('#add-source');
+      if ((await pub.$('#add-screen')) === null) {
+        await pub.keyboard.press('Escape');
+        return { skip: 'this browser shares no screens' };
+      }
+      await pub.click('#add-screen');
+      await pub.waitForSelector('#source-s1', { timeout: 10000 });
+      let note;
+      try {
+        // gone when the picker handed the screen over, not once the page had it among its sources: a share sees the page from then
+        const picked = await lastPick(pub);
+        expect(picked && picked.rig === null, `when the picker handed the screen over the rigging panel was playing ${JSON.stringify(picked)}`);
+        await waitRigPicture(pub, null);
+        note = (await pub.textContent('#rig-note')).trim();
+        expect(/hidden while you share a screen/.test(note), `the rigging says "${note}"`);
+        expect(await pub.$eval('#rig-picture', (b) => b.disabled && b.getAttribute('aria-pressed') === 'false'), 'the eye still takes a press, or says it is on');
+      } finally {
+        await dropScreen(pub);
+      }
+      await waitRigPicture(pub, camera.label);
+      // the model is the whole picture again, as it was
+      await waitPicture(pub, '#preview', DARK);
+      return `"${note}"`;
+    })
+  );
+
+  await step(
     'a demo model is downloaded once: the picker says so, and a reload opens it out of this browser, with the server asked for nothing',
     drawn(async () => {
       if (!wear) return { skip: 'no demo models in the bucket' };
@@ -435,6 +622,41 @@ function glb(json) {
       expect(wentThrough(over), `over the preview the loading went ${over.join(' > ') || 'unseen'}`);
       await waitPicture(pub, '#preview', DARK);
       return `"${line}" · after the reload: loading ${over.join(' > ')}, ${asks() - before} requests for the file`;
+    })
+  );
+
+  await step(
+    'a .glb with no vrm in it, then an .fbx: each is a model by the names of its bones and its shapes, worn, kept, and forgotten again from its ×',
+    drawn(async () => {
+      const said = [];
+      for (const file of [PUPPET.glb, PUPPET.fbx]) {
+        const was = await trackOf(pub, '#preview');
+        await openPicker();
+        await pub.setInputFiles('#model-file', file);
+        await waitWorn();
+        await pub.waitForFunction((id) => document.querySelector('#preview')?.srcObject?.getVideoTracks()[0]?.id !== id, was.id, { timeout: 15000 });
+        // neither kind of file has a name for its model in it: it goes by its file's
+        expect((await pub.textContent('#model-name')).trim() === 'puppet', `the model is called "${await pub.textContent('#model-name')}"`);
+        // its head is the bone called Head, and its blink and its mouth are the shapes called Blink and MouthOpen
+        const rig = await pub.$eval('#model-rig', (el) => ({ kind: el.dataset.kind, parts: el.dataset.parts }));
+        expect(rig.kind === 'presets' && rig.parts === 'blink mouth', `${path.basename(file)}: the page says its face is ${JSON.stringify(rig)}`);
+        const px = await waitPicture(pub, '#preview', DARK);
+        said.push(`${path.basename(file)}: ${rig.parts}, ${fmtPx(px)}`);
+      }
+      // both are on the shelf, and the × on a card takes its file out of this browser. the one that is on stays on
+      await openPicker();
+      const kept = await pub.$$eval('#model-kept button[id^="model-kept-"]', (els) =>
+        els.filter((el) => el.querySelector('span span')?.textContent.trim() === 'puppet').map((el) => el.id.replace('model-kept-', ''))
+      );
+      expect(kept.length === 2, `the shelf has ${kept.length} puppets, not the glb and the fbx`);
+      for (const id of kept) {
+        await pub.hover(`#model-kept-${id}`);
+        await pub.click(`#model-forget-${id}`);
+        await pub.waitForSelector(`#model-kept-${id}`, { state: 'detached', timeout: 5000 });
+      }
+      await closePicker();
+      expect((await pub.$('#model-controls')) !== null, 'forgetting the file took the model off');
+      return said.join(' · ');
     })
   );
 
@@ -500,20 +722,55 @@ function glb(json) {
   );
 
   await step(
-    'the one rule: the camera\'s own track went to no sender and into no <video> on the page, since the model went on',
+    "the one rule: the camera's own track went to no sender, and since the model went on it is in the rigging panel and in no other <video> on the page",
     drawn(async () => {
       const went = await cameraWent(pub, camera.label);
       expect(went.senders > 0, 'no video track was given to a sender at all');
       expect(went.sent.length === 0, `the camera's track went to a sender: ${JSON.stringify(went.sent)}`);
-      // the page's own first look, before the model: the preview and the row's thumbnail. nothing after it
+      expect(went.rig > 0, 'the rigging panel was never given the camera');
+      // the page's own first look, before the model: the preview and the row's thumbnail. after it, of every <video> but the rigging panel's, none
       const after = await pub.evaluate((label) => {
-        const last = window.__shown.map((s) => s.label).lastIndexOf(label);
-        return window.__shown.slice(last + 1).length;
+        const others = window.__shown.filter((s) => s.el !== 'rig-video');
+        const last = others.map((s) => s.label).lastIndexOf(label);
+        return others.slice(last + 1).length;
       }, camera.label);
-      expect(after > 0, 'no <video> was given the model after the camera');
+      expect(after > 0, "no <video> but the rigging panel's was given the model after the camera");
       const now = await trackOf(pub, '#preview');
       expect(now.label !== camera.label, 'the preview plays the camera');
-      return `${went.senders} video track(s) given to senders, none "${camera.label}"`;
+      expect((await trackOf(pub, '#rig-video'))?.label === camera.label, 'the rigging panel does not play the camera');
+      return `${went.senders} video track(s) given to senders, none "${camera.label}"; on the page it is the rigging panel's alone`;
+    })
+  );
+
+  await step(
+    "live, a screen is shared: the camera's picture is off the page before the screen's track is given to a sender; the screen stopped, it is back, and the watcher has the model",
+    drawn(async () => {
+      await pub.click('#add-source');
+      if ((await pub.$('#add-screen')) === null) {
+        await pub.keyboard.press('Escape');
+        return { skip: 'this browser shares no screens' };
+      }
+      await waitRigPicture(pub, camera.label);
+      const picks = await pub.evaluate(() => window.__picked.length);
+      await pub.click('#add-screen');
+      await pub.waitForSelector('#source-s1', { timeout: 10000 });
+      let picked;
+      let sent;
+      try {
+        picked = await lastPick(pub);
+        expect((await pub.evaluate(() => window.__picked.length)) === picks + 1 && picked, 'the picker handed nothing over');
+        expect(picked.rig === null, `when the picker handed the screen over the rigging panel was playing "${picked.rig}"`);
+        // live, the screen's track goes into its sender before the page has the screen among its sources
+        sent = await pub.evaluate((label) => window.__sent.filter((s) => s.kind === 'video' && s.label === label), picked.label);
+        expect(sent.length > 0, `the screen's track ("${picked.label}") was given to no sender`);
+        expect(sent.every((s) => s.rig === null), `the rigging panel was playing the camera when the screen's track was given to a sender: ${JSON.stringify(sent)}`);
+      } finally {
+        await dropScreen(pub);
+      }
+      await waitRigPicture(pub, camera.label);
+      expect((await cameraWent(pub, camera.label)).sent.length === 0, 'the camera was sent');
+      await waitLayer(w, 'cam');
+      return `"${picked.label}" given to a sender ${sent.length} time(s), the rigging panel playing nothing each time · ${fmtPx(await waitPicture(w, '#video', MAGENTA))}`;
     })
   );
 
@@ -572,7 +829,7 @@ function glb(json) {
   );
 
   await step(
-    'stop, then a reload with the model kept: the model is what opens, and the camera is in no <video> on the page',
+    "stop, then a reload with the model kept: the model is what opens, and the camera is in no <video> on the page but the rigging panel's",
     drawn(async () => {
       await pub.click('#stop');
       await waitStatus(w, /ended/);
@@ -583,12 +840,13 @@ function glb(json) {
       const { preview: over } = await loadingSeen(pub);
       expect(wentThrough(over), `over the preview the loading went ${over.join(' > ') || 'unseen'}`);
       const px = await waitPicture(pub, '#preview', MAGENTA);
+      await waitRigPicture(pub, camera.label);
       const went = await cameraWent(pub, camera.label);
-      expect(went.shown.length === 0, `a <video> on the page was given the camera's track: ${JSON.stringify(went.shown)}`);
+      expect(went.elsewhere.length === 0, `a <video> that is not the rigging panel's was given the camera's track: ${JSON.stringify(went.elsewhere)}`);
       const shown = await pub.evaluate(() => window.__shown.filter((s) => s.connected).length);
       expect(shown > 0, 'no <video> on the page was given anything');
       expect((await pub.textContent('#model-name')).trim() === 'Orion', `the model is called "${await pub.textContent('#model-name')}"`);
-      return `${shown} video track(s) given to the page's <video>s, none "${camera.label}" · ${fmtPx(px)}`;
+      return `${shown} video track(s) given to the page's <video>s, "${camera.label}" to the rigging panel's alone · ${fmtPx(px)}`;
     })
   );
 

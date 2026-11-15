@@ -27,6 +27,26 @@ import { cn } from '@/utils/cn';
 const SECTION_TITLE = 'text-xs font-semibold uppercase tracking-wider text-textTertiary';
 const mb = (bytes: number) => `${(bytes / 1_000_000).toFixed(bytes < 10_000_000 ? 1 : 0)} mb`;
 
+/**
+ * Where a model can be had, for someone who has none: the site, the kind of file it hands out,
+ * and a line about what is there. Each was open, and gave what is said here, in november 2026.
+ * A model's terms are its maker's, on its own page: nothing here says a model may be worn.
+ */
+const PLACES: readonly { id: string; name: string; href: string; file: string; about: string }[] = [
+  { id: 'vroid-hub', name: 'vroid hub', href: 'https://hub.vroid.com/en', file: '.vrm', about: 'characters made in vroid studio. each says who may wear it' },
+  { id: 'booth', name: 'booth', href: 'https://booth.pm/en', file: '.vrm', about: 'a market of avatars, many of them free' },
+  { id: 'open-source-avatars', name: 'open source avatars', href: 'https://www.opensourceavatars.com/', file: '.vrm', about: 'over 300, most of them free for any use' },
+  { id: 'sketchfab', name: 'sketchfab', href: 'https://sketchfab.com/', file: '.glb', about: 'characters under creative commons licences. download one as glb' },
+  {
+    id: 'mixamo',
+    name: 'mixamo',
+    href: 'https://www.mixamo.com/',
+    file: '.fbx',
+    about: 'free characters with a skeleton. most have no face to move, so only the head turns'
+  },
+  { id: 'vroid-studio', name: 'vroid studio', href: 'https://vroid.com/en/studio', file: '.vrm', about: 'free, to make one of your own' }
+];
+
 interface CardProps {
   id: string;
   name: string;
@@ -87,11 +107,12 @@ const keptDetail = (model: KeptModel) => [model.author, mb(model.bytes)].filter(
 /**
  * The model picker (docs/vtuber.md): the site's demo models, out of the bucket with one fetch
  * (a name, who made it, its licence and a thumbnail each), the streamer's own models that this
- * browser keeps, and a file of their own. A pick loads the model and puts it where the camera's
- * picture goes; its card shows how far along it is, and the dialog closes once it is on. A demo
- * model comes down once: this browser keeps it, its card says `downloaded`, and after that it
- * opens with nothing to wait for. Their own file is read here and kept here: it is not put up
- * anywhere.
+ * browser keeps, and a file of their own: a .vrm, a .glb or an .fbx. A pick loads the model and
+ * puts it where the camera's picture goes; its card shows how far along it is, and the dialog
+ * closes once it is on. A demo model comes down once: this browser keeps it, its card says
+ * `downloaded`, and after that it opens with nothing to wait for. Their own file is read here
+ * and kept here: it is not put up anywhere. Under that, a few sites that have models to
+ * download, for someone with no file to pick.
  */
 export function ModelDialog({ onClose }: { onClose: () => void }) {
   const demos = useAtomValue(demoModelsAtom);
@@ -190,7 +211,7 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
           <h3 id="model-kept-title" className={SECTION_TITLE}>
             yours
           </h3>
-          <p className="mt-1 text-sm text-textTertiary">a .vrm from your computer. it is kept in this browser for next time and goes nowhere else.</p>
+          <p className="mt-1 text-sm text-textTertiary">a .vrm, .glb or .fbx from your computer. it is kept in this browser for next time and goes nowhere else.</p>
           {kept.length > 0 && (
             <ul id="model-kept" className="m-0 mt-2 grid list-none grid-cols-2 gap-3 p-0 sm:grid-cols-4">
               {kept.map((model) => (
@@ -225,7 +246,7 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
             ref={fileRef}
             id="model-file"
             type="file"
-            accept=".vrm,model/gltf-binary"
+            accept=".vrm,.glb,.fbx,model/gltf-binary"
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -240,8 +261,25 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
             className="mt-3 text-sm font-semibold text-primaryBlue disabled:opacity-40"
             onClick={() => fileRef.current?.click()}
           >
-            pick a .vrm file
+            pick a model file
           </button>
+        </section>
+
+        <section aria-labelledby="model-places-title">
+          <h3 id="model-places-title" className={SECTION_TITLE}>
+            where to find one
+          </h3>
+          <p className="mt-1 text-sm text-textTertiary">other sites with models to download. each opens in a new tab.</p>
+          <ul id="model-places" className="m-0 mt-2 flex list-none flex-col gap-1.5 p-0 text-sm">
+            {PLACES.map((place) => (
+              <li key={place.id} className="min-w-0 text-textTertiary">
+                <a id={`model-place-${place.id}`} href={place.href} target="_blank" rel="noopener noreferrer" className="font-semibold text-primaryBlue hover:underline">
+                  {place.name}
+                </a>
+                {` · ${place.file} · ${place.about}`}
+              </li>
+            ))}
+          </ul>
         </section>
 
         {/* what the pick is doing, or why it did not come. not read out as it changes: the megabytes would be a sentence a second */}

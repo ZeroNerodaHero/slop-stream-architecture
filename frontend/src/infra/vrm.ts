@@ -1,17 +1,21 @@
 /**
- * A `.vrm` before it is drawn (docs/vtuber.md). A vrm is a glb: a 12 byte header, a json chunk,
- * a binary chunk. This reads the header and the json chunk, never a mesh: is it a vrm, does
- * everything it needs sit inside the file, what does it call itself, who made it and who may
- * wear it. Pure: no dom, no three, so the page asks it before a file goes anywhere.
+ * A `.vrm` or a `.glb` before it is drawn (docs/vtuber.md). A vrm is a glb: a 12 byte header, a
+ * json chunk, a binary chunk. This reads the header and the json chunk, never a mesh: does
+ * everything it needs sit inside the file, is it a vrm, what does it call itself, who made it
+ * and who may wear it; and for a glb that is no vrm, what its bones are called, which is all
+ * that says where its head is. Pure: no dom, no three, so the page asks it before a file goes
+ * anywhere (`model-file.ts`).
  *
  * The one thing it refuses that a loader would take: a buffer or a picture named by `uri`.
  * Whoever draws such a file fetches from wherever it points, and a model from a random download
  * should not get to call home from the streamer's browser.
  */
 
-export interface VrmInfo {
-  /** `0` (vrm 0.x) or `1` (vrm 1.0). */
-  version: '0' | '1';
+import type { BoneNode } from '@/infra/model-bones';
+
+export interface GlbInfo {
+  /** `0` (vrm 0.x) or `1` (vrm 1.0). `null`: a glb with no vrm in it, a model by the names of its bones alone. */
+  vrm: '0' | '1' | null;
   /** The model's own name. '' when it has none. */
   name: string;
   author: string;
@@ -21,15 +25,16 @@ export interface VrmInfo {
   wearer: string;
   /** Its own thumbnail, when there is one inside the file: the picture's bytes as they are. */
   thumbnail: Blob | null;
+  /** What is in it by name, and which of those are bones: where a glb that is no vrm is looked over for a head. */
+  nodes: BoneNode[];
 }
 
-/** Their disk and their gpu, so this is for a mistake, not a budget: no model is this big. */
-export const MAX_MODEL_BYTES = 150 * 1024 * 1024;
 const MAX_JSON_BYTES = 16 * 1024 * 1024;
 const MAX_WORDS = 80;
 const GLB_MAGIC = 0x46546c67; // 'glTF'
 const CHUNK_JSON = 0x4e4f534a;
 const CHUNK_BIN = 0x004e4942;
+const UNREADABLE = 'that file does not read as a model';
 
 /** What a model may say it cannot be drawn without: the vrm set, and the plain gltf ones three reads on its own. */
 const KNOWN_EXTENSIONS: readonly string[] = [
@@ -42,8 +47,22 @@ const KNOWN_EXTENSIONS: readonly string[] = [
   'VRMC_materials_hdr_emissiveMultiplier',
   'KHR_materials_unlit',
   'KHR_materials_emissive_strength',
+  'KHR_materials_clearcoat',
+  'KHR_materials_dispersion',
+  'KHR_materials_ior',
+  'KHR_materials_sheen',
+  'KHR_materials_specular',
+  'KHR_materials_transmission',
+  'KHR_materials_iridescence',
+  'KHR_materials_anisotropy',
+  'KHR_materials_volume',
+  'KHR_lights_punctual',
   'KHR_texture_transform',
-  'KHR_mesh_quantization'
+  'KHR_mesh_quantization',
+  'EXT_materials_bump',
+  'EXT_texture_webp',
+  'EXT_texture_avif',
+  'EXT_mesh_gpu_instancing'
 ];
 /** Each of these is a wasm decoder the page does not carry. */
 const PACKED: Record<string, string> = {
@@ -65,6 +84,8 @@ const indexAt = (v: unknown, key: string): number | null => {
 function words(v: unknown): string {
   return typeof v === 'string' ? v.split(/\s+/).filter(Boolean).join(' ').slice(0, MAX_WORDS) : '';
 }
+/** The same, without the address in brackets some tools put after a name: `CC-BY-4.0 (http://creativecommons.org/...)`. */
+const beforeAddress = (v: unknown) => words(v).replace(/\s*\(https?:\/\/[^)]*\)?$/, '');
 
 const WEARERS: Record<string, string> = {
   onlyauthor: 'only its author',
@@ -79,27 +100,41 @@ function pictureType(bytes: Uint8Array, said: unknown): string {
   return typeof said === 'string' && said.startsWith('image/') ? said : '';
 }
 
+/** By its first bytes: the file is a glb, which a vrm is too. */
+export function isGlb(file: ArrayBuffer): boolean {
+  return file.byteLength >= 20 && new DataView(file).getUint32(0, true) === GLB_MAGIC;
+}
+
+/** The file's nodes by name, each with its parent, and whether a skin moves by it. */
+function nodesOf(doc: Json): BoneNode[] {
+  const joints = new Set(listAt(doc, 'skins').flatMap((skin) => listAt(skin, 'joints')));
+  const list = listAt(doc, 'nodes');
+  const nodes: BoneNode[] = list.map((node, i) => ({ name: isObject(node) && typeof node.name === 'string' ? node.name : '', parent: -1, bone: joints.has(i) }));
+  list.forEach((node, i) => {
+    for (const child of listAt(node, 'children')) if (typeof child === 'number' && nodes[child]) nodes[child].parent = i;
+  });
+  return nodes;
+}
+
 /**
- * What the file says about itself. Throws an `Error` whose message is the reason, in words for
- * the person who picked it, when it is not a vrm this page will draw.
+ * What a glb says about itself. Throws an `Error` whose message is the reason, in words for
+ * the person who picked it, when it is not a file this page will draw.
  */
-export function readVrm(file: ArrayBuffer): VrmInfo {
-  if (file.byteLength > MAX_MODEL_BYTES)
-    throw new Error(`that file is ${Math.round(file.byteLength / (1024 * 1024))} mb. a model is ${MAX_MODEL_BYTES / (1024 * 1024)} mb at most`);
+export function readGlb(file: ArrayBuffer): GlbInfo {
   const view = new DataView(file);
-  if (file.byteLength < 20 || view.getUint32(0, true) !== GLB_MAGIC) throw new Error('not a .vrm file');
-  if (view.getUint32(4, true) !== 2) throw new Error('not a .vrm file (an old gltf)');
+  if (!isGlb(file)) throw new Error(UNREADABLE);
+  if (view.getUint32(4, true) !== 2) throw new Error('that is an old kind of gltf. this page reads version 2');
   if (view.getUint32(8, true) !== file.byteLength) throw new Error('that file is cut short');
   const jsonLength = view.getUint32(12, true);
   const jsonEnd = 20 + jsonLength;
-  if (view.getUint32(16, true) !== CHUNK_JSON || jsonLength > MAX_JSON_BYTES || jsonEnd > file.byteLength) throw new Error('not a .vrm file');
+  if (view.getUint32(16, true) !== CHUNK_JSON || jsonLength > MAX_JSON_BYTES || jsonEnd > file.byteLength) throw new Error(UNREADABLE);
   let doc: unknown;
   try {
     doc = JSON.parse(new TextDecoder().decode(new Uint8Array(file, 20, jsonLength)));
   } catch {
-    throw new Error('not a .vrm file (its inside does not read)');
+    throw new Error(UNREADABLE);
   }
-  if (!isObject(doc)) throw new Error('not a .vrm file');
+  if (!isObject(doc)) throw new Error(UNREADABLE);
 
   // everything inside the file: a `uri` is a fetch from wherever it points, made by whoever draws it
   for (const list of ['buffers', 'images']) {
@@ -114,12 +149,12 @@ export function readVrm(file: ArrayBuffer): VrmInfo {
   const extensions = objectAt(doc, 'extensions');
   const one = objectAt(objectAt(extensions, 'VRMC_vrm'), 'meta');
   const zero = objectAt(objectAt(extensions, 'VRM'), 'meta');
-  let info: Omit<VrmInfo, 'thumbnail'>;
-  let image: number | null;
+  let info: Omit<GlbInfo, 'thumbnail' | 'nodes'>;
+  let image: number | null = null;
   if (one) {
     const url = words(one.licenseUrl);
     info = {
-      version: '1',
+      vrm: '1',
       name: words(one.name),
       author: words(
         listAt(one, 'authors')
@@ -134,7 +169,7 @@ export function readVrm(file: ArrayBuffer): VrmInfo {
     // 0.x names a licence by a word (`CC0`, `Redistribution_Prohibited`); `Other` points at a url
     const named = words(zero.licenseName).replace(/_/g, ' ');
     info = {
-      version: '0',
+      vrm: '0',
       name: words(zero.title),
       author: words(zero.author),
       licence: named.toLowerCase() === 'other' ? words(zero.otherLicenseUrl) : named,
@@ -144,10 +179,19 @@ export function readVrm(file: ArrayBuffer): VrmInfo {
     const texture = indexAt(zero, 'texture');
     image = texture === null ? null : indexAt(listAt(doc, 'textures')[texture], 'source');
   } else {
-    throw new Error('that is a 3d file, but not a vrm: it has no avatar in it');
+    // a plain glb says little of itself: a line of copyright, and what a site it came down from wrote beside that
+    const asset = objectAt(doc, 'asset');
+    const extras = objectAt(asset, 'extras');
+    info = {
+      vrm: null,
+      name: words(extras?.title),
+      author: beforeAddress(extras?.author) || words(asset?.copyright),
+      licence: beforeAddress(extras?.license),
+      wearer: ''
+    };
   }
 
-  return { ...info, thumbnail: image === null ? null : thumbnailOf(file, doc, jsonEnd, image) };
+  return { ...info, thumbnail: image === null ? null : thumbnailOf(file, doc, jsonEnd, image), nodes: nodesOf(doc) };
 }
 
 /** The bytes of picture `image`: its buffer view, inside the binary chunk. `null` when they are not all in the file. */

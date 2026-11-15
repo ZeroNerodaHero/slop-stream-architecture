@@ -1,21 +1,22 @@
 /**
- * The model, drawn (docs/vtuber.md): one scene with one vrm in it, framed as a bust, and one
+ * The model, drawn (docs/vtuber.md): one scene with one model in it, framed as a bust, and one
  * `draw(pose, dt)` that moves it toward a pose and paints a frame onto the canvas it was given.
- * The head, the neck and the lean are here; the face is `model-rig.ts`'s. It runs in the face
+ * The head, the neck and the lean are here; the face is `model-rig.ts`'s; the file, whatever
+ * kind it is, is `model-load.ts`'s, which hands over a vrm either way. It runs in the face
  * worker, on an `OffscreenCanvas`; nothing in here knows about a camera, a track or the page.
- * `three` and `@pixiv/three-vrm` are imported here and in the rig and nowhere else, so they
- * are in the worker's bundle and in no page's.
+ * `three` and `@pixiv/three-vrm` are imported by these and by nothing a page loads, so they are
+ * in the worker's bundle and in no page's.
  *
  * A vrm 0.x model faces the other way from a 1.0 one. `VRMUtils.rotateVRM0` turns the whole
  * model round, which leaves its bones' own x and z pointing the other way: every turn about
  * those two is flipped for a 0.x model (`side`).
  */
 
-import { type VRM, VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
-import { AmbientLight, Box3, Color, DirectionalLight, LoadingManager, type Object3D, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { VRMUtils } from '@pixiv/three-vrm';
+import { AmbientLight, Box3, Color, DirectionalLight, type Object3D, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three';
 
 import type { RigInfo } from '@/infra/face-wire';
+import { loadModel } from '@/infra/model-load';
 import { buildRig } from '@/infra/model-rig';
 import { type Pose, SHAPE_COUNT } from '@/infra/pose';
 
@@ -34,7 +35,7 @@ export interface ModelScene {
 
 /** The lens: a long one, so a face is not bulged by a camera half a metre away. */
 const FOV = 20;
-/** The arms let down from the T a vrm stands in, in radians off the horizontal. */
+/** The arms let down from the T a vrm stands in, to this many radians under the horizontal. */
 const ARM_DOWN = 1.22;
 /** How far a head turns, whatever the reader says: a neck has ends. */
 const MAX_YAW = 0.75;
@@ -58,27 +59,32 @@ const BREATH = 0.012;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /**
- * `file` (a .vrm, already read by `infra/vrm.ts`) loaded and standing in a scene on `canvas`.
- * Rejects with words when the loader cannot make an avatar of it.
+ * An arm let down from wherever the model holds it: a vrm stands in a T, another model as its
+ * maker left it. `upper` and `lower` are the humanoid's normalized bones, whose axes are the
+ * model's own whatever way its real bones point. `out` is which way along x the arm goes when
+ * the model does not say (it has no bone under its upper arm). An arm that already hangs lower
+ * than this is left alone.
+ */
+function letDown(upper: Object3D | null, lower: Object3D | null, out: number) {
+  if (!upper) return;
+  // where the lower arm sits from the upper one is which way the arm points
+  const rest = lower && lower.position.lengthSq() > 0 ? lower.position.clone().normalize() : new Vector3(out, 0, 0);
+  const flat = Math.hypot(rest.x, rest.z);
+  if (flat === 0 || Math.atan2(-rest.y, flat) >= ARM_DOWN) return;
+  // the same way out from the body, further down
+  const down = new Vector3((rest.x / flat) * Math.cos(ARM_DOWN), -Math.sin(ARM_DOWN), (rest.z / flat) * Math.cos(ARM_DOWN));
+  upper.quaternion.setFromUnitVectors(rest, down);
+}
+
+/**
+ * `file` (a .vrm, a .glb or an .fbx, already read by `infra/model-file.ts`) loaded and standing
+ * in a scene on `canvas`. Rejects with words when no model can be made of it.
  */
 export async function createModelScene(canvas: OffscreenCanvas, file: ArrayBuffer, background: string): Promise<ModelScene> {
-  // everything a model needs is inside its file: the loader may open the file's own blobs and nothing else
-  const manager = new LoadingManager();
-  manager.setURLModifier((url) => {
-    if (url.startsWith('blob:') || url.startsWith('data:')) return url;
-    throw new Error('that model points outside its own file. it is not drawn');
-  });
-  const loader = new GLTFLoader(manager);
-  loader.register((parser) => new VRMLoaderPlugin(parser));
-  const gltf = await loader.parseAsync(file, '');
-  const vrm = gltf.userData.vrm as VRM | undefined;
-  if (!vrm) throw new Error('that file has no avatar in it');
-
-  VRMUtils.removeUnnecessaryVertices(gltf.scene);
-  VRMUtils.combineSkeletons(gltf.scene);
+  const { vrm, targets } = await loadModel(file);
   // the face, and what will move it. before the morphs are combined: that keeps only the ones an
   // expression uses, and the rig makes expressions of its own out of the model's raw ones
-  const rig = buildRig(vrm, gltf);
+  const rig = buildRig(vrm, targets);
   VRMUtils.combineMorphs(vrm);
   VRMUtils.rotateVRM0(vrm);
   // the bones move the mesh out of the box it was culled by
@@ -103,15 +109,16 @@ export async function createModelScene(canvas: OffscreenCanvas, file: ArrayBuffe
   sun.position.set(0.6, 1, 1.4).normalize();
   scene.add(sun, new AmbientLight(0xffffff, 0.35), vrm.scene);
 
-  const bone = (name: 'head' | 'neck' | 'chest' | 'upperChest' | 'spine' | 'leftUpperArm' | 'rightUpperArm'): Object3D | null =>
+  const bone = (name: 'head' | 'neck' | 'chest' | 'upperChest' | 'spine' | 'leftUpperArm' | 'leftLowerArm' | 'rightUpperArm' | 'rightLowerArm'): Object3D | null =>
     vrm.humanoid.getNormalizedBoneNode(name);
   const head = bone('head');
   const neck = bone('neck');
   const chest = bone('upperChest') ?? bone('chest');
   const spine = bone('spine');
   for (const b of [head, neck, chest, spine]) if (b) b.rotation.order = 'YXZ';
-  bone('leftUpperArm')?.rotation.set(0, 0, -ARM_DOWN * side);
-  bone('rightUpperArm')?.rotation.set(0, 0, ARM_DOWN * side);
+  // a model's left is its +x, a 0.x model's its -x
+  letDown(bone('leftUpperArm'), bone('leftLowerArm'), side);
+  letDown(bone('rightUpperArm'), bone('rightLowerArm'), -side);
 
   // a bust: from a head's height under the neck to a little over the top of the hair
   vrm.scene.updateMatrixWorld(true);

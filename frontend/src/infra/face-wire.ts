@@ -50,6 +50,33 @@ export interface ModelStats {
   brows: number;
 }
 
+/**
+ * Which of the reader's points join into what, for whoever draws them (the rigging panel).
+ * Each list is pairs of places in `FaceMarks.points`: the first joins the second, the third
+ * the fourth. They are the reader's own lists, told once, when the marks are first asked for:
+ * the page has nothing of the reader in its bundle to know them by.
+ */
+export interface FaceLines {
+  /** The whole mesh: every edge between neighbouring points. */
+  mesh: Uint16Array;
+  /** The outline of the face. */
+  outline: Uint16Array;
+  /** The eyes, the brows and the lips: what the model's face is moved by. */
+  features: Uint16Array;
+  /** The irises: where the eyes look. */
+  irises: Uint16Array;
+}
+
+/**
+ * One reading, as the rigging panel shows it: where the reader's points are in the camera's
+ * frame, and what the pose made of them (`ModelStats`' numbers, at the reading's rate and not
+ * twice a second). `points` are x then y for each point, each 0 to 1 of the frame as the
+ * camera has it (not mirrored); `null` with no face in the frame.
+ */
+export interface FaceMarks extends Pick<ModelStats, 'yaw' | 'pitch' | 'roll' | 'mouth' | 'blink' | 'smile' | 'brows'> {
+  points: Float32Array | null;
+}
+
 /** Where the reader's wasm is: its loader script and its binary, and which kind of worker the loader is for. */
 export interface FaceWasm {
   loader: string;
@@ -61,7 +88,7 @@ export interface FaceWasm {
 export type ToFaceWorker =
   | {
       type: 'start';
-      /** The .vrm's bytes. Handed over, not copied. */
+      /** The model file's bytes: a .vrm, a .glb or an .fbx. Handed over, not copied. */
       model: ArrayBuffer;
       width: number;
       height: number;
@@ -82,7 +109,8 @@ export type ToFaceWorker =
   | { type: 'frames'; frames: ReadableStream<VideoFrame> | null }
   /** One camera frame, from a page that reads them itself. Answered with `want`. */
   | { type: 'frame'; bitmap: ImageBitmap }
-  | { type: 'set'; mirror?: boolean; background?: string; expressions?: boolean }
+  /** `marks`: the reader's points go to the page with every reading (`marks`), for as long as the rigging panel is open to draw them. */
+  | { type: 'set'; mirror?: boolean; background?: string; expressions?: boolean; marks?: boolean }
   /** Take the resting face again. */
   | { type: 'rest' }
   | { type: 'stop' };
@@ -100,6 +128,10 @@ export type FromFaceWorker =
   | { type: 'failed'; why: string }
   | { type: 'state'; face: FaceState; why?: string }
   | { type: 'stats'; stats: ModelStats }
+  /** Which points join into what: once, the first time the marks are asked for. */
+  | { type: 'lines'; lines: FaceLines }
+  /** One reading's points and numbers, while the marks are asked for (`set`). */
+  | { type: 'marks'; marks: FaceMarks }
   /** One drawn frame, for a page that makes the track itself. */
   | { type: 'bitmap'; bitmap: ImageBitmap }
   /** Ready for the next camera frame, from a page that reads them itself. */

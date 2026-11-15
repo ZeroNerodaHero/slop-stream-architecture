@@ -10,18 +10,36 @@
 // with the stream in the corner ends it too (the tab-close listener outlives the page); and
 // start with someone else's stream in the corner ends that one (their player goes, their count
 // drops). Two publishers with fake cameras and one watcher.
+// Then the tab left on air, in a browser with a profile of its own and by real tab switches:
+// another tab comes to the front and the player comes out by itself into a window of its own
+// (from the go live page, which shows no player otherwise), your stream playing in it; its
+// chat button opens your room there on the page's own socket, the page's panel standing aside;
+// back in the tab the window is gone and the page has its chat again, a half typed line and
+// all; a click on the name in the window brings the tab back; from another page the corner
+// player goes out, chat and all, and comes back; × in the window asks there and ends the
+// stream; and the page listens for the leave only while on air. SKIP where the browser does
+// not say a tab was left (that is chrome's and edge's automatic picture in picture, https only).
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node live-pip.js
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { chromium } = require('playwright');
 const BASE = (process.env.BASE_URL || 'https://127.0.0.1').replace(/\/$/, '');
 const ME = 'livepip';
 const OTHER = 'livepip2';
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors'];
-const results = [];
+const results = []; // 'pass' | 'fail' | 'skip'
+// fn returns a string (shown after PASS) or { skip: 'why' } when it could not check anything
 async function step(name, fn) {
   const t0 = Date.now();
   const ms = () => String(Date.now() - t0).padStart(6);
   try {
     const info = await fn();
+    if (info && typeof info === 'object' && info.skip) {
+      results.push('skip');
+      console.log(`SKIP  ${name.padEnd(78)} ${ms()} ms  ${info.skip}`);
+      return;
+    }
     results.push('pass');
     console.log(`PASS  ${name.padEnd(78)} ${ms()} ms  ${info || ''}`);
   } catch (e) {
@@ -350,8 +368,8 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     await s.click('#go-live');
     await s.waitForURL('**/live', { timeout: 10000 });
     expect((await s.$('#pip-player')) !== null, 'the watched player went before start');
-    // the name is the nick still: nothing to fill in
-    await s.waitForFunction(() => !document.querySelector('#start').disabled);
+    // the name is the nick still: nothing to fill in. (the address changes a render before the page does: no #start yet is a wait, not a throw)
+    await s.waitForFunction(() => document.querySelector('#start')?.disabled === false);
     await s.click('#start');
     await s.waitForSelector('#pip-player', { state: 'detached', timeout: 5000 });
     await waitStatus(s, /^live$/);
@@ -366,6 +384,203 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
   await s.close();
   await other.click('#stop').catch(() => undefined);
   await browser.close();
+
+  // The tab left on air: a second act, in a browser with a profile of its own. Chrome tells a
+  // page its tab was left (its automatic picture in picture) only on https, outside incognito,
+  // and to a tab its own capture indicator knows has the camera. The contexts above are
+  // incognito, and --use-fake-ui-for-media-stream answers the camera prompt without that
+  // indicator hearing of it. So: a profile on disk, the camera granted the real way, and in the
+  // profile the answer a person gives the first window's question (automatic
+  // picture-in-picture: allow; while it is unanswered the window takes no presses). The tab
+  // switches are real ones: another page of the same window brought to the front, and back.
+  const LEFT = 'livepip3';
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'live-pip-'));
+  fs.mkdirSync(path.join(profile, 'Default'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'Default', 'Preferences'), JSON.stringify({ profile: { default_content_setting_values: { auto_picture_in_picture: 1 } } }));
+  const ctx = await chromium.launchPersistentContext(profile, {
+    channel: process.env.BROWSER_CHANNEL || 'chrome',
+    headless: true,
+    // a screen with room for the window: the headless one is 800×600, and chrome keeps a window well inside its screen
+    args: ['--use-fake-device-for-media-stream', '--ignore-certificate-errors', '--screen-info={1920x1080}'],
+    ignoreHTTPSErrors: true,
+    permissions: ['camera', 'microphone'],
+    // every page its own size: the player's window is a page too here, and must not be laid out as a 1280×720 one
+    viewport: null
+  });
+  // the nick, and the handler the page gives the media session for "this tab was left", kept where the test can see whether there is one
+  await ctx.addInitScript((name) => {
+    try {
+      localStorage.setItem('nick', JSON.stringify(name));
+    } catch {
+      // a blank tab has no storage
+    }
+    const set = navigator.mediaSession.setActionHandler.bind(navigator.mediaSession);
+    window.__tabLeft = null;
+    navigator.mediaSession.setActionHandler = (action, handler) => {
+      if (action === 'enterpictureinpicture') window.__tabLeft = handler;
+      return set(action, handler);
+    };
+  }, LEFT);
+  const t = ctx.pages()[0];
+  // every chat socket the streamer's tab opens for its own room: the chat going out to the window and back must add none
+  let chatSockets = 0;
+  t.on('websocket', (ws) => {
+    if (ws.url().includes(`/chat/${LEFT}`)) chatSockets++;
+  });
+  const listening = () => t.evaluate(() => typeof window.__tabLeft === 'function');
+  // the player's window is the page's own (same origin, opened by it), so the page reaches into its document
+  const waitOut = (sel, timeout = 8000) => t.waitForFunction((q) => !!window.documentPictureInPicture?.window?.document.querySelector(q), sel, { timeout });
+  const waitBack = (timeout = 5000) => t.waitForFunction(() => !window.documentPictureInPicture?.window, null, { timeout });
+  const outFrames = () => t.evaluate(() => window.documentPictureInPicture.window.document.querySelector('#live-pip-video').getVideoPlaybackQuality().totalVideoFrames);
+  const hasLine = (p, words) => p.evaluate((w) => [...document.querySelectorAll('#chat-lines [data-streamer="true"]')].some((el) => el.textContent.includes(w)), words);
+  let away; // the other tab
+  // the window is a page of its own to playwright as well, for real presses in it
+  const windowPage = () => ctx.pages().find((p) => p !== t && p !== away);
+  let win;
+  let base = 0; // the chat sockets once on air: the nick's, then the streamer's
+  let left = false; // the browser said the tab was left, and the window came
+  const NO_WINDOW = { skip: 'no window: the browser did not say the tab was left' };
+
+  await step(`${LEFT} goes live in a browser with a profile of its own: the page listens for the tab being left only while on air`, async () => {
+    await t.goto(`${BASE}/live`, { waitUntil: 'domcontentloaded' });
+    await t.waitForFunction(() => document.querySelector('#start')?.disabled === false);
+    if (!(await t.evaluate(() => 'documentPictureInPicture' in window))) return { skip: 'this browser has no document picture in picture' };
+    expect(!(await listening()), 'the page listens for the tab being left with nothing on air');
+    await t.click('#start');
+    await waitStatus(t, /^live$/);
+    await t.waitForSelector('#chat[data-phase="open"]', { timeout: 10000 });
+    expect(await listening(), 'on air, and the page does not listen for the tab being left');
+    base = chatSockets;
+    return 'not before start, listening once live';
+  });
+
+  await step('another tab comes to the front: the player comes out by itself into a window of its own, your stream playing in it, nothing of it in the page', async () => {
+    if (!(await listening())) return NO_WINDOW;
+    if (!BASE.startsWith('https://')) return { skip: 'the browser tells only https pages that their tab was left' };
+    away = await ctx.newPage();
+    await away.bringToFront();
+    try {
+      await waitOut('#live-pip-video');
+    } catch {
+      return { skip: 'this browser did not say the tab was left (automatic picture in picture: chrome and edge)' };
+    }
+    left = true;
+    const seen = await t.evaluate(() => {
+      const w = window.documentPictureInPicture.window;
+      const d = w.document;
+      return {
+        status: d.querySelector('#live-pip-status').textContent.trim(),
+        name: d.querySelector('#live-pip-player a.font-semibold').textContent.trim(),
+        size: `${w.innerWidth}×${w.innerHeight}`,
+        bg: getComputedStyle(d.querySelector('#live-pip-player')).backgroundColor,
+        font: getComputedStyle(d.body).fontFamily
+      };
+    });
+    expect(/^live$/i.test(seen.status) && seen.name === LEFT, `the window says "${seen.status}" for "${seen.name}"`);
+    expect(seen.bg !== 'rgba(0, 0, 0, 0)' && /geist/i.test(seen.font), `the window is not dressed as the page: ${JSON.stringify(seen)}`);
+    expect((await t.$('#live-pip-player')) === null, "the player is in the stream's own page as well");
+    const a = await outFrames();
+    await sleep(1500);
+    const b = await outFrames();
+    expect(b > a, `no frames in the window: ${a} -> ${b}`);
+    return `a ${seen.size} window · "${seen.status}" · ${b - a} frames in 1.5s`;
+  });
+
+  await step("the window's chat button: your room opens in the window on the page's own socket, no nick asked, and the go live page's panel stands aside", async () => {
+    if (!left) return NO_WINDOW;
+    win = windowPage();
+    expect(win, 'the window is not a page to press in');
+    const before = await win.evaluate(() => innerHeight);
+    expect(!(await win.$eval('#live-pip-chat', (b) => b.disabled)), "the chat button is disabled in the window over the stream's own page");
+    await win.click('#live-pip-chat');
+    await win.waitForSelector('#live-pip-player #chat[data-phase="open"]', { timeout: 8000 });
+    expect((await win.$('#chat-nick')) === null, 'the streamer was asked for a nick in their own room');
+    // the page's panel learns of the one in the window a render later: it keeps the room, and draws none of it
+    await t
+      .waitForFunction(() => document.querySelector('#chat')?.dataset.away === '' && !document.querySelector('#chat-lines'), null, { timeout: 5000 })
+      .catch(() => expect(false, "the page's panel still draws the room, beside the window's"));
+    expect(chatSockets === base, `${chatSockets - base} more chat sockets`);
+    await sleep(300);
+    const after = await win.evaluate(() => innerHeight);
+    expect(after > before, `the window did not grow for the chat: ${before} -> ${after} tall`);
+    return `the window ${before} -> ${after} tall · no new chat socket`;
+  });
+
+  const said = `hi from the window ${Date.now()}`;
+  await step('a line typed in the window goes out as the streamer; half of another stays in the box', async () => {
+    if (!left) return NO_WINDOW;
+    await win.fill('#chat-text', said);
+    await win.click('#chat-send');
+    await win.waitForFunction((w) => [...document.querySelectorAll('#chat-lines [data-streamer="true"]')].some((el) => el.textContent.includes(w)), said, { timeout: 8000 });
+    await win.fill('#chat-text', 'half a li');
+    return `"${said}"`;
+  });
+
+  await step('back in the tab: the window goes by itself, and the page has its chat again with the line and the half typed one, on the same socket', async () => {
+    if (!left) return NO_WINDOW;
+    await t.bringToFront();
+    await waitBack();
+    await t.waitForSelector('#chat-lines', { timeout: 5000 });
+    expect((await t.getAttribute('#chat', 'data-away')) === null, "the page's panel still stands aside");
+    expect(await hasLine(t, said), 'the line said in the window is not in the page');
+    const draft = await t.inputValue('#chat-text');
+    expect(draft === 'half a li', `the half typed line is "${draft}"`);
+    expect((await t.$('#live-pip-player')) === null, "the player is in the stream's own page");
+    expect(/^live$/i.test(await text(t, '#status')), `the page says "${await text(t, '#status')}"`);
+    expect(chatSockets === base, `${chatSockets - base} more chat sockets`);
+    return `still live · draft "${draft}" · no new chat socket`;
+  });
+
+  await step('left again: the window is back with the chat in it; a click on the name there brings the tab to the front, and the window goes', async () => {
+    if (!left) return NO_WINDOW;
+    await away.bringToFront();
+    await waitOut('#live-pip-player #chat[data-phase="open"]');
+    win = windowPage();
+    await win.click('#live-pip-player a.font-semibold');
+    // the link goes to the page the tab is already on, so nothing but the tab coming to the front takes this window
+    await waitBack();
+    expect(new URL(t.url()).pathname === '/live', `the tab is on ${new URL(t.url()).pathname}`);
+    return 'the tab is in front on /live, the window gone';
+  });
+
+  await step('home: the corner player with its chat; the tab left: the same box in a window, chat and all; back: in the corner again. the same socket throughout', async () => {
+    if (!left) return NO_WINDOW;
+    await t.click('header a[href="/"]');
+    await t.waitForSelector('#live-pip-player #chat[data-phase="open"]', { timeout: 10000 });
+    expect(chatSockets === base, `${chatSockets - base} more chat sockets on the way to the corner`);
+    const box = await rect(t, '#live-pip-player');
+    await away.bringToFront();
+    await waitOut('#live-pip-player #chat[data-phase="open"]');
+    expect((await t.$('#live-pip-player')) === null, 'the player is still in the page with its window open');
+    win = windowPage();
+    expect(await hasLine(win, said), 'the lines did not come along to the window');
+    const size = await win.evaluate(() => `${innerWidth}×${innerHeight}`);
+    expect(chatSockets === base, `${chatSockets - base} more chat sockets with the box in the window`);
+    await t.bringToFront();
+    await waitBack();
+    await t.waitForSelector('#live-pip-player #chat[data-phase="open"]', { timeout: 5000 });
+    expect(await hasLine(t, said), 'the lines did not come back to the corner');
+    expect(chatSockets === base, `${chatSockets - base} more chat sockets back in the corner`);
+    return `a ${Math.round(box.width)}×${Math.round(box.height)} box -> a ${size} window -> the corner · no new chat socket`;
+  });
+
+  await step('left once more: × in the window asks there, and yes ends the stream and the window; off air the page listens no more', async () => {
+    if (!left) return NO_WINDOW;
+    await away.bringToFront();
+    await waitOut('#live-pip-video');
+    win = windowPage();
+    await win.click('#live-pip-close');
+    await win.waitForSelector('#live-pip-confirm[open]', { timeout: 5000 });
+    await win.click('#live-pip-confirm-yes');
+    await waitBack();
+    await waitUnlisted(t, LEFT);
+    expect(!(await listening()), 'the page still listens for the tab being left with nothing on air');
+    return 'ended, unlisted, no window, not listening';
+  });
+
+  await t.click('#stop', { timeout: 2000 }).catch(() => undefined);
+  await ctx.close();
+  fs.rmSync(profile, { recursive: true, force: true });
   const failed = results.filter((r) => r === 'fail').length;
   console.log(`\n${failed ? 'FAIL' : 'PASS'}  ${results.length - failed}/${results.length}`);
   process.exit(failed ? 1 : 0);

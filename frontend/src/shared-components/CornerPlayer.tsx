@@ -15,7 +15,7 @@ import { Link } from 'react-router-dom';
 
 import type { Owner } from '@/infra/api';
 import type { PipChatPlace } from '@/infra/atoms/settings-atoms';
-import { canPopOut, openPopout } from '@/infra/popout';
+import { canPopOut, onTabLeft, openPopout } from '@/infra/popout';
 import type { Layer } from '@/infra/relay';
 import type { AvatarVoice } from '@/shared-components/AvatarLayer';
 import { ChatPanel } from '@/shared-components/ChatPanel';
@@ -50,9 +50,19 @@ const PIP_CHAT_W = 280;
 const PIP_CHAT_H = 288;
 /** The picture's width before anyone has dragged it. */
 const DEFAULT_W = 320;
+/** The footer under the picture (`text-sm`, `py-2`): with `DEFAULT_W`, the size of a window opened from a page that has no box to measure. */
+const FOOTER_H = 36;
 
 /** Where the open chat sits. `off` is the chat button closed: the picture alone, whatever the setting. */
 type Place = PipChatPlace | 'off';
+
+/**
+ * A click on the picture or the name in the player's own window: the tab comes to the front,
+ * on the stream's page (the link's own doing). Without this the link would only turn the page
+ * of a tab nobody is looking at. The browser lets a click in that window bring its tab forward;
+ * called from anywhere else, it does nothing.
+ */
+const toTab = () => window.focus();
 
 const sideOf = (place: Place) => (place === 'left' || place === 'right' ? PIP_CHAT_W : 0);
 /** How far the picture sits in from the player's left edge: the chat column, when it is on the left. */
@@ -149,6 +159,12 @@ export interface CornerChat {
   open: boolean;
   /** The page has a chat of its own: the button is disabled, and the chat waits for the next page without one. */
   pageHasChat: boolean;
+  /**
+   * That chat of the page's is this very room (the go live page, for the broadcast's player). In
+   * the page it changes nothing, the player is not shown there. In the player's own window the
+   * button works: the chat there is a second panel on the page's room (ChatPanel `guest`).
+   */
+  pageChatIsOurs?: boolean;
   onToggle: () => void;
 }
 
@@ -157,6 +173,14 @@ interface CornerPlayerProps {
   prefix: string;
   /** On screen at all. Hidden, the player keeps where it was put for the next time it shows. */
   visible: boolean;
+  /**
+   * Leaving the tab takes the player out into its own window by itself, and coming back to the
+   * tab brings it back (the broadcast's player, while the stream is up). From any page of the
+   * site, the stream's own included: the player is not `visible` there, and the window is all
+   * there is of it, from the leave until the tab is in front again. Where the browser tells a
+   * page its tab was left, and only there (`onTabLeft`).
+   */
+  popOutOnLeave?: boolean;
   /** The player's accessible name. */
   label: string;
   /** The stream's name, in the footer. */
@@ -214,13 +238,16 @@ interface CornerPlayerProps {
  * browser has document picture in picture) takes the same box, chat and all, out of the page
  * into an always-on-top window of its own, over other apps too; the window is the box then
  * (the os moves and resizes it, the picture fits whatever shape it is given), the button in
- * it brings the box back where it was, and the window goes with the box: back on the
- * stream's own page, or ended. What the box shows is the caller's: the watch player and the
- * broadcast's player are the two.
+ * it brings the box back where it was, a click on its picture or its name brings the tab to
+ * the front on the stream's page, and the window goes with the box: back on the stream's own
+ * page, or ended. With `popOutOnLeave` the player goes out by itself when the tab is left,
+ * and comes back when the tab does. What the box shows is the caller's: the watch player and
+ * the broadcast's player are the two.
  */
 export function CornerPlayer({
   prefix,
   visible,
+  popOutOnLeave = false,
   label,
   name,
   to,
@@ -249,13 +276,30 @@ export function CornerPlayer({
   /** The last press was a drag, so the click the browser fires after it is swallowed. */
   const dragged = useRef(false);
   const [box, setBox] = useState<Box | null>(null);
-  /** The window the box is popped out into, while it is (infra/popout.ts): the box renders in there, and nothing in the page. */
-  const [popout, setPopout] = useState<Window | null>(null);
+  /**
+   * The window the box is popped out into, while it is (infra/popout.ts): the box renders in
+   * there, and nothing in the page. `left`: the tab's leaving opened it (`popOutOnLeave`), not
+   * the button.
+   */
+  const [out, setOut] = useState<{ win: Window; left: boolean } | null>(null);
+  const popout = out?.win ?? null;
   const popped = popout !== null;
+  /** Out because the tab was left: the window is the player then, whether or not the page shows one, until the tab is in front again or × ends it. A stream that fails meanwhile says so in there. */
+  const away = out?.left === true;
+  const shown = visible || away;
   /** × was pressed and `closeConfirm` is asking. The dialog unmounts with the box, and says no then. */
   const [asking, setAsking] = useState(false);
-  const showChat = chat.open && !chat.pageHasChat;
+  /** The page's own chat is no bar to the player's: there is none, or, in the player's own window, it is this very room. */
+  const chatFree = (inWindow: boolean) => !chat.pageHasChat || (inWindow && chat.pageChatIsOurs === true);
+  /** In the window, over a page whose chat is this room: the chat is a second panel on the page's. */
+  const guest = popped && chat.pageHasChat && chat.pageChatIsOurs === true;
+  const canChat = chatFree(popped);
+  const showChat = chat.open && canChat;
   const place: Place = showChat ? chat.place : 'off';
+  /** Where the chat will sit once the player is in a window, for the size of one opened by a leave. */
+  const placeOut: Place = chat.open && chatFree(true) ? chat.place : 'off';
+  /** What a leave of the tab does right now. Kept here, so `onTabLeft` is listened to once for as long as `popOutOnLeave` holds, not again at every render. */
+  const leave = useRef<((asked: boolean) => void) | null>(null);
   /** The place last laid out, so a change of it can keep the picture where it was. Not updated while the player is hidden: the next time it shows applies the whole change once. */
   const placeRef = useRef<Place>('off');
 
@@ -292,22 +336,63 @@ export function CornerPlayer({
   // The window goes with the box: hidden (back on the stream's own page, or ended) or unmounted,
   // it closes. A window already closed by its own × takes the call quietly.
   useEffect(() => {
-    if (!visible) popout?.close();
-  }, [visible, popout]);
+    if (!shown) popout?.close();
+  }, [shown, popout]);
   useEffect(() => () => popout?.close(), [popout]);
 
-  /** The pop out button in the page: a window the box's size, and the box moves into it. Refused (the browser wants a click, and had one), it stays. */
-  const popOut = async () => {
-    const el = root.current;
-    if (!el || popout) return;
-    const r = el.getBoundingClientRect();
+  /** A window of this size, and the box moves into it. Refused (the browser wants a click behind it, or its own word that the tab was left), the box stays where it is. */
+  const open = async (width: number, height: number, left: boolean) => {
     try {
-      const win = await openPopout(Math.round(r.width), Math.round(r.height), (closed) => setPopout((w) => (w === closed ? null : w)));
+      const win = await openPopout(Math.round(width), Math.round(height), (closed) => setOut((o) => (o?.win === closed ? null : o)));
       win.document.title = label;
-      setPopout(win);
+      setOut({ win, left });
     } catch {
       // no window: the box stays in the page
     }
+  };
+
+  /** The pop out button in the page: a window the box's size. */
+  const popOut = () => {
+    const el = root.current;
+    if (!el || out) return;
+    const r = el.getBoundingClientRect();
+    void open(r.width, r.height, false);
+  };
+
+  // The tab was left with the stream up: the player goes out with it. The window is the box's
+  // size where the page shows one; on a page that shows none (the stream's own) it is the size
+  // the box starts at in the corner, with the chat's room when the chat is on. A player the
+  // button already took out stays as it is, and stays when the tab is back. `asked`, a person
+  // on the browser's own media controls, is the pop out button pressed.
+  useEffect(() => {
+    leave.current = (asked) => {
+      if (asked) popOut();
+      else if (!out) {
+        const r = root.current?.getBoundingClientRect();
+        void open(r ? r.width : DEFAULT_W + sideOf(placeOut), r ? r.height : heightAt(DEFAULT_W, FOOTER_H + (placeOut === 'bottom' ? PIP_CHAT_H : 0)), true);
+      }
+    };
+  });
+  useEffect(() => {
+    if (!popOutOnLeave) return;
+    return onTabLeft((asked) => leave.current?.(asked));
+  }, [popOutOnLeave]);
+
+  // A window the tab's leaving opened goes when the tab is in front again. The browser takes
+  // its window back by itself then; this holds every browser to it.
+  useEffect(() => {
+    if (!out?.left) return;
+    const back = () => {
+      if (!document.hidden) out.win.close();
+    };
+    document.addEventListener('visibilitychange', back);
+    return () => document.removeEventListener('visibilitychange', back);
+  }, [out]);
+
+  /** ×, or the yes after it: the stream ends, and the player's window with it. */
+  const endStream = () => {
+    onClose();
+    popout?.close();
   };
 
   /** The chat button. In the window, the window grows by the chat first (shrinks after), where the browser lets a page do that, so the picture keeps its size. */
@@ -386,7 +471,7 @@ export function CornerPlayer({
     e.stopPropagation();
   };
 
-  if (!visible) return null;
+  if (!shown) return null;
   const side = sideOf(place);
   const chatBelow = place === 'bottom';
   // One column for the picture, and a fixed column for a chat beside it. minmax(0, 1fr) so the
@@ -398,9 +483,9 @@ export function CornerPlayer({
     <div className="absolute right-3 top-[max(8px,5%)] flex gap-2">
       <IconButton
         id={`${prefix}-chat`}
-        label={chat.pageHasChat ? 'this page has its own chat' : showChat ? 'close the chat' : 'chat'}
+        label={!canChat ? 'this page has its own chat' : showChat ? 'close the chat' : 'chat'}
         active={showChat}
-        disabled={chat.pageHasChat}
+        disabled={!canChat}
         tipAt="below-right"
         onClick={toggleChat}
       >
@@ -421,7 +506,7 @@ export function CornerPlayer({
         id={`${prefix}-close`}
         label={closeLabel}
         tipAt="below-right"
-        onClick={closeConfirm ? () => setAsking(true) : onClose}
+        onClick={closeConfirm ? () => setAsking(true) : endStream}
         className="text-lg leading-none"
       >
         ×
@@ -438,7 +523,7 @@ export function CornerPlayer({
       yes={closeConfirm.yes}
       onYes={() => {
         setAsking(false);
-        onClose();
+        endStream();
       }}
       onNo={() => setAsking(false)}
     />
@@ -453,7 +538,7 @@ export function CornerPlayer({
       className={cn('relative', popped ? cn('min-h-0 shrink', chatBelow ? 'aspect-video' : 'flex-1') : GRIP)}
       onPointerDown={popped ? undefined : (e) => press(e, 'move')}
     >
-      <Link to={to} aria-label={`back to ${name}`} className={cn('block', popped && 'absolute inset-0')}>
+      <Link to={to} aria-label={`back to ${name}`} className={cn('block', popped && 'absolute inset-0')} onClick={popped ? toTab : undefined}>
         {scene && !popped ? (
           <SceneView
             id={`${prefix}-scene`}
@@ -491,7 +576,7 @@ export function CornerPlayer({
       title={popped ? undefined : 'drag to move, pull a corner to resize'}
       onPointerDown={popped ? undefined : (e) => press(e, 'move')}
     >
-      <Link to={to} className="min-w-0 cursor-pointer truncate font-semibold">
+      <Link to={to} className="min-w-0 cursor-pointer truncate font-semibold" onClick={popped ? toTab : undefined}>
         {name}
       </Link>
       <span className="flex shrink-0 items-baseline gap-3 text-textSecondary">
@@ -526,7 +611,7 @@ export function CornerPlayer({
       )}
       style={side ? { width: PIP_CHAT_W } : undefined}
     >
-      <ChatPanel name={chat.name} owner={chat.owner} embedded className="min-h-0 flex-1" />
+      <ChatPanel name={chat.name} owner={chat.owner} embedded guest={guest} className="min-h-0 flex-1" />
     </div>
   );
 
