@@ -772,6 +772,7 @@ export function FriendChat() {
                 {lines.map((line, i) => {
                   const mine = line.from === me;
                   const prev = lines[i - 1];
+                  const person = { name: line.from, verified: mine || (dm?.verified ?? false), avatar: mine ? myAvatar : (dm?.avatar ?? null) };
                   return (
                     <ChatLineShape
                       key={line.id}
@@ -780,14 +781,16 @@ export function FriendChat() {
                       at={line.at}
                       name={line.from}
                       who={
-                        <ProfileLink
-                          person={{ name: line.from, verified: mine || (dm?.verified ?? false), avatar: mine ? myAvatar : (dm?.avatar ?? null) }}
-                          className={cn('font-semibold underline-offset-2 hover:underline', mine && 'text-primaryBlue')}
-                        >
+                        <ProfileLink person={person} className={cn('font-semibold underline-offset-2 hover:underline', mine && 'text-primaryBlue')}>
                           {line.from}
                         </ProfileLink>
                       }
-                      face={<Face name={line.from} version={mine ? myAvatar : (dm?.avatar ?? null)} className="h-8 w-8 text-sm" />}
+                      // the head's face is the same way to them as the name (blocks, ChatLine.tsx), for the pointer: the name is the key's and the reader's
+                      face={
+                        <ProfileLink person={person} twin className="flex">
+                          <Face name={line.from} version={person.avatar} className="h-8 w-8 text-sm" />
+                        </ProfileLink>
+                      }
                       words={
                         line.text ? (
                           <span className="whitespace-pre-wrap">
