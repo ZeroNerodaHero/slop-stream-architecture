@@ -144,7 +144,7 @@ urlencode() {
 # this box's login counter (100 per 15 minutes) would stop a long run halfway: the test
 # suite clears it the same way after a run, so this is nothing it does not already do
 clear_login_limit() {
-  docker compose exec -T redis sh -c "redis-cli --scan --pattern 'rl:login:*' | xargs -r redis-cli del" >/dev/null 2>&1 || true
+  docker compose exec -T redis sh -c "for p in 'rl:login:*' 'rl:route:*'; do redis-cli --scan --pattern \"\$p\" | xargs -r redis-cli del; done" >/dev/null 2>&1 || true
 }
 
 docker image inspect "$FFMPEG_IMAGE" >/dev/null 2>&1 || { note "getting $FFMPEG_IMAGE once"; docker pull -q "$FFMPEG_IMAGE" >/dev/null || die "could not pull $FFMPEG_IMAGE"; }

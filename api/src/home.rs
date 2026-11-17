@@ -82,7 +82,12 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, video_url: &str, port: u16)
     tokio::spawn(tail(home.clone()));
     tokio::spawn(heal_every(home.clone()));
 
-    let router = Router::new().route("/health", get(|| async { "ok" })).route("/api/streams", get(list)).with_state(home);
+    let limits = crate::ratelimit::ByIp { redis: crate::connect_redis(redis_url).await, rule: crate::ratelimit::home_rule };
+    let router = Router::new()
+        .route("/health", get(|| async { "ok" }))
+        .route("/api/streams", get(list))
+        .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip))
+        .with_state(home);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     log::info!("home on {addr}");

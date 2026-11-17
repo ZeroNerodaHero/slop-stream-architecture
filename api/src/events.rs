@@ -65,6 +65,15 @@ const REPLAY_MS: i64 = 10_000;
 const RECHECK_EVERY: Duration = Duration::from_secs(30);
 /// The `watch` that means every name: the home page's. Not a name (names are letters, digits, `_ -`).
 const EVERYONE: &str = "*";
+/// Events sockets one address may hold open at once in this process. The page keeps one per
+/// browser (a shared worker carries every tab), so this is a household's worth of browsers.
+const MAX_SOCKETS_PER_IP: usize = 20;
+/// Names and topics one socket may watch at once. The sidebar watches every follow (500 at
+/// most, follows.rs) plus the people on screen; past this a `watch` is dropped.
+const MAX_WATCHES: usize = 1000;
+/// `watch` and `unwatch` frames one socket may send in a minute; past it they are dropped
+/// until the minute is over. Each watch of a name costs a lookup of its word.
+const MAX_WATCH_FRAMES_PER_MIN: u32 = 2000;
 /// The `watch` that means one group's room: `group:<name>`. Not a name either (the colon).
 const GROUP_TOPIC: &str = "group:";
 
@@ -120,6 +129,38 @@ pub(crate) struct Gateway {
     registry: Registry,
     /// Pinged when redis is back: every socket re-marks its name at once rather than at its next tick.
     refresh: Arc<Notify>,
+    /// Open sockets per address (`MAX_SOCKETS_PER_IP`). A std lock: never held across an await.
+    per_ip: Arc<std::sync::Mutex<HashMap<String, usize>>>,
+}
+
+/// One address's place among `per_ip`, given back when the socket ends (or never upgrades).
+struct IpSlot {
+    per_ip: Arc<std::sync::Mutex<HashMap<String, usize>>>,
+    ip: String,
+}
+
+impl IpSlot {
+    fn take(per_ip: &Arc<std::sync::Mutex<HashMap<String, usize>>>, ip: String) -> Option<IpSlot> {
+        let mut m = per_ip.lock().unwrap_or_else(|e| e.into_inner());
+        let n = m.entry(ip.clone()).or_insert(0);
+        if *n >= MAX_SOCKETS_PER_IP {
+            return None;
+        }
+        *n += 1;
+        Some(IpSlot { per_ip: per_ip.clone(), ip })
+    }
+}
+
+impl Drop for IpSlot {
+    fn drop(&mut self) {
+        let mut m = self.per_ip.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = m.get_mut(&self.ip) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                m.remove(&self.ip);
+            }
+        }
+    }
 }
 
 /// Every open socket of this process, and two indexes over them: which sockets are a name,
@@ -248,10 +289,15 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Resul
     let redis = crate::connect_redis(redis_url).await;
     let (stop, shutdown) = watch::channel(false);
     let dummy_prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
+    let limits = crate::ratelimit::ByIp { redis: redis.clone(), rule: crate::ratelimit::events_rule };
     let gateway = Gateway::new(db, redis, client, shutdown, dummy_prefix);
     let sockets = gateway.registry();
 
-    let router = Router::new().route("/health", get(|| async { "ok" })).merge(routes(gateway));
+    let router = Router::new()
+        .route("/health", get(|| async { "ok" }))
+        .merge(routes(gateway))
+        // socket opens per address (ratelimit.rs); open-at-once and watches are counted in here
+        .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     log::info!("events on {addr}");
@@ -285,6 +331,7 @@ impl Gateway {
             next: Arc::new(AtomicU64::new(1)),
             registry: Registry::default(),
             refresh: Arc::new(Notify::new()),
+            per_ip: Arc::default(),
         };
         tokio::spawn(tail(g.clone()));
         tokio::spawn(recheck(g.clone()));
@@ -554,6 +601,9 @@ impl Gateway {
         {
             let mut s = self.registry.0.lock().await;
             let Some(e) = s.by_id.get_mut(&id) else { return };
+            if !e.watching.contains(name) && e.watching.len() >= MAX_WATCHES {
+                return;
+            }
             if !e.watching.insert(name.to_owned()) {
                 return;
             }
@@ -717,11 +767,23 @@ pub(crate) fn routes(g: Gateway) -> Router {
 
 /// The login cookie came with the handshake; `handle` reads it. Not the `Me` extractor: a
 /// database error would be a 500 before the upgrade, and a nameless socket may still watch.
-async fn ws(State(g): State<Gateway>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> impl IntoResponse {
+async fn ws(State(g): State<Gateway>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> axum::response::Response {
+    // only what came through caddy is counted: the tests and the network inside are not an address
+    let slot = match crate::ratelimit::forwarded_ip(&headers) {
+        Some(ip) => match IpSlot::take(&g.per_ip, ip) {
+            Some(slot) => Some(slot),
+            None => return crate::ratelimit::too_many(30, "too many event sockets from here"),
+        },
+        None => None,
+    };
     upgrade
         .max_message_size(MAX_FRAME_BYTES)
         .max_frame_size(MAX_FRAME_BYTES)
-        .on_upgrade(move |socket| handle(g, headers, socket))
+        .on_upgrade(move |socket| async move {
+            let _slot = slot;
+            handle(g, headers, socket).await
+        })
+        .into_response()
 }
 
 /// `{ "<name>": <open sockets in this process> }`, like video's `GET /live`. Inside the compose
@@ -819,6 +881,8 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
     let mut shutdown = g.shutdown.clone();
     let refresh = g.refresh.clone();
     let mut going = false;
+    // watch and unwatch frames this minute (`MAX_WATCH_FRAMES_PER_MIN`)
+    let mut frames = (Instant::now(), 0u32);
     loop {
         tokio::select! {
             out = rx.recv() => match out {
@@ -832,6 +896,13 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                     _ => continue,
                 };
+                if frames.0.elapsed() >= Duration::from_secs(60) {
+                    frames = (Instant::now(), 0);
+                }
+                frames.1 += 1;
+                if frames.1 > MAX_WATCH_FRAMES_PER_MIN {
+                    continue;
+                }
                 // unknown frames are dropped, on both sides (docs/transition.md)
                 match serde_json::from_str::<In>(&text) {
                     Ok(In::Watch { name: n }) => {
@@ -939,6 +1010,17 @@ async fn recheck(g: Gateway) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_address_holds_at_most_its_sockets_and_gets_them_back() {
+        let per_ip: Arc<std::sync::Mutex<HashMap<String, usize>>> = Arc::default();
+        let slots: Vec<IpSlot> = (0..MAX_SOCKETS_PER_IP).map(|_| IpSlot::take(&per_ip, "1.2.3.4".into()).unwrap()).collect();
+        assert!(IpSlot::take(&per_ip, "1.2.3.4".into()).is_none());
+        assert!(IpSlot::take(&per_ip, "5.6.7.8".into()).is_some());
+        drop(slots);
+        assert!(!per_ip.lock().unwrap().contains_key("1.2.3.4"));
+        assert!(IpSlot::take(&per_ip, "1.2.3.4".into()).is_some());
+    }
 
     /// The pure half of `identify`, with a refusal as its text.
     fn named(nick: Option<&str>) -> Result<Option<String>, &'static str> {

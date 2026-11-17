@@ -31,7 +31,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::auth::{self, bump, Account, Me};
+use crate::auth::{self, Account, Me};
 use crate::chat::{clean_text, picture_ids, split_pictures, MAX_TEXT_CHARS};
 use crate::history::{self, Bind, Search};
 use crate::presence::{self, Presence};
@@ -254,9 +254,7 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     if !follows::friends(&s.db, me.id, other.id).await? {
         return Err(ApiError::new(StatusCode::FORBIDDEN, NOT_FRIENDS));
     }
-    if bump(&s, &format!("rl:dm:name:{}", me.name), RATE_WINDOW_SECS).await? > RATE_PER_MINUTE {
-        return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "slow down"));
-    }
+    crate::auth::limit(&s, &format!("rl:dm:name:{}", me.name), RATE_WINDOW_SECS, RATE_PER_MINUTE, "slow down").await?;
     // the pictures must be ones the upload kept: a lookup each, paid for by the rate like the say's (chat.rs `accept`)
     pictures_exist(&s.db, &images).await?;
     let image = if images.is_empty() { None } else { Some(images.join(",")) };
