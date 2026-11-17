@@ -578,11 +578,13 @@ pub async fn run() -> anyhow::Result<()> {
         .route("/", get(page))
         .route("/health", get(monitor_health))
         .route("/api/monitor", get(state))
+        // per address, in memory: this box has no redis (ratelimit.rs)
+        .route_layer(axum::middleware::from_fn_with_state(crate::ratelimit::Local::default(), crate::ratelimit::local))
         .with_state(app);
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
     log::info!("monitor on {addr}, store {}", cfg.data_dir.join(STORE_FILE).display());
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, router).with_graceful_shutdown(crate::wait_for_signal()).await?;
+    axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(crate::wait_for_signal()).await?;
     Ok(())
 }
 

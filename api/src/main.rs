@@ -55,6 +55,7 @@ mod monitor;
 mod notify;
 mod presence;
 mod profile;
+mod ratelimit;
 mod release;
 mod s3;
 mod socket;
@@ -145,11 +146,17 @@ impl FromRef<AppState> for s3::Store {
 }
 
 #[derive(Debug)]
-pub(crate) struct ApiError(StatusCode, String);
+/// The status, the words, and for a 429 the seconds until a retry can work (`Retry-After`).
+pub(crate) struct ApiError(StatusCode, String, Option<i64>);
 
 impl ApiError {
     pub(crate) fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        Self(status, message.into())
+        Self(status, message.into(), None)
+    }
+    /// A 429's wait, sent as `Retry-After` (at least a second).
+    pub(crate) fn retry_after(mut self, secs: i64) -> Self {
+        self.2 = Some(secs.max(1));
+        self
     }
     pub(crate) fn message(&self) -> &str {
         &self.1
@@ -170,7 +177,10 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({ "error": self.1 }))).into_response()
+        match self.2 {
+            Some(secs) => ratelimit::too_many(secs, &self.1),
+            None => (self.0, Json(json!({ "error": self.1 }))).into_response(),
+        }
     }
 }
 
@@ -956,6 +966,8 @@ fn router(state: AppState) -> Router {
         .route("/api/streams/{name}/heartbeat", post(heartbeat))
         .route("/api/streams/{name}/stop", post(stop))
         .route("/api/streams/{name}/watch", post(watch))
+        // every route above, counted per caller (ratelimit.rs). a route_layer, so it sees the matched path
+        .route_layer(axum::middleware::from_fn_with_state(state.clone(), ratelimit::api))
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "no such route") })
         .with_state(state)
 }

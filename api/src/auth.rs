@@ -372,6 +372,11 @@ pub(crate) async fn may_act_as(db: &PgPool, name: &str, me: Option<&str>) -> Res
 /// Who the cookie says this is. `None` for everyone without a (valid) login.
 pub(crate) struct Me(pub(crate) Option<Account>);
 
+/// The login the rate limiter already looked up for this request (ratelimit.rs), so `Me`
+/// does not ask postgres a second time.
+#[derive(Clone)]
+pub(crate) struct Seen(pub(crate) Option<Account>);
+
 impl Me {
     /// The login's name, the one thing most of the api compares against (a stream name, a room).
     pub(crate) fn name(&self) -> Option<&str> {
@@ -387,6 +392,9 @@ where
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        if let Some(Seen(me)) = parts.extensions.get::<Seen>() {
+            return Ok(Me(me.clone()));
+        }
         Ok(Me(whoami(&PgPool::from_ref(state), &parts.headers).await?))
     }
 }
@@ -404,6 +412,15 @@ pub(crate) async fn bump(s: &AppState, key: &str, window_secs: i64) -> Result<i6
         .query_async(&mut s.redis.clone())
         .await?;
     Ok(n)
+}
+
+/// `bump`, and past `max` a 429 with `message` that says how long is left (`Retry-After`).
+pub(crate) async fn limit(s: &AppState, key: &str, window_secs: i64, max: i64, message: &str) -> Result<(), ApiError> {
+    let (n, ttl) = crate::ratelimit::hit(&s.redis, key, window_secs).await?;
+    if n > max {
+        return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, message).retry_after(if ttl > 0 { ttl } else { window_secs }));
+    }
+    Ok(())
 }
 
 /// Caddy sets X-Forwarded-For and nothing else reaches this port, so it is trusted.
@@ -490,9 +507,7 @@ async fn signup(State(s): State<AppState>, headers: HeaderMap, body: Result<Json
         return Err(ApiError::new(StatusCode::FORBIDDEN, "reserved name"));
     }
     let password = clean_new_password(&body.password)?;
-    if bump(&s, &format!("rl:signup:ip:{}", client_ip(&headers)), SIGNUP_WINDOW_SECS).await? > SIGNUP_PER_IP {
-        return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "too many signups from here. try later"));
-    }
+    limit(&s, &format!("rl:signup:ip:{}", client_ip(&headers)), SIGNUP_WINDOW_SECS, SIGNUP_PER_IP, "too many signups from here. try later").await?;
     // a name somebody renamed away from is theirs for a while yet (docs/ids.md)
     if is_held(&s.db, &name, None).await? {
         return Err(name_taken());
@@ -533,10 +548,11 @@ async fn login(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<
     // counted before the verify, not after: a parallel burst would otherwise all read
     // zero, all run argon2, and all get through. INCR is atomic, so each try gets its own
     // number and exactly the first LOGIN_PER_NAME of them are checked.
-    let tries = bump(&s, &name_key, LOGIN_WINDOW_SECS).await?;
-    let from_ip = bump(&s, &ip_key, LOGIN_WINDOW_SECS).await?;
+    let (tries, name_ttl) = crate::ratelimit::hit(&s.redis, &name_key, LOGIN_WINDOW_SECS).await?;
+    let (from_ip, ip_ttl) = crate::ratelimit::hit(&s.redis, &ip_key, LOGIN_WINDOW_SECS).await?;
     if tries > LOGIN_PER_NAME || from_ip > LOGIN_PER_IP {
-        return Err(too_many());
+        let wait = if from_ip > LOGIN_PER_IP { ip_ttl.max(name_ttl) } else { name_ttl };
+        return Err(too_many().retry_after(if wait > 0 { wait } else { LOGIN_WINDOW_SECS }));
     }
     let stored: Option<(Uuid, Option<String>)> = sqlx::query_as("SELECT id, password_hash FROM streamers WHERE name = $1")
         .bind(&name)
@@ -604,9 +620,7 @@ async fn me(State(s): State<AppState>, Me(me): Me) -> ApiResult {
 async fn check_password(s: &AppState, headers: &HeaderMap, me: &Account, raw: &str) -> Result<(), ApiError> {
     let Some(password) = clean_password(raw) else { return Err(wrong_password()) };
     let key = login_key(&client_ip(headers), &me.name);
-    if bump(s, &key, LOGIN_WINDOW_SECS).await? > LOGIN_PER_NAME {
-        return Err(too_many());
-    }
+    limit(s, &key, LOGIN_WINDOW_SECS, LOGIN_PER_NAME, "too many tries. wait 15 minutes").await?;
     let stored: Option<Option<String>> = sqlx::query_scalar("SELECT password_hash FROM streamers WHERE id = $1")
         .bind(me.id)
         .fetch_optional(&s.db)
