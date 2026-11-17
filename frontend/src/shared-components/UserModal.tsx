@@ -95,7 +95,7 @@ function UserDialog() {
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
     dialog.showModal();
-    // the tab that is open, not the first focusable: the gear lands you on appearance
+    // the tab that is open, not the first focusable: the gear lands you where you left off
     dialog.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
     return () => {
       if (dialog.open) dialog.close();

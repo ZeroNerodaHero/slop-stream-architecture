@@ -70,7 +70,8 @@ function InspectorOpener() {
 
 /**
  * The gear: the user modal (profile, groups, security, notifications; appearance, chat, sidebar,
- * advanced), opened on appearance, the first of this browser's tabs.
+ * advanced), opened on the tab it was last left on (appearance, the first of this browser's
+ * tabs, the first time).
  * The far end of the actions line, away from the picture. The opener takes focus first, so the
  * browser has somewhere to hand it back (safari does not focus a clicked button), and the
  * panel closes under the dialog.
@@ -86,7 +87,7 @@ function SettingsOpener({ className }: { className?: string }) {
         onClick={(e) => {
           e.currentTarget.focus();
           store.set(friendsOpenAtom, false);
-          openUserModal('appearance');
+          openUserModal();
         }}
         className={cn(ACTION, 'align-middle hover:no-underline', className)}
       >
