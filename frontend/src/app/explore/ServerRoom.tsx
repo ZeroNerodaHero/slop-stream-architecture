@@ -41,7 +41,6 @@ import { meAtom } from '@/infra/atoms/auth-atoms';
 import { reconnectChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
-import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
 import {
   channelRenamedAtom,
   enterRoom,
@@ -55,7 +54,6 @@ import {
   setChannelMuted,
   setChannelOrder
 } from '@/infra/atoms/room-atoms';
-import { profilePopupEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { cleanName, isValidName } from '@/infra/names';
 import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
@@ -71,6 +69,7 @@ import { PageFrame } from '@/shared-components/PageFrame';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { PresenceSquare } from '@/shared-components/PersonRow';
 import { PicturePick } from '@/shared-components/PicturePick';
+import { ProfileLink } from '@/shared-components/ProfileLink';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { Field, SECTION_TITLE, Section } from '@/shared-components/user-modal/parts';
@@ -1276,7 +1275,6 @@ const PEEK_MS = 200;
  */
 function Member({ member, live, ownerRole }: { member: GroupMember; live: boolean; ownerRole: string }) {
   const presence = useAtomValue(presenceOfAtom(member.name));
-  const popup = useAtomValue(profilePopupEnabledAtom);
   const peek = usePeek(PEEK_MS);
   return (
     <li
@@ -1289,19 +1287,10 @@ function Member({ member, live, ownerRole }: { member: GroupMember; live: boolea
       onFocus={(e) => peek.focus(e, e.currentTarget.closest('#group-roster'))}
       onBlur={peek.blur}
     >
-      <Link
-        to={`/watch/${encodeURIComponent(member.name)}`}
-        // streaming: the page holds the player's box from its first paint (WatchPage.tsx)
-        state={presence === 'streaming' ? { live: true } : undefined}
-        // not draggable: the face must not lift off the row as a ghost link
-        draggable={false}
-        aria-haspopup={popup ? 'dialog' : undefined}
-        onClick={(e) => {
-          if (!popup || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-          e.preventDefault();
-          // every member is a login, so the ✓ is theirs
-          openProfilePopup({ name: member.name, verified: true, avatar: member.avatar ?? null });
-        }}
+      <ProfileLink
+        // every member is a login, so the ✓ is theirs
+        person={{ name: member.name, verified: true, avatar: member.avatar ?? null }}
+        live={presence === 'streaming'}
         className="flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue"
       >
         <span className="relative flex shrink-0">
@@ -1332,7 +1321,7 @@ function Member({ member, live, ownerRole }: { member: GroupMember; live: boolea
             </span>
           )}
         </span>
-      </Link>
+      </ProfileLink>
       {/* every member is a login, so the ✓ is theirs; the word is the row's, and the status the card asks for */}
       {peek.at && <PersonCard id={`roster-peek-${member.name}`} person={{ name: member.name, verified: true, avatar: member.avatar ?? null, presence }} at={peek.at} />}
     </li>
