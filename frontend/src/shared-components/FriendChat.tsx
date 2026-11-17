@@ -50,6 +50,7 @@ import { LinkedText } from '@/shared-components/LinkedText';
 import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { PresenceSquare, Who } from '@/shared-components/PersonRow';
+import { ProfileLink, useShowProfile } from '@/shared-components/ProfileLink';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { INPUT } from '@/shared-components/user-modal/parts';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -156,10 +157,12 @@ interface TabProps {
 /**
  * One face on the column, with its presence square, how many of their lines are new, and the
  * × in its corner that takes the chat off the column. Pointing at it, or tabbing onto it, puts
- * the person's card (PersonCard.tsx, the sidebar's) beside the column.
+ * the person's card (PersonCard.tsx, the sidebar's) beside the column. A click on another face
+ * shows that chat; a click on the shown one shows them (the popup, or their page: ProfileLink.tsx).
  */
 function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
   const peek = usePeek(PEEK_MS);
+  const profile = useShowProfile();
   return (
     <span
       className="group/tab relative shrink-0"
@@ -176,8 +179,14 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
         aria-controls="friend-chat-thread"
         tabIndex={reachable ? 0 : -1}
         aria-label={`chat with ${dm.name}${dm.unread > 0 ? `, ${dm.unread} new` : ''}`}
+        aria-haspopup={selected && profile.popup ? 'dialog' : undefined}
         data-unread={dm.unread || undefined}
         onClick={() => {
+          // the shown one's face is them, the roster's way: the popup, or their page (ProfileLink.tsx)
+          if (selected) {
+            profile.show(dm, dm.presence === 'streaming');
+            return;
+          }
           selectDm(dm.name);
           // a click means "talk to them": straight into the box (the same node for every tab, so it is there already)
           document.getElementById('friend-chat-text')?.focus();
@@ -662,7 +671,17 @@ export function FriendChat() {
         >
           {name && dm ? (
             <>
-              <Who name={name} verified={dm.verified} className="min-w-0 flex-1" />
+              {/* the name is a way to them: the popup, or their page (ProfileLink.tsx). a link, so a press on it is not a move */}
+              <span className="flex min-w-0 flex-1">
+                <ProfileLink
+                  id="friend-chat-profile"
+                  person={dm}
+                  live={dm.presence === 'streaming'}
+                  className="min-w-0 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue"
+                >
+                  <Who name={name} verified={dm.verified} />
+                </ProfileLink>
+              </span>
               {/* the search box under the header, up and down. blue while it is up: a pressed state is colour (buttons.mdc) */}
               <Tooltip content={searching ? 'close the search' : 'search this chat'}>
                 <button
@@ -760,7 +779,14 @@ export function FriendChat() {
                       mine={mine}
                       at={line.at}
                       name={line.from}
-                      who={<span className={cn('font-semibold', mine && 'text-primaryBlue')}>{line.from}</span>}
+                      who={
+                        <ProfileLink
+                          person={{ name: line.from, verified: mine || (dm?.verified ?? false), avatar: mine ? myAvatar : (dm?.avatar ?? null) }}
+                          className={cn('font-semibold underline-offset-2 hover:underline', mine && 'text-primaryBlue')}
+                        >
+                          {line.from}
+                        </ProfileLink>
+                      }
                       face={<Face name={line.from} version={mine ? myAvatar : (dm?.avatar ?? null)} className="h-8 w-8 text-sm" />}
                       words={
                         line.text ? (
