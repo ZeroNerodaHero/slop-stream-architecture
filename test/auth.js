@@ -8,7 +8,7 @@ const LOCAL = process.env.LOCAL === '1';
 const REPO = require('path').join(__dirname, '..');
 const RUN = Date.now().toString(36).slice(-5);
 const NAME = 'acct' + RUN;
-const PW = 'correct horse battery';
+const PW = 'correct horse battery 9!';
 // the account's name after the rename steps (docs/ids.md): what the steps after them use
 const NEW = 'renamed' + RUN;
 let CURRENT = NAME;
@@ -41,9 +41,12 @@ const body = async (res) => {
   const owner = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   const anon = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
 
-  await step('sign up: short password 400, good one 201, /api/me knows me', async () => {
+  await step('sign up: short, no-number and no-symbol passwords 400, good one 201, /api/me knows me', async () => {
     const short = await owner.post('/api/signup', { data: { name: NAME, password: 'short' } });
     expect(short.status() === 400, `short password got ${short.status()}`);
+    const noNumber = await owner.post('/api/signup', { data: { name: NAME, password: 'no number here!' } });
+    const noSymbol = await owner.post('/api/signup', { data: { name: NAME, password: 'no symbol here 9' } });
+    expect(noNumber.status() === 400 && noSymbol.status() === 400, `no number got ${noNumber.status()}, no symbol got ${noSymbol.status()}`);
     const res = await owner.post('/api/signup', { data: { name: NAME, password: PW } });
     expect(res.status() === 201, `signup got ${res.status()} ${JSON.stringify(await body(res))}`);
     const cookie = res.headers()['set-cookie'] || '';
@@ -56,7 +59,7 @@ const body = async (res) => {
   });
 
   await step('the name is taken now: a second signup is 409', async () => {
-    const res = await anon.post('/api/signup', { data: { name: NAME, password: 'another password' } });
+    const res = await anon.post('/api/signup', { data: { name: NAME, password: 'another password 4!' } });
     expect(res.status() === 409, `got ${res.status()}`);
     const reserved = await anon.post('/api/signup', { data: { name: 'dummy-' + RUN, password: PW } });
     expect(reserved.status() === 403, `dummy- signup got ${reserved.status()}`);
@@ -110,25 +113,25 @@ const body = async (res) => {
   });
 
   await step('change password: old one stops working, new one works', async () => {
-    const bad = await owner.post('/api/password', { data: { old: 'wrong', new: 'a brand new password' } });
+    const bad = await owner.post('/api/password', { data: { old: 'wrong', new: 'a brand new password 7!' } });
     expect(bad.status() === 403, `wrong old got ${bad.status()}`);
-    const ok = await owner.post('/api/password', { data: { old: PW, new: 'a brand new password' } });
+    const ok = await owner.post('/api/password', { data: { old: PW, new: 'a brand new password 7!' } });
     expect(ok.status() === 204, `change got ${ok.status()}`);
     const still = await body(await owner.get('/api/me'));
     expect(still.name === NAME, 'the changing login was logged out');
     const old = await anon.post('/api/login', { data: { name: NAME, password: PW } });
-    const fresh = await anon.post('/api/login', { data: { name: NAME, password: 'a brand new password' } });
+    const fresh = await anon.post('/api/login', { data: { name: NAME, password: 'a brand new password 7!' } });
     expect(old.status() === 401 && fresh.status() === 200, `old ${old.status()}, new ${fresh.status()}`);
     await anon.post('/api/logout');
     return 'and this login survived';
   });
 
   await step('nobody: /api/password and /api/logout-all are 401. logout-all ends the other device too', async () => {
-    const pw = await anon.post('/api/password', { data: { old: 'a brand new password', new: 'yet another password' } });
+    const pw = await anon.post('/api/password', { data: { old: 'a brand new password 7!', new: 'yet another password 5!' } });
     const all = await anon.post('/api/logout-all');
     expect(pw.status() === 401 && all.status() === 401, `nobody got ${pw.status()} and ${all.status()}`);
     // a second device logs in; the first logs every device out
-    const phone = await anon.post('/api/login', { data: { name: NAME, password: 'a brand new password' } });
+    const phone = await anon.post('/api/login', { data: { name: NAME, password: 'a brand new password 7!' } });
     expect(phone.status() === 200, `second device got ${phone.status()}`);
     const out = await owner.post('/api/logout-all');
     expect(out.status() === 204, `logout-all got ${out.status()}`);
@@ -140,8 +143,8 @@ const body = async (res) => {
 
   await step('a password typed decomposed (200 raw chars) logs in composed: nfkc first, then the length rule', async () => {
     const name = 'nfc' + RUN;
-    const decomposed = 'e\u0301'.repeat(100); // 200 code points, 100 characters after nfkc
-    const composed = '\u00e9'.repeat(100);
+    const decomposed = 'e\u0301'.repeat(100) + '1!'; // 202 code points, 102 characters after nfkc
+    const composed = '\u00e9'.repeat(100) + '1!';
     const up = await anon.post('/api/signup', { data: { name, password: decomposed } });
     expect(up.status() === 201, `signup got ${up.status()} ${JSON.stringify(await body(up))}`);
     const same = await anon.post('/api/login', { data: { name, password: decomposed } });
@@ -174,7 +177,7 @@ const body = async (res) => {
     const p = await fresh();
     await p.goto(`${BASE}/login?next=/live`, { waitUntil: 'domcontentloaded' });
     await p.fill('#auth-name', NAME);
-    await p.fill('#auth-password', 'a brand new password');
+    await p.fill('#auth-password', 'a brand new password 7!');
     await p.click('#auth-submit');
     await p.waitForFunction((n) => document.querySelector('#me')?.textContent === n, NAME, { timeout: 10000 });
     expect(p.url().endsWith('/live'), `landed on ${p.url()}`);
@@ -189,7 +192,7 @@ const body = async (res) => {
     const p = await fresh();
     await p.goto(`${BASE}/login?next=${encodeURIComponent('/\\evil.com')}`, { waitUntil: 'domcontentloaded' });
     await p.fill('#auth-name', NAME);
-    await p.fill('#auth-password', 'a brand new password');
+    await p.fill('#auth-password', 'a brand new password 7!');
     await p.click('#auth-submit');
     await p.waitForFunction((n) => document.querySelector('#me')?.textContent === n, NAME, { timeout: 10000 });
     const url = new URL(p.url());
@@ -202,7 +205,7 @@ const body = async (res) => {
     const p = await fresh();
     await p.goto(`${BASE}/login?next=/watch/${ROOM}`, { waitUntil: 'domcontentloaded' });
     await p.fill('#auth-name', NAME);
-    await p.fill('#auth-password', 'a brand new password');
+    await p.fill('#auth-password', 'a brand new password 7!');
     await p.click('#auth-submit');
     await p.waitForSelector('#chat-text', { timeout: 15000 });
     expect((await p.$('#chat-nick')) === null, 'a nick box showed for a login');
@@ -247,7 +250,7 @@ const body = async (res) => {
     const p = await fresh();
     await p.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' });
     await p.fill('#auth-name', NAME);
-    await p.fill('#auth-password', 'a brand new password');
+    await p.fill('#auth-password', 'a brand new password 7!');
     await p.click('#auth-submit');
     await p.hover('#user-panel');
     await p.waitForSelector('#logout', { timeout: 10000 });
@@ -260,7 +263,7 @@ const body = async (res) => {
   });
 
   // ---- the name can change (docs/ids.md): the id stays, the logins stay, the old name is held ----
-  const PW2 = 'a brand new password';
+  const PW2 = 'a brand new password 7!';
   const OTHER = 'other' + RUN;
 
   await step('rename: nobody 401, wrong password 403, own name 400, reserved 403, a taken name 409', async () => {
@@ -355,14 +358,14 @@ const body = async (res) => {
 
   if (LOCAL) {
     await step('api passwd <name> prints a new password that works, and ends the logins', async () => {
-      const before = await owner.post('/api/login', { data: { name: CURRENT, password: 'a brand new password' } });
+      const before = await owner.post('/api/login', { data: { name: CURRENT, password: 'a brand new password 7!' } });
       expect(before.status() === 200, `login before passwd got ${before.status()}`);
       const out = execSync(`docker compose exec -T api api passwd ${CURRENT}`, { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
       const pw = (out.match(/new password is\s+(\S+)/) || [])[1];
       expect(pw, `no password in: ${out}`);
       const dead = await body(await owner.get('/api/me'));
       expect(dead.name === null, `a login survived passwd: ${JSON.stringify(dead)}`);
-      const old = await anon.post('/api/login', { data: { name: CURRENT, password: 'a brand new password' } });
+      const old = await anon.post('/api/login', { data: { name: CURRENT, password: 'a brand new password 7!' } });
       const fresh = await anon.post('/api/login', { data: { name: CURRENT, password: pw } });
       expect(old.status() === 401 && fresh.status() === 200, `old ${old.status()}, printed one ${fresh.status()}`);
       // the name renamed away from is held: passwd must not make a stranger's account on it

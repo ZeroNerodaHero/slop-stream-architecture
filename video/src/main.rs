@@ -56,6 +56,7 @@
 //! of `video dummy` (see dummy.rs): publishing one needs the matching password too.
 
 mod dummy;
+mod limits;
 mod media;
 mod thumbs;
 
@@ -387,6 +388,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/viewers", get(viewers))
         .route("/thumb/{file}", get(thumb))
         .route("/ws", get(ws))
+        // per address, per minute (limits.rs)
+        .route_layer(axum::middleware::from_fn_with_state(limits::Limits::default(), limits::layer))
         .with_state(app.clone());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], ws_port));

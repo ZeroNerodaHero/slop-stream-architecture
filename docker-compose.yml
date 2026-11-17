@@ -123,6 +123,8 @@ services:
     restart: unless-stopped
     logging: *default-logging
     environment:
+      # off turns the per-route request limits off (docs/rate-limits.md). unset: on
+      RATE_LIMITS: ${RATE_LIMITS:-}
       DATABASE_URL: postgres://stream:stream@database:5432/stream
       # the pages' error reports. a second database in the same postgres, made by the api
       # when missing. the api runs fine without it. see docs/debugging.md
@@ -173,6 +175,8 @@ services:
     logging: *default-logging
     command: ["chat"]
     environment:
+      # off turns the per-route request limits off (docs/rate-limits.md). unset: on
+      RATE_LIMITS: ${RATE_LIMITS:-}
       DATABASE_URL: postgres://stream:stream@database:5432/stream
       REDIS_URL: redis://redis:6379/0
       PORT: "4100"
@@ -221,6 +225,8 @@ services:
     logging: *default-logging
     command: ["events"]
     environment:
+      # off turns the per-route request limits off (docs/rate-limits.md). unset: on
+      RATE_LIMITS: ${RATE_LIMITS:-}
       DATABASE_URL: postgres://stream:stream@database:5432/stream
       REDIS_URL: redis://redis:6379/0
       PORT: "4100"
@@ -258,6 +264,8 @@ services:
     logging: *default-logging
     command: ["home"]
     environment:
+      # off turns the per-route request limits off (docs/rate-limits.md). unset: on
+      RATE_LIMITS: ${RATE_LIMITS:-}
       DATABASE_URL: postgres://stream:stream@database:5432/stream
       REDIS_URL: redis://redis:6379/0
       VIDEO_URL: http://video:7880
@@ -353,6 +361,8 @@ services:
     # every stream at once.
     pids_limit: 256
     environment:
+      # off turns the per-route request limits off (docs/rate-limits.md). unset: on
+      RATE_LIMITS: ${RATE_LIMITS:-}
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
       WS_PORT: "7880"
       UDP_PORT: "7882"

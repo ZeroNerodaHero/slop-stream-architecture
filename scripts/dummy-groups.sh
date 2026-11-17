@@ -54,7 +54,7 @@ ABOUT=(
 rand() { echo $(( RANDOM % $1 )); }
 status() { curl -sk -o /dev/null -w '%{http_code}' --max-time 15 "$@"; }
 clear_login_limit() {
-  docker compose exec -T redis sh -c "redis-cli --scan --pattern 'rl:login:*' | xargs -r redis-cli del" >/dev/null 2>&1 || true
+  docker compose exec -T redis sh -c "for p in 'rl:login:*' 'rl:route:*'; do redis-cli --scan --pattern \"\$p\" | xargs -r redis-cli del; done" >/dev/null 2>&1 || true
 }
 
 JAR="$(mktemp)"

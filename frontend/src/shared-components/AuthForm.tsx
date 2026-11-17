@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useState } from 'react';
 
 import { type AuthMode, authBusyAtom, authErrorAtom, clearAuthError, login, meAtom, signup } from '@/infra/atoms/auth-atoms';
 import { identityChanged } from '@/infra/atoms/profile-atoms';
+import { NEW_PASSWORD_RULE, newPasswordProblem } from '@/infra/password';
 import { Button } from '@/shared-components/Button';
 
 interface AuthFormProps {
@@ -30,6 +31,8 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const signingUp = mode === 'signup';
+  // a new password's rule, said under the box as it is typed; logging in asks none of it
+  const problem = signingUp && password ? newPasswordProblem(password) : null;
 
   // Mount only: a stale error from a previous try should not greet you here.
   // The switch between the two modes clears it too (same component, no remount).
@@ -39,6 +42,7 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (problem) return;
     const ok = await (signingUp ? signup(name, password) : login(name, password));
     if (ok) {
       // the events socket is who the browser is: say hello again as the login, so the name reads
@@ -90,7 +94,7 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
 
       <div className="flex flex-col gap-1.5">
         <label htmlFor="auth-password" className={LABEL}>
-          password {signingUp && <span className="font-normal text-textTertiary">(8 or more, anything goes)</span>}
+          password {signingUp && <span className="font-normal text-textTertiary">({NEW_PASSWORD_RULE})</span>}
         </label>
         <div className="relative">
           <input
@@ -103,6 +107,8 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
             minLength={signingUp ? 8 : undefined}
             maxLength={128}
             required
+            aria-invalid={problem ? true : undefined}
+            aria-describedby={signingUp ? 'auth-password-hint' : undefined}
             className={`${INPUT} pr-20`}
           />
           <button
@@ -114,10 +120,15 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
             {show ? 'hide' : 'show'}
           </button>
         </div>
+        {signingUp && (
+          <p id="auth-password-hint" aria-live="polite" className={`min-h-[1.5em] text-sm ${problem ? 'text-decrease' : 'text-textTertiary'}`}>
+            {problem ?? (password ? 'good' : '')}
+          </p>
+        )}
       </div>
 
       <div className="mt-1 flex flex-wrap items-center gap-4">
-        <Button id="auth-submit" type="submit" variant="primary" disabled={busy || !name || !password}>
+        <Button id="auth-submit" type="submit" variant="primary" disabled={busy || !name || !password || !!problem}>
           {signingUp ? 'make the account' : 'log in'}
         </Button>
         <button

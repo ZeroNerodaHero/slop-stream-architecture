@@ -29,7 +29,7 @@ const GROUP = 'grp' + RUN;
 // the address, once the group exists: the title plus four digits. later steps use this.
 let slug = GROUP;
 const ROOM = 'grouproom' + RUN;
-const PW = 'correct horse battery';
+const PW = 'correct horse battery 9!';
 /** A role's id: a uuid the api made, never a counter. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors'];

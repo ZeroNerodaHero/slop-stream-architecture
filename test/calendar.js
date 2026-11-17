@@ -12,7 +12,7 @@ const RUN = Date.now().toString(36).slice(-5);
 const NAME = 'cal1';
 /** an account, for "whose rows" (a signup is for good, so a fresh one per run, like follows.js) */
 const ACCOUNT = 'calp' + RUN;
-const PW = 'correct horse battery';
+const PW = 'correct horse battery 9!';
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors', '--autoplay-policy=no-user-gesture-required'];
 const DAY = 86_400_000;
 const results = [];

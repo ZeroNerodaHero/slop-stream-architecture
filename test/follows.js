@@ -15,7 +15,7 @@ const FAN = 'fan' + RUN;
 const STAR = 'star' + RUN;
 const FREE = 'free' + RUN;
 const RENAMED = 'nova' + RUN;
-const PW = 'correct horse battery';
+const PW = 'correct horse battery 9!';
 const ARGS = ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--ignore-certificate-errors'];
 const results = [];
 async function step(name, fn) {

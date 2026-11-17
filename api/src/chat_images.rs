@@ -15,7 +15,7 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::auth::{bump, Me};
+use crate::auth::Me;
 use crate::s3;
 use crate::{ApiError, ApiResult, AppState};
 
@@ -52,9 +52,7 @@ async fn upload(State(s): State<AppState>, Me(me): Me, body: Result<Bytes, Bytes
     let Some(mime) = kind(&body) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "not a picture"));
     };
-    if bump(&s, &format!("rl:chatimg:{}", me.id), RATE_WINDOW_SECS).await? > RATE_PER_WINDOW {
-        return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "slow down"));
-    }
+    crate::auth::limit(&s, &format!("rl:chatimg:{}", me.id), RATE_WINDOW_SECS, RATE_PER_WINDOW, "slow down").await?;
     // postgres makes the id, the same as every other id. the row first; a failed save deletes it.
     let id: Uuid = match sqlx::query_scalar("INSERT INTO chat_images (id, mime, created_by) VALUES (gen_random_uuid(), $1, $2) RETURNING id")
         .bind(mime)

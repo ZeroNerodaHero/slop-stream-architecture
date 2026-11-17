@@ -235,6 +235,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         .filter(|n| crate::valid_name(n))
         .collect();
     let admins: Vec<Uuid> = crate::debug::admins_with_accounts(&db, admin_names).await?.into_iter().map(|a| a.id).collect();
+    let limits = crate::ratelimit::ByIp { redis: redis.clone(), rule: crate::ratelimit::chat_rule };
     let state = ChatState {
         db,
         redis,
@@ -255,6 +256,8 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         .route("/chat/{name}", get(ws))
         .route("/chat/{server}/{channel}", get(ws_channel))
         .merge(history::routes())
+        // opens and history reads per address (ratelimit.rs); the lines have their buckets below
+        .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip))
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));

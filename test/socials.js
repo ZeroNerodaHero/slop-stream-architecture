@@ -17,7 +17,7 @@ const RUN = Date.now().toString(36).slice(-5);
 const ME = 'soc' + RUN;
 /** somebody else with an account: the one the name is not */
 const NOSY = 'nos' + RUN;
-const PW = 'correct horse battery';
+const PW = 'correct horse battery 9!';
 const ARGS = ['--ignore-certificate-errors'];
 /** the api's cap on how many links one document holds. keep this with the api's */
 const MAX_LINKS = 20;

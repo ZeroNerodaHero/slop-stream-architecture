@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::auth::{self, bump, client_ip, Me};
+use crate::auth::{self, client_ip, Me};
 use crate::notify;
 use crate::presence::{self, Presence, Status, SEEN_WINDOW_MS};
 use crate::{live_set, ApiError, ApiResult, AppState, Name};
@@ -163,9 +163,7 @@ type FollowedRow = (String, bool, Option<i64>, String, DateTime<Utc>, bool, Stri
 /// none, in the one statement with the edge.
 async fn follow(State(s): State<AppState>, Name(name): Name, Me(me): Me) -> Result<StatusCode, ApiError> {
     let me = me.ok_or_else(not_logged_in)?;
-    if bump(&s, &format!("rl:follow:name:{}", me.name), CHURN_WINDOW_SECS).await? > CHURN_PER_HOUR {
-        return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "too many changes. wait an hour"));
-    }
+    crate::auth::limit(&s, &format!("rl:follow:name:{}", me.name), CHURN_WINDOW_SECS, CHURN_PER_HOUR, "too many changes. wait an hour").await?;
     // a new edge is news to the one followed, when they are a login (docs/notifications.md)
     if let Some((followed, followed_name)) = follow_as(&s.db, me.id, &me.name, name).await? {
         notify::followed(&s, followed, &followed_name, &me).await;
@@ -214,9 +212,7 @@ async fn unfollow(State(s): State<AppState>, Name(name): Name, Me(me): Me) -> Re
     let me = me.ok_or_else(not_logged_in)?;
     // the name the follow went to: a stale unfollow of a held name ends the edge to the account
     let name = auth::renamed_to(&s.db, &name).await?.unwrap_or(name);
-    if bump(&s, &format!("rl:follow:name:{}", me.name), CHURN_WINDOW_SECS).await? > CHURN_PER_HOUR {
-        return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "too many changes. wait an hour"));
-    }
+    crate::auth::limit(&s, &format!("rl:follow:name:{}", me.name), CHURN_WINDOW_SECS, CHURN_PER_HOUR, "too many changes. wait an hour").await?;
     let done = sqlx::query("DELETE FROM follows f USING streamers s WHERE s.id = f.followed_id AND f.follower_id = $1 AND s.name = $2")
         .bind(me.id)
         .bind(&name)
@@ -297,9 +293,7 @@ async fn search(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, q: Re
     if q.is_empty() {
         return Ok(Json(json!([])));
     }
-    if bump(&s, &format!("rl:search:ip:{}", client_ip(&headers)), SEARCH_WINDOW_SECS).await? > SEARCH_PER_MINUTE {
-        return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "too many searches. wait a minute"));
-    }
+    crate::auth::limit(&s, &format!("rl:search:ip:{}", client_ip(&headers)), SEARCH_WINDOW_SECS, SEARCH_PER_MINUTE, "too many searches. wait a minute").await?;
     let rows: Vec<HitRow> = sqlx::query_as(
         "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
                 EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $2 AND f.followed_id = s.id), s.status

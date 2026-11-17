@@ -278,7 +278,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
   });
 
   await step(`a claimed name (${CLAIMED}) is refused on hello and never online`, async () => {
-    const res = await api.post('/api/signup', { data: { name: CLAIMED, password: `a password for ${RUN}` } });
+    const res = await api.post('/api/signup', { data: { name: CLAIMED, password: `a password for ${RUN} 3!` } });
     expect([201, 409].includes(res.status()), `signup got ${res.status()}`);
     const c = await (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();
     await c.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
