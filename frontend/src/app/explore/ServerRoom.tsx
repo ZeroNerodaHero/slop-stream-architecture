@@ -37,7 +37,7 @@ import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { api, type Channel, CHANNEL_CAP, groupImage, type GroupMember, type GroupRole, groupWords, messageOf, type GroupRoom, type RolePerms } from '@/infra/api';
-import { meAtom } from '@/infra/atoms/auth-atoms';
+import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { reconnectChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
@@ -59,7 +59,7 @@ import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
-import { Button, buttonClassName } from '@/shared-components/Button';
+import { Button } from '@/shared-components/Button';
 import { type ChatSearch, comboProps, SearchFilters, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Face } from '@/shared-components/Face';
@@ -934,9 +934,9 @@ export function ServerPage() {
                 </Button>
               )}
               {!mine && me === null && (
-                <Link to="/login" className={buttonClassName('primary', 'px-3 py-1.5 text-sm')}>
+                <Button id="group-login" variant="primary" className="px-3 py-1.5 text-sm" onClick={() => openAuthDialog('login')}>
                   log in to join
-                </Link>
+                </Button>
               )}
               {!mine && <p className="text-sm text-textSecondary">you can read this. join to talk.</p>}
               {mine && !leaving && (

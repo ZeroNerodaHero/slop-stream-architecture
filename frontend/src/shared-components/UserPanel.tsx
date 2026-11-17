@@ -3,7 +3,7 @@ import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
-import { loadMe, logout, meAtom } from '@/infra/atoms/auth-atoms';
+import { loadMe, logout, meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { nickAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { closeAllDms, loadDms } from '@/infra/atoms/dm-atoms';
 import { forgetFollowing, friendsOpenAtom, loadFollowing, streamingFriendsAtom } from '@/infra/atoms/follow-atoms';
@@ -211,7 +211,6 @@ export function UserPanel() {
       </aside>
     );
   }
-  const next = encodeURIComponent(pathname);
   // on the right the panel grows leftward, so the row is mirrored and your picture stays at the edge, like the rows above it
   const mirrored = side === 'right';
   // where the picture goes: my page, once I have a name. a guest with none yet gets the profile tab, where the name box is
@@ -388,15 +387,15 @@ export function UserPanel() {
                 </span>
                 {/* the way to make the name yours, right under it; the gear at the far end */}
                 <span className={cn('flex items-center text-sm leading-5 text-textSecondary', mirrored && 'flex-row-reverse')}>
-                  <Link id="signup-link" to={`/signup?next=${next}`} className={ACTION}>
+                  <button id="signup-link" type="button" onClick={() => openAuthDialog('signup')} className={ACTION}>
                     <RiUserAddLine aria-hidden size={ICON} />
                     sign up
-                  </Link>
+                  </button>
                   <Dot />
-                  <Link id="login-link" to={`/login?next=${next}`} className={ACTION}>
+                  <button id="login-link" type="button" onClick={() => openAuthDialog('login')} className={ACTION}>
                     <RiLoginBoxLine aria-hidden size={ICON} />
                     log in
-                  </Link>
+                  </button>
                   {inspectorOn && (
                     <>
                       <Dot />
