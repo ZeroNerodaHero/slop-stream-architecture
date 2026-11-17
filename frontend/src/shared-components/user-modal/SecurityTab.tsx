@@ -18,6 +18,7 @@ import {
 import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { identityChanged } from '@/infra/atoms/profile-atoms';
 import { cleanName } from '@/infra/names';
+import { NEW_PASSWORD_RULE, newPasswordProblem } from '@/infra/password';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -44,6 +45,8 @@ function LoggedOut() {
       .slice(0, 32)
   );
   const [password, setPassword] = useState('');
+  // a new password's rule, said under the box as it is typed; logging in asks none of it
+  const problem = signingUp && password ? newPasswordProblem(password) : null;
 
   // Mount only: a stale error from the login page or an earlier open should not greet you here.
   useEffect(() => {
@@ -52,6 +55,7 @@ function LoggedOut() {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (problem) return;
     const ok = await (signingUp ? signup(name, password) : login(name, password));
     if (ok) {
       setPassword('');
@@ -86,7 +90,7 @@ function LoggedOut() {
             className={INPUT}
           />
         </Field>
-        <Field id="sec-password" label="password" hint={signingUp ? '8 or more, anything goes. there is no reset: remember it.' : undefined}>
+        <Field id="sec-password" label="password" hint={signingUp ? <PasswordHint problem={problem} /> : undefined}>
           <PasswordInput
             id="sec-password"
             value={password}
@@ -96,7 +100,7 @@ function LoggedOut() {
           />
         </Field>
         <div className="flex flex-wrap items-center gap-4">
-          <Button id="sec-submit" type="submit" variant="primary" className={BUTTON} disabled={busy || !name || !password}>
+          <Button id="sec-submit" type="submit" variant="primary" className={BUTTON} disabled={busy || !name || !password || !!problem}>
             {signingUp ? 'sign up' : 'log in'}
           </Button>
           <button
@@ -123,6 +127,7 @@ function LoggedIn({ me }: { me: string }) {
   const [old, setOld] = useState('');
   const [fresh, setFresh] = useState('');
   const [sure, setSure] = useState(false);
+  const problem = fresh ? newPasswordProblem(fresh) : null;
 
   // Mount only: the last visit's "changed" should not still be there.
   useEffect(() => {
@@ -131,6 +136,7 @@ function LoggedIn({ me }: { me: string }) {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (problem) return;
     if (await changePassword(old, fresh)) {
       setOld('');
       setFresh('');
@@ -151,18 +157,23 @@ function LoggedIn({ me }: { me: string }) {
         <p className="text-sm text-textTertiary">a login lasts 30 days on each device.</p>
       </Section>
 
-      <Section title="password" description="8 to 128 characters, anything goes. once it changes, every other login of this account is out; this one stays.">
+      <Section title="password" description={`${NEW_PASSWORD_RULE}. once it changes, every other login of this account is out; this one stays.`}>
         <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
           {/* for password managers: which account the new password belongs to */}
           <input type="text" name="username" value={me} autoComplete="username" readOnly tabIndex={-1} aria-hidden className="sr-only" />
           <Field id="sec-old" label="current password">
             <PasswordInput id="sec-old" value={old} onChange={setOld} autoComplete="current-password" />
           </Field>
-          <Field id="sec-new" label="new password" hint="8 or more. there is no reset: remember it.">
+          <Field id="sec-new" label="new password" hint={<PasswordHint problem={problem} />}>
             <PasswordInput id="sec-new" value={fresh} onChange={setFresh} autoComplete="new-password" minLength={8} />
           </Field>
           <div className="flex flex-wrap items-center gap-3">
-            <button id="sec-change" type="submit" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={busy || !old || fresh.length < 8}>
+            <button
+              id="sec-change"
+              type="submit"
+              className="text-base font-semibold text-primaryBlue disabled:opacity-40"
+              disabled={busy || !old || !fresh || !!problem}
+            >
               change password
             </button>
             <Status id="sec-status" text={status} />
@@ -208,4 +219,9 @@ function LoggedIn({ me }: { me: string }) {
       </Section>
     </>
   );
+}
+
+/** Under a new password's box: what it still needs, in red, or the rule and the warning that there is no reset. */
+function PasswordHint({ problem }: { problem: string | null }) {
+  return problem ? <span className="text-decrease">{problem}</span> : <>{NEW_PASSWORD_RULE}. there is no reset: remember it.</>;
 }

@@ -13,7 +13,7 @@ const BASE = process.env.BASE_URL || 'https://127.0.0.1';
 const RUN = Date.now().toString(36).slice(-5);
 const ANN = 'ann' + RUN;
 const BEN = 'ben' + RUN;
-const PW = 'correct horse battery';
+const PW = 'correct horse battery 9!';
 const ARGS = ['--ignore-certificate-errors'];
 const results = [];
 async function step(name, fn) {
