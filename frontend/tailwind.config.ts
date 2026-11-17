@@ -25,7 +25,8 @@ export default {
         primaryStroke: 'rgb(var(--primary-stroke) / <alpha-value>)',
         secondaryStroke: 'rgb(var(--secondary-stroke) / <alpha-value>)',
         increase: 'rgb(var(--increase) / <alpha-value>)',
-        decrease: 'rgb(var(--decrease) / <alpha-value>)'
+        decrease: 'rgb(var(--decrease) / <alpha-value>)',
+        caution: 'rgb(var(--caution) / <alpha-value>)'
       },
       fontFamily: {
         sans: ['"Geist Variable"', 'system-ui', 'sans-serif']

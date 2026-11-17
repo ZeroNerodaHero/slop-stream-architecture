@@ -238,7 +238,7 @@ function Speaker({ line }: { line: ChatLine }) {
   );
 }
 
-/** What stands after the name: the group badges, the red broadcast mark for the streamer's own lines (the friends bar's, LiveMark.tsx; the word comes up at once on hover, Tooltip.tsx), `you` on ours. No ✓: the name's colour says whether a login is behind it (Speaker). */
+/** What stands after the name: the group badges, the red broadcast mark for the streamer's own lines (LiveMark.tsx; the word comes up at once on hover, Tooltip.tsx), `you` on ours. No ✓: the name's colour says whether a login is behind it (Speaker). */
 function Marks({ line, mine }: { line: ChatLine; mine: boolean }) {
   return (
     <>

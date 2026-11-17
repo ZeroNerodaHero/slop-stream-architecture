@@ -8,7 +8,7 @@ import { meAtom } from '@/infra/atoms/auth-atoms';
 import { dmUnreadAtom, openDm, showDms } from '@/infra/atoms/dm-atoms';
 import { followNoteAtom, followingAtom, loadFollowing, searchQueryAtom, searchResultsAtom, setSearchQuery, unfollow } from '@/infra/atoms/follow-atoms';
 import { loadMyServers, loadServers, myServersAtom, publicServersAtom, SERVERS_FRESH_MS } from '@/infra/atoms/groups-atoms';
-import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
+import { type Presence, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import {
   type PanelSide,
   setSidebarFolded,
@@ -25,9 +25,8 @@ import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { Face } from '@/shared-components/Face';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { GroupMark } from '@/shared-components/GroupMark';
-import { LiveMark } from '@/shared-components/LiveMark';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
-import { Who } from '@/shared-components/PersonRow';
+import { PresenceSquare, Who } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { StreamStill } from '@/shared-components/StreamStill';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -205,21 +204,16 @@ interface Person {
 
 /**
  * The picture and the presence square in its bottom right corner, the way the closed panel
- * shows everyone. Streaming, the bottom left corner gets the red broadcast mark (LiveMark.tsx,
- * the one the chat puts beside the streamer's name): closed, the column has no words, and the
- * mark says what the blue square alone does not. The word is in the row's label; the mark's
- * `title` says it on hover.
+ * shows everyone (PersonRow.tsx): streaming, the square carries the broadcast icon. Closed, the
+ * column has no words; the word is in the row's label, and the square says it on hover.
  */
 function RailFace({ name, avatar, presence }: { name: string; avatar: number | null; presence: Presence }) {
   return (
     <span className="relative block shrink-0">
       <Face name={name} version={avatar} />
-      {presence === 'streaming' && (
-        <Tooltip content="streaming">
-          <LiveMark role="img" aria-label="streaming" data-streaming className="absolute -bottom-1 -left-1 border border-background" />
-        </Tooltip>
-      )}
-      <span aria-hidden data-presence={presence} className={cn('absolute -bottom-1 -right-1 h-3.5 w-3.5 border-2 border-background', PRESENCE_SQUARE[presence])} />
+      <Tooltip content={PRESENCE_WORD[presence]}>
+        <PresenceSquare presence={presence} className="border-background" />
+      </Tooltip>
     </span>
   );
 }

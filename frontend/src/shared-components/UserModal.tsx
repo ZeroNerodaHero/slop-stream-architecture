@@ -13,10 +13,11 @@ import { useAtomValue } from 'jotai';
 import { Fragment, type KeyboardEvent, type ReactNode, useLayoutEffect, useRef } from 'react';
 
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { myPresenceAtom, PRESENCE_SQUARE, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
+import { myPresenceAtom, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { myAvatarVersionAtom, myNameAtom } from '@/infra/atoms/profile-atoms';
 import { USER_TABS, type UserTab, closeUserModal, pickTab, userModalOpenAtom, userTabAtom } from '@/infra/atoms/user-modal-atoms';
 import { Face } from '@/shared-components/Face';
+import { PresenceSquare } from '@/shared-components/PersonRow';
 import { AdvancedTab } from '@/shared-components/user-modal/AdvancedTab';
 import { AppearanceTab } from '@/shared-components/user-modal/AppearanceTab';
 import { ChatTab } from '@/shared-components/user-modal/ChatTab';
@@ -148,16 +149,9 @@ function Rail({ tab }: { tab: UserTab }) {
       <div className="hidden items-center gap-3 border-b border-primaryStroke px-3 py-3 sm:flex">
         <span className="relative block shrink-0" title={name ? PRESENCE_WORD[presence] : undefined}>
           <Face name={name} version={avatar} className="h-9 w-9 text-base" />
-          {/* the presence square in the picture's corner, the corner panel's way (docs/status.md): blue streaming,
-              green online, red do not disturb, grey offline. the word is in the title; the ✓ keeps meaning login */}
-          {name && (
-            <span
-              id="modal-presence"
-              aria-hidden
-              data-presence={presence}
-              className={cn('absolute -bottom-1 -right-1 h-3.5 w-3.5 border-2 border-background', PRESENCE_SQUARE[presence])}
-            />
-          )}
+          {/* the presence square in the picture's corner, the corner panel's way (PersonRow.tsx). the word is in
+              the title; the ✓ keeps meaning login */}
+          {name && <PresenceSquare id="modal-presence" presence={presence} className="border-background" />}
         </span>
         <span className="min-w-0">
           <span className="block truncate font-semibold leading-tight">{name || 'nobody yet'}</span>
