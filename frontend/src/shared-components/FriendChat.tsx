@@ -15,6 +15,7 @@ import {
 import { api, messageOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { MAX_CHAT_IMAGES } from '@/infra/atoms/chat-atoms';
+import { type ChatBox as Box, keepDmBox, keptDmBox } from '@/infra/atoms/chat-layout-atoms';
 import {
   clearDmResults,
   type Dm,
@@ -75,21 +76,6 @@ const SQUARE_ON = 'border-primaryBlue';
 const HEADER_BUTTON =
   'shrink-0 border border-transparent p-0.5 transition-colors duration-150 hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 
-/** Where the window was dragged, and how big. */
-interface Box {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-/**
- * Where the window was left and its size, for the rest of the visit. `null` is the default,
- * the bottom corner beside the sidebar at 400 by 440, until the first move or resize. Hidden
- * and shown again, the window is where it was.
- */
-let parked: Box | null = null;
-
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const room = () => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight });
 
@@ -124,11 +110,11 @@ function resized(rect: DOMRect, dx: number, dy: number, sx: number, sy: number):
   return { x, y, w, h };
 }
 
-/** The same box, back on screen: the browser window shrank, or the chat was left somewhere while hidden. */
+/** The same box, back on screen: the browser window shrank, the chat was left somewhere while hidden, or it was kept from a bigger window. No smaller than the smallest, unless the screen is. */
 function fitted(box: Box): Box {
   const r = room();
-  const w = Math.min(box.w, r.w);
-  const h = Math.min(box.h, r.h);
+  const w = Math.min(Math.max(box.w, MIN_W), r.w);
+  const h = Math.min(Math.max(box.h, MIN_H), r.h);
   return { w, h, x: clamp(box.x, 0, Math.max(0, r.w - w)), y: clamp(box.y, 0, Math.max(0, r.h - h)) };
 }
 
@@ -373,7 +359,11 @@ export function FriendChat() {
   const [sending, setSending] = useState(false);
   /** A picked picture is being shrunk and put up: the picture button waits, and so does send, so a line does not go without the picture meant for it. */
   const [uploading, setUploading] = useState(false);
-  const [box, setBox] = useState<Box | null>(parked);
+  /** Where the window was left and its size, kept over a refresh (chat-layout-atoms.ts). `null` is the default, the bottom corner beside the sidebar at 400 by 440, until the first move or resize. */
+  const [box, setBox] = useState<Box | null>(() => {
+    const kept = keptDmBox();
+    return kept && fitted(kept);
+  });
   const ref = useRef<HTMLElement | null>(null);
   const input = useRef<HTMLInputElement | null>(null);
   const searchInput = useRef<HTMLInputElement | null>(null);
@@ -433,7 +423,7 @@ export function FriendChat() {
   }
 
   useEffect(() => {
-    parked = box;
+    keepDmBox(box);
   }, [box]);
 
   // A moved or resized window is pulled back on screen when the browser window shrinks, and on showing, in case it did while this was hidden.

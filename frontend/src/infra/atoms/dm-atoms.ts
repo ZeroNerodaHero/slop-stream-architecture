@@ -14,6 +14,7 @@ import { atom } from 'jotai';
 
 import { api, type DmLine, messageOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
+import { keepDmWindow, keptDmWindow } from '@/infra/atoms/chat-layout-atoms';
 import { followingAtom } from '@/infra/atoms/follow-atoms';
 import type { Presence } from '@/infra/atoms/presence-atoms';
 import { onEvents } from '@/infra/events';
@@ -64,6 +65,9 @@ export const dmJumpAtom = atom<{ name: string; id: number; n: number } | null>(n
 let jumps = 0;
 /** Which search the hits are for. Every search, close of the list, and logout is a new one; an answer to an older one is dropped. */
 let asks = 0;
+
+/** The login whose kept window (chat-layout-atoms.ts) has been put back, after its first list of threads. Until then nothing is kept: the tabs it names are not here yet. */
+let restoredFor: string | null = null;
 
 /** Threads with a page in flight. */
 const loading = new Set<string>();
@@ -164,6 +168,7 @@ export function pickDm() {
 
 /** Everything, on a logout or a change of login: another person's threads are not this one's. */
 export function closeAllDms() {
+  restoredFor = null;
   store.set(dmsAtom, []);
   store.set(dmActiveAtom, null);
   store.set(dmOpenAtom, false);
@@ -203,7 +208,32 @@ export async function loadDms(): Promise<void> {
   });
   const names = new Set(fresh.map((d) => d.name));
   store.set(dmsAtom, [...fresh, ...have.filter((d) => !names.has(d.name))]);
+  if (restoredFor !== me) restoreDmWindow(me);
 }
+
+/**
+ * The window as this login left it before the refresh: on screen or not, and its tab when that
+ * chat is still among the tabs (one gone since leaves the friends to pick from, or the newest).
+ * A window opened meanwhile is not undone.
+ */
+function restoreDmWindow(me: string) {
+  restoredFor = me;
+  const kept = keptDmWindow(me);
+  if (kept && !store.get(dmOpenAtom)) {
+    if (kept.active && find(kept.active)) store.set(dmActiveAtom, kept.active);
+    if (kept.open) showDms();
+  }
+  keepWindow();
+}
+
+/** The window on screen or not, and its tab, kept for the next visit once this login's has been put back. */
+function keepWindow() {
+  const me = store.get(meAtom);
+  if (!me || restoredFor !== me) return;
+  keepDmWindow({ me, open: store.get(dmOpenAtom), active: store.get(dmActiveAtom) });
+}
+store.sub(dmOpenAtom, keepWindow);
+store.sub(dmActiveAtom, keepWindow);
 
 function setThread(name: string, next: (prev: Thread | undefined) => Thread) {
   const threads = store.get(dmThreadsAtom);

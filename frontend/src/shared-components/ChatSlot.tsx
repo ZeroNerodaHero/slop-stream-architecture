@@ -1,7 +1,8 @@
 import { useAtomValue } from 'jotai';
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
-import { type ChatSide, chatModalOpenAtom, chatSideAtom, setChatModalOpen } from '@/infra/atoms/settings-atoms';
+import { type ChatBox as Box, keepStreamBox, keptStreamBox } from '@/infra/atoms/chat-layout-atoms';
+import { type ChatSide,chatModalOpenAtom, chatSideAtom, setChatModalOpen } from '@/infra/atoms/settings-atoms';
 import { store } from '@/infra/store';
 import { ChatIcon, IconButton } from '@/shared-components/VideoControls';
 import { cn } from '@/utils/cn';
@@ -22,20 +23,6 @@ const COLUMN_MS = 300;
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
 const MIN_W = 280;
 const MIN_H = 320;
-
-/** Where the window was dragged, and how big. `null` is the default, the top right, until the first move or resize. */
-interface Box {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-/**
- * Where the window was put, for the rest of the visit. Watch and go live each mount their own
- * slot; the next one starts where the last one was left.
- */
-let parked: Box | null = null;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const room = () => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight });
@@ -71,11 +58,11 @@ function resized(rect: DOMRect, dx: number, dy: number, sx: number, sy: number):
   return { x, y, w, h };
 }
 
-/** The same box, back on screen: the window shrank, or it was left somewhere while hidden. */
+/** The same box, back on screen: the window shrank, it was left somewhere while hidden, or it was kept from a bigger window. No smaller than the smallest, unless the screen is. */
 function fitted(box: Box): Box {
   const r = room();
-  const w = Math.min(box.w, r.w);
-  const h = Math.min(box.h, r.h);
+  const w = Math.min(Math.max(box.w, MIN_W), r.w);
+  const h = Math.min(Math.max(box.h, MIN_H), r.h);
   return { w, h, x: clamp(box.x, 0, Math.max(0, r.w - w)), y: clamp(box.y, 0, Math.max(0, r.h - h)) };
 }
 
@@ -123,7 +110,15 @@ export function ChatSlot({ children }: { children: ReactNode }) {
   /** The first time a column is shown it is already open: there is no slide to clip for. */
   const skipOpenClip = useRef(true);
   const modal = side === 'modal';
-  const [box, setBox] = useState<Box | null>(parked);
+  /**
+   * Where the window was put, kept over a refresh (chat-layout-atoms.ts). Watch and go live each
+   * mount their own slot; the next one starts where the last one was left. `null` is the
+   * default, the top right, until the first move or resize.
+   */
+  const [box, setBox] = useState<Box | null>(() => {
+    const kept = keptStreamBox();
+    return kept && fitted(kept);
+  });
   /** The window has finished fading in. While false it is invisible, so the first paint is the start of the fade. */
   const [shown, setShown] = useState(false);
   /** The column keeps its height through the slide, then drops it, so the page below does not jump while the panel is still on screen. */
@@ -132,7 +127,7 @@ export function ChatSlot({ children }: { children: ReactNode }) {
   const [clip, setClip] = useState(false);
 
   useEffect(() => {
-    parked = box;
+    keepStreamBox(box);
   }, [box]);
 
   // A moved window is pulled back on screen when the window shrinks.
