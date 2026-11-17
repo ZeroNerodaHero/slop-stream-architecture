@@ -1,11 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 
 import { api, groupMatches, mayMakeGroup, messageOf, type SearchHit, type Server } from '@/infra/api';
-import { meAtom } from '@/infra/atoms/auth-atoms';
-import { Button, buttonClassName } from '@/shared-components/Button';
+import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
+import { Button } from '@/shared-components/Button';
 import { GroupSquare } from '@/shared-components/GroupSquare';
 import { MakeGroupDialog } from '@/shared-components/MakeGroupDialog';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -75,9 +74,9 @@ export function ExplorePage() {
           </Button>
         )}
         {me === null && (
-          <Link id="groups-create" to="/login" className={buttonClassName('primary', 'shrink-0 px-4 py-2 text-sm')}>
+          <Button id="groups-create" variant="primary" className="shrink-0 px-4 py-2 text-sm" onClick={() => openAuthDialog('login')}>
             log in to create
-          </Link>
+          </Button>
         )}
       </div>
       {making && <MakeGroupDialog onClose={() => setMaking(false)} />}

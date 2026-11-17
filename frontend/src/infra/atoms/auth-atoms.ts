@@ -119,6 +119,23 @@ export function clearAuthError() {
   store.set(authErrorAtom, '');
 }
 
+// ---- the log in / sign up dialog --------------------------------------------------------------
+
+export type AuthMode = 'login' | 'signup';
+
+/** Which form the auth dialog shows, null for closed. The Shell mounts it on this alone (AuthDialog.tsx). */
+export const authDialogAtom = atom<AuthMode | null>(null);
+
+/** Over the page you are on: the sidebar's sign up and log in, "log in to create", "log in to join", and /login and /signup. */
+export function openAuthDialog(mode: AuthMode) {
+  store.set(authErrorAtom, '');
+  store.set(authDialogAtom, mode);
+}
+
+export function closeAuthDialog() {
+  store.set(authDialogAtom, null);
+}
+
 // ---- the password, from the security tab ------------------------------------------------------
 
 export const passwordBusyAtom = atom(false);
