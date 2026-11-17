@@ -60,9 +60,18 @@ const HASH_SLOTS: usize = 4;
 // ---- passwords ---------------------------------------------------------------
 
 /// argon2id with owasp's numbers: 19 MiB, 2 passes, 1 lane. About 50ms on a small vps.
-/// The salt and these settings travel inside the stored string, so they can change later.
+/// The salt and these settings travel inside the stored string, so they can change later:
+/// raise them here and every account moves onto the new ones at its next right password
+/// (`needs_rehash`, `upgrade_hash`). The one place they are written down.
+const ARGON2_ALGORITHM: Algorithm = Algorithm::Argon2id;
+const ARGON2_VERSION: Version = Version::V0x13;
+const ARGON2_M_COST_KIB: u32 = 19_456;
+const ARGON2_T_COST: u32 = 2;
+const ARGON2_P_COST: u32 = 1;
+
 fn hasher() -> Argon2<'static> {
-    Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::new(19_456, 2, 1, None).expect("argon2 params"))
+    let params = Params::new(ARGON2_M_COST_KIB, ARGON2_T_COST, ARGON2_P_COST, None).expect("argon2 params");
+    Argon2::new(ARGON2_ALGORITHM, ARGON2_VERSION, params)
 }
 
 fn hash_password(password: &str) -> Option<String> {
@@ -70,10 +79,26 @@ fn hash_password(password: &str) -> Option<String> {
     hasher().hash_password(password.as_bytes(), &salt).ok().map(|h| h.to_string())
 }
 
+/// The algorithm, version and cost are read from the stored string, so a hash made
+/// on older settings still checks.
 fn verify_password(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash)
         .map(|h| Argon2::default().verify_password(password.as_bytes(), &h).is_ok())
         .unwrap_or(false)
+}
+
+/// Was this stored hash made on other settings than `hasher`'s: another algorithm or
+/// version, other costs, another output length. A string that does not parse is not
+/// rehashed here: it never verifies, so there is no right password to rehash it with.
+fn needs_rehash(hash: &str) -> bool {
+    let Ok(parsed) = PasswordHash::new(hash) else { return false };
+    let same_algorithm = Algorithm::try_from(parsed.algorithm).is_ok_and(|a| a == ARGON2_ALGORITHM);
+    let same_version = parsed.version == Some(ARGON2_VERSION.into());
+    let same_params = Params::try_from(&parsed).is_ok_and(|p| {
+        p.m_cost() == ARGON2_M_COST_KIB && p.t_cost() == ARGON2_T_COST && p.p_cost() == ARGON2_P_COST
+    });
+    let same_len = parsed.hash.is_some_and(|h| h.len() == Params::DEFAULT_OUTPUT_LEN);
+    !(same_algorithm && same_version && same_params && same_len)
 }
 
 /// Checked against when the name does not exist, so that takes as long as a wrong
@@ -101,22 +126,52 @@ async fn hash_blocking(password: String) -> Result<String, ApiError> {
     .ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not hash"))
 }
 
+/// What checking a typed password found.
+#[derive(Debug)]
+enum Verdict {
+    Wrong,
+    /// Right. `upgraded` is the same password hashed on today's settings when the stored
+    /// hash was made on older ones, to put in its place (`upgrade_hash`).
+    Right { upgraded: Option<String> },
+}
+
 /// `None` is a name with no account: the decoy is checked instead, so the answer
-/// takes as long as a wrong password, and is false.
-async fn verify_blocking(password: String, hash: Option<String>) -> bool {
+/// takes as long as a wrong password, and is wrong. A right password on an old hash is
+/// hashed again in the same blocking job, under the same slot: never on the runtime.
+async fn verify_blocking(password: String, hash: Option<String>) -> Verdict {
     let slot = HASHING.acquire().await.ok();
     tokio::task::spawn_blocking(move || {
         let _slot = slot;
         match hash {
-            Some(hash) => verify_password(&password, &hash),
+            Some(hash) if verify_password(&password, &hash) => {
+                Verdict::Right { upgraded: needs_rehash(&hash).then(|| hash_password(&password)).flatten() }
+            }
+            Some(_) => Verdict::Wrong,
             None => {
                 let _ = verify_password(&password, decoy_hash());
-                false
+                Verdict::Wrong
             }
         }
     })
     .await
-    .unwrap_or(false)
+    .unwrap_or(Verdict::Wrong)
+}
+
+/// Swaps an account's old-settings hash for `new`, only while `old` is still the one
+/// stored: a password change or an `api passwd` in between wins, and this does nothing.
+/// Best effort: a failure is logged and the login goes on; the next one tries again.
+async fn upgrade_hash(db: &PgPool, id: Uuid, old: &str, new: &str) {
+    let result = sqlx::query("UPDATE streamers SET password_hash = $3 WHERE id = $1 AND password_hash = $2")
+        .bind(id)
+        .bind(old)
+        .bind(new)
+        .execute(db)
+        .await;
+    match result {
+        Ok(done) if done.rows_affected() == 1 => log::info!("{id}: password hash moved to the current argon2 settings"),
+        Ok(_) => {}
+        Err(e) => log::warn!("{id}: could not store the rehashed password: {e}"),
+    }
 }
 
 /// The same string from a phone and a laptop: compatibility normalisation.
@@ -124,17 +179,36 @@ fn normalize(raw: &str) -> String {
     raw.nfkc().collect()
 }
 
-/// Normalised, then 8 to 128 characters, anything in them. One rule for a new
+/// Normalised, then 8 to 128 characters. The length rule is one rule for a new
 /// password and for a typed one, measured the same way, or what signup takes
 /// could never log in (`e` + combining acute is two chars raw, one after nfkc).
+/// Only the length: a password made before the number-and-symbol rule still logs in.
 fn clean_password(raw: &str) -> Option<String> {
     let password = normalize(raw);
     (MIN_PASSWORD_CHARS..=MAX_PASSWORD_CHARS).contains(&password.chars().count()).then_some(password)
 }
 
-/// For a new password: the rule above, with the reason as a 400.
+/// The words a refused new password gets. frontend/src/infra/password.ts says the same.
+const NEW_PASSWORD_RULE: &str = "password: 8 to 128 characters, with at least one number and one symbol";
+
+/// A symbol is anything not a letter, a number or a space. The frontend's check
+/// (frontend/src/infra/password.ts) uses the same unicode classes, on the same nfkc string.
+fn is_symbol(c: char) -> bool {
+    !c.is_alphanumeric() && !c.is_whitespace()
+}
+
+/// For a new password (signup, change): the length rule, plus at least one number and
+/// one symbol, with the reason as a 400. Never asked of a password being typed to log in.
 fn clean_new_password(raw: &str) -> Result<String, ApiError> {
-    clean_password(raw).ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "password: 8 to 128 characters"))
+    let refused = || ApiError::new(StatusCode::BAD_REQUEST, NEW_PASSWORD_RULE);
+    let password = clean_password(raw).ok_or_else(refused)?;
+    let has_number = password.chars().any(char::is_numeric);
+    let has_symbol = password.chars().any(is_symbol);
+    if has_number && has_symbol {
+        Ok(password)
+    } else {
+        Err(refused())
+    }
 }
 
 // ---- login tokens and the cookie ----------------------------------------------
@@ -472,11 +546,14 @@ async fn login(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<
         Some((id, hash)) => (Some(id), hash),
         None => (None, None),
     };
-    if !verify_blocking(password, hash).await {
+    let Verdict::Right { upgraded } = verify_blocking(password, hash.clone()).await else {
         return Err(wrong());
-    }
+    };
     // a verified password means the row was there
     let Some(id) = id else { return Err(wrong()) };
+    if let (Some(new), Some(old)) = (upgraded, hash) {
+        upgrade_hash(&s.db, id, &old, &new).await;
+    }
     let _: () = s.redis.clone().del(&name_key).await?;
     let me = Account { id, name };
     let token = open_login(&s.db, &me).await?;
@@ -535,8 +612,11 @@ async fn check_password(s: &AppState, headers: &HeaderMap, me: &Account, raw: &s
         .fetch_optional(&s.db)
         .await?;
     let Some(hash) = stored.flatten() else { return Err(not_logged_in()) };
-    if !verify_blocking(password, Some(hash)).await {
+    let Verdict::Right { upgraded } = verify_blocking(password, Some(hash.clone())).await else {
         return Err(wrong_password());
+    };
+    if let Some(new) = upgraded {
+        upgrade_hash(&s.db, me.id, &hash, &new).await;
     }
     let _: () = s.redis.clone().del(&key).await?;
     Ok(())
@@ -768,6 +848,101 @@ pub(crate) mod tests {
     fn the_refusals_carry_the_word_the_pages_match_on() {
         assert!(NAME_HAS_ACCOUNT.contains("account"));
         assert!(NICK_HAS_ACCOUNT.contains("account"));
+    }
+
+    fn refused(raw: &str) -> bool {
+        match clean_new_password(raw) {
+            Ok(_) => false,
+            Err(e) => {
+                assert_eq!(e.into_response().status(), StatusCode::BAD_REQUEST);
+                true
+            }
+        }
+    }
+
+    #[test]
+    fn a_new_password_needs_eight_characters_a_number_and_a_symbol() {
+        assert!(!refused("abcdef1!"), "8 with a number and a symbol");
+        assert!(!refused("correct horse battery 9!"));
+        assert!(!refused("пароль-12"), "letters of any script, a hyphen is a symbol");
+        assert!(refused("abcde1!"), "7 is too short");
+        assert!(refused("abcdefgh!"), "no number");
+        assert!(refused("abcdefgh1"), "no symbol");
+        assert!(refused("abcd efg1"), "a space is not a symbol");
+        assert!(refused(&format!("{}1!", "a".repeat(127))), "129 is too long");
+        assert!(!refused(&format!("{}1!", "a".repeat(126))), "128 is fine");
+        // nfkc first: a fullwidth digit is a digit, and `e` + combining acute is one character
+        assert!(!refused("abcdef\u{ff11}!"));
+        assert!(refused("abcde\u{0301}1!"), "7 characters after nfkc");
+    }
+
+    #[test]
+    fn logging_in_asks_only_the_length() {
+        // passwords made before the number-and-symbol rule still go through to the verify
+        assert!(clean_password("correct horse battery").is_some());
+        assert!(clean_password("short").is_none());
+    }
+
+    fn hash_with(algorithm: Algorithm, version: Version, m: u32, t: u32, p: u32, password: &str) -> String {
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::new(algorithm, version, Params::new(m, t, p, None).unwrap())
+            .hash_password(password.as_bytes(), &salt)
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn a_hash_on_other_settings_needs_a_rehash() {
+        let current = hash_password("correct horse battery 9!").unwrap();
+        assert!(!needs_rehash(&current), "today's settings: {current}");
+        let pw = "correct horse battery 9!";
+        assert!(needs_rehash(&hash_with(Algorithm::Argon2id, Version::V0x13, 8_192, 2, 1, pw)), "less memory");
+        assert!(needs_rehash(&hash_with(Algorithm::Argon2id, Version::V0x13, ARGON2_M_COST_KIB, 1, 1, pw)), "fewer passes");
+        assert!(needs_rehash(&hash_with(Algorithm::Argon2id, Version::V0x13, ARGON2_M_COST_KIB, 2, 2, pw)), "more lanes");
+        assert!(needs_rehash(&hash_with(Algorithm::Argon2i, Version::V0x13, ARGON2_M_COST_KIB, 2, 1, pw)), "argon2i");
+        assert!(needs_rehash(&hash_with(Algorithm::Argon2id, Version::V0x10, ARGON2_M_COST_KIB, 2, 1, pw)), "version 0x10");
+        assert!(!needs_rehash("not a hash"), "nothing verifies against it, nothing to rehash");
+    }
+
+    #[tokio::test]
+    async fn a_right_password_on_an_old_hash_comes_back_hashed_on_todays_settings() {
+        let pw = "correct horse battery 9!";
+        let old = hash_with(Algorithm::Argon2id, Version::V0x13, 8_192, 1, 1, pw);
+        let Verdict::Right { upgraded: Some(new) } = verify_blocking(pw.into(), Some(old.clone())).await else {
+            panic!("a right password on an old hash is right, with a new hash");
+        };
+        assert_ne!(new, old);
+        assert!(!needs_rehash(&new), "the new one is on today's settings: {new}");
+        assert!(verify_password(pw, &new), "and it is the same password");
+
+        // a wrong password on an old hash: wrong, and nothing is hashed
+        assert!(matches!(verify_blocking("wrong guess 1!".into(), Some(old)).await, Verdict::Wrong));
+        // a right password on a current hash: right, nothing to upgrade
+        let current = hash_password(pw).unwrap();
+        assert!(matches!(verify_blocking(pw.into(), Some(current)).await, Verdict::Right { upgraded: None }));
+        // no account: the decoy, wrong
+        assert!(matches!(verify_blocking(pw.into(), None).await, Verdict::Wrong));
+    }
+
+    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored upgrade_only_replaces` against a throwaway postgres (see `test_db`).
+    #[tokio::test]
+    #[ignore]
+    async fn an_upgrade_only_replaces_the_hash_it_was_made_from() {
+        let pool = test_db().await;
+        let run = std::process::id();
+        let id = row(&pool, &format!("rehash-{run}"), Some("old-hash")).await;
+        let stored = |pool: PgPool| async move {
+            sqlx::query_scalar::<_, Option<String>>("SELECT password_hash FROM streamers WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+        upgrade_hash(&pool, id, "old-hash", "new-hash").await;
+        assert_eq!(stored(pool.clone()).await.as_deref(), Some("new-hash"));
+        // the password changed in between: the stale upgrade leaves the change alone
+        upgrade_hash(&pool, id, "old-hash", "stale-hash").await;
+        assert_eq!(stored(pool.clone()).await.as_deref(), Some("new-hash"));
     }
 
     /// A throwaway postgres, migrated. For example

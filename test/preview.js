@@ -281,7 +281,7 @@ const hasCard = (html) => /<div id="root">\s*<main/.test(html);
 
   await step("a claimed name's pictures and line: anonymous 403, the owner 200", async () => {
     const CLAIMED = 'pvacct' + RUN;
-    const signup = await owner.post('/api/signup', { data: { name: CLAIMED, password: 'correct horse battery' } });
+    const signup = await owner.post('/api/signup', { data: { name: CLAIMED, password: 'correct horse battery 9!' } });
     expect(signup.status() === 201, `signup got ${signup.status()}`);
     const no = await put(anon, CLAIMED, JPEG);
     expect(no.status() === 403, `anonymous got ${no.status()}`);

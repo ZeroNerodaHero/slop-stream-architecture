@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { authBusyAtom, authErrorAtom, clearAuthError, login, meAtom, signup } from '@/infra/atoms/auth-atoms';
 import { identityChanged } from '@/infra/atoms/profile-atoms';
+import { NEW_PASSWORD_RULE, newPasswordProblem } from '@/infra/password';
 import { Button } from '@/shared-components/Button';
 import { PageFrame } from '@/shared-components/PageFrame';
 
@@ -44,6 +45,8 @@ export function AuthPage({ mode }: AuthPageProps) {
   const [show, setShow] = useState(false);
   const next = nextFrom(params);
   const signingUp = mode === 'signup';
+  // a new password's rule, said under the box as it is typed; logging in asks none of it
+  const problem = signingUp && password ? newPasswordProblem(password) : null;
 
   // Mount only: a stale error from a previous visit should not greet you here.
   // The links between the two modes clear it too (same component, no remount).
@@ -53,6 +56,7 @@ export function AuthPage({ mode }: AuthPageProps) {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (problem) return;
     const ok = await (signingUp ? signup(name, password) : login(name, password));
     if (ok) {
       // the events socket is who the browser is: say hello again as the login, so the name reads
@@ -99,7 +103,7 @@ export function AuthPage({ mode }: AuthPageProps) {
           />
 
           <label htmlFor="auth-password" className="text-textSecondary">
-            password {signingUp && <span className="text-textTertiary">(8 or more, anything goes)</span>}
+            password {signingUp && <span className="text-textTertiary">({NEW_PASSWORD_RULE})</span>}
           </label>
           <div className="relative mt-1">
             <input
@@ -112,6 +116,8 @@ export function AuthPage({ mode }: AuthPageProps) {
               minLength={signingUp ? 8 : undefined}
               maxLength={128}
               required
+              aria-invalid={problem ? true : undefined}
+              aria-describedby={signingUp ? 'auth-password-hint' : undefined}
               className={`${INPUT} pr-20`}
             />
             <button
@@ -123,9 +129,14 @@ export function AuthPage({ mode }: AuthPageProps) {
               {show ? 'hide' : 'show'}
             </button>
           </div>
+          {signingUp && (
+            <p id="auth-password-hint" aria-live="polite" className={`mt-1 min-h-[1.5em] text-sm ${problem ? 'text-decrease' : 'text-textTertiary'}`}>
+              {problem ?? (password ? 'good' : '')}
+            </p>
+          )}
 
           <div className="mt-5 flex flex-wrap items-center gap-4">
-            <Button id="auth-submit" type="submit" variant="primary" disabled={busy || !name || !password}>
+            <Button id="auth-submit" type="submit" variant="primary" disabled={busy || !name || !password || !!problem}>
               {signingUp ? 'make the account' : 'log in'}
             </Button>
             {signingUp ? (
