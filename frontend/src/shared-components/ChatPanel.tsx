@@ -178,6 +178,16 @@ function useCountdown(until: number): number {
  * `guest` is a second panel on that one room, and the first draws nothing while it is up.
  */
 
+/** What a press on a speaker (their name, their face) does, and whether it does anything: the popup, or a login's lines here (Speaker). */
+function useSpeakerPress(line: ChatLine) {
+  const popup = useAtomValue(profilePopupEnabledAtom);
+  const press = (name: HTMLElement) => {
+    if (popup && name.ownerDocument === document) openProfilePopup({ name: line.from, verified: line.verified, avatar: line.avatar, lines: line.verified });
+    else if (line.verified) void showSpeaker(line.from);
+  };
+  return { popup, pressable: line.verified || (popup && line.streamer), press };
+}
+
 /**
  * The speaker's name. When the line is really that name's (a login's, or the streamer's; an
  * anonymous nick is nobody), a click on it shows them over the page (ProfilePopup.tsx: who
@@ -193,7 +203,7 @@ function useCountdown(until: number): number {
  */
 function Speaker({ line }: { line: ChatLine }) {
   const peek = usePeek(PEEK_MS);
-  const popup = useAtomValue(profilePopupEnabledAtom);
+  const { popup, pressable, press } = useSpeakerPress(line);
   const someone = line.verified || line.streamer;
   const watched = someone
     ? {
@@ -204,13 +214,9 @@ function Speaker({ line }: { line: ChatLine }) {
       }
     : {};
   const color = line.streamer ? 'text-increase' : line.verified ? 'text-primaryBlue' : 'text-decrease';
-  const press = (name: HTMLElement) => {
-    if (popup && name.ownerDocument === document) openProfilePopup({ name: line.from, verified: line.verified, avatar: line.avatar, lines: line.verified });
-    else if (line.verified) void showSpeaker(line.from);
-  };
   return (
     <>
-      {line.verified || (popup && line.streamer) ? (
+      {pressable ? (
         <span
           {...watched}
           role="button"
@@ -235,6 +241,22 @@ function Speaker({ line }: { line: ChatLine }) {
       )}
       {someone && peek.at && <PersonCard id={`chat-peek-${line.from}`} person={{ name: line.from, verified: line.verified, avatar: line.avatar }} at={peek.at} />}
     </>
+  );
+}
+
+/**
+ * The speaker's face at the head of a run (blocks, ChatLine.tsx): a click on it does what a
+ * click on their name does (Speaker). For the pointer alone: the name beside it is the way for a
+ * key and a reader, so the face is no second tab stop. An anonymous nick's face is only a face.
+ */
+function SpeakerFace({ line }: { line: ChatLine }) {
+  const { pressable, press } = useSpeakerPress(line);
+  const face = <Face name={line.from} version={line.avatar} className="h-8 w-8 text-sm" />;
+  if (!pressable) return face;
+  return (
+    <span aria-hidden data-face-from={line.from} onClick={(e) => press(e.currentTarget)} className="flex cursor-pointer">
+      {face}
+    </span>
   );
 }
 
@@ -718,7 +740,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                       </span>
                     </>
                   }
-                  face={<Face name={line.from} version={line.avatar} className="h-8 w-8 text-sm" />}
+                  face={<SpeakerFace line={line} />}
                   words={
                     line.text ? (
                       <span className="whitespace-pre-wrap">
