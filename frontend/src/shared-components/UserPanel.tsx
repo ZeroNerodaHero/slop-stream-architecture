@@ -10,7 +10,7 @@ import { forgetFollowing, friendsOpenAtom, loadFollowing, streamingFriendsAtom }
 import { forgetMyServers, loadMyServers } from '@/infra/atoms/groups-atoms';
 import { openInspector } from '@/infra/atoms/inspector-atoms';
 import { forgetNotifications, loadNotifications } from '@/infra/atoms/notification-atoms';
-import { myPresenceAtom, PRESENCE_SQUARE, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
+import { myPresenceAtom, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { identityChanged, loadMyProfile, myAvatarVersionAtom, myNameAtom } from '@/infra/atoms/profile-atoms';
 import { inspectorEnabledAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
@@ -18,6 +18,7 @@ import { isValidName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { Face } from '@/shared-components/Face';
 import { Friends } from '@/shared-components/Friends';
+import { PresenceSquare } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -219,14 +220,9 @@ export function UserPanel() {
   const face = (
     <>
       <Face name={me ?? nick} version={avatar} />
-      {/* the presence square in the corner of the picture: blue streaming, green online, red do not
-          disturb, grey offline (docs/status.md). the word is in the label; the ✓ keeps meaning login */}
-      <span
-        id="my-presence"
-        aria-hidden
-        data-presence={presence}
-        className={cn('absolute -bottom-1 -right-1 h-3.5 w-3.5 border-2 border-background', PRESENCE_SQUARE[presence])}
-      />
+      {/* the presence square in the corner of the picture: green online, green with the broadcast icon
+          streaming, orange do not disturb, grey offline. the word is in the label; the ✓ keeps meaning login */}
+      <PresenceSquare id="my-presence" presence={presence} className="border-background" />
       {/* how many of them are live, on the picture's corner: the one number the closed column shows */}
       {streaming > 0 && (
         <span
