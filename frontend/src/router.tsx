@@ -33,7 +33,8 @@ import { cn } from '@/utils/cn';
 function Shell() {
   const side = useAtomValue(panelSideAtom);
   return (
-    <div className={cn('flex min-h-screen items-start', side === 'right' && 'flex-row-reverse')}>
+    // the safe areas at the sides (a phone on its side, its notch): 0 everywhere else, so nothing moves
+    <div className={cn('flex min-h-screen items-start pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]', side === 'right' && 'flex-row-reverse')}>
       <UserPanel />
       <div className="relative min-w-0 flex-1">
         <Outlet />

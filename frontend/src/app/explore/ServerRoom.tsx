@@ -40,7 +40,7 @@ import { api, type Channel, CHANNEL_CAP, groupImage, type GroupMember, type Grou
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { reconnectChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
-import { PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
+import { PRESENCE_WORD, presenceOfAtom, presencesAtom } from '@/infra/atoms/presence-atoms';
 import {
   channelRenamedAtom,
   enterRoom,
@@ -54,6 +54,7 @@ import {
   setChannelMuted,
   setChannelOrder
 } from '@/infra/atoms/room-atoms';
+import { useIsMobile } from '@/infra/mobile';
 import { cleanName, isValidName } from '@/infra/names';
 import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
@@ -71,6 +72,7 @@ import { PresenceSquare } from '@/shared-components/PersonRow';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { ProfileLink } from '@/shared-components/ProfileLink';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
+import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { Field, SECTION_TITLE, Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
@@ -101,7 +103,7 @@ const ABOUT_CAP = 200;
 const ROOM_GRID = 'grid snap-start items-start gap-4 py-[7px] -mb-10';
 /** The room's three columns on a wide screen: the channels, the chat, the roster. The skeleton has the same, so the chat lands at its width. */
 const ROOM_COLUMNS = 'lg:grid-cols-[200px_minmax(0,1fr)_240px]';
-const ROOM_HEIGHT = 'h-[calc(100dvh-var(--title-row,4rem)-14px)] min-h-[420px]';
+const ROOM_HEIGHT = 'h-[calc(100dvh-var(--title-row,4rem)-14px)] max-md:h-[calc(100dvh-var(--title-row,4rem)-14px-env(safe-area-inset-bottom))] min-h-[420px]';
 const SIDE_INSET = 'mt-[7px]';
 const ROSTER_HEIGHT = 'max-h-[calc(100dvh-var(--title-row,4rem)-28px)]';
 
@@ -115,7 +117,7 @@ const TOP_VIEW = 'snap-start scroll-mt-6';
 
 /** The header's icon-only buttons (the gear, leave): a tooltip for the word, a border on hover. */
 const ICON_BUTTON =
-  'flex h-7 w-7 shrink-0 items-center justify-center border border-transparent focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default disabled:opacity-40';
+  'flex h-7 w-7 max-md:h-11 max-md:w-11 shrink-0 items-center justify-center border border-transparent focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default disabled:opacity-40';
 
 /**
  * The bell on a channel's row while the channel is not muted: up with the pointer on the row
@@ -678,6 +680,9 @@ export function ServerPage() {
   const [actionError, setActionError] = useState('');
   const [leaving, setLeaving] = useState(false);
   const [managing, setManaging] = useState(false);
+  // a phone: the group's drawer from the right (its picture and name, the channels, who is in), the room the chat alone
+  const mobile = useIsMobile();
+  const [drawer, setDrawer] = useState(false);
   const live = room?.live ?? [];
   const shown = live.slice(0, FACES);
   const previewKey = shown.join(',');
@@ -718,6 +723,13 @@ export function ServerPage() {
     if (wasMissing.current && !missing) reloadLines();
     wasMissing.current = missing;
   }, [missing]);
+
+  // a channel picked in the drawer: the drawer shuts on its chat
+  const [drawerChannel, setDrawerChannel] = useState(channel);
+  if (drawerChannel !== channel) {
+    setDrawerChannel(channel);
+    setDrawer(false);
+  }
 
   useEffect(() => {
     const names = previewKey ? previewKey.split(',') : [];
@@ -838,26 +850,184 @@ export function ServerPage() {
   const lastMember = mine && room.members <= 1;
   const canPicture = ownsPictures(room);
 
+  // the banner with the picture over its foot, the name, the count, the about line, and join, leave and the gear: the top of the page,
+  // or the head of a phone's drawer
+  const groupHead = (
+    <>
+      <div className={cn('relative mb-16', TOP_VIEW)}>
+        <div id="group-banner" className="group/banner relative h-36 overflow-hidden border border-primaryStroke" style={{ backgroundColor: color }}>
+          {bannerSrc && <img src={bannerSrc} alt="" className="h-full w-full object-cover" />}
+          {canPicture && (
+            <PicturePick
+              id="group-banner-pick"
+              label={room.banner === null ? 'add a banner' : 'change banner'}
+              reveal="group-hover/banner:opacity-100"
+              className="inset-0"
+              onPick={(file) => void pick(file, 'banner')}
+            />
+          )}
+        </div>
+        <div className="absolute -bottom-12 left-4 flex items-end gap-4">
+          <div className="group/icon relative flex">
+            <GroupMark id="group-icon" name={server} color={color} icon={room.icon} className="h-24 w-24 border-4 border-background text-3xl" />
+            {canPicture && (
+              <PicturePick
+                id="group-icon-pick"
+                label={room.icon === null ? 'add a picture' : 'change picture'}
+                reveal="group-hover/icon:opacity-100"
+                className="inset-1"
+                onPick={(file) => void pick(file, 'icon')}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+      <div className={cn('flex flex-wrap items-start justify-between gap-3 pl-4', mobile ? 'pr-3' : 'mb-7')}>
+        <div className="min-w-0">
+          <h2 className="flex flex-wrap items-center gap-2 text-xl font-semibold">
+            {words.title}
+            {words.tag && <span className="text-base font-normal text-textTertiary">#{words.tag}</span>}
+            {room.owner && <OwnerMark name={ownerRoleOf(room)} size={18} />}
+            {room.public === false && <span className="bg-primaryStroke px-1.5 py-0.5 text-xs uppercase text-textSecondary">private</span>}
+            <span id="group-members-count" className="text-sm font-normal text-textTertiary">
+              {room.members === 1 ? '1 member' : `${room.members} members`}
+            </span>
+          </h2>
+          {room.about && (
+            <p id="group-about-line" className="mt-2 max-w-xl text-textSecondary">
+              {room.about}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {canManage && (
+            <Tooltip content="manage">
+              <button
+                id="group-manage-open"
+                type="button"
+                aria-label="manage"
+                className={cn(ICON_BUTTON, 'text-textSecondary hover:border-primaryStroke hover:text-textPrimary')}
+                onClick={() => setManaging(true)}
+              >
+                <RiSettings3Line aria-hidden size={16} />
+              </button>
+            </Tooltip>
+          )}
+          {!mine && me && (
+            <Button id="group-join" variant="primary" className="px-3 py-1.5 text-sm max-md:min-h-11" disabled={busy} onClick={() => void join()}>
+              join
+            </Button>
+          )}
+          {!mine && me === null && (
+            <Button id="group-login" variant="primary" className="px-3 py-1.5 text-sm max-md:min-h-11" onClick={() => openAuthDialog('login')}>
+              log in to join
+            </Button>
+          )}
+          {!mine && <p className="text-sm text-textSecondary">you can read this. join to talk.</p>}
+          {mine && !leaving && (
+            <Tooltip content={lastMember ? 'leave and delete' : 'leave'}>
+              <button
+                id="room-leave"
+                type="button"
+                aria-label={lastMember ? 'leave and delete' : 'leave'}
+                className={cn(ICON_BUTTON, 'text-decrease hover:border-decrease')}
+                disabled={busy}
+                onClick={() => setLeaving(true)}
+              >
+                <RiLogoutBoxRLine aria-hidden size={16} />
+              </button>
+            </Tooltip>
+          )}
+          {mine && leaving && (
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="text-sm text-textSecondary">{lastMember ? 'this deletes the group' : 'leave this group?'}</span>
+              <button
+                id="room-leave-yes"
+                type="button"
+                className="text-sm font-semibold text-decrease disabled:opacity-40 max-md:min-h-11"
+                disabled={busy}
+                onClick={() => void leave()}
+              >
+                sure
+              </button>
+              <button
+                type="button"
+                className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline max-md:min-h-11"
+                onClick={() => setLeaving(false)}
+              >
+                keep
+              </button>
+            </span>
+          )}
+        </div>
+      </div>
+      {actionError && <p className={cn('text-sm text-decrease', mobile ? 'px-4' : 'mb-4')}>{actionError}</p>}
+    </>
+  );
+  const channelList = <ChannelList server={server} channel={channel} room={room} me={me ?? null} onError={setActionError} />;
+  // the cameras, under the channels. with every camera off the list stands alone: nothing says so
+  const liveList = shown.length > 0 && (
+    <section id="group-live" aria-label="live">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">
+        live <span className="font-normal normal-case tracking-normal">{live.length}</span>
+      </h3>
+      <div className="flex flex-col gap-3">
+        {shown.map((name) => (
+          <LiveFace key={name} name={name} />
+        ))}
+      </div>
+      {live.length > FACES && <p className="mt-2 text-xs text-textTertiary">{live.length - FACES} more live</p>}
+    </section>
+  );
+  // a phone's title row: the channel, and the group under it, small; the group's picture at the right end opens the drawer
+  const mobileTitle = (
+    <span className="flex min-w-0 flex-col">
+      <span className="truncate text-xl">#{channel}</span>
+      <span className="truncate text-sm font-normal text-textSecondary">{words.title}</span>
+    </span>
+  );
+  const drawerOpener = (
+    <Tooltip content={drawer ? null : 'channels and members'}>
+      <button
+        id="group-drawer-open"
+        type="button"
+        aria-label="channels and members"
+        aria-haspopup="dialog"
+        aria-expanded={drawer}
+        aria-controls="group-drawer"
+        onClick={() => setDrawer(true)}
+        className="flex h-11 w-11 items-center justify-center border border-transparent focus-visible:border-primaryBlue focus-visible:outline-none"
+      >
+        <GroupMark name={server} color={color} icon={room.icon} className="h-9 w-9 text-sm" />
+      </button>
+    </Tooltip>
+  );
+
   return (
     <PageFrame
       wide
       titleId={titleId}
+      mobileEnd={noChannel ? undefined : drawerOpener}
       title={
-        <span className="flex min-w-0 items-center gap-3">
-          <Badge group={{ name: server, badge: room.badge, color }} />
-          <span className="truncate">
-            {channel === 'general' ? (
-              <GroupName words={words} />
-            ) : (
-              <>
-                <Link to={`/groups/${server}`} className="hover:text-primaryBlue">
-                  <GroupName words={words} />
-                </Link>
-                <span className="text-textTertiary"> / {channel}</span>
-              </>
-            )}
+        mobile ? (
+          mobileTitle
+        ) : (
+          <span className="flex min-w-0 items-center gap-3">
+            <Badge group={{ name: server, badge: room.badge, color }} />
+            <span className="truncate">
+              {channel === 'general' ? (
+                <GroupName words={words} />
+              ) : (
+                <>
+                  <Link to={`/groups/${server}`} className="hover:text-primaryBlue">
+                    <GroupName words={words} />
+                  </Link>
+                  <span className="text-textTertiary"> / {channel}</span>
+                </>
+              )}
+            </span>
           </span>
-        </span>
+        )
       }
     >
       {noChannel ? (
@@ -869,132 +1039,14 @@ export function ServerPage() {
         </p>
       ) : (
         <>
-          <div className={cn('relative mb-16', TOP_VIEW)}>
-            <div id="group-banner" className="group/banner relative h-36 overflow-hidden border border-primaryStroke" style={{ backgroundColor: color }}>
-              {bannerSrc && <img src={bannerSrc} alt="" className="h-full w-full object-cover" />}
-              {canPicture && (
-                <PicturePick
-                  id="group-banner-pick"
-                  label={room.banner === null ? 'add a banner' : 'change banner'}
-                  reveal="group-hover/banner:opacity-100"
-                  className="inset-0"
-                  onPick={(file) => void pick(file, 'banner')}
-                />
-              )}
-            </div>
-            <div className="absolute -bottom-12 left-4 flex items-end gap-4">
-              <div className="group/icon relative flex">
-                <GroupMark id="group-icon" name={server} color={color} icon={room.icon} className="h-24 w-24 border-4 border-background text-3xl" />
-                {canPicture && (
-                  <PicturePick
-                    id="group-icon-pick"
-                    label={room.icon === null ? 'add a picture' : 'change picture'}
-                    reveal="group-hover/icon:opacity-100"
-                    className="inset-1"
-                    onPick={(file) => void pick(file, 'icon')}
-                  />
-                )}
-              </div>
-            </div>
-          </div>
-          <div className="mb-7 flex flex-wrap items-start justify-between gap-3 pl-4">
-            <div className="min-w-0">
-              <h2 className="flex flex-wrap items-center gap-2 text-xl font-semibold">
-                {words.title}
-                {words.tag && <span className="text-base font-normal text-textTertiary">#{words.tag}</span>}
-                {room.owner && <OwnerMark name={ownerRoleOf(room)} size={18} />}
-                {room.public === false && <span className="bg-primaryStroke px-1.5 py-0.5 text-xs uppercase text-textSecondary">private</span>}
-                <span id="group-members-count" className="text-sm font-normal text-textTertiary">
-                  {room.members === 1 ? '1 member' : `${room.members} members`}
-                </span>
-              </h2>
-              {room.about && (
-                <p id="group-about-line" className="mt-2 max-w-xl text-textSecondary">
-                  {room.about}
-                </p>
-              )}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {canManage && (
-                <Tooltip content="manage">
-                  <button
-                    id="group-manage-open"
-                    type="button"
-                    aria-label="manage"
-                    className={cn(ICON_BUTTON, 'text-textSecondary hover:border-primaryStroke hover:text-textPrimary')}
-                    onClick={() => setManaging(true)}
-                  >
-                    <RiSettings3Line aria-hidden size={16} />
-                  </button>
-                </Tooltip>
-              )}
-              {!mine && me && (
-                <Button id="group-join" variant="primary" className="px-3 py-1.5 text-sm" disabled={busy} onClick={() => void join()}>
-                  join
-                </Button>
-              )}
-              {!mine && me === null && (
-                <Button id="group-login" variant="primary" className="px-3 py-1.5 text-sm" onClick={() => openAuthDialog('login')}>
-                  log in to join
-                </Button>
-              )}
-              {!mine && <p className="text-sm text-textSecondary">you can read this. join to talk.</p>}
-              {mine && !leaving && (
-                <Tooltip content={lastMember ? 'leave and delete' : 'leave'}>
-                  <button
-                    id="room-leave"
-                    type="button"
-                    aria-label={lastMember ? 'leave and delete' : 'leave'}
-                    className={cn(ICON_BUTTON, 'text-decrease hover:border-decrease')}
-                    disabled={busy}
-                    onClick={() => setLeaving(true)}
-                  >
-                    <RiLogoutBoxRLine aria-hidden size={16} />
-                  </button>
-                </Tooltip>
-              )}
-              {mine && leaving && (
-                <span className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm text-textSecondary">{lastMember ? 'this deletes the group' : 'leave this group?'}</span>
-                  <button
-                    id="room-leave-yes"
-                    type="button"
-                    className="text-sm font-semibold text-decrease disabled:opacity-40"
-                    disabled={busy}
-                    onClick={() => void leave()}
-                  >
-                    sure
-                  </button>
-                  <button
-                    type="button"
-                    className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline"
-                    onClick={() => setLeaving(false)}
-                  >
-                    keep
-                  </button>
-                </span>
-              )}
-            </div>
-          </div>
-          {actionError && <p className="mb-4 text-sm text-decrease">{actionError}</p>}
+          {!mobile && groupHead}
           <div id="group-room" ref={roomRef} className={cn(ROOM_GRID, ROOM_COLUMNS)}>
-            <div className={cn('flex min-w-0 flex-col gap-6', SIDE_INSET)}>
-              <ChannelList server={server} channel={channel} room={room} me={me ?? null} onError={setActionError} />
-              {/* the cameras, under the channels. with every camera off the list stands alone: nothing says so */}
-              {shown.length > 0 && (
-                <section id="group-live" aria-label="live">
-                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">
-                    live <span className="font-normal normal-case tracking-normal">{live.length}</span>
-                  </h3>
-                  <div className="flex flex-col gap-3">
-                    {shown.map((name) => (
-                      <LiveFace key={name} name={name} />
-                    ))}
-                  </div>
-                  {live.length > FACES && <p className="mt-2 text-xs text-textTertiary">{live.length - FACES} more live</p>}
-                </section>
-              )}
-            </div>
+            {!mobile && (
+              <div className={cn('flex min-w-0 flex-col gap-6', SIDE_INSET)}>
+                {channelList}
+                {liveList}
+              </div>
+            )}
             <div className={cn('min-w-0', ROOM_HEIGHT)}>
               {/* the search box is the roster's (RoomSearch), for a member and a guest alike; the hits land in the panel. a search is every channel's: a hit opened in another one moves the page there */}
               <ChatPanel
@@ -1004,8 +1056,24 @@ export function ServerPage() {
                 className="h-full"
               />
             </div>
-            <Roster room={room} />
+            {!mobile && <Roster room={room} />}
           </div>
+          {/* a phone: what the page has around the chat, in a drawer from the right. it scrolls as one: the group's head, then the channels in
+              a box, then who is in, in a box of its own (online first, then offline). the dim sliver at the left shuts it */}
+          {mobile && (
+            <SwipeDrawer id="group-drawer" side="right" open={drawer} onOpenChange={setDrawer} label={`${words.title}: channels and members`}>
+              {() => (
+                <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain pb-3">
+                  {groupHead}
+                  <div className="mx-3 flex flex-col gap-6 border border-primaryStroke bg-backgroundSecondary p-4">
+                    {channelList}
+                    {liveList}
+                  </div>
+                  <Roster room={room} flat />
+                </div>
+              )}
+            </SwipeDrawer>
+          )}
           {managing && <ManageDialog server={server} channel={channel} room={room} me={me ?? null} onClose={() => setManaging(false)} />}
         </>
       )}
@@ -1057,14 +1125,14 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
               className={cn('group/channel flex items-center', here ? 'bg-primaryStroke/40' : 'hover:bg-primaryStroke/20')}
             >
               {here ? (
-                <span aria-current="page" className="min-w-0 flex-1 truncate px-2 py-1 font-semibold">
+                <span aria-current="page" className="min-w-0 flex-1 truncate px-2 py-1 font-semibold max-md:py-2.5">
                   #{item.name}
                 </span>
               ) : (
                 <Link
                   id={`group-channel-${item.name}`}
                   to={item.name === 'general' ? `/groups/${server}` : `/groups/${server}/${item.name}`}
-                  className="min-w-0 flex-1 truncate px-2 py-1 text-textSecondary group-hover/channel:text-textPrimary"
+                  className="min-w-0 flex-1 truncate px-2 py-1 text-textSecondary group-hover/channel:text-textPrimary max-md:py-2.5"
                 >
                   #{item.name}
                 </Link>
@@ -1101,7 +1169,7 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
           type="button"
           aria-haspopup="dialog"
           onClick={() => setAdding(true)}
-          className="mt-0.5 flex w-full items-center gap-1 px-2 py-1 text-left text-textTertiary hover:bg-primaryStroke/20 hover:text-textPrimary"
+          className="mt-0.5 flex w-full items-center gap-1 px-2 py-1 text-left text-textTertiary hover:bg-primaryStroke/20 hover:text-textPrimary max-md:min-h-11"
         >
           <RiAddLine aria-hidden size={14} />
           add channel
@@ -1291,7 +1359,7 @@ function Member({ member, live, ownerRole }: { member: GroupMember; live: boolea
         // every member is a login, so the ✓ is theirs
         person={{ name: member.name, verified: true, avatar: member.avatar ?? null }}
         live={presence === 'streaming'}
-        className="flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue"
+        className="flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue max-md:min-h-11"
       >
         <span className="relative flex shrink-0">
           <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8 shrink-0" />
@@ -1355,9 +1423,10 @@ function rosterQuery(query: string): string {
  * this browser said so; their card on hover (`Member`). Nothing here acts on a member: what a
  * power does is in the manage dialog, from the header.
  */
-function Roster({ room }: { room: GroupRoom }) {
+function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
   const members = room.roster ?? [];
   const live = room.live ?? [];
+  const presences = useAtomValue(presencesAtom);
   const input = useRef<HTMLInputElement | null>(null);
   const search = useChatSearch(input, undefined, {
     people: members.map((member) => ({ name: member.name, avatar: member.avatar ?? null })),
@@ -1365,12 +1434,17 @@ function Roster({ room }: { room: GroupRoom }) {
   });
   const q = rosterQuery(search.query);
   const shown = q ? members.filter((member) => member.name.toLowerCase().includes(q) || member.roles.some((role) => role.name.toLowerCase().includes(q))) : members;
+  const row = (member: GroupMember) => <Member key={member.name} member={member} live={live.includes(member.name)} ownerRole={ownerRoleOf(room)} />;
+  // a phone's drawer: the ones here first, then the rest under their own heading, each in the group's order
+  const isAway = (member: GroupMember) => (presences.get(member.name) ?? 'offline') === 'offline';
+  const here = shown.filter((member) => !isAway(member));
+  const away = shown.filter(isAway);
 
   return (
     <aside
       id="group-roster"
       aria-label="members"
-      className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-4 text-sm', SIDE_INSET, ROSTER_HEIGHT)}
+      className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-4 text-sm', flat ? 'mx-3' : cn(SIDE_INSET, ROSTER_HEIGHT))}
     >
       <RoomSearch search={search} input={input} />
       <h3 className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-textTertiary">
@@ -1386,12 +1460,29 @@ function Roster({ room }: { room: GroupRoom }) {
           nobody by that name.
         </p>
       )}
-      {/* no bar: it would take width from the rows. the padding under the last row is for its presence square, which hangs 4px below its face and would otherwise be 4px of scroll. its scroll is its own: the end of a long roster does not send the page to its other view */}
-      <ul id="group-members" className="flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {shown.map((member) => (
-          <Member key={member.name} member={member} live={live.includes(member.name)} ownerRole={ownerRoleOf(room)} />
-        ))}
-      </ul>
+      {flat ? (
+        // in the drawer, which scrolls as one: no scroll of its own
+        <>
+          <ul id="group-members" className="flex flex-col gap-1 pb-1">
+            {here.map(row)}
+          </ul>
+          {away.length > 0 && (
+            <>
+              <h4 className="flex items-center gap-1 border-t border-primaryStroke pt-3 text-xs font-semibold uppercase tracking-wider text-textTertiary">
+                offline <span className="font-normal normal-case tracking-normal">{away.length}</span>
+              </h4>
+              <ul id="group-members-offline" className="flex flex-col gap-1 pb-1">
+                {away.map(row)}
+              </ul>
+            </>
+          )}
+        </>
+      ) : (
+        // no bar: it would take width from the rows. the padding under the last row is for its presence square, which hangs 4px below its face and would otherwise be 4px of scroll. its scroll is its own: the end of a long roster does not send the page to its other view
+        <ul id="group-members" className="flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {shown.map(row)}
+        </ul>
+      )}
     </aside>
   );
 }

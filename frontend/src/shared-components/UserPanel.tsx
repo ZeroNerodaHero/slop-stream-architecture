@@ -1,4 +1,4 @@
-import { RiLoginBoxLine, RiLogoutBoxRLine, RiSettings3Line, RiTerminalBoxLine, RiUserAddLine } from '@remixicon/react';
+import { RiLoginBoxLine, RiLogoutBoxRLine, RiMenuLine, RiSettings3Line, RiTerminalBoxLine, RiUserAddLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
@@ -10,16 +10,18 @@ import { forgetFollowing, friendsOpenAtom, loadFollowing, streamingFriendsAtom }
 import { forgetMyServers, loadMyServers } from '@/infra/atoms/groups-atoms';
 import { openInspector } from '@/infra/atoms/inspector-atoms';
 import { forgetNotifications, loadNotifications } from '@/infra/atoms/notification-atoms';
-import { myPresenceAtom, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
+import { myPresenceAtom, type Presence, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { identityChanged, loadMyProfile, myAvatarVersionAtom, myNameAtom } from '@/infra/atoms/profile-atoms';
 import { inspectorEnabledAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
+import { useIsMobile } from '@/infra/mobile';
 import { isValidName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { Face } from '@/shared-components/Face';
 import { Friends } from '@/shared-components/Friends';
 import { PresenceSquare } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
+import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -43,7 +45,9 @@ const WIDEN = 'transition-[width] duration-100 ease-out motion-reduce:transition
 /** The name line in both states: the same box, so logging in or out does not move anything. */
 const NAME_LINE = '-mx-1 block border border-transparent px-1 py-0.5 leading-tight';
 /** The small links under the name: a remix icon and a word. */
-const ACTION = 'inline-flex shrink-0 items-center gap-1 text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline';
+const ACTION = 'inline-flex shrink-0 items-center gap-1 text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline max-md:min-h-11';
+/** An icon-only action on a phone: a finger's 44px square. */
+const ICON_TAP = 'max-md:min-w-11 max-md:justify-center';
 const ICON = 14;
 /** Your picture: one box, a blue stroke when pointed at or focused. No shadow. A flex box, so a link lays the picture out the way the button did (no line box under it). */
 const YOU =
@@ -61,7 +65,7 @@ function Dot() {
 function InspectorOpener() {
   return (
     <Tooltip content="messages: the frames this browser gets">
-      <button id="inspector-open" type="button" aria-label="messages" onClick={openInspector} className={cn(ACTION, 'align-middle hover:no-underline')}>
+      <button id="inspector-open" type="button" aria-label="messages" onClick={openInspector} className={cn(ACTION, ICON_TAP, 'align-middle hover:no-underline')}>
         <RiTerminalBoxLine aria-hidden size={ICON} />
       </button>
     </Tooltip>
@@ -89,9 +93,54 @@ function SettingsOpener({ className }: { className?: string }) {
           store.set(friendsOpenAtom, false);
           openUserModal();
         }}
-        className={cn(ACTION, 'align-middle hover:no-underline', className)}
+        className={cn(ACTION, ICON_TAP, 'align-middle hover:no-underline', className)}
       >
         <RiSettings3Line aria-hidden size={ICON} />
+      </button>
+    </Tooltip>
+  );
+}
+
+/** How you are, as a word, at the head of a phone's drawer: the desktop column says it in the picture's tooltip. */
+function Status({ presence }: { presence: Presence }) {
+  return (
+    <>
+      <span id="my-status" className={PRESENCE_TEXT[presence]}>
+        {PRESENCE_WORD[presence]}
+      </span>
+      <Dot />
+    </>
+  );
+}
+
+/**
+ * A phone's way into the sidebar's drawer (UserPanel below), at the left of every page's title
+ * row: the menu glyph and your picture with its presence square, one 44px-tall button. Hidden
+ * at 768px and up, where the column is beside the page.
+ */
+export function DrawerOpener() {
+  const me = useAtomValue(meAtom);
+  const nick = useAtomValue(nickAtom);
+  const avatar = useAtomValue(myAvatarVersionAtom);
+  const presence = useAtomValue(myPresenceAtom);
+  const open = useAtomValue(friendsOpenAtom);
+  return (
+    <Tooltip content={open ? null : 'menu'}>
+      <button
+        id="user-drawer-open"
+        type="button"
+        aria-label="menu"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls="user-drawer"
+        onClick={() => store.set(friendsOpenAtom, true)}
+        className="-ml-2 flex h-11 shrink-0 items-center gap-2 border border-transparent px-2 text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none md:hidden"
+      >
+        <RiMenuLine aria-hidden size={22} />
+        <span className="relative flex">
+          <Face name={me ?? nick} version={avatar} className="h-8 w-8" />
+          <PresenceSquare presence={presence} className="border-background" />
+        </span>
       </button>
     </Tooltip>
   );
@@ -122,6 +171,7 @@ export function UserPanel() {
   const inspectorOn = useAtomValue(inspectorEnabledAtom);
   const side = useAtomValue(panelSideAtom);
   const streaming = useAtomValue(streamingFriendsAtom);
+  const mobile = useIsMobile();
   const { pathname } = useLocation();
   const panel = useRef<HTMLElement | null>(null);
   // the nick as it was when the box got focus: leaving it tells the chat only on a real change
@@ -196,6 +246,8 @@ export function UserPanel() {
   // its foot in grey. the page beside it would otherwise be laid out wider and reflow when the
   // column arrived. no id: the panel the tests key on is the one below
   if (me === undefined) {
+    // a phone has no column to hold the page's place: its drawer comes once who you are is known
+    if (mobile) return null;
     return (
       <aside aria-label="you" data-side={side} className={COLUMN}>
         <Skeleton label="loading who you are" className={cn(panelClass(side), COLLAPSED)}>
@@ -212,7 +264,10 @@ export function UserPanel() {
     );
   }
   // on the right the panel grows leftward, so the row is mirrored and your picture stays at the edge, like the rows above it
-  const mirrored = side === 'right';
+  // a phone's drawer is always the left one
+  const mirrored = side === 'right' && !mobile;
+  // the names and actions beside the picture: the open column's, and the drawer's whenever it is on screen
+  const wide = friendsOpen || mobile;
   // where the picture goes: my page, once I have a name. a guest with none yet gets the profile tab, where the name box is
   const myPage = isValidName(myName) ? `/watch/${myName}` : null;
   const youLabel = `you: ${myPage ? 'your page' : 'pick a name'}. ${PRESENCE_WORD[presence]}${streaming > 0 ? `. ${streaming} streaming` : ''}`;
@@ -235,6 +290,166 @@ export function UserPanel() {
       )}
     </>
   );
+
+  // your picture 1.25rem less its 1px border in from the edge (19px at the browser's size, the faces' inset in Friends.tsx), open or
+  // closed: centered in the closed 5rem column at every text size, in line with the faces above. the name block beside it is in
+  // the row closed too, invisible, so the row is one height in both states and the lists above have the same room (Friends.tsx
+  // cuts them at whole rows of it). the foot of the column; a phone's drawer has it at its head, over the lists
+  const youRow = (
+    <div
+      className={cn(
+        'flex shrink-0 items-center gap-2 border-primaryStroke py-2.5',
+        mobile ? 'border-b' : 'border-t',
+        mirrored ? 'flex-row-reverse pl-3 pr-[calc(1.25rem-1px)]' : 'pl-[calc(1.25rem-1px)] pr-3'
+      )}
+    >
+      {/* the picture is a link to your own page, the way every face above is a link to theirs. not draggable: it must not lift off as a ghost */}
+      {myPage ? (
+        <Link id="you" to={myPage} aria-label={youLabel} title={youTitle} draggable={false} onClick={closeFriends} className={YOU}>
+          {face}
+        </Link>
+      ) : (
+        <button
+          id="you"
+          type="button"
+          aria-label={youLabel}
+          aria-haspopup="dialog"
+          title={youTitle}
+          onClick={(e) => {
+            e.currentTarget.focus();
+            closeFriends();
+            openUserModal('profile');
+          }}
+          className={YOU}
+        >
+          {face}
+        </button>
+      )}
+
+      {me ? (
+        <>
+          <span className={cn('min-w-0 flex-1 whitespace-nowrap', mirrored && 'text-right', !wide && 'invisible')}>
+            {/* a login's name is a second way to your page. #me stays the bare name, for the tests, even while the panel is closed */}
+            <Link
+              to={`/watch/${me}`}
+              title="your page"
+              draggable={false}
+              onClick={closeFriends}
+              className={cn(
+                NAME_LINE,
+                'flex w-full items-center gap-1.5 text-left hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none',
+                mirrored && 'flex-row-reverse text-right'
+              )}
+            >
+              <span id="me" className="truncate font-semibold">
+                {me}
+              </span>
+              <Tooltip content="logged in: this name is yours">
+                <span role="img" aria-label="logged in" className="shrink-0 text-increase">
+                  ✓
+                </span>
+              </Tooltip>
+            </Link>
+            {/* leading-5, not tight: tight is 17.5px on text-sm, and a half pixel here puts the whole footer, and the column over it, off the pixel grid.
+                    a flex row, so the gear sits at the far end, away from the picture on either side */}
+            <span className={cn('flex items-center text-sm leading-5', mirrored && 'flex-row-reverse')}>
+              {mobile && <Status presence={presence} />}
+              <button id="logout" type="button" onClick={() => void logout().then(() => identityChanged('login'))} className={ACTION}>
+                <RiLogoutBoxRLine aria-hidden size={ICON} />
+                log out
+              </button>
+              {inspectorOn && (
+                <>
+                  <Dot />
+                  <InspectorOpener />
+                </>
+              )}
+              <SettingsOpener className={mirrored ? 'mr-auto' : 'ml-auto'} />
+            </span>
+          </span>
+        </>
+      ) : (
+        <>
+          <span className={cn('min-w-0 flex-1 whitespace-nowrap', mirrored && 'text-right', !wide && 'invisible')}>
+            <label htmlFor="username" className="sr-only">
+              your name
+            </label>
+            {/* a guest's name is the box: clicking it edits, it does not open anything */}
+            <span className="relative -mx-1 block">
+              <input
+                id="username"
+                value={nick}
+                onChange={(e) => setNick(e.target.value)}
+                onFocus={(e) => {
+                  nickAtFocus.current = e.currentTarget.value;
+                }}
+                onBlur={(e) => {
+                  // a reconnect replaces the history and blips the count for the whole room: only for a new name
+                  if (e.currentTarget.value !== nickAtFocus.current) identityChanged('nick');
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+                placeholder="pick a name"
+                title="your name. click to change it"
+                maxLength={24}
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                className={cn(
+                  NAME_LINE,
+                  // the border shows on hover and goes blue on focus (said here too: the hover rule outranks the one in globals.css)
+                  'mx-0 w-full truncate bg-transparent font-semibold text-textPrimary placeholder:font-normal placeholder:text-textTertiary hover:border-primaryStroke focus:border-primaryBlue focus:bg-background',
+                  mirrored ? 'pl-6 text-right' : 'pr-6'
+                )}
+              />
+              <span aria-hidden className={cn('pointer-events-none absolute top-1/2 -translate-y-1/2 text-sm text-textTertiary', mirrored ? 'left-1.5' : 'right-1.5')}>
+                ✎
+              </span>
+            </span>
+            {/* the way to make the name yours, right under it; the gear at the far end */}
+            <span className={cn('flex items-center text-sm leading-5 text-textSecondary', mirrored && 'flex-row-reverse')}>
+              {mobile && <Status presence={presence} />}
+              <button id="signup-link" type="button" onClick={() => openAuthDialog('signup')} className={ACTION}>
+                <RiUserAddLine aria-hidden size={ICON} />
+                sign up
+              </button>
+              <Dot />
+              <button id="login-link" type="button" onClick={() => openAuthDialog('login')} className={ACTION}>
+                <RiLoginBoxLine aria-hidden size={ICON} />
+                log in
+              </button>
+              {inspectorOn && (
+                <>
+                  <Dot />
+                  <InspectorOpener />
+                </>
+              )}
+              <SettingsOpener className={mirrored ? 'mr-auto' : 'ml-auto'} />
+            </span>
+          </span>
+        </>
+      )}
+    </div>
+  );
+
+  // a phone: the column is a drawer from the left (SwipeDrawer.tsx), opened by a swipe in from the edge or the menu button at the
+  // left of the title row (`DrawerOpener`). you at its head, then the lists, open the whole time it is on screen. `friendsOpenAtom` is
+  // its open, so a page change, a name picked and the gear shut it as they shut the column
+  if (mobile) {
+    return (
+      <SwipeDrawer id="user-drawer" side="left" open={friendsOpen} onOpenChange={(to) => store.set(friendsOpenAtom, to)} label="you">
+        {(shown) => (
+          <>
+            {youRow}
+            <div className="flex min-h-0 flex-1 flex-col">
+              <Friends open={shown} side="left" onPick={closeFriends} />
+            </div>
+          </>
+        )}
+      </SwipeDrawer>
+    );
+  }
 
   return (
     <aside
@@ -269,145 +484,7 @@ export function UserPanel() {
         <div className="flex min-h-0 flex-1 flex-col">
           <Friends open={friendsOpen} side={side} onPick={closeFriends} />
         </div>
-        {/* your picture 1.25rem less its 1px border in from the edge (19px at the browser's size, the faces' inset in Friends.tsx), open or
-            closed: centered in the closed 5rem column at every text size, in line with the faces above. the name block beside it is in
-            the row closed too, invisible, so the row is one height in both states and the lists above have the same room (Friends.tsx
-            cuts them at whole rows of it) */}
-        <div
-          className={cn(
-            'flex shrink-0 items-center gap-2 border-t border-primaryStroke py-2.5',
-            mirrored ? 'flex-row-reverse pl-3 pr-[calc(1.25rem-1px)]' : 'pl-[calc(1.25rem-1px)] pr-3'
-          )}
-        >
-          {/* the picture is a link to your own page, the way every face above is a link to theirs. not draggable: it must not lift off as a ghost */}
-          {myPage ? (
-            <Link id="you" to={myPage} aria-label={youLabel} title={youTitle} draggable={false} onClick={closeFriends} className={YOU}>
-              {face}
-            </Link>
-          ) : (
-            <button
-              id="you"
-              type="button"
-              aria-label={youLabel}
-              aria-haspopup="dialog"
-              title={youTitle}
-              onClick={(e) => {
-                e.currentTarget.focus();
-                closeFriends();
-                openUserModal('profile');
-              }}
-              className={YOU}
-            >
-              {face}
-            </button>
-          )}
-
-          {me ? (
-            <>
-              <span className={cn('min-w-0 flex-1 whitespace-nowrap', mirrored && 'text-right', !friendsOpen && 'invisible')}>
-                {/* a login's name is a second way to your page. #me stays the bare name, for the tests, even while the panel is closed */}
-                <Link
-                  to={`/watch/${me}`}
-                  title="your page"
-                  draggable={false}
-                  onClick={closeFriends}
-                  className={cn(
-                    NAME_LINE,
-                    'flex w-full items-center gap-1.5 text-left hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none',
-                    mirrored && 'flex-row-reverse text-right'
-                  )}
-                >
-                  <span id="me" className="truncate font-semibold">
-                    {me}
-                  </span>
-                  <Tooltip content="logged in: this name is yours">
-                    <span role="img" aria-label="logged in" className="shrink-0 text-increase">
-                      ✓
-                    </span>
-                  </Tooltip>
-                </Link>
-                {/* leading-5, not tight: tight is 17.5px on text-sm, and a half pixel here puts the whole footer, and the column over it, off the pixel grid.
-                    a flex row, so the gear sits at the far end, away from the picture on either side */}
-                <span className={cn('flex items-center text-sm leading-5', mirrored && 'flex-row-reverse')}>
-                  <button id="logout" type="button" onClick={() => void logout().then(() => identityChanged('login'))} className={ACTION}>
-                    <RiLogoutBoxRLine aria-hidden size={ICON} />
-                    log out
-                  </button>
-                  {inspectorOn && (
-                    <>
-                      <Dot />
-                      <InspectorOpener />
-                    </>
-                  )}
-                  <SettingsOpener className={mirrored ? 'mr-auto' : 'ml-auto'} />
-                </span>
-              </span>
-            </>
-          ) : (
-            <>
-              <span className={cn('min-w-0 flex-1 whitespace-nowrap', mirrored && 'text-right', !friendsOpen && 'invisible')}>
-                <label htmlFor="username" className="sr-only">
-                  your name
-                </label>
-                {/* a guest's name is the box: clicking it edits, it does not open anything */}
-                <span className="relative -mx-1 block">
-                  <input
-                    id="username"
-                    value={nick}
-                    onChange={(e) => setNick(e.target.value)}
-                    onFocus={(e) => {
-                      nickAtFocus.current = e.currentTarget.value;
-                    }}
-                    onBlur={(e) => {
-                      // a reconnect replaces the history and blips the count for the whole room: only for a new name
-                      if (e.currentTarget.value !== nickAtFocus.current) identityChanged('nick');
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') e.currentTarget.blur();
-                    }}
-                    placeholder="pick a name"
-                    title="your name. click to change it"
-                    maxLength={24}
-                    autoComplete="off"
-                    autoCapitalize="off"
-                    spellCheck={false}
-                    className={cn(
-                      NAME_LINE,
-                      // the border shows on hover and goes blue on focus (said here too: the hover rule outranks the one in globals.css)
-                      'mx-0 w-full truncate bg-transparent font-semibold text-textPrimary placeholder:font-normal placeholder:text-textTertiary hover:border-primaryStroke focus:border-primaryBlue focus:bg-background',
-                      mirrored ? 'pl-6 text-right' : 'pr-6'
-                    )}
-                  />
-                  <span
-                    aria-hidden
-                    className={cn('pointer-events-none absolute top-1/2 -translate-y-1/2 text-sm text-textTertiary', mirrored ? 'left-1.5' : 'right-1.5')}
-                  >
-                    ✎
-                  </span>
-                </span>
-                {/* the way to make the name yours, right under it; the gear at the far end */}
-                <span className={cn('flex items-center text-sm leading-5 text-textSecondary', mirrored && 'flex-row-reverse')}>
-                  <button id="signup-link" type="button" onClick={() => openAuthDialog('signup')} className={ACTION}>
-                    <RiUserAddLine aria-hidden size={ICON} />
-                    sign up
-                  </button>
-                  <Dot />
-                  <button id="login-link" type="button" onClick={() => openAuthDialog('login')} className={ACTION}>
-                    <RiLoginBoxLine aria-hidden size={ICON} />
-                    log in
-                  </button>
-                  {inspectorOn && (
-                    <>
-                      <Dot />
-                      <InspectorOpener />
-                    </>
-                  )}
-                  <SettingsOpener className={mirrored ? 'mr-auto' : 'ml-auto'} />
-                </span>
-              </span>
-            </>
-          )}
-        </div>
+        {youRow}
       </div>
     </aside>
   );
