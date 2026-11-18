@@ -147,10 +147,6 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
       <p id="auth-error" className="min-h-[1.5em] text-base text-decrease" aria-live="polite">
         {error}
       </p>
-
-      <p className="text-sm leading-normal text-textSecondary">
-        there is no email and no reset, so remember it. nobody has to sign up to watch, chat, or stream under a free name.
-      </p>
     </form>
   );
 }
