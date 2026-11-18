@@ -31,16 +31,24 @@ export function Who({ name, verified, className }: { name: string; verified: boo
  * in the background the face sits on: `className` names it (`border-backgroundSecondary` in the
  * chat window and on the card). The face's wrapper is `relative`. Streaming, the green square
  * carries the broadcast icon (the one LiveMark.tsx and the inbox use): the one mark that says live.
+ * That square is half again the size of the others (21px, the icon 12px) so the icon reads, and
+ * hangs as far past the corner in proportion (6px to their 4px).
  */
 export function PresenceSquare({ presence, className, id }: { presence: Presence; className?: string; id?: string }) {
+  const live = presence === 'streaming';
   return (
     <span
       id={id}
       aria-hidden
       data-presence={presence}
-      className={cn('absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center border-2 text-background', PRESENCE_SQUARE[presence], className)}
+      className={cn(
+        'absolute flex items-center justify-center border-2 text-background',
+        live ? '-bottom-1.5 -right-1.5 h-[21px] w-[21px]' : '-bottom-1 -right-1 h-3.5 w-3.5',
+        PRESENCE_SQUARE[presence],
+        className
+      )}
     >
-      {presence === 'streaming' && <RiBroadcastLine aria-hidden size={8} />}
+      {live && <RiBroadcastLine aria-hidden size={12} />}
     </span>
   );
 }
