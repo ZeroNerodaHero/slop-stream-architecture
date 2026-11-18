@@ -9,14 +9,40 @@ export const NEW_PASSWORD_RULE = '8 to 128 characters, with at least one number 
 const MIN = 8;
 const MAX = 128;
 
-/** What is missing from a new password, in words for under the box, or null when it is fine. */
-export function newPasswordProblem(raw: string): string | null {
+/** The rule's three parts, each met or not: the signup form's checklist. */
+export interface PasswordChecks {
+  length: boolean;
+  number: boolean;
+  symbol: boolean;
+}
+
+/** How many characters the rule counts: after nfkc, by code point. */
+function countOf(raw: string): number {
+  return [...raw.normalize('NFKC')].length;
+}
+
+export function passwordChecks(raw: string): PasswordChecks {
   const password = raw.normalize('NFKC');
   const length = [...password].length;
-  if (length < MIN) return `at least ${MIN} characters (${length} so far)`;
-  if (length > MAX) return `at most ${MAX} characters`;
-  const number = /\p{N}/u.test(password);
-  const symbol = /[^\p{Alphabetic}\p{N}\p{White_Space}]/u.test(password);
+  return {
+    length: length >= MIN && length <= MAX,
+    number: /\p{N}/u.test(password),
+    symbol: /[^\p{Alphabetic}\p{N}\p{White_Space}]/u.test(password)
+  };
+}
+
+/** Every part of the rule met. */
+export function passwordOk(checks: PasswordChecks): boolean {
+  return checks.length && checks.number && checks.symbol;
+}
+
+/** What is missing from a new password, in words for under the box, or null when it is fine. */
+export function newPasswordProblem(raw: string): string | null {
+  const { length: lengthOk, number, symbol } = passwordChecks(raw);
+  if (!lengthOk) {
+    const length = countOf(raw);
+    return length < MIN ? `at least ${MIN} characters (${length} so far)` : `at most ${MAX} characters`;
+  }
   if (!number && !symbol) return 'add a number and a symbol, like 7 and !';
   if (!number) return 'add a number';
   if (!symbol) return 'add a symbol, like ! or #';
