@@ -59,7 +59,7 @@ function AuthBox({ mode }: { mode: AuthMode }) {
         closeAuthDialog();
       }}
       // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
-      className="m-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-textPrimary backdrop:bg-black/60 backdrop:backdrop-blur-sm"
+      className="m-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-5 text-textPrimary backdrop:bg-black/60 backdrop:backdrop-blur-sm"
     >
       <div className="relative">
         <div className="absolute -right-2 -top-2">
@@ -79,9 +79,6 @@ function AuthBox({ mode }: { mode: AuthMode }) {
         <h2 id="auth-title" className="border-l-4 border-primaryBlue pl-3 pr-10 text-xl font-semibold leading-tight">
           {mode === 'signup' ? 'sign up' : 'log in'}
         </h2>
-        <p className="mt-3 text-base leading-normal text-textSecondary">
-          an account keeps your name yours: only you can go live as it, edit your page, or talk as it.
-        </p>
       </div>
       <AuthForm mode={mode} onMode={openAuthDialog} onDone={close} />
     </dialog>

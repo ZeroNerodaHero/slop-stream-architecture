@@ -1,10 +1,12 @@
+import { RiCheckLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type FormEvent, useEffect, useState } from 'react';
 
 import { type AuthMode, authBusyAtom, authErrorAtom, clearAuthError, login, meAtom, signup } from '@/infra/atoms/auth-atoms';
 import { identityChanged } from '@/infra/atoms/profile-atoms';
-import { NEW_PASSWORD_RULE, newPasswordProblem } from '@/infra/password';
+import { passwordChecks, passwordOk } from '@/infra/password';
 import { Button } from '@/shared-components/Button';
+import { BUTTON } from '@/shared-components/user-modal/parts';
 
 interface AuthFormProps {
   mode: AuthMode;
@@ -15,7 +17,7 @@ interface AuthFormProps {
 }
 
 const LABEL = 'text-sm font-semibold text-textSecondary';
-const INPUT = 'w-full border border-primaryStroke bg-background px-4 py-3 text-textPrimary focus:border-primaryBlue';
+const INPUT = 'w-full border border-primaryStroke bg-background px-3 py-2 text-base leading-snug text-textPrimary focus:border-primaryBlue';
 
 /**
  * Log in and sign up, one form: a name, a password, a button. The password goes to the api as
@@ -31,8 +33,9 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const signingUp = mode === 'signup';
-  // a new password's rule, said under the box as it is typed; logging in asks none of it
-  const problem = signingUp && password ? newPasswordProblem(password) : null;
+  // a new password's rule, ticked off under the box as it is typed; logging in asks none of it
+  const checks = signingUp ? passwordChecks(password) : null;
+  const unmet = checks !== null && !passwordOk(checks);
 
   // Mount only: a stale error from a previous try should not greet you here.
   // The switch between the two modes clears it too (same component, no remount).
@@ -42,7 +45,7 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (problem) return;
+    if (unmet) return;
     const ok = await (signingUp ? signup(name, password) : login(name, password));
     if (ok) {
       // the events socket is who the browser is: say hello again as the login, so the name reads
@@ -65,8 +68,8 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
   }
 
   return (
-    <form onSubmit={(e) => void submit(e)} className="mt-6 flex flex-col gap-4">
-      <div className="flex flex-col gap-1.5">
+    <form onSubmit={(e) => void submit(e)} className="mt-4 flex flex-col gap-3">
+      <div className="flex flex-col gap-1">
         <label htmlFor="auth-name" className={LABEL}>
           name
         </label>
@@ -92,9 +95,9 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
         />
       </div>
 
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-1">
         <label htmlFor="auth-password" className={LABEL}>
-          password {signingUp && <span className="font-normal text-textTertiary">({NEW_PASSWORD_RULE})</span>}
+          password
         </label>
         <div className="relative">
           <input
@@ -107,9 +110,9 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
             minLength={signingUp ? 8 : undefined}
             maxLength={128}
             required
-            aria-invalid={problem ? true : undefined}
-            aria-describedby={signingUp ? 'auth-password-hint' : undefined}
-            className={`${INPUT} pr-20`}
+            aria-invalid={password && unmet ? true : undefined}
+            aria-describedby={checks ? 'auth-password-rules' : undefined}
+            className={`${INPUT} pr-16`}
           />
           <button
             id="auth-show"
@@ -120,15 +123,17 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
             {show ? 'hide' : 'show'}
           </button>
         </div>
-        {signingUp && (
-          <p id="auth-password-hint" aria-live="polite" className={`min-h-[1.5em] text-sm ${problem ? 'text-decrease' : 'text-textTertiary'}`}>
-            {problem ?? (password ? 'good' : '')}
-          </p>
+        {checks && (
+          <ul id="auth-password-rules" aria-live="polite" className="mt-0.5 flex flex-col gap-0.5">
+            <Rule ok={checks.length}>8–128 characters</Rule>
+            <Rule ok={checks.number}>a number</Rule>
+            <Rule ok={checks.symbol}>a symbol</Rule>
+          </ul>
         )}
       </div>
 
-      <div className="mt-1 flex flex-wrap items-center gap-4">
-        <Button id="auth-submit" type="submit" variant="primary" disabled={busy || !name || !password || !!problem}>
+      <div className="flex flex-wrap items-center gap-4">
+        <Button id="auth-submit" type="submit" variant="primary" className={BUTTON} disabled={busy || !name || !password || unmet}>
           {signingUp ? 'make the account' : 'log in'}
         </Button>
         <button
@@ -144,9 +149,29 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
         </button>
       </div>
 
-      <p id="auth-error" className="min-h-[1.5em] text-base text-decrease" aria-live="polite">
-        {error}
-      </p>
+      {error && (
+        <p id="auth-error" role="alert" className="text-base text-decrease">
+          {error}
+        </p>
+      )}
     </form>
+  );
+}
+
+/** One part of the new password's rule: a box, ticked once the password meets it. */
+function Rule({ ok, children }: { ok: boolean; children: string }) {
+  return (
+    <li className={`flex items-center gap-2 text-sm leading-5 ${ok ? 'text-textPrimary' : 'text-textSecondary'}`}>
+      <span
+        role="img"
+        aria-label={ok ? 'met' : 'not yet'}
+        className={`flex h-4 w-4 shrink-0 items-center justify-center border transition-colors duration-150 ${
+          ok ? 'border-primaryBlue bg-primaryBlue text-background' : 'border-primaryStroke bg-background'
+        }`}
+      >
+        {ok && <RiCheckLine aria-hidden size={12} />}
+      </span>
+      {children}
+    </li>
   );
 }
