@@ -53,6 +53,7 @@ mod migrate;
 mod models;
 mod monitor;
 mod notify;
+mod oauth;
 mod presence;
 mod profile;
 mod ratelimit;
@@ -130,6 +131,8 @@ pub(crate) struct AppState {
     pub(crate) groups_per_owner: i64,
     /// Who is live, as the lists last heard it (`live_set`).
     live_cache: LiveCache,
+    /// The login providers the environment turned on (oauth.rs). Empty: password logins only.
+    pub(crate) oauth: Arc<oauth::Config>,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -945,6 +948,7 @@ async fn watch(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult
 fn router(state: AppState) -> Router {
     Router::new()
         .merge(auth::routes())
+        .merge(oauth::routes())
         .merge(profile::routes())
         .merge(about_page::routes())
         .merge(groups::routes())
@@ -1155,6 +1159,7 @@ async fn main() {
         s3,
         groups_per_owner,
         live_cache: Arc::default(),
+        oauth: Arc::new(oauth::Config::from_env()),
     };
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))

@@ -456,6 +456,19 @@ export interface MeInfo {
   name: string | null;
   /** When the name last changed, rfc3339. null: never. The profile tab says when it may change again. */
   renamed_at: string | null;
+  /** false: an account made with Google, Twitch or Discord that has no password yet. null for nobody; absent on an older api (which means true). */
+  has_password?: boolean | null;
+  /** This account's old names still held for it: going back onto one is allowed any time. Absent on an older api. */
+  held?: string[];
+}
+
+/** A login provider (docs/accounts.md). The api turns each on from its env vars. */
+export type OAuthProvider = 'google' | 'twitch' | 'discord';
+
+/** `GET /api/oauth/identities`: the providers linked to this login, and whether it has a password. */
+export interface OAuthIdentities {
+  has_password: boolean;
+  identities: { provider: OAuthProvider; linked_at: string }[];
 }
 
 /** Proof that this page is the one that went live. Heartbeat and stop carry it. */
@@ -578,6 +591,14 @@ export const api = {
   /** Every login of the account, this one included. */
   logoutAll: () => request<null>('POST', '/api/logout-all'),
   changePassword: (old: string, next: string) => request<null>('POST', '/api/password', { old, new: next }),
+  /** The providers turned on here, for the "continue with" buttons. Public. */
+  oauthProviders: () => request<{ providers: OAuthProvider[] }>('GET', '/api/oauth/providers'),
+  oauthIdentities: () => request<OAuthIdentities>('GET', '/api/oauth/identities'),
+  /** 409 when it is the last way in (no password, nothing else linked). */
+  oauthUnlink: (provider: OAuthProvider) => request<null>('POST', `/api/oauth/${provider}/unlink`),
+  /** The pending newcomer (after a provider login nobody here has): which provider, and a name to start from. 404 when there is none. */
+  oauthSignupInfo: () => request<{ provider: OAuthProvider; suggested: string }>('GET', '/api/oauth/signup'),
+  oauthSignup: (name: string) => request<{ id: string; name: string }>('POST', '/api/oauth/signup', { name }),
   /** The account's name changes; its logins, groups and pictures stay. Once a month, with the password, not while live. See docs/ids.md. */
   rename: (name: string, password: string) => request<{ id: string; name: string; renamed_at: string }>('POST', '/api/name', { name, password }),
   /** Every group, `bot` first; `mine` says which the login is in. See docs/groups.md. */

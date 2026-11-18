@@ -1,11 +1,17 @@
 import { useAtomValue } from 'jotai';
 import { type FormEvent, useEffect, useState } from 'react';
 
+import { api, messageOf, type OAuthIdentities } from '@/infra/api';
 import {
   authBusyAtom,
   authErrorAtom,
   changePassword,
   clearAuthError,
+  hasPasswordAtom,
+  loadOAuthProviders,
+  oauthProvidersAtom,
+  oauthStartUrl,
+  PROVIDER_LABEL,
   clearPasswordStatus,
   login,
   logout,
@@ -21,13 +27,15 @@ import { cleanName } from '@/infra/names';
 import { NEW_PASSWORD_RULE, newPasswordProblem } from '@/infra/password';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
+import { OAuthButtons } from '@/shared-components/OAuthButtons';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { BUTTON, Field, INPUT, PasswordInput, Section, Status } from '@/shared-components/user-modal/parts';
 
 /**
  * The account. Nobody has to have one; with one the name is yours. Logged out: log in or sign
  * up, right here (the /login and /signup pages are the same form with a place to go after).
- * Logged in: a new password, and the ways out. No email anywhere, so no reset: the words say so.
+ * Logged in: a new password (or a first one, for an account made with a provider), the linked
+ * Google / Twitch / Discord logins, and the ways out. No email reset yet: the words say so.
  */
 export function SecurityTab() {
   const me = useAtomValue(meAtom);
@@ -116,12 +124,14 @@ function LoggedOut() {
           </button>
         </div>
         <Status id="sec-error" text={error} />
+        <OAuthButtons />
       </form>
     </Section>
   );
 }
 
 function LoggedIn({ me }: { me: string }) {
+  const hasPassword = useAtomValue(hasPasswordAtom);
   const busy = useAtomValue(passwordBusyAtom);
   const status = useAtomValue(passwordStatusAtom);
   const [old, setOld] = useState('');
@@ -137,7 +147,7 @@ function LoggedIn({ me }: { me: string }) {
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (problem) return;
-    if (await changePassword(old, fresh)) {
+    if (await changePassword(hasPassword ? old : '', fresh)) {
       setOld('');
       setFresh('');
     }
@@ -157,13 +167,22 @@ function LoggedIn({ me }: { me: string }) {
         <p className="text-sm text-textTertiary">a login lasts 30 days on each device.</p>
       </Section>
 
-      <Section title="password" description={`${NEW_PASSWORD_RULE}. once it changes, every other login of this account is out; this one stays.`}>
+      <Section
+        title="password"
+        description={
+          hasPassword
+            ? `${NEW_PASSWORD_RULE}. once it changes, every other login of this account is out; this one stays.`
+            : `this account has no password yet: you log in with a linked account below. set one to log in with your name too. ${NEW_PASSWORD_RULE}.`
+        }
+      >
         <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
           {/* for password managers: which account the new password belongs to */}
           <input type="text" name="username" value={me} autoComplete="username" readOnly tabIndex={-1} aria-hidden className="sr-only" />
-          <Field id="sec-old" label="current password">
-            <PasswordInput id="sec-old" value={old} onChange={setOld} autoComplete="current-password" />
-          </Field>
+          {hasPassword && (
+            <Field id="sec-old" label="current password">
+              <PasswordInput id="sec-old" value={old} onChange={setOld} autoComplete="current-password" />
+            </Field>
+          )}
           <Field id="sec-new" label="new password" hint={<PasswordHint problem={problem} />}>
             <PasswordInput id="sec-new" value={fresh} onChange={setFresh} autoComplete="new-password" minLength={8} />
           </Field>
@@ -172,14 +191,16 @@ function LoggedIn({ me }: { me: string }) {
               id="sec-change"
               type="submit"
               className="text-base font-semibold text-primaryBlue disabled:opacity-40"
-              disabled={busy || !old || !fresh || !!problem}
+              disabled={busy || (hasPassword && !old) || !fresh || !!problem}
             >
-              change password
+              {hasPassword ? 'change password' : 'set password'}
             </button>
             <Status id="sec-status" text={status} />
           </div>
         </form>
       </Section>
+
+      <LinkedLogins />
 
       <Section title="sessions" description="this browser, or every browser this account is logged in on.">
         <div className="flex flex-wrap items-center gap-3">
@@ -224,4 +245,75 @@ function LoggedIn({ me }: { me: string }) {
 /** Under a new password's box: what it still needs, in red, or the rule and the warning that there is no reset. */
 function PasswordHint({ problem }: { problem: string | null }) {
   return problem ? <span className="text-decrease">{problem}</span> : <>{NEW_PASSWORD_RULE}. there is no reset: remember it.</>;
+}
+
+/**
+ * Google, Twitch and Discord on this account: link one (a trip to the provider and back), or
+ * unlink it. The api refuses to unlink the last way in (no password and nothing else linked),
+ * and the button says so before you try. Only the providers turned on here are offered.
+ */
+function LinkedLogins() {
+  const providers = useAtomValue(oauthProvidersAtom);
+  const [linked, setLinked] = useState<OAuthIdentities | null>(null);
+  const [status, setStatus] = useState('');
+
+  useEffect(() => {
+    void loadOAuthProviders();
+    api
+      .oauthIdentities()
+      .then(setLinked)
+      .catch(() => setLinked(null));
+  }, []);
+
+  const mine = linked?.identities.map((i) => i.provider) ?? [];
+  // linked ones show even if the provider was turned off since: they can still be unlinked
+  const shown = [...new Set([...(providers ?? []), ...mine])];
+  if (!shown.length) return null;
+  const lastWayIn = !!linked && !linked.has_password && mine.length <= 1;
+
+  async function unlink(p: (typeof shown)[number]) {
+    setStatus('');
+    try {
+      await api.oauthUnlink(p);
+      setLinked(await api.oauthIdentities());
+      setStatus(`${PROVIDER_LABEL[p]} unlinked`);
+    } catch (err) {
+      setStatus(`not unlinked: ${messageOf(err)}`);
+    }
+  }
+
+  return (
+    <Section title="linked logins" description="log in with these instead of a password. linking never happens on its own, not even when an email matches.">
+      <ul className="flex flex-col gap-2">
+        {shown.map((p) => {
+          const on = mine.includes(p);
+          return (
+            <li key={p} className="flex flex-wrap items-center gap-3">
+              <span className="min-w-20 font-semibold">{PROVIDER_LABEL[p]}</span>
+              {on ? (
+                <>
+                  <span className="text-sm text-increase">linked</span>
+                  <button
+                    id={`sec-unlink-${p}`}
+                    type="button"
+                    disabled={lastWayIn}
+                    title={lastWayIn ? 'your only way to log in: set a password or link another first' : undefined}
+                    onClick={() => void unlink(p)}
+                    className="text-sm font-semibold text-decrease disabled:opacity-40"
+                  >
+                    unlink
+                  </button>
+                </>
+              ) : providers?.includes(p) ? (
+                <a id={`sec-link-${p}`} href={oauthStartUrl(p, true)} className="text-sm font-semibold text-primaryBlue">
+                  link
+                </a>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      <Status id="sec-linked-status" text={status} />
+    </Section>
+  );
 }

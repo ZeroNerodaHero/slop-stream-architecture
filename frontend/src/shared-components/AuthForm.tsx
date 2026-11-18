@@ -6,6 +6,7 @@ import { type AuthMode, authBusyAtom, authErrorAtom, clearAuthError, login, meAt
 import { identityChanged } from '@/infra/atoms/profile-atoms';
 import { passwordChecks, passwordOk } from '@/infra/password';
 import { Button } from '@/shared-components/Button';
+import { OAuthButtons } from '@/shared-components/OAuthButtons';
 import { BUTTON } from '@/shared-components/user-modal/parts';
 
 interface AuthFormProps {
@@ -154,6 +155,7 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
           {error}
         </p>
       )}
+      <OAuthButtons />
     </form>
   );
 }

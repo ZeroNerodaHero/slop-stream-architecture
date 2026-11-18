@@ -244,6 +244,13 @@ const MIGRATIONS: &[Migration] = &[
         present: "SELECT EXISTS (SELECT 1 FROM information_schema.columns
             WHERE table_schema = 'public' AND table_name = 'dms' AND column_name = 'image')",
     },
+    Migration {
+        version: 32,
+        name: "migrate-32.sql",
+        sql: include_str!("../migrations/migrate-32.sql"),
+        present: "SELECT to_regclass('public.oauth_identities') IS NOT NULL
+            AND to_regclass('public.admin_pins') IS NOT NULL",
+    },
 ];
 
 /// Apply every migration that has not run. The chat process does not call this.

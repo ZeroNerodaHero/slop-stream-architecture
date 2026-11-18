@@ -1,6 +1,7 @@
 # accounts
 
-username + password, in postgres. optional: nobody has to log in.
+username + password, in postgres, and/or a linked Google, Twitch or Discord login (see
+"google, twitch, discord" below). optional: nobody has to log in.
 
 ## the short answer
 
@@ -148,9 +149,24 @@ changed:
 - `test/auth.js`: twenty steps, see `spec.md`.
 - `video/src/main.rs`: `owns_stream`, the one call to the api's heartbeat that makes the socket honour the gate. the api decides; video checks that it did. (no signing: one http round trip on the same box is simpler than a second secret.)
 
+## google, twitch, discord
+
+`api/src/oauth.rs`. a second way into the same accounts: the login it makes is the same
+`logins` row and the same cookie (same flags) as a password login.
+
+- **the flow.** authorization code with PKCE (S256) and a random `state`. `GET /api/oauth/{provider}/start` stores the state and the PKCE verifier in redis (`oauth:state:<state>`, 10 minutes) and in an HttpOnly, Secure, SameSite=Lax cookie on `/api/oauth` (`oauth_state`), then 303s to the provider. the callback needs the query `state` to equal the cookie's (a callback started in another browser is refused: no login csrf), takes the redis entry with one GETDEL (used once), trades the code for a token with the verifier and the client secret, and asks the provider's user endpoint over https who it is (google: the openid userinfo endpoint, so no id token is verified by hand).
+- **who it is** is the provider's stable user id (google `sub`, twitch and discord `id`), in `oauth_identities (user_id, provider, provider_user_id, email, created_at)`, unique on `(provider, provider_user_id)` and on `(user_id, provider)` (one of each per account). never the email and never the display name: **an email that matches another account is never a reason to link.** the provider's email (only a verified one) is kept on the identity for later (resets, otp) and never shown to anyone, not even on `/api/oauth/identities`.
+- **known identity:** logged in. **`?link=1` and still logged in as the account that started it:** linked to it (somebody else's provider account: refused). **unknown:** a pending signup in redis (`oauth:signup:<token>`, 15 minutes, its own HttpOnly cookie `oauth_signup`), the pages ask for a name (`/oauth?pick=<provider>`), and `POST /api/oauth/signup {name}` makes the account under exactly the signup rules (name rule, `dummy-` reserved, held names refused, a claimed name is `name taken`, a free row is claimed with its followers, 20 signups per ip per hour), with the identity linked in the same transaction.
+- **no password.** such an account's `password_hash` is `!no-password` (`auth::NO_PASSWORD`): not null, so every "has an account" check (`password_hash IS NOT NULL`: the ✓, claimed names, dms, admins) counts it; not a hash, so no typed password ever verifies against it. `/api/me` says `has_password: false`. it sets a first password from the security tab with its login alone (no `old`), and renames with its login alone (no `password`): the cookie is all it has.
+- **unlinking** (`POST /api/oauth/{provider}/unlink`) is refused (409) when it would leave no way in: no password and nothing else linked. checked under `SELECT ... FOR UPDATE` on the account's row, so two unlinks at once cannot both pass.
+- **config.** `GOOGLE_CLIENT_ID`/`_SECRET`, `TWITCH_CLIENT_ID`/`_SECRET`, `DISCORD_CLIENT_ID`/`_SECRET`, and `PUBLIC_URL` (the origin people type, `https://...`). the callback each provider is told about is `{PUBLIC_URL}/api/oauth/{provider}/callback`. a provider without both values, or every provider without `PUBLIC_URL`, is off: no button, its routes answer with a "not set up" page. nothing crashes.
+- **scopes.** google `openid email profile`, twitch `user:read:email`, discord `identify email`.
+- **pages.** "continue with ..." under the log in / sign up forms and the security tab's (only the providers turned on). `/oauth` (`OAuthPage.tsx`) is where the api sends the browser back: `?done`, `?linked`, `?pick` (the name box), `?error=<words>`. the security tab lists the linked logins with link and unlink.
+- **rate limits.** start, callback, signup and unlink are the `oauth` tier: 30 per ip per minute (`rate-limits.md`).
+
 ## not here
 
-- email, reset links, 2fa
-- oauth (github, discord). it fits later: same `logins` table, one more way to make a row
+- email, reset links, 2fa (oauth identities keep a verified email for when they come)
+- github or other providers. one more `Provider` arm in `oauth.rs`
 - display names with capitals. the stream name is the login name (it can change, `ids.md`, but it is still the one word)
 - admin pages

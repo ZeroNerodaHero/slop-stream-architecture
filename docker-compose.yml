@@ -140,6 +140,15 @@ services:
       # who may read /api/errors: these accounts (the /admin page), or a bearer token (a machine)
       ADMIN_NAMES: ${ADMIN_NAMES:-}
       OPS_TOKEN: ${OPS_TOKEN:-}
+      # log in with google, twitch, discord (docs/accounts.md). a provider is on only with both
+      # its id and secret, and PUBLIC_URL (callback: {PUBLIC_URL}/api/oauth/<provider>/callback)
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID:-}
+      TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET:-}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
       # how many groups one login may own. empty: 2. see docs/groups.md
       GROUPS_PER_OWNER: ${GROUPS_PER_OWNER:-}
       # off (the default): the s3 container below. a url: that bucket, with the key and secret.
