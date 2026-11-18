@@ -237,12 +237,15 @@ function Card({
  * next, so the push comes exactly when the part ends and not a gap later. The same z as the row
  * and later in the document, so the heading paints over it; the sidebar open (z-40) covers both.
  */
-/** `aside`: a control beside the words (groups' `create group`), riding along in the sticky row. The section is named by the words alone. */
-function Part({ id, line, heading, aside, children }: { id: string; line: string; heading: ReactNode; aside?: ReactNode; children: ReactNode }) {
+/**
+ * `aside`: a control beside the words (groups' `create group`), riding along in the sticky row. The section is named by the words alone.
+ * `title`: the words without the count, for a phone's row (PageFrame.tsx), which says the part you are in.
+ */
+function Part({ id, title, line, heading, aside, children }: { id: string; title: string; line: string; heading: ReactNode; aside?: ReactNode; children: ReactNode }) {
   return (
-    <section id={id} aria-labelledby={`${id}-title`}>
-      {/* a phone's row holds the drawer's button at its left (PageFrame.tsx), so there the heading sticks under the row, the width of the page */}
-      <h2 className="sticky top-0 z-30 flex h-16 w-fit items-center gap-4 max-md:top-[calc(4rem+env(safe-area-inset-top))] max-md:w-full max-md:bg-background">
+    <section id={id} aria-labelledby={`${id}-title`} data-title={title}>
+      {/* a phone's row says the part you are in (PageFrame.tsx), so there the heading does not stick: it scrolls with its part */}
+      <h2 className="sticky top-0 z-30 flex h-16 w-fit items-center gap-4 max-md:static">
         <span id={`${id}-title`} className={cn(SECTION_TITLE, line)}>
           {heading}
         </span>
@@ -285,6 +288,7 @@ function Followed({
   return (
     <Part
       id="followed"
+      title="following"
       line={LIVE_LINE}
       heading={
         <>
@@ -328,7 +332,7 @@ function People() {
   // there from the first paint instead of arriving under the groups
   if (people.isPending) {
     return (
-      <Part id="people" line={OFFLINE_LINE} heading="people">
+      <Part id="people" title="people" line={OFFLINE_LINE} heading="people">
         <Skeleton id="people-loading" className={PEOPLE_GRID}>
           {Array.from({ length: PEOPLE_GUESS }, (_, i) => (
             <div key={i} className={cn(CARD, 'flex items-center gap-3 p-3')}>
@@ -348,6 +352,7 @@ function People() {
   return (
     <Part
       id="people"
+      title="people"
       line={OFFLINE_LINE}
       heading={
         <>
@@ -397,6 +402,7 @@ function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
   return (
     <Part
       id="recent"
+      title="recently offline"
       line={OFFLINE_LINE}
       heading={
         <>
@@ -448,6 +454,7 @@ function Groups() {
   return (
     <Part
       id="home-groups"
+      title="groups"
       line={OFFLINE_LINE}
       heading={
         <>
@@ -560,6 +567,7 @@ export function HomePage() {
     <PageFrame wide>
       <Part
         id="live"
+        title="active streams"
         line={LIVE_LINE}
         heading={
           <>

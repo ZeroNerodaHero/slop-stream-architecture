@@ -13,6 +13,7 @@ import {
   RiNotificationOffLine,
   RiPencilLine,
   RiSearchLine,
+  RiServerLine,
   RiSettings3Line,
   RiShieldStarLine,
   RiTimeLine,
@@ -72,7 +73,7 @@ import { PresenceSquare } from '@/shared-components/PersonRow';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { ProfileLink } from '@/shared-components/ProfileLink';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
-import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
+import { DrawerClose, SwipeDrawer } from '@/shared-components/SwipeDrawer';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { Field, SECTION_TITLE, Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
@@ -979,11 +980,14 @@ export function ServerPage() {
       {live.length > FACES && <p className="mt-2 text-xs text-textTertiary">{live.length - FACES} more live</p>}
     </section>
   );
-  // a phone's title row: the channel, and the group under it, small; the group's picture at the right end opens the drawer
+  // a phone's title row: the group's picture, then its name, small, over the channel; the button at the right end opens the drawer
   const mobileTitle = (
-    <span className="flex min-w-0 flex-col">
-      <span className="truncate text-xl">#{channel}</span>
-      <span className="truncate text-sm font-normal text-textSecondary">{words.title}</span>
+    <span className="flex min-w-0 items-center gap-2.5">
+      <GroupMark name={server} color={color} icon={room.icon} className="h-9 w-9 shrink-0 text-sm" />
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate text-sm font-normal text-textSecondary">{words.title}</span>
+        <span className="truncate text-lg">#&nbsp;{channel}</span>
+      </span>
     </span>
   );
   const drawerOpener = (
@@ -996,9 +1000,9 @@ export function ServerPage() {
         aria-expanded={drawer}
         aria-controls="group-drawer"
         onClick={() => setDrawer(true)}
-        className="flex h-11 w-11 items-center justify-center border border-transparent focus-visible:border-primaryBlue focus-visible:outline-none"
+        className="-mr-2.5 flex h-11 w-11 shrink-0 items-center justify-center border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
       >
-        <GroupMark name={server} color={color} icon={room.icon} className="h-9 w-9 text-sm" />
+        <RiServerLine aria-hidden size={22} />
       </button>
     </Tooltip>
   );
@@ -1007,27 +1011,24 @@ export function ServerPage() {
     <PageFrame
       wide
       titleId={titleId}
+      mobileTitle={noChannel ? undefined : mobileTitle}
       mobileEnd={noChannel ? undefined : drawerOpener}
       title={
-        mobile ? (
-          mobileTitle
-        ) : (
-          <span className="flex min-w-0 items-center gap-3">
-            <Badge group={{ name: server, badge: room.badge, color }} />
-            <span className="truncate">
-              {channel === 'general' ? (
-                <GroupName words={words} />
-              ) : (
-                <>
-                  <Link to={`/groups/${server}`} className="hover:text-primaryBlue">
-                    <GroupName words={words} />
-                  </Link>
-                  <span className="text-textTertiary"> / {channel}</span>
-                </>
-              )}
-            </span>
+        <span className="flex min-w-0 items-center gap-3">
+          <Badge group={{ name: server, badge: room.badge, color }} />
+          <span className="truncate">
+            {channel === 'general' ? (
+              <GroupName words={words} />
+            ) : (
+              <>
+                <Link to={`/groups/${server}`} className="hover:text-primaryBlue">
+                  <GroupName words={words} />
+                </Link>
+                <span className="text-textTertiary"> / {channel}</span>
+              </>
+            )}
           </span>
-        )
+        </span>
       }
     >
       {noChannel ? (
@@ -1058,19 +1059,26 @@ export function ServerPage() {
             </div>
             {!mobile && <Roster room={room} />}
           </div>
-          {/* a phone: what the page has around the chat, in a drawer from the right. it scrolls as one: the group's head, then the channels in
-              a box, then who is in, in a box of its own (online first, then offline). the dim sliver at the left shuts it */}
+          {/* a phone: what the page has around the chat, in a drawer from the right. its × on a line of its own over the rest, which
+              scrolls as one: the group's head, then the channels in a box, then who is in, in a box of its own (online first, then
+              offline). the dim sliver at the left shuts it too */}
           {mobile && (
             <SwipeDrawer id="group-drawer" side="right" open={drawer} onOpenChange={setDrawer} label={`${words.title}: channels and members`}>
               {() => (
-                <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain pb-3">
-                  {groupHead}
-                  <div className="mx-3 flex flex-col gap-6 border border-primaryStroke bg-backgroundSecondary p-4">
-                    {channelList}
-                    {liveList}
+                <>
+                  <div className="flex shrink-0 items-center justify-between border-b border-primaryStroke pl-4 pr-1.5">
+                    <span className="text-sm text-textSecondary">channels and members</span>
+                    <DrawerClose onClose={() => setDrawer(false)} />
                   </div>
-                  <Roster room={room} flat />
-                </div>
+                  <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain pb-3">
+                    {groupHead}
+                    <div className="mx-3 flex flex-col gap-6 border border-primaryStroke bg-backgroundSecondary p-4">
+                      {channelList}
+                      {liveList}
+                    </div>
+                    <Roster room={room} flat />
+                  </div>
+                </>
               )}
             </SwipeDrawer>
           )}
