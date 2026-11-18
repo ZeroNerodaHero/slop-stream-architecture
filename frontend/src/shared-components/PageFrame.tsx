@@ -4,6 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 
 import { buttonClassName } from '@/shared-components/Button';
 import { NotificationsBell } from '@/shared-components/Notifications';
+import { DrawerOpener } from '@/shared-components/UserPanel';
 import { cn } from '@/utils/cn';
 
 interface PageFrameProps {
@@ -13,6 +14,8 @@ interface PageFrameProps {
   aside?: ReactNode;
   /** Room for a side panel next to the video. */
   wide?: boolean;
+  /** On a phone, the right end of the row instead of the bell and go live: a group's button for its drawer (ServerRoom.tsx). */
+  mobileEnd?: ReactNode;
   children: ReactNode;
 }
 
@@ -36,11 +39,11 @@ export function HomeLink({ reload = false }: { reload?: boolean }) {
  * inbox opens under it), then go live, absent on its own page. Search is the sidebar's
  * (Friends.tsx), and so is the settings gear, at the far end of your line in it (UserPanel.tsx).
  */
-function TopActions() {
+function TopActions({ className }: { className?: string }) {
   const { pathname } = useLocation();
   const onLivePage = pathname.replace(/\/$/, '') === '/live';
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-2">
+    <div className={cn('ml-auto flex shrink-0 items-center gap-2', className)}>
       <NotificationsBell />
       {!onLivePage && (
         <Link id="go-live" to="/live" className={buttonClassName('primary', 'px-3 py-2 text-sm')}>
@@ -65,7 +68,7 @@ function TopActions() {
  * stands at the row's left end, and the next part's pushes it out. Who you are is not here:
  * the sidebar is mounted once by the router's Shell, beside this column.
  */
-export function PageFrame({ title, titleId, aside, wide = false, children }: PageFrameProps) {
+export function PageFrame({ title, titleId, aside, wide = false, mobileEnd, children }: PageFrameProps) {
   const titled = Boolean(title || aside);
   const headerRef = useRef<HTMLElement | null>(null);
 
@@ -90,8 +93,14 @@ export function PageFrame({ title, titleId, aside, wide = false, children }: Pag
     <main className={cn('mx-auto px-5 pb-10', wide ? 'max-w-[1360px]' : 'max-w-[960px]')}>
       <header
         ref={headerRef}
-        className={cn('sticky top-0 z-30 flex items-center gap-4 bg-background py-3', titled ? 'mb-6 min-h-16 flex-wrap border-b border-primaryStroke' : 'h-16 -mb-16')}
+        className={cn(
+          'sticky top-0 z-30 flex items-center gap-4 bg-background py-3',
+          // a phone: the drawer's button (44px) in the row, and the notch or the status bar over it
+          'max-md:pb-2.5 max-md:pt-[calc(0.625rem+env(safe-area-inset-top))]',
+          titled ? 'mb-6 min-h-16 flex-wrap border-b border-primaryStroke' : 'h-16 -mb-16 max-md:mb-0 max-md:h-[calc(4rem+env(safe-area-inset-top))]'
+        )}
       >
+        <DrawerOpener />
         {title && (
           <div className="flex min-w-0 items-center gap-4">
             <HomeLink />
@@ -101,7 +110,8 @@ export function PageFrame({ title, titleId, aside, wide = false, children }: Pag
           </div>
         )}
         {aside && <div className="max-w-full shrink-0">{aside}</div>}
-        <TopActions />
+        <TopActions className={cn(mobileEnd !== undefined && 'max-md:hidden')} />
+        {mobileEnd !== undefined && <div className="ml-auto flex shrink-0 items-center md:hidden">{mobileEnd}</div>}
       </header>
       {children}
     </main>

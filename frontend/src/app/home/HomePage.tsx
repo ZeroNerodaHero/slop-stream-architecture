@@ -241,7 +241,8 @@ function Card({
 function Part({ id, line, heading, aside, children }: { id: string; line: string; heading: ReactNode; aside?: ReactNode; children: ReactNode }) {
   return (
     <section id={id} aria-labelledby={`${id}-title`}>
-      <h2 className="sticky top-0 z-30 flex h-16 w-fit items-center gap-4">
+      {/* a phone's row holds the drawer's button at its left (PageFrame.tsx), so there the heading sticks under the row, the width of the page */}
+      <h2 className="sticky top-0 z-30 flex h-16 w-fit items-center gap-4 max-md:top-[calc(4rem+env(safe-area-inset-top))] max-md:w-full max-md:bg-background">
         <span id={`${id}-title`} className={cn(SECTION_TITLE, line)}>
           {heading}
         </span>
