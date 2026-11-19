@@ -882,7 +882,8 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                 onKeyDown={onKey}
                 placeholder={`say something as ${asStreamer ? name : speaker}`}
                 autoComplete="off"
-                className="h-10 min-w-0 flex-1 border border-primaryStroke bg-background px-3 text-base"
+                // a phone zooms in on a focused box under 16px: never smaller there, whatever text size the appearance tab picked
+                className="h-10 min-w-0 flex-1 border border-primaryStroke bg-background px-3 text-base max-md:text-[length:max(1rem,16px)]"
               />
               {/* refused for the rate: the button goes red and counts down to the next line, and shakes at each try meanwhile. still a button, so a try can shake it */}
               <Button

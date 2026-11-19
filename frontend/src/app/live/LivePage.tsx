@@ -90,7 +90,7 @@ export function LivePage() {
   const navigate = useNavigate();
   const mobile = useIsMobile();
   // the visual viewport (mobile.ts): the page is what the keyboard leaves, panned with it
-  const view = useVisibleViewport(mobile);
+  const view = useVisibleViewport(mobile, true);
   useLockedDocument(mobile);
   const [tab, setTab] = useState<LiveTab>(keptTab);
   const previewRef = useRef<HTMLVideoElement | null>(null);

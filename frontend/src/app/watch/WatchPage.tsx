@@ -142,7 +142,7 @@ export function WatchPage() {
   const [tab, setTab] = useState<WatchTab>('about');
   const mobile = useIsMobile();
   // a phone's page is the window (as go live's is): the visual viewport (mobile.ts) is its box, so the send row stays over the keyboard
-  const view = useVisibleViewport(mobile);
+  const view = useVisibleViewport(mobile, true);
   useLockedDocument(mobile);
   const [phoneTab, setPhoneTab] = useState<PhoneTab>('chat');
   // a phone's tabs once opened stay mounted, hidden while another is open (the chat keeps its place and
