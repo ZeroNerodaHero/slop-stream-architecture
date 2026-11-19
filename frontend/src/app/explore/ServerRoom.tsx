@@ -1,5 +1,7 @@
 import {
   RiAddLine,
+  RiArrowLeftSLine,
+  RiArrowRightSLine,
   RiCloseLine,
   RiDeleteBinLine,
   RiDraggable,
@@ -21,7 +23,7 @@ import {
   RiUserUnfollowLine,
   RiVipCrownLine
 } from '@remixicon/react';
-import { useAtomValue } from 'jotai';
+import { useAtom, useAtomValue } from 'jotai';
 import {
   Fragment,
   useEffect,
@@ -56,6 +58,7 @@ import {
   setChannelMuted,
   setChannelOrder
 } from '@/infra/atoms/room-atoms';
+import { roomMembersOpenAtom } from '@/infra/atoms/settings-atoms';
 import { useIsMobile } from '@/infra/mobile';
 import { cleanName, isValidName } from '@/infra/names';
 import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
@@ -66,6 +69,7 @@ import { Button } from '@/shared-components/Button';
 import { type ChatSearch, comboProps, SearchFilters, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Face } from '@/shared-components/Face';
+import { RailFace } from '@/shared-components/Friends';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -98,13 +102,15 @@ const ABOUT_CAP = 200;
  * carries both breaths as padding, so the snap puts its edge under the row and the chat 7px
  * below it, and it folds the page's foot (`pb-10`, 2.5rem) under itself. So the room scrolled
  * to is exactly what the window shows, and the page can scroll exactly that far, whether the
- * row is one line or two. The columns beside the chat, the channels and the roster, stand 7px
- * further in (SIDE_INSET): 14px under the row, and the roster ends 14px over the foot, which
- * it may not pass.
+ * row is one line or two. The columns beside the chat, the channels and the roster, start on
+ * the chat's top edge, and the roster (open or folded to its strip) ends on its foot too.
  */
-const ROOM_GRID = 'grid snap-start items-start gap-4 py-[7px] -mb-10 max-md:mb-0 max-md:gap-0 max-md:py-0';
-/** The room's three columns on a wide screen: the channels, the chat, the roster. The skeleton has the same, so the chat lands at its width. */
-const ROOM_COLUMNS = 'lg:grid-cols-[200px_minmax(0,1fr)_240px]';
+const ROOM_GRID = 'grid snap-start items-start gap-2 py-[7px] -mb-10 max-md:mb-0 max-md:gap-0 max-md:py-0';
+/**
+ * The room's three columns on a wide screen: the channels, the chat, the roster, or the roster
+ * folded to a strip of faces (`MembersStrip`). The skeleton has the same, so the chat lands at its width.
+ */
+const roomColumns = (membersOpen: boolean) => (membersOpen ? 'lg:grid-cols-[176px_minmax(0,1fr)_224px]' : 'lg:grid-cols-[176px_minmax(0,1fr)_56px]');
 const ROOM_HEIGHT = 'h-[calc(100dvh-var(--title-row,4rem)-14px)] max-md:h-[calc(100dvh-var(--title-row,4rem))] min-h-[420px] max-md:min-h-[320px]';
 /**
  * A phone's room is the chat alone, edge to edge under the title row (PageFrame's `bleed`): no
@@ -112,8 +118,8 @@ const ROOM_HEIGHT = 'h-[calc(100dvh-var(--title-row,4rem)-14px)] max-md:h-[calc(
  */
 const ROOM_CHAT_MOBILE =
   'max-md:border-0 max-md:bg-background max-md:[&>header]:px-3 max-md:[&_#chat-lines]:px-3 max-md:[&>footer]:px-3 max-md:[&>footer]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] max-md:[&>footer]:pt-2';
-const SIDE_INSET = 'mt-[7px]';
-const ROSTER_HEIGHT = 'max-h-[calc(100dvh-var(--title-row,4rem)-28px)]';
+/** The roster beside the chat: the chat's height on a wide screen; under it (a narrow screen's one column) no taller than the window. */
+const ROSTER_HEIGHT = 'max-h-[calc(100dvh-var(--title-row,4rem)-14px)] lg:h-[calc(100dvh-var(--title-row,4rem)-14px)] lg:min-h-[420px]';
 
 /**
  * The page's two views, each a snap area (`snap-start`; the type is on <html> while the page
@@ -555,7 +561,7 @@ function LiveFace({ name }: { name: string }) {
  * panel's, a pane where its lines were (`SearchResults`); the panel has no box of its own.
  * Escape takes the list down, then empties the box, and the roster is whole again.
  */
-function RoomSearch({ search, input }: { search: ChatSearch; input: RefObject<HTMLInputElement | null> }) {
+function RoomSearch({ search, input, flat }: { search: ChatSearch; input: RefObject<HTMLInputElement | null>; flat: boolean }) {
   return (
     <form id="group-search-form" onSubmit={search.submit} className="group/search relative shrink-0">
       <label htmlFor="group-search" className="sr-only">
@@ -572,14 +578,17 @@ function RoomSearch({ search, input }: { search: ChatSearch; input: RefObject<HT
         placeholder="members or every channel"
         autoCapitalize="off"
         spellCheck={false}
-        className="h-8 w-full border border-primaryStroke bg-background pl-8 pr-2 text-sm text-textPrimary placeholder:text-textTertiary"
+        className={cn('h-8 w-full border border-primaryStroke bg-background pr-2 text-sm text-textPrimary placeholder:text-textTertiary', flat ? 'pl-8' : 'pl-7')}
       />
       <Tooltip content="search">
         <button
           id="group-search-go"
           type="submit"
           aria-label="search"
-          className="absolute left-0 top-0 flex h-8 w-8 items-center justify-center text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none"
+          className={cn(
+            'absolute left-0 top-0 flex h-8 items-center justify-center text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none',
+            flat ? 'w-8' : 'w-7'
+          )}
         >
           <RiSearchLine aria-hidden size={14} />
         </button>
@@ -611,6 +620,7 @@ function GroupName({ words }: { words: { title: string; tag: string | null } }) 
  * scrolls to it while this shows, so the room lands where the window already is.
  */
 function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }) {
+  const membersOpen = useAtomValue(roomMembersOpenAtom);
   return (
     <Skeleton id="group-loading" label="loading the group">
       <div className={cn('relative mb-16', TOP_VIEW)}>
@@ -625,11 +635,15 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
         <Bone className="h-6 w-56 max-w-full" />
         <Bone className="h-4 w-80 max-w-full" />
       </div>
-      <div ref={gridRef} className={cn(ROOM_GRID, ROOM_COLUMNS, 'max-md:gap-4')}>
-        <div className={cn('flex flex-col gap-1.5', SIDE_INSET)}>
-          <Bone className="mb-1 h-3 w-24" />
+      <div ref={gridRef} className={cn(ROOM_GRID, roomColumns(membersOpen), 'max-md:gap-4')}>
+        <div className="flex flex-col border border-primaryStroke bg-backgroundSecondary p-1">
+          <div className="flex h-6 items-center px-2">
+            <Bone className="h-3 w-24" />
+          </div>
           {Array.from({ length: 3 }, (_, i) => (
-            <Bone key={i} className="h-7" />
+            <div key={i} className="flex h-7 items-center px-2">
+              <Bone className="h-3.5 w-20" />
+            </div>
           ))}
         </div>
         <div className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3', ROOM_HEIGHT)}>
@@ -638,16 +652,31 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
           <Bone className="h-4 w-3/4" />
           <Bone className="mt-auto h-10" />
         </div>
-        <div className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-4', SIDE_INSET)}>
-          <Bone className="h-8" />
-          <Bone className="h-3 w-20" />
-          {Array.from({ length: 3 }, (_, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <Bone className="h-8 w-8 shrink-0" />
-              <Bone className={cn('h-3', i === 1 ? 'w-16' : 'w-24')} />
-            </div>
-          ))}
+        <div className={cn('flex flex-col gap-2 border border-primaryStroke bg-backgroundSecondary p-2', ROSTER_HEIGHT, !membersOpen && 'lg:hidden')}>
+          <Bone className="h-8 shrink-0" />
+          <div className="flex h-6 shrink-0 items-center">
+            <Bone className="h-3 w-20" />
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {Array.from({ length: 3 }, (_, i) => (
+              <div key={i} className="flex items-center gap-2 p-px">
+                <Bone className="h-7 w-7 shrink-0" />
+                <Bone className={cn('h-3', i === 1 ? 'w-16' : 'w-24')} />
+              </div>
+            ))}
+          </div>
         </div>
+        {!membersOpen && (
+          <div className={cn('hidden w-14 flex-col items-center border border-primaryStroke bg-backgroundSecondary pt-1.5 lg:flex', ROSTER_HEIGHT)}>
+            <Bone className="h-[calc(2rem+2px)] w-[calc(2rem+2px)] shrink-0" />
+            <div className="my-1 h-4" />
+            <div className="flex flex-col gap-1">
+              {Array.from({ length: 3 }, (_, i) => (
+                <Bone key={i} className="h-[calc(2rem+2px)] w-[calc(2rem+2px)]" />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </Skeleton>
   );
@@ -691,6 +720,8 @@ export function ServerPage() {
   // a phone: the group's drawer from the right (its picture and name, the channels, who is in), the room the chat alone
   const mobile = useIsMobile();
   const [drawer, setDrawer] = useState(false);
+  // the roster beside the chat, or folded to its strip of faces (a wide screen's: the phone's drawer and a narrow screen's column always have it whole)
+  const membersOpen = useAtomValue(roomMembersOpenAtom);
   const live = room?.live ?? [];
   const shown = live.slice(0, FACES);
   const previewKey = shown.join(',');
@@ -983,7 +1014,7 @@ export function ServerPage() {
       {actionError && <p className={cn('text-sm text-decrease', mobile ? 'px-4' : 'mb-4')}>{actionError}</p>}
     </>
   );
-  const channelList = <ChannelList server={server} channel={channel} room={room} me={me ?? null} onError={setActionError} />;
+  const channelList = <ChannelList server={server} channel={channel} room={room} me={me ?? null} boxed={!mobile} onError={setActionError} />;
   // the cameras, under the channels. with every camera off the list stands alone: nothing says so
   const liveList = shown.length > 0 && (
     <section id="group-live" aria-label="live">
@@ -1061,9 +1092,10 @@ export function ServerPage() {
       ) : (
         <>
           {!mobile && groupHead}
-          <div id="group-room" ref={roomRef} className={cn(ROOM_GRID, ROOM_COLUMNS)}>
+          <div id="group-room" ref={roomRef} className={cn(ROOM_GRID, roomColumns(membersOpen))}>
             {!mobile && (
-              <div className={cn('flex min-w-0 flex-col gap-6', SIDE_INSET)}>
+              // no margin over the channels' box: its top edge is the chat panel's
+              <div className="flex min-w-0 flex-col gap-3">
                 {channelList}
                 {liveList}
               </div>
@@ -1120,7 +1152,22 @@ export function ServerPage() {
  * their bell, and the bell on the row is the crossed one from then on, and stays up as the
  * mark that says so, until they click it again.
  */
-function ChannelList({ server, channel, room, me, onError }: { server: string; channel: string; room: GroupRoom; me: string | null; onError: (error: string) => void }) {
+function ChannelList({
+  server,
+  channel,
+  room,
+  me,
+  boxed,
+  onError
+}: {
+  server: string;
+  channel: string;
+  room: GroupRoom;
+  me: string | null;
+  /** Beside the chat: a box of its own, its top edge the chat panel's, with 28px rows. In a phone's drawer the drawer has the box. */
+  boxed: boolean;
+  onError: (error: string) => void;
+}) {
   const [adding, setAdding] = useState(false);
   const channels = room.channels ?? [];
   const muted = room.muted ?? [];
@@ -1128,6 +1175,8 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
   // the mute is a member's: a stranger gets no row to mute
   const canMute = room.mine && me !== null;
   const full = channels.length >= CHANNEL_CAP;
+  // a row's height: 28px of line in the box, the text's own line and 4px over and under it in the drawer
+  const row = boxed ? 'text-sm leading-7' : 'py-1';
 
   async function mute(item: string, on: boolean) {
     onError('');
@@ -1139,9 +1188,9 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
   }
 
   return (
-    <nav aria-label="channels">
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-textTertiary">channels</h3>
-      <ul id="group-channels" className="flex flex-col gap-0.5">
+    <nav aria-label="channels" className={cn(boxed && 'border border-primaryStroke bg-backgroundSecondary p-1')}>
+      <h3 className={cn('text-xs font-semibold uppercase tracking-wider text-textTertiary', boxed ? 'flex h-6 items-center px-2' : 'mb-2')}>channels</h3>
+      <ul id="group-channels" className={cn('flex flex-col', !boxed && 'gap-0.5')}>
         {channels.map((item) => {
           const here = item.name === channel;
           const isMuted = muted.includes(item.name);
@@ -1153,14 +1202,14 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
               className={cn('group/channel flex items-center', here ? 'bg-primaryStroke/40' : 'hover:bg-primaryStroke/20')}
             >
               {here ? (
-                <span aria-current="page" className="min-w-0 flex-1 truncate px-2 py-1 font-semibold max-md:py-2.5">
+                <span aria-current="page" className={cn('min-w-0 flex-1 truncate px-2 font-semibold max-md:py-2.5', row)}>
                   #{item.name}
                 </span>
               ) : (
                 <Link
                   id={`group-channel-${item.name}`}
                   to={item.name === 'general' ? `/groups/${server}` : `/groups/${server}/${item.name}`}
-                  className="min-w-0 flex-1 truncate px-2 py-1 text-textSecondary group-hover/channel:text-textPrimary max-md:py-2.5"
+                  className={cn('min-w-0 flex-1 truncate px-2 text-textSecondary group-hover/channel:text-textPrimary max-md:py-2.5', row)}
                 >
                   #{item.name}
                 </Link>
@@ -1186,7 +1235,7 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
         })}
       </ul>
       {canAdd && full && (
-        <p id="group-channels-full" className="mt-3 text-xs text-textTertiary">
+        <p id="group-channels-full" className={cn('text-xs text-textTertiary', boxed ? 'px-2 py-1' : 'mt-3')}>
           {CHANNEL_CAP} channels is the cap. delete one to add another.
         </p>
       )}
@@ -1197,7 +1246,10 @@ function ChannelList({ server, channel, room, me, onError }: { server: string; c
           type="button"
           aria-haspopup="dialog"
           onClick={() => setAdding(true)}
-          className="mt-0.5 flex w-full items-center gap-1 px-2 py-1 text-left text-textTertiary hover:bg-primaryStroke/20 hover:text-textPrimary max-md:min-h-11"
+          className={cn(
+            'flex w-full items-center gap-1 px-2 text-left text-textTertiary hover:bg-primaryStroke/20 hover:text-textPrimary max-md:min-h-11',
+            boxed ? row : 'mt-0.5 py-1'
+          )}
         >
           <RiAddLine aria-hidden size={14} />
           add channel
@@ -1369,7 +1421,7 @@ const PEEK_MS = 200;
  * stream, their status. The row holds the name, the picture and the word; the status is the
  * card's one profile read, which the popup opens whole from.
  */
-function Member({ member, live, ownerRole }: { member: GroupMember; live: boolean; ownerRole: string }) {
+function Member({ member, live, ownerRole, flat }: { member: GroupMember; live: boolean; ownerRole: string; flat: boolean }) {
   const presence = useAtomValue(presenceOfAtom(member.name));
   const peek = usePeek(PEEK_MS);
   return (
@@ -1387,16 +1439,19 @@ function Member({ member, live, ownerRole }: { member: GroupMember; live: boolea
         // every member is a login, so the ✓ is theirs
         person={{ name: member.name, verified: true, avatar: member.avatar ?? null }}
         live={presence === 'streaming'}
-        className="flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue max-md:min-h-11"
+        className={cn(
+          'flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue max-md:min-h-11',
+          !flat && 'p-px'
+        )}
       >
         <span className="relative flex shrink-0">
-          <Face name={member.name} version={member.avatar ?? null} className="h-8 w-8 shrink-0" />
+          <Face name={member.name} version={member.avatar ?? null} className={cn('shrink-0', flat ? 'h-8 w-8' : 'h-7 w-7 text-sm')} />
           <PresenceSquare presence={presence} className="border-backgroundSecondary" />
           <span className="sr-only">{PRESENCE_WORD[presence]}</span>
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-center gap-x-2">
-            <span className="truncate font-semibold">{member.name}</span>
+            <span className="truncate text-sm font-semibold">{member.name}</span>
             {member.owner && <OwnerMark name={ownerRole} />}
             {timedOut(member) && (
               <Tooltip content={`timed out until ${untilWords(member.timeout ?? 0)}`}>
@@ -1450,67 +1505,198 @@ function rosterQuery(query: string): string {
  * list scrolls. A click on a row shows the member over the room, or goes to their page where
  * this browser said so; their card on hover (`Member`). Nothing here acts on a member: what a
  * power does is in the manage dialog, from the header.
+ *
+ * On a wide screen the arrow at the heading's end folds the roster to a strip of faces
+ * (`MembersStrip`), kept per browser (settings.roomMembersOpen). The roster stays mounted under
+ * the strip, hidden, so its search and scroll are where they were when it opens again; the
+ * focus goes to the strip's arrow on the fold and back to this one on the unfold.
  */
 function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
   const members = room.roster ?? [];
   const live = room.live ?? [];
   const presences = useAtomValue(presencesAtom);
   const input = useRef<HTMLInputElement | null>(null);
+  const [membersOpen, setMembersOpen] = useAtom(roomMembersOpenAtom);
+  // the drawer has no strip: there the roster is always whole
+  const folded = !flat && !membersOpen;
+  const hideRef = useRef<HTMLButtonElement | null>(null);
+  const showRef = useRef<HTMLButtonElement | null>(null);
+  // where the focus goes once the fold or the unfold has rendered: only after a click here, not on the first paint
+  const focusNext = useRef<RefObject<HTMLElement | null> | null>(null);
+  useEffect(() => {
+    focusNext.current?.current?.focus();
+    focusNext.current = null;
+  }, [membersOpen]);
+  const setOpen = (open: boolean, focus: RefObject<HTMLElement | null>) => {
+    focusNext.current = focus;
+    setMembersOpen(open);
+  };
   const search = useChatSearch(input, undefined, {
     people: members.map((member) => ({ name: member.name, avatar: member.avatar ?? null })),
     channels: (room.channels ?? []).map((item) => item.name)
   });
   const q = rosterQuery(search.query);
   const shown = q ? members.filter((member) => member.name.toLowerCase().includes(q) || member.roles.some((role) => role.name.toLowerCase().includes(q))) : members;
-  const row = (member: GroupMember) => <Member key={member.name} member={member} live={live.includes(member.name)} ownerRole={ownerRoleOf(room)} />;
+  const row = (member: GroupMember) => <Member key={member.name} member={member} live={live.includes(member.name)} ownerRole={ownerRoleOf(room)} flat={flat} />;
   // a phone's drawer: the ones here first, then the rest under their own heading, each in the group's order
   const isAway = (member: GroupMember) => (presences.get(member.name) ?? 'offline') === 'offline';
   const here = shown.filter((member) => !isAway(member));
   const away = shown.filter(isAway);
+  const heading = (
+    <h3 className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-textTertiary">
+      members <span className="font-normal normal-case tracking-normal">{room.members}</span>
+    </h3>
+  );
 
   return (
-    <aside
-      id="group-roster"
-      aria-label="members"
-      className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-4 text-sm', flat ? 'mx-3' : cn(SIDE_INSET, ROSTER_HEIGHT))}
-    >
-      <RoomSearch search={search} input={input} />
-      <h3 className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-textTertiary">
-        members <span className="font-normal normal-case tracking-normal">{room.members}</span>
-      </h3>
-      {!room.roster && (
-        <p id="group-members-private" className="text-textTertiary">
-          this group is private: who is in it is for its members.
-        </p>
-      )}
-      {q && shown.length === 0 && (
-        <p id="group-members-nobody" className="text-textTertiary">
-          nobody by that name.
-        </p>
-      )}
-      {flat ? (
-        // in the drawer, which scrolls as one: no scroll of its own
-        <>
-          <ul id="group-members" className="flex flex-col gap-1 pb-1">
-            {here.map(row)}
+    <>
+      <aside
+        id="group-roster"
+        aria-label="members"
+        className={cn(
+          'flex flex-col border border-primaryStroke bg-backgroundSecondary text-sm',
+          flat ? 'mx-3 gap-3 p-4' : cn('gap-2 p-2', ROSTER_HEIGHT),
+          folded && 'lg:hidden'
+        )}
+      >
+        <RoomSearch search={search} input={input} flat={flat} />
+        {flat ? (
+          heading
+        ) : (
+          // the heading's row, and at its end the arrow that folds the roster to its strip (a wide screen's)
+          <div className="flex h-6 shrink-0 items-center justify-between pl-0.5">
+            {heading}
+            <Tooltip content="hide members">
+              <button
+                ref={hideRef}
+                id="group-members-hide"
+                type="button"
+                aria-label="hide members"
+                aria-expanded
+                aria-controls="group-roster"
+                onClick={() => setOpen(false, showRef)}
+                className="hidden h-6 w-6 shrink-0 items-center justify-center border border-transparent text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none lg:flex"
+              >
+                <RiArrowRightSLine aria-hidden size={16} />
+              </button>
+            </Tooltip>
+          </div>
+        )}
+        {!room.roster && (
+          <p id="group-members-private" className="text-textTertiary">
+            this group is private: who is in it is for its members.
+          </p>
+        )}
+        {q && shown.length === 0 && (
+          <p id="group-members-nobody" className="text-textTertiary">
+            nobody by that name.
+          </p>
+        )}
+        {flat ? (
+          // in the drawer, which scrolls as one: no scroll of its own
+          <>
+            <ul id="group-members" className="flex flex-col gap-1 pb-1">
+              {here.map(row)}
+            </ul>
+            {away.length > 0 && (
+              <>
+                <h4 className="flex items-center gap-1 border-t border-primaryStroke pt-3 text-xs font-semibold uppercase tracking-wider text-textTertiary">
+                  offline <span className="font-normal normal-case tracking-normal">{away.length}</span>
+                </h4>
+                <ul id="group-members-offline" className="flex flex-col gap-1 pb-1">
+                  {away.map(row)}
+                </ul>
+              </>
+            )}
+          </>
+        ) : (
+          // no bar: it would take width from the rows. the padding under the last row is for its presence square, which hangs 4px below its face and would otherwise be 4px of scroll. its scroll is its own: the end of a long roster does not send the page to its other view
+          <ul id="group-members" className="flex min-h-0 flex-col gap-0.5 overflow-y-auto overscroll-contain pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {shown.map(row)}
           </ul>
-          {away.length > 0 && (
-            <>
-              <h4 className="flex items-center gap-1 border-t border-primaryStroke pt-3 text-xs font-semibold uppercase tracking-wider text-textTertiary">
-                offline <span className="font-normal normal-case tracking-normal">{away.length}</span>
-              </h4>
-              <ul id="group-members-offline" className="flex flex-col gap-1 pb-1">
-                {away.map(row)}
-              </ul>
-            </>
-          )}
-        </>
-      ) : (
-        // no bar: it would take width from the rows. the padding under the last row is for its presence square, which hangs 4px below its face and would otherwise be 4px of scroll. its scroll is its own: the end of a long roster does not send the page to its other view
-        <ul id="group-members" className="flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {shown.map(row)}
-        </ul>
-      )}
+        )}
+      </aside>
+      {folded && <MembersStrip room={room} showRef={showRef} onSearch={() => setOpen(true, input)} onShow={() => setOpen(true, hideRef)} />}
+    </>
+  );
+}
+
+/**
+ * The roster folded (a wide screen's, `Roster`): a strip a face wide, the chat's height. The
+ * search box's square at its head opens the roster with the focus in the box; then how many are
+ * in, and every member's face with the presence square on its corner (the sidebar's, `RailFace`),
+ * each a way to them like a roster row, the name its tooltip; the strip scrolls with no bar. At
+ * its foot, the arrow that opens the roster again. A private group's guest gets the count alone.
+ */
+function MembersStrip({
+  room,
+  showRef,
+  onSearch,
+  onShow
+}: {
+  room: GroupRoom;
+  showRef: RefObject<HTMLButtonElement | null>;
+  onSearch: () => void;
+  onShow: () => void;
+}) {
+  const presences = useAtomValue(presencesAtom);
+  const members = room.roster ?? [];
+  return (
+    <aside id="group-members-strip" aria-label="members" className={cn('hidden w-14 flex-col border border-primaryStroke bg-backgroundSecondary lg:flex', ROSTER_HEIGHT)}>
+      <div className="flex shrink-0 justify-center pt-1.5">
+        <Tooltip content="search members" at="left">
+          <button
+            id="group-members-search"
+            type="button"
+            aria-label="search members"
+            onClick={onSearch}
+            className="flex h-[calc(2rem+2px)] w-[calc(2rem+2px)] items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textTertiary hover:border-primaryBlue hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none"
+          >
+            <RiSearchLine aria-hidden size={18} />
+          </button>
+        </Tooltip>
+      </div>
+      <p className="my-1 flex h-4 shrink-0 items-center justify-center text-xs font-semibold text-textTertiary">
+        {room.members}
+        <span className="sr-only">&nbsp;{room.members === 1 ? 'member' : 'members'}</span>
+      </p>
+      {/* the faces 10px in from the strip's border, and room under the last one for its presence square, which hangs below its face */}
+      <ul className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overscroll-contain px-2.5 pb-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {members.map((member) => {
+          const presence = presences.get(member.name) ?? 'offline';
+          return (
+            <li key={member.name} data-member={member.name} className="flex">
+              <Tooltip content={member.name} at="left">
+                <ProfileLink
+                  // every member is a login, so the ✓ is theirs
+                  person={{ name: member.name, verified: true, avatar: member.avatar ?? null }}
+                  live={presence === 'streaming'}
+                  label={`${member.name} · ${PRESENCE_WORD[presence]}`}
+                  className="flex border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue"
+                >
+                  <RailFace name={member.name} avatar={member.avatar ?? null} presence={presence} />
+                </ProfileLink>
+              </Tooltip>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="flex shrink-0 justify-center border-t border-primaryStroke py-1.5">
+        <Tooltip content="show members" at="left">
+          <button
+            ref={showRef}
+            id="group-members-show"
+            type="button"
+            aria-label="show members"
+            aria-expanded={false}
+            aria-controls="group-roster"
+            onClick={onShow}
+            className="flex h-[34px] w-[34px] items-center justify-center border border-transparent text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none"
+          >
+            <RiArrowLeftSLine aria-hidden size={16} />
+          </button>
+        </Tooltip>
+      </div>
     </aside>
   );
 }

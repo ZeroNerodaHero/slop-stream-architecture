@@ -216,6 +216,12 @@ export function setSidebarFolded(list: SidebarList, folded: boolean) {
   store.set(storedSidebarFoldsAtom, { ...store.get(sidebarFoldsAtom), [list]: folded });
 }
 
+/**
+ * A group's members column on a wide screen (ServerRoom.tsx): open, the roster with its search
+ * box and the names; closed, a strip of faces a face wide. This browser's; open to start.
+ */
+export const roomMembersOpenAtom = atomWithStorage('settings.roomMembersOpen', true, undefined, { getOnInit: true });
+
 // ---- debugging -------------------------------------------------------------------------------
 
 /** The messages inspector (docs/status.md): the frames this browser gets, in the browser. Off, it costs one boolean per frame. */

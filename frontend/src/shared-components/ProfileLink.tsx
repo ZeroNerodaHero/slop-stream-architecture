@@ -33,6 +33,8 @@ interface ProfileLinkProps {
   id?: string;
   /** A second way to the same person right beside the first (a chat head's face by its name): for the pointer alone, no tab stop and nothing read out, so the name stays the one way for a key and a reader. */
   twin?: boolean;
+  /** What a reader hears, where the link holds a face and no name (a group's strip of faces). */
+  label?: string;
   className?: string;
   children: ReactNode;
 }
@@ -43,13 +45,14 @@ interface ProfileLinkProps {
  * (settings.profilePopup): then the click is the link's, as is a click with a key held either
  * way (the browser's own: their page in a tab of its own).
  */
-export function ProfileLink({ person, live = false, id, twin = false, className, children }: ProfileLinkProps) {
+export function ProfileLink({ person, live = false, id, twin = false, label, className, children }: ProfileLinkProps) {
   const popup = useAtomValue(profilePopupEnabledAtom);
   return (
     <Link
       id={id}
       tabIndex={twin ? -1 : undefined}
       aria-hidden={twin || undefined}
+      aria-label={label}
       to={profilePath(person.name)}
       state={liveState(live)}
       // not draggable: the face must not lift off the row as a ghost link

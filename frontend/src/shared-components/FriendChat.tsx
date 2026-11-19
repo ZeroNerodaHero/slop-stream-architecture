@@ -1132,8 +1132,8 @@ export function FriendChat() {
       className={panelClassName(
         cn(
           'group fixed z-50 flex text-base',
-          // until moved or resized: 400 by 440, just inside the page, clear of the open sidebar
-          !box && cn('bottom-6 h-[min(440px,70vh)] w-[min(400px,calc(100vw-3rem))]', side === 'right' ? 'right-96' : 'left-96')
+          // until moved or resized: 400 by 440, just inside the page, clear of the open sidebar (300px, UserPanel.tsx, and 1.5rem)
+          !box && cn('bottom-6 h-[min(440px,70vh)] w-[min(400px,calc(100vw-3rem))]', side === 'right' ? 'right-[324px]' : 'left-[324px]')
         )
       )}
     >

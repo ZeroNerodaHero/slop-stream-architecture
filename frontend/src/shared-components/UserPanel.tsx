@@ -18,7 +18,7 @@ import { useIsMobile } from '@/infra/mobile';
 import { isValidName } from '@/infra/names';
 import { store } from '@/infra/store';
 import { Face } from '@/shared-components/Face';
-import { Friends } from '@/shared-components/Friends';
+import { Friends, RAIL_FACE } from '@/shared-components/Friends';
 import { PresenceSquare } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
@@ -26,10 +26,10 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 /** Closed: a column of pictures. Open: wide enough for the names. The page sits in what's left. */
-const COLLAPSED = 'w-20';
-const EXPANDED = 'w-[min(360px,calc(100vw-12rem))]';
+const COLLAPSED = 'w-14';
+const EXPANDED = 'w-[min(300px,calc(100vw-12rem))]';
 /** The column's place in the page, closed or not yet known: sticky, the window's height, this wide. */
-const COLUMN = 'sticky top-0 h-screen w-20 shrink-0 self-start';
+const COLUMN = 'sticky top-0 h-screen w-14 shrink-0 self-start';
 /** The panel inside it, against the page's edge, with the stroke on the side the page is. */
 const panelClass = (side: 'left' | 'right') =>
   cn(
@@ -276,13 +276,13 @@ export function UserPanel() {
     return (
       <aside aria-label="you" data-side={side} className={COLUMN}>
         <Skeleton label="loading who you are" className={cn(panelClass(side), COLLAPSED)}>
-          <div className={cn('flex flex-1 pt-2', side === 'right' ? 'justify-end pr-[calc(1.25rem-1px)]' : 'pl-[calc(1.25rem-1px)]')}>
-            {/* the closed search box: 2.5rem tall, a face column wide (Friends.tsx) */}
-            <Bone className="h-10 w-[calc(2.5rem+2px)]" />
+          <div className={cn('flex flex-1 pt-1', side === 'right' ? 'justify-end pr-[calc(0.75rem-1px)]' : 'pl-[calc(0.75rem-1px)]')}>
+            {/* the closed search box: 2rem tall, a face column wide (Friends.tsx) */}
+            <Bone className="h-8 w-[calc(2rem+2px)]" />
           </div>
-          <div className={cn('flex shrink-0 border-t border-primaryStroke py-2.5', side === 'right' ? 'justify-end pr-[calc(1.25rem-1px)]' : 'pl-[calc(1.25rem-1px)]')}>
-            {/* your picture in its box: 2.5rem and the box's 1px border each side, like a row's face above */}
-            <Bone className="h-[calc(2.5rem+2px)] w-[calc(2.5rem+2px)]" />
+          <div className={cn('flex shrink-0 border-t border-primaryStroke py-1.5', side === 'right' ? 'justify-end pr-[calc(0.75rem-1px)]' : 'pl-[calc(0.75rem-1px)]')}>
+            {/* your picture in its box: 2rem and the box's 1px border each side, like a row's face above */}
+            <Bone className="h-[calc(2rem+2px)] w-[calc(2rem+2px)]" />
           </div>
         </Skeleton>
       </aside>
@@ -299,7 +299,7 @@ export function UserPanel() {
   const youTitle = `${myPage ? 'your page' : 'pick a name'} · ${PRESENCE_WORD[presence]}`;
   const face = (
     <>
-      <Face name={me ?? nick} version={avatar} />
+      <Face name={me ?? nick} version={avatar} className={RAIL_FACE} />
       {/* the presence square in the corner of the picture: green online, green with the broadcast icon
           streaming, orange do not disturb, grey offline. the word is in the label; the ✓ keeps meaning login */}
       <PresenceSquare id="my-presence" presence={presence} className="border-background" />
@@ -316,16 +316,17 @@ export function UserPanel() {
     </>
   );
 
-  // your picture 1.25rem less its 1px border in from the edge (19px at the browser's size, the faces' inset in Friends.tsx), open or
-  // closed: centered in the closed 5rem column at every text size, in line with the faces above. the name block beside it is in
+  // your picture 0.75rem less its 1px border in from the edge (11px at the browser's size, the faces' inset in Friends.tsx), open or
+  // closed: centered in the closed 3.5rem column at every text size, in line with the faces above. the name block beside it is in
   // the row closed too, invisible, so the row is one height in both states and the lists above have the same room (Friends.tsx
-  // cuts them at whole rows of it). the foot of the column; a phone's drawer has it at its head, over the lists
+  // cuts them at whole rows of it). the foot of the column; a phone's drawer has it at its head, over the lists, with the
+  // drawer's roomier 2.5rem face 1.25rem in
   const youRow = (
     <div
       className={cn(
-        'flex shrink-0 items-center gap-2 border-primaryStroke py-2.5',
-        mobile ? 'border-b' : 'border-t',
-        mirrored ? 'flex-row-reverse pl-3 pr-[calc(1.25rem-1px)]' : 'pl-[calc(1.25rem-1px)] pr-3'
+        'flex shrink-0 items-center gap-2 border-primaryStroke',
+        mobile ? 'border-b py-2.5' : 'border-t py-1.5',
+        mobile ? 'pl-[calc(1.25rem-1px)] pr-3' : mirrored ? 'flex-row-reverse pl-3 pr-[calc(0.75rem-1px)]' : 'pl-[calc(0.75rem-1px)] pr-3'
       )}
     >
       {/* the picture is a link to your own page, the way every face above is a link to theirs. not draggable: it must not lift off as a ghost */}

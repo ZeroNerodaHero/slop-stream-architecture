@@ -43,15 +43,22 @@ const NOTE = 'px-3 py-3 text-sm text-textSecondary';
 const FACES_GUESS = 4;
 
 /**
- * The column of faces: 2.5rem squares with a 1px border around each, 1.25rem less that border
- * in from the panel's edge (19px at the browser's size), which centers them in the closed 5rem
+ * The column of faces: 2rem squares with a 1px border around each, 0.75rem less that border
+ * in from the panel's edge (11px at the browser's size), which centers them in the closed 3.5rem
  * panel at every text size and lines them up with you at the bottom. The panel grows away from
  * that edge (docs/follows.md), so on the right side each row is mirrored and the faces stay
- * put there too.
+ * put there too. A phone's drawer keeps its roomier column: 2.5rem faces, 1.25rem in (`max-md:`).
  */
-const INSET: Record<PanelSide, string> = { left: 'pl-[calc(1.25rem-1px)] pr-2', right: 'pr-[calc(1.25rem-1px)] pl-2' };
+const INSET: Record<PanelSide, string> = {
+  left: 'pl-[calc(0.75rem-1px)] pr-2 max-md:pl-[calc(1.25rem-1px)]',
+  right: 'pr-[calc(0.75rem-1px)] pl-2 max-md:pr-[calc(1.25rem-1px)]'
+};
 /** The face column alone, for a line that has nothing beside the column: the icon, the divider. */
-const COLUMN = 'px-[calc(1.25rem-1px)]';
+const COLUMN = 'px-[calc(0.75rem-1px)] max-md:px-[calc(1.25rem-1px)]';
+/** A face in the column: 2rem (`FACE_REM`), 2.5rem on a phone (`MOBILE_FACE_REM`). */
+export const RAIL_FACE = 'h-8 w-8 text-sm max-md:h-10 max-md:w-10 max-md:text-lg';
+/** The column's width: a face and its row's border. The closed search box and the icon lines are this wide. */
+const FACE_COLUMN_W = 'w-[calc(2rem+2px)] max-md:w-[calc(2.5rem+2px)]';
 
 /**
  * The column is a stack of blocks, each followed by the same gap, whole pixels: the box, then
@@ -59,13 +66,15 @@ const COLUMN = 'px-[calc(1.25rem-1px)]';
  * sizes, and the gap nothing goes under. The face and the box are in rems and so follow the
  * root font size (`Sizes`); the icon line, the line and the gap are px and do not.
  */
-/** A face is `h-10`, 2.5rem (Face.tsx), and so is the search box. A group's square is the same. */
-const FACE_REM = 2.5;
-/** The row around a face: a 1px border above it and below it. The box's own border is inside its 2.5rem. */
+/** A face is `h-8`, 2rem (`RAIL_FACE`), and so is the search box. A group's square is the same. */
+const FACE_REM = 2;
+/** A phone's drawer keeps the 2.5rem face, so its rows are still a finger's 44px (`ROW_TAP`). */
+const MOBILE_FACE_REM = 2.5;
+/** The row around a face: a 1px border above it and below it. The box's own border is inside its rems. */
 const ROW_BORDER_PX = 2;
 /**
  * On a phone (mobile.ts) the row has a pixel more above the face and below it (`ROW_TAP`), so it
- * is a finger's 44px at the browser's size, not 42. The desktop's column keeps its 42.
+ * is a finger's 44px at the browser's size (with its 2.5rem face, `MOBILE_FACE_REM`). The desktop's column keeps its 34.
  */
 const ROW_TAP_PX = 2;
 const ROW_TAP = 'max-md:py-px';
@@ -73,7 +82,7 @@ const ROW_TAP = 'max-md:py-px';
 const HEAD_PX = 16;
 /** The line between two lists. The room to grab it reaches into the gaps on either side. */
 const LINE_PX = 1;
-const MIN_GAP = 8;
+const MIN_GAP = 4;
 
 /**
  * The face and the box in px, for one root font size. The text size setting sets that size
@@ -81,9 +90,9 @@ const MIN_GAP = 8;
  * it again when the setting changes; the 1px borders are px and stay.
  */
 interface Sizes {
-  /** A face, 2.5rem, and the row's border above and below it: the pitch of a list less its gap. 42 at the browser's size, 44 on a phone. */
+  /** A face, 2rem, and the row's border above and below it: the pitch of a list less its gap. 34 at the browser's size; on a phone 2.5rem and the tap pixels, 44. */
   face: number;
-  /** The search box, 2.5rem: 40 at the browser's size. */
+  /** The search box, the face's rems: 32 at the browser's size, 40 on a phone. */
   search: number;
 }
 
@@ -94,7 +103,8 @@ function rootPx(): number {
 }
 
 function sizesOf(rem: number, mobile: boolean): Sizes {
-  return { face: FACE_REM * rem + ROW_BORDER_PX + (mobile ? ROW_TAP_PX : 0), search: FACE_REM * rem };
+  const faceRem = mobile ? MOBILE_FACE_REM : FACE_REM;
+  return { face: faceRem * rem + ROW_BORDER_PX + (mobile ? ROW_TAP_PX : 0), search: faceRem * rem };
 }
 
 /**
@@ -216,10 +226,10 @@ interface Person {
  * shows everyone (PersonRow.tsx): streaming, the square carries the broadcast icon. Closed, the
  * column has no words; the word is in the row's label, and the square says it on hover.
  */
-function RailFace({ name, avatar, presence }: { name: string; avatar: number | null; presence: Presence }) {
+export function RailFace({ name, avatar, presence }: { name: string; avatar: number | null; presence: Presence }) {
   return (
     <span className="relative block shrink-0">
-      <Face name={name} version={avatar} />
+      <Face name={name} version={avatar} className={RAIL_FACE} />
       <Tooltip content={PRESENCE_WORD[presence]}>
         <PresenceSquare presence={presence} className="border-background" />
       </Tooltip>
@@ -284,8 +294,8 @@ function Row({ id, person, side, open, folded = false, onPick, children }: RowPr
             <span className={cn('text-xs', PRESENCE_TEXT[person.presence])}>{PRESENCE_WORD[person.presence]}</span>
           </span>
         )}
-        {/* the face's height: 40px, and 16:9 of that. not in a folded list: the still asks video for a frame every 5s while mounted, and a folded row shows nothing */}
-        {open && !folded && person.presence === 'streaming' && <StreamStill name={person.name} className="h-10" />}
+        {/* the face's height: 32px (40 on a phone), and 16:9 of that. not in a folded list: the still asks video for a frame every 5s while mounted, and a folded row shows nothing */}
+        {open && !folded && person.presence === 'streaming' && <StreamStill name={person.name} className="h-8 max-md:h-10" />}
       </Link>
       {open && children}
       {open && peek.at && <PersonCard id={`friends-peek-${person.name}`} person={person} at={peek.at} side={side} />}
@@ -354,11 +364,14 @@ interface ListProps {
 
 /**
  * Where the caret goes: right before the icon, its 16px box ending 2px short of the icon's,
- * which is 13px into the face column (42px at the browser's size). So the fold button reaches 5px into the panel's
- * edge inset and pads the same back: the icon stands where the closed column has it, and the
- * caret hangs off its edge side.
+ * which is 9px into the face column (34px at the browser's size; 13px into a phone's 42). So the fold button reaches
+ * 9px (5px) into the panel's edge inset and pads the same back: the icon stands where the closed column has it, and
+ * the caret hangs off its edge side.
  */
-const CARET_ROOM: Record<PanelSide, string> = { left: '-ml-[5px] pl-[5px]', right: '-mr-[5px] pr-[5px]' };
+const CARET_ROOM: Record<PanelSide, string> = {
+  left: '-ml-[9px] pl-[9px] max-md:-ml-[5px] max-md:pl-[5px]',
+  right: '-mr-[9px] pr-[9px] max-md:-mr-[5px] max-md:pr-[5px]'
+};
 /** The fold button: caret, icon and word in one, the far end of the line left to the action. Hover and focus are a colour, like the line between two lists. */
 const FOLD = 'relative flex min-w-0 flex-1 items-center gap-2 outline-none transition-colors duration-150 hover:text-textPrimary focus-visible:text-primaryBlue';
 
@@ -392,9 +405,9 @@ interface HeadProps {
 function Head({ icon: Icon, word, count, listId, kind, open, side, below, folded, action, mark }: HeadProps) {
   const mirrored = side === 'right';
   // the icon says what the word says, and the number what the chat button's title says, so readers skip them
-  // the column is a face wide (`Sizes.face`: 2.5rem and the row's border), so the icon stands centered under the faces
+  // the column is a face wide (`Sizes.face`: the face's rems and the row's border), so the icon stands centered under the faces
   const icon = (
-    <span aria-hidden className="relative flex w-[calc(2.5rem+2px)] shrink-0 justify-center">
+    <span aria-hidden className={cn('relative flex shrink-0 justify-center', FACE_COLUMN_W)}>
       <Icon size={16} />
       {/* the number stands with the closed column too, where the chat button has no room: the one sign something came */}
       {mark !== undefined && mark > 0 && (
@@ -592,7 +605,7 @@ function GroupRow({ id, server, side, open, onPick }: { id: string; server: Serv
         )}
       >
         <span className="relative block shrink-0">
-          <GroupMark name={server.name} color={server.color} icon={server.icon} className="h-10 w-10 border border-primaryStroke text-lg" />
+          <GroupMark name={server.name} color={server.color} icon={server.icon} className="h-8 w-8 border border-primaryStroke text-base max-md:h-10 max-md:w-10 max-md:text-lg" />
           {live > 0 && (
             <span
               aria-hidden
@@ -824,8 +837,8 @@ function FollowingSkeleton({ side, open }: { side: PanelSide; open: boolean }) {
     <Skeleton id="friends-loading" className="flex flex-col gap-2">
       {Array.from({ length: FACES_GUESS }, (_, i) => (
         <div key={i} className={cn('flex items-center gap-2', mirrored && 'flex-row-reverse', INSET[side])}>
-          {/* a face's square: `Sizes.face`, 2.5rem and the row's border */}
-          <Bone className="h-[calc(2.5rem+2px)] w-[calc(2.5rem+2px)] shrink-0 max-md:h-11" />
+          {/* a face's square: `Sizes.face`, the face's rems and the row's border */}
+          <Bone className={cn('h-[calc(2rem+2px)] shrink-0 max-md:h-11', FACE_COLUMN_W)} />
           {open && <Bone className="h-3.5 w-24" />}
         </div>
       ))}
@@ -970,11 +983,11 @@ export function Friends({ open, side, onPick }: FriendsProps) {
             find someone or a group
           </label>
           {/* closed, the box is a square the size of a face (the face column's width) with the icon in it; open, it runs the width of the panel and the icon stays where it was */}
-          <div className={cn('relative', open ? 'w-full' : 'w-[calc(2.5rem+2px)]', mirrored && 'ml-auto')}>
+          <div className={cn('relative', open ? 'w-full' : FACE_COLUMN_W, mirrored && 'ml-auto')}>
             <RiSearchLine
               aria-hidden
               size={18}
-              className={cn('pointer-events-none absolute top-1/2 -translate-y-1/2 text-textTertiary', mirrored ? 'right-3' : 'left-3')}
+              className={cn('pointer-events-none absolute top-1/2 -translate-y-1/2 text-textTertiary', mirrored ? 'right-2 max-md:right-3' : 'left-2 max-md:left-3')}
             />
             <input
               id="friends-search"
@@ -985,7 +998,11 @@ export function Friends({ open, side, onPick }: FriendsProps) {
               autoComplete="off"
               autoCapitalize="off"
               spellCheck={false}
-              className={cn(INPUT, 'h-10 text-sm', open ? (mirrored ? 'pl-3 pr-12' : 'pl-12 pr-3') : 'px-0 text-transparent placeholder:text-transparent')}
+              className={cn(
+                INPUT,
+                'h-8 text-sm max-md:h-10',
+                open ? (mirrored ? 'pl-3 pr-10 max-md:pr-12' : 'pl-10 pr-3 max-md:pl-12') : 'px-0 text-transparent placeholder:text-transparent'
+              )}
             />
           </div>
         </div>
