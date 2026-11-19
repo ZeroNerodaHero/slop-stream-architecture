@@ -23,7 +23,7 @@ load, per action), not a measurement.
 |---|---|---|---|---|---|---|---|
 | ✅ | `POST /api/signup` | Create an account | 20 / IP | 20 / IP **+ 30 / IP** (auth tier) | IP | 1 h; 1 min | rare (once per person) |
 | ✅ | `POST /api/login` | Log in | 10 / name+IP, 100 / IP | same **+ 30 / IP**, now with Retry-After | name+IP, IP | 15 min; 1 min | low (per login) |
-| ✅ | `GET /api/oauth/{provider}/start`, `GET /api/oauth/{provider}/callback`, `POST /api/oauth/signup`, `POST /api/oauth/{provider}/unlink` | Google / Twitch / Discord login: start, the provider's redirect back, pick a name, unlink | `POST /api/oauth/signup` shares signup's 20 / IP / hour | **30 / IP** (oauth tier) | IP | 1 min; 1 h | low (once per login; a callback is two outbound https calls) |
+| ✅ | `GET /api/oauth/{provider}/start`, `GET /api/oauth/{provider}/callback`, `POST /api/oauth/signup`, `POST /api/oauth/{provider}/unlink` | Google / Discord login: start, the provider's redirect back, pick a name, unlink | `POST /api/oauth/signup` shares signup's 20 / IP / hour | **30 / IP** (oauth tier) | IP | 1 min; 1 h | low (once per login; a callback is two outbound https calls) |
 | ✅ | `GET /api/oauth/providers`, `GET /api/oauth/identities`, `GET /api/oauth/signup` | Which providers are on; this login's linked ones; the pending name pick | none | **600** (read tier) | account / IP | 1 min | low (login form, security tab) |
 | ✅ | `POST /api/logout`, `POST /api/logout-all` | End this / every login | none | **30 / IP** | IP | 1 min | rare |
 | ✅ | `POST /api/password` | Change password | 10 tries / name+IP (shared with login) | same **+ 30 / IP** | name+IP, IP | 15 min; 1 min | rare |

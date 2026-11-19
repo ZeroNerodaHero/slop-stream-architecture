@@ -1,4 +1,5 @@
-//! Log in with Google, Twitch or Discord, next to the password. See docs/accounts.md.
+//! Log in with Google or Discord (or any provider in `PROVIDERS`), next to the password. See
+//! docs/accounts.md.
 //!
 //! The authorization-code flow with PKCE (S256) and a random `state`:
 //!
@@ -15,12 +16,17 @@
 //!    - nobody's: a pending signup in redis (15 minutes, its own HttpOnly cookie), and the pages
 //!      ask for a name (`/oauth?pick=1`). `POST /api/oauth/signup {name}` makes the account under
 //!      the same name rules as a password signup, with no password (`auth::NO_PASSWORD`).
+//!
 //!    An email that matches another account's is never a reason to link: a provider's email is
 //!    whatever that provider let somebody type.
 //!
-//! Config is the environment: `<P>_CLIENT_ID` and `<P>_CLIENT_SECRET` for GOOGLE, TWITCH and
-//! DISCORD, and PUBLIC_URL (the callback is `{PUBLIC_URL}/api/oauth/{provider}/callback`). A
-//! provider without both, or every provider without PUBLIC_URL, is off; nothing crashes.
+//! An account with at least one provider linked is *oauth verified* (`linked_sql!`): the mark
+//! next to its name. Any provider counts, so a new entry in `PROVIDERS` counts with no change.
+//!
+//! Config is the environment: `<ENV>_CLIENT_ID` and `<ENV>_CLIENT_SECRET` for each provider in
+//! `PROVIDERS` (GOOGLE, DISCORD), and PUBLIC_URL (the callback is
+//! `{PUBLIC_URL}/api/oauth/{provider}/callback`). A provider without both, or every provider
+//! without PUBLIC_URL, is off; nothing crashes.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -50,79 +56,111 @@ const SIGNUP_COOKIE: &str = "oauth_signup";
 /// Where the pages pick up after the provider (frontend/src/app/auth/OAuthPage.tsx).
 const PAGE: &str = "/oauth";
 
+/// The oauth-verified mark as SQL, for the `streamers` row named by the alias: whether it has
+/// any outside login linked. An EXISTS rather than a kept column: it cannot drift from the
+/// links, and it is one probe of `oauth_identities`' unique (user_id, provider) index (user_id
+/// leads) per row, inside whatever query already reads the row. No N+1, no extra round trip.
+macro_rules! linked_sql {
+    ($row:literal) => {
+        concat!("EXISTS (SELECT 1 FROM oauth_identities oi WHERE oi.user_id = ", $row, ".id)")
+    };
+}
+pub(crate) use linked_sql;
+
 // ---- providers and config ------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Provider {
-    Google,
-    Twitch,
-    Discord,
+/// Everything that differs between two providers. A new provider is one entry in `PROVIDERS`,
+/// its two env vars, and its callback url in the provider's console: the routes, the buttons,
+/// the security tab and the verified mark all go by this list. (The pages have an icon per
+/// slug, and a plain one for a slug they do not know: frontend/src/infra/oauth.ts.)
+pub(crate) struct Spec {
+    /// In the urls and the database: `[a-z0-9_]`, never changed once people have linked it.
+    slug: &'static str,
+    /// `<env>_CLIENT_ID`, `<env>_CLIENT_SECRET`.
+    env: &'static str,
+    /// For words a person reads.
+    label: &'static str,
+    authorize_url: &'static str,
+    token_url: &'static str,
+    /// Who the token belongs to.
+    user_url: &'static str,
+    scope: &'static str,
+    /// More query pairs on the way to the provider.
+    authorize_extra: &'static [(&'static str, &'static str)],
+    /// The user endpoint's answer, read. None when it has no stable id.
+    parse: fn(&Value) -> Option<Profile>,
+}
+
+const GOOGLE: Spec = Spec {
+    slug: "google",
+    env: "GOOGLE",
+    label: "Google",
+    authorize_url: "https://accounts.google.com/o/oauth2/v2/auth",
+    token_url: "https://oauth2.googleapis.com/token",
+    // the OpenID userinfo endpoint: the answer comes straight from Google over tls for a token
+    // we just got from Google, so no ID token has to be verified by hand
+    user_url: "https://openidconnect.googleapis.com/v1/userinfo",
+    scope: "openid email profile",
+    authorize_extra: &[("prompt", "select_account")],
+    parse: parse_google,
+};
+
+const DISCORD: Spec = Spec {
+    slug: "discord",
+    env: "DISCORD",
+    label: "Discord",
+    authorize_url: "https://discord.com/oauth2/authorize",
+    token_url: "https://discord.com/api/oauth2/token",
+    user_url: "https://discord.com/api/users/@me",
+    scope: "identify email",
+    authorize_extra: &[],
+    parse: parse_discord,
+};
+
+/// Every provider this api knows, in the order the buttons show them.
+const PROVIDERS: &[Spec] = &[GOOGLE, DISCORD];
+
+/// One of `PROVIDERS`. Equal by slug.
+#[derive(Clone, Copy)]
+pub(crate) struct Provider(&'static Spec);
+
+impl PartialEq for Provider {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.slug == other.0.slug
+    }
+}
+impl Eq for Provider {}
+impl std::hash::Hash for Provider {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        self.0.slug.hash(h)
+    }
+}
+impl std::fmt::Debug for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.slug)
+    }
 }
 
 impl Provider {
-    pub(crate) const ALL: [Provider; 3] = [Provider::Google, Provider::Twitch, Provider::Discord];
+    #[cfg(test)]
+    pub(crate) const GOOGLE: Provider = Provider(&GOOGLE);
+    #[cfg(test)]
+    pub(crate) const DISCORD: Provider = Provider(&DISCORD);
+
+    pub(crate) fn all() -> impl Iterator<Item = Provider> {
+        PROVIDERS.iter().map(Provider)
+    }
 
     pub(crate) fn slug(self) -> &'static str {
-        match self {
-            Provider::Google => "google",
-            Provider::Twitch => "twitch",
-            Provider::Discord => "discord",
-        }
+        self.0.slug
     }
 
     pub(crate) fn from_slug(slug: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|p| p.slug() == slug)
-    }
-
-    fn env_prefix(self) -> &'static str {
-        match self {
-            Provider::Google => "GOOGLE",
-            Provider::Twitch => "TWITCH",
-            Provider::Discord => "DISCORD",
-        }
+        Self::all().find(|p| p.slug() == slug)
     }
 
     fn label(self) -> &'static str {
-        match self {
-            Provider::Google => "Google",
-            Provider::Twitch => "Twitch",
-            Provider::Discord => "Discord",
-        }
-    }
-
-    fn authorize_url(self) -> &'static str {
-        match self {
-            Provider::Google => "https://accounts.google.com/o/oauth2/v2/auth",
-            Provider::Twitch => "https://id.twitch.tv/oauth2/authorize",
-            Provider::Discord => "https://discord.com/oauth2/authorize",
-        }
-    }
-
-    fn token_url(self) -> &'static str {
-        match self {
-            Provider::Google => "https://oauth2.googleapis.com/token",
-            Provider::Twitch => "https://id.twitch.tv/oauth2/token",
-            Provider::Discord => "https://discord.com/api/oauth2/token",
-        }
-    }
-
-    /// Who the token belongs to. Google's is the OpenID userinfo endpoint: the answer comes
-    /// straight from Google over tls for a token we just got from Google, so no ID token has to
-    /// be verified by hand.
-    fn user_url(self) -> &'static str {
-        match self {
-            Provider::Google => "https://openidconnect.googleapis.com/v1/userinfo",
-            Provider::Twitch => "https://api.twitch.tv/helix/users",
-            Provider::Discord => "https://discord.com/api/users/@me",
-        }
-    }
-
-    fn scope(self) -> &'static str {
-        match self {
-            Provider::Google => "openid email profile",
-            Provider::Twitch => "user:read:email",
-            Provider::Discord => "identify email",
-        }
+        self.0.label
     }
 }
 
@@ -145,7 +183,7 @@ impl Config {
         let config = Self::from_vars(|k| std::env::var(k).ok());
         let on: Vec<&str> = config.enabled().into_iter().map(Provider::slug).collect();
         match (&config.public_url, on.is_empty()) {
-            (_, true) => log::info!("oauth: no provider set up (GOOGLE_/TWITCH_/DISCORD_CLIENT_ID and _SECRET, and PUBLIC_URL)"),
+            (_, true) => log::info!("oauth: no provider set up (<P>_CLIENT_ID and _SECRET for {:?}, and PUBLIC_URL)", PROVIDERS.iter().map(|p| p.env).collect::<Vec<_>>()),
             (Some(url), false) => log::info!("oauth: {on:?}, callbacks at {url}/api/oauth/<provider>/callback"),
             (None, false) => {}
         }
@@ -167,8 +205,8 @@ impl Config {
             }
         });
         let mut clients = HashMap::new();
-        for p in Provider::ALL {
-            let (id, secret) = (val(&format!("{}_CLIENT_ID", p.env_prefix())), val(&format!("{}_CLIENT_SECRET", p.env_prefix())));
+        for p in Provider::all() {
+            let (id, secret) = (val(&format!("{}_CLIENT_ID", p.0.env)), val(&format!("{}_CLIENT_SECRET", p.0.env)));
             match (id, secret) {
                 (Some(id), Some(secret)) if public_url.is_some() => {
                     clients.insert(p, Client { id, secret });
@@ -182,7 +220,7 @@ impl Config {
     }
 
     pub(crate) fn enabled(&self) -> Vec<Provider> {
-        Provider::ALL.into_iter().filter(|p| self.clients.contains_key(p)).collect()
+        Provider::all().filter(|p| self.clients.contains_key(p)).collect()
     }
 
     fn client(&self, p: Provider) -> Option<&Client> {
@@ -322,7 +360,7 @@ fn fail(words: &str) -> Response {
 /// Who the provider says this is.
 #[derive(Debug, PartialEq, Clone)]
 struct Profile {
-    /// The provider's own id for the account: google's `sub`, twitch's and discord's `id`.
+    /// The provider's own id for the account: google's `sub`, discord's `id`.
     id: String,
     /// Only when the provider says it is verified.
     email: Option<String>,
@@ -330,27 +368,33 @@ struct Profile {
     suggested: String,
 }
 
+fn str_of(v: &Value, k: &str) -> Option<String> {
+    v.get(k).and_then(Value::as_str).map(str::to_owned).filter(|x| !x.is_empty())
+}
+
+fn bool_of(v: &Value, k: &str) -> bool {
+    v.get(k).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn parse_google(v: &Value) -> Option<Profile> {
+    Some(Profile {
+        id: str_of(v, "sub")?,
+        email: str_of(v, "email").filter(|_| bool_of(v, "email_verified")),
+        suggested: suggest_name(&str_of(v, "given_name").or_else(|| str_of(v, "name")).unwrap_or_default()),
+    })
+}
+
+fn parse_discord(v: &Value) -> Option<Profile> {
+    Some(Profile {
+        id: str_of(v, "id")?,
+        email: str_of(v, "email").filter(|_| bool_of(v, "verified")),
+        suggested: suggest_name(&str_of(v, "username").unwrap_or_default()),
+    })
+}
+
 /// The provider's user answer, read. None when it has no stable id.
 fn parse_profile(p: Provider, v: &Value) -> Option<Profile> {
-    let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned).filter(|x| !x.is_empty());
-    let verified = |v: &Value, k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
-    match p {
-        Provider::Google => Some(Profile {
-            id: s(v, "sub")?,
-            email: s(v, "email").filter(|_| verified(v, "email_verified")),
-            suggested: suggest_name(&s(v, "given_name").or_else(|| s(v, "name")).unwrap_or_default()),
-        }),
-        Provider::Twitch => {
-            let u = v.get("data")?.as_array()?.first()?;
-            // twitch only hands out a verified email
-            Some(Profile { id: s(u, "id")?, email: s(u, "email"), suggested: suggest_name(&s(u, "login").unwrap_or_default()) })
-        }
-        Provider::Discord => Some(Profile {
-            id: s(v, "id")?,
-            email: s(v, "email").filter(|_| verified(v, "verified")),
-            suggested: suggest_name(&s(v, "username").unwrap_or_default()),
-        }),
-    }
+    (p.0.parse)(v)
 }
 
 /// A handle as a name we allow (a-z 0-9 _ -, 1 to 32), or empty. Only a suggestion: the
@@ -400,7 +444,7 @@ async fn who_is_it(config: &Config, p: Provider, code: &str, verifier: &str) -> 
         .append_pair("code_verifier", verifier)
         .finish();
     let res = http()
-        .post(p.token_url())
+        .post(p.0.token_url)
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .header(header::ACCEPT, "application/json")
         .body(form)
@@ -413,11 +457,11 @@ async fn who_is_it(config: &Config, p: Provider, code: &str, verifier: &str) -> 
     }
     let token: Value = res.json().await.map_err(|e| log::warn!("oauth {}: token body: {e}", p.slug()))?;
     let access = token.get("access_token").and_then(Value::as_str).ok_or_else(|| log::warn!("oauth {}: no access_token", p.slug()))?;
-    let mut req = http().get(p.user_url()).bearer_auth(access).header(header::ACCEPT, "application/json");
-    if p == Provider::Twitch {
-        req = req.header("Client-Id", &client.id);
-    }
-    let res = req.send().await.map_err(|e| log::warn!("oauth {}: user: {e}", p.slug()))?;
+    let res = http()
+        .get(p.0.user_url)
+        .bearer_auth(access)
+        .header(header::ACCEPT, "application/json")
+        .send().await.map_err(|e| log::warn!("oauth {}: user: {e}", p.slug()))?;
     if !res.status().is_success() {
         log::warn!("oauth {}: user: http {}", p.slug(), res.status());
         return Err(());
@@ -439,6 +483,17 @@ pub(crate) async fn linked_account(db: &sqlx::PgPool, p: Provider, provider_user
     .fetch_optional(db)
     .await?;
     Ok(row.map(|(id, name)| Account { id, name }))
+}
+
+/// Whether this account is oauth verified: any provider linked (`linked_sql!`). The routes read
+/// the mark inside the queries that already read the row; this is the one-account form.
+#[cfg(test)]
+pub(crate) async fn is_verified(db: &sqlx::PgPool, user: Uuid) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(concat!("SELECT ", linked_sql!("s"), " FROM streamers s WHERE s.id = $1"))
+        .bind(user)
+        .fetch_optional(db)
+        .await
+        .map(|v| v.unwrap_or(false))
 }
 
 /// Attach. `Ok(false)`: that provider account is somebody's already, or this account has that
@@ -555,18 +610,16 @@ async fn start(State(s): State<AppState>, Path(slug): Path<String>, Query(q): Qu
         .arg(STATE_SECS)
         .query_async(&mut s.redis.clone())
         .await?;
-    let mut to = url::Url::parse(p.authorize_url()).expect("a fixed url");
+    let mut to = url::Url::parse(p.0.authorize_url).expect("a fixed url");
     to.query_pairs_mut()
         .append_pair("response_type", "code")
         .append_pair("client_id", &client.id)
         .append_pair("redirect_uri", &redirect_uri)
-        .append_pair("scope", p.scope())
+        .append_pair("scope", p.0.scope)
         .append_pair("state", &state)
         .append_pair("code_challenge", &pkce_challenge(&verifier))
         .append_pair("code_challenge_method", "S256");
-    if p == Provider::Google {
-        to.query_pairs_mut().append_pair("prompt", "select_account");
-    }
+    to.query_pairs_mut().extend_pairs(p.0.authorize_extra.iter().copied());
     Ok(redirect_with(to.as_str(), &[short_cookie(STATE_COOKIE, &state, STATE_SECS)]))
 }
 
@@ -711,7 +764,8 @@ async fn providers(State(s): State<AppState>) -> Json<Value> {
     Json(json!({ "providers": s.oauth.enabled().into_iter().map(Provider::slug).collect::<Vec<_>>() }))
 }
 
-/// `GET /api/oauth/identities`: this login's linked providers and whether it has a password.
+/// `GET /api/oauth/identities`: this login's linked providers, whether it has a password, and
+/// whether it is oauth verified.
 /// The provider emails stay in the database.
 async fn identities(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let me = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
@@ -720,8 +774,10 @@ async fn identities(State(s): State<AppState>, Me(me): Me) -> ApiResult {
         .fetch_all(&s.db)
         .await?;
     let has_password = auth::has_password(&s.db, me.id).await?;
+    // oauth verified is exactly "anything linked" (`linked_sql!`), said here so the tab need not work it out
+    let verified = !rows.is_empty();
     let list: Vec<Value> = rows.into_iter().map(|(provider, at)| json!({ "provider": provider, "linked_at": at })).collect();
-    Ok(Json(json!({ "has_password": has_password, "identities": list })))
+    Ok(Json(json!({ "has_password": has_password, "oauth_verified": verified, "identities": list })))
 }
 
 /// `POST /api/oauth/{provider}/unlink`. Refused when it would leave no way in.
@@ -807,9 +863,9 @@ mod tests {
     #[test]
     fn a_provider_is_on_only_with_both_keys_and_a_public_url() {
         assert!(vars(&[]).enabled().is_empty(), "nothing set: nothing on, no crash");
-        let c = vars(&[("PUBLIC_URL", "https://example.org/"), ("GOOGLE_CLIENT_ID", "id"), ("GOOGLE_CLIENT_SECRET", "s"), ("TWITCH_CLIENT_ID", "id")]);
-        assert_eq!(c.enabled(), vec![Provider::Google], "twitch has no secret");
-        assert_eq!(c.redirect_uri(Provider::Google).as_deref(), Some("https://example.org/api/oauth/google/callback"));
+        let c = vars(&[("PUBLIC_URL", "https://example.org/"), ("GOOGLE_CLIENT_ID", "id"), ("GOOGLE_CLIENT_SECRET", "s"), ("DISCORD_CLIENT_ID", "id")]);
+        assert_eq!(c.enabled(), vec![Provider::GOOGLE], "discord has no secret");
+        assert_eq!(c.redirect_uri(Provider::GOOGLE).as_deref(), Some("https://example.org/api/oauth/google/callback"));
         let no_url = vars(&[("GOOGLE_CLIENT_ID", "id"), ("GOOGLE_CLIENT_SECRET", "s")]);
         assert!(no_url.enabled().is_empty(), "no PUBLIC_URL: no callback, so off");
         let bad_url = vars(&[("PUBLIC_URL", "not a url"), ("DISCORD_CLIENT_ID", "id"), ("DISCORD_CLIENT_SECRET", "s")]);
@@ -828,16 +884,16 @@ mod tests {
 
     #[test]
     fn profiles_key_on_the_providers_stable_id() {
-        let g = parse_profile(Provider::Google, &json!({ "sub": "1234", "email": "a@b.c", "email_verified": true, "given_name": "Billy Bob" })).unwrap();
+        let g = parse_profile(Provider::GOOGLE, &json!({ "sub": "1234", "email": "a@b.c", "email_verified": true, "given_name": "Billy Bob" })).unwrap();
         assert_eq!(g, Profile { id: "1234".into(), email: Some("a@b.c".into()), suggested: "billy_bob".into() });
-        let unverified = parse_profile(Provider::Google, &json!({ "sub": "1", "email": "a@b.c", "email_verified": false })).unwrap();
+        let unverified = parse_profile(Provider::GOOGLE, &json!({ "sub": "1", "email": "a@b.c", "email_verified": false })).unwrap();
         assert_eq!(unverified.email, None, "an unverified email is not kept");
-        assert!(parse_profile(Provider::Google, &json!({ "email": "a@b.c", "email_verified": true })).is_none(), "no sub: nobody");
-        let t = parse_profile(Provider::Twitch, &json!({ "data": [{ "id": "99", "login": "Streamer_1", "email": "t@w.tv" }] })).unwrap();
-        assert_eq!(t, Profile { id: "99".into(), email: Some("t@w.tv".into()), suggested: "streamer_1".into() });
-        assert!(parse_profile(Provider::Twitch, &json!({ "data": [] })).is_none());
-        let d = parse_profile(Provider::Discord, &json!({ "id": "42", "username": "Café.Kid", "email": "d@x.y", "verified": true })).unwrap();
+        assert!(parse_profile(Provider::GOOGLE, &json!({ "email": "a@b.c", "email_verified": true })).is_none(), "no sub: nobody");
+        let d = parse_profile(Provider::DISCORD, &json!({ "id": "42", "username": "Café.Kid", "email": "d@x.y", "verified": true })).unwrap();
         assert_eq!(d, Profile { id: "42".into(), email: Some("d@x.y".into()), suggested: "caf_kid".into() });
+        let unverified = parse_profile(Provider::DISCORD, &json!({ "id": "42", "username": "x", "email": "d@x.y", "verified": false })).unwrap();
+        assert_eq!(unverified.email, None);
+        assert!(parse_profile(Provider::DISCORD, &json!({ "username": "x" })).is_none(), "no id: nobody");
     }
 
     #[test]
@@ -855,18 +911,34 @@ mod tests {
     fn the_last_way_in_cannot_be_unlinked() {
         let one = vec!["google".to_string()];
         let two = vec!["google".to_string(), "discord".to_string()];
-        assert_eq!(may_unlink(false, &one, Provider::Google), Unlink::LastWayIn);
-        assert_eq!(may_unlink(true, &one, Provider::Google), Unlink::Yes, "the password is still a way in");
-        assert_eq!(may_unlink(false, &two, Provider::Google), Unlink::Yes, "discord is still a way in");
-        assert_eq!(may_unlink(true, &one, Provider::Twitch), Unlink::NotLinked);
+        assert_eq!(may_unlink(false, &one, Provider::GOOGLE), Unlink::LastWayIn);
+        assert_eq!(may_unlink(true, &one, Provider::GOOGLE), Unlink::Yes, "the password is still a way in");
+        assert_eq!(may_unlink(false, &two, Provider::GOOGLE), Unlink::Yes, "discord is still a way in");
+        assert_eq!(may_unlink(true, &one, Provider::DISCORD), Unlink::NotLinked);
     }
 
     #[test]
     fn slugs_round_trip() {
-        for p in Provider::ALL {
+        for p in Provider::all() {
             assert_eq!(Provider::from_slug(p.slug()), Some(p));
         }
         assert_eq!(Provider::from_slug("github"), None);
+        assert_eq!(Provider::from_slug("twitch"), None, "twitch is gone");
+    }
+
+    #[test]
+    fn the_registry_is_well_formed() {
+        let slugs: Vec<&str> = PROVIDERS.iter().map(|p| p.slug).collect();
+        assert_eq!(slugs, ["google", "discord"]);
+        for (i, p) in PROVIDERS.iter().enumerate() {
+            // the slug is a url segment and a database key (migrate-32.sql's check)
+            assert!(!p.slug.is_empty() && p.slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'), "{}", p.slug);
+            assert!(p.env.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'), "{}", p.env);
+            for url in [p.authorize_url, p.token_url, p.user_url] {
+                assert!(url.starts_with("https://"), "{url}");
+            }
+            assert!(PROVIDERS[i + 1..].iter().all(|q| q.slug != p.slug && q.env != p.env), "{} twice", p.slug);
+        }
     }
 
     // ---- against a postgres (`auth::tests::test_db`): cargo test -- --ignored oauth
@@ -877,18 +949,18 @@ mod tests {
         let pool = auth::tests::test_db().await;
         let run = std::process::id();
         let name = format!("oa-new-{run}");
-        let id = create_account(&pool, &name, Provider::Google, &format!("g-{run}"), Some("x@y.z")).await.expect("made");
-        let found = linked_account(&pool, Provider::Google, &format!("g-{run}")).await.unwrap();
+        let id = create_account(&pool, &name, Provider::GOOGLE, &format!("g-{run}"), Some("x@y.z")).await.expect("made");
+        let found = linked_account(&pool, Provider::GOOGLE, &format!("g-{run}")).await.unwrap();
         assert_eq!(found, Some(Account { id, name: name.clone() }));
         assert!(!auth::has_password(&pool, id).await.unwrap(), "no password");
         assert!(auth::is_claimed(&pool, &name).await.unwrap(), "but the name is claimed");
         // the same provider account again (a second tab): refused, and no second account
-        let again = create_account(&pool, &format!("oa-new2-{run}"), Provider::Google, &format!("g-{run}"), None).await;
+        let again = create_account(&pool, &format!("oa-new2-{run}"), Provider::GOOGLE, &format!("g-{run}"), None).await;
         assert_eq!(again.expect_err("linked already").into_response().status(), StatusCode::CONFLICT);
         let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM streamers WHERE name = $1)").bind(format!("oa-new2-{run}")).fetch_one(&pool).await.unwrap();
         assert!(!exists, "the rolled back account is not left behind");
         // a name with an account is taken
-        let taken = create_account(&pool, &name, Provider::Discord, &format!("d-{run}"), None).await;
+        let taken = create_account(&pool, &name, Provider::DISCORD, &format!("d-{run}"), None).await;
         assert_eq!(taken.expect_err("taken").into_response().status(), StatusCode::CONFLICT);
     }
 
@@ -899,13 +971,29 @@ mod tests {
         let run = std::process::id();
         let with_pw = auth::tests::row(&pool, &format!("oa-pw-{run}"), Some("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA")).await;
         let mut conn = pool.acquire().await.unwrap();
-        assert!(link(&mut conn, with_pw, Provider::Twitch, &format!("t-{run}"), None).await.unwrap());
-        assert!(!link(&mut conn, with_pw, Provider::Twitch, &format!("t2-{run}"), None).await.unwrap(), "one twitch per account");
-        let other = create_account(&pool, &format!("oa-only-{run}"), Provider::Discord, &format!("d-{run}"), None).await.unwrap();
-        assert!(!link(&mut conn, other, Provider::Twitch, &format!("t-{run}"), None).await.unwrap(), "somebody else's twitch");
+        assert!(!is_verified(&pool, with_pw).await.unwrap(), "a password alone is not oauth verified");
+        assert!(link(&mut conn, with_pw, Provider::GOOGLE, &format!("lg-{run}"), None).await.unwrap());
+        assert!(is_verified(&pool, with_pw).await.unwrap(), "linked: verified");
+        assert!(!link(&mut conn, with_pw, Provider::GOOGLE, &format!("lg2-{run}"), None).await.unwrap(), "one google per account");
+        let other = create_account(&pool, &format!("oa-only-{run}"), Provider::DISCORD, &format!("ld-{run}"), None).await.unwrap();
+        assert!(is_verified(&pool, other).await.unwrap(), "made with a provider: verified");
+        assert!(!link(&mut conn, other, Provider::GOOGLE, &format!("lg-{run}"), None).await.unwrap(), "somebody else's google");
         drop(conn);
-        assert_eq!(unlink(&pool, other, Provider::Discord).await.unwrap(), Unlink::LastWayIn);
-        assert_eq!(unlink(&pool, with_pw, Provider::Twitch).await.unwrap(), Unlink::Yes, "the password is left");
-        assert_eq!(unlink(&pool, with_pw, Provider::Twitch).await.unwrap(), Unlink::NotLinked);
+        assert_eq!(unlink(&pool, other, Provider::DISCORD).await.unwrap(), Unlink::LastWayIn);
+        assert!(is_verified(&pool, other).await.unwrap(), "the refused unlink left it linked");
+        assert_eq!(unlink(&pool, with_pw, Provider::GOOGLE).await.unwrap(), Unlink::Yes, "the password is left");
+        assert!(!is_verified(&pool, with_pw).await.unwrap(), "nothing linked: not verified");
+        assert_eq!(unlink(&pool, with_pw, Provider::GOOGLE).await.unwrap(), Unlink::NotLinked);
+        // a no-password account with two providers may let go of one, never the second
+        let mut conn = pool.acquire().await.unwrap();
+        assert!(link(&mut conn, other, Provider::GOOGLE, &format!("lg3-{run}"), None).await.unwrap());
+        drop(conn);
+        assert_eq!(unlink(&pool, other, Provider::DISCORD).await.unwrap(), Unlink::Yes);
+        assert_eq!(unlink(&pool, other, Provider::GOOGLE).await.unwrap(), Unlink::LastWayIn);
+        // the mark where the pages read it: the profile, and a free name never wears it
+        let name: String = sqlx::query_scalar("SELECT name FROM streamers WHERE id = $1").bind(other).fetch_one(&pool).await.unwrap();
+        assert!(crate::profile::load_profile(&pool, &name).await.unwrap().oauth_verified);
+        assert!(!crate::profile::load_profile(&pool, &format!("oa-pw-{run}")).await.unwrap().oauth_verified);
+        assert!(!crate::profile::load_profile(&pool, &format!("oa-nobody-{run}")).await.unwrap().oauth_verified, "no row: no mark");
     }
 }

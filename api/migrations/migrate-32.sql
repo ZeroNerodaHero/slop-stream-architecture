@@ -1,15 +1,17 @@
--- logging in with google, twitch or discord (docs/accounts.md). one row per outside account
+-- logging in with google or discord (docs/accounts.md). one row per outside account
 -- linked to one of ours. keyed on the provider's own stable user id, never on an email or a
 -- display name: those change, and an email match is not proof it is the same person.
 -- `email` is what the provider said, kept for later (resets, otp). never shown to anyone else.
 CREATE TABLE oauth_identities (
     user_id uuid NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
-    provider text NOT NULL CHECK (provider IN ('google', 'twitch', 'discord')),
+    -- oauth.rs `PROVIDERS` is the list; a slug shape here, so a new provider needs no migration
+    provider text NOT NULL CHECK (provider ~ '^[a-z0-9_]{1,32}$'),
     provider_user_id text NOT NULL,
     email text,
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (provider, provider_user_id),
-    -- one of each provider per account; also the index for "this account's logins"
+    -- one of each provider per account; also the index for "this account's logins" and for
+    -- the oauth-verified mark (oauth.rs `linked_sql!`: an EXISTS on user_id, which leads)
     UNIQUE (user_id, provider)
 );
 

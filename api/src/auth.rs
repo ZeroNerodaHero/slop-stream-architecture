@@ -101,7 +101,7 @@ fn needs_rehash(hash: &str) -> bool {
     !(same_algorithm && same_version && same_params && same_len)
 }
 
-/// What `password_hash` holds for an account made with google, twitch or discord and no
+/// What `password_hash` holds for an account made with a provider (google, discord) and no
 /// password yet (oauth.rs). Not a hash: `PasswordHash::new` refuses it, so no typed password
 /// ever verifies against it. Not null either: null means "a name with no account", and every
 /// `password_hash IS NOT NULL` in the api (is_claimed, the ✓, dms, ...) must count this account.
@@ -635,20 +635,21 @@ async fn logout_all(State(s): State<AppState>, Me(me): Me) -> Result<Response, A
 /// profile tab to say when it may change again.
 async fn me(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let Some(me) = me else {
-        return Ok(Json(json!({ "id": null, "name": null, "renamed_at": null, "has_password": null, "held": [] })));
+        return Ok(Json(json!({ "id": null, "name": null, "renamed_at": null, "has_password": null, "oauth_verified": null, "held": [] })));
     };
-    let row: Option<(Option<DateTime<Utc>>, Option<String>)> = sqlx::query_as("SELECT renamed_at, password_hash FROM streamers WHERE id = $1")
-        .bind(me.id)
-        .fetch_optional(&s.db)
-        .await?;
-    let (renamed_at, hash) = row.unwrap_or((None, None));
+    let row: Option<(Option<DateTime<Utc>>, Option<String>, bool)> =
+        sqlx::query_as(concat!("SELECT s.renamed_at, s.password_hash, ", crate::oauth::linked_sql!("s"), " FROM streamers s WHERE s.id = $1"))
+            .bind(me.id)
+            .fetch_optional(&s.db)
+            .await?;
+    let (renamed_at, hash, oauth_verified) = row.unwrap_or((None, None, false));
     let has_password = hash.as_deref().is_some_and(is_password);
     // the names held for me: going back onto one is allowed any time (rename_wait)
     let held: Vec<String> = sqlx::query_scalar("SELECT name FROM held_names WHERE user_id = $1 AND until > now() ORDER BY name")
         .bind(me.id)
         .fetch_all(&s.db)
         .await?;
-    Ok(Json(json!({ "id": me.id, "name": me.name, "renamed_at": renamed_at, "has_password": has_password, "held": held })))
+    Ok(Json(json!({ "id": me.id, "name": me.name, "renamed_at": renamed_at, "has_password": has_password, "oauth_verified": oauth_verified, "held": held })))
 }
 
 /// The login's own password, counted on the login limiter first: a stolen cookie is not

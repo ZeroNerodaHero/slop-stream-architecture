@@ -72,7 +72,7 @@ pub(crate) const SEARCH: Rule = rule("search", 60, 60, Key::Who);
 pub(crate) const WRITE: Rule = rule("write", 120, 60, Key::Who);
 /// Signup, login, logout, password and name changes, on top of their own counts.
 pub(crate) const AUTH: Rule = rule("auth", 30, 60, Key::Ip);
-/// Logging in with google, twitch or discord: starting one, the provider's redirect back, the
+/// Logging in with google or discord: starting one, the provider's redirect back, the
 /// pick-a-name step, unlinking. By address: a start is a redis write each, a callback two
 /// outbound https calls. A person needs a handful.
 pub(crate) const OAUTH: Rule = rule("oauth", 30, 60, Key::Ip);
