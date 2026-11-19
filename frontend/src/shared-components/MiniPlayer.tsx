@@ -250,8 +250,8 @@ export function MiniPlayer() {
       id="corner-players"
       className={cn(
         'pointer-events-none fixed bottom-6 z-50 flex flex-col items-end gap-3',
-        // the sidebar can take the right edge: keep the players in the page, not on the column
-        side === 'right' ? (sidebarOpen ? 'right-96' : 'right-[6.5rem]') : 'right-6'
+        // the sidebar can take the right edge: keep the players in the page, not on the column (UserPanel.tsx: 3.5rem closed, 300px open, and the 1.5rem)
+        side === 'right' ? (sidebarOpen ? 'right-[324px]' : 'right-20') : 'right-6'
       )}
     >
       <WatchCorner />
