@@ -561,9 +561,9 @@ function LiveFace({ name }: { name: string }) {
  * panel's, a pane where its lines were (`SearchResults`); the panel has no box of its own.
  * Escape takes the list down, then empties the box, and the roster is whole again.
  */
-function RoomSearch({ search, input, flat }: { search: ChatSearch; input: RefObject<HTMLInputElement | null>; flat: boolean }) {
+function RoomSearch({ search, input, flat, className }: { search: ChatSearch; input: RefObject<HTMLInputElement | null>; flat: boolean; className?: string }) {
   return (
-    <form id="group-search-form" onSubmit={search.submit} className="group/search relative shrink-0">
+    <form id="group-search-form" onSubmit={search.submit} className={cn('group/search relative shrink-0', className)}>
       <label htmlFor="group-search" className="sr-only">
         search members and every channel
       </label>
@@ -653,7 +653,10 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
           <Bone className="mt-auto h-10" />
         </div>
         <div className={cn('flex flex-col gap-2 border border-primaryStroke bg-backgroundSecondary p-2', ROSTER_HEIGHT, !membersOpen && 'lg:hidden')}>
-          <Bone className="h-8 shrink-0" />
+          <div className="flex shrink-0 gap-1">
+            <Bone className="h-8 min-w-0 flex-1" />
+            <Bone className="hidden h-8 w-8 shrink-0 lg:block" />
+          </div>
           <div className="flex h-6 shrink-0 items-center">
             <Bone className="h-3 w-20" />
           </div>
@@ -1506,7 +1509,7 @@ function rosterQuery(query: string): string {
  * this browser said so; their card on hover (`Member`). Nothing here acts on a member: what a
  * power does is in the manage dialog, from the header.
  *
- * On a wide screen the arrow at the heading's end folds the roster to a strip of faces
+ * On a wide screen the arrow's square at the search box's end folds the roster to a strip of faces
  * (`MembersStrip`), kept per browser (settings.roomMembersOpen). The roster stays mounted under
  * the strip, hidden, so its search and scroll are where they were when it opens again; the
  * focus goes to the strip's arrow on the fold and back to this one on the unfold.
@@ -1559,28 +1562,33 @@ function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
           folded && 'lg:hidden'
         )}
       >
-        <RoomSearch search={search} input={input} flat={flat} />
         {flat ? (
-          heading
-        ) : (
-          // the heading's row, and at its end the arrow that folds the roster to its strip (a wide screen's)
-          <div className="flex h-6 shrink-0 items-center justify-between pl-0.5">
+          <>
+            <RoomSearch search={search} input={input} flat />
             {heading}
-            <Tooltip content="hide members">
-              <button
-                ref={hideRef}
-                id="group-members-hide"
-                type="button"
-                aria-label="hide members"
-                aria-expanded
-                aria-controls="group-roster"
-                onClick={() => setOpen(false, showRef)}
-                className="hidden h-6 w-6 shrink-0 items-center justify-center border border-transparent text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none lg:flex"
-              >
-                <RiArrowRightSLine aria-hidden size={16} />
-              </button>
-            </Tooltip>
-          </div>
+          </>
+        ) : (
+          <>
+            {/* the search box's row, and at its end the square that folds the roster to its strip (a wide screen's) */}
+            <div className="flex shrink-0 gap-1">
+              <RoomSearch search={search} input={input} flat={false} className="min-w-0 flex-1" />
+              <Tooltip content="hide members">
+                <button
+                  ref={hideRef}
+                  id="group-members-hide"
+                  type="button"
+                  aria-label="hide members"
+                  aria-expanded
+                  aria-controls="group-roster"
+                  onClick={() => setOpen(false, showRef)}
+                  className="hidden h-8 w-8 shrink-0 items-center justify-center border border-primaryStroke bg-background text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none lg:flex"
+                >
+                  <RiArrowRightSLine aria-hidden size={16} />
+                </button>
+              </Tooltip>
+            </div>
+            <div className="flex h-6 shrink-0 items-center pl-0.5">{heading}</div>
+          </>
         )}
         {!room.roster && (
           <p id="group-members-private" className="text-textTertiary">
@@ -1616,43 +1624,36 @@ function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
           </ul>
         )}
       </aside>
-      {folded && <MembersStrip room={room} showRef={showRef} onSearch={() => setOpen(true, input)} onShow={() => setOpen(true, hideRef)} />}
+      {folded && <MembersStrip room={room} showRef={showRef} onShow={() => setOpen(true, hideRef)} />}
     </>
   );
 }
 
 /**
  * The roster folded (a wide screen's, `Roster`): a strip a face wide, the chat's height. The
- * search box's square at its head opens the roster with the focus in the box; then how many are
- * in, and every member's face with the presence square on its corner (the sidebar's, `RailFace`),
- * each a way to them like a roster row, the name its tooltip; the strip scrolls with no bar. At
- * its foot, the arrow that opens the roster again. A private group's guest gets the count alone.
+ * arrow's square at its head opens the roster again; then how many are in, and every member's
+ * face with the presence square on its corner (the sidebar's, `RailFace`), each a way to them
+ * like a roster row, the name its tooltip; the strip scrolls with no bar. A private group's
+ * guest gets the arrow and the count alone.
  */
-function MembersStrip({
-  room,
-  showRef,
-  onSearch,
-  onShow
-}: {
-  room: GroupRoom;
-  showRef: RefObject<HTMLButtonElement | null>;
-  onSearch: () => void;
-  onShow: () => void;
-}) {
+function MembersStrip({ room, showRef, onShow }: { room: GroupRoom; showRef: RefObject<HTMLButtonElement | null>; onShow: () => void }) {
   const presences = useAtomValue(presencesAtom);
   const members = room.roster ?? [];
   return (
     <aside id="group-members-strip" aria-label="members" className={cn('hidden w-14 flex-col border border-primaryStroke bg-backgroundSecondary lg:flex', ROSTER_HEIGHT)}>
       <div className="flex shrink-0 justify-center pt-1.5">
-        <Tooltip content="search members" at="left">
+        <Tooltip content="show members" at="left">
           <button
-            id="group-members-search"
+            ref={showRef}
+            id="group-members-show"
             type="button"
-            aria-label="search members"
-            onClick={onSearch}
-            className="flex h-[calc(2rem+2px)] w-[calc(2rem+2px)] items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textTertiary hover:border-primaryBlue hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none"
+            aria-label="show members"
+            aria-expanded={false}
+            aria-controls="group-roster"
+            onClick={onShow}
+            className="flex h-[calc(2rem+2px)] w-[calc(2rem+2px)] items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none"
           >
-            <RiSearchLine aria-hidden size={18} />
+            <RiArrowLeftSLine aria-hidden size={16} />
           </button>
         </Tooltip>
       </div>
@@ -1681,22 +1682,6 @@ function MembersStrip({
           );
         })}
       </ul>
-      <div className="flex shrink-0 justify-center border-t border-primaryStroke py-1.5">
-        <Tooltip content="show members" at="left">
-          <button
-            ref={showRef}
-            id="group-members-show"
-            type="button"
-            aria-label="show members"
-            aria-expanded={false}
-            aria-controls="group-roster"
-            onClick={onShow}
-            className="flex h-[34px] w-[34px] items-center justify-center border border-transparent text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none"
-          >
-            <RiArrowLeftSLine aria-hidden size={16} />
-          </button>
-        </Tooltip>
-      </div>
     </aside>
   );
 }
