@@ -1,6 +1,6 @@
-import { type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef } from 'react';
+import { type PointerEvent as ReactPointerEvent, type RefObject, useEffect, useLayoutEffect, useRef } from 'react';
 
-import { MOBILE_QUERY, useIsMobile } from '@/infra/mobile';
+import { MOBILE_QUERY, useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
 import { cn } from '@/utils/cn';
 
 /**
@@ -166,4 +166,87 @@ export function useSheetBack(dismiss: () => void, up = true) {
     if (!up || !mobile || !window.matchMedia(MOBILE_QUERY).matches) return;
     return hold({ dismiss: () => latest.current() });
   }, [up, mobile]);
+}
+
+// the keyboard
+
+/** The keyboard up, at least this much of the dimmed page stays above a sheet, to tap it shut. */
+const KEYBOARD_ROOM = 24;
+/** Kept between the box in use (or its form's submit) and the sheet's edge. */
+const KEEP = 12;
+
+/**
+ * A dialog just opened with `showModal()`: the caret goes in its first box (`selector`) on a
+ * desktop. On a phone it does not: that raises the keyboard while the sheet is still sliding up,
+ * and iOS pans the page to the box, so the sheet reads as a box floating mid-window, a desktop's
+ * modal, until the keyboard goes. There the keyboard comes when a box is tapped, so a box that
+ * `showModal()` focused on its own is let go too. Read straight from the window, for the layout
+ * effect that opens the dialog.
+ */
+export function focusOnOpen(dialog: HTMLDialogElement, selector: string) {
+  if (!window.matchMedia(MOBILE_QUERY).matches) {
+    dialog.querySelector<HTMLElement>(selector)?.focus();
+    return;
+  }
+  const at = document.activeElement;
+  if (at instanceof HTMLElement && dialog.contains(at) && at.matches('input, textarea, select, [contenteditable]')) at.blur();
+}
+
+/**
+ * A form's sheet (`SHEET_DIALOG`) on a phone's keyboard, as the chat sheet does it (FriendChat.tsx):
+ * while it is up the document is pinned where it was scrolled to (`useLockedDocument`), so iOS
+ * cannot scroll the page to bring a box over the keyboard; with the keyboard up the sheet sits on
+ * it, no taller than what it leaves (`useVisibleViewport`), and scrolls itself so the box in use,
+ * and its form's submit when there is room for both, are in sight. Nothing on a desktop.
+ */
+export function useSheetKeyboard(ref: RefObject<HTMLDialogElement | null>) {
+  const mobile = useIsMobile();
+  const view = useVisibleViewport(mobile, true);
+  useLockedDocument(mobile, true);
+  const raised = view?.keyboard ? view : null;
+
+  useLayoutEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    const s = dialog.style;
+    if (!raised) {
+      s.marginBottom = s.maxHeight = s.paddingBottom = '';
+      return;
+    }
+    s.marginBottom = `${raised.bottom}px`;
+    s.maxHeight = `${Math.max(0, raised.height - KEYBOARD_ROOM)}px`;
+    // the keyboard covers the home bar: no safe area under the last row
+    s.paddingBottom = '1.25rem';
+    inSight(dialog);
+  }, [ref, raised]);
+
+  // another box tapped while the keyboard is already up
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog || !raised) return;
+    let frame = 0;
+    const focused = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => inSight(dialog));
+    };
+    dialog.addEventListener('focusin', focused);
+    return () => {
+      dialog.removeEventListener('focusin', focused);
+      cancelAnimationFrame(frame);
+    };
+  }, [ref, raised]);
+}
+
+/** Scroll the sheet so the box in use is in it, with its form's submit under it when both fit. */
+function inSight(dialog: HTMLDialogElement) {
+  const field = document.activeElement;
+  if (!(field instanceof HTMLElement) || field === dialog || !dialog.contains(field)) return;
+  const box = dialog.getBoundingClientRect();
+  const at = field.getBoundingClientRect();
+  const submit = field.closest('form')?.querySelector<HTMLElement>('[type="submit"]');
+  const last = Math.max(at.bottom, submit?.getBoundingClientRect().bottom ?? at.bottom);
+  let by = Math.max(0, last - (box.bottom - KEEP));
+  // the box itself wins over the submit
+  if (at.top - by < box.top + KEEP) by = at.top - box.top - KEEP;
+  if (by) dialog.scrollTop += by;
 }

@@ -77,11 +77,15 @@ export function useVisibleViewport(on: boolean, pinned = false): VisibleViewport
  * moves. The go live page, the watch page and the chat sheet (FriendChat.tsx) on a phone. iOS scrolls a document that is only
  * `overflow: hidden` anyway to bring a focused box over the keyboard, so html and body are also
  * pinned (`position: fixed`, inset 0), and a focus puts back whatever scroll it applied (the
- * visual viewport's own pans are `useVisibleViewport(on, true)`'s).
+ * visual viewport's own pans are `useVisibleViewport(on, true)`'s). `keepPlace`: for a sheet over
+ * a page that scrolls (the auth dialog), the page stays drawn where it was scrolled to while
+ * pinned, and is scrolled back there after.
  */
-export function useLockedDocument(on: boolean) {
+export function useLockedDocument(on: boolean, keepPlace = false) {
   useEffect(() => {
     if (!on) return;
+    const x = window.scrollX;
+    const y = window.scrollY;
     const restores = [document.documentElement, document.body].map((el) => {
       const { overflow, overscrollBehavior, position, inset, width } = el.style;
       el.style.overflow = 'hidden';
@@ -91,6 +95,11 @@ export function useLockedDocument(on: boolean) {
       el.style.width = '100%';
       return () => Object.assign(el.style, { overflow, overscrollBehavior, position, inset, width });
     });
+    // the body is drawn up by what had been scrolled; `inset` is restored above, which puts these back
+    if (keepPlace) {
+      document.body.style.top = `${-y}px`;
+      document.body.style.left = `${-x}px`;
+    }
     let frame = 0;
     const top = () => {
       if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
@@ -106,8 +115,9 @@ export function useLockedDocument(on: boolean) {
       document.removeEventListener('focusin', focused);
       cancelAnimationFrame(frame);
       restores.forEach((restore) => restore());
+      if (keepPlace) window.scrollTo(x, y);
     };
-  }, [on]);
+  }, [on, keepPlace]);
 }
 
 /** How the pinned player's box eases between its full 16:9 and the strip (`useKeyboardStrip`). */

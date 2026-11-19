@@ -4,7 +4,7 @@ import { useLayoutEffect, useRef } from 'react';
 
 import { type AuthMode, authDialogAtom, closeAuthDialog, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { AuthForm } from '@/shared-components/AuthForm';
-import { SHEET_CLOSE, SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
+import { SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack, useSheetKeyboard } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -34,8 +34,8 @@ function AuthBox({ mode }: { mode: AuthMode }) {
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
     dialog.showModal();
-    // the name, not the first focusable (that is the close in the corner)
-    dialog.querySelector<HTMLElement>('#auth-name')?.focus();
+    // the name, not the first focusable (that is the close in the corner); not on a phone, whose keyboard waits for a tap
+    focusOnOpen(dialog, '#auth-name');
     return () => {
       if (dialog.open) dialog.close();
     };
@@ -44,6 +44,7 @@ function AuthBox({ mode }: { mode: AuthMode }) {
   // every way out goes through the element: close() restores focus, then fires `close`
   const close = () => dialogRef.current?.close();
   useSheetBack(close);
+  useSheetKeyboard(dialogRef);
 
   return (
     <dialog

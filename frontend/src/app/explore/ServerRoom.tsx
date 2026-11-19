@@ -71,7 +71,7 @@ import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Face } from '@/shared-components/Face';
 import { RailFace } from '@/shared-components/Friends';
 import { GroupMark } from '@/shared-components/GroupMark';
-import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
+import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack, useSheetKeyboard } from '@/shared-components/MobileSheet';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
@@ -1296,7 +1296,7 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
     dialog.showModal();
-    dialog.querySelector<HTMLElement>('#channel-make-name')?.focus();
+    focusOnOpen(dialog, '#channel-make-name');
     return () => {
       if (dialog.open) dialog.close();
     };
@@ -1305,6 +1305,7 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
   // every way out goes through the element: close() hands focus back, then fires `close`, which is onClose
   const close = () => dialogRef.current?.close();
   useSheetBack(close);
+  useSheetKeyboard(dialogRef);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
