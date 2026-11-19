@@ -25,11 +25,11 @@ export const groupsBusyAtom = atom(false);
 export const groupsStatusAtom = atom('');
 /** The groups the login is in, in the list's order: the badges its chat lines wear. */
 export const myGroupsAtom = atom((get) => get(groupsAtom).filter((g) => g.mine));
-/** The badges my name wears in chat, as the api picks them (groups.rs `badges_of`): my primary group's alone when I picked one, else every one of mine. */
+/** The badges my name wears in chat, as the api picks them (groups.rs `badges_of`): one only: my primary group's when I picked one, else the first of mine. */
 export const myBadgesAtom = atom((get) => {
   const mine = get(myGroupsAtom);
   const primary = mine.find((g) => g.primary);
-  return primary ? [primary] : mine;
+  return primary ? [primary] : mine.slice(0, 1);
 });
 /** The servers the login is in, as the sidebar lists them (docs/follows.md). `undefined` until asked once this page load; `[]` for nobody. */
 export const myServersAtom = atom<Server[] | undefined>(undefined);
@@ -179,7 +179,7 @@ export function setPrimaryGroup(name: string, on: boolean): Promise<boolean> {
   return act(
     on ? 'set' : 'cleared',
     () => (on ? api.setPrimaryGroup(name) : api.clearPrimaryGroup(name)),
-    on ? `${name} is your primary group` : 'no primary group: every badge again',
+    on ? `${name} is your primary group` : 'no primary group: your first group\'s badge again',
     true
   );
 }
