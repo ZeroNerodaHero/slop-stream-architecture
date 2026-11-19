@@ -1122,8 +1122,7 @@ export function ServerPage() {
             <SwipeDrawer id="group-drawer" side="right" open={drawer} onOpenChange={setDrawer} label={`${words.title}: channels and members`}>
               {() => (
                 <>
-                  <div className="flex shrink-0 items-center justify-between border-b border-primaryStroke pl-4 pr-1.5">
-                    <span className="text-sm text-textSecondary">channels and members</span>
+                  <div className="flex shrink-0 items-center justify-end border-b border-primaryStroke pl-4 pr-1.5">
                     <DrawerClose onClose={() => setDrawer(false)} />
                   </div>
                   <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain pb-3">
@@ -1193,7 +1192,7 @@ function ChannelList({
 
   return (
     <nav aria-label="channels" className={cn(boxed && 'border border-primaryStroke bg-backgroundSecondary p-1')}>
-      <h3 className={cn('text-xs font-semibold uppercase tracking-wider text-textTertiary', boxed ? 'flex h-6 items-center px-2' : 'mb-2')}>channels</h3>
+      <h3 className={cn('text-xs font-semibold uppercase tracking-wider text-textTertiary', boxed ? 'flex h-6 items-center px-2' : 'sr-only')}>channels</h3>
       <ul id="group-channels" className={cn('flex flex-col', !boxed && 'gap-0.5')}>
         {channels.map((item) => {
           const here = item.name === channel;
@@ -1550,7 +1549,7 @@ function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
   const here = shown.filter((member) => !isAway(member));
   const away = shown.filter(isAway);
   const heading = (
-    <h3 className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-textTertiary">
+    <h3 className={cn('flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-textTertiary', flat && 'sr-only')}>
       members <span className="font-normal normal-case tracking-normal">{room.members}</span>
     </h3>
   );
