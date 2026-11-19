@@ -1,4 +1,4 @@
-import { RiArrowLeftSLine } from '@remixicon/react';
+import { RiArrowLeftSLine, RiHome5Line } from '@remixicon/react';
 import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
@@ -19,6 +19,8 @@ interface PageFrameProps {
   mobileTitle?: ReactNode;
   /** On a phone, the right end of the row instead of the bell and go live: a group's button for its drawer (ServerRoom.tsx). */
   mobileEnd?: ReactNode;
+  /** On a phone, the page runs to the window's edges: no side padding, no gap under the row, no foot. A group's room (ServerRoom.tsx). */
+  bleed?: boolean;
   children: ReactNode;
 }
 
@@ -38,16 +40,34 @@ export function HomeLink({ reload = false, className }: { reload?: boolean; clas
 }
 
 /**
+ * A phone's way home, where the desktop has the back caret: the house, a 44px square, beside
+ * the menu. Named `home` and no tooltip, the caret's way (tooltips.mdc): the row is pinned to
+ * the window's top edge. The tests click `header a[href="/"]`.
+ */
+function MobileHomeLink() {
+  return (
+    <Link
+      id="home"
+      to="/"
+      aria-label="home"
+      className="flex h-11 w-11 shrink-0 items-center justify-center border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
+    >
+      <RiHome5Line aria-hidden size={22} />
+    </Link>
+  );
+}
+
+/**
  * The right end of every page's title row: the notifications bell (Notifications.tsx, the
  * inbox opens under it), then go live, absent on its own page. Search is the sidebar's
  * (Friends.tsx), and so is the settings gear, at the far end of your line in it (UserPanel.tsx).
  */
-function TopActions() {
+function TopActions({ bell = true }: { bell?: boolean }) {
   const { pathname } = useLocation();
   const onLivePage = pathname.replace(/\/$/, '') === '/live';
   return (
     <div className="ml-auto flex shrink-0 items-center gap-2">
-      <NotificationsBell />
+      {bell && <NotificationsBell />}
       {!onLivePage && (
         <Link id="go-live" to="/live" className={buttonClassName('primary', 'px-3 py-2 text-sm max-md:h-11')}>
           go live
@@ -111,13 +131,15 @@ function useCurrentPart(on: boolean, main: RefObject<HTMLElement | null>, row: R
  * stands at the row's left end, and the next part's pushes it out. Who you are is not here:
  * the sidebar is mounted once by the router's Shell, beside this column.
  *
- * A phone's row is its own (below 768px, mobile.ts): the menu (the sidebar's drawer) at the left,
- * then where you are on one line, cut with an ellipsis when it is long: `mobileTitle` or the
- * title, or on home the part you have scrolled to (`useCurrentPart`), whose headings then scroll
- * with the page under the row. Then the bell and go live, or `mobileEnd`. Always measured into
- * `--title-row`, home's too: the page starts under it.
+ * A phone's row is its own (below 768px, mobile.ts): the menu (the sidebar's drawer) at the left
+ * on every page, and home beside it on every page but home, then where you are on one line, cut
+ * with an ellipsis when it is long: `mobileTitle` or the title, or on home the part you have
+ * scrolled to (`useCurrentPart`), whose headings then scroll with the page under the row. Then go
+ * live, or `mobileEnd`. No bell: a phone's is in the sidebar's drawer, beside the gear
+ * (UserPanel.tsx). Always measured into `--title-row`, home's too: the page starts under it.
+ * `bleed` takes the page's padding away, so what is under the row reaches the window's edges.
  */
-export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mobileEnd, children }: PageFrameProps) {
+export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mobileEnd, bleed = false, children }: PageFrameProps) {
   const titled = Boolean(title || aside);
   const mobile = useIsMobile();
   const mainRef = useRef<HTMLElement | null>(null);
@@ -147,17 +169,17 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
     const named = mobileTitle ?? title;
     const headed = mobileTitle !== undefined || title !== undefined;
     return (
-      <main ref={mainRef} className={cn('mx-auto px-5 pb-10', width)}>
+      <main ref={mainRef} className={cn('mx-auto', bleed ? 'px-0' : 'px-4 pb-8', width)}>
         {/* the buttons are 44px; the notch or the status bar is over them */}
         <header
           ref={headerRef}
           className={cn(
-            'sticky top-0 z-30 flex min-h-[calc(4rem+env(safe-area-inset-top))] items-center gap-2 border-b border-primaryStroke bg-background pb-2.5 pt-[calc(0.625rem+env(safe-area-inset-top))]',
-            titled && 'mb-6'
+            'sticky top-0 z-30 flex min-h-[calc(4rem+env(safe-area-inset-top))] items-center gap-1 border-b border-primaryStroke bg-background pb-2.5 pt-[calc(0.625rem+env(safe-area-inset-top))]',
+            bleed ? 'px-4' : titled && 'mb-4'
           )}
         >
           <DrawerOpener />
-          {title && <HomeLink className="h-11 w-11 justify-center px-0" />}
+          {title && <MobileHomeLink />}
           {headed ? (
             <h1 id={titleId} className="min-w-0 flex-1 truncate text-xl font-semibold leading-tight">
               {named}
@@ -169,7 +191,7 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
             </p>
           )}
           {aside && <div className="shrink-0">{aside}</div>}
-          {mobileEnd ?? <TopActions />}
+          {mobileEnd ?? <TopActions bell={false} />}
         </header>
         {children}
       </main>

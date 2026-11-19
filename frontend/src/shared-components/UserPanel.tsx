@@ -1,4 +1,4 @@
-import { RiLoginBoxLine, RiLogoutBoxRLine, RiMenuLine, RiSettings3Line, RiTerminalBoxLine, RiUserAddLine } from '@remixicon/react';
+import { RiLoginBoxLine, RiLogoutBoxRLine, RiMenuLine, RiNotification3Line, RiSettings3Line, RiTerminalBoxLine, RiUserAddLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
@@ -9,7 +9,7 @@ import { closeAllDms, loadDms } from '@/infra/atoms/dm-atoms';
 import { forgetFollowing, friendsOpenAtom, loadFollowing, streamingFriendsAtom } from '@/infra/atoms/follow-atoms';
 import { forgetMyServers, loadMyServers } from '@/infra/atoms/groups-atoms';
 import { openInspector } from '@/infra/atoms/inspector-atoms';
-import { forgetNotifications, loadNotifications } from '@/infra/atoms/notification-atoms';
+import { forgetNotifications, loadNotifications, toggleNotifications, unreadNotificationsAtom } from '@/infra/atoms/notification-atoms';
 import { myPresenceAtom, type Presence, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { identityChanged, loadMyProfile, myAvatarVersionAtom, myNameAtom } from '@/infra/atoms/profile-atoms';
 import { inspectorEnabledAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
@@ -21,7 +21,7 @@ import { Face } from '@/shared-components/Face';
 import { Friends } from '@/shared-components/Friends';
 import { PresenceSquare } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
-import { DrawerClose, SwipeDrawer } from '@/shared-components/SwipeDrawer';
+import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -96,6 +96,40 @@ function SettingsOpener({ className }: { className?: string }) {
         className={cn(ACTION, ICON_TAP, 'align-middle hover:no-underline', className)}
       >
         <RiSettings3Line aria-hidden size={ICON} />
+      </button>
+    </Tooltip>
+  );
+}
+
+/**
+ * A phone's bell: the title row has none (PageFrame.tsx), so it is here, just before the gear.
+ * The drawer shuts and the list (Notifications.tsx) opens under the title row.
+ */
+function NotificationsOpener() {
+  const unread = useAtomValue(unreadNotificationsAtom);
+  return (
+    <Tooltip content={unread > 0 ? `notifications: ${unread} new` : 'notifications'}>
+      <button
+        id="drawer-notifications"
+        type="button"
+        aria-label={unread > 0 ? `notifications, ${unread} new` : 'notifications'}
+        aria-haspopup="dialog"
+        data-unread={unread || undefined}
+        onClick={() => {
+          store.set(friendsOpenAtom, false);
+          toggleNotifications();
+        }}
+        className={cn(ACTION, ICON_TAP, 'relative ml-auto align-middle hover:no-underline')}
+      >
+        <RiNotification3Line aria-hidden size={ICON} />
+        {unread > 0 && (
+          <span
+            aria-hidden
+            className="absolute right-1 top-1.5 flex h-3.5 min-w-3.5 items-center justify-center bg-primaryBlue px-0.5 text-[9px] font-semibold leading-none text-background"
+          >
+            {unread > 99 ? '99+' : unread}
+          </span>
+        )}
       </button>
     </Tooltip>
   );
@@ -355,7 +389,8 @@ export function UserPanel() {
                   <InspectorOpener />
                 </>
               )}
-              <SettingsOpener className={mirrored ? 'mr-auto' : 'ml-auto'} />
+              {mobile && <NotificationsOpener />}
+              <SettingsOpener className={mobile ? undefined : mirrored ? 'mr-auto' : 'ml-auto'} />
             </span>
           </span>
         </>
@@ -416,13 +451,12 @@ export function UserPanel() {
                   <InspectorOpener />
                 </>
               )}
-              <SettingsOpener className={mirrored ? 'mr-auto' : 'ml-auto'} />
+              {mobile && <NotificationsOpener />}
+              <SettingsOpener className={mobile ? undefined : mirrored ? 'mr-auto' : 'ml-auto'} />
             </span>
           </span>
         </>
       )}
-      {/* a phone's drawer: its × at the end of its head, past the gear */}
-      {mobile && <DrawerClose onClose={closeFriends} className="-mr-1.5" />}
     </div>
   );
 

@@ -266,7 +266,7 @@ function NotificationsList() {
     const onDown = (e: PointerEvent) => {
       const target = e.target as Node | null;
       if (!target || dialogRef.current?.contains(target)) return;
-      if (target instanceof Element && target.closest('#notifications')) return;
+      if (target instanceof Element && target.closest('#notifications, #drawer-notifications')) return;
       closeNotifications();
     };
     const onKey = (e: KeyboardEvent) => {
@@ -318,7 +318,10 @@ function NotificationsList() {
         cn(
           'fixed z-50 m-0 flex max-h-[min(560px,calc(100dvh-5.5rem))] flex-col overflow-hidden p-0 text-base text-textPrimary open:flex',
           // until the bell is measured: the top right of the window
-          !style && 'left-auto right-5 top-[4.5rem] w-[min(400px,calc(100vw-2.5rem))]'
+          !style && 'left-auto right-5 top-[4.5rem] w-[min(400px,calc(100vw-2.5rem))]',
+          // a phone has no bell in its title row (its bell is in the sidebar's drawer): the list spans the window under the row
+          !style &&
+            'max-md:left-2 max-md:right-2 max-md:top-[calc(var(--title-row,4rem)+0.5rem)] max-md:max-h-[calc(100dvh-var(--title-row,4rem)-1rem-env(safe-area-inset-bottom))] max-md:w-auto'
         )
       )}
     >
