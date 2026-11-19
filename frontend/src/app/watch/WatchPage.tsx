@@ -247,15 +247,10 @@ export function WatchPage() {
           )}
           {oauthVerified && <OAuthMark id="watch-oauth-verified" size={22} className="ml-2 align-[-3px]" />}
           {isDummyName(name) && <TestBadge />}
-          {/* the word beside the name (docs/status.md): the square and the word, from the events socket.
-              not live, `online` is the reason to wait and `do not disturb` the reason not to */}
+          {/* the presence word is not drawn beside the name any more: the status line under it carries that.
+              #presence stays, unseen, for screen readers and the browser tests that key on it (docs/spec.md) */}
           {name && (
-            <span
-              id="presence"
-              data-presence={presence}
-              className={cn('ml-3 inline-flex items-center gap-1.5 align-middle text-base font-normal', PRESENCE_TEXT[presence])}
-            >
-              <span aria-hidden className={cn('inline-block h-3 w-3', PRESENCE_SQUARE[presence])} />
+            <span id="presence" data-presence={presence} className="sr-only">
               {PRESENCE_WORD[presence]}
             </span>
           )}
