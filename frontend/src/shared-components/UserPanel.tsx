@@ -21,7 +21,7 @@ import { Face } from '@/shared-components/Face';
 import { Friends } from '@/shared-components/Friends';
 import { PresenceSquare } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
-import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
+import { DrawerClose, SwipeDrawer } from '@/shared-components/SwipeDrawer';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -115,14 +115,9 @@ function Status({ presence }: { presence: Presence }) {
 
 /**
  * A phone's way into the sidebar's drawer (UserPanel below), at the left of every page's title
- * row: the menu glyph and your picture with its presence square, one 44px-tall button. Hidden
- * at 768px and up, where the column is beside the page.
+ * row (PageFrame.tsx): the menu glyph, a 44px square. Who you are is the drawer's head.
  */
 export function DrawerOpener() {
-  const me = useAtomValue(meAtom);
-  const nick = useAtomValue(nickAtom);
-  const avatar = useAtomValue(myAvatarVersionAtom);
-  const presence = useAtomValue(myPresenceAtom);
   const open = useAtomValue(friendsOpenAtom);
   return (
     <Tooltip content={open ? null : 'menu'}>
@@ -134,13 +129,9 @@ export function DrawerOpener() {
         aria-expanded={open}
         aria-controls="user-drawer"
         onClick={() => store.set(friendsOpenAtom, true)}
-        className="-ml-2 flex h-11 shrink-0 items-center gap-2 border border-transparent px-2 text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none md:hidden"
+        className="-ml-2.5 flex h-11 w-11 shrink-0 items-center justify-center border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
       >
         <RiMenuLine aria-hidden size={22} />
-        <span className="relative flex">
-          <Face name={me ?? nick} version={avatar} className="h-8 w-8" />
-          <PresenceSquare presence={presence} className="border-background" />
-        </span>
       </button>
     </Tooltip>
   );
@@ -430,12 +421,14 @@ export function UserPanel() {
           </span>
         </>
       )}
+      {/* a phone's drawer: its × at the end of its head, past the gear */}
+      {mobile && <DrawerClose onClose={closeFriends} className="-mr-1.5" />}
     </div>
   );
 
-  // a phone: the column is a drawer from the left (SwipeDrawer.tsx), opened by a swipe in from the edge or the menu button at the
-  // left of the title row (`DrawerOpener`). you at its head, then the lists, open the whole time it is on screen. `friendsOpenAtom` is
-  // its open, so a page change, a name picked and the gear shut it as they shut the column
+  // a phone: the column is a drawer from the left (SwipeDrawer.tsx), opened by the menu button at the left of the title row
+  // (`DrawerOpener`). you at its head, then the lists, open the whole time it is on screen. `friendsOpenAtom` is its open, so a
+  // page change, a name picked and the gear shut it as they shut the column
   if (mobile) {
     return (
       <SwipeDrawer id="user-drawer" side="left" open={friendsOpen} onOpenChange={(to) => store.set(friendsOpenAtom, to)} label="you">

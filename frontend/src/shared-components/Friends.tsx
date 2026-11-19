@@ -22,6 +22,7 @@ import {
   textSizeAtom
 } from '@/infra/atoms/settings-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
+import { useIsMobile } from '@/infra/mobile';
 import { Face } from '@/shared-components/Face';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { GroupMark } from '@/shared-components/GroupMark';
@@ -62,6 +63,12 @@ const COLUMN = 'px-[calc(1.25rem-1px)]';
 const FACE_REM = 2.5;
 /** The row around a face: a 1px border above it and below it. The box's own border is inside its 2.5rem. */
 const ROW_BORDER_PX = 2;
+/**
+ * On a phone (mobile.ts) the row has a pixel more above the face and below it (`ROW_TAP`), so it
+ * is a finger's 44px at the browser's size, not 42. The desktop's column keeps its 42.
+ */
+const ROW_TAP_PX = 2;
+const ROW_TAP = 'max-md:py-px';
 /** The icon line over a list: the icon, and the word in text-xs, are both 16px. The chat button at the friends line's end is 14. */
 const HEAD_PX = 16;
 /** The line between two lists. The room to grab it reaches into the gaps on either side. */
@@ -74,7 +81,7 @@ const MIN_GAP = 8;
  * it again when the setting changes; the 1px borders are px and stay.
  */
 interface Sizes {
-  /** A face, 2.5rem, and the row's border above and below it: the pitch of a list less its gap. 42 at the browser's size. */
+  /** A face, 2.5rem, and the row's border above and below it: the pitch of a list less its gap. 42 at the browser's size, 44 on a phone. */
   face: number;
   /** The search box, 2.5rem: 40 at the browser's size. */
   search: number;
@@ -86,8 +93,8 @@ function rootPx(): number {
   return Number.isFinite(px) && px > 0 ? px : 16;
 }
 
-function sizesOf(rem: number): Sizes {
-  return { face: FACE_REM * rem + ROW_BORDER_PX, search: FACE_REM * rem };
+function sizesOf(rem: number, mobile: boolean): Sizes {
+  return { face: FACE_REM * rem + ROW_BORDER_PX + (mobile ? ROW_TAP_PX : 0), search: FACE_REM * rem };
 }
 
 /**
@@ -264,6 +271,7 @@ function Row({ id, person, side, open, folded = false, onPick, children }: RowPr
         aria-label={`${person.name} · ${PRESENCE_WORD[person.presence]}`}
         className={cn(
           'flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue',
+          ROW_TAP,
           mirrored && 'flex-row-reverse'
         )}
       >
@@ -577,6 +585,7 @@ function GroupRow({ id, server, side, open, onPick }: { id: string; server: Serv
         aria-label={`${words.title}${words.tag ? ` #${words.tag}` : ''} · ${count}`}
         className={cn(
           'flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue',
+          ROW_TAP,
           mirrored && 'flex-row-reverse'
         )}
       >
@@ -814,7 +823,7 @@ function FollowingSkeleton({ side, open }: { side: PanelSide; open: boolean }) {
       {Array.from({ length: FACES_GUESS }, (_, i) => (
         <div key={i} className={cn('flex items-center gap-2', mirrored && 'flex-row-reverse', INSET[side])}>
           {/* a face's square: `Sizes.face`, 2.5rem and the row's border */}
-          <Bone className="h-[calc(2.5rem+2px)] w-[calc(2.5rem+2px)] shrink-0" />
+          <Bone className="h-[calc(2.5rem+2px)] w-[calc(2.5rem+2px)] shrink-0 max-md:h-11" />
           {open && <Bone className="h-3.5 w-24" />}
         </div>
       ))}
@@ -872,7 +881,8 @@ export function Friends({ open, side, onPick }: FriendsProps) {
   // the face and the box in px, off the document: read again when the text size changes, which the room's observer below does not see (the stack's
   // height stays, its rows grow). the setting's own subscriber (settings-atoms.ts) has put the size on <html> by then: the store tells every
   // subscriber in the same call, and react renders after it
-  const sizes = useMemo(() => sizesOf(rootPx()), [textSize]);
+  const mobile = useIsMobile();
+  const sizes = useMemo(() => sizesOf(rootPx(), mobile), [textSize, mobile]);
 
   // the room follows the window (and the note under the lists, when there is one)
   useEffect(() => {

@@ -269,6 +269,8 @@ export function WatchPage() {
         </>
       }
       titleId="who"
+      // a phone's row: the stream's name alone, on one line
+      mobileTitle={name}
       wide
     >
       {/* the video column, the chat, the tabs, in that order. left or right is a grid at lg+ (the
