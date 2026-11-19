@@ -690,7 +690,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
       {/* on a phone a stream's chat (watch, go live) drops this bar to leave the lines room over the keyboard: kept for screen readers, ids and the hide-bots setting as they are. a group's bar stays, it names the channel */}
       {!embedded && (
         <header
-          className={cn('flex items-center justify-between gap-3 border-b border-primaryStroke px-4 py-2 text-base', !server && 'max-md:sr-only')}
+          className={cn('flex items-center justify-between gap-3 border-b border-primaryStroke px-3 py-1.5 text-base', !server && 'max-md:sr-only')}
         >
           <span id={server ? 'channel' : undefined} className="truncate font-semibold">
             {server ? `#${channel}` : 'chat'}
@@ -742,7 +742,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
             data-style={shape}
             // its scroll is its own: the top of the history does not scroll the page under it (the room page snaps between its views).
             // a column: a log is a line each at an even gap; bubbles stand close within a minute and apart between minutes, blocks close within a run and apart between runs (ChatLine.tsx)
-            className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-4 py-2 text-base leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
+            className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-2 py-1 text-base leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
           >
             {waiting && <ChatSkeleton shape={shape} />}
             {!waiting && lines.length === 0 && (
@@ -823,7 +823,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
         )}
       </div>
 
-      <footer className="border-t border-primaryStroke p-3">
+      <footer className="border-t border-primaryStroke p-2">
         {needsNick ? (
           <div className="flex flex-wrap gap-2">
             <label htmlFor="chat-nick" className="sr-only">
@@ -884,7 +884,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                   type="button"
                   id="chat-picture"
                   aria-label="picture"
-                  className="flex h-10 w-10 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
                   disabled={uploading || images.length >= MAX_CHAT_IMAGES}
                   onClick={() => fileRef.current?.click()}
                 >
@@ -897,17 +897,18 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                 value={draft}
                 onChange={(e) => setChatDraft(e.target.value)}
                 onKeyDown={onKey}
-                placeholder={`say something as ${asStreamer ? name : speaker}`}
+                placeholder="comment"
+                aria-label={`comment as ${asStreamer ? name : speaker}`}
                 autoComplete="off"
                 // a phone zooms in on a focused box under 16px: never smaller there, whatever text size the appearance tab picked
-                className="h-10 min-w-0 flex-1 border border-primaryStroke bg-background px-3 text-base max-md:h-11 max-md:text-[length:max(1rem,16px)]"
+                className="h-9 min-w-0 flex-1 border border-primaryStroke bg-background px-3 text-base max-md:h-11 max-md:text-[length:max(1rem,16px)]"
               />
               {/* refused for the rate: the button goes red and counts down to the next line, and shakes at each try meanwhile. still a button, so a try can shake it */}
               <Button
                 id="chat-send"
                 variant={wait > 0 ? 'danger' : 'primary'}
                 // a phone's: a 44px target at least, as tall as the box beside it
-                className="h-10 shrink-0 px-4 text-base tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
+                className="h-9 shrink-0 px-4 text-base tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
                 disabled={!canSend}
                 title={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : undefined}
                 data-wait={wait > 0 ? wait : undefined}
