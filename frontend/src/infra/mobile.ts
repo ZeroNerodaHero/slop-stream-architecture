@@ -40,7 +40,7 @@ export type VisibleViewport = {
 /**
  * The part of the window the on-screen keyboard leaves, from the visual viewport, kept as it
  * resizes and pans. The one hook for every phone box that sits on the keyboard: the /live page
- * (LivePage.tsx) and the chat sheet (FriendChat.tsx). null while off, or where the browser has
+ * (LivePage.tsx), the watch page (WatchPage.tsx) and the chat sheet (FriendChat.tsx). null while off, or where the browser has
  * no `visualViewport` (the box then falls back to `dvh`).
  */
 export function useVisibleViewport(on: boolean): VisibleViewport | null {
@@ -67,3 +67,28 @@ export function useVisibleViewport(on: boolean): VisibleViewport | null {
   }, [on]);
   return on ? view : null;
 }
+
+/** While on: the document does not scroll (nor bounce), so the page is the window and nothing else moves. The go live page and the watch page on a phone. */
+export function useLockedDocument(on: boolean) {
+  useEffect(() => {
+    if (!on) return;
+    const root = document.documentElement;
+    const { overflow, overscrollBehavior } = root.style;
+    root.style.overflow = 'hidden';
+    root.style.overscrollBehavior = 'none';
+    return () => {
+      root.style.overflow = overflow;
+      root.style.overscrollBehavior = overscrollBehavior;
+    };
+  }, [on]);
+}
+
+/**
+ * The stream's chat on a phone page that is the window (LivePage.tsx, WatchPage.tsx): edge to
+ * edge in its tab, no box, no least height (the tab is what is left of the window, less with the
+ * keyboard up), and the send row's padding is the safe area at the foot, but not while the
+ * keyboard covers that edge (ServerRoom.tsx's room does the same). The page's root is
+ * `group/phone`, with `data-keyboard` from `useVisibleViewport`.
+ */
+export const CHAT_MOBILE =
+  'min-h-0 border-0 bg-background [&>header]:px-3 [&_#chat-lines]:px-3 [&>footer]:px-3 [&>footer]:pt-2 [&>footer]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] group-data-[keyboard=true]/phone:[&>footer]:pb-2';

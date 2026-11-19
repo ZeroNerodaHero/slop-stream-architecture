@@ -48,6 +48,7 @@ import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
+import { CHAT_MOBILE, useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
 import { dummyPage } from '@/infra/about';
 import { api } from '@/infra/api';
 import { cleanName, isDummyName } from '@/infra/names';
@@ -86,6 +87,10 @@ const NOT_LIVE_WORDS: Record<Presence, string> = {
 /** Under the player: their page (docs/about.md), when they stream (docs/calendar.md), and where else to find them (docs/socials.md). In this order. */
 type WatchTab = 'about' | 'calendar' | 'socials';
 const WATCH_TABS: readonly WatchTab[] = ['about', 'calendar', 'socials'];
+
+/** A phone's tabs under the player: the same three, and the chat at the row's right end. Chat is where a phone's page opens, as on go live (LivePage.tsx). */
+type PhoneTab = WatchTab | 'chat';
+const PHONE_TABS: readonly PhoneTab[] = [...WATCH_TABS, 'chat'];
 
 /**
  * The document itself was served for a stream's page: the api put its card inside `#root`, a
@@ -135,6 +140,14 @@ function DmButton({ name, className }: { name: string; className?: string }) {
 
 export function WatchPage() {
   const [tab, setTab] = useState<WatchTab>('about');
+  const mobile = useIsMobile();
+  // a phone's page is the window (as go live's is): the visual viewport (mobile.ts) is its box, so the send row stays over the keyboard
+  const view = useVisibleViewport(mobile);
+  useLockedDocument(mobile);
+  const [phoneTab, setPhoneTab] = useState<PhoneTab>('chat');
+  // a phone's tabs once opened stay mounted, hidden while another is open (the chat keeps its place and
+  // the line being typed); the calendar and the socials wait for their first open
+  const [opened, setOpened] = useState<ReadonlySet<PhoneTab>>(() => new Set<PhoneTab>(['chat', 'about']));
   const params = useParams<{ name: string }>();
   const navigate = useNavigate();
   const { state } = useLocation();
@@ -231,44 +244,298 @@ export function WatchPage() {
     navigate('/');
   };
 
+  const title = (
+    <>
+      {/* their picture, or the letter their name makes when they have none: a face left of the name either way */}
+      {name && <Face name={name} version={avatar} className="mr-3 inline-flex align-middle" />}
+      {bio ? (
+        <Tooltip content={bio}>
+          <span>{name}</span>
+        </Tooltip>
+      ) : (
+        name
+      )}
+      {verified && (
+        <Tooltip content="has an account: this really is them">
+          <span role="img" aria-label="has an account" className="ml-2 text-increase">
+            ✓
+          </span>
+        </Tooltip>
+      )}
+      {oauthVerified && <OAuthMark id="watch-oauth-verified" size={22} className="ml-2 align-[-3px]" />}
+      {isDummyName(name) && <TestBadge />}
+      {/* the presence word is not drawn beside the name any more: the status line under it carries that.
+          #presence stays, unseen, for screen readers and the browser tests that key on it (docs/spec.md) */}
+      {name && (
+        <span id="presence" data-presence={presence} className="sr-only">
+          {PRESENCE_WORD[presence]}
+        </span>
+      )}
+      {/* their status (`bio` on the wire) is hover only: not drawn under the name, it shows in a tooltip
+          over the name. #bio stays, unseen, for screen readers and the tests that key on it (docs/spec.md) */}
+      {bio && (
+        <span id="bio" className="sr-only">
+          {bio}
+        </span>
+      )}
+    </>
+  );
+
+  // the player, or the profile while they are not live, and the streamer's pictures beside it: the
+  // desktop's video column, and a phone's pinned top. a phone has no chat button on it: the chat is
+  // a tab there, never closed
+  const player = (
+    <>
+      {/* the controls sit on the video, along its bottom edge. they stay up while the sound is off
+          (a silent stream should show why) and otherwise come up on hover, while a control has
+          keyboard focus (not the focus a mouse click leaves behind, or they would stick), and on a
+          screen with no hover at all. "tap to play" is the exception: big, in the middle. */}
+      {/* not live, and while the api is being asked: the profile where the picture would be
+          (docs/follows.md). the face, the word and a sentence; the tabs sit below and the chat stays.
+          the player appears when they start (`live` pushed on the events socket, docs/status.md), so
+          there is nothing to press and no black box, not even for the ask: a player with no stream
+          would be one. a streamer who put an offline picture gets it where the player goes, the
+          profile under it, and the line they wrote (if any) above the sentence.
+          the one exception is a stream that is expected: they are streaming and the page is still
+          asking (or video is a beat behind the word). then the player's box stands grey where the
+          player goes, so the page has its shape and nothing moves down when the picture lands.
+          never a <video>, never for a name that is not streaming: nothing flashes on an offline
+          profile. the chat's button sits on it where the player's does */}
+      {phase === 'waiting' || phase === 'loading' ? (
+        expecting ? (
+          <Skeleton id="player-loading" label="loading the stream" className="relative aspect-video w-full border border-primaryStroke bg-backgroundSecondary">
+            <Bone className="absolute inset-0" />
+            <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
+              {mobile ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
+              <DmButton name={name} />
+            </div>
+          </Skeleton>
+        ) : (
+          <>
+            {offline !== null && <OfflinePicture id="offline-picture" src={api.offlineUrl(name, offline)} className="mb-3 w-full" />}
+            {/* a phone's is smaller: it is pinned over the tabs, and the open tab gets what it leaves */}
+            <div id="profile" className={cn(panelClassName('flex flex-wrap items-center gap-6 p-6 max-md:gap-3 max-md:p-3'))} data-presence={presence}>
+              <Face name={name} version={avatar} className="h-28 w-28 text-5xl max-md:h-14 max-md:w-14 max-md:text-2xl" />
+              <div className="min-w-0 flex-1">
+                <p className={cn('flex items-center gap-2 text-lg font-semibold', PRESENCE_TEXT[presence])}>
+                  <span aria-hidden className={cn('inline-block h-3 w-3', PRESENCE_SQUARE[presence])} />
+                  {PRESENCE_WORD[presence]}
+                </p>
+                {offlineNote && (
+                  <p id="offline-note" className="mt-1 [overflow-wrap:anywhere]">
+                    {offlineNote}
+                  </p>
+                )}
+                <p className="mt-1 text-textSecondary">{phase === 'loading' ? 'loading' : NOT_LIVE_WORDS[presence]}</p>
+              </div>
+              {/* the chat's button lives on the player; without a player it lives here, and a friend's line button with it */}
+              <span className="flex items-center gap-3 self-start">
+                {!mobile && <ChatOpenButton />}
+                <DmButton name={name} />
+              </span>
+            </div>
+          </>
+        )
+      ) : (
+        <div className="group relative">
+          {/* the streamer's frame as they laid it out (docs/screen.md): `#video`, the one with the sound,
+              stands in for the bottom video layer; a video layer clicked is shown alone */}
+          <SceneView
+            id="scene"
+            layers={layers}
+            streamFor={slotStreamAtom}
+            imageUrl={(asset) => api.assetUrl(name, asset)}
+            // their avatar, moving with the sound arriving on #video's stream: drawn here from the name, nothing of it on the wire
+            avatar={{ name, version: avatar, streamAtom: remoteStreamAtom }}
+            main={{
+              id: 'video',
+              streamAtom: remoteStreamAtom,
+              videoRef,
+              slot: primary,
+              muted,
+              volume,
+              onPlaying: markPlaying,
+              onAutoplayBlocked: markAutoplayBlocked
+            }}
+            onPick={pickSlot}
+          />
+          {/* the same grey over the frame until frames play (`playing` on #video, markPlaying): the box
+              that was loading goes on loading, instead of turning black for the connection. inside the
+              stroke, under the controls and tap to play, and no pointer of its own */}
+          {(phase === 'connecting' || phase === 'connected') && <Bone className="pointer-events-none absolute inset-px" />}
+          {needsTap && (
+            <Button
+              id="tap-to-play"
+              variant="primary"
+              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
+              onClick={() => unmuteVideo(videoRef.current)}
+            >
+              tap to play
+            </Button>
+          )}
+          {/* top left, once frames play: how the picture is arriving. up on its own while it is in trouble */}
+          {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} playback={{ muted, level: volume }} />}
+          {/* while the chat is closed the bar stays up, so the button that brings it back is on the picture.
+              beside it, for a friend, the line to them (docs/dms.md) */}
+          {phase !== 'bad-name' && (
+            <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || (!mobile && !chatOpen)))}>
+              {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
+              {mobile ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
+              <DmButton name={name} />
+              <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'picture in picture'} disabled={cornerTaken} onClick={toCorner}>
+                <PipIcon />
+              </IconButton>
+            </div>
+          )}
+        </div>
+      )}
+      {/* the streamer's pictures that are not in the frame (left beside it, or the frame set aside for one
+          pulled out of it): click one and it is the big one; the sound stays put. `the stream` puts the
+          streamer's frame back when no picture of theirs can */}
+      {(tiles.length > 0 || sceneTile) && (
+        <div id="tiles" className="mt-2 flex gap-2 overflow-x-auto">
+          {sceneTile && (
+            <button
+              id="tile-scene"
+              type="button"
+              onClick={clearChoice}
+              className="flex aspect-video w-40 shrink-0 items-center justify-center border border-dashed border-secondaryStroke text-sm text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-textPrimary"
+            >
+              back to the stream
+            </button>
+          )}
+          {tiles.map((tile) => (
+            <StreamTile key={tile.slot} id={`tile-${tile.slot}`} streamAtom={slotStreamAtom(tile.slot)} label={slotLabel(tile)} onPick={() => pickSlot(tile.slot)} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+
+  // under the picture: what is up, who is watching, and at the right end how many follow them and the
+  // button to (docs/follows.md; the count moves with the click, the api's number comes with the next
+  // grant). while the stream plays the line would say `watching`, which the picture and the word beside
+  // the name already say: then it is for screen readers and the tests alone, and the count stands in its
+  // place, the corner player's way. the line comes back for anything else: not live, connecting, ended.
+  // a phone has it at the top of the about tab
+  const status = (
+    <div className="my-3 flex flex-wrap items-baseline gap-x-4">
+      <StatusLine text={message} tone={tone} className={cn('my-0', phase === 'watching' && 'sr-only')} />
+      <ViewerCount id="viewers" count={viewers} className="text-lg text-textSecondary" />
+      {name && !isDummyName(name) && (
+        <span className="ml-auto inline-flex items-center gap-3">
+          {followers !== null && (
+            <span id="followers" className="text-lg text-textSecondary">
+              {followers} {followers === 1 ? 'follower' : 'followers'}
+            </span>
+          )}
+          <FollowButton id="follow" name={name} onChange={(now) => store.set(followersAtom, (followers ?? 0) + (now ? 1 : -1))} />
+        </span>
+      )}
+    </div>
+  );
+
+  // after a connection failed, under the picture on a phone too: it is what the picture is waiting on
+  const retryRow = canRetry && (
+    <div className="my-3">
+      <button id="retry" type="button" className="text-base font-semibold text-primaryBlue" onClick={retry}>
+        retry
+      </button>
+    </div>
+  );
+
+  if (mobile) {
+    // a phone's page is the window and never scrolls (go live's way, LivePage.tsx): the row, the
+    // player pinned under it, one row of tabs (about, calendar and socials at the left, the chat at
+    // the right end), and the open tab in what is left. only a tab's own content scrolls. the box
+    // follows the visual viewport, so the chat's send row stays over the keyboard. the chat is the
+    // panel here, not ChatSlot: a phone has no column and no window to put it in
+    const tabs: readonly PhoneTab[] = !name ? [] : phase === 'bad-name' ? ['chat'] : PHONE_TABS;
+    const shown: PhoneTab = tabs.includes(phoneTab) ? phoneTab : 'chat';
+    const openTab = (t: PhoneTab) => {
+      setPhoneTab(t);
+      setOpened((was) => (was.has(t) ? was : new Set(was).add(t)));
+    };
+    const content = (t: PhoneTab) =>
+      t === 'chat' ? (
+        <ChatPanel name={name} className={cn('h-full min-h-0 flex-1', CHAT_MOBILE)} />
+      ) : t === 'about' ? (
+        <>
+          <div className="[&>div]:mt-0">{status}</div>
+          <About key={name} name={name} doc={about} edit={mine} />
+        </>
+      ) : t === 'calendar' ? (
+        <Calendar name={name} />
+      ) : (
+        <SocialsTab name={name} doc={socials} joined={joined} mine={mine} />
+      );
+    return (
+      <div
+        data-keyboard={view?.keyboard ?? false}
+        className="group/phone fixed inset-x-0 top-0 flex h-[100dvh] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
+        style={view ? { height: view.height, transform: view.top ? `translateY(${view.top}px)` : undefined } : undefined}
+      >
+        <PageFrame title={title} titleId="who" mobileTitle={name} wide bleed fill>
+          <div className="shrink-0">
+            {player}
+            {retryRow && <div className="px-4">{retryRow}</div>}
+          </div>
+          {tabs.length > 0 && (
+            <div id="watch-tabs" className="flex min-h-0 flex-1 flex-col">
+              <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className="flex shrink-0 border-b border-primaryStroke px-1">
+                {tabs.map((t) => {
+                  const on = t === shown;
+                  return (
+                    <button
+                      key={t}
+                      id={`tab-${t}`}
+                      type="button"
+                      role="tab"
+                      aria-selected={on}
+                      aria-controls={`panel-${t}`}
+                      tabIndex={on ? 0 : -1}
+                      onClick={() => openTab(t)}
+                      className={cn(
+                        '-mb-px min-h-11 whitespace-nowrap border-b-2 px-3 text-sm font-semibold leading-tight transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primaryBlue',
+                        t === 'chat' && 'ml-auto',
+                        on ? 'border-primaryBlue text-textPrimary' : 'border-transparent text-textSecondary'
+                      )}
+                    >
+                      {t}
+                    </button>
+                  );
+                })}
+              </div>
+              {/* every tab opened stays mounted, hidden while another is open: the chat keeps its place
+                  and the line being typed. the chat's own lines scroll inside it, its send row at the foot */}
+              <div className="relative min-h-0 flex-1">
+                {tabs.map((t) => (
+                  <div
+                    key={t}
+                    id={`panel-${t}`}
+                    role="tabpanel"
+                    aria-labelledby={`tab-${t}`}
+                    inert={shown !== t ? true : undefined}
+                    className={cn(
+                      'absolute inset-0',
+                      shown !== t && 'invisible',
+                      t === 'chat' ? 'flex flex-col' : 'overflow-y-auto overscroll-contain px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-4'
+                    )}
+                  >
+                    {(opened.has(t) || shown === t) && content(t)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </PageFrame>
+      </div>
+    );
+  }
+
   return (
     <PageFrame
-      title={
-        <>
-          {/* their picture, or the letter their name makes when they have none: a face left of the name either way */}
-          {name && <Face name={name} version={avatar} className="mr-3 inline-flex align-middle" />}
-          {bio ? (
-            <Tooltip content={bio}>
-              <span>{name}</span>
-            </Tooltip>
-          ) : (
-            name
-          )}
-          {verified && (
-            <Tooltip content="has an account: this really is them">
-              <span role="img" aria-label="has an account" className="ml-2 text-increase">
-                ✓
-              </span>
-            </Tooltip>
-          )}
-          {oauthVerified && <OAuthMark id="watch-oauth-verified" size={22} className="ml-2 align-[-3px]" />}
-          {isDummyName(name) && <TestBadge />}
-          {/* the presence word is not drawn beside the name any more: the status line under it carries that.
-              #presence stays, unseen, for screen readers and the browser tests that key on it (docs/spec.md) */}
-          {name && (
-            <span id="presence" data-presence={presence} className="sr-only">
-              {PRESENCE_WORD[presence]}
-            </span>
-          )}
-          {/* their status (`bio` on the wire) is hover only: not drawn under the name, it shows in a tooltip
-              over the name. #bio stays, unseen, for screen readers and the tests that key on it (docs/spec.md) */}
-          {bio && (
-            <span id="bio" className="sr-only">
-              {bio}
-            </span>
-          )}
-        </>
-      }
+      title={title}
       titleId="who"
       // a phone's row: the stream's name alone, on one line
       mobileTitle={name}
@@ -281,155 +548,10 @@ export function WatchPage() {
           a remount would be a reconnect. */}
       <div className={chatLayoutClass(chatSide, chatOpen)}>
         <div className={cn('min-w-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-1')}>
-          {/* the controls sit on the video, along its bottom edge. they stay up while the sound is off
-              (a silent stream should show why) and otherwise come up on hover, while a control has
-              keyboard focus (not the focus a mouse click leaves behind, or they would stick), and on a
-              screen with no hover at all. "tap to play" is the exception: big, in the middle. */}
-          {/* not live, and while the api is being asked: the profile where the picture would be
-              (docs/follows.md). the face, the word and a sentence; the tabs sit below and the chat stays.
-              the player appears when they start (`live` pushed on the events socket, docs/status.md), so
-              there is nothing to press and no black box, not even for the ask: a player with no stream
-              would be one. a streamer who put an offline picture gets it where the player goes, the
-              profile under it, and the line they wrote (if any) above the sentence.
-              the one exception is a stream that is expected: they are streaming and the page is still
-              asking (or video is a beat behind the word). then the player's box stands grey where the
-              player goes, so the page has its shape and nothing moves down when the picture lands.
-              never a <video>, never for a name that is not streaming: nothing flashes on an offline
-              profile. the chat's button sits on it where the player's does */}
-          {phase === 'waiting' || phase === 'loading' ? (
-            expecting ? (
-              <Skeleton id="player-loading" label="loading the stream" className="relative aspect-video w-full border border-primaryStroke bg-backgroundSecondary">
-                <Bone className="absolute inset-0" />
-                <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
-                  <ChatOpenButton className="ml-auto" />
-                  <DmButton name={name} />
-                </div>
-              </Skeleton>
-            ) : (
-              <>
-                {offline !== null && <OfflinePicture id="offline-picture" src={api.offlineUrl(name, offline)} className="mb-3 w-full" />}
-                <div id="profile" className={cn(panelClassName('flex flex-wrap items-center gap-6 p-6'))} data-presence={presence}>
-                  <Face name={name} version={avatar} className="h-28 w-28 text-5xl" />
-                  <div className="min-w-0 flex-1">
-                    <p className={cn('flex items-center gap-2 text-lg font-semibold', PRESENCE_TEXT[presence])}>
-                      <span aria-hidden className={cn('inline-block h-3 w-3', PRESENCE_SQUARE[presence])} />
-                      {PRESENCE_WORD[presence]}
-                    </p>
-                    {offlineNote && (
-                      <p id="offline-note" className="mt-1 [overflow-wrap:anywhere]">
-                        {offlineNote}
-                      </p>
-                    )}
-                    <p className="mt-1 text-textSecondary">{phase === 'loading' ? 'loading' : NOT_LIVE_WORDS[presence]}</p>
-                  </div>
-                  {/* the chat's button lives on the player; without a player it lives here, and a friend's line button with it */}
-                  <span className="flex items-center gap-3 self-start">
-                    <ChatOpenButton />
-                    <DmButton name={name} />
-                  </span>
-                </div>
-              </>
-            )
-          ) : (
-            <div className="group relative">
-              {/* the streamer's frame as they laid it out (docs/screen.md): `#video`, the one with the sound,
-                  stands in for the bottom video layer; a video layer clicked is shown alone */}
-              <SceneView
-                id="scene"
-                layers={layers}
-                streamFor={slotStreamAtom}
-                imageUrl={(asset) => api.assetUrl(name, asset)}
-                // their avatar, moving with the sound arriving on #video's stream: drawn here from the name, nothing of it on the wire
-                avatar={{ name, version: avatar, streamAtom: remoteStreamAtom }}
-                main={{
-                  id: 'video',
-                  streamAtom: remoteStreamAtom,
-                  videoRef,
-                  slot: primary,
-                  muted,
-                  volume,
-                  onPlaying: markPlaying,
-                  onAutoplayBlocked: markAutoplayBlocked
-                }}
-                onPick={pickSlot}
-              />
-              {/* the same grey over the frame until frames play (`playing` on #video, markPlaying): the box
-                  that was loading goes on loading, instead of turning black for the connection. inside the
-                  stroke, under the controls and tap to play, and no pointer of its own */}
-              {(phase === 'connecting' || phase === 'connected') && <Bone className="pointer-events-none absolute inset-px" />}
-              {needsTap && (
-                <Button
-                  id="tap-to-play"
-                  variant="primary"
-                  className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-                  onClick={() => unmuteVideo(videoRef.current)}
-                >
-                  tap to play
-                </Button>
-              )}
-              {/* top left, once frames play: how the picture is arriving. up on its own while it is in trouble */}
-              {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} playback={{ muted, level: volume }} />}
-              {/* while the chat is closed the bar stays up, so the button that brings it back is on the picture.
-                  beside it, for a friend, the line to them (docs/dms.md) */}
-              {phase !== 'bad-name' && (
-                <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || !chatOpen))}>
-                  {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
-                  <ChatOpenButton className="ml-auto" />
-                  <DmButton name={name} />
-                  <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'picture in picture'} disabled={cornerTaken} onClick={toCorner}>
-                    <PipIcon />
-                  </IconButton>
-                </div>
-              )}
-            </div>
-          )}
-          {/* the streamer's pictures that are not in the frame (left beside it, or the frame set aside for one
-              pulled out of it): click one and it is the big one; the sound stays put. `the stream` puts the
-              streamer's frame back when no picture of theirs can */}
-          {(tiles.length > 0 || sceneTile) && (
-            <div id="tiles" className="mt-2 flex gap-2 overflow-x-auto">
-              {sceneTile && (
-                <button
-                  id="tile-scene"
-                  type="button"
-                  onClick={clearChoice}
-                  className="flex aspect-video w-40 shrink-0 items-center justify-center border border-dashed border-secondaryStroke text-sm text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-textPrimary"
-                >
-                  back to the stream
-                </button>
-              )}
-              {tiles.map((tile) => (
-                <StreamTile key={tile.slot} id={`tile-${tile.slot}`} streamAtom={slotStreamAtom(tile.slot)} label={slotLabel(tile)} onPick={() => pickSlot(tile.slot)} />
-              ))}
-            </div>
-          )}
-          {/* under the picture: what is up, who is watching, and at the right end how many follow them and the
-              button to (docs/follows.md; the count moves with the click, the api's number comes with the next
-              grant). while the stream plays the line would say `watching`, which the picture and the word beside
-              the name already say: then it is for screen readers and the tests alone, and the count stands in its
-              place, the corner player's way. the line comes back for anything else: not live, connecting, ended */}
-          <div className="my-3 flex flex-wrap items-baseline gap-x-4">
-            <StatusLine text={message} tone={tone} className={cn('my-0', phase === 'watching' && 'sr-only')} />
-            <ViewerCount id="viewers" count={viewers} className="text-lg text-textSecondary" />
-            {name && !isDummyName(name) && (
-              <span className="ml-auto inline-flex items-center gap-3">
-                {followers !== null && (
-                  <span id="followers" className="text-lg text-textSecondary">
-                    {followers} {followers === 1 ? 'follower' : 'followers'}
-                  </span>
-                )}
-                <FollowButton id="follow" name={name} onChange={(now) => store.set(followersAtom, (followers ?? 0) + (now ? 1 : -1))} />
-              </span>
-            )}
-          </div>
+          {player}
+          {status}
 
-          {canRetry && (
-            <div className="my-3">
-              <button id="retry" type="button" className="text-base font-semibold text-primaryBlue" onClick={retry}>
-                retry
-              </button>
-            </div>
-          )}
+          {retryRow}
         </div>
 
         {name && (

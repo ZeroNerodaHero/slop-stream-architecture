@@ -43,7 +43,7 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
-import { useIsMobile, useVisibleViewport } from '@/infra/mobile';
+import { CHAT_MOBILE, useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
@@ -85,29 +85,6 @@ function keepTab(tab: LiveTab) {
     // private mode: the tab is just not kept
   }
 }
-
-/** While on: the document does not scroll (nor bounce), so the page is the window and nothing else moves. */
-function useLockedDocument(on: boolean) {
-  useEffect(() => {
-    if (!on) return;
-    const root = document.documentElement;
-    const { overflow, overscrollBehavior } = root.style;
-    root.style.overflow = 'hidden';
-    root.style.overscrollBehavior = 'none';
-    return () => {
-      root.style.overflow = overflow;
-      root.style.overscrollBehavior = overscrollBehavior;
-    };
-  }, [on]);
-}
-
-/**
- * The chat on a phone: edge to edge in its tab, no box, no least height (the tab is what is
- * left of the window, less with the keyboard up), and the send row's padding is the safe area
- * at the foot, but not while the keyboard covers that edge (ServerRoom.tsx's room does the same).
- */
-const CHAT_MOBILE =
-  'min-h-0 border-0 bg-background [&>header]:px-3 [&_#chat-lines]:px-3 [&>footer]:px-3 [&>footer]:pt-2 [&>footer]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] group-data-[keyboard=true]/live:[&>footer]:pb-2';
 
 export function LivePage() {
   const navigate = useNavigate();
@@ -306,7 +283,7 @@ export function LivePage() {
       <div
         id="live-mobile"
         data-keyboard={view?.keyboard ?? false}
-        className="group/live fixed inset-x-0 top-0 flex h-[100dvh] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
+        className="group/phone fixed inset-x-0 top-0 flex h-[100dvh] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
         style={view ? { height: view.height, transform: view.top ? `translateY(${view.top}px)` : undefined } : undefined}
       >
         <PageFrame
