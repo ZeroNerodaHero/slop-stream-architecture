@@ -271,12 +271,12 @@ function SpeakerFace({ line }: { line: ChatLine }) {
   );
 }
 
-/** What stands after the name: the group badges, the red broadcast mark for the streamer's own lines (LiveMark.tsx; the word comes up at once on hover, Tooltip.tsx), `you` on ours. No ✓: the name's colour says whether a login is behind it (Speaker). */
+/** What stands after the name: the group badges (each shows its group's card on hover and focus, from what the line carried: Badge.tsx), the red broadcast mark for the streamer's own lines (LiveMark.tsx; the word comes up at once on hover, Tooltip.tsx), `you` on ours. No ✓: the name's colour says whether a login is behind it (Speaker). */
 function Marks({ line, mine }: { line: ChatLine; mine: boolean }) {
   return (
     <>
       {line.groups.map((group) => (
-        <Badge key={group.name} group={group} />
+        <Badge key={group.name} group={group} card />
       ))}
       {line.streamer && (
         <Tooltip content="streamer">

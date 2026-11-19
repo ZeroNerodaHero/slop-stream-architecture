@@ -209,7 +209,7 @@ export interface DemoModel {
   thumb: boolean;
 }
 
-/** A group as worn on a chat line: enough to draw the badge. */
+/** A group as worn on a chat line: enough to draw the badge, and the hover card it opens. */
 export interface GroupBadge {
   name: string;
   /** The word on the badge. Shown in capitals. */
@@ -218,6 +218,12 @@ export interface GroupBadge {
   color: string;
   /** Unix seconds, the `?v=` of the group's picture (`groupImage`), drawn small beside the word. Null, or absent on a line kept before it was carried and on an older api: none. */
   icon?: number | null;
+  /** The line about the group, for the badge's hover card (GroupCard). Absent when empty, on a line kept before it was carried, and on an older api. */
+  about?: string | null;
+  /** How many are in it, counted when the line was said. Absent on an older line: the card leaves the count off. */
+  members?: number | null;
+  /** Unix seconds, the `?v=` of the group's banner (`groupImage`), the top of the hover card. Null or absent: none. */
+  banner?: number | null;
 }
 
 /** A group as `GET /api/groups` lists it. */
