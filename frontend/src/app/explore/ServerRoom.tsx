@@ -171,13 +171,13 @@ const POWERS: { key: keyof RolePerms; label: string; description: string; icon: 
   {
     key: 'roles',
     label: 'roles',
-    description: 'make, edit and hand out roles, and keep channels to them',
+    description: 'make, edit and hand out roles',
     icon: <RiShieldStarLine aria-hidden size={16} />
   },
   {
     key: 'channels',
     label: 'channels',
-    description: 'add, rename, reorder and delete channels, set their cooldowns, and see every channel',
+    description: 'add, rename, reorder and delete channels, set their cooldowns and who sees them, and see every channel',
     icon: <RiHashtag aria-hidden size={16} />
   },
   {
@@ -531,6 +531,107 @@ function KeptMark({ roles }: { roles: GroupRole[] }) {
         <RiLockLine aria-hidden size={14} />
       </span>
     </Tooltip>
+  );
+}
+
+/**
+ * Who sees a channel, on its row in the channels tab (docs/groups.md): two boxes, `everyone`
+ * and `selected roles`, and under the second the group's roles as chips in their colours,
+ * pressed for the ones the channel is kept to. Kept to roles, it is seen by their holders, the
+ * owners and the channels power. Each press is one `setChannelRoles`, the whole list; the room
+ * catches up on the `role` facts, and until it does the list sent stands on screen. The api
+ * reads an empty list as everyone's, so `selected roles` with nothing picked is this row's
+ * alone (owner-only on screen, nothing sent) until a role is, and the last role kept cannot be
+ * let go of here: `everyone` is the way back. A role carrying a power this login lacks is out
+ * of reach, as in the roles tab. `general` is everyone's: the boxes stand, greyed.
+ */
+function ChannelSeers({ server, name, room, run }: { server: string; name: string; room: GroupRoom; run: Run }) {
+  const kept = keptTo(room, name).map((role) => role.id);
+  const key = [...kept].sort().join(' ');
+  /** The list last sent, while the room still says what it said when it went (`from`). */
+  const [sent, setSent] = useState<{ from: string; ids: string[] } | null>(null);
+  /** `selected roles` pressed with no role picked yet: nothing told the api, since an empty list is everyone's. */
+  const [picking, setPicking] = useState(false);
+  const ids = sent && sent.from === key ? sent.ids : kept;
+  const general = name === 'general';
+  const selected = !general && (ids.length > 0 || picking);
+
+  async function put(next: string[]) {
+    setSent({ from: key, ids: next });
+    let ok = false;
+    await run(async () => {
+      await api.setChannelRoles(server, name, next);
+      ok = true;
+    });
+    if (!ok) setSent(null);
+    else setPicking(false);
+  }
+
+  const box = (on: boolean) => cn(on && 'border-primaryBlue text-primaryBlue hover:border-primaryBlue');
+  return (
+    <div className="flex flex-col gap-2">
+      <Tooltip content={general ? "general is everyone's" : null}>
+        <div role="group" aria-label={`who sees #${name}`} className="flex items-center">
+          <Button
+            id={`channel-seers-${name}-everyone`}
+            size="sm"
+            aria-pressed={!selected}
+            disabled={general}
+            className={box(!selected)}
+            onClick={() => {
+              setPicking(false);
+              if (ids.length > 0) void put([]);
+            }}
+          >
+            everyone
+          </Button>
+          <Button
+            id={`channel-seers-${name}-roles`}
+            size="sm"
+            aria-pressed={selected}
+            disabled={general}
+            className={cn('-ml-px', box(selected))}
+            onClick={() => setPicking(true)}
+          >
+            selected roles
+          </Button>
+        </div>
+      </Tooltip>
+      {selected && (
+        <div role="group" aria-label={`roles that see #${name}`} className="flex flex-wrap items-center gap-1">
+          {room.roles.map((role) => {
+            const on = ids.includes(role.id);
+            const within = reaches(room, role.perms);
+            const last = on && ids.length === 1;
+            const why = !within ? "it carries a power you don't hold" : last ? 'the last role: pick another first, or press everyone' : null;
+            return (
+              <Tooltip key={role.id} content={why}>
+                <Button
+                  id={`channel-role-${name}-${role.id}`}
+                  data-role={role.name}
+                  size="sm"
+                  aria-pressed={on}
+                  aria-disabled={why !== null || undefined}
+                  className={cn(why !== null && 'cursor-not-allowed opacity-50')}
+                  style={on ? { color: role.color, borderColor: role.color } : undefined}
+                  onClick={() => {
+                    if (why !== null) return;
+                    void put(on ? ids.filter((id) => id !== role.id) : [...ids, role.id]);
+                  }}
+                >
+                  <span style={on ? undefined : { color: role.color }}>{role.name}</span>
+                </Button>
+              </Tooltip>
+            );
+          })}
+          {ids.length === 0 && (
+            <p className="text-xs text-textTertiary">
+              only the owner until you pick a role. nothing is saved until then{room.roles.length === 0 ? ': make one in the roles tab' : ''}.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2534,7 +2635,7 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
       title="channels"
       description={`${channels.length} of ${CHANNEL_CAP}, top to bottom as the list shows them. ${
         orders
-          ? 'drag a row to move it. the pencil by a name changes it. general stays.'
+          ? "drag a row to move it. the pencil by a name changes it. under each, who sees it: everyone, or the roles you pick and the owners. general stays everyone's."
           : 'the channels power moves and adds them; the ones you made are yours to rename and delete.'
       }`}
     >
@@ -2556,37 +2657,41 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
               key={name}
               data-channel={name}
               className={cn(
-                'flex items-center gap-3 border bg-background px-3 py-2 transition-[border-color] duration-150',
+                'flex flex-col gap-2 border bg-background px-3 py-2 transition-[border-color] duration-150',
                 held ? 'border-primaryBlue' : 'border-primaryStroke'
               )}
             >
-              {orders && (
-                <Tooltip content={held ? null : 'drag to move'}>
-                  <button
-                    id={`channel-drag-${name}`}
-                    type="button"
-                    aria-label={`move #${name}: drag, or the arrow keys`}
-                    aria-keyshortcuts="ArrowUp ArrowDown"
-                    onPointerDown={(e) => startDrag(e, name, i)}
-                    onKeyDown={(e) => keyMove(e, name, i)}
-                    className={cn(
-                      'shrink-0 touch-none select-none border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke hover:text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none',
-                      held ? 'cursor-grabbing' : 'cursor-grab'
-                    )}
-                  >
-                    <RiDraggable aria-hidden size={18} />
+              <div className="flex items-center gap-3">
+                {orders && (
+                  <Tooltip content={held ? null : 'drag to move'}>
+                    <button
+                      id={`channel-drag-${name}`}
+                      type="button"
+                      aria-label={`move #${name}: drag, or the arrow keys`}
+                      aria-keyshortcuts="ArrowUp ArrowDown"
+                      onPointerDown={(e) => startDrag(e, name, i)}
+                      onKeyDown={(e) => keyMove(e, name, i)}
+                      className={cn(
+                        'shrink-0 touch-none select-none border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke hover:text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none',
+                        held ? 'cursor-grabbing' : 'cursor-grab'
+                      )}
+                    >
+                      <RiDraggable aria-hidden size={18} />
+                    </button>
+                  </Tooltip>
+                )}
+                {/* the api's rename rule is delete's: who made it, or the channels power, and never general */}
+                <ChannelName item={item} channels={channels} editable={item.can_delete} onRename={(to) => void run(() => renameChannel(server, name, to))} />
+                <KeptMark roles={keptTo(room, name)} />
+                <CooldownMark item={item} canSet={orders} onPick={(seconds) => void run(() => api.setChannelCooldown(server, name, seconds))} />
+                {item.can_delete && (
+                  <button id={`channel-remove-${name}`} type="button" className="shrink-0 text-sm text-decrease" onClick={() => setSure(name)}>
+                    delete
                   </button>
-                </Tooltip>
-              )}
-              {/* the api's rename rule is delete's: who made it, or the channels power, and never general */}
-              <ChannelName item={item} channels={channels} editable={item.can_delete} onRename={(to) => void run(() => renameChannel(server, name, to))} />
-              <KeptMark roles={keptTo(room, name)} />
-              <CooldownMark item={item} canSet={orders} onPick={(seconds) => void run(() => api.setChannelCooldown(server, name, seconds))} />
-              {item.can_delete && (
-                <button id={`channel-remove-${name}`} type="button" className="shrink-0 text-sm text-decrease" onClick={() => setSure(name)}>
-                  delete
-                </button>
-              )}
+                )}
+              </div>
+              {/* who sees it: the channels power's say, from the channel's side */}
+              {orders && <ChannelSeers server={server} name={name} room={room} run={run} />}
             </li>
           );
         })}
@@ -2628,8 +2733,6 @@ interface RoleDraft {
   name: string;
   color: string;
   perms: RolePerms;
-  /** The channels kept to it, by name. */
-  channels: string[];
   /** Seconds between its holders' lines; 0 none. */
   cooldown: number;
 }
@@ -2660,11 +2763,9 @@ function roleWords(role: GroupRole): string {
 /**
  * The roles, each a row: the name in its colour, the powers it carries and the channels kept
  * to it. A row within reach is the click: it opens in place as the name, the colour, the
- * powers, the cooldown and the channels, with save, cancel and delete; one is open at a time.
- * The channels (docs/groups.md): every channel but `general` as a word, pressed when the
- * channel is kept to this role, and then seen by its holders, the roles that also keep it, the
- * owners and the channels power, and by nobody else; a channel no role keeps is everyone's.
- * Who sees it as the draft stands is the word's tooltip. `add role` makes one right away, called `new role` (numbered when
+ * powers and the cooldown, with save, cancel and delete; one is open at a time. Who sees a
+ * channel is said from the channel's side (the channels tab, `ChannelSeers`); a save here sends
+ * the role's channels back as they stand. `add role` makes one right away, called `new role` (numbered when
  * that is taken), and opens it with the name selected, so what is typed next is its name. A
  * role is known by its id, not its name: a rename is a save like any other, and the open row
  * stays on its role whatever the socket says of it meanwhile; a role deleted under it closes it.
@@ -2683,8 +2784,6 @@ function RolesSection({ server, room, run }: ManageProps) {
   const ownerRole = ownerRoleOf(room);
   // the row open in place: the draft, while the role it is of is still there
   const open = draft !== null && room.roles.some((role) => role.id === draft.id) ? draft : null;
-  // the channels a role can be given: the ones this login sees, general apart, since general is everyone's
-  const keepable = (room.channels ?? []).filter((item) => item.name !== 'general');
 
   /** A role now, so it has an id to be known by, then open with the name selected. */
   async function add() {
@@ -2704,7 +2803,6 @@ function RolesSection({ server, room, run }: ManageProps) {
           name: made.name,
           color: made.color,
           perms: made.perms,
-          channels: made.channels ?? [],
           cooldown: made.cooldown ?? 0
         });
       });
@@ -2716,12 +2814,16 @@ function RolesSection({ server, room, run }: ManageProps) {
   async function save(e: FormEvent) {
     e.preventDefault();
     if (!open || !open.name.trim()) return;
+    // the channels kept to it as the room has them now, untouched: who sees a channel is the channels tab's. the ones
+    // this login sees, as the api reads a role's body (one it does not see stays kept whatever the body says)
+    const seen = new Set((room.channels ?? []).map((item) => item.name));
+    const kept = (room.roles.find((role) => role.id === open.id)?.channels ?? []).filter((name) => seen.has(name));
     await run(async () => {
       await api.saveRole(server, open.id, {
         name: open.name.trim(),
         color: open.color,
         perms: open.perms,
-        channels: open.channels,
+        channels: kept,
         cooldown: open.cooldown
       });
       setDraft(null);
@@ -2736,14 +2838,6 @@ function RolesSection({ server, room, run }: ManageProps) {
       await api.renameOwnerRole(server, ownerDraft.trim());
       setOwnerDraft(null);
     });
-  }
-
-  /** Who sees `channel` as the draft stands: `everyone`, or `only` the roles that keep it, this one first. */
-  function seers(channel: string): string {
-    const ticked = open?.channels.includes(channel) ?? false;
-    const others = room.roles.filter((role) => role.id !== open?.id && (role.channels ?? []).includes(channel)).map((role) => role.name);
-    const names = ticked ? ['this role', ...others] : others;
-    return names.length > 0 ? `only ${names.join(', ')}` : 'everyone';
   }
 
   /** The open role, deleted. One call at a time, as `add`: a second click while the first is out would be a 404 said in red after the role is gone. */
@@ -2902,31 +2996,6 @@ function RolesSection({ server, room, run }: ManageProps) {
                       </button>
                     ))}
                   </div>
-                  {/* the channels kept to this role: each a word, pressed (blue) when kept; who sees it as the draft stands is the tooltip */}
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span className="text-sm font-semibold text-textSecondary">channels</span>
-                    {keepable.length === 0 ? (
-                      <span className="text-xs text-textTertiary">only #general so far</span>
-                    ) : (
-                      keepable.map((item) => {
-                        const kept = open.channels.includes(item.name);
-                        return (
-                          <Tooltip key={item.name} content={seers(item.name)}>
-                            <button
-                              id={`role-channel-${item.name}`}
-                              type="button"
-                              aria-pressed={kept}
-                              aria-label={`#${item.name}: ${seers(item.name)}`}
-                              onClick={() => setDraft({ ...open, channels: kept ? open.channels.filter((name) => name !== item.name) : [...open.channels, item.name] })}
-                              className={cn('text-sm font-semibold', kept ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
-                            >
-                              #{item.name}
-                            </button>
-                          </Tooltip>
-                        );
-                      })
-                    )}
-                  </div>
                   <div className="flex items-center gap-3">
                     <button
                       id="role-save"
@@ -2966,7 +3035,6 @@ function RolesSection({ server, room, run }: ManageProps) {
                       name: role.name,
                       color: role.color,
                       perms: role.perms,
-                      channels: role.channels ?? [],
                       cooldown: role.cooldown ?? 0
                     });
                   }}

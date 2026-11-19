@@ -53,7 +53,7 @@ load, per action), not a measurement.
 | ✅ | `GET /api/groups/{group}`, `/messages`, `/members`, `/roles`, `/bans`, `/icon`, `/banner` | Read a group room | none | **600** | account / IP | 1 min | high (room page) |
 | ✅ | `DELETE /api/groups/{group}` | Delete group | none | **120** (moderate tier) | account | 10 min | rare (owner) |
 | ✅ | `POST /api/groups/{group}/join`, `/leave` | Join / leave | members cap (8) only | **120** | account | 1 min | low |
-| ✅ | `POST/PUT /api/groups/{group}/channels`, `PUT/DELETE /channels/{channel}`, `PUT /channels/{channel}/cooldown` | Channel setup | channel cap (20) only | **120** (moderate) | account | 10 min | rare (owner/mod) |
+| ✅ | `POST/PUT /api/groups/{group}/channels`, `PUT/DELETE /channels/{channel}`, `PUT /channels/{channel}/cooldown`, `PUT /channels/{channel}/roles` | Channel setup | channel cap (20) only | **120** (moderate) | account | 10 min | rare (owner/mod) |
 | ✅ | `PUT/DELETE /api/groups/{group}/channels/{channel}/mute` | Mute a channel | none | **120** | account | 1 min | low |
 | ✅ | `PUT /api/groups/{group}/channels/{channel}/read` | Read marker | none | **120** | account | 1 min | high (as messages are read) |
 | ✅ | `PUT /api/groups/{group}/icon`, `/banner` | Upload group pictures | none | **60** (upload) | account | 1 h | rare (owner) |

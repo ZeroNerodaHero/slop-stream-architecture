@@ -705,6 +705,32 @@ const dropAll = async (ctx, names) => {
     expect(freed.status() === 200 && (await body(freed)).channels.length === 0, `letting staff go got ${freed.status()}`);
     const freeRoom = await body(await anon.get(`/api/groups/${slug}`));
     expect(freeRoom.channels.some((c) => c.name === 'staff'), `after letting go nobody's room lists ${freeRoom.channels.map((c) => c.name).join(' ')}`);
+    // who sees it from the channel's side: one call, the whole list. nobody 401, the roles power alone 403; general and a role not of the group refused
+    const seers = (ctx, channel, roles) => ctx.put(`/api/groups/${slug}/channels/${channel}/roles`, { data: { roles } });
+    const keptBy = async (channel) =>
+      (await body(await maker.get(`/api/groups/${slug}`))).roles
+        .filter((r) => (r.channels || []).includes(channel))
+        .map((r) => r.name)
+        .sort()
+        .join(' ');
+    const seersNobody = await seers(anon, 'staff', [staffers.id]);
+    const seersShaper = await seers(member, 'staff', [staffers.id]);
+    expect(seersNobody.status() === 401 && seersShaper.status() === 403, `setting who sees staff: nobody ${seersNobody.status()}, the roles power ${seersShaper.status()}`);
+    const seersGeneral = await seers(maker, 'general', [staffers.id]);
+    const seersStranger = await seers(maker, 'staff', ['00000000-0000-0000-0000-000000000000']);
+    const seersNoChannel = await seers(maker, 'nosuch', []);
+    expect(
+      seersGeneral.status() === 400 && seersStranger.status() === 404 && seersNoChannel.status() === 404,
+      `general got ${seersGeneral.status()}, a stranger role ${seersStranger.status()}, a missing channel ${seersNoChannel.status()}`
+    );
+    const both = await seers(maker, 'staff', [staffers.id, shapers.id]);
+    expect(both.status() === 200 && (await keptBy('staff')) === 'shapers staffers', `keeping staff to both got ${both.status()}, kept by "${await keptBy('staff')}"`);
+    const one = await seers(maker, 'staff', [shapers.id]);
+    expect(one.status() === 200 && (await keptBy('staff')) === 'shapers', `keeping staff to shapers alone got ${one.status()}, kept by "${await keptBy('staff')}"`);
+    expect(!(await body(await anon.get(`/api/groups/${slug}`))).channels.some((c) => c.name === 'staff'), 'nobody still sees staff once it is kept');
+    const everyone = await seers(maker, 'staff', []);
+    expect(everyone.status() === 200 && (await keptBy('staff')) === '', `an empty list got ${everyone.status()}, kept by "${await keptBy('staff')}"`);
+    expect((await body(await anon.get(`/api/groups/${slug}`))).channels.some((c) => c.name === 'staff'), "an empty list did not make staff everyone's");
     await asMemberPage.context().close();
     await asOwnerPage.context().close();
     for (const id of [staffers.id, shapers.id]) await maker.delete(`/api/groups/${slug}/roles/${id}`);
@@ -1193,25 +1219,49 @@ const dropAll = async (ctx, names) => {
     await q.waitForSelector('#manage-channels li[data-channel="highlights"]', { timeout: 10000 });
     expect(!(await q.$('#channel-name-clips')) && !(await q.$('#channel-name-highlights')), 'the box is still open');
     expect((await channelNames()).join(' ') === 'highlights general', `after the rename the list reads ${(await channelNames()).join(' ')}`);
-    // the roles tab keeps a channel to a role: the editor has a box per channel but general, with who sees it beside;
-    // ticked and saved, the row says what it keeps and the channel wears a lock on both lists; the role deleted, the lock goes
+    // who sees a channel is the channels tab's: a role made in the roles tab (whose editor has no channels any more), then on
+    // the channel's row `selected roles` (owner-only, nothing sent, until a role is picked) and the role's chip, one call.
+    // the roles row says what it keeps and the channel wears a lock on both lists; the role deleted, the lock goes
     await q.click('#manage-tab-roles');
     await q.waitForSelector('#manage-panel-roles #role-add', { timeout: 5000 });
     await q.click('#role-add');
-    await q.waitForSelector('#group-roles li[data-open] #role-channel-highlights', { timeout: 10000 });
-    expect(!(await q.$('#role-channel-general')), 'general has a word in the role editor');
-    // the channels are words, pressed when kept; who sees the channel is the word's label
-    expect((await q.getAttribute('#role-channel-highlights', 'aria-pressed')) === 'false' && /everyone/.test(await q.getAttribute('#role-channel-highlights', 'aria-label')), `before the press #highlights reads "${await q.getAttribute('#role-channel-highlights', 'aria-label')}"`);
+    await q.waitForSelector('#group-roles li[data-open] #role-name', { timeout: 10000 });
+    expect(!(await q.$('#group-roles li[data-open] [id^="role-channel-"]')), 'the role editor still has a channels picker');
     await q.fill('#role-name', 'staffers');
-    await q.click('#role-channel-highlights');
-    expect((await q.getAttribute('#role-channel-highlights', 'aria-pressed')) === 'true' && /only this role/.test(await q.getAttribute('#role-channel-highlights', 'aria-label')), `after the press #highlights reads "${await q.getAttribute('#role-channel-highlights', 'aria-label')}"`);
     await q.click('#role-save');
     await q.waitForSelector('#group-roles li[data-role="staffers"]:not([data-open])', { timeout: 10000 });
-    const staffersRow = await q.textContent('#group-roles li[data-role="staffers"]');
-    expect(/keeps #highlights/.test(staffersRow), `the row reads "${staffersRow}"`);
+    const staffersId = (await body(await maker.get(`/api/groups/${madeName}`))).roles.find((r) => r.name === 'staffers').id;
+    await q.click('#manage-tab-channels');
+    await q.waitForSelector('#channel-seers-highlights-everyone[aria-pressed="true"]', { timeout: 5000 });
+    expect(await q.$('#channel-seers-general-everyone[disabled]'), "general's who-sees-it is not greyed");
+    let seersPuts = 0;
+    const countSeers = (r) => {
+      if (r.method() === 'PUT' && new URL(r.url()).pathname === `/api/groups/${madeName}/channels/highlights/roles`) seersPuts += 1;
+    };
+    q.on('request', countSeers);
+    await q.click('#channel-seers-highlights-roles');
+    await q.waitForSelector('#manage-channels li[data-channel="highlights"] >> text=only the owner until you pick a role', { timeout: 5000 });
+    expect(seersPuts === 0, 'selected roles with none picked told the api');
+    const seersPut = q.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === `/api/groups/${madeName}/channels/highlights/roles`, { timeout: 10000 });
+    await q.click(`#channel-role-highlights-${staffersId}`);
+    const seersRes = await seersPut;
+    expect(seersRes.status() === 200 && JSON.stringify(seersRes.request().postDataJSON()) === JSON.stringify({ roles: [staffersId] }), `the pick got ${seersRes.status()}, sent ${seersRes.request().postData()}`);
+    await q.waitForSelector(`#channel-role-highlights-${staffersId}[aria-pressed="true"]`, { timeout: 10000 });
+    q.off('request', countSeers);
+    expect(seersPuts === 1, `the pick made ${seersPuts} calls`);
     await q.waitForSelector('#group-channels [aria-label="only staffers"]', { timeout: 10000 });
+    await q.waitForSelector('#manage-channels li[data-channel="highlights"] [aria-label="only staffers"]', { timeout: 5000 });
     const keptRoom = await body(await maker.get(`/api/groups/${madeName}`));
     expect(keptRoom.roles.find((r) => r.name === 'staffers').channels.join(' ') === 'highlights', `the api's role keeps ${JSON.stringify(keptRoom.roles)}`);
+    await q.click('#manage-tab-roles');
+    const staffersRow = await q.textContent('#group-roles li[data-role="staffers"]');
+    expect(/keeps #highlights/.test(staffersRow), `the row reads "${staffersRow}"`);
+    // a save of the role leaves what it keeps alone
+    await q.click('#group-roles li[data-role="staffers"] button');
+    await q.waitForSelector('#group-roles li[data-role="staffers"][data-open] #role-save', { timeout: 5000 });
+    await q.click('#role-save');
+    await q.waitForSelector('#group-roles li[data-role="staffers"]:not([data-open])', { timeout: 10000 });
+    expect((await body(await maker.get(`/api/groups/${madeName}`))).roles.find((r) => r.name === 'staffers').channels.join(' ') === 'highlights', 'a role save let its channel go');
     await q.click('#manage-tab-channels');
     await q.waitForSelector('#manage-channels li[data-channel="highlights"] [aria-label="only staffers"]', { timeout: 5000 });
     // the channel's cooldown from the clock on its row: a menu of the choices; 30s wears it on the row and the page's list; off takes it back
