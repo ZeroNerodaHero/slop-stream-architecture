@@ -27,6 +27,11 @@ interface PageFrameProps {
   bleed?: boolean;
   /** On a phone, the page is its parent's height: a column, the row on top and the rest the page's to share out. The go live page, which is the window (LivePage.tsx). */
   fill?: boolean;
+  /**
+   * The desktop's row is a phone's too: `mobileStart`, `mobileTitle` over `mobileSub` and `mobileEnd`, one
+   * row 56px tall, between the back caret and the bell and go live. A stream's page (WatchPage.tsx).
+   */
+  person?: boolean;
   children: ReactNode;
 }
 
@@ -155,7 +160,7 @@ function useCurrentPart(on: boolean, main: RefObject<HTMLElement | null>, row: R
  * (UserPanel.tsx). Always measured into `--title-row`, home's too: the page starts under it.
  * `bleed` takes the page's padding away, so what is under the row reaches the window's edges.
  */
-export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mobileSub, mobileEnd, mobileStart, bleed = false, fill = false, children }: PageFrameProps) {
+export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mobileSub, mobileEnd, mobileStart, bleed = false, fill = false, person = false, children }: PageFrameProps) {
   const titled = Boolean(title || aside);
   const mobile = useIsMobile();
   const onLivePage = useOnLivePage();
@@ -229,6 +234,29 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
           ) : (
             <TopActions bell={false} home={homeByGoLive} />
           )}
+        </header>
+        {children}
+      </main>
+    );
+  }
+
+  if (person) {
+    // a stream's row, the phone's shape at full width: their face, the name over its numbers (both cut
+    // with an ellipsis), their buttons, then the bell and go live every page ends in
+    return (
+      <main ref={mainRef} className={cn('mx-auto px-5 pb-10', width)}>
+        <header ref={headerRef} className="sticky top-0 z-30 mb-2 flex min-h-14 items-center gap-3 border-b border-primaryStroke bg-background py-2">
+          <HomeLink />
+          {mobileStart}
+          <div className="min-w-0 flex-1">
+            <h1 id={titleId} className="truncate text-base font-medium leading-tight">
+              {mobileTitle ?? title}
+            </h1>
+            {mobileSub && <p className="truncate text-xs leading-4 text-textSecondary">{mobileSub}</p>}
+          </div>
+          {aside && <div className="shrink-0">{aside}</div>}
+          {mobileEnd !== undefined && <div className="flex shrink-0 items-center gap-2">{mobileEnd}</div>}
+          <TopActions />
         </header>
         {children}
       </main>

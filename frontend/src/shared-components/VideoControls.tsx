@@ -59,10 +59,33 @@ interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 
   tipAt?: keyof typeof TIP_AT;
   /** A toggle that is on: it keeps the blue the hover gives. */
   active?: boolean;
+  /**
+   * `glass` (the default): the dark chip over the picture, its name hanging off it. `page`: the same
+   * 32px square on the page itself, the light box of a `Button` (`backgroundSecondary`, a `primaryStroke`
+   * edge, blue on hover), 44px on a phone. It draws no name of its own: wrap it in the page's `Tooltip`.
+   */
+  tone?: 'glass' | 'page';
 }
 
 /** A 32px square chip with a glyph in it. */
-export function IconButton({ label, tipAt = 'above-right', active = false, className, children, ...props }: IconButtonProps) {
+export function IconButton({ label, tipAt = 'above-right', active = false, tone = 'glass', className, children, ...props }: IconButtonProps) {
+  if (tone === 'page') {
+    return (
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={active || undefined}
+        className={cn(
+          'flex h-8 w-8 shrink-0 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textPrimary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primaryBlue disabled:cursor-default disabled:opacity-50 max-md:min-h-11 max-md:min-w-11 [&_svg]:h-[18px] [&_svg]:w-[18px]',
+          active && 'border-primaryBlue text-primaryBlue',
+          className
+        )}
+        {...props}
+      >
+        {children}
+      </button>
+    );
+  }
   return (
     <button
       type="button"

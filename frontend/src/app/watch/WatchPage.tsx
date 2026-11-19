@@ -43,7 +43,7 @@ import {
 } from '@/infra/atoms/watch-atoms';
 import { dmActiveAtom, dmOpenAtom, hideDms, openDm } from '@/infra/atoms/dm-atoms';
 import { followingAtom, loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
-import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
+import { type Presence, presenceOfAtom } from '@/infra/atoms/presence-atoms';
 import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
@@ -59,9 +59,8 @@ import { FollowButton } from '@/shared-components/FollowButton';
 import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
-import { OfflinePicture } from '@/shared-components/OfflinePicture';
-import { panelClassName } from '@/shared-components/Panel';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { PresenceSquare } from '@/shared-components/PersonRow';
 import { SceneView } from '@/shared-components/SceneView';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SocialsTab } from '@/shared-components/SocialsEditor';
@@ -77,7 +76,7 @@ import { cn } from '@/utils/cn';
 import { streamNumbers } from '@/utils/count';
 import { roveTabs } from '@/utils/tabs';
 
-/** The sentence under the word while they are not live: why to wait, or not. */
+/** The sentence at the top of the about tab while they are not live: why to wait, or not. */
 const NOT_LIVE_WORDS: Record<Presence, string> = {
   offline: 'not streaming right now. the stream shows up here the moment they start.',
   online: 'around, not streaming. the stream shows up here the moment they start.',
@@ -114,13 +113,13 @@ function hintedLive(state: unknown): boolean {
 type Ask = 'before' | 'asking' | 'done';
 
 /**
- * Beside the chat's button, wherever that is on the page: a line to the streamer (docs/dms.md),
- * the same chip. For a friend alone, someone this login follows who follows it back: a line
+ * In the title row, right of follow: a line to the streamer (docs/dms.md), a light 32px box
+ * (44px on a phone). For a friend alone, someone this login follows who follows it back: a line
  * goes nowhere else, and the sidebar's list already says who that is. It opens the chat
  * window on their thread (or shows the one they have), lit while that thread is the one on
- * screen, and then it hides the window, the chat button's way.
+ * screen, and then it hides the window, the chat button's way. One on the page, desktop or phone.
  */
-function DmButton({ name, className, onPage = false }: { name: string; className?: string; onPage?: boolean }) {
+function DmButton({ name }: { name: string }) {
   const friend = useAtomValue(followingAtom)?.find((f) => f.name === name && f.mutual);
   const open = useAtomValue(dmOpenAtom);
   const active = useAtomValue(dmActiveAtom);
@@ -128,31 +127,12 @@ function DmButton({ name, className, onPage = false }: { name: string; className
   const on = open && active === name;
   const label = on ? `hide the chat with ${name}` : `message ${name}`;
   const toggle = () => (on ? hideDms() : openDm({ id: '', name, avatar: friend.avatar, verified: friend.verified, bio: friend.bio, presence: friend.presence }));
-  // a phone's is on the page (the top of the about tab), not on the picture: the glyph alone, 44px, lit blue while on
-  if (onPage) {
-    return (
-      <Tooltip content={label}>
-        <button
-          id="dm-open"
-          type="button"
-          aria-label={label}
-          aria-pressed={on || undefined}
-          onClick={toggle}
-          className={cn(
-            'flex h-11 w-11 shrink-0 items-center justify-center border border-transparent transition-colors duration-150 focus-visible:border-primaryBlue focus-visible:outline-none',
-            on ? 'text-primaryBlue' : 'text-textSecondary hover:text-primaryBlue',
-            className
-          )}
-        >
-          <MailIcon />
-        </button>
-      </Tooltip>
-    );
-  }
   return (
-    <IconButton id="dm-open" label={label} active={on} className={className} onClick={toggle}>
-      <MailIcon />
-    </IconButton>
+    <Tooltip content={label}>
+      <IconButton id="dm-open" tone="page" label={label} active={on} onClick={toggle}>
+        <MailIcon />
+      </IconButton>
+    </Tooltip>
   );
 }
 
@@ -221,15 +201,15 @@ export function WatchPage() {
   const cornerTaken = useAtomValue(publishPipAtom);
   // a fake stream gets a page from its name. anyone else's is read from the api.
   const about = useMemo(() => (isDummyName(name) ? dummyPage(name, { offline }) : null), [name, offline]);
-  // a phone's offline box is a thumbnail where the player goes: their offline picture, else the first of
-  // their home card's pictures (the profile read the person card keeps, follow-atoms' loadPeek), else none
+  // the offline box where the player goes shows a thumbnail: their offline picture, else the first of
+  // their home card's pictures (the profile read the person card keeps, follow-atoms' loadPeek), else black
   const thumbs = useAtomValue(peeksAtom)[name]?.card.thumbs;
   const [brokenThumb, setBrokenThumb] = useState<string | null>(null);
   useEffect(() => {
-    if (mobile && name && !isDummyName(name)) void loadPeek(name);
-  }, [mobile, name]);
+    if (name && !isDummyName(name)) void loadPeek(name);
+  }, [name]);
   const offlineThumb = offline !== null ? api.offlineUrl(name, offline) : thumbs?.[0] !== undefined ? api.streamThumbUrl(name, thumbs[0]) : null;
-  const phoneThumb = offlineThumb !== brokenThumb ? offlineThumb : null;
+  const shownThumb = offlineThumb !== brokenThumb ? offlineThumb : null;
 
   // Mount only: start watching the name in the url (or take back the stream picture in picture
   // kept alive), and on the way out stop, unless picture in picture keeps it going in the corner.
@@ -273,33 +253,33 @@ export function WatchPage() {
     navigate('/');
   };
 
+  // the title row, desktop and phone alike (PageFrame's `person` row): their face with the presence square on
+  // its corner (`#presence`, the word on hover and for screen readers), the name over how many follow and
+  // watch, and at the right end follow and, for a friend, the line to them
+  const face = name ? (
+    <span className="relative shrink-0">
+      <Face name={name} version={avatar} className={mobile ? 'h-8 w-8 text-sm' : 'h-10 w-10 text-lg'} />
+      <PresenceSquare id="presence" labelled presence={presence} className="border-background" />
+    </span>
+  ) : undefined;
   const title = (
-    <>
-      {/* their picture, or the letter their name makes when they have none: a face left of the name either way */}
-      {name && <Face name={name} version={avatar} className="mr-3 inline-flex align-middle" />}
+    <span className="relative flex min-w-0 items-center gap-1.5">
       {bio ? (
         <Tooltip content={bio}>
-          <span>{name}</span>
+          <span className="truncate">{name}</span>
         </Tooltip>
       ) : (
-        name
+        <span className="truncate">{name}</span>
       )}
       {verified && (
         <Tooltip content="has an account: this really is them">
-          <span role="img" aria-label="has an account" className="ml-2 text-increase">
+          <span role="img" aria-label="has an account" className="shrink-0 text-increase">
             ✓
           </span>
         </Tooltip>
       )}
-      {oauthVerified && <OAuthMark id="watch-oauth-verified" size={22} className="ml-2 align-[-3px]" />}
+      {oauthVerified && <OAuthMark id="watch-oauth-verified" size={16} className="shrink-0" />}
       {isDummyName(name) && <TestBadge />}
-      {/* the presence word is not drawn beside the name any more: the status line under it carries that.
-          #presence stays, unseen, for screen readers and the browser tests that key on it (docs/spec.md) */}
-      {name && (
-        <span id="presence" data-presence={presence} className="sr-only">
-          {PRESENCE_WORD[presence]}
-        </span>
-      )}
       {/* their status (`bio` on the wire) is hover only: not drawn under the name, it shows in a tooltip
           over the name. #bio stays, unseen, for screen readers and the tests that key on it (docs/spec.md) */}
       {bio && (
@@ -307,7 +287,7 @@ export function WatchPage() {
           {bio}
         </span>
       )}
-    </>
+    </span>
   );
 
   // the player, or the profile while they are not live, and the streamer's pictures beside it: the
@@ -319,84 +299,53 @@ export function WatchPage() {
           (a silent stream should show why) and otherwise come up on hover, while a control has
           keyboard focus (not the focus a mouse click leaves behind, or they would stick), and on a
           screen with no hover at all. "tap to play" is the exception: big, in the middle. */}
-      {/* not live, and while the api is being asked: the profile where the picture would be
-          (docs/follows.md). the face, the word and a sentence; the tabs sit below and the chat stays.
-          the player appears when they start (`live` pushed on the events socket, docs/status.md), so
-          there is nothing to press and no black box, not even for the ask: a player with no stream
-          would be one. a streamer who put an offline picture gets it where the player goes, the
-          profile under it, and the line they wrote (if any) above the sentence.
+      {/* not live, and while the api is being asked: the player's own 16:9 box (`#profile`, a strip while a
+          phone types, as the player is), so the tabs sit where they will when the stream starts. black, or
+          their offline picture (else a thumbnail of their stream), and a small `offline` chip at its bottom
+          left once the api has said so; the sentence and the line they wrote are at the top of the about
+          tab. the player appears when they start (`live` pushed on the events socket, docs/status.md):
+          never a <video> without a stream, not even for the ask.
           the one exception is a stream that is expected: they are streaming and the page is still
           asking (or video is a beat behind the word). then the player's box stands grey where the
           player goes, so the page has its shape and nothing moves down when the picture lands.
-          never a <video>, never for a name that is not streaming: nothing flashes on an offline
-          profile. the chat's button sits on it where the player's does */}
+          never for a name that is not streaming: nothing flashes on an offline page. the chat's button
+          sits on either box where the player's does (a phone's chat is a tab) */}
       {phase === 'waiting' || phase === 'loading' ? (
         expecting ? (
           <Skeleton id="player-loading" label="loading the stream" className="relative aspect-video w-full border border-primaryStroke bg-backgroundSecondary max-md:border-t-0">
             <Bone className="absolute inset-0" />
-            {/* a phone's chat is a tab and its line to a friend is at the top of the about tab */}
             {!mobile && (
               <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
                 <ChatOpenButton className="ml-auto" />
-                <DmButton name={name} />
               </div>
             )}
           </Skeleton>
-        ) : mobile ? (
-          // a phone's profile is the player's box, the same 16:9 in the same place (and a strip while typing,
-          // as the player is), so the tabs sit where they will when the stream starts: a thumbnail of the
-          // stream, or their face and the word on black. the word, their line and the sentence stay for
-          // screen readers and the tests (docs/spec.md)
-          <div id="profile" data-presence={presence} ref={strip.ref} className={cn('relative', strip.box)} style={strip.style}>
-            <div className={cn('relative aspect-video w-full overflow-hidden bg-black', strip.frame)}>
-              {phoneThumb ? (
+        ) : (
+          <div id="profile" data-presence={presence} ref={mobile ? strip.ref : undefined} className={cn('relative', mobile && strip.box)} style={mobile ? strip.style : undefined}>
+            <div className={cn('relative aspect-video w-full overflow-hidden border border-primaryStroke bg-black max-md:border-x-0 max-md:border-t-0', mobile && strip.frame)}>
+              {shownThumb && (
                 <img
                   id={offline !== null ? 'offline-picture' : undefined}
-                  src={phoneThumb}
+                  src={shownThumb}
                   alt=""
                   draggable={false}
                   className="absolute inset-0 h-full w-full object-cover"
-                  onError={() => setBrokenThumb(phoneThumb)}
+                  onError={() => setBrokenThumb(shownThumb)}
                 />
-              ) : (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
-                  <Face name={name} version={avatar} className="h-16 w-16 text-2xl" />
-                  <span aria-hidden className="text-sm text-white/70">
-                    offline
-                  </span>
+              )}
+              {phase === 'waiting' && (
+                <span className="absolute bottom-2 left-2 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-xs font-semibold text-white">
+                  <span aria-hidden className="h-2 w-2 bg-textTertiary" />
+                  offline
+                </span>
+              )}
+              {!mobile && (
+                <div className="absolute bottom-0 right-0 p-3">
+                  <ChatOpenButton />
                 </div>
               )}
             </div>
-            <div className="sr-only">
-              <p>{PRESENCE_WORD[presence]}</p>
-              {offlineNote && <p id="offline-note">{offlineNote}</p>}
-              <p>{phase === 'loading' ? 'loading' : NOT_LIVE_WORDS[presence]}</p>
-            </div>
           </div>
-        ) : (
-          <>
-            {offline !== null && <OfflinePicture id="offline-picture" src={api.offlineUrl(name, offline)} className="mb-3 w-full" />}
-            <div id="profile" className={cn(panelClassName('flex flex-wrap items-center gap-6 p-6'))} data-presence={presence}>
-              <Face name={name} version={avatar} className="h-28 w-28 text-5xl" />
-              <div className="min-w-0 flex-1">
-                <p className={cn('flex items-center gap-2 text-lg font-semibold', PRESENCE_TEXT[presence])}>
-                  <span aria-hidden className={cn('inline-block h-3 w-3', PRESENCE_SQUARE[presence])} />
-                  {PRESENCE_WORD[presence]}
-                </p>
-                {offlineNote && (
-                  <p id="offline-note" className="mt-1 [overflow-wrap:anywhere]">
-                    {offlineNote}
-                  </p>
-                )}
-                <p className="mt-1 text-textSecondary">{phase === 'loading' ? 'loading' : NOT_LIVE_WORDS[presence]}</p>
-              </div>
-              {/* the chat's button lives on the player; without a player it lives here, and a friend's line button with it */}
-              <span className="flex items-center gap-3 self-start">
-                {!mobile && <ChatOpenButton />}
-                <DmButton name={name} />
-              </span>
-            </div>
-          </>
         )
       ) : (
         <div ref={mobile ? strip.ref : undefined} className={cn('group relative', mobile && strip.box)} style={mobile ? strip.style : undefined}>
@@ -439,13 +388,11 @@ export function WatchPage() {
           )}
           {/* top left, once frames play: how the picture is arriving. up on its own while it is in trouble */}
           {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} playback={{ muted, level: volume }} />}
-          {/* while the chat is closed the bar stays up, so the button that brings it back is on the picture.
-              beside it, for a friend, the line to them (docs/dms.md) */}
+          {/* while the chat is closed the bar stays up, so the button that brings it back is on the picture */}
           {phase !== 'bad-name' && (
             <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || (!mobile && !chatOpen)))}>
               {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
               {mobile ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
-              {!mobile && <DmButton name={name} />}
               <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'picture in picture'} disabled={cornerTaken} onClick={toCorner}>
                 <PipIcon />
               </IconButton>
@@ -476,29 +423,57 @@ export function WatchPage() {
     </>
   );
 
-  // under the picture: what is up, who is watching, and at the right end how many follow them and the
-  // button to (docs/follows.md; the count moves with the click, the api's number comes with the next
-  // grant). while the stream plays the line would say `watching`, which the picture and the word beside
-  // the name already say: then it is for screen readers and the tests alone, and the count stands in its
-  // place, the corner player's way. the line comes back for anything else: not live, connecting, ended.
-  // a phone has it at the top of the about tab, and the follow button in the title row
+  // follow in the title row (docs/follows.md; the count moves with the click, the api's number comes with
+  // the next grant), and beside it for a friend the line to them. a fake stream has neither
   const followButton = (className?: string) => (
     <FollowButton id="follow" name={name} small={mobile} className={className} onChange={(now) => store.set(followersAtom, (followers ?? 0) + (now ? 1 : -1))} />
   );
+  const rowEnd =
+    name && !isDummyName(name) ? (
+      <>
+        {followButton(mobile ? 'min-h-11 min-w-11' : undefined)}
+        <DmButton name={name} />
+      </>
+    ) : undefined;
+  const followersCount = name && !isDummyName(name) && followers !== null && (
+    <span id="followers">
+      {followers} {followers === 1 ? 'follower' : 'followers'}
+    </span>
+  );
+
+  // a phone's top of the about tab: what is up, who is watching, how many follow them. while the stream
+  // plays the line would say `watching`, which the picture already says: then it is for screen readers
+  // and the tests alone, and the count stands in its place, the corner player's way
   const status = (
     <div className="my-3 flex flex-wrap items-baseline gap-x-4">
       <StatusLine text={message} tone={tone} className={cn('my-0', phase === 'watching' && 'sr-only')} />
       <ViewerCount id="viewers" count={viewers} className="text-lg text-textSecondary" />
-      {name && !isDummyName(name) && (
-        <span className="ml-auto inline-flex items-center gap-3">
-          {followers !== null && (
-            <span id="followers" className="text-lg text-textSecondary">
-              {followers} {followers === 1 ? 'follower' : 'followers'}
-            </span>
-          )}
-          {!mobile && followButton()}
-        </span>
+      {followersCount && <span className="ml-auto text-lg text-textSecondary">{followersCount}</span>}
+    </div>
+  );
+  // the desktop's under the picture: only what the title row does not already say. the numbers are its
+  // small line, and offline is the chip on the player, so `not live yet` and `watching` (and #viewers and
+  // #followers) are for screen readers and the tests alone. connecting, ended, a lost connection show
+  const quiet = phase === 'watching' || phase === 'waiting' || phase === 'loading';
+  const deskStatus = (
+    <div className={cn('relative', !quiet && 'my-3')}>
+      <StatusLine text={message} tone={tone} className={cn('my-0', quiet && 'sr-only')} />
+      <span className="sr-only">
+        <ViewerCount id="viewers" count={viewers} />
+        {followersCount}
+      </span>
+    </div>
+  );
+
+  // at the top of the about tab while they are not live: the line they wrote (if any), then the sentence
+  const offlineWords = phase === 'waiting' && !expecting && (
+    <div className="mb-4 text-sm text-textSecondary">
+      {offlineNote && (
+        <p id="offline-note" className="text-textPrimary [overflow-wrap:anywhere]">
+          {offlineNote}
+        </p>
       )}
+      <p>{NOT_LIVE_WORDS[presence]}</p>
     </div>
   );
 
@@ -528,11 +503,8 @@ export function WatchPage() {
         <ChatPanel name={name} className={cn('h-full min-h-0 flex-1', CHAT_MOBILE)} />
       ) : t === 'about' ? (
         <>
-          {/* the line to a friend at the right end: the row's follow leaves the name too little for it there */}
-          <div className="flex items-start gap-2">
-            <div className="min-w-0 flex-1 [&>div]:mt-0">{status}</div>
-            <DmButton name={name} onPage className="-mr-2.5 -mt-2.5" />
-          </div>
+          <div className="[&>div]:mt-0">{status}</div>
+          {offlineWords}
           <About key={name} name={name} doc={about} edit={mine} />
         </>
       ) : t === 'calendar' ? (
@@ -549,23 +521,10 @@ export function WatchPage() {
         <PageFrame
           title={title}
           titleId="who"
-          // the name, cut with an ellipsis, and their presence square right after it (the word was the card under the player)
-          mobileTitle={
-            name ? (
-              <span className="flex min-w-0 items-center gap-1.5">
-                <span className="truncate">{name}</span>
-                <Tooltip content={PRESENCE_WORD[presence]}>
-                  <span role="img" aria-label={PRESENCE_WORD[presence]} className={cn('relative h-2 w-2 shrink-0', PRESENCE_SQUARE[presence])} />
-                </Tooltip>
-              </span>
-            ) : (
-              name
-            )
-          }
-          // the row: the menu, their face, the name over how many follow and watch, home, and follow at the right end
-          mobileStart={name ? <Face name={name} version={avatar} className="h-8 w-8 text-sm" /> : undefined}
+          // the row: the menu, their face and its presence square, the name over how many follow and watch, home, then follow and the line to a friend
+          mobileStart={face}
           mobileSub={streamNumbers(name && !isDummyName(name) ? followers : null, viewers)}
-          mobileEnd={name && !isDummyName(name) ? followButton('min-h-11 min-w-11') : undefined}
+          mobileEnd={rowEnd}
           wide
           bleed
           fill
@@ -631,8 +590,11 @@ export function WatchPage() {
     <PageFrame
       title={title}
       titleId="who"
-      // a phone's row: the stream's name alone, on one line
-      mobileTitle={name}
+      // the phone's row at full width: their face and its square, the name over its numbers, follow and the line to a friend
+      person
+      mobileStart={face}
+      mobileSub={streamNumbers(name && !isDummyName(name) ? followers : null, viewers)}
+      mobileEnd={rowEnd}
       wide
     >
       {/* the video column, the chat, the tabs, in that order. left or right is a grid at lg+ (the
@@ -643,7 +605,7 @@ export function WatchPage() {
       <div className={chatLayoutClass(chatSide, chatOpen)}>
         <div className={cn('min-w-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-1')}>
           {player}
-          {status}
+          {deskStatus}
 
           {retryRow}
         </div>
@@ -691,7 +653,10 @@ export function WatchPage() {
             </div>
             <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} className="pt-4">
               {tab === 'about' ? (
-                <About key={name} name={name} doc={about} edit={mine} />
+                <>
+                  {offlineWords}
+                  <About key={name} name={name} doc={about} edit={mine} />
+                </>
               ) : tab === 'calendar' ? (
                 <Calendar name={name} />
               ) : (
