@@ -1,23 +1,41 @@
 ---
-description: Small actions are text, not a bordered box
+description: Every clickable action is a boxed Button; plain links only inside sentences
 globs: frontend/**/*.tsx
 alwaysApply: false
 ---
 
 # Buttons
 
-`Button` always draws a border and a fill, and nothing else: no shadow, no press movement, and no `flat` prop (there is nothing left for one to turn off). That is a commit: make it, go live, log in, the yes on a dialog. No box-shadow, on `Button` or anywhere else.
+Every clickable action is a box: the shared `Button` (or `buttonClassName` on a router `Link`) from `shared-components/Button.tsx`. A bare word like "change name" or "delete" reads as a link, so it never stands alone as an action. This is every screen, including ones already shipped.
 
-A small action is not that. Add, delete, kick, leave, cancel, the no on a confirm, save on a line already in the page: words only, no border, no box, no `Button`. The yes stays a `Button`. This is every screen, including ones already shipped.
+`Button` draws a 1px border and a fill, and a hover that changes a colour or the border: no shadow, no press movement (no-box-shadow.mdc).
+
+- **A commit** (make it, go live, log in, the yes on a dialog): `variant="primary"`, the default size.
+- **A small action in a row** (rename, add, kick, save, cancel, the no on a confirm): `size="sm"`. It is `px-3 py-1.5 text-sm`, a `primaryStroke` border that hovers to a lifted fill and a stronger stroke, a `primaryBlue` focus outline, `opacity-50` and no hover when disabled, and `max-md:min-h-11` so it stays a thumb's height on a phone. Pick the variant:
+  - `variant="secondary"` (default): a neutral action.
+  - `variant="outline"`: the one action in the row that moves things forward (add, save, join).
+  - `variant="outline-danger"`: delete, remove, kick, leave, ban. Destructive is always outline danger, never a bare red word.
+- **A row too tight for words**: an icon-only button, with an `aria-label` and a `Tooltip` of the same name (tooltips.mdc).
+- **A plain inline link** only inside a sentence ("no account? <u>sign up</u>"), where it is part of what the sentence says. A word sitting alone beside a field or at the end of a row is not in a sentence: box it.
 
 ```tsx
-// ❌ BAD — "add" becomes a bordered box
-<Button className="px-3 py-1.5 text-sm" type="submit">add</Button>
+// ❌ BAD — bare words that read as links, and a one-off box
+<button type="button" className="text-sm text-textSecondary hover:underline">change name</button>
+<button type="button" className="text-sm text-textTertiary">delete</button>
 <button className="border px-3 py-1.5 text-sm">add role</button>
 
 // ✅ GOOD
-<button type="submit" className="text-sm font-semibold text-primaryBlue disabled:opacity-40">add</button>
-<button type="button" className="text-sm text-textTertiary">delete</button>
+<Button size="sm" onClick={rename}>change name</Button>
+<Button size="sm" variant="outline" type="submit" disabled={!ok}>add role</Button>
+<Button size="sm" variant="outline-danger" onClick={remove}>delete</Button>
+
+// ✅ GOOD — a tight row
+<Tooltip content="remove">
+  <button type="button" aria-label="remove" onClick={remove}><RiCloseLine aria-hidden size={16} /></button>
+</Tooltip>
+
+// ✅ GOOD — a link inside a sentence
+<p>no account? <button type="button" className="text-primaryBlue hover:underline" onClick={toSignup}>sign up</button></p>
 ```
 
-Do not invent a one-off bordered chip for a new control. A pressed state is colour (`text-primaryBlue`), not a new outline.
+Do not invent a one-off bordered chip for a new control: reach for `Button` and a `size`/`variant`. A pressed or selected state is colour (`border-primaryBlue text-primaryBlue`), not a new outline.
