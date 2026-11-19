@@ -481,15 +481,17 @@ function SourceList({ sources }: { sources: Source[] }) {
  * with no name yet is told so under it, with the way to the profile tab, where the name is
  * picked (there is no name box on this page: a login streams as its account, anyone else as
  * the nick in the corner panel). While live, `share screen` beside stop, the same press as the
- * `+` menu's `screen or window`; not where the browser has no screen capture (phones).
+ * `+` menu's `screen or window`; not where the browser has no screen capture (phones). A
+ * phone's go live page puts it beside the status under the preview instead (LivePage.tsx), in
+ * a box of its own `className`.
  */
-function StartStop() {
+export function StartStop({ className = 'flex flex-col gap-2 p-2' }: { className?: string }) {
   const publishing = useAtomValue(isPublishingAtom);
   const canStart = useAtomValue(canStartAtom);
   const canShare = useAtomValue(canShareScreenAtom);
   const named = isValidName(useAtomValue(streamNameAtom));
   return (
-    <div className="flex flex-col gap-2 p-2">
+    <div className={className}>
       {publishing ? (
         <Button id="stop" variant="danger" className="w-full" onClick={() => stopLive()}>
           stop
@@ -533,9 +535,10 @@ function StartStop() {
  * share, removes a picture or the avatar, turns the camera off. The `+` adds. Folded, it is a
  * rail, with start (or stop) still at its foot. With a model in the camera's place
  * (docs/vtuber.md) its face reader's words and controls sit under the list, and the picker is
- * this panel's to open: from the `+`, and from `another model`.
+ * this panel's to open: from the `+`, and from `another model`. `startStop={false}`: no foot,
+ * the page has start and stop somewhere else (a phone's, LivePage.tsx).
  */
-export function Sources() {
+export function Sources({ startStop = true }: { startStop?: boolean }) {
   const sources = useAtomValue(sourcesAtom);
   const open = useAtomValue(livePanelsAtom).sources;
   const status = useAtomValue(sourceStatusAtom);
@@ -557,7 +560,7 @@ export function Sources() {
         open={open}
         onToggle={() => setLivePanel('sources', !open)}
         aside={<AddMenu onModel={() => setPicking(true)} />}
-        footer={<StartStop />}
+        footer={startStop ? <StartStop /> : undefined}
       >
         {sources.length === 0 ? (
           <div className="px-3 py-3 text-sm text-textTertiary">

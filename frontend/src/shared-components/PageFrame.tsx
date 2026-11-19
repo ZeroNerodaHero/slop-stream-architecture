@@ -21,6 +21,8 @@ interface PageFrameProps {
   mobileEnd?: ReactNode;
   /** On a phone, the page runs to the window's edges: no side padding, no gap under the row, no foot. A group's room (ServerRoom.tsx). */
   bleed?: boolean;
+  /** On a phone, the page is its parent's height: a column, the row on top and the rest the page's to share out. The go live page, which is the window (LivePage.tsx). */
+  fill?: boolean;
   children: ReactNode;
 }
 
@@ -139,7 +141,7 @@ function useCurrentPart(on: boolean, main: RefObject<HTMLElement | null>, row: R
  * (UserPanel.tsx). Always measured into `--title-row`, home's too: the page starts under it.
  * `bleed` takes the page's padding away, so what is under the row reaches the window's edges.
  */
-export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mobileEnd, bleed = false, children }: PageFrameProps) {
+export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mobileEnd, bleed = false, fill = false, children }: PageFrameProps) {
   const titled = Boolean(title || aside);
   const mobile = useIsMobile();
   const mainRef = useRef<HTMLElement | null>(null);
@@ -169,7 +171,7 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
     const named = mobileTitle ?? title;
     const headed = mobileTitle !== undefined || title !== undefined;
     return (
-      <main ref={mainRef} className={cn('mx-auto', bleed ? 'px-0' : 'px-4 pb-8', width)}>
+      <main ref={mainRef} className={cn('mx-auto', bleed ? 'px-0' : 'px-4 pb-8', width, fill && 'flex h-full min-h-0 w-full flex-col')}>
         {/* the buttons are 44px; the notch or the status bar is over them */}
         <header
           ref={headerRef}
