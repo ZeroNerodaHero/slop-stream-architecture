@@ -266,8 +266,8 @@ export const faceCameraAtom = atom((get) => {
 export const faceMirrorAtom = atom((get) => get(storedFaceMirrorAtom) !== false);
 /** The brows, the smile and the wide eyes move the model too, not only the mouth and the blinks: on unless turned off. */
 export const faceExpressionsAtom = atom((get) => get(storedFaceExpressionsAtom) !== false);
-/** The rigging panel has the camera's picture under the reader's marks: on unless turned off, which leaves the marks alone. */
-export const rigPictureAtom = atom((get) => get(storedRigPictureAtom) !== false);
+/** The rigging panel always has the camera's picture under the reader's marks (the eye that turned it off is gone). */
+export const rigPictureAtom = atom(() => true);
 /** The flat colour behind the model, `#rrggbb`. */
 export const modelBackgroundAtom = atom((get) => {
   const colour = get(storedModelBackgroundAtom);
