@@ -16,7 +16,7 @@ import { atom } from 'jotai';
 
 import { api, type Channel, type GroupMember, type GroupRoom, messageOf, statusOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { dropChannel, followChannel, moveChannelLines, reconnectChat, seedChannels } from '@/infra/atoms/chat-atoms';
+import { findServerChat, serverChat } from '@/infra/atoms/chat-atoms';
 import { holdPresence, onEvents, releasePresence, unwatchPresence, watchPresence } from '@/infra/events';
 import { type GroupChange, groupTopic } from '@/infra/frames';
 import { store } from '@/infra/store';
@@ -152,8 +152,9 @@ function applyRename(room: GroupRoom, from: string, to: string): void {
     channels: channels.filter((c) => c.name !== to).map((c) => (c.name === from ? { ...c, name: to } : c)),
     muted: room.muted?.map((c) => (c === from ? to : c)) ?? room.muted
   });
-  moveChannelLines(from, to);
-  followChannel(to);
+  const chat = findServerChat(room.name);
+  chat?.moveChannelLines(from, to);
+  chat?.followChannel(to);
   store.set(channelRenamedAtom, { from, to });
 }
 
@@ -172,7 +173,7 @@ async function loadRoom(): Promise<void> {
     const before = store.get(roomAtom);
     store.set(roomAtom, room);
     store.set(roomErrorAtom, '');
-    if (before && before.name === server) reconcileChannels(before.channels ?? [], room.channels ?? []);
+    if (before && before.name === server) reconcileChannels(server, before.channels ?? [], room.channels ?? []);
   } catch (err) {
     if (mine !== attempt) return;
     store.set(roomErrorAtom, statusOf(err) === 404 ? 'no such group' : messageOf(err));
@@ -191,14 +192,16 @@ export function reloadLines(): void {
  * takes its lines off the shelf, and the socket is opened again, since the chat joins what the
  * login sees as the socket opens and keeps carrying a channel until then.
  */
-function reconcileChannels(was: Channel[], now: Channel[]): void {
+function reconcileChannels(server: string, was: Channel[], now: Channel[]): void {
   const had = new Set(was.map((c) => c.name));
   const has = new Set(now.map((c) => c.name));
   const came = now.filter((c) => !had.has(c.name));
   const went = was.filter((c) => !has.has(c.name));
-  for (const c of went) dropChannel(c.name);
-  if (went.length > 0) reconnectChat();
-  else for (const c of came) followChannel(c.name);
+  // this server's socket alone: a stream's room in the corner is no business of the group's
+  const chat = findServerChat(server);
+  for (const c of went) chat?.dropChannel(c.name);
+  if (went.length > 0) chat?.reconnect();
+  else for (const c of came) chat?.followChannel(c.name);
   if (came.length > 0) void loadLines();
 }
 
@@ -214,11 +217,11 @@ async function loadLines(): Promise<void> {
   try {
     const lines = await api.groupMessages(server);
     if (mine !== attempt) return;
-    seedChannels(server, lines);
+    serverChat(server).seedChannels(lines);
   } catch {
     if (mine !== attempt) return;
     // nothing to say here: older lines still scroll in from the history routes. seeded with nothing, so the panel stops standing grey lines for an answer that is not coming
-    seedChannels(server, {});
+    serverChat(server).seedChannels({});
   }
 }
 
@@ -268,7 +271,7 @@ function apply(change: GroupChange): void {
       const mine = about(change.channel.made_by ?? '');
       const can_delete = change.channel.name !== 'general' && (mine || room.perms.channels);
       store.set(roomAtom, { ...room, channels: [...channels, { ...change.channel, can_delete }] });
-      followChannel(change.channel.name);
+      findServerChat(room.name)?.followChannel(change.channel.name);
       return;
     }
     case 'unchannel':
@@ -278,7 +281,7 @@ function apply(change: GroupChange): void {
         channels: (room.channels ?? []).filter((c) => c.name !== change.channel),
         muted: room.muted?.filter((c) => c !== change.channel) ?? room.muted
       });
-      dropChannel(change.channel);
+      findServerChat(room.name)?.dropChannel(change.channel);
       return;
     case 'channel_renamed':
       applyRename(room, change.channel, change.name);

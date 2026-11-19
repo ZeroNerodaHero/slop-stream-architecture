@@ -1,5 +1,5 @@
 import { atom, useAtomValue } from 'jotai';
-import { useRef } from 'react';
+import { Component, type ErrorInfo, type ReactNode, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 
 import {
@@ -48,6 +48,7 @@ import {
 } from '@/infra/atoms/watch-atoms';
 import { api } from '@/infra/api';
 import { cleanName } from '@/infra/names';
+import { report } from '@/infra/report';
 import { cn } from '@/utils/cn';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
@@ -65,16 +66,39 @@ function isWatchPageOf(pathname: string, name: string): boolean {
 
 const isLivePage = (pathname: string) => pathname.replace(/\/$/, '') === '/live';
 
-/** The pages with a chat of their own. The chat atoms hold one room, so the players' chats stay closed there. */
-const hasOwnChat = (pathname: string) => /^\/(watch\/|live\/?$)/.test(pathname);
+/**
+ * One corner player's own catch. A crash in a player (or in its popped out window) is that
+ * player's alone: without this it reached the router's crash page, which replaces every page,
+ * and the crash page's reload ended a stream that was still up. The stream lives in the atoms,
+ * not here, so it goes on; the player is tried again on the next page.
+ */
+class CornerCatch extends Component<{ at: string; children: ReactNode }, { failed: boolean; at: string }> {
+  state = { failed: false, at: this.props.at };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  static getDerivedStateFromProps(props: { at: string }, state: { failed: boolean; at: string }) {
+    return props.at === state.at ? null : { failed: false, at: props.at };
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    report('crash', error, { componentStack: info.componentStack ?? undefined });
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
 
 /** The two players, by the id prefix each puts on its elements. */
 type Corner = 'pip' | 'live-pip';
 
 /**
- * Which player's chat button is on, if any. One, not one each: the chat atoms hold one room
- * (and only one player shows at a time anyway). Kept while a page with its own chat hides the
- * chat, and across streams: the button is a choice for the visit.
+ * Which player's chat button is on, if any. One, not one each: only one player shows at a time.
+ * Each player's chat is its own stream's room (chat-atoms.ts), whatever the page's chat is, so
+ * the button stays on across pages and streams: it is a choice for the visit.
  */
 const cornerChatAtom = atom<Corner | null>(null);
 
@@ -123,7 +147,8 @@ function WatchCorner() {
       volume={volume}
       onPlaying={markPlaying}
       onAutoplayBlocked={markAutoplayBlocked}
-      chat={{ name, place: pipChat, open: cornerChat === 'pip', pageHasChat: hasOwnChat(pathname), onToggle: () => toggleCornerChat('pip') }}
+      // the stream's own room: over a group's channel, a friend's chat or another stream's page alike, the corner's chat is this stream's
+      chat={{ name, place: pipChat, open: cornerChat === 'pip', pageChatIsOurs: isWatchPageOf(pathname, name), onToggle: () => toggleCornerChat('pip') }}
       closeLabel="stop watching"
       onClose={endWatch}
       center={
@@ -209,13 +234,13 @@ function LiveCorner() {
         imageUrl: (asset) => api.assetUrl(name, asset),
         avatar: { name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined }
       }}
-      // the go live page's chat is this same room: out in the window the player may show it too
+      // your own room, as the streamer, on every page: while you watch someone else their page's chat is theirs and this
+      // one stays yours. the go live page's chat is this same room: out in the window the player shows it as a guest
       chat={{
         name,
         owner,
         place: pipChat,
         open: cornerChat === 'live-pip',
-        pageHasChat: hasOwnChat(pathname),
         pageChatIsOurs: isLivePage(pathname),
         onToggle: () => toggleCornerChat('live-pip')
       }}
@@ -245,6 +270,7 @@ function LiveCorner() {
 export function MiniPlayer() {
   const side = useAtomValue(panelSideAtom);
   const sidebarOpen = useAtomValue(friendsOpenAtom);
+  const { pathname } = useLocation();
   return (
     <div
       id="corner-players"
@@ -254,8 +280,12 @@ export function MiniPlayer() {
         side === 'right' ? (sidebarOpen ? 'right-[324px]' : 'right-20') : 'right-6'
       )}
     >
-      <WatchCorner />
-      <LiveCorner />
+      <CornerCatch at={pathname}>
+        <WatchCorner />
+      </CornerCatch>
+      <CornerCatch at={pathname}>
+        <LiveCorner />
+      </CornerCatch>
     </div>
   );
 }
