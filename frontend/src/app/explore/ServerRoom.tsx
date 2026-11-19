@@ -67,6 +67,7 @@ import { type ChatSearch, comboProps, SearchFilters, SearchSuggestions, useChatS
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Face } from '@/shared-components/Face';
 import { GroupMark } from '@/shared-components/GroupMark';
+import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
@@ -1251,6 +1252,7 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
 
   // every way out goes through the element: close() hands focus back, then fires `close`, which is onClose
   const close = () => dialogRef.current?.close();
+  useSheetBack(close);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -1278,6 +1280,7 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
     <dialog
       ref={dialogRef}
       id="channel-make"
+      data-sheet=""
       aria-labelledby="channel-make-title"
       onPointerDown={onPointerDown}
       onClick={onClick}
@@ -1285,9 +1288,10 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
         event.stopPropagation();
         onClose();
       }}
-      // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
-      className="m-auto w-[min(460px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60"
+      // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop. a phone's is a sheet (MobileSheet.tsx)
+      className={cn('m-auto w-[min(460px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60', SHEET_DIALOG)}
     >
+      <SheetGrab onDismiss={close} />
       <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-5">
         <div>
           <h2 id="channel-make-title" className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
@@ -1650,6 +1654,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
 
   // every way out goes through the element: close() restores focus, then fires `close`
   const close = () => dialogRef.current?.close();
+  useSheetBack(close);
 
   const run: Run = async (work) => {
     setError('');
@@ -1701,7 +1706,9 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
       // a set height, not a cap: the rail and the pane fill it, and a change of tab does not move the box
       className={cn(
         'm-auto h-[min(680px,calc(100dvh-3rem))] w-[min(880px,calc(100vw-3rem))] overflow-hidden border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary',
-        'flex-col open:flex sm:flex-row backdrop:bg-black/60'
+        'flex-col open:flex sm:flex-row backdrop:bg-black/60',
+        // a phone's is a page over the page, its × a finger's (MobileSheet.tsx)
+        PAGE_DIALOG
       )}
     >
       {/* the rail: the group at its head, then the tabs. a strip along the top on a phone */}
@@ -1761,7 +1768,10 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
             aria-label="close"
             aria-keyshortcuts="Escape"
             onClick={close}
-            className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue"
+            className={cn(
+              'absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
+              SHEET_CLOSE
+            )}
           >
             <RiCloseLine aria-hidden size={20} />
           </button>

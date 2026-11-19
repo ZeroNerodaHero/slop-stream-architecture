@@ -54,6 +54,7 @@ import { ChatImages, pictureSrc } from '@/shared-components/ChatPanel';
 import { comboProps, SearchFilters, SearchHit, SearchResults, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
 import { LinkedText } from '@/shared-components/LinkedText';
+import { SHEET_FLICK, SHEET_MS, SHEET_SNAP, useSheetBack } from '@/shared-components/MobileSheet';
 import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { PresenceSquare, Who } from '@/shared-components/PersonRow';
@@ -327,11 +328,6 @@ function Picker({ dms }: { dms: Dm[] }) {
 const SHEET = 0.8;
 /** At least this much of the dimmed page stays above the sheet while the keyboard is up, to tap it shut. */
 const SHEET_GAP = 24;
-/** Let go past this share of its height and the sheet shuts. */
-const SHEET_SNAP = 0.3;
-/** A flick down this fast (px per ms) shuts it, however short. */
-const SHEET_FLICK = 0.5;
-const SHEET_MS = 200;
 const SHEET_SLIDE = 'duration-200 ease-out motion-reduce:transition-none';
 /** How dark the page behind the sheet gets. */
 const SHEET_DIM = 0.6;
@@ -368,8 +364,9 @@ type SheetGrip = Pick<DOMAttributes<HTMLElement>, 'onPointerDown' | 'onPointerMo
 /**
  * A phone's chat sheet, while `active` (a phone, the chat open): the slide up once it is on
  * screen, the slide down before `onDismiss` takes it off (a tap on the dim page, a drag down
- * let go past `SHEET_SNAP` of its height or flicked, Escape), and the keyboard's place
- * (`useVisibleViewport`). `grip` goes on the grabber and on the head: the sheet follows the finger.
+ * let go past `SHEET_SNAP` of its height or flicked, Escape, the browser's back button), and the
+ * keyboard's place (`useVisibleViewport`). `grip` goes on the grabber and on the head: the sheet
+ * follows the finger. The drag's numbers and the back button are every phone sheet's (MobileSheet.tsx).
  */
 function useSheet(active: boolean, onDismiss: () => void) {
   const view = useVisibleViewport(active);
@@ -403,10 +400,14 @@ function useSheet(active: boolean, onDismiss: () => void) {
     return () => window.clearTimeout(done);
   }, [leaving]);
 
+  // the back button slides it down too
+  useSheetBack(() => setLeaving(true), active);
+
   useEffect(() => {
     if (!active) return;
+    // not while a modal dialog is over it (that one's escape is its own). a panel that is merely shown (the notifications) does not count
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape' && !document.querySelector('dialog[open]')) setLeaving(true);
+      if (e.key === 'Escape' && !document.querySelector('dialog:modal')) setLeaving(true);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

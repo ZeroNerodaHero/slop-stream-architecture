@@ -76,6 +76,7 @@ import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { OAuthMark } from '@/shared-components/OAuthMark';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
+import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { CHIP_BUTTON, ControlTip } from '@/shared-components/VideoControls';
 import { compressChatImage } from '@/infra/picture';
@@ -389,6 +390,8 @@ function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
   }, []);
 
   const close = () => dialogRef.current?.close();
+  // already the whole window, a phone's page over the page: the back button shuts it too (MobileSheet.tsx)
+  useSheetBack(close);
   /** On the grey: not on a button, and not on the picture (the <img> is drawn at exactly the picture's size). */
   const beside = (target: EventTarget) => target instanceof Element && !target.closest('button, img');
   const span = 100 - 2 * PICTURE_EDGE;
@@ -437,7 +440,7 @@ function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
         type="button"
         id="chat-picture-close"
         aria-label="close"
-        className={cn(CHIP_BUTTON, 'group/control absolute right-3 top-3 h-10 w-10 justify-center')}
+        className={cn(CHIP_BUTTON, 'group/control absolute right-3 top-3 h-10 w-10 justify-center', SHEET_CLOSE)}
         onClick={close}
       >
         <RiCloseLine aria-hidden size={24} />

@@ -2,6 +2,8 @@ import { type MouseEvent, type PointerEvent, useLayoutEffect, useRef, useState }
 import { createPortal } from 'react-dom';
 
 import { Button } from '@/shared-components/Button';
+import { SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
+import { cn } from '@/utils/cn';
 
 interface ConfirmDialogProps {
   /** The ids the tests key on: `<id>`, `<id>-title`, `<id>-message`, `<id>-yes`, `<id>-no`. */
@@ -66,6 +68,7 @@ function ConfirmBox({ id, title, message, yes, onYes, onNo }: ConfirmDialogProps
   }, []);
 
   const close = () => dialogRef.current?.close();
+  useSheetBack(close);
   const onPointerDown = (e: PointerEvent<HTMLDialogElement>) => {
     pressedBackdrop.current = e.target === e.currentTarget;
   };
@@ -77,6 +80,7 @@ function ConfirmBox({ id, title, message, yes, onYes, onNo }: ConfirmDialogProps
     <dialog
       ref={dialogRef}
       id={id}
+      data-sheet=""
       aria-labelledby={`${id}-title`}
       aria-describedby={`${id}-message`}
       onPointerDown={onPointerDown}
@@ -87,8 +91,10 @@ function ConfirmBox({ id, title, message, yes, onYes, onNo }: ConfirmDialogProps
         else onNo();
       }}
       // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
-      className="m-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60"
+      // a phone's is a sheet up from the foot (MobileSheet.tsx)
+      className={cn('m-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60', SHEET_DIALOG)}
     >
+      <SheetGrab onDismiss={close} />
       <h2 id={`${id}-title`} className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
         {title}
       </h2>

@@ -6,7 +6,9 @@ import { isSameOrigin, linkHref } from '@/infra/about';
 import { linkWarningAtom, setLinkWarning } from '@/infra/atoms/settings-atoms';
 import { store } from '@/infra/store';
 import { buttonClassName } from '@/shared-components/Button';
+import { SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { CHECKBOX } from '@/shared-components/user-modal/parts';
+import { cn } from '@/utils/cn';
 
 /**
  * A link in talk: `http(s)://…` or `www.…` at the start of a word, up to the next space or the
@@ -189,6 +191,7 @@ function LeaveBox({ href, onClose }: LeaveDialogProps) {
   }, []);
 
   const close = () => dialogRef.current?.close();
+  useSheetBack(close);
   const onPointerDown = (e: PointerEvent<HTMLDialogElement>) => {
     pressedBackdrop.current = e.target === e.currentTarget;
   };
@@ -202,6 +205,7 @@ function LeaveBox({ href, onClose }: LeaveDialogProps) {
     <dialog
       ref={dialogRef}
       id="leave-site"
+      data-sheet=""
       data-site={site}
       aria-labelledby="leave-site-title"
       aria-describedby="leave-site-message"
@@ -212,8 +216,10 @@ function LeaveBox({ href, onClose }: LeaveDialogProps) {
         onClose();
       }}
       // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
-      className="m-auto w-[min(440px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60"
+      // a phone's is a sheet up from the foot (MobileSheet.tsx)
+      className={cn('m-auto w-[min(440px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60', SHEET_DIALOG)}
     >
+      <SheetGrab onDismiss={close} />
       <h2 id="leave-site-title" className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight [overflow-wrap:anywhere]">
         you are leaving this site for {site}
       </h2>

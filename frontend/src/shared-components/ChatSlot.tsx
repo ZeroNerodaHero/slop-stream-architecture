@@ -3,6 +3,7 @@ import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactN
 
 import { type ChatBox as Box, keepStreamBox, keptStreamBox } from '@/infra/atoms/chat-layout-atoms';
 import { type ChatSide,chatModalOpenAtom, chatSideAtom, setChatModalOpen } from '@/infra/atoms/settings-atoms';
+import { MOBILE_QUERY, useIsMobile } from '@/infra/mobile';
 import { store } from '@/infra/store';
 import { ChatIcon, IconButton } from '@/shared-components/VideoControls';
 import { cn } from '@/utils/cn';
@@ -66,6 +67,19 @@ function fitted(box: Box): Box {
   return { w, h, x: clamp(box.x, 0, Math.max(0, r.w - w)), y: clamp(box.y, 0, Math.max(0, r.h - h)) };
 }
 
+/**
+ * Where the stream's chat is: the layout setting, except that a phone (mobile.ts) has no window
+ * floating over the page. There the "window" is the column under the video, as left and right
+ * are: still the one dialog (`#chat-modal`), never shown over anything.
+ */
+export function useChatSide(): ChatSide {
+  const side = useAtomValue(chatSideAtom);
+  return useIsMobile() && side === 'modal' ? 'right' : side;
+}
+
+/** The window is the setting and the screen is not a phone's, read outside a render. */
+const windowNow = () => store.get(chatSideAtom) === 'modal' && !window.matchMedia(MOBILE_QUERY).matches;
+
 /** The corner handles. `sx`/`sy`: which way the box grows when that corner is pulled outward. */
 const CORNERS = [
   { id: 'nw', sx: -1, sy: -1, className: '-left-px -top-px cursor-nwse-resize border-l-2 border-t-2' },
@@ -100,7 +114,7 @@ export function chatLayoutClass(side: ChatSide, open: boolean): string {
  * the video opens it again.
  */
 export function ChatSlot({ children }: { children: ReactNode }) {
-  const side = useAtomValue(chatSideAtom);
+  const side = useChatSide();
   const open = useAtomValue(chatModalOpenAtom);
   const ref = useRef<HTMLDialogElement | null>(null);
   /** Set for the close that happens because the page is going away, so that close does not count as the viewer shutting the window. */
@@ -217,7 +231,7 @@ export function ChatSlot({ children }: { children: ReactNode }) {
       if (!(e.target instanceof Element) || e.target.id !== 'user-modal') return;
       const dialog = ref.current;
       if (!dialog || dialog.open || settingsOpen()) return;
-      if (store.get(chatSideAtom) !== 'modal' || !store.get(chatModalOpenAtom)) return;
+      if (!windowNow() || !store.get(chatModalOpenAtom)) return;
       dialog.show();
       if (reduceMotion()) {
         setShown(true);
@@ -306,7 +320,7 @@ export function ChatSlot({ children }: { children: ReactNode }) {
       role={modal ? undefined : 'presentation'}
       onClose={() => {
         if (leaving.current) return;
-        if (store.get(chatSideAtom) === 'modal') setChatModalOpen(false);
+        if (windowNow()) setChatModalOpen(false);
       }}
       style={style}
       className={cn(

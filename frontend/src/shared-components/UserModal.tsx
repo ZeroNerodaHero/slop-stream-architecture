@@ -17,6 +17,7 @@ import { myPresenceAtom, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { myAvatarVersionAtom, myNameAtom } from '@/infra/atoms/profile-atoms';
 import { USER_TABS, type UserTab, closeUserModal, pickTab, userModalOpenAtom, userTabAtom } from '@/infra/atoms/user-modal-atoms';
 import { Face } from '@/shared-components/Face';
+import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { PresenceSquare } from '@/shared-components/PersonRow';
 import { AdvancedTab } from '@/shared-components/user-modal/AdvancedTab';
 import { AppearanceTab } from '@/shared-components/user-modal/AppearanceTab';
@@ -104,6 +105,7 @@ function UserDialog() {
 
   // every way out goes through the element: close() restores focus, then fires `close`
   const close = () => dialogRef.current?.close();
+  useSheetBack(close);
 
   return (
     <dialog
@@ -128,8 +130,9 @@ function UserDialog() {
         'open:flex flex-col sm:flex-row',
         // full bleed on a phone: the browser's margins and size caps of a modal dialog go
         'm-0 h-dvh max-h-none w-full max-w-none border-0',
-        'sm:m-auto sm:h-[min(680px,calc(100dvh-3rem))] sm:w-[min(960px,calc(100vw-3rem))] sm:border sm:border-primaryStroke',
-        'backdrop:bg-black/60 sm:backdrop:backdrop-blur-sm'
+        // past a phone (mobile.ts), the box in the middle. below it a page over the page, its × a finger's (MobileSheet.tsx)
+        'md:m-auto md:h-[min(680px,calc(100dvh-3rem))] md:w-[min(960px,calc(100vw-3rem))] md:border md:border-primaryStroke',
+        'backdrop:bg-black/60 md:backdrop:backdrop-blur-sm'
       )}
     >
       <Rail tab={tab} />
@@ -223,7 +226,10 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
             aria-label="close"
             aria-keyshortcuts="Escape"
             onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue"
+            className={cn(
+              'flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
+              SHEET_CLOSE
+            )}
           >
             <RiCloseLine aria-hidden size={20} />
           </button>

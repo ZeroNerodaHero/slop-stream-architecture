@@ -19,6 +19,7 @@ import {
   scaledRect
 } from '@/infra/picture';
 import { Button } from '@/shared-components/Button';
+import { SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { cn } from '@/utils/cn';
 
 /** An arrow key moves the box this much of the picture; with shift, five times that. */
@@ -164,6 +165,7 @@ function CropBox({ request }: { request: CropRequest }) {
   }, [rect !== null && k > 0]);
 
   const close = () => dialogRef.current?.close();
+  useSheetBack(close);
 
   /** A press on the box (a move) or a corner (a resize): the pointer is followed through window listeners, captured, until it lifts. */
   const press = (e: ReactPointerEvent<HTMLElement>, kind: 'move' | 'resize', sx = 0, sy = 0) => {
@@ -250,14 +252,20 @@ function CropBox({ request }: { request: CropRequest }) {
     <dialog
       ref={dialogRef}
       id="crop"
+      data-sheet=""
       aria-labelledby="crop-title"
       aria-describedby="crop-hint"
       onPointerDown={onBackdropDown}
       onClick={onBackdropClick}
       onClose={() => answerCrop(id, answer.current)}
       // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
-      className="m-auto max-h-[calc(100dvh-2rem)] w-[min(720px,calc(100vw-2rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-5 text-base text-textPrimary backdrop:bg-black/60 sm:p-6"
+      // a phone's is a sheet up from the foot (MobileSheet.tsx)
+      className={cn(
+        'm-auto max-h-[calc(100dvh-2rem)] w-[min(720px,calc(100vw-2rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-5 text-base text-textPrimary backdrop:bg-black/60 sm:p-6',
+        SHEET_DIALOG
+      )}
     >
+      <SheetGrab onDismiss={close} />
       <h2 id="crop-title" className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
         {spec.title}
       </h2>
