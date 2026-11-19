@@ -7,6 +7,7 @@ import {
   RiGroupLine,
   RiHashtag,
   RiInformationLine,
+  RiLiveLine,
   RiLockLine,
   RiLogoutBoxRLine,
   RiNotificationLine,
@@ -850,6 +851,8 @@ export function ServerPage() {
   const canManage = power || managesChannels(room);
   const lastMember = mine && room.members <= 1;
   const canPicture = ownsPictures(room);
+  const membersWords = room.members === 1 ? '1 member' : `${room.members} members`;
+  const liveWords = live.length === 1 ? '1 streaming now' : `${live.length} streaming now`;
 
   // the banner with the picture over its foot, the name, the count, the about line, and join, leave and the gear: the top of the page,
   // or the head of a phone's drawer
@@ -890,9 +893,18 @@ export function ServerPage() {
             {words.tag && <span className="text-base font-normal text-textTertiary">#{words.tag}</span>}
             {room.owner && <OwnerMark name={ownerRoleOf(room)} size={18} />}
             {room.public === false && <span className="bg-primaryStroke px-1.5 py-0.5 text-xs uppercase text-textSecondary">private</span>}
-            <span id="group-members-count" className="text-sm font-normal text-textTertiary">
-              {room.members === 1 ? '1 member' : `${room.members} members`}
-            </span>
+            <Tooltip content={membersWords}>
+              <span id="group-members-count" role="img" aria-label={membersWords} className="flex items-center gap-1 text-sm font-normal text-textTertiary">
+                {room.members}
+                <RiGroupLine aria-hidden size={16} />
+              </span>
+            </Tooltip>
+            <Tooltip content={liveWords}>
+              <span id="group-live-count" role="img" aria-label={liveWords} className="flex items-center gap-1 text-sm font-normal text-textTertiary">
+                {live.length}
+                <RiLiveLine aria-hidden size={16} />
+              </span>
+            </Tooltip>
           </h2>
           {room.about && (
             <p id="group-about-line" className="mt-2 max-w-xl text-textSecondary">
@@ -1015,7 +1027,7 @@ export function ServerPage() {
       mobileEnd={noChannel ? undefined : drawerOpener}
       title={
         <span className="flex min-w-0 items-center gap-3">
-          <Badge group={{ name: server, badge: room.badge, color }} />
+          <GroupMark name={server} color={color} icon={room.icon} className="h-8 w-8 shrink-0 text-sm" />
           <span className="truncate">
             {channel === 'general' ? (
               <GroupName words={words} />
@@ -1028,6 +1040,7 @@ export function ServerPage() {
               </>
             )}
           </span>
+          <Badge group={{ name: server, badge: 'group', color }} className="shrink-0" />
         </span>
       }
     >
