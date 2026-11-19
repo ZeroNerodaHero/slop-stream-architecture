@@ -17,11 +17,11 @@ export type { Presence, PresenceChoice } from '@/infra/frames';
 
 export const PRESENCE_WORD: Record<Presence, string> = { offline: 'offline', online: 'online', dnd: 'do not disturb', streaming: 'streaming' };
 /**
- * The square's colour: green here, green with the broadcast icon in it streaming (PresenceSquare draws the icon), orange do not
+ * The square's colour: the accent streaming (the blue every live mark is), green here, orange do not
  * disturb, grey offline. `dnd` carries the bar discord's does, drawn in the panel's background.
  */
 export const PRESENCE_SQUARE: Record<Presence, string> = {
-  streaming: 'bg-increase',
+  streaming: 'bg-primaryBlue',
   online: 'bg-increase',
   dnd: "bg-caution before:absolute before:inset-x-[2px] before:top-1/2 before:h-px before:-translate-y-1/2 before:bg-backgroundSecondary before:content-['']",
   offline: 'bg-textTertiary'

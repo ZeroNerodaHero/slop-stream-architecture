@@ -8,7 +8,7 @@ two words, on purpose: **presence** is the word next to a name, `offline` `onlin
 
 | shown | means | who decides | colour |
 |---|---|---|---|
-| `streaming` | a stream is up under the name | the api, from what it already knows: `video`'s `GET /live`, else the `live:<name>` key | the square: `increase`, green, with the broadcast icon in it (`PresenceSquare`, PersonRow.tsx); the word: the accent, `primaryBlue` |
+| `streaming` | a stream is up under the name | the api, from what it already knows: `video`'s `GET /live`, else the `live:<name>` key | the square: the accent, `primaryBlue` (`PresenceSquare`, PersonRow.tsx: one 12px square for every state, no icon); the word: the accent, `primaryBlue` |
 | `online` | a browser is open as that name | the connection: a socket for the name is open on the gateway | `increase`, green |
 | `do not disturb` | a browser is open, and they said so | them, a choice | the square: `caution`, orange, a dark line through it the way discord's has a bar; the word: `decrease`, red |
 | `offline` | no browser open, or they chose to look that way | nobody is connected, or they picked `appear offline` | `textTertiary`, grey |

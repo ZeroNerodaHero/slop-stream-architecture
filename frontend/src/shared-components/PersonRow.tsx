@@ -1,4 +1,3 @@
-import { RiBroadcastLine } from '@remixicon/react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -32,28 +31,11 @@ export function Who({ name, verified, oauthVerified, className }: { name: string
 /**
  * The presence square on a face's bottom right corner, the colours of docs/status.md, ringed
  * in the background the face sits on: `className` names it (`border-backgroundSecondary` in the
- * chat window and on the card). The face's wrapper is `relative`. Streaming, the green square
- * carries the broadcast icon (the one LiveMark.tsx and the inbox use): the one mark that says live.
- * That square is half again the size of the others (21px, the icon 12px) so the icon reads, and
- * hangs as far past the corner in proportion (6px to their 4px).
+ * chat window and on the card). The face's wrapper is `relative`. One 12px square for every
+ * state, no icon: only the colour says which, so nothing beside it moves when a word changes.
  */
 export function PresenceSquare({ presence, className, id }: { presence: Presence; className?: string; id?: string }) {
-  const live = presence === 'streaming';
-  return (
-    <span
-      id={id}
-      aria-hidden
-      data-presence={presence}
-      className={cn(
-        'absolute flex items-center justify-center border-2 text-background',
-        live ? '-bottom-1.5 -right-1.5 h-[21px] w-[21px]' : '-bottom-1 -right-1 h-3.5 w-3.5',
-        PRESENCE_SQUARE[presence],
-        className
-      )}
-    >
-      {live && <RiBroadcastLine aria-hidden size={12} />}
-    </span>
-  );
+  return <span id={id} aria-hidden data-presence={presence} className={cn('absolute -bottom-1 -right-1 h-3 w-3 border-2', PRESENCE_SQUARE[presence], className)} />;
 }
 
 /** The square and the word, the colours of docs/status.md. `square={false}`: the word alone, where the face beside it already carries the square. */
