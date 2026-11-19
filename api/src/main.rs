@@ -24,7 +24,7 @@
 //! memberships, groups and the pictures in the bucket point at it, so a login can
 //! change its name (auth.rs, `POST /api/name`) and keep all of them. The name stays
 //! the url, the chat nick and every redis key: nothing a person reads is an id.
-//! The tables are the files in `api/migrations`, applied in order at boot (migrate.rs).
+//! The tables are `api/schema.sql`, applied at boot to an empty database (schema.rs).
 //!
 //! The same binary run as `api chat` is the text chat server (chat.rs),
 //! `api monitor` watches the other boxes from a box of its own (monitor.rs),
@@ -49,7 +49,7 @@ mod group_mod;
 mod groups;
 mod history;
 mod home;
-mod migrate;
+mod schema;
 mod models;
 mod monitor;
 mod notify;
@@ -1072,8 +1072,8 @@ async fn main() {
         return;
     }
 
-    // chat, events and home returned above and do not create tables. this process does, from api/migrations.
-    migrate::run(&db).await.expect("migrations");
+    // chat, events and home returned above and do not create tables. this process does, from api/schema.sql.
+    schema::ensure(&db).await.expect("schema");
 
     // `api passwd <name>`: a new random password, printed once. see auth.rs
     if env::args().nth(1).as_deref() == Some("passwd") {

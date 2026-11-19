@@ -209,7 +209,7 @@ export interface DemoModel {
   thumb: boolean;
 }
 
-/** A group as worn on a chat line: enough to draw the badge. */
+/** A group as worn on a chat line: enough to draw the badge, and the hover card it opens. */
 export interface GroupBadge {
   name: string;
   /** The word on the badge. Shown in capitals. */
@@ -218,6 +218,12 @@ export interface GroupBadge {
   color: string;
   /** Unix seconds, the `?v=` of the group's picture (`groupImage`), drawn small beside the word. Null, or absent on a line kept before it was carried and on an older api: none. */
   icon?: number | null;
+  /** The line about the group, for the badge's hover card (GroupCard). Absent when empty, on a line kept before it was carried, and on an older api. */
+  about?: string | null;
+  /** How many are in it, counted when the line was said. Absent on an older line: the card leaves the count off. */
+  members?: number | null;
+  /** Unix seconds, the `?v=` of the group's banner (`groupImage`), the top of the hover card. Null or absent: none. */
+  banner?: number | null;
 }
 
 /** A group as `GET /api/groups` lists it. */
@@ -624,7 +630,7 @@ export const api = {
   leaveGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/leave`),
   /** The one group whose badge the login's name wears, in place of every group's. 403 `join it first`. Leaving it clears it. */
   setPrimaryGroup: (name: string) => request<null>('PUT', `/api/groups/${encodeURIComponent(name)}/primary`),
-  /** Back to every group's badge, in the order joined. */
+  /** Back to the first joined group's badge. */
   clearPrimaryGroup: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}/primary`),
   /** An owner, the one who made it, or an admin. Its members are out with it. */
   deleteGroup: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}`),

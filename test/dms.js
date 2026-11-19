@@ -398,7 +398,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     await annPage.waitForFunction((n) => document.querySelector('#me')?.textContent === n, ANN, { timeout: 10000 });
     await annPage.waitForSelector('#profile #chat-open', { timeout: 10000 });
     // the line button comes once the list has said ben follows back
-    await annPage.waitForSelector('#profile #dm-open', { timeout: 10000 });
+    await annPage.waitForSelector('#dm-open', { timeout: 10000 });
     expect(!(await annPage.$('#friend-chat')), 'the window must be down on a fresh page');
     const label = await annPage.getAttribute('#dm-open', 'aria-label');
     expect(label === `message ${BEN}`, `the button is named ${JSON.stringify(label)}`);

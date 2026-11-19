@@ -4,7 +4,7 @@
 //! `./scripts/deploy.sh` works out which release its tree is (the highest `v<n>` reachable
 //! from HEAD; `v<n>+<commit>` when the images are newer than that tag) and, once `/api/health`
 //! has answered 200, runs `api release <version> <commit>`: one row in `deploys`
-//! (`migrate-13.sql`) per run that ended well. The newest row is what `/api/health` says under
+//! (`schema.sql`) per run that ended well. The newest row is what `/api/health` says under
 //! `version` and `deployed_at`.
 //!
 //! In the database, not the environment, on purpose: a release that moved only the pages

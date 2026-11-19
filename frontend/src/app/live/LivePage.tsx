@@ -43,7 +43,7 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
-import { useIsMobile, useVisibleViewport } from '@/infra/mobile';
+import { CHAT_MOBILE, useIsMobile, useKeyboardStrip, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
@@ -60,6 +60,7 @@ import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { IconButton, PipIcon, revealClassName } from '@/shared-components/VideoControls';
 import { cn } from '@/utils/cn';
+import { streamNumbers } from '@/utils/count';
 import { roveTabs } from '@/utils/tabs';
 
 /** A phone's tabs under the preview, in the bar's order. Chat first: it is where a phone's page opens. */
@@ -86,35 +87,14 @@ function keepTab(tab: LiveTab) {
   }
 }
 
-/** While on: the document does not scroll (nor bounce), so the page is the window and nothing else moves. */
-function useLockedDocument(on: boolean) {
-  useEffect(() => {
-    if (!on) return;
-    const root = document.documentElement;
-    const { overflow, overscrollBehavior } = root.style;
-    root.style.overflow = 'hidden';
-    root.style.overscrollBehavior = 'none';
-    return () => {
-      root.style.overflow = overflow;
-      root.style.overscrollBehavior = overscrollBehavior;
-    };
-  }, [on]);
-}
-
-/**
- * The chat on a phone: edge to edge in its tab, no box, no least height (the tab is what is
- * left of the window, less with the keyboard up), and the send row's padding is the safe area
- * at the foot, but not while the keyboard covers that edge (ServerRoom.tsx's room does the same).
- */
-const CHAT_MOBILE =
-  'min-h-0 border-0 bg-background [&>header]:px-3 [&_#chat-lines]:px-3 [&>footer]:px-3 [&>footer]:pt-2 [&>footer]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] group-data-[keyboard=true]/live:[&>footer]:pb-2';
-
 export function LivePage() {
   const navigate = useNavigate();
   const mobile = useIsMobile();
   // the visual viewport (mobile.ts): the page is what the keyboard leaves, panned with it
-  const view = useVisibleViewport(mobile);
+  const view = useVisibleViewport(mobile, true);
   useLockedDocument(mobile);
+  // a phone's preview is a strip while the keyboard is up, so the chat has the room
+  const strip = useKeyboardStrip(view?.keyboard ?? false);
   const [tab, setTab] = useState<LiveTab>(keptTab);
   const previewRef = useRef<HTMLVideoElement | null>(null);
   const message = useAtomValue(publishMessageAtom);
@@ -183,11 +163,13 @@ export function LivePage() {
   // the preview, as the desktop and the phone both have it. a phone has no chat button on it:
   // the chat is a tab there, never closed
   const preview = (
-    <div className="group relative">
+    <div ref={mobile ? strip.ref : undefined} className={cn('group relative', mobile && strip.box)} style={mobile ? strip.style : undefined}>
       {/* the frame as every watcher gets it (docs/screen.md): the sources on the stream, laid out
           in fractions. taken hold of here; the watchers' players follow within a beat */}
       <SceneView
         id="scene"
+        // a phone's preview sits right on the row's own stroke: no second line between them. scaled into the strip while typing
+        className={cn('max-md:border-t-0', mobile && strip.frame)}
         layers={scene.layers}
         streamFor={sentStreamAtom}
         imageUrl={(asset) => api.assetUrl(name, asset)}
@@ -306,14 +288,18 @@ export function LivePage() {
       <div
         id="live-mobile"
         data-keyboard={view?.keyboard ?? false}
-        className="group/live fixed inset-x-0 top-0 flex h-[100dvh] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
+        className="group/phone fixed inset-x-0 top-0 flex h-[100dvh] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
         style={view ? { height: view.height, transform: view.top ? `translateY(${view.top}px)` : undefined } : undefined}
       >
         <PageFrame
           title="go live"
           mobileTitle={name || 'go live'}
           // who is going live, beside the menu: your picture (or the letter your name makes). a picture, not a control
-          mobileStart={me ? <Face name={me} version={myAvatar} className="mr-1 h-8 w-8 text-sm" /> : undefined}
+          mobileStart={me ? <Face name={me} version={myAvatar} className="h-8 w-8 text-sm" /> : undefined}
+          // under the name, how many watch (this page has no count of followers). no follow button: it is your own
+          // stream, so home takes the row's right end
+          mobileSub={streamNumbers(null, viewers)}
+          mobileEnd={null}
           wide
           bleed
           fill

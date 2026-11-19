@@ -2,6 +2,10 @@ import { Link } from 'react-router-dom';
 
 import { groupImage, groupWords, type Server } from '@/infra/api';
 import { GroupMark } from '@/shared-components/GroupMark';
+import { cn } from '@/utils/cn';
+
+/** The square's box: its size, stroke and fill. A stand-in square takes the same, so the two cannot drift. */
+export const GROUP_SQUARE_BOX = 'aspect-square border border-primaryStroke bg-backgroundSecondary';
 
 /** One group as a square: the banner or its colour, the picture, the name. */
 export function GroupSquare({ server, id }: { server: Server; id: string }) {
@@ -13,7 +17,7 @@ export function GroupSquare({ server, id }: { server: Server; id: string }) {
       <Link
         id={id}
         to={`/groups/${server.name}`}
-        className="relative flex aspect-square flex-col justify-end overflow-hidden border border-primaryStroke bg-backgroundSecondary transition-[border-color] duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue"
+        className={cn(GROUP_SQUARE_BOX, 'relative flex flex-col justify-end overflow-hidden transition-[border-color] duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue')}
       >
         <span className="absolute inset-0" style={{ backgroundColor: server.color }}>
           {banner && <img src={banner} alt="" className="h-full w-full object-cover" />}

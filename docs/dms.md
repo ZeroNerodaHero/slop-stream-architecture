@@ -49,7 +49,7 @@ CREATE TABLE dms (
   to_id uuid NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
   text text NOT NULL,
   sent_at timestamptz NOT NULL DEFAULT now(),
-  image text,  -- migrate-31.sql: the pictures' ids joined by commas, null for none
+  image text,  -- schema.sql: the pictures' ids joined by commas, null for none
   CHECK (from_id <> to_id)
 );
 CREATE INDEX dms_thread_idx ON dms (LEAST(from_id, to_id), GREATEST(from_id, to_id), id DESC);  -- one thread, newest first
@@ -65,7 +65,7 @@ CREATE TABLE dm_reads (
 );
 ```
 
-`api/migrations/migrate-10.sql`, run by the api at boot like the rest; `image` came with `migrate-31.sql`. a thread is the pair whichever way each line went, so the thread index puts the two ids in one order (`LEAST`, `GREATEST`); a page is one range on it. the two one-sided indexes are the list of threads (`from_id = me OR to_id = me`, grouped by the other side) and the count of what is new (`from_id = peer AND to_id = me AND id > last_read_id`). the pictures' bytes are in the bucket under `chat/<id>` (`chat_images.rs`), not in the row. nothing is indexed for the search: the rooms keep a `tsvector` and a `has_link` column with indexes (`chat.md`) because a room runs to hundreds of thousands of lines, while the pair bounds a thread to a few thousand at most, so a search is the thread index's range with the words (`to_tsvector('simple', text)`), the rooms' link regex (`history::LINK`) and the days read off each row.
+`api/schema.sql`, applied by the api at boot to an empty database. a thread is the pair whichever way each line went, so the thread index puts the two ids in one order (`LEAST`, `GREATEST`); a page is one range on it. the two one-sided indexes are the list of threads (`from_id = me OR to_id = me`, grouped by the other side) and the count of what is new (`from_id = peer AND to_id = me AND id > last_read_id`). the pictures' bytes are in the bucket under `chat/<id>` (`chat_images.rs`), not in the row. nothing is indexed for the search: the rooms keep a `tsvector` and a `has_link` column with indexes (`chat.md`) because a room runs to hundreds of thousands of lines, while the pair bounds a thread to a few thousand at most, so a search is the thread index's range with the words (`to_tsvector('simple', text)`), the rooms' link regex (`history::LINK`) and the days read off each row.
 
 ## api
 

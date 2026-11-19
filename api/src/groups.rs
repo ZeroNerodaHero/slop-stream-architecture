@@ -11,8 +11,9 @@
 //! (group_mod.rs) is a name, a colour and some of those powers, never owner itself.
 //! The explorer lists them; the room is `/chat/<server>/<channel>`.
 //!
-//! Badges travel on the chat line itself (`groups`: name, badge, colour, as they were when
-//! the line was said), so drawing a room needs no lookup here.
+//! Badges travel on the chat line itself (`groups`: name, badge, colour, picture, and for the
+//! badge's hover card the line about it, the member count and the banner, as they were when
+//! the line was said), so drawing a room, or a badge's card, needs no lookup here.
 //!
 //! Every change to a group is also a `group` fact on the `events` stream (presence.rs), which
 //! the gateway pushes to the sockets watching `group:<name>`: a room on screen loads once
@@ -43,7 +44,7 @@ pub(crate) const BOT_GROUP: &str = "bot";
 /// A badge is a word, not a sentence: `BOT`, `VIP`, `mod`. The panel shows it in capitals.
 const MAX_BADGE_CHARS: usize = 12;
 const MAX_ABOUT_CHARS: usize = 200;
-/// Groups one login may be in. Every badge goes on every line, so it is capped. Owning has its
+/// Groups one login may be in. Its lines wear one badge (`badges_of`); the cap stays. Owning has its
 /// own cap, `AppState::groups_per_owner`, read from `.env` (`groups_per_owner_from_env`).
 const GROUPS_PER_MEMBER: i64 = 8;
 /// Groups one login may own when `GROUPS_PER_OWNER` is not set: the ones it made plus the
@@ -72,43 +73,72 @@ pub(crate) struct Badge {
     /// when there is none, and absent on a line kept before it was carried.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) icon: Option<i64>,
+    /// The line about the group, for the card the badge opens on hover. Left out when empty,
+    /// and absent on a line kept before it was carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) about: Option<String>,
+    /// How many are in the group, counted when the line was said. Absent on an older line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) members: Option<i64>,
+    /// Unix seconds, the `?v=` of the group's banner, the top of the card. Left out when there
+    /// is none, and absent on an older line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) banner: Option<i64>,
 }
 
-/// The badges an account wears: its primary group's alone when it picked one (migrate-33,
-/// `memberships.is_primary`), else its groups' in the order joined; `bot` first either way when
-/// the socket said so. One query. `None` (an anonymous nick) matches no membership.
+/// The columns `badges_of` and `badge_of` read, in `BADGE_COLUMNS`' order.
+type BadgeRow = (String, String, String, Option<i64>, String, i64, Option<i64>);
+
+/// What a badge reads from `groups g`: the word and colour, the picture's version, and what the
+/// hover card wants (the line about it, the member count, the banner's version). The count is a
+/// subquery on the memberships' group index, so a speaker's badges stay one query.
+const BADGE_COLUMNS: &str = "g.name, g.badge, g.color, (EXTRACT(EPOCH FROM g.icon_at))::bigint, g.about,
+        (SELECT count(*) FROM memberships c WHERE c.group_name = g.name),
+        (EXTRACT(EPOCH FROM g.banner_at))::bigint";
+
+impl From<BadgeRow> for Badge {
+    fn from((name, badge, color, icon, about, members, banner): BadgeRow) -> Self {
+        let about = Some(about).filter(|a| !a.is_empty());
+        Badge { name, badge, color, icon, about, members: Some(members), banner }
+    }
+}
+
+/// The badges an account wears: one group's only, never more. Its primary group
+/// (`memberships.is_primary`) when it picked one, else the first it joined, the same one
+/// `badge_of` shows on its card; `bot` before it when the socket said so. One query. `None`
+/// (an anonymous nick) matches no membership.
 pub(crate) async fn badges_of(db: &PgPool, user: Option<Uuid>, bot: bool) -> Result<Vec<Badge>, sqlx::Error> {
-    let rows: Vec<(String, String, String, Option<i64>)> = sqlx::query_as(
-        "SELECT g.name, g.badge, g.color, (EXTRACT(EPOCH FROM g.icon_at))::bigint FROM groups g
+    let rows: Vec<BadgeRow> = sqlx::query_as(&format!(
+        "SELECT {BADGE_COLUMNS} FROM groups g
          LEFT JOIN memberships m ON m.group_name = g.name AND m.user_id = $1
          WHERE (g.name = $2 AND $3)
-            OR (m.user_id IS NOT NULL
-                AND (m.is_primary OR NOT EXISTS (SELECT 1 FROM memberships p WHERE p.user_id = $1 AND p.is_primary)))
-         ORDER BY g.name = $2 DESC, m.joined_at",
-    )
+            OR g.name = (SELECT p.group_name FROM memberships p WHERE p.user_id = $1
+                         ORDER BY p.is_primary DESC, p.joined_at LIMIT 1)
+         ORDER BY g.name = $2 DESC"
+    ))
     .bind(user)
     .bind(BOT_GROUP)
     .bind(bot)
     .fetch_all(db)
     .await?;
-    Ok(rows.into_iter().map(|(name, badge, color, icon)| Badge { name, badge, color, icon }).collect())
+    Ok(rows.into_iter().map(Badge::from).collect())
 }
 
 /// The one badge a name's card shows (`GET /api/streamers/:name`, `badge`): the account's
 /// primary group, else the first it joined, the first its chat lines wear. None for a name with
 /// no account or no group.
 pub(crate) async fn badge_of(db: &PgPool, name: &str) -> Result<Option<Badge>, sqlx::Error> {
-    let row: Option<(String, String, String, Option<i64>)> = sqlx::query_as(
-        "SELECT g.name, g.badge, g.color, (EXTRACT(EPOCH FROM g.icon_at))::bigint FROM streamers st
+    let row: Option<BadgeRow> = sqlx::query_as(&format!(
+        "SELECT {BADGE_COLUMNS} FROM streamers st
          JOIN memberships m ON m.user_id = st.id
          JOIN groups g ON g.name = m.group_name
          WHERE st.name = $1 AND st.password_hash IS NOT NULL
-         ORDER BY m.is_primary DESC, m.joined_at LIMIT 1",
-    )
+         ORDER BY m.is_primary DESC, m.joined_at LIMIT 1"
+    ))
     .bind(name)
     .fetch_optional(db)
     .await?;
-    Ok(row.map(|(name, badge, color, icon)| Badge { name, badge, color, icon }))
+    Ok(row.map(Badge::from))
 }
 
 // ---- rules -----------------------------------------------------------------------------
@@ -453,9 +483,9 @@ async fn leave(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me)
 }
 
 /// `PUT /api/groups/:group/primary`: the one group whose badge this login's name wears, in
-/// place of every group's (`badges_of`), and the one its card shows (`badge_of`). 204. 401 for
+/// place of the first joined (`badges_of`), and the one its card shows (`badge_of`). 204. 401 for
 /// nobody, 403 `join it first` for a group it is not in. Leaving the group, or the group going,
-/// takes the choice with the membership row (migrate-33).
+/// takes the choice with the membership row (schema.sql).
 async fn set_primary(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let me = me.ok_or_else(not_logged_in)?;
     let group = group_name(&group)?;
@@ -475,7 +505,7 @@ async fn set_primary(State(s): State<AppState>, Path(group): Path<String>, Me(me
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/groups/:group/primary`: back to every group's badge. 204, also when it was not
+/// `DELETE /api/groups/:group/primary`: back to the first joined group's badge. 204, also when it was not
 /// the primary. 401 for nobody.
 async fn clear_primary(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let me = me.ok_or_else(not_logged_in)?;
@@ -1000,7 +1030,7 @@ struct ChannelName {
 /// on. Who made the channel, or the channels power; `general` stays. The name goes through the
 /// door a new channel's does (the name rule, the history words, 409 for one the server has).
 /// Everything that knows the channel by its name follows it in one transaction: the row, the
-/// mutes on it (the foreign key cascades, migrate-25), the inbox rows for its lines
+/// mutes on it (the foreign key cascades, schema.sql), the inbox rows for its lines
 /// (`notifications.room`) and the lines kept for search (`chat_lines.room`); then the chat's
 /// stream in redis is renamed, so the history reads on. → the channel as the room lists it, and
 /// a `channel_renamed` fact (`channel` the old name, `name` the new) to every room open; a page
@@ -1299,14 +1329,22 @@ mod tests {
 
     #[test]
     fn a_badge_serialises_plainly() {
-        let b = Badge { name: "bot".into(), badge: "BOT".into(), color: "#5865f2".into(), icon: None };
+        let b = Badge { name: "bot".into(), badge: "BOT".into(), color: "#5865f2".into(), icon: None, about: None, members: None, banner: None };
         let text = serde_json::to_string(&vec![b.clone()]).unwrap();
         assert_eq!(text, r##"[{"name":"bot","badge":"BOT","color":"#5865f2"}]"##);
         assert_eq!(serde_json::from_str::<Vec<Badge>>(&text).unwrap(), vec![b]);
         // a picture's version rides along; a line kept before it was carried reads as none
-        let vip = Badge { name: "vip".into(), badge: "VIP".into(), color: "#ff00aa".into(), icon: Some(1_700_000_000) };
+        let vip = Badge { name: "vip".into(), badge: "VIP".into(), color: "#ff00aa".into(), icon: Some(1_700_000_000), about: None, members: None, banner: None };
         let text = serde_json::to_string(&vip).unwrap();
         assert_eq!(text, r##"{"name":"vip","badge":"VIP","color":"#ff00aa","icon":1700000000}"##);
         assert_eq!(serde_json::from_str::<Badge>(&text).unwrap(), vip);
+        // the hover card's part rides along too: the line about it, the count, the banner
+        let card = Badge { about: Some("the vips".into()), members: Some(12), banner: Some(1_700_000_001), ..vip };
+        let text = serde_json::to_string(&card).unwrap();
+        assert_eq!(text, r##"{"name":"vip","badge":"VIP","color":"#ff00aa","icon":1700000000,"about":"the vips","members":12,"banner":1700000001}"##);
+        assert_eq!(serde_json::from_str::<Badge>(&text).unwrap(), card);
+        // an empty about reads as none
+        let row: BadgeRow = ("x".into(), "X".into(), "#000000".into(), None, String::new(), 3, None);
+        assert_eq!(Badge::from(row).about, None);
     }
 }

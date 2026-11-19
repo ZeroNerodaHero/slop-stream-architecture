@@ -9,7 +9,7 @@
 //!
 //! `GET /api/search?q=` finds names to follow: every streamers row whose name starts with the
 //! letters (under three of them) or holds them anywhere (from three), the exact one first,
-//! then the ones that start with them. A trigram index on the name (migrate-30.sql) serves
+//! then the ones that start with them. A trigram index on the name (schema.sql) serves
 //! both shapes once the table outgrows a read of the whole of it.
 
 use std::collections::HashMap;
@@ -271,7 +271,7 @@ fn clean_query(raw: &str) -> String {
 
 /// The `LIKE` pattern for a cleaned query: the letters at the start of a name, or anywhere in
 /// it from `SEARCH_ANYWHERE_FROM` letters. `_` is a letter in a name and a wildcard to `LIKE`,
-/// so it is escaped; the trigram index reads both shapes (migrate-30.sql). The query is ascii
+/// so it is escaped; the trigram index reads both shapes (schema.sql). The query is ascii
 /// (`clean_query`), so its bytes are its letters.
 fn search_pattern(q: &str) -> String {
     let letters = q.replace('_', "\\_");

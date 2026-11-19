@@ -25,6 +25,7 @@ import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { Section, Status } from '@/shared-components/user-modal/parts';
+import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
 
 /** The buttons in a row of the list: a size down from the pane's. */
 const SMALL = 'px-3 py-1.5 text-sm';
@@ -108,9 +109,9 @@ export function GroupsTab() {
           </Skeleton>
         )}
         {loaded === false && (
-          <button id="group-reload" type="button" className="self-start text-base font-semibold text-primaryBlue" onClick={() => void loadGroups()}>
+          <Button id="group-reload" size="sm" className="self-start" onClick={() => void loadGroups()}>
             try again
-          </button>
+          </Button>
         )}
         {groups.length > 0 && (
           <ul id="group-list" className="divide-y divide-primaryStroke border border-primaryStroke bg-background">
@@ -153,9 +154,9 @@ function GroupRow({ group, me, busy }: { group: Group; me: string | null; busy: 
             <Button id={`group-leave-${group.name}`} variant="danger" className={SMALL} disabled={busy} onClick={() => void leaveGroup(group.name)}>
               {group.members <= 1 ? 'sure? deletes it' : 'sure?'}
             </Button>
-            <button type="button" onClick={() => setLeaveSure(false)} className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline">
+            <Button size="sm" onClick={() => setLeaveSure(false)}>
               keep
-            </button>
+            </Button>
           </>
         ) : group.mine ? (
           <>
@@ -166,36 +167,18 @@ function GroupRow({ group, me, busy }: { group: Group; me: string | null; busy: 
                   <span id={`group-primary-${group.name}`} className="text-sm font-semibold text-primaryBlue">
                     primary
                   </span>
-                  <button
-                    id={`group-unprimary-${group.name}`}
-                    type="button"
-                    className="text-sm text-textTertiary disabled:opacity-40"
-                    disabled={busy}
-                    onClick={() => void setPrimaryGroup(group.name, false)}
-                  >
+                  <Button id={`group-unprimary-${group.name}`} size="sm" disabled={busy} onClick={() => void setPrimaryGroup(group.name, false)}>
                     unset
-                  </button>
+                  </Button>
                 </>
               ) : (
-                <button
-                  id={`group-make-primary-${group.name}`}
-                  type="button"
-                  className="text-sm font-semibold text-primaryBlue disabled:opacity-40"
-                  disabled={busy}
-                  onClick={() => void setPrimaryGroup(group.name, true)}
-                >
+                <Button id={`group-make-primary-${group.name}`} size="sm" variant="outline" disabled={busy} onClick={() => void setPrimaryGroup(group.name, true)}>
                   make primary
-                </button>
+                </Button>
               ))}
-            <button
-              id={`group-leave-${group.name}`}
-              type="button"
-              className="text-sm font-semibold text-textTertiary disabled:opacity-40"
-              disabled={busy}
-              onClick={() => setLeaveSure(true)}
-            >
+            <Button id={`group-leave-${group.name}`} size="sm" variant="outline-danger" disabled={busy} onClick={() => setLeaveSure(true)}>
               leave
-            </button>
+            </Button>
           </>
         ) : (
           <Button id={`group-join-${group.name}`} variant="primary" className={SMALL} disabled={busy} onClick={() => void joinGroup(group.name)}>
@@ -203,26 +186,21 @@ function GroupRow({ group, me, busy }: { group: Group; me: string | null; busy: 
           </Button>
         )}
         {canDelete && group.public !== undefined && (
-          <button
-            id={`group-access-${group.name}`}
-            type="button"
-            className="text-sm font-semibold text-primaryBlue disabled:opacity-40"
-            disabled={busy}
-            onClick={() => void setGroupListed(group.name, group.public === false, words.title)}
-          >
-            {group.public === false ? 'make public' : 'make private'}
-          </button>
+          <span id={`group-access-${group.name}`} data-public={group.public !== false}>
+            <VisibilityToggle
+              isPublic={group.public !== false}
+              ids={[`group-access-${group.name}-public`, `group-access-${group.name}-private`]}
+              disabled={busy}
+              onChange={(next) => {
+                if (next !== (group.public !== false)) void setGroupListed(group.name, next, words.title);
+              }}
+            />
+          </span>
         )}
         {canDelete && (
-          <button
-            id={`group-delete-${group.name}`}
-            type="button"
-            className="text-sm font-semibold text-decrease disabled:opacity-40"
-            disabled={busy}
-            onClick={() => setSure(true)}
-          >
+          <Button id={`group-delete-${group.name}`} size="sm" variant="outline-danger" disabled={busy} onClick={() => setSure(true)}>
             delete
-          </button>
+          </Button>
         )}
         {sure && (
           <ConfirmDialog

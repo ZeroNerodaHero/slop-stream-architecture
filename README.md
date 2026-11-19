@@ -64,7 +64,7 @@ a full restart runbook (single services, a hard dev wipe, health, logs, a remote
 - `api/` — http api, chat, events, home, and monitor (one binary)
 - `video/` — webrtc sfu and the dummy streams
 - `frontend/` — the pages
-- `scripts/` — deploy, ship, test, seed, migrate, models
+- `scripts/` — deploy, ship, test, seed, models
 - `monitor/` — a second compose file that watches boxes
 - `docs/` — the human docs
 - `.github/workflows/images.yml` — builds the four images on every push to `main` that touches them

@@ -38,12 +38,10 @@
 # Afterwards the swapped containers are checked: running, healthy where the
 # image has a check, or the script exits non-zero (no rollback).
 #
-# Every run that ends well writes the commit it deployed to .deployed (gitignored). Between the
-# health check and that, the data migrations in scripts/migrate-scripts/ that have not run on
-# this machine run, in order (scripts/migrate.sh; .migrated remembers which).
+# Every run that ends well writes the commit it deployed to .deployed (gitignored).
 # --pull diffs from there, not from HEAD, so a --pull that died in a build is
 # picked up whole by the next one instead of reporting "nothing changed".
-# After the migrations, the demo models in random-media/vrms go into the bucket when the
+# After the health check, the demo models in random-media/vrms go into the bucket when the
 # folder changed since they last did (scripts/models.sh; .models remembers the folder).
 #
 # It also records the release it put up: the highest v<n> tag reaching HEAD (the
@@ -974,8 +972,7 @@ reexec_if_updated() {
 # which services the files changed between two commits belong to, one per line,
 # sorted (main puts them in deploy order). docs, tests, monitor/ and this script
 # map to nothing: they run somewhere else. .env.example maps to nothing to build,
-# its new keys land in .env through refresh_env on every run. a migration script is
-# not a service either: `migrate` says one came, so a pull of nothing else still runs it.
+# its new keys land in .env through refresh_env on every run.
 # the demo models are in no image (scripts/models.sh puts them in the bucket): `models`
 # says the folder moved, for the line that says why nothing is redeployed.
 changed_services() {
@@ -991,28 +988,14 @@ changed_services() {
       frontend/Caddyfile) echo caddy ;;
       frontend/*) echo frontend ;;
       docker-compose.yml) echo compose ;;
-      scripts/migrate-scripts/*) echo migrate ;;
     esac
   done | sort -u
-}
-
-# ---- data migrations -------------------------------------------------------------
-# the migrations that are not the database's schema (scripts/migrate-scripts/, run in order by
-# scripts/migrate.sh, each once, recorded in .migrated): redis streams, the bucket, anything a
-# release needs done once to data that is already there. after the health check, so they find
-# the stack up. one that fails fails the run: .deployed is not written, so the next --pull diffs
-# from before this one and comes back to it; ./scripts/migrate.sh by hand does too. DOCKER_CMD is
-# how this run reached docker; empty when it has not had to (a --pull with nothing to redeploy),
-# and migrate.sh finds it itself then, and only if something is pending.
-run_migrations() {
-  [ -f scripts/migrate.sh ] || return 0
-  DOCKER_CMD="${DOCKER[*]-}" bash ./scripts/migrate.sh
 }
 
 # ---- the demo models ---------------------------------------------------------------
 # random-media/vrms into the bucket, for the go live page's picker (scripts/models.sh,
 # docs/vtuber.md), when the folder is not as the last run left it (.models): a pull that brought
-# a model brings it to the page. after the health check, like the migrations: it works through
+# a model brings it to the page. after the health check: it works through
 # the api container. never this deploy's failure: the stack is up either way, the reason is
 # said, and ./scripts/models.sh by hand does it again.
 sync_models() {
@@ -1084,10 +1067,7 @@ ${B}notes${N}
   touched api/ video/ frontend/ Cargo.*; docs and this script do not count): every live stream ends.
   every run that ends well records its release (the highest v<n> tag reaching HEAD, the action's
   number for that push) in the database; /api/health says it under "version".
-  after the health check, every run also runs the data migrations not yet run here
-  (scripts/migrate-scripts/, in order, each once, recorded in .migrated: ./scripts/migrate.sh --help).
-  one that fails fails the run and is retried by the next; the containers stay as swapped.
-  then the demo models (random-media/vrms) go into the bucket when that folder changed since
+  after the health check, the demo models (random-media/vrms) go into the bucket when that folder changed since
   they last did (./scripts/models.sh --help). that never fails a run.
 EOF
 }
@@ -1319,14 +1299,12 @@ full_deploy() {
   pick_env_name
   if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else setup_build_mode; fi   # after write_env, which rewrites .env
   compose_up
-  local ok=1 migrated=1
+  local ok=1
   wait_for_health || ok=0
-  if [ "$ok" -eq 1 ]; then run_migrations || migrated=0; fi
   if [ "$ok" -eq 1 ]; then sync_models; fi
   show_result "$ok"
-  [ "$migrated" -eq 1 ] || warn "a data migration did not finish (above). the stack is up, but this run is not recorded: fix it and run ./scripts/migrate.sh, or the next ./scripts/deploy.sh retries it"
-  if [ "$ok" -eq 1 ] && [ "$migrated" -eq 1 ]; then record_deployed; record_release; fi
-  [ "$ok" -eq 1 ] && [ "$migrated" -eq 1 ]
+  if [ "$ok" -eq 1 ]; then record_deployed; record_release; fi
+  [ "$ok" -eq 1 ]
 }
 
 partial_deploy() {
@@ -1346,15 +1324,13 @@ partial_deploy() {
   local -a swapped=(); read -r -a swapped <<< "$(swapped_containers)" || true
   [ ${#swapped[@]} -eq 0 ] || check_swapped "${swapped[@]}"   # exits non-zero when one is not up
   prune_images
-  local ok=1 migrated=1
+  local ok=1
   wait_for_health || ok=0
-  if [ "$ok" -eq 1 ]; then run_migrations || migrated=0; fi
   if [ "$ok" -eq 1 ]; then sync_models; fi
   say "containers"
   "${DOCKER[@]}" compose ps || true
-  [ "$migrated" -eq 1 ] || warn "a data migration did not finish (above). the containers are swapped, but this run is not recorded: fix it and run ./scripts/migrate.sh, or the next ./scripts/deploy.sh retries it"
-  if [ "$ok" -eq 1 ] && [ "$migrated" -eq 1 ]; then record_deployed; record_release; note "done. https://${PUBLIC_IP}/   (release ${RELEASE:-none}, build $BUILD)"; fi
-  [ "$ok" -eq 1 ] && [ "$migrated" -eq 1 ]
+  if [ "$ok" -eq 1 ]; then record_deployed; record_release; note "done. https://${PUBLIC_IP}/   (release ${RELEASE:-none}, build $BUILD)"; fi
+  [ "$ok" -eq 1 ]
 }
 
 # the commit the images are built from, baked in as BUILD (see docs/debugging.md): the
@@ -1391,8 +1367,6 @@ main() {
       if [ "$OLD_HEAD" = "$NEW_HEAD" ]; then
         say "nothing changed since the last deploy, nothing to redeploy"
         refresh_env
-        # a migration a partial run left unfinished is still pending: it runs now, or says why not
-        run_migrations || exit 1
         sync_models
         # nothing to build, but the prune was asked for: still give the disk back
         [ "$PRUNE" = 0 ] || { pick_docker_cmd; prune_for_deploy; }
@@ -1408,13 +1382,9 @@ main() {
       if [ ${#TARGETS[@]} -eq 0 ]; then
         local what="docs only?"
         ! grep -qx models <<< "$changed" || what="demo models"
-        ! grep -qx migrate <<< "$changed" || what="migration scripts"
         say "$(git rev-parse --short "$OLD_HEAD") -> $(git rev-parse --short "$NEW_HEAD") changed no service files ($what), nothing to redeploy"
         refresh_env
-        # a script the pull brought runs against the stack as it is; a failure leaves .deployed
-        # where it was, so the next --pull sees this range again and comes back to it
-        run_migrations || exit 1
-        # a model the pull brought goes into the bucket the same way
+        # a model the pull brought goes into the bucket
         sync_models
         # the new head runs the same containers the old one did, so it is as deployed
         if [ -f "$DEPLOYED_FILE" ] && [ "$(tr -d '[:space:]' < "$DEPLOYED_FILE")" = "$OLD_HEAD" ]; then record_deployed; fi

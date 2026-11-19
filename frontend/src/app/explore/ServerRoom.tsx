@@ -79,8 +79,9 @@ import { PresenceSquare } from '@/shared-components/PersonRow';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { ProfileLink } from '@/shared-components/ProfileLink';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
-import { DrawerClose, SwipeDrawer } from '@/shared-components/SwipeDrawer';
+import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
 import { Field, SECTION_TITLE, Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -1052,7 +1053,7 @@ export function ServerPage() {
         aria-haspopup="dialog"
         aria-expanded={drawer}
         aria-controls="group-drawer"
-        onClick={() => setDrawer(true)}
+        onClick={() => setDrawer((open) => !open)}
         className="-mr-2.5 flex h-11 w-11 shrink-0 items-center justify-center border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
       >
         <RiServerLine aria-hidden size={22} />
@@ -1115,17 +1116,13 @@ export function ServerPage() {
             </div>
             {!mobile && <Roster room={room} />}
           </div>
-          {/* a phone: what the page has around the chat, in a drawer from the right. its × on a line of its own over the rest, which
-              scrolls as one: the group's head, then the channels in a box, then who is in, in a box of its own (online first, then
+          {/* a phone: what the page has around the chat, in a drawer from the right. no bar over it (no title, no ×: the dim sliver at the left or
+              the opener shuts it), and it scrolls as one: the group's head, then the channels in a box, then who is in, in a box of its own (online first, then
               offline). the dim sliver at the left shuts it too */}
           {mobile && (
             <SwipeDrawer id="group-drawer" side="right" open={drawer} onOpenChange={setDrawer} label={`${words.title}: channels and members`}>
               {() => (
                 <>
-                  <div className="flex shrink-0 items-center justify-between border-b border-primaryStroke pl-4 pr-1.5">
-                    <span className="text-sm text-textSecondary">channels and members</span>
-                    <DrawerClose onClose={() => setDrawer(false)} />
-                  </div>
                   <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain pb-3">
                     {groupHead}
                     <div className="mx-3 flex flex-col gap-6 border border-primaryStroke bg-backgroundSecondary p-4">
@@ -1193,7 +1190,7 @@ function ChannelList({
 
   return (
     <nav aria-label="channels" className={cn(boxed && 'border border-primaryStroke bg-backgroundSecondary p-1')}>
-      <h3 className={cn('text-xs font-semibold uppercase tracking-wider text-textTertiary', boxed ? 'flex h-6 items-center px-2' : 'mb-2')}>channels</h3>
+      <h3 className={cn('text-xs font-semibold uppercase tracking-wider text-textTertiary', boxed ? 'flex h-6 items-center px-2' : 'sr-only')}>channels</h3>
       <ul id="group-channels" className={cn('flex flex-col', !boxed && 'gap-0.5')}>
         {channels.map((item) => {
           const here = item.name === channel;
@@ -1550,7 +1547,7 @@ function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
   const here = shown.filter((member) => !isAway(member));
   const away = shown.filter(isAway);
   const heading = (
-    <h3 className="flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-textTertiary">
+    <h3 className={cn('flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-textTertiary', flat && 'sr-only')}>
       members <span className="font-normal normal-case tracking-normal">{room.members}</span>
     </h3>
   );
@@ -2075,26 +2072,7 @@ function ListingSection({ server, room, run }: ManageProps) {
   const isPublic = room.public !== false;
   return (
     <Section title="listing" description="public is on the lists for anyone. private is off them: someone with the address can still open it and join.">
-      <p className="flex flex-wrap items-center gap-2">
-        <button
-          id="room-public"
-          type="button"
-          aria-pressed={isPublic}
-          className={cn('text-sm font-semibold', isPublic ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
-          onClick={() => void run(() => api.setGroupPublic(server, true))}
-        >
-          public
-        </button>
-        <button
-          id="room-private"
-          type="button"
-          aria-pressed={!isPublic}
-          className={cn('text-sm font-semibold', !isPublic ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
-          onClick={() => void run(() => api.setGroupPublic(server, false))}
-        >
-          private
-        </button>
-      </p>
+      <VisibilityToggle isPublic={isPublic} ids={['room-public', 'room-private']} onChange={(next) => void run(() => api.setGroupPublic(server, next))} />
     </Section>
   );
 }

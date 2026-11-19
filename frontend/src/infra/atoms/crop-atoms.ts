@@ -31,6 +31,17 @@ export function cropPicture(file: File, spec: PictureSpec): Promise<Blob | null>
   return new Promise((resolve) => store.set(cropRequestAtom, { id: ++count, file, spec, resolve }));
 }
 
+/**
+ * `pick another image`: the open request `id` again over `file`, under a new id, so the dialog
+ * remounts and starts fresh (the box as big as fits, in the middle). The same caller waits on
+ * the same answer. An id that is not the open request's is nothing.
+ */
+export function swapCropFile(id: number, file: File) {
+  const request = store.get(cropRequestAtom);
+  if (!request || request.id !== id) return;
+  store.set(cropRequestAtom, { ...request, id: ++count, file });
+}
+
 /** The dialog's answer to request `id`. An id that is not the open request's (answered already) is nothing. */
 export function answerCrop(id: number, picture: Blob | null) {
   const request = store.get(cropRequestAtom);
