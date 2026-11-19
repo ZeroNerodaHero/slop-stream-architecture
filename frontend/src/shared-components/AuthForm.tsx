@@ -71,7 +71,7 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
     <form onSubmit={(e) => void submit(e)} className="mt-4 flex flex-col gap-3">
       <div className="flex flex-col gap-1">
         <label htmlFor="auth-name" className={LABEL}>
-          name
+          username
         </label>
         <input
           id="auth-name"
