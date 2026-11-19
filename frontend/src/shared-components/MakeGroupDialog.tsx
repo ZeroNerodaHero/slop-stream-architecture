@@ -215,7 +215,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
           aria-label="about"
           className={INPUT}
         />
-        {/* the swatches, the square for any other colour and the badge as it will read: one 24px line */}
+        {/* the swatches and the square for any other colour on the left, the badge as it will read pushed to the right: one 24px line */}
         <div className="flex flex-wrap items-center gap-1.5">
           {SWATCHES.map(({ hex, name }) => (
             <Tooltip key={hex} content={name}>
@@ -243,7 +243,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
               />
             </label>
           </Tooltip>
-          <Badge group={{ name: clean || 'new', badge: badge.trim() || 'badge', color }} src={icon?.url} size="md" className="ml-1.5" />
+          <Badge group={{ name: clean || 'new', badge: badge.trim() || 'badge', color }} src={icon?.url} size="md" className="ml-auto" />
         </div>
         {/* public or private on the left, the two answers on the right */}
         <div className="flex items-center justify-between gap-3">
