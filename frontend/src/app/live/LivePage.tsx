@@ -43,7 +43,8 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
-import { CHAT_MOBILE, useIsMobile, useKeyboardStrip, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
+import { CHAT_MOBILE, keyboardStrip, useChatTyping, useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
+import { KbdDebug } from '@/shared-components/KbdDebug';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
@@ -93,8 +94,9 @@ export function LivePage() {
   // the visual viewport (mobile.ts): the page is what the keyboard leaves, panned with it
   const view = useVisibleViewport(mobile, true);
   useLockedDocument(mobile);
-  // a phone's preview is a strip while the keyboard is up, so the chat has the room
-  const strip = useKeyboardStrip(view?.keyboard ?? false);
+  // a phone's preview is a strip while the chat is typed in, so the chat has the room; the controls and tabs hide
+  const typing = useChatTyping(mobile, view?.keyboard ?? false);
+  const strip = keyboardStrip(typing);
   const [tab, setTab] = useState<LiveTab>(keptTab);
   const previewRef = useRef<HTMLVideoElement | null>(null);
   const message = useAtomValue(publishMessageAtom);
@@ -163,12 +165,12 @@ export function LivePage() {
   // the preview, as the desktop and the phone both have it. a phone has no chat button on it:
   // the chat is a tab there, never closed
   const preview = (
-    <div ref={mobile ? strip.ref : undefined} className={cn('group relative', mobile && strip.box)} style={mobile ? strip.style : undefined}>
+    <div data-kbd-video={mobile || undefined} className={cn('group relative', mobile && strip.box)} style={mobile ? strip.style : undefined}>
       {/* the frame as every watcher gets it (docs/screen.md): the sources on the stream, laid out
           in fractions. taken hold of here; the watchers' players follow within a beat */}
       <SceneView
         id="scene"
-        // a phone's preview sits right on the row's own stroke: no second line between them. scaled into the strip while typing
+        // a phone's preview sits right on the row's own stroke: no second line between them. its middle third is the strip while typing
         className={cn('max-md:border-t-0', mobile && strip.frame)}
         layers={scene.layers}
         streamFor={sentStreamAtom}
@@ -287,7 +289,7 @@ export function LivePage() {
     return (
       <div
         id="live-mobile"
-        data-keyboard={view?.keyboard ?? false}
+        data-keyboard={typing || (view?.keyboard ?? false)}
         className="group/phone fixed inset-x-0 top-0 flex h-[100dvh] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
         style={view ? { height: view.height, transform: view.top ? `translateY(${view.top}px)` : undefined } : undefined}
       >
@@ -306,14 +308,14 @@ export function LivePage() {
         >
           <div className="shrink-0">{preview}</div>
           {/* the stream's state and the press that changes it, always in sight. not while typing: the keyboard has that room */}
-          <div className={cn('flex shrink-0 items-center gap-3 border-b border-primaryStroke px-4 py-2', view?.keyboard && 'hidden')}>
+          <div className={cn('flex shrink-0 items-center gap-3 border-b border-primaryStroke px-4 py-2', typing && 'hidden')}>
             <div className="min-w-0 flex-1">
               <StatusLine text={message} tone={tone} className="my-0 truncate text-lg leading-tight" />
               <ViewerCount id="viewers" count={viewers} className="text-sm text-textSecondary" />
             </div>
             <StartStop className="flex w-32 shrink-0 flex-col items-stretch gap-1 [&>button:first-child]:h-11 [&>button:first-child]:py-0" />
           </div>
-          <div role="tablist" aria-label="go live" onKeyDown={roveTabs} className="flex shrink-0 border-b border-primaryStroke">
+          <div role="tablist" aria-label="go live" onKeyDown={roveTabs} className={cn('flex shrink-0 border-b border-primaryStroke', typing && 'hidden')}>
             {LIVE_TABS.map((t) => {
               const on = t === tab;
               return (
@@ -360,6 +362,7 @@ export function LivePage() {
             {panel('thumbnails', thumbnails)}
           </div>
         </PageFrame>
+        <KbdDebug typing={typing} />
       </div>
     );
   }
