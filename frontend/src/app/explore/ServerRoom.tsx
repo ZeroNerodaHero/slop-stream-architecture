@@ -156,30 +156,70 @@ const ORDERS = [
   { id: 'oldest', label: 'oldest' }
 ] as const;
 
-/** The five powers: the word for each (the rows, the tooltips) and its icon (the role editor's toggles), the manage tabs' icons where a tab is that power's. */
-const POWERS: { key: keyof RolePerms; label: string; icon: ReactNode }[] = [
+/**
+ * The five powers: the word for each (the rows, the role editor's list), what it lets a holder
+ * do (the api's checks in `group_mod.rs` and `groups.rs`), and its icon, the manage tabs' icons
+ * where a tab is that power's.
+ */
+const POWERS: { key: keyof RolePerms; label: string; description: string; icon: ReactNode }[] = [
   {
     key: 'appearance',
-    label: 'about and public',
+    label: 'about & access',
+    description: 'edit the about text, switch the group public or private, and set the member order',
     icon: <RiInformationLine aria-hidden size={16} />
   },
   {
     key: 'roles',
     label: 'roles',
+    description: 'make, edit and hand out roles, and keep channels to them',
     icon: <RiShieldStarLine aria-hidden size={16} />
   },
   {
     key: 'channels',
     label: 'channels',
+    description: 'add, rename, reorder and delete channels, set their cooldowns, and see every channel',
     icon: <RiHashtag aria-hidden size={16} />
   },
   {
     key: 'kick',
     label: 'kick',
+    description: 'kick members and time them out',
     icon: <RiUserUnfollowLine aria-hidden size={16} />
   },
-  { key: 'ban', label: 'ban', icon: <RiForbidLine aria-hidden size={16} /> }
+  { key: 'ban', label: 'ban', description: 'ban and unban members', icon: <RiForbidLine aria-hidden size={16} /> }
 ];
+
+/**
+ * One power in the role editor's list: the whole row is the toggle, the icon, the name and what
+ * it does. Pressed, the border and the icon and name go blue. `locked` is the owner role's (on,
+ * and not to be changed); `mine` false greys a power this login cannot give, and says so.
+ */
+function PowerRow({ power, id, on, mine = true, locked = false, onToggle }: { power: (typeof POWERS)[number]; id: string; on: boolean; mine?: boolean; locked?: boolean; onToggle?: () => void }) {
+  const still = locked || !mine;
+  return (
+    <Tooltip content={mine ? null : 'not yours to give'}>
+      <button
+        id={id}
+        type="button"
+        aria-pressed={on}
+        aria-disabled={still || undefined}
+        onClick={() => !still && onToggle?.()}
+        className={cn(
+          'flex w-full items-start gap-2 border px-2 py-1.5 text-left focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue',
+          on ? 'border-primaryBlue' : 'border-primaryStroke',
+          still ? 'cursor-default' : 'hover:bg-primaryStroke/20',
+          !mine && 'opacity-40'
+        )}
+      >
+        <span className={cn('mt-0.5 shrink-0', on ? 'text-primaryBlue' : 'text-textTertiary')}>{power.icon}</span>
+        <span className="text-sm">
+          <span className={cn('font-semibold', on ? 'text-primaryBlue' : 'text-textPrimary')}>{power.label}</span>{' '}
+          <span className="text-textSecondary">{power.description}</span>
+        </span>
+      </button>
+    </Tooltip>
+  );
+}
 
 const NO_PERMS: RolePerms = {
   appearance: false,
@@ -2732,38 +2772,28 @@ function RolesSection({ server, room, run }: ManageProps) {
         <li data-role={ownerRole} data-owner data-open={ownerDraft !== null || undefined} className={cn(ownerDraft !== null && 'border border-primaryStroke p-3')}>
           {ownerDraft !== null ? (
             <form id="owner-role-form" onSubmit={(e) => void saveOwner(e)} className="flex flex-col gap-3">
-              <input
-                id="owner-role-name"
-                value={ownerDraft}
-                onChange={(e) => setOwnerDraft(e.target.value)}
-                placeholder="owner role name"
-                maxLength={32}
-                aria-label="owner role name"
-                autoFocus
-                onFocus={(e) => e.currentTarget.select()}
-                className={INPUT}
-              />
-              {/* the crown pinned left, the powers pinned right (on their own line, still right, when it wraps): the role form's row */}
-              <div role="group" aria-label="powers" className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-                <span className="flex h-6 w-6 items-center justify-center text-primaryBlue">
+              {/* the crown beside the name: the owner role's mark where the role form has its colour */}
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center text-primaryBlue">
                   <RiVipCrownLine aria-hidden size={16} />
                 </span>
-                <span className="ml-auto flex items-center gap-1">
+                <input
+                  id="owner-role-name"
+                  value={ownerDraft}
+                  onChange={(e) => setOwnerDraft(e.target.value)}
+                  placeholder="owner role name"
+                  maxLength={32}
+                  aria-label="owner role name"
+                  autoFocus
+                  onFocus={(e) => e.currentTarget.select()}
+                  className={INPUT}
+                />
+              </div>
+              {/* the role form's list of powers, every one on and locked: an owner's */}
+              <div role="group" aria-label="powers" className="flex flex-col gap-1">
                 {POWERS.map((power) => (
-                  <Tooltip key={power.key} content={`${power.label}: an owner's`}>
-                    <button
-                      id={`owner-role-perm-${power.key}`}
-                      type="button"
-                      aria-label={power.label}
-                      aria-pressed
-                      aria-disabled
-                      className="flex h-6 w-6 cursor-default items-center justify-center text-primaryBlue"
-                    >
-                      {power.icon}
-                    </button>
-                  </Tooltip>
+                  <PowerRow key={power.key} power={power} id={`owner-role-perm-${power.key}`} on locked />
                 ))}
-                </span>
               </div>
               <p className="text-xs text-textTertiary">
                 an owner has every power and sees every channel. only the name changes here; who owns the group is the members tab.
@@ -2827,52 +2857,34 @@ function RolesSection({ server, room, run }: ManageProps) {
                     }}
                     className={INPUT}
                   />
-                  {/* one row: the colours pinned left, the powers as icons pinned right (on their own line, still right, when it wraps). a power is a pressed icon (blue), the word its tooltip */}
-                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-                    <div role="group" aria-label="colour" className="flex items-center gap-1">
-                      {COLORS.map((swatch) => (
-                        <button
-                          key={swatch}
-                          type="button"
-                          aria-label={swatch}
-                          aria-pressed={swatch === open.color}
-                          onClick={() => setDraft({ ...open, color: swatch })}
-                          style={{ backgroundColor: swatch }}
-                          className={cn('h-6 w-6 border-2', swatch === open.color ? 'border-textPrimary' : 'border-transparent')}
+                  <div role="group" aria-label="colour" className="flex flex-wrap items-center gap-1">
+                    {COLORS.map((swatch) => (
+                      <button
+                        key={swatch}
+                        type="button"
+                        aria-label={swatch}
+                        aria-pressed={swatch === open.color}
+                        onClick={() => setDraft({ ...open, color: swatch })}
+                        style={{ backgroundColor: swatch }}
+                        className={cn('h-6 w-6 border-2', swatch === open.color ? 'border-textPrimary' : 'border-transparent')}
+                      />
+                    ))}
+                  </div>
+                  {/* the powers, a row each: the icon, the name and what it does; the row is the toggle. one this login lacks is not its to give: greyed, and it says so */}
+                  <div role="group" aria-label="powers" className="flex flex-col gap-1">
+                    {POWERS.map((power) => {
+                      const on = open.perms[power.key];
+                      return (
+                        <PowerRow
+                          key={power.key}
+                          power={power}
+                          id={`role-perm-${power.key}`}
+                          on={on}
+                          mine={room.perms[power.key]}
+                          onToggle={() => setDraft({ ...open, perms: { ...open.perms, [power.key]: !on } })}
                         />
-                      ))}
-                    </div>
-                    <div role="group" aria-label="powers" className="ml-auto flex items-center gap-1">
-                      {POWERS.map((power) => {
-                        const on = open.perms[power.key];
-                        // a power this login lacks is not its to give: greyed, and the tooltip says so
-                        const mine = room.perms[power.key];
-                        return (
-                          <Tooltip key={power.key} content={mine ? power.label : `${power.label}: not yours to give`}>
-                            <button
-                              id={`role-perm-${power.key}`}
-                              type="button"
-                              aria-label={power.label}
-                              aria-pressed={on}
-                              aria-disabled={!mine || undefined}
-                              onClick={() =>
-                                mine &&
-                                setDraft({
-                                  ...open,
-                                  perms: { ...open.perms, [power.key]: !on }
-                                })
-                              }
-                              className={cn(
-                                'flex h-6 w-6 items-center justify-center border border-transparent focus-visible:border-primaryBlue focus-visible:outline-none',
-                                !mine ? 'cursor-default opacity-40' : on ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary'
-                              )}
-                            >
-                              {power.icon}
-                            </button>
-                          </Tooltip>
-                        );
-                      })}
-                    </div>
+                      );
+                    })}
                   </div>
                   {/* the cooldown: seconds between its holders' lines, as pressed words; off unless a role says otherwise */}
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1">

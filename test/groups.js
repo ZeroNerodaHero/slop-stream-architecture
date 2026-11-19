@@ -1094,7 +1094,7 @@ const dropAll = async (ctx, names) => {
     const started = await q.inputValue('#role-name');
     expect(started === 'new role', `a new role is called "${started}"`);
     await q.fill('#role-name', 'helpers');
-    // the powers are icons on the colour row, pressed when on
+    // the powers are a list under the colours, a row each, pressed when on
     await q.click('#role-perm-kick');
     expect((await q.getAttribute('#role-perm-kick', 'aria-pressed')) === 'true', 'kick did not press');
     // the cooldown is off until a word is pressed
