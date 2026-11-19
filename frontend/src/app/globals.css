@@ -75,6 +75,17 @@ html:has([data-sheet-open]) {
   }
 }
 
+/* a phone's text boxes are 16px at least: ios zooms the page in on a box with smaller text when it takes focus.
+   that is every box (the chats, the dms, a sheet's search), whatever its own class says and under a text size
+   below 100% (1rem is then under 16px). a phone can still pinch to zoom: no maximum-scale in index.html */
+@media (max-width: 767.98px) {
+  textarea,
+  select,
+  input:not([type='checkbox'], [type='radio'], [type='range'], [type='file'], [type='color'], [type='button'], [type='submit'], [type='reset'], [type='image']) {
+    font-size: max(16px, 1rem) !important;
+  }
+}
+
 body {
   /* 20px at the browser's size, in rems so the size setting (settings.textSize, a percentage on <html>) scales it with the rest */
   @apply bg-background font-sans text-[1.25rem] leading-relaxed text-textPrimary antialiased;

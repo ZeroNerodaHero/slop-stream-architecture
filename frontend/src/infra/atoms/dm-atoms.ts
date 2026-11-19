@@ -29,6 +29,8 @@ export interface Dm {
   bio: string;
   presence: Presence;
   unread: number;
+  /** The thread's newest line as `GET /api/dms` listed it: a phone's friend list says it under the name. Absent on a tab opened before the list came. */
+  last?: DmLine;
 }
 
 /** Somebody to open a chat with: a sidebar row, a pick from the grid. */
@@ -204,7 +206,7 @@ export async function loadDms(): Promise<void> {
   const fresh: Dm[] = list.map((t) => {
     const here = have.find((d) => d.name === t.name);
     // a line counted new since the list was asked for stays counted: the api's number is the floor
-    return { id: t.id, name: t.name, avatar: t.avatar, verified: t.verified, bio: t.bio, presence: t.presence, unread: Math.max(t.unread, here?.unread ?? 0) };
+    return { id: t.id, name: t.name, avatar: t.avatar, verified: t.verified, bio: t.bio, presence: t.presence, unread: Math.max(t.unread, here?.unread ?? 0), last: t.last ? lineOf(t.last) : undefined };
   });
   const names = new Set(fresh.map((d) => d.name));
   store.set(dmsAtom, [...fresh, ...have.filter((d) => !names.has(d.name))]);

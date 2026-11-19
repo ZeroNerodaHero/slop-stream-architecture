@@ -3,6 +3,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { api } from '@/infra/api';
+import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
   addStreamThumb,
   cameraAtom,
@@ -42,9 +43,10 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
-import { useIsMobile } from '@/infra/mobile';
+import { useIsMobile, useVisibleViewport } from '@/infra/mobile';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
+import { Face } from '@/shared-components/Face';
 import { Mixer } from '@/shared-components/live/Mixer';
 import { Rigging } from '@/shared-components/live/Rigging';
 import { Sources, StartStop } from '@/shared-components/live/Sources';
@@ -84,30 +86,6 @@ function keepTab(tab: LiveTab) {
   }
 }
 
-/**
- * The part of the window the page can use on a phone: the visual viewport, which is shorter
- * while the on-screen keyboard is up, and how far the browser has panned the page to keep a
- * focused box in sight. `keyboard`: the window is a good deal shorter than the layout's, so
- * the keyboard is what is under it. null while off, or where there is no visual viewport (the
- * page then falls back to `100dvh`).
- */
-function useVisibleWindow(on: boolean): { height: number; top: number; keyboard: boolean } | null {
-  const [view, setView] = useState<{ height: number; top: number; keyboard: boolean } | null>(null);
-  useEffect(() => {
-    const vv = window.visualViewport;
-    if (!on || !vv) return;
-    const read = () => setView({ height: vv.height, top: vv.offsetTop, keyboard: window.innerHeight - vv.height > 120 });
-    read();
-    vv.addEventListener('resize', read);
-    vv.addEventListener('scroll', read);
-    return () => {
-      vv.removeEventListener('resize', read);
-      vv.removeEventListener('scroll', read);
-    };
-  }, [on]);
-  return on ? view : null;
-}
-
 /** While on: the document does not scroll (nor bounce), so the page is the window and nothing else moves. */
 function useLockedDocument(on: boolean) {
   useEffect(() => {
@@ -134,7 +112,8 @@ const CHAT_MOBILE =
 export function LivePage() {
   const navigate = useNavigate();
   const mobile = useIsMobile();
-  const view = useVisibleWindow(mobile);
+  // the visual viewport (mobile.ts): the page is what the keyboard leaves, panned with it
+  const view = useVisibleViewport(mobile);
   useLockedDocument(mobile);
   const [tab, setTab] = useState<LiveTab>(keptTab);
   const previewRef = useRef<HTMLVideoElement | null>(null);
@@ -158,6 +137,7 @@ export function LivePage() {
   const selected = useAtomValue(selectedSourceAtom);
   const mixerOpen = useAtomValue(mixerOpenAtom);
   const myAvatar = useAtomValue(myAvatarVersionAtom);
+  const me = useAtomValue(meAtom);
   const thumbFileRef = useRef<HTMLInputElement | null>(null);
 
   // the editor's hooks on the preview: a drag, a corner, the keys. delete takes a picture or the
@@ -329,7 +309,15 @@ export function LivePage() {
         className="group/live fixed inset-x-0 top-0 flex h-[100dvh] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
         style={view ? { height: view.height, transform: view.top ? `translateY(${view.top}px)` : undefined } : undefined}
       >
-        <PageFrame title="go live" mobileTitle={name || 'go live'} wide bleed fill>
+        <PageFrame
+          title="go live"
+          mobileTitle={name || 'go live'}
+          // who is going live, beside the menu: your picture (or the letter your name makes). a picture, not a control
+          mobileStart={me ? <Face name={me} version={myAvatar} className="mr-1 h-8 w-8 text-sm" /> : undefined}
+          wide
+          bleed
+          fill
+        >
           <div className="shrink-0">{preview}</div>
           {/* the stream's state and the press that changes it, always in sight. not while typing: the keyboard has that room */}
           <div className={cn('flex shrink-0 items-center gap-3 border-b border-primaryStroke px-4 py-2', view?.keyboard && 'hidden')}>
