@@ -1,22 +1,23 @@
 import { useQuery } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 
 import { api, groupMatches, mayMakeGroup, messageOf, type SearchHit, type Server } from '@/infra/api';
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { Button } from '@/shared-components/Button';
-import { GroupSquare } from '@/shared-components/GroupSquare';
+import { GROUP_SQUARE_BOX, GroupSquare } from '@/shared-components/GroupSquare';
 import { MakeGroupDialog } from '@/shared-components/MakeGroupDialog';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { PersonRow } from '@/shared-components/PersonRow';
-import { Bone, Skeleton } from '@/shared-components/Skeleton';
+import { Skeleton } from '@/shared-components/Skeleton';
+import { cn } from '@/utils/cn';
 
 const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary';
 
 const SQUARES = 'grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3';
 const SECTION_TITLE = 'mb-4 text-sm font-semibold uppercase tracking-wider text-textTertiary';
-/** How many grey squares stand under each heading before the lists have answered. */
-const SQUARES_GUESS = 4;
+/** How many stand-in squares are drawn; the row shows as many as fit across and hides the rest. */
+const SQUARES_GUESS = 6;
 
 /**
  * The groups you are in, then the public ones you are not. `bot` is a badge, not one of these.
@@ -91,11 +92,7 @@ export function ExplorePage() {
           {['yours', 'public'].map((title) => (
             <section key={title}>
               <h2 className={SECTION_TITLE}>{title}</h2>
-              <div className={SQUARES}>
-                {Array.from({ length: SQUARES_GUESS }, (_, i) => (
-                  <Bone key={i} className="aspect-square" />
-                ))}
-              </div>
+              <SquaresRow pulse />
             </section>
           ))}
         </Skeleton>
@@ -120,7 +117,25 @@ export function ExplorePage() {
       )}
       {query.data && (
         <div id="groups" className="flex flex-col gap-10">
-          <Section id="yours" title="yours" empty={q ? 'nothing in yours matches' : 'you are not in a group yet'} servers={yours} />
+          <Section
+            id="yours"
+            title="yours"
+            empty={
+              q ? (
+                'nothing in yours matches'
+              ) : canMake ? (
+                <>
+                  you are not in a group yet,{' '}
+                  <button id="groups-empty-make" type="button" className="font-semibold text-primaryBlue hover:underline" onClick={() => setMaking(true)}>
+                    make one
+                  </button>
+                </>
+              ) : (
+                'you are not in a group yet'
+              )
+            }
+            servers={yours}
+          />
           <Section id="public" title="public" empty={q ? 'nothing public matches' : 'no public groups to find'} servers={listed} />
         </div>
       )}
@@ -128,12 +143,33 @@ export function ExplorePage() {
   );
 }
 
-function Section({ id, title, empty, servers }: { id: string; title: string; empty: string; servers: Server[] }) {
+/**
+ * One row of stand-in squares on the real squares' grid and box: as many as fit across, the
+ * rest cut off (extra rows are 0 tall, with no gap between rows). Still when a list is empty;
+ * breathing, where motion is welcome, while the lists are on their way.
+ */
+function SquaresRow({ pulse = false }: { pulse?: boolean }) {
+  return (
+    <div aria-hidden className={cn(SQUARES, 'grid-rows-1 auto-rows-[0] gap-y-0 overflow-hidden')}>
+      {Array.from({ length: SQUARES_GUESS }, (_, i) => (
+        <span key={i} className={cn(GROUP_SQUARE_BOX, pulse && 'motion-safe:animate-pulse')} />
+      ))}
+    </div>
+  );
+}
+
+function Section({ id, title, empty, servers }: { id: string; title: string; empty: ReactNode; servers: Server[] }) {
   return (
     <section id={id} aria-label={title}>
       <h2 className={SECTION_TITLE}>{title}</h2>
       {servers.length === 0 ? (
-        <p className="text-textSecondary">{empty}</p>
+        // the words over the middle of the empty row
+        <div className="relative">
+          <SquaresRow />
+          <p className="absolute inset-0 flex items-center justify-center px-4 text-center text-sm text-textSecondary">
+            <span>{empty}</span>
+          </p>
+        </div>
       ) : (
         <ul className={SQUARES}>
           {servers.map((server) => (
