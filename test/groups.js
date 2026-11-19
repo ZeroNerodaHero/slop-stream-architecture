@@ -1066,7 +1066,7 @@ const dropAll = async (ctx, names) => {
     expect(await q.$('#manage-panel-about #manage-icon-pick'), 'about has no picture pick for the owner');
     expect(await q.$('#manage-panel-about #manage-banner-pick'), 'about has no banner pick for the owner');
     await q.click('#room-private');
-    await q.waitForSelector('#group-manage[open] #room-private[aria-pressed="true"]', { timeout: 10000 });
+    await q.waitForSelector('#group-manage[open] #room-private[aria-checked="true"]', { timeout: 10000 });
     const room = await body(await maker.get(`/api/groups/${madeName}`));
     expect(room && room.public === false, `after private the room says ${JSON.stringify(room && room.public)}`);
     // roles are changed in place, under their tab. add role makes one called new role and opens it with the name

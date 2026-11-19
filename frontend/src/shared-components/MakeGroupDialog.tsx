@@ -19,12 +19,6 @@ import { cn } from '@/utils/cn';
 
 /** The auth modal's box (AuthForm.tsx), in a row. */
 const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base leading-snug text-textPrimary placeholder:text-textTertiary focus:border-primaryBlue';
-/** What public and private each mean, under the locks: only the chosen one's. */
-const LISTING = {
-  public: 'a public group is on the lists for anyone. the owner can switch this later, under manage on the group.',
-  private:
-    'a private group is left off the lists. someone with the address can still open it and join. four digits are added, so the same name can be made twice. the owner can switch this later, under manage on the group.',
-};
 
 /** The api's caps, as the boxes know them. */
 const MAX_BADGE_CHARS = 12;
@@ -137,15 +131,15 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       // a phone's is a sheet up from the foot (MobileSheet.tsx)
       className={cn(
-        'm-auto max-h-[calc(100dvh-2rem)] w-[min(520px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-5 text-base text-textPrimary backdrop:bg-black/60',
+        'm-auto max-h-[calc(100dvh-2rem)] w-[min(520px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-4 text-base text-textPrimary backdrop:bg-black/60',
         SHEET_DIALOG
       )}
     >
       <SheetGrab onDismiss={onClose} />
       <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
-        {/* 8px under the title, not the form's 12 */}
-        <h2 id="groups-make-title" className="-mb-1 text-sm font-semibold uppercase tracking-wider text-textTertiary">
-          make a group
+        {/* the dialogs' title (CropDialog, ConfirmDialog): the blue bar, a size down to keep this one dense */}
+        <h2 id="groups-make-title" className="border-l-4 border-primaryBlue pl-3 text-lg font-semibold leading-tight text-textPrimary">
+          create group
         </h2>
         {/* the banner and the picture as they will sit on the group: the whole picture is the click, as on the room */}
         {/* the picture hangs 32px under the banner; the line under it sits 8px past that (28 here and the form's 12) */}
@@ -172,7 +166,6 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
             />
           </div>
         </div>
-        <p className="text-sm leading-snug text-textTertiary">a banner and a picture, now or later on the group. without them the group wears its colour.</p>
         <div className="flex flex-wrap items-center gap-2">
           <input
             id="groups-make-name"
@@ -242,17 +235,17 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
           </Tooltip>
           <Badge group={{ name: clean || 'new', badge: badge.trim() || 'badge', color }} src={icon?.url} size="md" className="ml-1.5" />
         </div>
-        <div className="flex flex-col gap-1">
+        {/* public or private on the left, the two answers on the right */}
+        <div className="flex items-center justify-between gap-3">
           <VisibilityToggle isPublic={isPublic} onChange={setPublic} ids={['groups-make-public', 'groups-make-private']} />
-          <p className="text-sm leading-snug text-textTertiary">{isPublic ? LISTING.public : LISTING.private}</p>
-        </div>
-        <div className="mt-3 flex items-center justify-end gap-3">
-          <button type="button" className="text-sm text-textTertiary" onClick={onClose}>
-            cancel
-          </button>
-          <Button id="groups-make-submit" type="submit" variant="primary" className="px-3 py-1.5 text-sm" disabled={!ok || busy || sending}>
-            {sending ? 'making…' : 'make it'}
-          </Button>
+          <span className="flex items-center gap-3">
+            <Button size="sm" onClick={onClose}>
+              cancel
+            </Button>
+            <Button id="groups-make-submit" type="submit" variant="primary" className="px-3 py-1.5 text-sm" disabled={!ok || busy || sending}>
+              {sending ? 'making…' : 'make it'}
+            </Button>
+          </span>
         </div>
         {spoke && status && (
           <p id="groups-make-status" className="text-sm text-textSecondary">
