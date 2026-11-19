@@ -132,8 +132,8 @@ export function ChatLineShape({ shape, mine, at, name, who, face, faced = false,
   }
   if (shape === 'blocks') {
     return (
-      <p {...attrs} title={title} className={cn('group/line flex gap-2.5 leading-snug', first && 'mt-2 first:mt-0')}>
-        {first ? <span className={cn(GUTTER, 'mt-0.5')}>{face}</span> : <GutterClock at={at} shown={bucket} className="pt-1" />}
+      <p {...attrs} title={title} className={cn('group/line flex gap-2 leading-snug', first && 'mt-1 first:mt-0')}>
+        {first ? <span className={cn(GUTTER, 'mt-0.5')}>{face}</span> : <GutterClock at={at} shown={bucket} className="pt-0.5" />}
         <span className="flex min-w-0 flex-1 flex-col [overflow-wrap:anywhere]">
           {first && (
             <span className="flex items-baseline gap-2">
@@ -149,7 +149,7 @@ export function ChatLineShape({ shape, mine, at, name, who, face, faced = false,
   }
   const named = crowd && !mine && first;
   return (
-    <p {...attrs} title={title} className={cn('group/line flex gap-2.5 leading-snug', bucket && 'mt-2 first:mt-0')}>
+    <p {...attrs} title={title} className={cn('group/line flex gap-2 leading-snug', bucket && 'mt-2 first:mt-0')}>
       {faced && first ? <span className={cn(GUTTER, 'mt-0.5')}>{face}</span> : <GutterClock at={at} shown={bucket} className="pt-2.5" />}
       <span className={cn('flex min-w-0 flex-1', mine ? 'justify-end' : 'justify-start')}>
         {/* the box: a stroke and a fill, no shadow (no-box-shadow.mdc). yours wears the blue. `relative`: the reader's name is `sr-only` (relative-parent.mdc) */}

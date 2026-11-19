@@ -1211,9 +1211,10 @@ export async function goLive(): Promise<void> {
   pc = myPc;
   abort = myAbort;
   // the tab closing ends the stream wherever in the app it is kept (picture in picture takes it
-  // off its page), so the listeners are the stream's, from here to `stopLive`, not the page's
+  // off its page), so the listener is the stream's, from here to `stopLive`, not the page's.
+  // `pagehide` alone, never `beforeunload`: that one fires for leaves that never happen (a
+  // `mailto:` or an app's link, a leave another listener cancels), and the stream stopped then
   addEventListener('pagehide', stopOnLeave);
-  addEventListener('beforeunload', stopOnLeave);
   myPc.onconnectionstatechange = () => {
     if (!gone()) onConnection(myPc.connectionState);
   };
@@ -1784,7 +1785,6 @@ export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', {
   stopPublishStats();
   if (report) void reportPeerFailure('publish', store.get(streamNameAtom), message, pc);
   removeEventListener('pagehide', stopOnLeave);
-  removeEventListener('beforeunload', stopOnLeave);
   if (heartbeat) {
     clearInterval(heartbeat);
     heartbeat = null;
@@ -1838,8 +1838,13 @@ export function stopLive(message = 'stopped', phase: PublishPhase = 'stopped', {
   setPhase(phase, message);
 }
 
-/** Tab closed. sendBeacon survives page teardown, fetch may not. */
-export function stopOnLeave() {
+/**
+ * Tab closed. sendBeacon survives page teardown, fetch may not. Only this page's own document
+ * going counts: the popped out player's window (infra/popout.ts) hides and closes on its own,
+ * and that is never a stop.
+ */
+export function stopOnLeave(event?: Event) {
+  if (event && event.target !== document) return;
   const owner = store.get(ownerAtom);
   if (!owner) return;
   api.stopBeacon(owner);
@@ -1859,9 +1864,11 @@ export function startPublishPip() {
  * Navigated away inside the app. With a stream up (or on its way up), everything stays as it
  * is and the corner player takes over: going home to look around, or to watch someone else,
  * is not a stop. With nothing on air the camera is released and the page's boxes forgotten.
+ * On air is the stream's own handles (the peer, the owner), not only the phase's word: a
+ * stream that is up is never ended by a page going away.
  */
 export function leaveLivePage() {
-  if (store.get(isPublishingAtom)) {
+  if (store.get(isPublishingAtom) || pc !== null || store.get(ownerAtom) !== null) {
     store.set(publishPipAtom, true);
     return;
   }

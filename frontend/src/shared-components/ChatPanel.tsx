@@ -16,53 +16,7 @@ import { createPortal } from 'react-dom';
 
 import { api, messageOf, type Owner } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import {
-  type ChatLine,
-  addChatImage,
-  backToLatest,
-  chatAsStreamerAtom,
-  chatBehindAtom,
-  chatCanSendAtom,
-  chatCountAtom,
-  chatDraftAtom,
-  chatGuestAtom,
-  chatImagesAtom,
-  chatLinesAtom,
-  chatLoadedAtom,
-  chatNoticeAtom,
-  chatPhaseAtom,
-  chatPinnedAtom,
-  chatResultsAtom,
-  chatResultsForAtom,
-  chatScrollAtom,
-  chatShakeAtom,
-  chatSpeakerAtom,
-  chatTierAtom,
-  chatWaitAtom,
-  clearResults,
-  hiddenBotLinesAtom,
-  isBotLine,
-  leaveChat,
-  loadOlder,
-  MAX_CHAT_IMAGES,
-  nickAtom,
-  nickIsValidAtom,
-  noteChatScroll,
-  openChat,
-  openLine,
-  openServerChat,
-  removeChatImage,
-  sendChat,
-  setChatDraft,
-  setChatFollowing,
-  setChatGuest,
-  setNick,
-  showChannel,
-  showNotice,
-  showSpeaker,
-  takeScrollPlan,
-  visibleChatLinesAtom
-} from '@/infra/atoms/chat-atoms';
+import { type ChatLine, type ChatRoom, chatRoomFor, chatSpeakerAtom, isBotLine, MAX_CHAT_IMAGES, nickAtom, nickIsValidAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
 import { type ChatStyle, chatStyleAtom, hideBotsAtom, profilePopupEnabledAtom, setHideBots } from '@/infra/atoms/settings-atoms';
 import { Badge } from '@/shared-components/Badge';
@@ -132,11 +86,8 @@ interface ChatPanelProps {
 }
 
 /** Enter sends. The enter that picks an ime candidate is not a send (safari says it with keyCode 229). */
-function onKey(e: ReactKeyboardEvent<HTMLInputElement>) {
-  if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
-    e.preventDefault();
-    sendChat();
-  }
+function isSendKey(e: ReactKeyboardEvent<HTMLInputElement>): boolean {
+  return e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229;
 }
 
 /** A wait on the send button: `12s` under a minute, `9:05` from there (a cooldown or a timeout can run minutes), `3h 10m` past an hour. */
@@ -174,20 +125,27 @@ function useCountdown(until: number): number {
  * each wearing its speaker's group badges after the name; the blocks' face is the picture when
  * the line is a login's or the streamer's, the letter their name makes otherwise. The robot in
  * the header hides the bots' lines (a setting too, the chat tab has it as well). Joins on
- * mount, leaves on unmount (a room the next panel takes over right away stays open,
- * `leaveChat`: the chat going with the player into a window of its own is not a reconnect); a
- * change of `owner` (going live, stopping) or of the login reconnects through `openChat`. One
- * at a time: the chat atoms hold one room, and the ids here are the ones the tests key on. A
- * `guest` is a second panel on that one room, and the first draws nothing while it is up.
+ * mount, leaves on unmount (a room the next panel takes over right away stays open: the chat
+ * going with the player into a window of its own is not a reconnect); a change of `owner`
+ * (going live, stopping) or of the login says hello again. Each panel draws its own room
+ * (`chatRoomFor`, chat-atoms.ts): the page's and the corner player's are two rooms at once,
+ * each with its lines and its box, and two panels on one room share its socket and its lines.
+ * A `guest` is a second panel on the page's own room, and the page's draws nothing while it is up.
  */
 
 /** What a press on a speaker (their name, their face) does, and whether it does anything: the popup, or a login's lines here (Speaker). */
-function useSpeakerPress(line: ChatLine) {
+function useSpeakerPress(line: ChatLine, room: ChatRoom) {
   const popup = useAtomValue(profilePopupEnabledAtom);
   const press = (name: HTMLElement) => {
     if (popup && name.ownerDocument === document)
-      openProfilePopup({ name: line.from, verified: line.verified, oauth_verified: line.oauth_verified, avatar: line.avatar, lines: line.verified });
-    else if (line.verified) void showSpeaker(line.from);
+      openProfilePopup({
+        name: line.from,
+        verified: line.verified,
+        oauth_verified: line.oauth_verified,
+        avatar: line.avatar,
+        lines: line.verified ? room.key : undefined
+      });
+    else if (line.verified) void room.showSpeaker(line.from);
   };
   return { popup, pressable: line.verified || (popup && line.streamer), press };
 }
@@ -205,9 +163,9 @@ function useSpeakerPress(line: ChatLine) {
  * one name is one too many. The colour says who the line is really from: the streamer green,
  * a login blue, an anonymous nick red (no card for it, so its `title` says why).
  */
-function Speaker({ line }: { line: ChatLine }) {
+function Speaker({ line, room }: { line: ChatLine; room: ChatRoom }) {
   const peek = usePeek(PEEK_MS);
-  const { popup, pressable, press } = useSpeakerPress(line);
+  const { popup, pressable, press } = useSpeakerPress(line, room);
   const someone = line.verified || line.streamer;
   const watched = someone
     ? {
@@ -261,8 +219,8 @@ function Speaker({ line }: { line: ChatLine }) {
  * click on their name does (Speaker). For the pointer alone: the name beside it is the way for a
  * key and a reader, so the face is no second tab stop. An anonymous nick's face is only a face.
  */
-function SpeakerFace({ line }: { line: ChatLine }) {
-  const { pressable, press } = useSpeakerPress(line);
+function SpeakerFace({ line, room }: { line: ChatLine; room: ChatRoom }) {
+  const { pressable, press } = useSpeakerPress(line, room);
   const face = <Face name={line.from} version={line.avatar} className="h-8 w-8 text-sm" />;
   if (!pressable) return face;
   return (
@@ -532,64 +490,64 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
   // true while the view sits at the newest line. someone who scrolled up to read is left there.
   const stuck = useRef(true);
   const shown = useRef(0);
+  const shownRoom = useRef<ChatRoom | null>(null);
   const mobile = useIsMobile();
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const lines = useAtomValue(visibleChatLinesAtom);
-  const total = useAtomValue(chatLinesAtom).length;
-  const loaded = useAtomValue(chatLoadedAtom);
+  // this panel's room, and none other's: its lines, its box, its socket (chat-atoms.ts)
+  const room = chatRoomFor(name, server);
+  const lines = useAtomValue(room.visibleLinesAtom);
+  const total = useAtomValue(room.linesAtom).length;
+  const loaded = useAtomValue(room.loadedAtom);
   const hideBots = useAtomValue(hideBotsAtom);
-  const hiddenBots = useAtomValue(hiddenBotLinesAtom);
+  const hiddenBots = useAtomValue(room.hiddenBotLinesAtom);
   const shape = useAtomValue(chatStyleAtom);
-  const count = useAtomValue(chatCountAtom);
-  const phase = useAtomValue(chatPhaseAtom);
-  const draft = useAtomValue(chatDraftAtom);
-  const images = useAtomValue(chatImagesAtom);
-  const notice = useAtomValue(chatNoticeAtom);
+  const count = useAtomValue(room.countAtom);
+  const phase = useAtomValue(room.phaseAtom);
+  const draft = useAtomValue(room.draftAtom);
+  const images = useAtomValue(room.imagesAtom);
+  const notice = useAtomValue(room.noticeAtom);
   const nick = useAtomValue(nickAtom);
   const nickOk = useAtomValue(nickIsValidAtom);
-  const canSend = useAtomValue(chatCanSendAtom);
-  const asStreamer = useAtomValue(chatAsStreamerAtom);
+  const canSend = useAtomValue(room.canSendAtom);
+  const asStreamer = useAtomValue(room.asStreamerAtom);
   const speaker = useAtomValue(chatSpeakerAtom);
   const me = useAtomValue(meAtom);
-  const results = useAtomValue(chatResultsAtom);
-  const resultsFor = useAtomValue(chatResultsForAtom);
-  const pinned = useAtomValue(chatPinnedAtom);
-  const behind = useAtomValue(chatBehindAtom);
-  const scrollTick = useAtomValue(chatScrollAtom);
-  const tier = useAtomValue(chatTierAtom);
-  const shake = useAtomValue(chatShakeAtom);
+  const results = useAtomValue(room.resultsAtom);
+  const resultsFor = useAtomValue(room.resultsForAtom);
+  const pinned = useAtomValue(room.pinnedAtom);
+  const behind = useAtomValue(room.behindAtom);
+  const scrollTick = useAtomValue(room.scrollAtom);
+  const tier = useAtomValue(room.tierAtom);
+  const shake = useAtomValue(room.shakeAtom);
   // a send refused for the rate: the seconds until the next line may go, on the send button
-  const wait = useCountdown(useAtomValue(chatWaitAtom));
+  const wait = useCountdown(useAtomValue(room.waitAtom));
   // a guest is drawing this room somewhere else: this panel, the one that holds the room open, stands aside
-  const aside = useAtomValue(chatGuestAtom) && !guest;
+  const aside = useAtomValue(room.guestAtom) && !guest;
 
-  // The inputs that change while mounted: the owner (going live) and the login.
+  // The inputs that change while mounted: the room, the owner (going live) and the login.
   // Nothing opens until /api/me has answered, so the first hello is the right one.
   // A server is one socket for every channel: the channel is not one of these inputs.
-  // A guest opens nothing: the room is the page's panel's. And going is not yet a close: the
-  // room may be the next panel's to take over, a moment from now (`leaveChat`).
+  // Going is not yet a close: the room may be the next panel's to take over, a moment from now.
   useEffect(() => {
-    if (me === undefined || guest) return;
-    if (channel !== undefined) openServerChat(name, channel);
-    else openChat(name, owner);
-    return leaveChat;
-  }, [name, owner?.session, owner?.token, me, server, guest]);
+    if (me === undefined) return;
+    return room.join(owner);
+  }, [room, owner?.session, owner?.token, me]);
 
   // A guest says it is up for as long as it is, and the panel that holds the room stands aside.
   useEffect(() => {
     if (!guest) return;
-    setChatGuest(true);
-    return () => setChatGuest(false);
-  }, [guest]);
+    room.setGuest(true);
+    return () => room.setGuest(false);
+  }, [room, guest]);
 
   // The channel on screen, for a server: a swap of what is shown, nothing opened or asked.
   useEffect(() => {
-    if (channel !== undefined) showChannel(channel);
-  }, [channel]);
+    if (channel !== undefined) room.showChannel(channel);
+  }, [room, channel]);
 
-  /** The nick box's join: the socket as this panel wants it. */
-  const open = () => (channel !== undefined ? openServerChat(name, channel) : openChat(name, owner));
+  /** The nick box's join: the socket as the panels want it. */
+  const open = () => room.open();
 
   // Keep the newest line in view, unless the reader has scrolled up, or a jump asked for one line.
   // A layout effect: the store fires before react has put the new lines in the dom.
@@ -600,7 +558,12 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
       shown.current = 0;
       return;
     }
-    const plan = takeScrollPlan();
+    // another room in this panel (the corner following another stream) starts at its newest line
+    if (shownRoom.current !== room) {
+      shownRoom.current = room;
+      shown.current = 0;
+    }
+    const plan = room.takeScrollPlan();
     if (plan === 'keep') {
       el.scrollTop += el.scrollHeight - hold.current;
     } else if (plan && typeof plan === 'object') {
@@ -608,15 +571,15 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
       // centred by the list's own scroll, not scrollIntoView: that would centre the line in the window as well, scrolling the page under the panel (the room page snaps between its views)
       if (node instanceof HTMLElement) el.scrollTop += node.getBoundingClientRect().top - el.getBoundingClientRect().top - (el.clientHeight - node.offsetHeight) / 2;
       stuck.current = false;
-      setChatFollowing(false);
+      room.setFollowing(false);
     } else if (plan === 'bottom' || stuck.current || shown.current === 0) {
       el.scrollTop = el.scrollHeight;
       stuck.current = true;
-      setChatFollowing(true);
+      room.setFollowing(true);
     }
     shown.current = lines.length;
     hold.current = el.scrollHeight;
-  }, [lines, total, scrollTick, aside]);
+  }, [room, lines, total, scrollTick, aside]);
 
   // A phone's list changes height under the reader (the keyboard, the player easing to a strip and
   // back, mobile.ts): one sitting at the newest line stays there through it
@@ -634,27 +597,29 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
     const el = e.currentTarget;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= STUCK_PX;
     stuck.current = atBottom;
-    setChatFollowing(atBottom);
-    noteChatScroll(el.scrollTop);
-    if (el.scrollTop < 48) void loadOlder();
+    room.setFollowing(atBottom);
+    room.noteScroll(el.scrollTop);
+    if (el.scrollTop < 48) void room.loadOlder();
   }
 
   async function pickPictures(list: FileList | null) {
     const files = list ? [...list] : [];
     if (files.length === 0 || uploading) return;
-    const room = MAX_CHAT_IMAGES - images.length;
-    const batch = files.slice(0, Math.max(0, room));
-    if (files.length > room) showNotice(`${MAX_CHAT_IMAGES} pictures at most`);
+    // the room the pictures were picked in, even when the panel moves to another before they are up
+    const into = room;
+    const left = MAX_CHAT_IMAGES - images.length;
+    const batch = files.slice(0, Math.max(0, left));
+    if (files.length > left) into.showNotice(`${MAX_CHAT_IMAGES} pictures at most`);
     if (batch.length === 0) return;
     setUploading(true);
     try {
       for (const file of batch) {
         const blob = await compressChatImage(file);
         const saved = await api.uploadChatImage(blob);
-        addChatImage(saved.id);
+        into.addImage(saved.id);
       }
     } catch (err) {
-      showNotice(messageOf(err));
+      into.showNotice(messageOf(err));
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -686,11 +651,16 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
   }
 
   return (
-    <aside id="chat" data-phase={phase} className={embedded ? cn('relative flex flex-col', className) : panelClassName(cn('relative flex min-h-[320px] flex-col', className))}>
+    <aside
+      id="chat"
+      data-phase={phase}
+      data-room={room.key}
+      className={embedded ? cn('relative flex flex-col', className) : panelClassName(cn('relative flex min-h-[320px] flex-col', className))}
+    >
       {/* on a phone a stream's chat (watch, go live) drops this bar to leave the lines room over the keyboard: kept for screen readers, ids and the hide-bots setting as they are. a group's bar stays, it names the channel */}
       {!embedded && (
         <header
-          className={cn('flex items-center justify-between gap-3 border-b border-primaryStroke px-4 py-2 text-base', !server && 'max-md:sr-only')}
+          className={cn('flex items-center justify-between gap-3 border-b border-primaryStroke px-3 py-1.5 text-base', !server && 'max-md:sr-only')}
         >
           <span id={server ? 'channel' : undefined} className="truncate font-semibold">
             {server ? `#${channel}` : 'chat'}
@@ -726,7 +696,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
             <button
               id="chat-latest"
               type="button"
-              onClick={backToLatest}
+              onClick={() => room.backToLatest()}
               className="w-full shrink-0 border-b border-primaryStroke px-3 py-1 text-sm font-semibold text-primaryBlue"
             >
               latest{behind > 0 ? ` · ${behind} new` : ''}
@@ -742,7 +712,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
             data-style={shape}
             // its scroll is its own: the top of the history does not scroll the page under it (the room page snaps between its views).
             // a column: a log is a line each at an even gap; bubbles stand close within a minute and apart between minutes, blocks close within a run and apart between runs (ChatLine.tsx)
-            className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-4 py-2 text-base leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
+            className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-2 py-1 text-base leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
           >
             {waiting && <ChatSkeleton shape={shape} />}
             {!waiting && lines.length === 0 && (
@@ -764,13 +734,13 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                   crowd
                   who={
                     <>
-                      <Speaker line={line} />
+                      <Speaker line={line} room={room} />
                       <span className="ml-1 inline-flex items-center gap-1 align-middle">
                         <Marks line={line} mine={mine} />
                       </span>
                     </>
                   }
-                  face={<SpeakerFace line={line} />}
+                  face={<SpeakerFace line={line} room={room} />}
                   words={
                     line.text ? (
                       <span className="whitespace-pre-wrap">
@@ -796,7 +766,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
 
         {/* the hits, or one speaker's lines, newest first, where the lines were (ChatSearch.tsx). one clicked puts the lines back with it in view; close puts them back as they were */}
         {results && (
-          <SearchResults id="chat-results" label={resultsFor} count={results.length} onClose={clearResults} className="absolute inset-0 text-base">
+          <SearchResults id="chat-results" label={resultsFor} count={results.length} onClose={() => room.clearResults()} className="absolute inset-0 text-base">
             {results.map((line) => {
               // where the hit is, when it is not here: a server's search is every channel's
               const elsewhere = line.channel !== undefined && line.channel !== channel ? line.channel : null;
@@ -813,8 +783,8 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                   onClick={() => {
                     // a server's hit from another channel: the lines move there now, and the page's address follows
                     if (elsewhere !== null) onChannel?.(elsewhere);
-                    clearResults();
-                    void openLine(line.id, line.channel);
+                    room.clearResults();
+                    void room.openLine(line.id, line.channel);
                   }}
                 />
               );
@@ -823,7 +793,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
         )}
       </div>
 
-      <footer className="border-t border-primaryStroke p-3">
+      <footer className="border-t border-primaryStroke p-2">
         {needsNick ? (
           <div className="flex flex-wrap gap-2">
             <label htmlFor="chat-nick" className="sr-only">
@@ -869,7 +839,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                         type="button"
                         aria-label="remove picture"
                         className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center bg-black/70 text-white"
-                        onClick={() => removeChatImage(id)}
+                        onClick={() => room.removeImage(id)}
                       >
                         <RiCloseLine aria-hidden size={14} />
                       </button>
@@ -884,7 +854,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                   type="button"
                   id="chat-picture"
                   aria-label="picture"
-                  className="flex h-10 w-10 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
                   disabled={uploading || images.length >= MAX_CHAT_IMAGES}
                   onClick={() => fileRef.current?.click()}
                 >
@@ -895,23 +865,28 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
               <input
                 id="chat-text"
                 value={draft}
-                onChange={(e) => setChatDraft(e.target.value)}
-                onKeyDown={onKey}
-                placeholder={`say something as ${asStreamer ? name : speaker}`}
+                onChange={(e) => room.setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (!isSendKey(e)) return;
+                  e.preventDefault();
+                  room.send();
+                }}
+                placeholder="comment"
+                aria-label={`comment as ${asStreamer ? name : speaker}`}
                 autoComplete="off"
                 // a phone zooms in on a focused box under 16px: never smaller there, whatever text size the appearance tab picked
-                className="h-10 min-w-0 flex-1 border border-primaryStroke bg-background px-3 text-base max-md:h-11 max-md:text-[length:max(1rem,16px)]"
+                className="h-9 min-w-0 flex-1 border border-primaryStroke bg-background px-3 text-base max-md:h-11 max-md:text-[length:max(1rem,16px)]"
               />
               {/* refused for the rate: the button goes red and counts down to the next line, and shakes at each try meanwhile. still a button, so a try can shake it */}
               <Button
                 id="chat-send"
                 variant={wait > 0 ? 'danger' : 'primary'}
                 // a phone's: a 44px target at least, as tall as the box beside it
-                className="h-10 shrink-0 px-4 text-base tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
+                className="h-9 shrink-0 px-4 text-base tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
                 disabled={!canSend}
                 title={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : undefined}
                 data-wait={wait > 0 ? wait : undefined}
-                onClick={sendChat}
+                onClick={() => room.send()}
               >
                 {wait > 0 ? (
                   <span key={shake} className="inline-block motion-safe:animate-shake">
