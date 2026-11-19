@@ -338,7 +338,8 @@ export function ChatSlot({ children }: { children: ReactNode }) {
               'lg:row-span-2',
               side === 'left' && 'lg:col-start-1 lg:row-start-1',
               open ? 'mt-4 h-[min(50vh,560px)] opacity-100' : 'mt-0 h-0 overflow-hidden opacity-0',
-              tall ? 'lg:mt-0 lg:h-[calc(100vh-140px)] lg:max-h-[720px] lg:opacity-100' : 'lg:mt-0 lg:h-0 lg:max-h-0 lg:opacity-0',
+              // beside the video: from the top of the page to the window's foot less its bottom padding (pb-10), no taller than 720px
+              tall ? 'lg:mt-0 lg:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] lg:max-h-[720px] lg:opacity-100' : 'lg:mt-0 lg:h-0 lg:max-h-0 lg:opacity-0',
               clip && 'overflow-hidden'
             )
       )}
@@ -370,7 +371,7 @@ export function ChatSlot({ children }: { children: ReactNode }) {
           modal
             ? 'min-h-0 w-full flex-1'
             : cn(
-                'h-[min(50vh,560px)] w-full lg:absolute lg:top-0 lg:h-[min(720px,calc(100vh-140px))] lg:w-[360px]',
+                'h-[min(50vh,560px)] w-full lg:absolute lg:top-0 lg:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] lg:w-[360px]',
                 'transition-transform duration-300 ease-out motion-reduce:transition-none',
                 side === 'right' && 'lg:right-0',
                 side === 'left' && 'lg:left-0',

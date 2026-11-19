@@ -244,7 +244,8 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
     // a stream's row, the phone's shape at full width: their face, the name over its numbers (both cut
     // with an ellipsis), their buttons, then the bell and go live every page ends in
     return (
-      <main ref={mainRef} className={cn('mx-auto px-5 pb-10', width)}>
+      // --page-top: where the page under the row starts (the row and its margin), for a column that fills the window (ChatSlot.tsx)
+      <main ref={mainRef} className={cn('mx-auto px-5 pb-10 [--page-top:calc(var(--title-row,3.5rem)+0.5rem)]', width)}>
         <header ref={headerRef} className="sticky top-0 z-30 mb-2 flex min-h-14 items-center gap-3 border-b border-primaryStroke bg-background py-2">
           <HomeLink />
           {mobileStart}
@@ -264,7 +265,7 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
   }
 
   return (
-    <main ref={mainRef} className={cn('mx-auto px-5 pb-10', width)}>
+    <main ref={mainRef} className={cn('mx-auto px-5 pb-10', titled && '[--page-top:calc(var(--title-row,4rem)+1.5rem)]', width)}>
       <header
         ref={headerRef}
         className={cn(
