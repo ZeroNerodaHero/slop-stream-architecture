@@ -59,12 +59,14 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
 
   if (me) {
     return (
-      <p className="mt-4 text-base text-textSecondary">
-        you are logged in as <span className="font-semibold text-textPrimary">{me}</span>.{' '}
-        <button type="button" onClick={onDone} className="font-semibold text-primaryBlue">
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <p className="text-base text-textSecondary">
+          you are logged in as <span className="font-semibold text-textPrimary">{me}</span>.
+        </p>
+        <Button size="sm" variant="outline" onClick={onDone}>
           carry on
-        </button>
-      </p>
+        </Button>
+      </div>
     );
   }
 
@@ -137,17 +139,16 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
         <Button id="auth-submit" type="submit" variant="primary" className={BUTTON} disabled={busy || !name || !password || unmet}>
           {signingUp ? 'make the account' : 'log in'}
         </Button>
-        <button
+        <Button
           id="auth-switch"
-          type="button"
+          size="sm"
           onClick={() => {
             clearAuthError();
             onMode(signingUp ? 'login' : 'signup');
           }}
-          className="text-base text-textSecondary underline-offset-2 hover:underline"
         >
           {signingUp ? 'have one? log in' : 'new here? sign up'}
-        </button>
+        </Button>
       </div>
 
       {error && (

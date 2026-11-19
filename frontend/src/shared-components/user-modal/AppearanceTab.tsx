@@ -2,6 +2,7 @@ import { useAtomValue } from 'jotai';
 
 import { customFrom, paletteAtom, setCustomColor, setTextSize, setTheme, TEXT_SIZES, type TextSize, textSizeAtom, themeAtom } from '@/infra/atoms/settings-atoms';
 import { contrast, hex, type Palette, PRESET_NAMES, PRESETS, type PresetName, type TokenName, TOKENS } from '@/infra/theme';
+import { Button } from '@/shared-components/Button';
 import { Field, OptionCard, SECTION_TITLE, Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -189,9 +190,9 @@ export function AppearanceTab() {
               : ''}
           </p>
           <div>
-            <button id="theme-reset" type="button" className="text-base font-semibold text-primaryBlue" onClick={() => setTheme({ kind: 'preset', name: 'dark' })}>
+            <Button id="theme-reset" size="sm" onClick={() => setTheme({ kind: 'preset', name: 'dark' })}>
               back to dark
-            </button>
+            </Button>
           </div>
         </Section>
       )}

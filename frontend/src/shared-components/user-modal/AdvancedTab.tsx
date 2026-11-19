@@ -2,6 +2,7 @@ import { useAtomValue } from 'jotai';
 
 import { openInspector } from '@/infra/atoms/inspector-atoms';
 import { inspectorEnabledAtom, setInspectorEnabled } from '@/infra/atoms/settings-atoms';
+import { Button } from '@/shared-components/Button';
 import { CHECKBOX, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 
 /**
@@ -22,9 +23,9 @@ export function AdvancedTab() {
             keep the messages
           </label>
           {inspectorOn && (
-            <button id="inspector-open-settings" type="button" className="text-base font-semibold text-primaryBlue" onClick={openInspector}>
+            <Button id="inspector-open-settings" size="sm" onClick={openInspector}>
               open messages
-            </button>
+            </Button>
           )}
         </div>
         <p className="mt-4 text-sm text-textTertiary">

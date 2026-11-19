@@ -145,14 +145,14 @@ function Rename({ me }: { me: string }) {
             {`sure? /watch/${me} becomes /watch/${wanted}`}
           </Button>
         ) : (
-          <button id="profile-rename" type="submit" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={!ready}>
+          <Button id="profile-rename" type="submit" size="sm" variant="outline" disabled={!ready}>
             change name
-          </button>
+          </Button>
         )}
         {sure && (
-          <button type="button" onClick={() => setSure(false)} className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline">
+          <Button size="sm" onClick={() => setSure(false)}>
             keep {me}
-          </button>
+          </Button>
         )}
         <Status id="profile-rename-status" text={status || (again ? `you can change it again on ${again.toISOString().slice(0, 10)}` : '')} />
       </div>
@@ -287,15 +287,9 @@ export function ProfileTab() {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             {avatar !== null && (
-              <button
-                id="profile-avatar-remove"
-                type="button"
-                className="text-base font-semibold text-textTertiary disabled:opacity-40"
-                disabled={!canEdit}
-                onClick={() => void removeMyAvatar()}
-              >
+              <Button id="profile-avatar-remove" size="sm" variant="outline-danger" disabled={!canEdit} onClick={() => void removeMyAvatar()}>
                 remove picture
-              </button>
+              </Button>
             )}
             <Status
               id="profile-avatar-status"
@@ -422,15 +416,9 @@ export function ProfileTab() {
           />
         </Field>
         <div className="flex flex-wrap items-center gap-3">
-          <button
-            id="profile-save-bio"
-            type="button"
-            className="text-base font-semibold text-primaryBlue disabled:opacity-40"
-            disabled={!canEdit}
-            onClick={() => void saveMyBio()}
-          >
+          <Button id="profile-save-bio" size="sm" variant="outline" disabled={!canEdit} onClick={() => void saveMyBio()}>
             save status
-          </button>
+          </Button>
           <span id="profile-bio-count" className={cn('text-sm tabular-nums text-textTertiary', left < 20 && 'text-decrease')}>
             {left}
           </span>
@@ -490,15 +478,9 @@ export function ProfileTab() {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             {offline !== null && (
-              <button
-                id="profile-offline-remove"
-                type="button"
-                className="text-base font-semibold text-textTertiary disabled:opacity-40"
-                disabled={!canEdit}
-                onClick={() => void removeMyOffline()}
-              >
+              <Button id="profile-offline-remove" size="sm" variant="outline-danger" disabled={!canEdit} onClick={() => void removeMyOffline()}>
                 remove picture
-              </button>
+              </Button>
             )}
             <Status
               id="profile-offline-status"
@@ -530,15 +512,9 @@ export function ProfileTab() {
           />
         </Field>
         <div className="flex flex-wrap items-center gap-3">
-          <button
-            id="profile-save-offline-note"
-            type="button"
-            className="text-base font-semibold text-primaryBlue disabled:opacity-40"
-            disabled={!canEdit}
-            onClick={() => void saveMyOfflineNote()}
-          >
+          <Button id="profile-save-offline-note" size="sm" variant="outline" disabled={!canEdit} onClick={() => void saveMyOfflineNote()}>
             save line
-          </button>
+          </Button>
           <Status id="profile-offline-note-status" text={offlineNoteStatus || (canEdit ? '' : whyNot)} />
         </div>
       </Section>

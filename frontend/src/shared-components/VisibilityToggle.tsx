@@ -12,6 +12,7 @@ interface VisibilityToggleProps {
   /** The ids the tests key on: the public lock, then the private one. */
   ids: [string, string];
   className?: string;
+  disabled?: boolean;
 }
 
 /**
@@ -19,7 +20,7 @@ interface VisibilityToggleProps {
  * blue, the other grey; each says its name on hover and focus. The make-a-group dialog and the
  * room's manage dialog (listing) both use it.
  */
-export function VisibilityToggle({ isPublic, onChange, ids, className }: VisibilityToggleProps) {
+export function VisibilityToggle({ isPublic, onChange, ids, className, disabled }: VisibilityToggleProps) {
   const options = [
     { value: true, label: 'public', Icon: RiLockUnlockLine, id: ids[0] },
     { value: false, label: 'private', Icon: RiLockLine, id: ids[1] },
@@ -35,8 +36,9 @@ export function VisibilityToggle({ isPublic, onChange, ids, className }: Visibil
               type="button"
               aria-label={label}
               aria-pressed={on}
+              disabled={disabled}
               onClick={() => onChange(value)}
-              className={cn(ICON_BUTTON, on ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
+              className={cn(ICON_BUTTON, on ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary', 'disabled:opacity-40 disabled:hover:border-transparent')}
             >
               <Icon aria-hidden size={16} />
             </button>

@@ -34,6 +34,7 @@ import {
   type SocialsSize
 } from '@/infra/socials';
 import { store } from '@/infra/store';
+import { Button } from '@/shared-components/Button';
 import { INPUT, OptionCard, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { SOCIAL_ICON, SOCIAL_ICON_PX, Socials } from '@/shared-components/Socials';
@@ -289,12 +290,12 @@ export function SocialsEditor({ canEdit, whyNot, onDone }: SocialsEditorProps) {
 
       {/* outside the fieldset: `done` works whether or not the boxes are on */}
       <div className="mt-5 flex flex-wrap items-center gap-3">
-        <button id="socials-save" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={!canEdit} onClick={() => void saveMySocials()}>
+        <Button id="socials-save" size="sm" variant="outline" disabled={!canEdit} onClick={() => void saveMySocials()}>
           save links
-        </button>
-        <button id="socials-done" type="button" className="text-base font-semibold text-textTertiary" onClick={onDone}>
+        </Button>
+        <Button id="socials-done" size="sm" onClick={onDone}>
           done
-        </button>
+        </Button>
         <Status id="socials-status" text={status || (canEdit ? (dirty ? 'changed. save to keep it.' : '') : whyNot)} />
       </div>
     </div>

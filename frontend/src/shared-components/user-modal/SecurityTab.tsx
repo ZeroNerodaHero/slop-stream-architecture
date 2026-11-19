@@ -28,7 +28,7 @@ import { cleanName } from '@/infra/names';
 import { providerLabel, providerList, rememberReturn } from '@/infra/oauth';
 import { NEW_PASSWORD_RULE, newPasswordProblem } from '@/infra/password';
 import { store } from '@/infra/store';
-import { Button } from '@/shared-components/Button';
+import { Button, buttonClassName } from '@/shared-components/Button';
 import { OAuthButtons, ProviderIcon } from '@/shared-components/OAuthButtons';
 import { OAUTH_MARK_WORDS, OAuthMark } from '@/shared-components/OAuthMark';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -115,17 +115,16 @@ function LoggedOut() {
           <Button id="sec-submit" type="submit" variant="primary" className={BUTTON} disabled={busy || !name || !password || !!problem}>
             {signingUp ? 'sign up' : 'log in'}
           </Button>
-          <button
+          <Button
             id="sec-mode"
-            type="button"
+            size="sm"
             onClick={() => {
               setSigningUp((s) => !s);
               clearAuthError();
             }}
-            className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline"
           >
             {signingUp ? 'have one? log in' : 'new here? sign up'}
-          </button>
+          </Button>
         </div>
         <Status id="sec-error" text={error} />
         <OAuthButtons />
@@ -193,14 +192,9 @@ function LoggedIn({ me }: { me: string }) {
             <PasswordInput id="sec-new" value={fresh} onChange={setFresh} autoComplete="new-password" minLength={8} />
           </Field>
           <div className="flex flex-wrap items-center gap-3">
-            <button
-              id="sec-change"
-              type="submit"
-              className="text-base font-semibold text-primaryBlue disabled:opacity-40"
-              disabled={busy || (hasPassword && !old) || !fresh || !!problem}
-            >
+            <Button id="sec-change" type="submit" size="sm" variant="outline" disabled={busy || (hasPassword && !old) || !fresh || !!problem}>
               {hasPassword ? 'change password' : 'set password'}
-            </button>
+            </Button>
             <Status id="sec-status" text={status} />
           </div>
         </form>
@@ -210,16 +204,15 @@ function LoggedIn({ me }: { me: string }) {
 
       <Section title="sessions" description="this browser, or every browser this account is logged in on.">
         <div className="flex flex-wrap items-center gap-3">
-          <button
+          <Button
             id="sec-logout"
-            type="button"
-            className="text-base font-semibold text-textTertiary"
+            size="sm"
             onClick={() => {
               void logout().then(() => identityChanged('login'));
             }}
           >
             log out
-          </button>
+          </Button>
           {sure ? (
             <>
               <Button
@@ -232,14 +225,14 @@ function LoggedIn({ me }: { me: string }) {
               >
                 sure? log out everywhere
               </Button>
-              <button type="button" onClick={() => setSure(false)} className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline">
+              <Button size="sm" onClick={() => setSure(false)}>
                 keep
-              </button>
+              </Button>
             </>
           ) : (
-            <button id="sec-logout-all" type="button" className="text-base font-semibold text-decrease" onClick={() => setSure(true)}>
+            <Button id="sec-logout-all" size="sm" variant="outline-danger" onClick={() => setSure(true)}>
               log out everywhere
-            </button>
+            </Button>
           )}
         </div>
         <p className="text-sm text-textTertiary">everywhere ends every login of this account on every device, this one too.</p>
@@ -342,31 +335,21 @@ function LinkedLogins() {
                     </span>
                   ) : sure === p ? (
                     <>
-                      <button
-                        id={`sec-unlink-${p}`}
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void unlink(p)}
-                        className="text-sm font-semibold text-decrease disabled:opacity-40"
-                      >
+                      <Button id={`sec-unlink-${p}`} size="sm" variant="outline-danger" disabled={busy} onClick={() => void unlink(p)}>
                         sure? unlink {providerLabel(p)}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSure(null)}
-                        className="text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline"
-                      >
+                      </Button>
+                      <Button size="sm" onClick={() => setSure(null)}>
                         keep
-                      </button>
+                      </Button>
                     </>
                   ) : (
-                    <button id={`sec-unlink-${p}`} type="button" onClick={() => setSure(p)} className="text-sm font-semibold text-decrease">
+                    <Button id={`sec-unlink-${p}`} size="sm" variant="outline-danger" onClick={() => setSure(p)}>
                       unlink
-                    </button>
+                    </Button>
                   )}
                 </>
               ) : providers?.includes(p) ? (
-                <a id={`sec-link-${p}`} href={oauthStartUrl(p, true)} onClick={() => rememberReturn(true)} className="text-sm font-semibold text-primaryBlue">
+                <a id={`sec-link-${p}`} href={oauthStartUrl(p, true)} onClick={() => rememberReturn(true)} className={buttonClassName('outline', undefined, 'sm')}>
                   link {providerLabel(p)}
                 </a>
               ) : null}
