@@ -2,7 +2,7 @@ import { useAtomValue } from 'jotai';
 import { type CSSProperties, type FocusEvent, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import type { GroupBadge } from '@/infra/api';
+import { api, type GroupBadge } from '@/infra/api';
 import { BOT_GROUP } from '@/infra/atoms/chat-atoms';
 import { loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
 import { type Presence, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
@@ -119,6 +119,8 @@ interface PersonCardProps {
  * the face with the presence square on its corner, the name at the top beside it with their
  * group's badge under the name (the primary group, else the first joined; none for no group),
  * then their status under the two.
+ * Not streaming, their first home-card thumbnail stands there instead at the same size (a grey
+ * box when they have none).
  * Streaming, a frame of the stream (StreamStill.tsx, kept a few seconds old) stands between
  * the name and the status, the card's width: the preview of what they are streaming, the
  * sidebar's small one made big. The sidebar's rows, the chat window's tabs, a chat line's
@@ -136,7 +138,8 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
   const peek = useAtomValue(peeksAtom)[person.name]?.card;
   // the profile popup is up (a click on this row opened it, like as not): the page under it is not being pointed at, and a card left there would show through, dimmed
   const covered = useAtomValue(profilePopupAtom) !== null;
-  const asks = person.bio === undefined || person.presence === undefined;
+  // not streaming, the card shows their thumbnail, which only the api's card has: so it asks then too (kept a while, follow-atoms)
+  const asks = person.bio === undefined || person.presence === undefined || person.presence !== 'streaming';
   useEffect(() => {
     if (asks) void loadPeek(person.name);
   }, [person.name, asks]);
@@ -182,7 +185,16 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
           {badge && <Badge group={badge} className="max-w-full" />}
         </span>
       </span>
-      {presence === 'streaming' && <StreamStill name={person.name} className="w-full" />}
+      {presence === 'streaming' ? (
+        <StreamStill name={person.name} className="w-full" />
+      ) : (
+        // not streaming: their first home-card thumbnail at the still's size, or a plain grey box that size when they have none
+        <span id={id ? `${id}-thumb` : undefined} className="relative block aspect-video w-full shrink-0 overflow-hidden border border-primaryStroke bg-backgroundTertiary">
+          {known?.thumbs?.[0] !== undefined && (
+            <img src={api.streamThumbUrl(person.name, known.thumbs[0])} alt="" draggable={false} className="absolute inset-0 h-full w-full object-cover" />
+          )}
+        </span>
+      )}
       {/* the status, the width of the card: whole words, four lines at most */}
       {bio && <span className="line-clamp-4 break-words text-sm leading-snug">{bio}</span>}
     </div>,
