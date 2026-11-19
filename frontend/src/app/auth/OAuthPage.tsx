@@ -8,7 +8,7 @@ import { identityChanged } from '@/infra/atoms/profile-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
 import { providerLabel, takeReturn } from '@/infra/oauth';
-import { Button } from '@/shared-components/Button';
+import { Button, buttonClassName } from '@/shared-components/Button';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { BUTTON, Field, INPUT, Status } from '@/shared-components/user-modal/parts';
 
@@ -57,11 +57,11 @@ export function OAuthPage() {
         </p>
         <p className="mt-4">
           {me ? (
-            <button id="oauth-back" type="button" onClick={goBack} className="font-semibold text-primaryBlue">
+            <Button id="oauth-back" size="sm" onClick={goBack}>
               back to where you were
-            </button>
+            </Button>
           ) : (
-            <Link to="/login" className="font-semibold text-primaryBlue">
+            <Link to="/login" className={buttonClassName('secondary', undefined, 'sm')}>
               back to log in
             </Link>
           )}
@@ -163,7 +163,7 @@ function PickName() {
             make the account
           </Button>
           {gone && (
-            <Link to="/login" className="text-sm font-semibold text-primaryBlue">
+            <Link to="/login" className={buttonClassName('secondary', undefined, 'sm')}>
               start again
             </Link>
           )}

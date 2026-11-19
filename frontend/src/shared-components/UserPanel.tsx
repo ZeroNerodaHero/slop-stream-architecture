@@ -17,6 +17,7 @@ import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { useIsMobile } from '@/infra/mobile';
 import { isValidName } from '@/infra/names';
 import { store } from '@/infra/store';
+import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { Friends, RAIL_FACE } from '@/shared-components/Friends';
 import { PresenceSquare } from '@/shared-components/PersonRow';
@@ -44,8 +45,10 @@ const WIDEN = 'transition-[width] duration-100 ease-out motion-reduce:transition
 
 /** The name line in both states: the same box, so logging in or out does not move anything. */
 const NAME_LINE = '-mx-1 block border border-transparent px-1 py-0.5 leading-tight';
-/** The small links under the name: a remix icon and a word. */
-const ACTION = 'inline-flex shrink-0 items-center gap-1 text-sm text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline max-md:min-h-11';
+/** The icon-only actions under the name (the gear, the bell, the messages): a glyph with a tooltip. */
+const ACTION = 'inline-flex shrink-0 items-center gap-1 text-sm text-textSecondary hover:text-textPrimary max-md:min-h-11';
+/** The worded actions under the name (log out, sign up, log in): a small Button, a remix icon and a word, a size down so the line stays one line. */
+const BOX = 'shrink-0 gap-1 px-2 py-0.5 font-normal';
 /** An icon-only action on a phone: a finger's 44px square. */
 const ICON_TAP = 'max-md:min-w-11 max-md:justify-center';
 const ICON = 14;
@@ -380,10 +383,10 @@ export function UserPanel() {
                     a flex row, so the gear sits at the far end, away from the picture on either side */}
             <span className={cn('flex items-center text-sm leading-5', mirrored && 'flex-row-reverse')}>
               {mobile && <Status presence={presence} />}
-              <button id="logout" type="button" onClick={() => void logout().then(() => identityChanged('login'))} className={ACTION}>
+              <Button id="logout" size="sm" onClick={() => void logout().then(() => identityChanged('login'))} className={BOX}>
                 <RiLogoutBoxRLine aria-hidden size={ICON} />
                 log out
-              </button>
+              </Button>
               {inspectorOn && (
                 <>
                   <Dot />
@@ -437,15 +440,14 @@ export function UserPanel() {
             {/* the way to make the name yours, right under it; the gear at the far end */}
             <span className={cn('flex items-center text-sm leading-5 text-textSecondary', mirrored && 'flex-row-reverse')}>
               {mobile && <Status presence={presence} />}
-              <button id="signup-link" type="button" onClick={() => openAuthDialog('signup')} className={ACTION}>
+              <Button id="signup-link" size="sm" variant="outline" onClick={() => openAuthDialog('signup')} className={BOX}>
                 <RiUserAddLine aria-hidden size={ICON} />
                 sign up
-              </button>
-              <Dot />
-              <button id="login-link" type="button" onClick={() => openAuthDialog('login')} className={ACTION}>
+              </Button>
+              <Button id="login-link" size="sm" onClick={() => openAuthDialog('login')} className={cn(BOX, mirrored ? 'mr-2' : 'ml-2')}>
                 <RiLoginBoxLine aria-hidden size={ICON} />
                 log in
-              </button>
+              </Button>
               {inspectorOn && (
                 <>
                   <Dot />
