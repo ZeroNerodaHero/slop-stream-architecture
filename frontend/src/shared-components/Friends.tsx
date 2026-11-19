@@ -89,6 +89,8 @@ const HEAD_PX = 16;
 /** The line between two lists. The room to grab it reaches into the gaps on either side. */
 const LINE_PX = 1;
 const MIN_GAP = 4;
+/** Extra room above the search box only, so it clears the panel's top edge: the top gap is the spread gap plus this. */
+const TOP_EXTRA_PX = 4;
 
 /**
  * The face and the box in px, for one root font size. The text size setting sets that size
@@ -174,7 +176,7 @@ function gapNames(lists: number): GapName[] {
 function measure(room: number, lists: number, faces: boolean, { face, search }: Sizes): Fit {
   const names = gapNames(lists);
   if (room <= 0 || !faces) return { rows: 0, gap: MIN_GAP, left: 0, names };
-  const blocks = search + lists * HEAD_PX + Math.max(0, lists - 1) * LINE_PX;
+  const blocks = TOP_EXTRA_PX + search + lists * HEAD_PX + Math.max(0, lists - 1) * LINE_PX;
   const rows = Math.floor((room - blocks - names.length * MIN_GAP) / (face + MIN_GAP));
   // a window too short for one row: one row anyway, cut off by the panel
   if (rows < 1) return { rows: 1, gap: MIN_GAP, left: 0, names };
@@ -993,7 +995,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
   return (
     <div id="friends" role="region" aria-label="following and groups" className="flex min-h-0 flex-1 flex-col">
       <div ref={stack} className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className={cn('shrink-0 transition-[padding]', SLIDE, INSET[side])} style={{ paddingTop: spacing.gaps.top, paddingBottom: spacing.gaps.search }}>
+        <div className={cn('shrink-0 transition-[padding]', SLIDE, INSET[side])} style={{ paddingTop: (spacing.gaps.top ?? MIN_GAP) + TOP_EXTRA_PX, paddingBottom: spacing.gaps.search }}>
           <label htmlFor="friends-search" className="sr-only">
             find someone or a group
           </label>
