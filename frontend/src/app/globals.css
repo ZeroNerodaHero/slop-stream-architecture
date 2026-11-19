@@ -29,6 +29,18 @@ html {
   scroll-padding-top: var(--title-row, 4rem);
 }
 
+/* a desktop's page keeps its bar's track whether or not it is long enough to scroll. the gutter above is not
+   enough: under the webkit bar below, chrome and safari on a mac (overlay bars in the system settings) reserve
+   nothing, and the 6px bar then narrows the page the moment it grows past the window. a watch page's calendar
+   tab did that, and the player shrank and the page jumped on each switch from about. the track is transparent
+   and holds no thumb while nothing scrolls. a phone's bars take no room; a modal's and a locked page's
+   `overflow: hidden` (the rules below, mobile.ts, popout.ts) still win */
+@media (min-width: 768px) {
+  html {
+    overflow-y: scroll;
+  }
+}
+
 /* one thin bar, the page's and every pane's: a square thumb in the faintest text colour (3:1 on every surface,
    so it reads) on nothing. the webkit parts are what hold its size: chrome and safari then draw a classic bar
    at the width given, where the platform's overlay bar hides and swells under the pointer */
