@@ -19,6 +19,8 @@ interface PageFrameProps {
   mobileTitle?: ReactNode;
   /** On a phone, the right end of the row instead of the bell and go live: a group's button for its drawer (ServerRoom.tsx). */
   mobileEnd?: ReactNode;
+  /** On a phone, beside the menu at the row's left: the go live page's picture of you (LivePage.tsx). */
+  mobileStart?: ReactNode;
   /** On a phone, the page runs to the window's edges: no side padding, no gap under the row, no foot. A group's room (ServerRoom.tsx). */
   bleed?: boolean;
   /** On a phone, the page is its parent's height: a column, the row on top and the rest the page's to share out. The go live page, which is the window (LivePage.tsx). */
@@ -59,17 +61,24 @@ function MobileHomeLink() {
   );
 }
 
+/** The go live page: its own row has no go live. */
+function useOnLivePage(): boolean {
+  const { pathname } = useLocation();
+  return pathname.replace(/\/$/, '') === '/live';
+}
+
 /**
  * The right end of every page's title row: the notifications bell (Notifications.tsx, the
  * inbox opens under it), then go live, absent on its own page. Search is the sidebar's
  * (Friends.tsx), and so is the settings gear, at the far end of your line in it (UserPanel.tsx).
+ * A phone's home goes just before go live (`home`).
  */
-function TopActions({ bell = true }: { bell?: boolean }) {
-  const { pathname } = useLocation();
-  const onLivePage = pathname.replace(/\/$/, '') === '/live';
+function TopActions({ bell = true, home = false }: { bell?: boolean; home?: boolean }) {
+  const onLivePage = useOnLivePage();
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-2">
+    <div className={cn('ml-auto flex shrink-0 items-center', home ? 'gap-1' : 'gap-2')}>
       {bell && <NotificationsBell />}
+      {home && <MobileHomeLink />}
       {!onLivePage && (
         <Link id="go-live" to="/live" className={buttonClassName('primary', 'px-3 py-2 text-sm max-md:h-11')}>
           go live
@@ -134,16 +143,18 @@ function useCurrentPart(on: boolean, main: RefObject<HTMLElement | null>, row: R
  * the sidebar is mounted once by the router's Shell, beside this column.
  *
  * A phone's row is its own (below 768px, mobile.ts): the menu (the sidebar's drawer) at the left
- * on every page, and home beside it on every page but home, then where you are on one line, cut
- * with an ellipsis when it is long: `mobileTitle` or the title, or on home the part you have
- * scrolled to (`useCurrentPart`), whose headings then scroll with the page under the row. Then go
- * live, or `mobileEnd`. No bell: a phone's is in the sidebar's drawer, beside the gear
+ * on every page, `mobileStart` beside it, then where you are on one line, cut with an ellipsis
+ * when it is long: `mobileTitle` or the title, or on home the part you have scrolled to
+ * (`useCurrentPart`), whose headings then scroll with the page under the row. Then home (every
+ * page but home) just left of go live, or `mobileEnd`; where the row has no go live (its own
+ * page, a `mobileEnd`), home stays beside the menu. No bell: a phone's is in the sidebar's drawer, beside the gear
  * (UserPanel.tsx). Always measured into `--title-row`, home's too: the page starts under it.
  * `bleed` takes the page's padding away, so what is under the row reaches the window's edges.
  */
-export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mobileEnd, bleed = false, fill = false, children }: PageFrameProps) {
+export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mobileEnd, mobileStart, bleed = false, fill = false, children }: PageFrameProps) {
   const titled = Boolean(title || aside);
   const mobile = useIsMobile();
+  const onLivePage = useOnLivePage();
   const mainRef = useRef<HTMLElement | null>(null);
   const headerRef = useRef<HTMLElement | null>(null);
   const part = useCurrentPart(mobile && !titled, mainRef, headerRef);
@@ -170,6 +181,8 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
   if (mobile) {
     const named = mobileTitle ?? title;
     const headed = mobileTitle !== undefined || title !== undefined;
+    // home just left of go live when the row has go live, else beside the menu
+    const homeByGoLive = Boolean(title) && mobileEnd === undefined && !onLivePage;
     return (
       <main ref={mainRef} className={cn('mx-auto', bleed ? 'px-0' : 'px-4 pb-8', width, fill && 'flex h-full min-h-0 w-full flex-col')}>
         {/* the buttons are 44px; the notch or the status bar is over them */}
@@ -181,7 +194,8 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
           )}
         >
           <DrawerOpener />
-          {title && <MobileHomeLink />}
+          {mobileStart}
+          {title && !homeByGoLive && <MobileHomeLink />}
           {headed ? (
             <h1 id={titleId} className="min-w-0 flex-1 truncate text-xl font-semibold leading-tight">
               {named}
@@ -193,7 +207,7 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
             </p>
           )}
           {aside && <div className="shrink-0">{aside}</div>}
-          {mobileEnd ?? <TopActions bell={false} />}
+          {mobileEnd ?? <TopActions bell={false} home={homeByGoLive} />}
         </header>
         {children}
       </main>

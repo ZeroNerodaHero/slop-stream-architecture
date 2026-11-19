@@ -3,6 +3,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { api } from '@/infra/api';
+import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
   addStreamThumb,
   cameraAtom,
@@ -45,6 +46,7 @@ import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
 import { useIsMobile } from '@/infra/mobile';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
+import { Face } from '@/shared-components/Face';
 import { Mixer } from '@/shared-components/live/Mixer';
 import { Rigging } from '@/shared-components/live/Rigging';
 import { Sources, StartStop } from '@/shared-components/live/Sources';
@@ -158,6 +160,7 @@ export function LivePage() {
   const selected = useAtomValue(selectedSourceAtom);
   const mixerOpen = useAtomValue(mixerOpenAtom);
   const myAvatar = useAtomValue(myAvatarVersionAtom);
+  const me = useAtomValue(meAtom);
   const thumbFileRef = useRef<HTMLInputElement | null>(null);
 
   // the editor's hooks on the preview: a drag, a corner, the keys. delete takes a picture or the
@@ -329,7 +332,15 @@ export function LivePage() {
         className="group/live fixed inset-x-0 top-0 flex h-[100dvh] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
         style={view ? { height: view.height, transform: view.top ? `translateY(${view.top}px)` : undefined } : undefined}
       >
-        <PageFrame title="go live" mobileTitle={name || 'go live'} wide bleed fill>
+        <PageFrame
+          title="go live"
+          mobileTitle={name || 'go live'}
+          // who is going live, beside the menu: your picture (or the letter your name makes). a picture, not a control
+          mobileStart={me ? <Face name={me} version={myAvatar} className="mr-1 h-8 w-8 text-sm" /> : undefined}
+          wide
+          bleed
+          fill
+        >
           <div className="shrink-0">{preview}</div>
           {/* the stream's state and the press that changes it, always in sight. not while typing: the keyboard has that room */}
           <div className={cn('flex shrink-0 items-center gap-3 border-b border-primaryStroke px-4 py-2', view?.keyboard && 'hidden')}>

@@ -1,4 +1,4 @@
-import { RiAddLine, RiCloseLine, RiImageAddLine, RiSearchLine } from '@remixicon/react';
+import { RiAddLine, RiArrowLeftSLine, RiCloseLine, RiImageAddLine, RiSearchLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type CSSProperties,
@@ -273,12 +273,77 @@ function Rail({ dms, active, side }: { dms: Dm[]; active: string | null; side: P
  * The friends to pick from, where a thread would be: everyone who follows you back, a face
  * with its presence square and the name under it, the ones with a chat on the column in the
  * blue stroke. A pick opens their chat, or shows the one they have. Friends alone: a line can
- * only go to somebody who chose you back.
+ * only go to somebody who chose you back. A phone's sheet (`list`) has them as a list instead:
+ * a row each, the face with its presence square, the name, and the last line said when there
+ * is one to hand (the thread on screen before, or the list of threads).
  */
-function Picker({ dms }: { dms: Dm[] }) {
+function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
   const following = useAtomValue(followingAtom);
+  const threads = useAtomValue(dmThreadsAtom);
+  const me = useAtomValue(meAtom);
   const friends = following?.filter((f) => f.mutual) ?? [];
   const open = new Set(dms.map((d) => d.name));
+  if (list) {
+    return (
+      <div id="friend-chat-pick" className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
+        {following === undefined ? (
+          <Skeleton id="friend-chat-pick-loading" className="flex flex-col">
+            {Array.from({ length: 4 }, (_, i) => (
+              <div key={i} className="flex items-center gap-3 px-3 py-2.5">
+                <Bone className="h-10 w-10" />
+                <div className="flex flex-1 flex-col gap-1.5">
+                  <Bone className="h-3.5 w-24" />
+                  <Bone className="h-3 w-40" />
+                </div>
+              </div>
+            ))}
+          </Skeleton>
+        ) : friends.length === 0 ? (
+          <p id="friend-chat-pick-empty" className="p-3 text-sm text-textSecondary">
+            nobody follows you back yet. a chat is with a friend: someone you follow who follows you.
+          </p>
+        ) : (
+          <ul aria-label="friends" className="flex flex-col">
+            {friends.map((f) => {
+              const tab = dms.find((d) => d.name === f.name);
+              const last = threads[f.name]?.lines.at(-1) ?? tab?.last;
+              const said = last && (last.text || (last.images.length > 0 ? 'a picture' : ''));
+              return (
+                <li key={f.name} className="border-b border-primaryStroke">
+                  <button
+                    id={`friend-chat-pick-${f.name}`}
+                    type="button"
+                    aria-label={`chat with ${f.name}${tab?.unread ? `, ${tab.unread} new` : ''}`}
+                    onClick={() => openDm({ id: '', name: f.name, avatar: f.avatar, verified: f.verified, bio: f.bio, presence: f.presence })}
+                    className="flex min-h-14 w-full items-center gap-3 border border-transparent px-3 py-2 text-left focus-visible:border-primaryBlue focus-visible:outline-none active:bg-backgroundTertiary"
+                  >
+                    <span className="relative block shrink-0">
+                      <Face name={f.name} version={f.avatar} />
+                      <PresenceSquare presence={f.presence} className={RING} />
+                    </span>
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <Who name={f.name} verified={f.verified} />
+                      {said && (
+                        <span className={cn('truncate text-sm', tab?.unread ? 'text-textPrimary' : 'text-textTertiary')}>
+                          {last.from === me ? 'you: ' : ''}
+                          {said}
+                        </span>
+                      )}
+                    </span>
+                    {tab && tab.unread > 0 && (
+                      <span aria-hidden className="flex h-5 min-w-5 shrink-0 items-center justify-center bg-primaryBlue px-1 text-xs font-semibold leading-none text-background">
+                        {tab.unread > 99 ? '99+' : tab.unread}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    );
+  }
   return (
     <div id="friend-chat-pick" className="min-h-0 flex-1 overflow-y-auto p-3">
       {following === undefined ? (
@@ -506,7 +571,8 @@ function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; lab
  * they were. The ×
  * hides the window and keeps everything; the sidebar's chat button brings it back. With no tab
  * shown, the friends to pick from are where the thread would be, under `no chat` when there
- * are no tabs at all. The lines take the shape the chat tab picked for every chat
+ * are no tabs at all (a phone's sheet: under `friends`, as a list, and its back button and the
+ * browser's back come to it from a chat). The lines take the shape the chat tab picked for every chat
  * (settings.chatStyle, drawn by ChatLine.tsx as the rooms' are): a log, bubbles, or blocks;
  * the log carries it as `data-style`, and your name is the blue one. A line may carry
  * pictures, the room chat's way: the picture button beside the box (`#friend-chat-picture`)
@@ -529,6 +595,9 @@ export function FriendChat() {
   /** A phone: the chat is a sheet up from the foot (MobileSheet), not the window. */
   const mobile = useIsMobile();
   const sheet = useSheet(mobile && open, hideDms);
+  // a phone's chat in the sheet: the browser's back goes to the friends to pick from first, and the sheet's own back after.
+  // declared after the sheet's, so it is the newer on the back button's stack (MobileSheet.tsx)
+  useSheetBack(pickDm, mobile && open && active !== null);
   const { pathname } = useLocation();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   /** The search box is under the header. One box for the window: its words stay through a change of tab, the hits are the thread's they were asked of. */
@@ -846,18 +915,39 @@ export function FriendChat() {
             a phone's is the sheet's head, under the grabber: a drag on it pulls the sheet down, and it moves nothing */}
         <header
           {...(mobile ? sheet.grip : { onPointerDown: (e: ReactPointerEvent) => press(e, 'move'), title: 'drag to move' })}
-          className={cn('flex cursor-move items-center gap-2 border-b border-primaryStroke px-3 py-2', GRIP, mobile && 'cursor-auto gap-1 py-0.5 pr-1')}
+          className={cn('flex cursor-move items-center gap-2 border-b border-primaryStroke px-3 py-2', GRIP, mobile && 'cursor-auto gap-1 py-0.5 pr-1', mobile && name && 'pl-1')}
         >
           {name && dm ? (
             <>
-              {/* the name is a way to them: the popup, or their page (ProfileLink.tsx). a link, so a press on it is not a move */}
+              {/* a phone's sheet has no column of faces or +: back to the friends to pick from, in the same sheet */}
+              {mobile && (
+                <Tooltip content="back to friends">
+                  <button
+                    id="friend-chat-back"
+                    type="button"
+                    aria-label="back to friends"
+                    onClick={pickDm}
+                    className={cn(headerButton, 'text-textTertiary hover:text-textPrimary')}
+                  >
+                    <RiArrowLeftSLine aria-hidden size={24} />
+                  </button>
+                </Tooltip>
+              )}
+              {/* the name is a way to them: the popup, or their page (ProfileLink.tsx). a link, so a press on it is not a move.
+                  a phone's carries their face with how they are on its corner, which the window's column does */}
               <span className="flex min-w-0 flex-1">
                 <ProfileLink
                   id="friend-chat-profile"
                   person={dm}
                   live={dm.presence === 'streaming'}
-                  className="min-w-0 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue"
+                  className={cn('min-w-0 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue', mobile && 'flex items-center gap-2.5 py-1 pr-1')}
                 >
+                  {mobile && (
+                    <span id="friend-chat-face" className="relative block shrink-0">
+                      <Face name={name} version={dm.avatar} className="h-8 w-8 text-sm" />
+                      <PresenceSquare presence={dm.presence} className={RING} />
+                    </span>
+                  )}
                   <Who name={name} verified={dm.verified} />
                 </ProfileLink>
               </span>
@@ -877,7 +967,7 @@ export function FriendChat() {
             </>
           ) : (
             <span id="friend-chat-title" className="min-w-0 flex-1 truncate font-semibold">
-              {dms.length === 0 ? 'no chat' : 'new chat'}
+              {mobile ? 'friends' : dms.length === 0 ? 'no chat' : 'new chat'}
             </span>
           )}
           <Tooltip content="hide. your chats stay; the sidebar's chat button brings them back">
@@ -967,9 +1057,11 @@ export function FriendChat() {
                       // the head's face is the same way to them as the name (blocks, ChatLine.tsx), for the pointer: the name is the key's and the reader's
                       face={
                         <ProfileLink person={person} twin className="flex">
-                          <Face name={line.from} version={person.avatar} className="h-8 w-8 text-sm" />
+                          <Face name={line.from} version={person.avatar} className={mobile && shape === 'log' ? 'h-5 w-5 text-[10px]' : 'h-8 w-8 text-sm'} />
                         </ProfileLink>
                       }
+                      // a phone's sheet has no column of faces: each line carries its writer's, whatever the shape
+                      faced={mobile}
                       words={
                         line.text ? (
                           <span className="whitespace-pre-wrap">
@@ -1107,7 +1199,7 @@ export function FriendChat() {
             </form>
           </>
         ) : (
-          <Picker dms={dms} />
+          <Picker dms={people} list={mobile} />
         )}
       </div>
       {side === 'right' && !mobile && rail}

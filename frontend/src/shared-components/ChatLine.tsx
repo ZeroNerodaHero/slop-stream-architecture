@@ -88,6 +88,8 @@ export interface ChatLineShapeProps extends Place {
   who: ReactNode;
   /** The writer's face, a gutter wide (`h-8 w-8`), for the head of a run in `blocks`. */
   face: ReactNode;
+  /** The face in every shape, not `blocks` alone: a phone's chat with a friend (FriendChat.tsx). `log` puts it before the name on every line (sized by the caller), `bubbles` in the gutter at the head of a run. */
+  faced?: boolean;
   /** A room: the left side of `bubbles` is everyone else, so a box that is not yours wears the name on the first of a run. A thread's two sides say who. */
   crowd?: boolean;
   /** The words, wrapped as the caller likes; null for a line of pictures alone. */
@@ -113,12 +115,13 @@ export interface ChatLineShapeProps extends Place {
  * under the words in every shape (inside the box in `bubbles`). The text size is the list's:
  * the panel's `text-base`, the window's `text-sm`.
  */
-export function ChatLineShape({ shape, mine, at, name, who, face, crowd = false, first, bucket, words, pictures, attrs }: ChatLineShapeProps) {
+export function ChatLineShape({ shape, mine, at, name, who, face, faced = false, crowd = false, first, bucket, words, pictures, attrs }: ChatLineShapeProps) {
   const title = at ? stamp(at) : undefined;
   if (shape === 'log') {
     return (
       <p {...attrs} title={title} className="flex items-baseline gap-2 leading-snug">
         <span className="shrink-0 text-xs tabular-nums text-textTertiary">{clock(at)}</span>
+        {faced && <span className="shrink-0 self-start">{face}</span>}
         <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
           <span className="mr-1.5">{who}</span>
           {words}
@@ -147,7 +150,7 @@ export function ChatLineShape({ shape, mine, at, name, who, face, crowd = false,
   const named = crowd && !mine && first;
   return (
     <p {...attrs} title={title} className={cn('group/line flex gap-2.5 leading-snug', bucket && 'mt-2 first:mt-0')}>
-      <GutterClock at={at} shown={bucket} className="pt-2.5" />
+      {faced && first ? <span className={cn(GUTTER, 'mt-0.5')}>{face}</span> : <GutterClock at={at} shown={bucket} className="pt-2.5" />}
       <span className={cn('flex min-w-0 flex-1', mine ? 'justify-end' : 'justify-start')}>
         {/* the box: a stroke and a fill, no shadow (no-box-shadow.mdc). yours wears the blue. `relative`: the reader's name is `sr-only` (relative-parent.mdc) */}
         <span
