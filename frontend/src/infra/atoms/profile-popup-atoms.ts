@@ -17,8 +17,8 @@ export interface ProfilePopupTarget {
   /** The verified mark (a provider linked), when the row clicked knows it. */
   oauth_verified?: boolean;
   avatar: number | null;
-  /** Opened from a chat line of this account: the popup has the way to that account's lines in the chat, which is what the click did before the popup. */
-  lines?: boolean;
+  /** Opened from a chat line of this account: the key of the room that line is in (chat-atoms.ts `ChatRoom.key`). The popup has the way to that account's lines in that room, which is what the click did before the popup. */
+  lines?: string;
 }
 
 export const profilePopupAtom = atom<ProfilePopupTarget | null>(null);

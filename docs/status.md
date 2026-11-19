@@ -360,7 +360,7 @@ all six are in the repo; the order is still the deploy order (`transition.md`): 
 4. **the inspector** — the ring in the worker, the taps, the redaction, the panel, the setting. about 350 lines of ts.
 5. **video** — the `stop` call. ten lines, one `./scripts/deploy.sh video`, bundled with whatever video change comes next.
 6. **tests and docs** — `test/presence.js`; the docs below.
-7. **later** — home off its 3s poll: a `watch` of `*` (or a `streams` frame) that gets `live`/`ended` for every name plus a full refetch on reconnect; chat rooms over the one socket (a `join` frame), which would also end the "this page has its own chat" limit of the corner player; the first notification reading `dnd`; the viewer count as a `ZCARD` on the same pattern (`kubernetes.md` item 6); `/admin` showing `XRANGE events`; a Web Locks leader as the android fallback if one socket per browser ever matters there.
+7. **later** — home off its 3s poll: a `watch` of `*` (or a `streams` frame) that gets `live`/`ended` for every name plus a full refetch on reconnect; chat rooms over the one socket (a `join` frame), fewer sockets for a page with two chats on screen (each `ChatRoom` has its own today, docs/chat-audit.md); the first notification reading `dnd`; the viewer count as a `ZCARD` on the same pattern (`kubernetes.md` item 6); `/admin` showing `XRANGE events`; a Web Locks leader as the android fallback if one socket per browser ever matters there.
 
 each phase deploys alone. 1 is already `curl`-able presence; 1 + 2 is a gateway any client can use.
 
