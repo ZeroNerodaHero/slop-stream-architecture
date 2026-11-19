@@ -1027,13 +1027,13 @@ pub(crate) mod tests {
         assert_eq!(stored(pool.clone()).await.as_deref(), Some("new-hash"));
     }
 
-    /// A throwaway postgres, migrated. For example
+    /// A throwaway postgres, with api/schema.sql in it. For example
     /// `docker run -d --name test-pg -e POSTGRES_PASSWORD=x -e POSTGRES_DB=t -p 55434:5432 postgres:17-alpine`
     /// and `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t`. follows.rs's tests use it too.
     pub(crate) async fn test_db() -> PgPool {
         let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL: the postgres to run this against");
         let pool = sqlx::postgres::PgPoolOptions::new().max_connections(2).connect(&url).await.expect("connect");
-        crate::migrate::run(&pool).await.expect("migrate");
+        crate::schema::ensure(&pool).await.expect("schema");
         pool
     }
 

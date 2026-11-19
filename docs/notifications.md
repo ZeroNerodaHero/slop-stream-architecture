@@ -55,13 +55,13 @@ CREATE TABLE notifications (
     text text NOT NULL DEFAULT '',                                       -- dm, chat: the line, 140 chars at most
     at timestamptz NOT NULL DEFAULT now(),
     read_at timestamptz,                                                 -- when the login saw it
-    room text                                                            -- chat: <server>/<channel>, the dedupe and where it leads (migrate-21)
+    room text                                                            -- chat: <server>/<channel>, the dedupe and where it leads (schema.sql)
 );
 CREATE INDEX notifications_user_idx ON notifications (user_id, id DESC);
 
 ALTER TABLE streamers ADD COLUMN notify jsonb NOT NULL DEFAULT '{}'::jsonb;
 
--- migrate-21: a login's muted channels. no row for their lines
+-- schema.sql: a login's muted channels. no row for their lines
 CREATE TABLE channel_mutes (
     user_id uuid NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
     server text NOT NULL,
@@ -72,7 +72,7 @@ CREATE TABLE channel_mutes (
 );
 ```
 
-`api/migrations/migrate-14.sql` and `migrate-21.sql`, run by the api at boot like the rest. the one index is the list (`user_id`, newest first) and the clip; the chat writer's delete of the unread row for a room walks the same index, thirty rows at most a login. the clip, after every write, for every login the write reached:
+`api/schema.sql`, applied by the api at boot to an empty database. the one index is the list (`user_id`, newest first) and the clip; the chat writer's delete of the unread row for a room walks the same index, thirty rows at most a login. the clip, after every write, for every login the write reached:
 
 ```sql
 DELETE FROM notifications WHERE id IN (

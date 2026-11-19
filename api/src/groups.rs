@@ -103,8 +103,8 @@ impl From<BadgeRow> for Badge {
     }
 }
 
-/// The badges an account wears: its primary group's alone when it picked one (migrate-33,
-/// `memberships.is_primary`), else its groups' in the order joined; `bot` first either way when
+/// The badges an account wears: its primary group's alone when it picked one
+/// (`memberships.is_primary`), else its groups' in the order joined; `bot` first either way when
 /// the socket said so. One query. `None` (an anonymous nick) matches no membership.
 pub(crate) async fn badges_of(db: &PgPool, user: Option<Uuid>, bot: bool) -> Result<Vec<Badge>, sqlx::Error> {
     let rows: Vec<BadgeRow> = sqlx::query_as(&format!(
@@ -484,7 +484,7 @@ async fn leave(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me)
 /// `PUT /api/groups/:group/primary`: the one group whose badge this login's name wears, in
 /// place of every group's (`badges_of`), and the one its card shows (`badge_of`). 204. 401 for
 /// nobody, 403 `join it first` for a group it is not in. Leaving the group, or the group going,
-/// takes the choice with the membership row (migrate-33).
+/// takes the choice with the membership row (schema.sql).
 async fn set_primary(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let me = me.ok_or_else(not_logged_in)?;
     let group = group_name(&group)?;
@@ -1029,7 +1029,7 @@ struct ChannelName {
 /// on. Who made the channel, or the channels power; `general` stays. The name goes through the
 /// door a new channel's does (the name rule, the history words, 409 for one the server has).
 /// Everything that knows the channel by its name follows it in one transaction: the row, the
-/// mutes on it (the foreign key cascades, migrate-25), the inbox rows for its lines
+/// mutes on it (the foreign key cascades, schema.sql), the inbox rows for its lines
 /// (`notifications.room`) and the lines kept for search (`chat_lines.room`); then the chat's
 /// stream in redis is renamed, so the history reads on. → the channel as the room lists it, and
 /// a `channel_renamed` fact (`channel` the old name, `name` the new) to every room open; a page

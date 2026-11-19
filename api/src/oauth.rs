@@ -931,7 +931,7 @@ mod tests {
         let slugs: Vec<&str> = PROVIDERS.iter().map(|p| p.slug).collect();
         assert_eq!(slugs, ["google", "discord"]);
         for (i, p) in PROVIDERS.iter().enumerate() {
-            // the slug is a url segment and a database key (migrate-32.sql's check)
+            // the slug is a url segment and a database key (schema.sql's check)
             assert!(!p.slug.is_empty() && p.slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'), "{}", p.slug);
             assert!(p.env.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'), "{}", p.env);
             for url in [p.authorize_url, p.token_url, p.user_url] {

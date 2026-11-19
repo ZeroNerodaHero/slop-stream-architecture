@@ -49,11 +49,11 @@ const SEARCH_LIMIT: i64 = 50;
 /// A search's box, in unicode scalars: filters and words together.
 const SEARCH_CHARS: usize = 200;
 /// A link, for `has:link`, as the panel draws one (LinkedText.tsx): `http(s)://` or `www.` at the
-/// start of a word. The rooms keep it as a column (`has_link`, migrate-22.sql, this same regex);
+/// start of a word. The rooms keep it as a column (`has_link`, schema.sql, this same regex);
 /// a direct message thread, too small for a column of its own, reads it over the text (dms.rs).
 pub(crate) const LINK: &str = r"(^|[^[:alnum:]])(https?://|www\.)[^[:space:]]";
 /// A link to a video, for `has:video`: a postgres regex (case-insensitive) over the text of the
-/// lines that have a link (`has_link`, migrate-22.sql). The host or the file type has to sit
+/// lines that have a link (`has_link`, schema.sql). The host or the file type has to sit
 /// inside a link of that same shape, so a video-looking word beside an unrelated link
 /// (`a.mov … https://example.com`) is not one. A file link may end a sentence: the punctuation
 /// the panel leaves out of a link (`LinkedText.tsx`) is allowed before a space or the end, so
@@ -436,7 +436,7 @@ fn placeholder(binds: &mut Vec<Bind>, bind: Bind) -> String {
 /// The query for a search: the rooms (one, or a server's channels, as a text array), then one
 /// clause per thing asked, each bound in the order returned, and the limit last. `simple`: the
 /// words as written, not stems; websearch so a quoted phrase stays a phrase. `has:image` and
-/// `has:link` are the partial indexes of migrate-22.sql; `has:video` is a regex over the linked
+/// `has:link` are the partial indexes of schema.sql; `has:video` is a regex over the linked
 /// lines; the dates are the room index.
 fn search_sql(search: &Search, account: Option<Uuid>) -> (String, Vec<Bind>) {
     let mut binds = Vec::new();
@@ -941,7 +941,7 @@ mod tests {
         rows.into_iter().map(|row| line_of(row).id).collect()
     }
 
-    /// The filters against the database: the generated `has_link` (migrate-22.sql), the video
+    /// The filters against the database: the generated `has_link` (schema.sql), the video
     /// regex as postgres reads it, `from:` by name and by account, and the days.
     /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored the_filters` against a throwaway postgres (see auth.rs's `test_db`).
     #[tokio::test]
