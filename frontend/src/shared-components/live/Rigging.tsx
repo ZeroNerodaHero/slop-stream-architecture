@@ -1,4 +1,3 @@
-import { RiEyeLine, RiEyeOffLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef } from 'react';
 
@@ -13,12 +12,10 @@ import {
   rigPictureAtom,
   screenMaySeePageAtom,
   setLivePanel,
-  setRigPicture,
   watchFaceMarks
 } from '@/infra/atoms/publish-atoms';
 import type { FaceLines, FaceMarks } from '@/infra/face';
-import { Collapsible, ICON_BUTTON } from '@/shared-components/live/Collapsible';
-import { Tooltip } from '@/shared-components/Tooltip';
+import { Collapsible } from '@/shared-components/live/Collapsible';
 import { cn } from '@/utils/cn';
 
 /** What stands over the picture while the reader has no face to mark, in the streamer's words. */
@@ -341,19 +338,14 @@ function RigBody() {
  * mouth is, how shut the eyes, the smile, the brows, and the head's turn, nod and tilt.
  *
  * This is the one place the camera's own picture is shown, and it is this page's alone: the
- * track is in no sender (`readerCameraAtom`). The eye in the header takes the picture away and
- * leaves the marks on black; while a screen is shared the picture is hidden whatever the eye
- * says, since a share of this page would carry it out. Hidden from before the browser's picker
+ * track is in no sender (`readerCameraAtom`). The picture is always under the marks (no eye: Billy wants
+ * the face video and the rig together); while a screen is shared it is hidden, since a share of this page would carry it out. Hidden from before the browser's picker
  * opens (`screenMaySeePageAtom`): once a screen is shared its first frames are already sent.
  */
 export function Rigging() {
   const model = useAtomValue(modelAtom);
   const open = useAtomValue(livePanelsAtom).rig;
-  const picture = useAtomValue(rigPictureAtom);
-  const sharing = useAtomValue(screenMaySeePageAtom);
-  const hasCamera = useAtomValue(readerCameraAtom) !== null;
   if (!model) return null;
-  const on = picture && !sharing;
   return (
     <Collapsible
       id="rig"
@@ -361,31 +353,6 @@ export function Rigging() {
       open={open}
       onToggle={() => setLivePanel('rig', !open)}
       className="mt-3"
-      aside={
-        open && hasCamera ? (
-          <Tooltip
-            content={
-              sharing
-                ? "your camera's picture is hidden while you share a screen"
-                : picture
-                  ? "your camera's picture is under the marks. click for the marks alone"
-                  : "the marks alone. click to put your camera's picture under them"
-            }
-          >
-            <button
-              id="rig-picture"
-              type="button"
-              aria-label="my camera's picture"
-              aria-pressed={on}
-              disabled={sharing}
-              onClick={() => setRigPicture(!picture)}
-              className={cn(ICON_BUTTON, 'mr-1', on && 'text-primaryBlue')}
-            >
-              {on ? <RiEyeLine aria-hidden size={16} /> : <RiEyeOffLine aria-hidden size={16} />}
-            </button>
-          </Tooltip>
-        ) : undefined
-      }
     >
       <RigBody />
     </Collapsible>
