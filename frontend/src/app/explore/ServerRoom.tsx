@@ -1078,7 +1078,7 @@ export function ServerPage() {
               </>
             )}
           </span>
-          <Badge group={{ name: server, badge: room.badge, color }} className="shrink-0" />
+          <Badge group={{ name: server, badge: room.badge, color, icon: room.icon }} className="shrink-0" />
         </span>
       }
     >
