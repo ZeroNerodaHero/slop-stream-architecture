@@ -37,7 +37,10 @@ import {
   modelLoadingAtom,
   moveSourceTo,
   placeImage,
+  liveViewersAtom,
+  publishMessageAtom,
   publishPhaseAtom,
+  publishToneAtom,
   removeSource,
   screenShareSupported,
   screenStreamAtom,
@@ -65,6 +68,7 @@ import { ModelDialog } from '@/shared-components/live/ModelDialog';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
+import { ViewerCount } from '@/shared-components/ViewerCount';
 
 /** A row: the selected one wears the rail's mark, a blue edge on a lifted ground. Its handle sits against that edge, so the row's own inset there is thin. */
 const ROW = 'group/row flex h-10 w-full min-w-0 items-center gap-2 border-l-2 pl-0.5 pr-1 text-left text-sm leading-tight transition-colors duration-150';
@@ -485,8 +489,11 @@ function SourceList({ sources }: { sources: Source[] }) {
  * phone's go live page puts it beside the status under the preview instead (LivePage.tsx), in
  * a box of its own `className`.
  */
-export function StartStop({ className = 'flex flex-col gap-2 p-2' }: { className?: string }) {
+export function StartStop({ className = 'flex flex-col gap-2 p-2', status = false }: { className?: string; status?: boolean }) {
   const publishing = useAtomValue(isPublishingAtom);
+  const message = useAtomValue(publishMessageAtom);
+  const tone = useAtomValue(publishToneAtom);
+  const viewers = useAtomValue(liveViewersAtom);
   const canStart = useAtomValue(canStartAtom);
   const canShare = useAtomValue(canShareScreenAtom);
   const named = isValidName(useAtomValue(streamNameAtom));
@@ -522,6 +529,24 @@ export function StartStop({ className = 'flex flex-col gap-2 p-2' }: { className
         >
           share screen
         </button>
+      )}
+      {/* the stream's status and who is watching, small, under stop and share screen (the desktop page's;
+          a phone's page has its own beside start/stop). #status and #viewers keep their ids (docs/spec.md) */}
+      {status && message && (
+        <p
+          id="status"
+          aria-live="polite"
+          className={cn('pt-2 text-center text-sm', tone === 'live' ? 'text-increase' : tone === 'bad' ? 'text-decrease' : 'text-textSecondary')}
+        >
+          {tone === 'live' && <span aria-hidden className="mr-1.5 inline-block h-2 w-2 bg-increase align-middle" />}
+          {message}
+          {tone === 'live' && viewers !== null && (
+            <span className="text-textSecondary">
+              {' · '}
+              <ViewerCount id="viewers" count={viewers} />
+            </span>
+          )}
+        </p>
       )}
     </div>
   );
@@ -560,7 +585,7 @@ export function Sources({ startStop = true }: { startStop?: boolean }) {
         open={open}
         onToggle={() => setLivePanel('sources', !open)}
         aside={<AddMenu onModel={() => setPicking(true)} />}
-        footer={startStop ? <StartStop /> : undefined}
+        footer={startStop ? <StartStop status /> : undefined}
       >
         {sources.length === 0 ? (
           <div className="px-3 py-3 text-sm text-textTertiary">
