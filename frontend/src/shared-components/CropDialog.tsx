@@ -2,7 +2,7 @@ import { useAtomValue } from 'jotai';
 import { type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { messageOf } from '@/infra/api';
-import { answerCrop, type CropRequest, cropRequestAtom } from '@/infra/atoms/crop-atoms';
+import { answerCrop, swapCropFile, type CropRequest, cropRequestAtom } from '@/infra/atoms/crop-atoms';
 import {
   aspectOf,
   assetType,
@@ -90,6 +90,8 @@ function CropBox({ request }: { request: CropRequest }) {
   const [k, setK] = useState(0);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  /** The hidden picker behind `pick another image`. */
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   // A layout effect: its cleanup runs while the node is still in the document, which is when
   // close() hands focus back. Taken away still open (a second request on top), the answer is no.
@@ -345,16 +347,43 @@ function CropBox({ request }: { request: CropRequest }) {
         {goes}
       </p>
 
-      <div className="mt-4 flex flex-wrap items-center justify-end gap-3">
-        <span id="crop-status" className="mr-auto text-sm text-decrease" aria-live="polite">
-          {loaded ? error : ''}
-        </span>
-        <button id="crop-cancel" type="button" className="text-base font-semibold text-textTertiary" onClick={close}>
-          cancel
-        </button>
-        <Button id="crop-use" variant="primary" className="px-4 py-2" disabled={!loaded || !rect || busy} onClick={() => void use()}>
-          {busy ? 'cutting…' : 'use it'}
-        </Button>
+      {/* left: another picture (the same request again over the new file, so it starts fresh; a picker shut with
+          nothing keeps this one) and what went wrong. right: cancel and use it */}
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <input
+            ref={fileRef}
+            id="crop-file"
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const next = e.target.files?.[0];
+              e.target.value = '';
+              if (next) swapCropFile(id, next);
+            }}
+          />
+          <button
+            id="crop-pick"
+            type="button"
+            className="text-base font-semibold text-textTertiary hover:text-textPrimary focus-visible:text-textPrimary focus-visible:outline-none disabled:opacity-50"
+            disabled={busy}
+            onClick={() => fileRef.current?.click()}
+          >
+            pick another image
+          </button>
+          <span id="crop-status" className="text-sm text-decrease" aria-live="polite">
+            {loaded ? error : ''}
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <button id="crop-cancel" type="button" className="text-base font-semibold text-textTertiary" onClick={close}>
+            cancel
+          </button>
+          <Button id="crop-use" variant="primary" className="px-4 py-2" disabled={!loaded || !rect || busy} onClick={() => void use()}>
+            {busy ? 'cutting…' : 'use it'}
+          </Button>
+        </div>
       </div>
     </dialog>
   );
