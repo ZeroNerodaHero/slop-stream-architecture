@@ -68,13 +68,17 @@ pub(crate) struct Badge {
     pub(crate) name: String,
     pub(crate) badge: String,
     pub(crate) color: String,
+    /// Unix seconds, the `?v=` of the group's picture, drawn small beside the word. Left out
+    /// when there is none, and absent on a line kept before it was carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) icon: Option<i64>,
 }
 
 /// The badges an account wears: its groups' in the order joined, with `bot` first when the
 /// socket said so. One query. `None` (an anonymous nick) matches no membership.
 pub(crate) async fn badges_of(db: &PgPool, user: Option<Uuid>, bot: bool) -> Result<Vec<Badge>, sqlx::Error> {
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT g.name, g.badge, g.color FROM groups g
+    let rows: Vec<(String, String, String, Option<i64>)> = sqlx::query_as(
+        "SELECT g.name, g.badge, g.color, (EXTRACT(EPOCH FROM g.icon_at))::bigint FROM groups g
          LEFT JOIN memberships m ON m.group_name = g.name AND m.user_id = $1
          WHERE (g.name = $2 AND $3) OR m.user_id IS NOT NULL
          ORDER BY g.name = $2 DESC, m.joined_at",
@@ -84,7 +88,7 @@ pub(crate) async fn badges_of(db: &PgPool, user: Option<Uuid>, bot: bool) -> Res
     .bind(bot)
     .fetch_all(db)
     .await?;
-    Ok(rows.into_iter().map(|(name, badge, color)| Badge { name, badge, color }).collect())
+    Ok(rows.into_iter().map(|(name, badge, color, icon)| Badge { name, badge, color, icon }).collect())
 }
 
 // ---- rules -----------------------------------------------------------------------------
@@ -215,10 +219,10 @@ pub(crate) async fn tell(s: &AppState, group: &str, what: &str, data: Value) {
 
 // ---- routes ----------------------------------------------------------------------------
 
-/// name, badge, color, about, made_by, members, mine, public, title, tag
-type GroupRow = (String, String, String, String, Option<String>, i64, bool, bool, Option<String>, Option<i32>);
+/// name, badge, color, about, made_by, members, mine, public, title, tag, icon
+type GroupRow = (String, String, String, String, Option<String>, i64, bool, bool, Option<String>, Option<i32>, Option<i64>);
 
-fn group_json((name, badge, color, about, made_by, members, mine, public, title, tag): GroupRow) -> Value {
+fn group_json((name, badge, color, about, made_by, members, mine, public, title, tag, icon): GroupRow) -> Value {
     json!({
         "name": name,
         "badge": badge,
@@ -230,6 +234,7 @@ fn group_json((name, badge, color, about, made_by, members, mine, public, title,
         "public": public,
         "title": title,
         "tag": tag,
+        "icon": icon,
         "automatic": name == BOT_GROUP,
     })
 }
@@ -242,7 +247,7 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
         "SELECT g.name, g.badge, g.color, g.about, maker.name,
                 (SELECT count(*) FROM memberships m WHERE m.group_name = g.name),
                 EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1),
-                g.public, g.title, g.tag
+                g.public, g.title, g.tag, (EXTRACT(EPOCH FROM g.icon_at))::bigint
          FROM groups g
          LEFT JOIN streamers maker ON maker.id = g.created_by_id
          WHERE g.public OR g.name = $2
@@ -340,7 +345,7 @@ async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGrou
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     }
     log::info!("{}: made the group {slug} ({badge})", maker.name);
-    Ok((StatusCode::CREATED, Json(group_json((slug, badge, color, about, Some(maker.name.clone()), 1, true, body.public, Some(title), Some(tag))))))
+    Ok((StatusCode::CREATED, Json(group_json((slug, badge, color, about, Some(maker.name.clone()), 1, true, body.public, Some(title), Some(tag), None)))))
 }
 
 /// `POST /api/groups/:group/join`: 204, also when already in it. 401 for nobody, 404 for no
@@ -1234,9 +1239,14 @@ mod tests {
 
     #[test]
     fn a_badge_serialises_plainly() {
-        let b = Badge { name: "bot".into(), badge: "BOT".into(), color: "#5865f2".into() };
+        let b = Badge { name: "bot".into(), badge: "BOT".into(), color: "#5865f2".into(), icon: None };
         let text = serde_json::to_string(&vec![b.clone()]).unwrap();
         assert_eq!(text, r##"[{"name":"bot","badge":"BOT","color":"#5865f2"}]"##);
         assert_eq!(serde_json::from_str::<Vec<Badge>>(&text).unwrap(), vec![b]);
+        // a picture's version rides along; a line kept before it was carried reads as none
+        let vip = Badge { name: "vip".into(), badge: "VIP".into(), color: "#ff00aa".into(), icon: Some(1_700_000_000) };
+        let text = serde_json::to_string(&vip).unwrap();
+        assert_eq!(text, r##"{"name":"vip","badge":"VIP","color":"#ff00aa","icon":1700000000}"##);
+        assert_eq!(serde_json::from_str::<Badge>(&text).unwrap(), vip);
     }
 }

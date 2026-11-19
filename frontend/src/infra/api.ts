@@ -214,6 +214,8 @@ export interface GroupBadge {
   badge: string;
   /** `#rrggbb` */
   color: string;
+  /** Unix seconds, the `?v=` of the group's picture (`groupImage`), drawn small beside the word. Null, or absent on a line kept before it was carried and on an older api: none. */
+  icon?: number | null;
 }
 
 /** A group as `GET /api/groups` lists it. */

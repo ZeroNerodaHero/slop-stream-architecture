@@ -223,7 +223,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
             aria-label="any other colour"
             className="h-8 w-12 cursor-pointer border border-primaryStroke bg-background p-0.5"
           />
-          <Badge group={{ name: clean || 'new', badge: badge.trim() || 'badge', color }} />
+          <Badge group={{ name: clean || 'new', badge: badge.trim() || 'badge', color }} src={icon?.url} />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button

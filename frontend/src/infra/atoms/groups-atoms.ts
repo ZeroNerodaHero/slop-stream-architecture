@@ -3,8 +3,9 @@
  * See docs/groups.md. The user modal's groups tab edits them and the profile tab shows mine;
  * the sidebar lists the ones I am in as servers (`GET /api/explore`'s `yours`, which has each
  * one's picture and who in it is live) and its search box finds those and the public ones
- * (`discover`). The chat needs nothing from here: the server puts each
- * speaker's badges on the line itself. Same shape as the other atom modules: atoms for what
+ * (`discover`). The chat needs little from here: the server puts each
+ * speaker's badges on the line itself, and a badge only reads the freshest picture version
+ * from these (`groupIconsAtom`). Same shape as the other atom modules: atoms for what
  * renders, action functions to change it.
  */
 
@@ -13,6 +14,7 @@ import { atom } from 'jotai';
 import { api, type Group, type NewGroup, type Server, messageOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { reconnectChat } from '@/infra/atoms/chat-atoms';
+import { roomAtom } from '@/infra/atoms/room-atoms';
 import { store } from '@/infra/store';
 
 export const groupsAtom = atom<Group[]>([]);
@@ -27,6 +29,24 @@ export const myGroupsAtom = atom((get) => get(groupsAtom).filter((g) => g.mine))
 export const myServersAtom = atom<Server[] | undefined>(undefined);
 /** The public servers the login is not in, the explorer's `discover`: what the sidebar's box finds past the ones you are in. `undefined` until asked once this page load. */
 export const publicServersAtom = atom<Server[] | undefined>(undefined);
+/**
+ * Each group's picture version the page has already heard of, by name: the groups list, the
+ * explorer's servers and the room on screen. A badge reads it before the version its chat line
+ * carried, which is a copy from when the line was said (and absent on an older line). Nothing
+ * here is asked for: it only gathers what is loaded anyway.
+ */
+export const groupIconsAtom = atom((get) => {
+  const icons = new Map<string, number | null>();
+  const heard = (name: string, icon: number | null | undefined) => {
+    if (icon !== undefined) icons.set(name, icon);
+  };
+  for (const group of get(groupsAtom)) heard(group.name, group.icon);
+  for (const server of get(publicServersAtom) ?? []) heard(server.name, server.icon);
+  for (const server of get(myServersAtom) ?? []) heard(server.name, server.icon);
+  const room = get(roomAtom);
+  if (room) heard(room.name, room.icon);
+  return icons;
+});
 
 let askingServers: Promise<void> | null = null;
 /** Bumped by `forgetMyServers`: an ask carries the stamp it was made under and lands only while that is still the current one. */
