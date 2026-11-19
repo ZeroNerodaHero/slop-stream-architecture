@@ -120,20 +120,37 @@ type Ask = 'before' | 'asking' | 'done';
  * window on their thread (or shows the one they have), lit while that thread is the one on
  * screen, and then it hides the window, the chat button's way.
  */
-function DmButton({ name, className }: { name: string; className?: string }) {
+function DmButton({ name, className, onPage = false }: { name: string; className?: string; onPage?: boolean }) {
   const friend = useAtomValue(followingAtom)?.find((f) => f.name === name && f.mutual);
   const open = useAtomValue(dmOpenAtom);
   const active = useAtomValue(dmActiveAtom);
   if (!friend) return null;
   const on = open && active === name;
+  const label = on ? `hide the chat with ${name}` : `message ${name}`;
+  const toggle = () => (on ? hideDms() : openDm({ id: '', name, avatar: friend.avatar, verified: friend.verified, bio: friend.bio, presence: friend.presence }));
+  // a phone's is on the page (the top of the about tab), not on the picture: the glyph alone, 44px, lit blue while on
+  if (onPage) {
+    return (
+      <Tooltip content={label}>
+        <button
+          id="dm-open"
+          type="button"
+          aria-label={label}
+          aria-pressed={on || undefined}
+          onClick={toggle}
+          className={cn(
+            'flex h-11 w-11 shrink-0 items-center justify-center border border-transparent transition-colors duration-150 focus-visible:border-primaryBlue focus-visible:outline-none',
+            on ? 'text-primaryBlue' : 'text-textSecondary hover:text-primaryBlue',
+            className
+          )}
+        >
+          <MailIcon />
+        </button>
+      </Tooltip>
+    );
+  }
   return (
-    <IconButton
-      id="dm-open"
-      label={on ? `hide the chat with ${name}` : `message ${name}`}
-      active={on}
-      className={className}
-      onClick={() => (on ? hideDms() : openDm({ id: '', name, avatar: friend.avatar, verified: friend.verified, bio: friend.bio, presence: friend.presence }))}
-    >
+    <IconButton id="dm-open" label={label} active={on} className={className} onClick={toggle}>
       <MailIcon />
     </IconButton>
   );
@@ -317,10 +334,13 @@ export function WatchPage() {
         expecting ? (
           <Skeleton id="player-loading" label="loading the stream" className="relative aspect-video w-full border border-primaryStroke bg-backgroundSecondary max-md:border-t-0">
             <Bone className="absolute inset-0" />
-            <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
-              {mobile ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
-              <DmButton name={name} />
-            </div>
+            {/* a phone's chat is a tab and its line to a friend is at the top of the about tab */}
+            {!mobile && (
+              <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
+                <ChatOpenButton className="ml-auto" />
+                <DmButton name={name} />
+              </div>
+            )}
           </Skeleton>
         ) : mobile ? (
           // a phone's profile is the player's box, the same 16:9 in the same place (and a strip while typing,
@@ -351,10 +371,6 @@ export function WatchPage() {
               <p>{PRESENCE_WORD[presence]}</p>
               {offlineNote && <p id="offline-note">{offlineNote}</p>}
               <p>{phase === 'loading' ? 'loading' : NOT_LIVE_WORDS[presence]}</p>
-            </div>
-            <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
-              <span className="ml-auto" />
-              <DmButton name={name} />
             </div>
           </div>
         ) : (
@@ -429,7 +445,7 @@ export function WatchPage() {
             <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || (!mobile && !chatOpen)))}>
               {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
               {mobile ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
-              <DmButton name={name} />
+              {!mobile && <DmButton name={name} />}
               <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'picture in picture'} disabled={cornerTaken} onClick={toCorner}>
                 <PipIcon />
               </IconButton>
@@ -512,7 +528,11 @@ export function WatchPage() {
         <ChatPanel name={name} className={cn('h-full min-h-0 flex-1', CHAT_MOBILE)} />
       ) : t === 'about' ? (
         <>
-          <div className="[&>div]:mt-0">{status}</div>
+          {/* the line to a friend at the right end: the row's follow leaves the name too little for it there */}
+          <div className="flex items-start gap-2">
+            <div className="min-w-0 flex-1 [&>div]:mt-0">{status}</div>
+            <DmButton name={name} onPage className="-mr-2.5 -mt-2.5" />
+          </div>
           <About key={name} name={name} doc={about} edit={mine} />
         </>
       ) : t === 'calendar' ? (
@@ -529,7 +549,19 @@ export function WatchPage() {
         <PageFrame
           title={title}
           titleId="who"
-          mobileTitle={name}
+          // the name, cut with an ellipsis, and their presence square right after it (the word was the card under the player)
+          mobileTitle={
+            name ? (
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate">{name}</span>
+                <Tooltip content={PRESENCE_WORD[presence]}>
+                  <span role="img" aria-label={PRESENCE_WORD[presence]} className={cn('relative h-2 w-2 shrink-0', PRESENCE_SQUARE[presence])} />
+                </Tooltip>
+              </span>
+            ) : (
+              name
+            )
+          }
           // the row: the menu, their face, the name over how many follow and watch, home, and follow at the right end
           mobileStart={name ? <Face name={name} version={avatar} className="h-8 w-8 text-sm" /> : undefined}
           mobileSub={streamNumbers(name && !isDummyName(name) ? followers : null, viewers)}
