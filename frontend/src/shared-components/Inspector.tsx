@@ -20,6 +20,8 @@ import {
 } from '@/infra/atoms/inspector-atoms';
 import { eventsPhaseAtom, eventsTransportAtom } from '@/infra/events';
 import type { FrameEntry } from '@/infra/frames';
+import { useIsMobile } from '@/infra/mobile';
+import { SHEET_CLOSE, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -88,6 +90,8 @@ function InspectorPanel() {
   const frozen = useAtomValue(inspectorFrozenAtom);
   const phase = useAtomValue(eventsPhaseAtom);
   const transport = useAtomValue(eventsTransportAtom);
+  const mobile = useIsMobile();
+  useSheetBack(closeInspector);
 
   // the rows: the ring through the filter, this tick. paused, the rows as they were when the pause
   // began (taken by the toggle itself) while the recorder goes on; the count line says how many came
@@ -168,17 +172,24 @@ function InspectorPanel() {
       id="inspector-panel"
       aria-label="messages"
       onClose={closeInspector}
-      style={box ? { left: box.x, top: box.y, width: box.w, height: box.h } : undefined}
+      data-sheet={mobile ? '' : undefined}
+      style={box && !mobile ? { left: box.x, top: box.y, width: box.w, height: box.h } : undefined}
       className={cn(
         FRAME,
         'fixed z-50 m-0 flex flex-col overflow-hidden p-0 text-sm text-textPrimary open:flex',
-        !box && 'left-auto right-6 top-6 h-[min(440px,calc(100dvh-3rem))] w-[min(600px,calc(100vw-3rem))]'
+        // a phone's is a sheet on the foot of the window, the page above it still usable (MobileSheet.tsx): no moving, no resizing
+        mobile
+          ? 'inset-x-0 bottom-0 top-auto h-[60dvh] w-full max-w-none border-x-0 border-b-0 pb-[env(safe-area-inset-bottom)]'
+          : !box && 'left-auto right-6 top-6 h-[min(440px,calc(100dvh-3rem))] w-[min(600px,calc(100vw-3rem))]'
       )}
     >
+      {mobile && <SheetGrab onDismiss={closeInspector} />}
       <header
-        className={cn('flex cursor-move items-center gap-2 border-b border-primaryStroke px-3 py-2', GRIP)}
-        onPointerDown={(e) => press(e, 'move')}
-        title="drag to move"
+        className={cn('flex cursor-move items-center gap-2 border-b border-primaryStroke px-3 py-2', GRIP, mobile && 'cursor-auto')}
+        onPointerDown={(e) => {
+          if (!mobile) press(e, 'move');
+        }}
+        title={mobile ? undefined : 'drag to move'}
       >
         <span className="font-semibold">messages</span>
         <span className="text-xs text-textTertiary">
@@ -228,7 +239,7 @@ function InspectorPanel() {
               type="button"
               aria-label="close"
               onClick={closeInspector}
-              className="flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue"
+              className={cn('flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryBlue hover:text-primaryBlue', SHEET_CLOSE)}
             >
               <RiCloseLine aria-hidden size={18} />
             </button>
@@ -311,12 +322,14 @@ function InspectorPanel() {
         })}
       </ul>
 
-      <div
-        id="inspector-resize-se"
-        aria-hidden
-        onPointerDown={(e) => press(e, 'resize')}
-        className={cn('absolute -bottom-px -right-px h-4 w-4 cursor-nwse-resize border-b-2 border-r-2 border-primaryBlue', GRIP)}
-      />
+      {!mobile && (
+        <div
+          id="inspector-resize-se"
+          aria-hidden
+          onPointerDown={(e) => press(e, 'resize')}
+          className={cn('absolute -bottom-px -right-px h-4 w-4 cursor-nwse-resize border-b-2 border-r-2 border-primaryBlue', GRIP)}
+        />
+      )}
     </dialog>
   );
 }

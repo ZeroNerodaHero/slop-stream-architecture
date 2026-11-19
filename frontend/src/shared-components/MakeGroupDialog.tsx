@@ -11,6 +11,7 @@ import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { GroupMark } from '@/shared-components/GroupMark';
+import { SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -115,17 +116,24 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
   const onClick = (e: MouseEvent<HTMLDialogElement>) => {
     if (pressedBackdrop.current && e.target === e.currentTarget) onClose();
   };
+  useSheetBack(onClose);
 
   return (
     <dialog
       ref={dialogRef}
       id="groups-make"
+      data-sheet=""
       aria-labelledby="groups-make-title"
       onPointerDown={onPointerDown}
       onClick={onClick}
       onClose={onClose}
-      className="m-auto max-h-[calc(100dvh-2rem)] w-[min(520px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60"
+      // a phone's is a sheet up from the foot (MobileSheet.tsx)
+      className={cn(
+        'm-auto max-h-[calc(100dvh-2rem)] w-[min(520px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60',
+        SHEET_DIALOG
+      )}
     >
+      <SheetGrab onDismiss={onClose} />
       <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
         <h2 id="groups-make-title" className="text-sm font-semibold uppercase tracking-wider text-textTertiary">
           make a group

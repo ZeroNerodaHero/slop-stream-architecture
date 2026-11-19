@@ -63,6 +63,18 @@ html:has([data-sheet-open]) {
   overflow: hidden;
 }
 
+/* a phone's dialog sheet (MobileSheet.tsx) slides up from the foot as it opens. a desktop's dialog has no slide */
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+}
+@media (max-width: 767.98px) and (prefers-reduced-motion: no-preference) {
+  dialog[data-sheet][open] {
+    animation: sheet-up 200ms ease-out;
+  }
+}
+
 body {
   /* 20px at the browser's size, in rems so the size setting (settings.textSize, a percentage on <html>) scales it with the rest */
   @apply bg-background font-sans text-[1.25rem] leading-relaxed text-textPrimary antialiased;

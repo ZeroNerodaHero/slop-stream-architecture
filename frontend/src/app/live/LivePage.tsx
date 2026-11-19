@@ -41,9 +41,9 @@ import {
   liveViewersAtom
 } from '@/infra/atoms/publish-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
-import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
+import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
 import { useIsMobile } from '@/infra/mobile';
-import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
+import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Mixer } from '@/shared-components/live/Mixer';
 import { Rigging } from '@/shared-components/live/Rigging';
@@ -150,7 +150,7 @@ export function LivePage() {
   const thumbStatus = useAtomValue(thumbStatusAtom);
   const owner = useAtomValue(ownerAtom);
   const viewers = useAtomValue(liveViewersAtom);
-  const chatSide = useAtomValue(chatSideAtom);
+  const chatSide = useChatSide();
   const chatOpen = useAtomValue(chatModalOpenAtom);
   const scene = useAtomValue(sceneAtom);
   const sources = useAtomValue(sourcesAtom);

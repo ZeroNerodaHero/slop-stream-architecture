@@ -4,7 +4,9 @@ import { useLayoutEffect, useRef } from 'react';
 
 import { type AuthMode, authDialogAtom, closeAuthDialog, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { AuthForm } from '@/shared-components/AuthForm';
+import { SHEET_CLOSE, SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { cn } from '@/utils/cn';
 
 /**
  * Log in or sign up over the page you are on, instead of a page of its own: the sidebar's two
@@ -41,11 +43,13 @@ function AuthBox({ mode }: { mode: AuthMode }) {
 
   // every way out goes through the element: close() restores focus, then fires `close`
   const close = () => dialogRef.current?.close();
+  useSheetBack(close);
 
   return (
     <dialog
       ref={dialogRef}
       id="auth-dialog"
+      data-sheet=""
       data-mode={mode}
       aria-labelledby="auth-title"
       onPointerDown={(e) => {
@@ -59,8 +63,13 @@ function AuthBox({ mode }: { mode: AuthMode }) {
         closeAuthDialog();
       }}
       // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
-      className="m-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-5 text-textPrimary backdrop:bg-black/60 backdrop:backdrop-blur-sm"
+      // a phone's is a sheet up from the foot (MobileSheet.tsx)
+      className={cn(
+        'm-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-5 text-textPrimary backdrop:bg-black/60 backdrop:backdrop-blur-sm',
+        SHEET_DIALOG
+      )}
     >
+      <SheetGrab onDismiss={close} />
       <div className="relative">
         <div className="absolute -right-2 -top-2">
           <Tooltip content="close" at="left">
@@ -70,7 +79,10 @@ function AuthBox({ mode }: { mode: AuthMode }) {
               aria-label="close"
               aria-keyshortcuts="Escape"
               onClick={close}
-              className="flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue"
+              className={cn(
+                'flex h-8 w-8 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
+                SHEET_CLOSE
+              )}
             >
               <RiCloseLine aria-hidden size={18} />
             </button>

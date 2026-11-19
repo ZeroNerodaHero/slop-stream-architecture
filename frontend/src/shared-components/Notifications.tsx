@@ -19,9 +19,11 @@ import {
 } from '@/infra/atoms/notification-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import type { NotificationKind } from '@/infra/frames';
+import { useIsMobile } from '@/infra/mobile';
 import { store } from '@/infra/store';
 import { buttonClassName } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
+import { SHEET_CLOSE, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { panelClassName } from '@/shared-components/Panel';
 import { Who } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
@@ -92,7 +94,15 @@ export function NotificationsBell() {
 /** The list under the bell. Renders nothing until the bell is pressed. */
 export function Notifications() {
   const open = useAtomValue(notificationsOpenAtom);
-  return open ? <NotificationsList /> : null;
+  const mobile = useIsMobile();
+  if (!open) return null;
+  return (
+    <>
+      {/* a phone's: the page dimmed under the sheet, and kept still (globals.css). its click shuts the list, and lands nowhere else */}
+      {mobile && <div id="notifications-dim" aria-hidden data-sheet-open="" onClick={closeNotifications} className="fixed inset-0 z-50 touch-none bg-black/60" />}
+      <NotificationsList />
+    </>
+  );
 }
 
 /** The person a dm row opens a chat with: as the chat window or the sidebar has them now, else what the row knows. */
@@ -230,6 +240,7 @@ function NotificationsList() {
   const known = useRef<Set<number> | null>(null);
   const [fresh, setFresh] = useState<ReadonlySet<number>>(() => new Set());
   const openedAt = useRef(pathname);
+  const mobile = useIsMobile();
 
   // Mount only: shown under the bell (and kept there through a resize), the list asked for when
   // this tab has none yet (a load that failed; the rows otherwise come by push), the clock.
@@ -266,7 +277,8 @@ function NotificationsList() {
     const onDown = (e: PointerEvent) => {
       const target = e.target as Node | null;
       if (!target || dialogRef.current?.contains(target)) return;
-      if (target instanceof Element && target.closest('#notifications, #drawer-notifications')) return;
+      // a phone's dim page shuts it on its click: closed on the press, the click would land on the page under it
+      if (target instanceof Element && target.closest('#notifications, #drawer-notifications, #notifications-dim')) return;
       closeNotifications();
     };
     const onKey = (e: KeyboardEvent) => {
@@ -307,24 +319,28 @@ function NotificationsList() {
     openUserModal('notifications');
   };
 
+  // a phone's list is a sheet up from the foot over the page dimmed (`Notifications`, MobileSheet.tsx), not hung from a bell: a
+  // tap on the dim page shuts it, and so do a drag down by its grabber and the back button
+  useSheetBack(closeNotifications);
+
   return (
     <dialog
       ref={dialogRef}
       id="notifications-panel"
+      data-sheet={mobile ? '' : undefined}
       aria-labelledby="notifications-title"
       onClose={closeNotifications}
-      style={style}
+      style={mobile ? undefined : style}
       className={panelClassName(
         cn(
           'fixed z-50 m-0 flex max-h-[min(560px,calc(100dvh-5.5rem))] flex-col overflow-hidden p-0 text-base text-textPrimary open:flex',
           // until the bell is measured: the top right of the window
-          !style && 'left-auto right-5 top-[4.5rem] w-[min(400px,calc(100vw-2.5rem))]',
-          // a phone has no bell in its title row (its bell is in the sidebar's drawer): the list spans the window under the row
-          !style &&
-            'max-md:left-2 max-md:right-2 max-md:top-[calc(var(--title-row,4rem)+0.5rem)] max-md:max-h-[calc(100dvh-var(--title-row,4rem)-1rem-env(safe-area-inset-bottom))] max-md:w-auto'
+          !style && !mobile && 'left-auto right-5 top-[4.5rem] w-[min(400px,calc(100vw-2.5rem))]',
+          mobile && 'inset-x-0 bottom-0 top-auto w-full max-w-none max-h-[85dvh] border-x-0 border-b-0 pb-[env(safe-area-inset-bottom)]'
         )
       )}
     >
+      {mobile && <SheetGrab onDismiss={closeNotifications} />}
       <header className="flex shrink-0 items-center gap-2 border-b border-primaryStroke px-3 py-2">
         <RiNotification3Line aria-hidden size={16} className="shrink-0 text-textSecondary" />
         <h2 id="notifications-title" className="min-w-0 flex-1 truncate text-sm font-semibold">
@@ -338,7 +354,7 @@ function NotificationsList() {
           </Tooltip>
         )}
         <Tooltip content="close">
-          <button id="notifications-close" type="button" aria-label="close" onClick={closeNotifications} className={ICON_BUTTON}>
+          <button id="notifications-close" type="button" aria-label="close" onClick={closeNotifications} className={cn(ICON_BUTTON, SHEET_CLOSE)}>
             <RiCloseLine aria-hidden size={18} />
           </button>
         </Tooltip>

@@ -2,6 +2,7 @@ import { RiCloseLine } from '@remixicon/react';
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import { useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -79,6 +80,9 @@ export function SwipeDrawer({ side, open, onOpenChange, label, id, className, ch
     change.current = onOpenChange;
   });
 
+  // the browser's back button shuts it, as it does a sheet (MobileSheet.tsx)
+  useSheetBack(() => change.current(false), open);
+
   // shut: on screen until the slide is over, then gone (and so out of the tab order)
   const [wasOpen, setWasOpen] = useState(open);
   if (wasOpen !== open) {
@@ -97,7 +101,8 @@ export function SwipeDrawer({ side, open, onOpenChange, label, id, className, ch
     const before = document.activeElement;
     panel.current?.focus({ preventScroll: true });
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !document.querySelector('dialog[open]')) change.current(false);
+      // not while a modal dialog is over it: that escape is the dialog's. a panel merely shown (the notifications) does not count
+      if (e.key === 'Escape' && !document.querySelector('dialog:modal')) change.current(false);
     };
     window.addEventListener('keydown', onKey);
     return () => {
