@@ -217,10 +217,14 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   const openChats = async (p) => {
     await p.hover('#user-panel');
     await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
-    await p.waitForSelector('#chats-open', { state: 'visible', timeout: 10000 });
-    await p.click('#chats-open');
+    // ben's chat button on his friends row: the sidebar's way into the window
+    await p.waitForSelector(`#friend-chat-${BEN}`, { state: 'visible', timeout: 10000 });
+    // what the button said before the click: its name carries ben's count of new lines
+    const label = await p.getAttribute(`#friend-chat-${BEN}`, 'aria-label');
+    await p.click(`#friend-chat-${BEN}`);
     await p.waitForSelector('#friend-chat', { timeout: 10000 });
     await p.mouse.move(700, 300);
+    return label;
   };
   let annPage;
 
@@ -382,7 +386,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     const second = await context.newPage();
     await second.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await second.waitForFunction(() => document.querySelector('#friends-unread')?.textContent === '2', null, { timeout: 10000 });
-    await openChats(annPage);
+    const label = await openChats(annPage);
+    expect(label === `chat with ${BEN}, 2 new`, `ben's chat button was named ${JSON.stringify(label)}`);
     await annPage.waitForFunction(() => !document.querySelector('#friends-unread'), null, { timeout: 10000 });
     await annPage.waitForFunction(() => [...document.querySelectorAll('#friend-chat-log p')].some((p) => p.textContent.includes('and another')), null, { timeout: 10000 });
     await second.waitForFunction(() => !document.querySelector('#friends-unread'), null, { timeout: 10000 });

@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 
 import { type Followed, groupMatches, groupWords, type Server } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { dmUnreadAtom, openDm, showDms } from '@/infra/atoms/dm-atoms';
+import { dmsAtom, dmUnreadAtom, openDm } from '@/infra/atoms/dm-atoms';
 import { followNoteAtom, followingAtom, loadFollowing, searchQueryAtom, searchResultsAtom, setSearchQuery, unfollow } from '@/infra/atoms/follow-atoms';
 import { loadMyServers, loadServers, myServersAtom, publicServersAtom, SERVERS_FRESH_MS } from '@/infra/atoms/groups-atoms';
 import { type Presence, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
@@ -84,7 +84,7 @@ const ROW_TAP = 'max-md:py-px';
  * `relative`: the sr-only word inside it has its place there.
  */
 const ROW_H = 'relative h-[calc(2rem+2px)] max-md:h-[calc(2.5rem+4px)]';
-/** The icon line over a list: the icon, and the word in text-xs, are both 16px. The chat button at the friends line's end is 14. */
+/** The icon line over a list: the icon, and the word in text-xs, are both 16px. */
 const HEAD_PX = 16;
 /** The line between two lists. The room to grab it reaches into the gaps on either side. */
 const LINE_PX = 1;
@@ -324,46 +324,27 @@ function Unfollow({ id, name }: { id: string; name: string }) {
   );
 }
 
+/** The chat button on a friend's row, with how many of their lines are new (docs/dms.md) on its corner in blue, matched by name as `openDm` keeps the tabs. */
 function Chat({ id, person }: { id: string; person: Person }) {
+  const unread = useAtomValue(dmsAtom).find((d) => d.name === person.name)?.unread ?? 0;
   return (
-    <Tooltip content="chat">
+    <Tooltip content={unread > 0 ? `chat, ${unread} new` : 'chat'}>
       <button
         id={id}
         type="button"
-        aria-label={`chat with ${person.name}`}
+        aria-label={unread > 0 ? `chat with ${person.name}, ${unread} new` : `chat with ${person.name}`}
         onClick={() => openDm({ id: '', name: person.name, avatar: person.avatar, verified: person.verified, bio: person.bio, presence: person.presence })}
-        className={cn(ICON_BUTTON, 'hover:text-textPrimary')}
+        className={cn(ICON_BUTTON, 'relative hover:text-textPrimary')}
       >
         <RiChat3Line aria-hidden size={16} />
+        {/* on the icon's corner, out of the flow, so the button is one size with a number or without */}
+        {unread > 0 && (
+          <span aria-hidden className="absolute -right-1.5 -top-1.5 bg-background px-px text-xs font-semibold leading-none tabular-nums text-primaryBlue">
+            {unread > 99 ? '99+' : unread}
+          </span>
+        )}
       </button>
     </Tooltip>
-  );
-}
-
-/**
- * The chat window back on screen (FriendChat.tsx): the chats as they were left, or the friends
- * to pick one from, and how many lines are new (docs/dms.md), in blue like the streaming count.
- * The far end of the friends line, open only. The footer's action (UserPanel.tsx) in size and
- * colour; leading-none, since text-sm's own 20px line would stand out of the 16px head.
- */
-function ChatsOpener() {
-  const unread = useAtomValue(dmUnreadAtom);
-  return (
-    <button
-      id="chats-open"
-      type="button"
-      title={unread > 0 ? `your chats: ${unread} new` : 'your chats with friends'}
-      onClick={showDms}
-      className="inline-flex shrink-0 items-center gap-1 text-sm leading-none text-textSecondary underline-offset-2 hover:text-textPrimary hover:underline"
-    >
-      <RiChat3Line aria-hidden size={14} />
-      chat
-      {unread > 0 && (
-        <span id="chats-unread" className="font-semibold text-primaryBlue">
-          {unread}
-        </span>
-      )}
-    </button>
   );
 }
 
@@ -415,12 +396,12 @@ interface HeadProps {
  */
 function Head({ icon: Icon, word, count, listId, kind, open, side, below, folded, action, mark }: HeadProps) {
   const mirrored = side === 'right';
-  // the icon says what the word says, and the number what the chat button's title says, so readers skip them
+  // the icon says what the word says, and the number what the rows' chat buttons say, so readers skip them
   // the column is a face wide (`Sizes.face`: the face's rems and the row's border), so the icon stands centered under the faces
   const icon = (
     <span aria-hidden className={cn('relative flex shrink-0 justify-center', FACE_COLUMN_W)}>
       <Icon size={16} />
-      {/* the number stands with the closed column too, where the chat button has no room: the one sign something came */}
+      {/* the number stands with the closed column too, where the rows' chat buttons have no room: the one sign something came */}
       {mark !== undefined && mark > 0 && (
         <span
           id="friends-unread"
@@ -678,8 +659,7 @@ interface ListsProps extends ListProps {
  * The lists under their icons, a line between one and the next: friends (they follow you back),
  * everyone else you follow, each streaming first as the api sent them, and the groups you are
  * in, in the order settings put them (settings.sidebarLists). A friend gets a chat button as
- * well as unfollow, and the friends line ends with `chat`, which brings the chat window back; a
- * group's row is the way to its page. Each list is cut at whole rows (`rows`) and scrolls inside,
+ * well as unfollow, with how many of their lines are new on its corner; a group's row is the way to its page. Each list is cut at whole rows (`rows`) and scrolls inside,
  * at the pitch `spacing` worked out for the room; the line between two lists says how the rows
  * are shared, and dragging it trades a row between them, keeping every list's weight as the rows
  * then stand (as fractions of the room, so a taller window keeps the proportion). The caret
@@ -750,7 +730,6 @@ function Lists({ side, open, onPick, stack, rows, face, spacing, shares, folds }
               side={side}
               below={gaps[`head-${i}`] ?? MIN_GAP}
               folded={folded}
-              action={block.kind === 'friends' ? <ChatsOpener /> : undefined}
               mark={block.kind === 'friends' ? unread : undefined}
             />
             {/* folded, the list has no rows (`count` is 0) and slides to no height; it stays in the document, inert, so its rows are out of the tab order and off a reader */}

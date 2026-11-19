@@ -34,7 +34,7 @@ function YouPreview({ side }: { side: PanelSide }) {
 
 /** The column's three lists (Friends.tsx), each with the icon it stands under there and a line on what it holds. */
 const SIDEBAR_LIST_WORDS: Record<SidebarList, { icon: typeof RiUserHeartLine; label: string; detail: string }> = {
-  friends: { icon: RiUserHeartLine, label: 'friends', detail: 'who you follow that follows you back. the chat button is on this line' },
+  friends: { icon: RiUserHeartLine, label: 'friends', detail: 'who you follow that follows you back. each has a chat button, with what is new on it' },
   following: { icon: RiUserFollowLine, label: 'following', detail: 'the rest of who you follow, streaming first' },
   groups: { icon: RiGroupLine, label: 'groups', detail: 'the groups you are in, and how many in each are live' }
 };
