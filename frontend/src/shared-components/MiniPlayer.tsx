@@ -1,5 +1,5 @@
 import { atom, useAtomValue } from 'jotai';
-import { useRef } from 'react';
+import { Component, type ErrorInfo, type ReactNode, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 
 import {
@@ -48,6 +48,7 @@ import {
 } from '@/infra/atoms/watch-atoms';
 import { api } from '@/infra/api';
 import { cleanName } from '@/infra/names';
+import { report } from '@/infra/report';
 import { cn } from '@/utils/cn';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
@@ -64,6 +65,32 @@ function isWatchPageOf(pathname: string, name: string): boolean {
 }
 
 const isLivePage = (pathname: string) => pathname.replace(/\/$/, '') === '/live';
+
+/**
+ * One corner player's own catch. A crash in a player (or in its popped out window) is that
+ * player's alone: without this it reached the router's crash page, which replaces every page,
+ * and the crash page's reload ended a stream that was still up. The stream lives in the atoms,
+ * not here, so it goes on; the player is tried again on the next page.
+ */
+class CornerCatch extends Component<{ at: string; children: ReactNode }, { failed: boolean; at: string }> {
+  state = { failed: false, at: this.props.at };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  static getDerivedStateFromProps(props: { at: string }, state: { failed: boolean; at: string }) {
+    return props.at === state.at ? null : { failed: false, at: props.at };
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    report('crash', error, { componentStack: info.componentStack ?? undefined });
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
 
 /** The two players, by the id prefix each puts on its elements. */
 type Corner = 'pip' | 'live-pip';
@@ -243,6 +270,7 @@ function LiveCorner() {
 export function MiniPlayer() {
   const side = useAtomValue(panelSideAtom);
   const sidebarOpen = useAtomValue(friendsOpenAtom);
+  const { pathname } = useLocation();
   return (
     <div
       id="corner-players"
@@ -252,8 +280,12 @@ export function MiniPlayer() {
         side === 'right' ? (sidebarOpen ? 'right-[324px]' : 'right-20') : 'right-6'
       )}
     >
-      <WatchCorner />
-      <LiveCorner />
+      <CornerCatch at={pathname}>
+        <WatchCorner />
+      </CornerCatch>
+      <CornerCatch at={pathname}>
+        <LiveCorner />
+      </CornerCatch>
     </div>
   );
 }

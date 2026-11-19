@@ -283,7 +283,10 @@ export function CornerPlayer({
    * the button.
    */
   const [out, setOut] = useState<{ win: Window; left: boolean } | null>(null);
-  const popout = out?.win ?? null;
+  // a window that closed before its `pagehide` reached `setOut` is no home: a portal into its
+  // torn down body throws, and a throw here took the whole app down to the crash page (whose
+  // reload is the end of a stream). the effect below lets it go
+  const popout = out && !out.win.closed ? out.win : null;
   const popped = popout !== null;
   /** Out because the tab was left: the window is the player then, whether or not the page shows one, until the tab is in front again or × ends it. A stream that fails meanwhile says so in there. */
   const away = out?.left === true;
@@ -340,6 +343,9 @@ export function CornerPlayer({
     if (!shown) popout?.close();
   }, [shown, popout]);
   useEffect(() => () => popout?.close(), [popout]);
+  useEffect(() => {
+    if (out?.win.closed) setOut(null);
+  });
 
   /** A window of this size, and the box moves into it. Refused (the browser wants a click behind it, or its own word that the tab was left), the box stays where it is. */
   const open = async (width: number, height: number, left: boolean) => {
