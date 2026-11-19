@@ -44,7 +44,7 @@ pub(crate) const BOT_GROUP: &str = "bot";
 /// A badge is a word, not a sentence: `BOT`, `VIP`, `mod`. The panel shows it in capitals.
 const MAX_BADGE_CHARS: usize = 12;
 const MAX_ABOUT_CHARS: usize = 200;
-/// Groups one login may be in. Every badge goes on every line, so it is capped. Owning has its
+/// Groups one login may be in. Its lines wear one badge (`badges_of`); the cap stays. Owning has its
 /// own cap, `AppState::groups_per_owner`, read from `.env` (`groups_per_owner_from_env`).
 const GROUPS_PER_MEMBER: i64 = 8;
 /// Groups one login may own when `GROUPS_PER_OWNER` is not set: the ones it made plus the
@@ -103,17 +103,18 @@ impl From<BadgeRow> for Badge {
     }
 }
 
-/// The badges an account wears: its primary group's alone when it picked one
-/// (`memberships.is_primary`), else its groups' in the order joined; `bot` first either way when
-/// the socket said so. One query. `None` (an anonymous nick) matches no membership.
+/// The badges an account wears: one group's only, never more. Its primary group
+/// (`memberships.is_primary`) when it picked one, else the first it joined, the same one
+/// `badge_of` shows on its card; `bot` before it when the socket said so. One query. `None`
+/// (an anonymous nick) matches no membership.
 pub(crate) async fn badges_of(db: &PgPool, user: Option<Uuid>, bot: bool) -> Result<Vec<Badge>, sqlx::Error> {
     let rows: Vec<BadgeRow> = sqlx::query_as(&format!(
         "SELECT {BADGE_COLUMNS} FROM groups g
          LEFT JOIN memberships m ON m.group_name = g.name AND m.user_id = $1
          WHERE (g.name = $2 AND $3)
-            OR (m.user_id IS NOT NULL
-                AND (m.is_primary OR NOT EXISTS (SELECT 1 FROM memberships p WHERE p.user_id = $1 AND p.is_primary)))
-         ORDER BY g.name = $2 DESC, m.joined_at"
+            OR g.name = (SELECT p.group_name FROM memberships p WHERE p.user_id = $1
+                         ORDER BY p.is_primary DESC, p.joined_at LIMIT 1)
+         ORDER BY g.name = $2 DESC"
     ))
     .bind(user)
     .bind(BOT_GROUP)
@@ -482,7 +483,7 @@ async fn leave(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me)
 }
 
 /// `PUT /api/groups/:group/primary`: the one group whose badge this login's name wears, in
-/// place of every group's (`badges_of`), and the one its card shows (`badge_of`). 204. 401 for
+/// place of the first joined (`badges_of`), and the one its card shows (`badge_of`). 204. 401 for
 /// nobody, 403 `join it first` for a group it is not in. Leaving the group, or the group going,
 /// takes the choice with the membership row (schema.sql).
 async fn set_primary(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
@@ -504,7 +505,7 @@ async fn set_primary(State(s): State<AppState>, Path(group): Path<String>, Me(me
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/groups/:group/primary`: back to every group's badge. 204, also when it was not
+/// `DELETE /api/groups/:group/primary`: back to the first joined group's badge. 204, also when it was not
 /// the primary. 401 for nobody.
 async fn clear_primary(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let me = me.ok_or_else(not_logged_in)?;

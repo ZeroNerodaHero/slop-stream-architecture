@@ -264,7 +264,7 @@ export function ProfileTab() {
               ) : (
                 <span className="shrink-0 border border-primaryStroke px-1.5 text-xs font-semibold uppercase leading-5 tracking-wider text-textTertiary">guest</span>
               )}
-              {/* the badges my chat lines wear: my primary group's, else my groups in the order joined. the groups tab changes them */}
+              {/* the badges my chat lines wear: one only: my primary group's, else my first group's. the groups tab changes them */}
               {me &&
                 badges.map((group) => {
                   const words = groupWords(group);

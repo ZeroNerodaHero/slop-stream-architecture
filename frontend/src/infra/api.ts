@@ -630,7 +630,7 @@ export const api = {
   leaveGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/leave`),
   /** The one group whose badge the login's name wears, in place of every group's. 403 `join it first`. Leaving it clears it. */
   setPrimaryGroup: (name: string) => request<null>('PUT', `/api/groups/${encodeURIComponent(name)}/primary`),
-  /** Back to every group's badge, in the order joined. */
+  /** Back to the first joined group's badge. */
   clearPrimaryGroup: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}/primary`),
   /** An owner, the one who made it, or an admin. Its members are out with it. */
   deleteGroup: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}`),
