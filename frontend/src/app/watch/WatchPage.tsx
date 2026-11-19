@@ -42,7 +42,7 @@ import {
   watchViewersAtom
 } from '@/infra/atoms/watch-atoms';
 import { dmActiveAtom, dmOpenAtom, hideDms, openDm } from '@/infra/atoms/dm-atoms';
-import { followingAtom } from '@/infra/atoms/follow-atoms';
+import { followingAtom, loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
 import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-atoms';
@@ -204,6 +204,15 @@ export function WatchPage() {
   const cornerTaken = useAtomValue(publishPipAtom);
   // a fake stream gets a page from its name. anyone else's is read from the api.
   const about = useMemo(() => (isDummyName(name) ? dummyPage(name, { offline }) : null), [name, offline]);
+  // a phone's offline box is a thumbnail where the player goes: their offline picture, else the first of
+  // their home card's pictures (the profile read the person card keeps, follow-atoms' loadPeek), else none
+  const thumbs = useAtomValue(peeksAtom)[name]?.card.thumbs;
+  const [brokenThumb, setBrokenThumb] = useState<string | null>(null);
+  useEffect(() => {
+    if (mobile && name && !isDummyName(name)) void loadPeek(name);
+  }, [mobile, name]);
+  const offlineThumb = offline !== null ? api.offlineUrl(name, offline) : thumbs?.[0] !== undefined ? api.streamThumbUrl(name, thumbs[0]) : null;
+  const phoneThumb = offlineThumb !== brokenThumb ? offlineThumb : null;
 
   // Mount only: start watching the name in the url (or take back the stream picture in picture
   // kept alive), and on the way out stop, unless picture in picture keeps it going in the corner.
@@ -313,12 +322,46 @@ export function WatchPage() {
               <DmButton name={name} />
             </div>
           </Skeleton>
+        ) : mobile ? (
+          // a phone's profile is the player's box, the same 16:9 in the same place (and a strip while typing,
+          // as the player is), so the tabs sit where they will when the stream starts: a thumbnail of the
+          // stream, or their face and the word on black. the word, their line and the sentence stay for
+          // screen readers and the tests (docs/spec.md)
+          <div id="profile" data-presence={presence} ref={strip.ref} className={cn('relative', strip.box)} style={strip.style}>
+            <div className={cn('relative aspect-video w-full overflow-hidden bg-black', strip.frame)}>
+              {phoneThumb ? (
+                <img
+                  id={offline !== null ? 'offline-picture' : undefined}
+                  src={phoneThumb}
+                  alt=""
+                  draggable={false}
+                  className="absolute inset-0 h-full w-full object-cover"
+                  onError={() => setBrokenThumb(phoneThumb)}
+                />
+              ) : (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+                  <Face name={name} version={avatar} className="h-16 w-16 text-2xl" />
+                  <span aria-hidden className="text-sm text-white/70">
+                    offline
+                  </span>
+                </div>
+              )}
+            </div>
+            <div className="sr-only">
+              <p>{PRESENCE_WORD[presence]}</p>
+              {offlineNote && <p id="offline-note">{offlineNote}</p>}
+              <p>{phase === 'loading' ? 'loading' : NOT_LIVE_WORDS[presence]}</p>
+            </div>
+            <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
+              <span className="ml-auto" />
+              <DmButton name={name} />
+            </div>
+          </div>
         ) : (
           <>
             {offline !== null && <OfflinePicture id="offline-picture" src={api.offlineUrl(name, offline)} className="mb-3 w-full" />}
-            {/* a phone's is smaller: it is pinned over the tabs, and the open tab gets what it leaves */}
-            <div id="profile" className={cn(panelClassName('flex flex-wrap items-center gap-6 p-6 max-md:gap-3 max-md:p-3'))} data-presence={presence}>
-              <Face name={name} version={avatar} className="h-28 w-28 text-5xl max-md:h-14 max-md:w-14 max-md:text-2xl" />
+            <div id="profile" className={cn(panelClassName('flex flex-wrap items-center gap-6 p-6'))} data-presence={presence}>
+              <Face name={name} version={avatar} className="h-28 w-28 text-5xl" />
               <div className="min-w-0 flex-1">
                 <p className={cn('flex items-center gap-2 text-lg font-semibold', PRESENCE_TEXT[presence])}>
                   <span aria-hidden className={cn('inline-block h-3 w-3', PRESENCE_SQUARE[presence])} />
