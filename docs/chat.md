@@ -50,6 +50,7 @@ server → client
 
 ```json
 {"type":"history","messages":[{"id":"1729...-0","from":"bob","text":"hi","streamer":false,"verified":false,"groups":[],"avatar":null,"at":1729000000000}]}
+{"type":"history","messages":[{"id":"1729...-1","from":"ann","text":"yo","streamer":false,"verified":true,"groups":[{"name":"vip-0042","badge":"VIP","color":"#ff00aa","icon":1700000000,"about":"the vips","members":12,"banner":1700000001}],"avatar":null,"at":1729000000500}]}
 {"type":"message","id":"1729...-1","from":"billy","text":"yo","streamer":true,"verified":true,"groups":[{"name":"vip","badge":"vip","color":"#f2cc60"}],"avatar":1700000000,"at":1729000000500}
 {"type":"message","id":"1729...-2","from":"pixelfan","text":"hi chat","streamer":false,"verified":false,"groups":[{"name":"bot","badge":"BOT","color":"#5865f2"}],"avatar":null,"at":1729000000900}
 {"type":"count","count":12}

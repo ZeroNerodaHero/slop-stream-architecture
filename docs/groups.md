@@ -50,6 +50,20 @@ flowchart LR
 
 chat (`chat.md`): the `hello` takes `"bot": true`; every `history` and `message` line carries `groups`, an array, empty for most lines.
 
+each badge on a line (groups.rs `Badge`, read by `badges_of` in one query at the hello, the count a subquery on `memberships_group_idx`) is `{ name, badge, color, icon?, about?, members?, banner? }`:
+
+| field | what |
+| --- | --- |
+| `name`, `badge`, `color` | the group's full name, the word, `#rrggbb` |
+| `icon` | unix seconds, the `?v=` of `/api/groups/:group/icon`; left out when there is no picture |
+| `about` | the line about the group; left out when empty |
+| `members` | how many are in it, counted when the socket said hello |
+| `banner` | unix seconds, the `?v=` of `/api/groups/:group/banner`; left out when there is none |
+
+they are a copy from when the line was said (the stream's `g`, postgres' badges json), so an older line may lack any of the optional ones, and its count and line are the ones it was said with. `GET /api/streamers/:name`'s `badge` is the same shape (`badge_of`).
+
+hovering a badge on a chat line, or tabbing to it, shows the group's card (`#group-badge-card`, `GroupCard` in `Badge.tsx`, in the site's `Tooltip`), from those fields alone, no fetch: the banner across the top (16:5, when there is one), the picture beside the full name with the badge under it, the line about it (three lines at most) and `N members` (not for `bot`). 280px wide, a stroke, no shadow. a badge anywhere else (the person card, the groups tab) keeps its plain `title`.
+
 ### the facts
 
 every change to a group is one `group` entry on the `events` stream (`presence::publish_group`), written after the row is, with `name` the group, `what` the kind, and `data` the change as json. the gateway forwards it whole, as `{"type":"group","group":"<name>","what":"<what>", …data}`, to the sockets watching `group:<name>`, and knows nothing more about it: a new kind of change is the api's alone. `live` and `ended` for a member are the gateway's own: on a `live` or `ended` fact it looks up the name's groups (only when some socket watches some group) and tells each room's watchers `{"type":"group","group":…,"what":"live","who":"<name>"}`.
