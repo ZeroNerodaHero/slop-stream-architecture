@@ -14,9 +14,17 @@ import { GroupMark } from '@/shared-components/GroupMark';
 import { SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
 import { cn } from '@/utils/cn';
 
-const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary';
+/** The auth modal's box (AuthForm.tsx), in a row. */
+const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base leading-snug text-textPrimary placeholder:text-textTertiary focus:border-primaryBlue';
+/** What public and private each mean, under the locks: only the chosen one's. */
+const LISTING = {
+  public: 'a public group is on the lists for anyone. the owner can switch this later, under manage on the group.',
+  private:
+    'a private group is left off the lists. someone with the address can still open it and join. four digits are added, so the same name can be made twice. the owner can switch this later, under manage on the group.',
+};
 
 /** The api's caps, as the boxes know them. */
 const MAX_BADGE_CHARS = 12;
@@ -129,17 +137,19 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       // a phone's is a sheet up from the foot (MobileSheet.tsx)
       className={cn(
-        'm-auto max-h-[calc(100dvh-2rem)] w-[min(520px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60',
+        'm-auto max-h-[calc(100dvh-2rem)] w-[min(520px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-5 text-base text-textPrimary backdrop:bg-black/60',
         SHEET_DIALOG
       )}
     >
       <SheetGrab onDismiss={onClose} />
-      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
-        <h2 id="groups-make-title" className="text-sm font-semibold uppercase tracking-wider text-textTertiary">
+      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
+        {/* 8px under the title, not the form's 12 */}
+        <h2 id="groups-make-title" className="-mb-1 text-sm font-semibold uppercase tracking-wider text-textTertiary">
           make a group
         </h2>
         {/* the banner and the picture as they will sit on the group: the whole picture is the click, as on the room */}
-        <div className="relative mb-8">
+        {/* the picture hangs 32px under the banner; the line under it sits 8px past that (28 here and the form's 12) */}
+        <div className="relative mb-7">
           <div id="groups-make-banner" className="group/banner relative h-28 overflow-hidden border border-primaryStroke" style={{ backgroundColor: color }}>
             {banner && <img src={banner.url} alt="" className="h-full w-full object-cover" />}
             <PicturePick
@@ -162,7 +172,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
             />
           </div>
         </div>
-        <p className="text-sm text-textTertiary">a banner and a picture, now or later on the group. without them the group wears its colour.</p>
+        <p className="text-sm leading-snug text-textTertiary">a banner and a picture, now or later on the group. without them the group wears its colour.</p>
         <div className="flex flex-wrap items-center gap-2">
           <input
             id="groups-make-name"
@@ -202,7 +212,8 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
           aria-label="about"
           className={INPUT}
         />
-        <div className="flex flex-wrap items-center gap-2">
+        {/* the swatches, the square for any other colour and the badge as it will read: one 24px line */}
+        <div className="flex flex-wrap items-center gap-1.5">
           {SWATCHES.map((swatch) => (
             <Tooltip key={swatch} content={swatch}>
               <button
@@ -211,45 +222,31 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
                 aria-pressed={swatch === color}
                 onClick={() => setColor(swatch)}
                 style={{ backgroundColor: swatch }}
-                className={cn('h-8 w-8 border-2', swatch === color ? 'border-textPrimary' : 'border-transparent')}
+                // the chosen one's ring is an outline: no box-shadow on this site
+                className={cn('h-6 w-8 focus-visible:outline-primaryBlue', swatch === color && 'outline outline-2 outline-offset-1 outline-textPrimary')}
               />
             </Tooltip>
           ))}
-          <input
-            id="groups-make-color"
-            type="color"
-            value={color}
-            onChange={(e) => setColor(e.target.value)}
-            aria-label="any other colour"
-            className="h-8 w-12 cursor-pointer border border-primaryStroke bg-background p-0.5"
-          />
-          <Badge group={{ name: clean || 'new', badge: badge.trim() || 'badge', color }} src={icon?.url} />
+          <Tooltip content="any other colour">
+            {/* the native picker, unseen over a square of the colour; it opens on the click */}
+            <label className="relative h-6 w-6 shrink-0 cursor-pointer border border-primaryStroke focus-within:border-primaryBlue" style={{ backgroundColor: color }}>
+              <input
+                id="groups-make-color"
+                type="color"
+                value={color}
+                onChange={(e) => setColor(e.target.value)}
+                aria-label="any other colour"
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              />
+            </label>
+          </Tooltip>
+          <Badge group={{ name: clean || 'new', badge: badge.trim() || 'badge', color }} src={icon?.url} size="md" className="ml-1.5" />
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            id="groups-make-public"
-            type="button"
-            aria-pressed={isPublic}
-            onClick={() => setPublic(true)}
-            className={cn('text-sm font-semibold', isPublic ? 'text-primaryBlue' : 'text-textTertiary')}
-          >
-            public
-          </button>
-          <button
-            id="groups-make-private"
-            type="button"
-            aria-pressed={!isPublic}
-            onClick={() => setPublic(false)}
-            className={cn('text-sm font-semibold', !isPublic ? 'text-primaryBlue' : 'text-textTertiary')}
-          >
-            private
-          </button>
-          <p className="text-sm text-textTertiary">
-            a private group is left off the lists. someone with the address can still open it and join. four digits are added, so the same name can be made twice. the
-            owner can switch this later, under manage on the group.
-          </p>
+        <div className="flex flex-col gap-1">
+          <VisibilityToggle isPublic={isPublic} onChange={setPublic} ids={['groups-make-public', 'groups-make-private']} />
+          <p className="text-sm leading-snug text-textTertiary">{isPublic ? LISTING.public : LISTING.private}</p>
         </div>
-        <div className="flex items-center justify-end gap-3">
+        <div className="mt-3 flex items-center justify-end gap-3">
           <button type="button" className="text-sm text-textTertiary" onClick={onClose}>
             cancel
           </button>

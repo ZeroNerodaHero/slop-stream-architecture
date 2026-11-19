@@ -14,6 +14,8 @@ interface BadgeProps {
   src?: string | null;
   /** The pointer or the keyboard focus on it shows the group's card (GroupCard): a chat line's badges. Otherwise a plain `title`. */
   card?: boolean;
+  /** `md` is 24px tall instead of 16: the create dialog's preview, beside its colour swatches. */
+  size?: 'sm' | 'md';
   className?: string;
 }
 
@@ -27,7 +29,7 @@ interface BadgeProps {
  * with any colour a group picked. With `card` it is a tab stop, and hovering or focusing it
  * shows the group's card instead of the browser's title.
  */
-export function Badge({ group, src, card, className }: BadgeProps) {
+export function Badge({ group, src, card, size = 'sm', className }: BadgeProps) {
   const icons = useAtomValue(groupIconsAtom);
   const icon = icons.has(group.name) ? icons.get(group.name) : group.icon;
   const pill = (
@@ -38,8 +40,8 @@ export function Badge({ group, src, card, className }: BadgeProps) {
       aria-label={card ? `group ${group.name}` : undefined}
       className={cn('inline-flex items-center align-middle', card && 'cursor-default', className)}
     >
-      <GroupMark name={group.name} color={group.color} icon={icon} src={src} className="h-4 w-4 text-[10px] leading-none" />
-      <Pill group={group} />
+      <GroupMark name={group.name} color={group.color} icon={icon} src={src} className={size === 'md' ? 'h-6 w-6 text-xs leading-none' : 'h-4 w-4 text-[10px] leading-none'} />
+      <Pill group={group} className={size === 'md' ? 'px-1.5 leading-6' : undefined} />
     </span>
   );
   if (!card) return pill;
@@ -51,12 +53,12 @@ export function Badge({ group, src, card, className }: BadgeProps) {
 }
 
 /** The word in the group's colour, white or black by that colour's lightness. */
-function Pill({ group }: { group: GroupBadge }) {
+function Pill({ group, className }: { group: GroupBadge; className?: string }) {
   const dark = isDark(fromHex(group.color));
   return (
     <span
       style={{ backgroundColor: group.color, color: dark ? '#fff' : '#000' }}
-      className="whitespace-nowrap px-1 text-xs font-semibold uppercase leading-4 tracking-wider"
+      className={cn('whitespace-nowrap px-1 text-xs font-semibold uppercase leading-4 tracking-wider', className)}
     >
       {group.badge}
     </span>

@@ -81,6 +81,7 @@ import { ProfileLink } from '@/shared-components/ProfileLink';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
 import { Field, SECTION_TITLE, Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -2071,26 +2072,7 @@ function ListingSection({ server, room, run }: ManageProps) {
   const isPublic = room.public !== false;
   return (
     <Section title="listing" description="public is on the lists for anyone. private is off them: someone with the address can still open it and join.">
-      <p className="flex flex-wrap items-center gap-2">
-        <button
-          id="room-public"
-          type="button"
-          aria-pressed={isPublic}
-          className={cn('text-sm font-semibold', isPublic ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
-          onClick={() => void run(() => api.setGroupPublic(server, true))}
-        >
-          public
-        </button>
-        <button
-          id="room-private"
-          type="button"
-          aria-pressed={!isPublic}
-          className={cn('text-sm font-semibold', !isPublic ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
-          onClick={() => void run(() => api.setGroupPublic(server, false))}
-        >
-          private
-        </button>
-      </p>
+      <VisibilityToggle isPublic={isPublic} ids={['room-public', 'room-private']} onChange={(next) => void run(() => api.setGroupPublic(server, next))} />
     </Section>
   );
 }
