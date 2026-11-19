@@ -15,7 +15,7 @@ keep every existing bullet as it is, with two factual fixes when you next edit t
 
 also, `transition.md` still describes the events socket as a future migration; the socket already runs. consider a short notice at the top of that file: the migration happened; the file is history.
 
-the database is one file, `api/schema.sql`, applied by the api at boot to an empty database (`api/src/schema.rs`). there are no migrations any more: a change to the tables is an edit of that file and a reset of the database. a `migrate-<n>` left in a topic file (the history block in `groups.md`) is the order things were built in, not a file.
+the database is one file, `api/schema.sql`, applied by the api at boot to an empty database (`api/src/schema.rs`). it is the baseline as of 2026-11-19 (the old migrations folded into it); a change to the tables from here is a new `api/migrations/NNNN-what.sql`, applied at the api's next boot, no reset (`api/migrations/README.md`). a `migrate-<n>` left in a topic file (the history block in `groups.md`) is the order things were built in, not a file.
 
 # below this line, the current index (unchanged), starting with:
 

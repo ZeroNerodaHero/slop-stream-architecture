@@ -1,8 +1,7 @@
--- The whole database, as it is now. The api applies this file at boot to an empty database
--- (one with no `streamers` table) in one transaction, and leaves a database that has it alone
--- (api/src/schema.rs). There are no migrations: a change to the tables is an edit of this file,
--- and an existing database is reset to pick it up (drop the public schema, or `docker compose
--- down -v`, then redeploy). Fine while the box has no real users.
+-- The baseline: the whole database as of 2026-11-19. The api applies this file at boot to an
+-- empty database (one with no `streamers` table) in one transaction, then the migrations after
+-- it (api/migrations, listed in api/src/schema.rs `MIGRATIONS`). Do not edit it: a change to the
+-- tables is a new migration, which reaches an existing database at its next boot, no reset.
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
 

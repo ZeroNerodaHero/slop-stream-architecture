@@ -17,6 +17,6 @@ compose starts four containers from this image: `api`, `chat`, `events`, `home`.
 
 routes are registered in `src/main.rs` (`fn router`) and in each module's `routes()`. the contract is `docs/spec.md`. health: `GET /api/health`. errors: `POST|GET /api/errors` (get needs `ADMIN_NAMES` or `OPS_TOKEN`).
 
-schema: `schema.sql`, the whole database in one file. `src/schema.rs` applies it at boot, in one transaction, when the database has no `streamers` table, and otherwise does nothing. there are no migrations and no version table: to change the tables, edit `schema.sql` and reset the database (`docker compose down -v`, or drop the `public` schema, then redeploy). fine while there are no real users.
+schema: `schema.sql`, the whole database in one file. `src/schema.rs` applies it at boot, in one transaction, when the database has no `streamers` table, and otherwise does nothing. it is the baseline, frozen as of 2026-11-19: to change the tables from here, add `migrations/NNNN-what.sql` and its line in `MIGRATIONS` (`src/schema.rs`). at boot the api applies the ones `schema_migrations` lacks, in order, so an existing database picks a change up with no reset (`migrations/README.md`).
 
 the watch page html (`GET /watch/<name>`) is served here so a shared link gets a preview card (`src/profile.rs`).
