@@ -61,6 +61,8 @@ export interface Streamer extends OAuthVerified {
   last_live?: string | null;
   /** When the account was made, rfc3339; null for a free name. Absent on an older api. */
   joined_at?: string | null;
+  /** The one group badge the card shows under the name: their primary group, else the first they joined (the first their chat lines wear). null: no group. Absent on an older api. */
+  badge?: GroupBadge | null;
 }
 
 /** One line of a direct message thread (docs/dms.md). `from` is the writer's name now; `at` unix milliseconds; `images` the pictures on it, the ids from `POST /api/chat-images`, empty for none (an older api leaves it off; `dm-atoms` fills it). */
@@ -234,6 +236,8 @@ export interface Group extends GroupBadge {
   tag?: number | null;
   /** `bot`: nobody joins it, a chat socket that says `bot: true` wears it. */
   automatic: boolean;
+  /** The login's primary group: its name wears this badge alone. Always false for nobody. Absent on an older api: none. */
+  primary?: boolean;
 }
 
 export interface NewGroup {
@@ -618,6 +622,10 @@ export const api = {
   createGroup: (group: NewGroup) => request<Group>('POST', '/api/groups', group),
   joinGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/join`),
   leaveGroup: (name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(name)}/leave`),
+  /** The one group whose badge the login's name wears, in place of every group's. 403 `join it first`. Leaving it clears it. */
+  setPrimaryGroup: (name: string) => request<null>('PUT', `/api/groups/${encodeURIComponent(name)}/primary`),
+  /** Back to every group's badge, in the order joined. */
+  clearPrimaryGroup: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}/primary`),
   /** An owner, the one who made it, or an admin. Its members are out with it. */
   deleteGroup: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}`),
   /** The whole room: the group, its roles, what this login may do, the channels, who is live, and the roster and bans it may see. 404 for no such group. */

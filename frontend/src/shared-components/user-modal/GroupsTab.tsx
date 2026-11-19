@@ -15,7 +15,8 @@ import {
   leaveGroup,
   loadGroups,
   setGroupListed,
-  myGroupsAtom
+  setPrimaryGroup,
+  myBadgesAtom
 } from '@/infra/atoms/groups-atoms';
 import { closeUserModal, pickTab } from '@/infra/atoms/user-modal-atoms';
 import { Badge } from '@/shared-components/Badge';
@@ -30,7 +31,8 @@ const SMALL = 'px-3 py-1.5 text-sm';
 
 /**
  * Groups: the badges a name wears in chat. Everyone sees the list; a login joins and leaves,
- * and deletes the one it owns. Making one is the groups page's and home's (MakeGroupDialog.tsx),
+ * picks one of its groups as primary (its name then wears that badge alone, and its card shows
+ * it), and deletes the one it owns. Making one is the groups page's and home's (MakeGroupDialog.tsx),
  * where the banner and the picture go on with it; this tab only points there. `bot` is
  * automatic (a bot's socket says so), so it has no join. Every change says hello to the open
  * chat again, so the badges follow at once.
@@ -39,7 +41,7 @@ export function GroupsTab() {
   const me = useAtomValue(meAtom);
   const groups = useAtomValue(groupsAtom);
   const loaded = useAtomValue(groupsLoadedAtom);
-  const mine = useAtomValue(myGroupsAtom);
+  const mine = useAtomValue(myBadgesAtom);
   const busy = useAtomValue(groupsBusyAtom);
   const status = useAtomValue(groupsStatusAtom);
 
@@ -55,7 +57,7 @@ export function GroupsTab() {
         title="your badges"
         description={
           me
-            ? 'what your name wears in chat: the badge of every group you are in, in the order you joined.'
+            ? "what your name wears in chat: your primary group's badge, or with none picked, the badge of every group you are in, in the order you joined."
             : 'a group puts a badge next to your name in chat. groups are for accounts; nobody has to have one.'
         }
       >
@@ -156,15 +158,45 @@ function GroupRow({ group, me, busy }: { group: Group; me: string | null; busy: 
             </button>
           </>
         ) : group.mine ? (
-          <button
-            id={`group-leave-${group.name}`}
-            type="button"
-            className="text-sm font-semibold text-textTertiary disabled:opacity-40"
-            disabled={busy}
-            onClick={() => setLeaveSure(true)}
-          >
-            leave
-          </button>
+          <>
+            {/* the one badge the name wears. an older api has no `primary`: nothing to pick */}
+            {group.primary !== undefined &&
+              (group.primary ? (
+                <>
+                  <span id={`group-primary-${group.name}`} className="text-sm font-semibold text-primaryBlue">
+                    primary
+                  </span>
+                  <button
+                    id={`group-unprimary-${group.name}`}
+                    type="button"
+                    className="text-sm text-textTertiary disabled:opacity-40"
+                    disabled={busy}
+                    onClick={() => void setPrimaryGroup(group.name, false)}
+                  >
+                    unset
+                  </button>
+                </>
+              ) : (
+                <button
+                  id={`group-make-primary-${group.name}`}
+                  type="button"
+                  className="text-sm font-semibold text-primaryBlue disabled:opacity-40"
+                  disabled={busy}
+                  onClick={() => void setPrimaryGroup(group.name, true)}
+                >
+                  make primary
+                </button>
+              ))}
+            <button
+              id={`group-leave-${group.name}`}
+              type="button"
+              className="text-sm font-semibold text-textTertiary disabled:opacity-40"
+              disabled={busy}
+              onClick={() => setLeaveSure(true)}
+            >
+              leave
+            </button>
+          </>
         ) : (
           <Button id={`group-join-${group.name}`} variant="primary" className={SMALL} disabled={busy} onClick={() => void joinGroup(group.name)}>
             join

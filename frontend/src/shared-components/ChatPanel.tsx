@@ -247,7 +247,7 @@ function Speaker({ line }: { line: ChatLine }) {
       {someone && peek.at && (
         <PersonCard
           id={`chat-peek-${line.from}`}
-          person={{ name: line.from, verified: line.verified, oauth_verified: line.oauth_verified, avatar: line.avatar }}
+          person={{ name: line.from, verified: line.verified, oauth_verified: line.oauth_verified, avatar: line.avatar, groups: line.groups }}
           at={peek.at}
         />
       )}

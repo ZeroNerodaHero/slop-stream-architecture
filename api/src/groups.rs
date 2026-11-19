@@ -74,13 +74,16 @@ pub(crate) struct Badge {
     pub(crate) icon: Option<i64>,
 }
 
-/// The badges an account wears: its groups' in the order joined, with `bot` first when the
-/// socket said so. One query. `None` (an anonymous nick) matches no membership.
+/// The badges an account wears: its primary group's alone when it picked one (migrate-33,
+/// `memberships.is_primary`), else its groups' in the order joined; `bot` first either way when
+/// the socket said so. One query. `None` (an anonymous nick) matches no membership.
 pub(crate) async fn badges_of(db: &PgPool, user: Option<Uuid>, bot: bool) -> Result<Vec<Badge>, sqlx::Error> {
     let rows: Vec<(String, String, String, Option<i64>)> = sqlx::query_as(
         "SELECT g.name, g.badge, g.color, (EXTRACT(EPOCH FROM g.icon_at))::bigint FROM groups g
          LEFT JOIN memberships m ON m.group_name = g.name AND m.user_id = $1
-         WHERE (g.name = $2 AND $3) OR m.user_id IS NOT NULL
+         WHERE (g.name = $2 AND $3)
+            OR (m.user_id IS NOT NULL
+                AND (m.is_primary OR NOT EXISTS (SELECT 1 FROM memberships p WHERE p.user_id = $1 AND p.is_primary)))
          ORDER BY g.name = $2 DESC, m.joined_at",
     )
     .bind(user)
@@ -89,6 +92,23 @@ pub(crate) async fn badges_of(db: &PgPool, user: Option<Uuid>, bot: bool) -> Res
     .fetch_all(db)
     .await?;
     Ok(rows.into_iter().map(|(name, badge, color, icon)| Badge { name, badge, color, icon }).collect())
+}
+
+/// The one badge a name's card shows (`GET /api/streamers/:name`, `badge`): the account's
+/// primary group, else the first it joined, the first its chat lines wear. None for a name with
+/// no account or no group.
+pub(crate) async fn badge_of(db: &PgPool, name: &str) -> Result<Option<Badge>, sqlx::Error> {
+    let row: Option<(String, String, String, Option<i64>)> = sqlx::query_as(
+        "SELECT g.name, g.badge, g.color, (EXTRACT(EPOCH FROM g.icon_at))::bigint FROM streamers st
+         JOIN memberships m ON m.user_id = st.id
+         JOIN groups g ON g.name = m.group_name
+         WHERE st.name = $1 AND st.password_hash IS NOT NULL
+         ORDER BY m.is_primary DESC, m.joined_at LIMIT 1",
+    )
+    .bind(name)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(name, badge, color, icon)| Badge { name, badge, color, icon }))
 }
 
 // ---- rules -----------------------------------------------------------------------------
@@ -219,10 +239,10 @@ pub(crate) async fn tell(s: &AppState, group: &str, what: &str, data: Value) {
 
 // ---- routes ----------------------------------------------------------------------------
 
-/// name, badge, color, about, made_by, members, mine, public, title, tag, icon
-type GroupRow = (String, String, String, String, Option<String>, i64, bool, bool, Option<String>, Option<i32>, Option<i64>);
+/// name, badge, color, about, made_by, members, mine, public, title, tag, icon, primary
+type GroupRow = (String, String, String, String, Option<String>, i64, bool, bool, Option<String>, Option<i32>, Option<i64>, bool);
 
-fn group_json((name, badge, color, about, made_by, members, mine, public, title, tag, icon): GroupRow) -> Value {
+fn group_json((name, badge, color, about, made_by, members, mine, public, title, tag, icon, primary): GroupRow) -> Value {
     json!({
         "name": name,
         "badge": badge,
@@ -235,19 +255,22 @@ fn group_json((name, badge, color, about, made_by, members, mine, public, title,
         "title": title,
         "tag": tag,
         "icon": icon,
+        "primary": primary,
         "automatic": name == BOT_GROUP,
     })
 }
 
 /// `GET /api/groups`: every group a stranger may see, `bot` first, then oldest first.
-/// A private group is here only for someone in it (and `bot` always). `made_by` is the
+/// A private group is here only for someone in it (and `bot` always). `primary` is the asking
+/// login's primary group (`set_primary`), always false for nobody. `made_by` is the
 /// maker's name as it is now, by the id: a renamed maker reads right everywhere.
 async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let rows: Vec<GroupRow> = sqlx::query_as(
         "SELECT g.name, g.badge, g.color, g.about, maker.name,
                 (SELECT count(*) FROM memberships m WHERE m.group_name = g.name),
                 EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1),
-                g.public, g.title, g.tag, (EXTRACT(EPOCH FROM g.icon_at))::bigint
+                g.public, g.title, g.tag, (EXTRACT(EPOCH FROM g.icon_at))::bigint,
+                EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1 AND m.is_primary)
          FROM groups g
          LEFT JOIN streamers maker ON maker.id = g.created_by_id
          WHERE g.public OR g.name = $2
@@ -345,7 +368,7 @@ async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGrou
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     }
     log::info!("{}: made the group {slug} ({badge})", maker.name);
-    Ok((StatusCode::CREATED, Json(group_json((slug, badge, color, about, Some(maker.name.clone()), 1, true, body.public, Some(title), Some(tag), None)))))
+    Ok((StatusCode::CREATED, Json(group_json((slug, badge, color, about, Some(maker.name.clone()), 1, true, body.public, Some(title), Some(tag), None, false)))))
 }
 
 /// `POST /api/groups/:group/join`: 204, also when already in it. 401 for nobody, 404 for no
@@ -426,6 +449,42 @@ async fn leave(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me)
         tell(&s, &group, "left", json!({ "who": me.name, "by": "leave", "members": members })).await;
     }
     delete_if_empty(&s, &group).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `PUT /api/groups/:group/primary`: the one group whose badge this login's name wears, in
+/// place of every group's (`badges_of`), and the one its card shows (`badge_of`). 204. 401 for
+/// nobody, 403 `join it first` for a group it is not in. Leaving the group, or the group going,
+/// takes the choice with the membership row (migrate-33).
+async fn set_primary(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
+    let me = me.ok_or_else(not_logged_in)?;
+    let group = group_name(&group)?;
+    // one statement, so the unique index never sees two: every row of the login's off, this one on
+    let done = sqlx::query(
+        "UPDATE memberships SET is_primary = (group_name = $2)
+         WHERE user_id = $1 AND EXISTS (SELECT 1 FROM memberships WHERE user_id = $1 AND group_name = $2)",
+    )
+    .bind(me.id)
+    .bind(&group)
+    .execute(&s.db)
+    .await?;
+    if done.rows_affected() == 0 {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "join it first"));
+    }
+    log::info!("{}: primary group {group}", me.name);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `DELETE /api/groups/:group/primary`: back to every group's badge. 204, also when it was not
+/// the primary. 401 for nobody.
+async fn clear_primary(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
+    let me = me.ok_or_else(not_logged_in)?;
+    let group = group_name(&group)?;
+    sqlx::query("UPDATE memberships SET is_primary = false WHERE user_id = $1 AND group_name = $2 AND is_primary")
+        .bind(me.id)
+        .bind(&group)
+        .execute(&s.db)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1150,6 +1209,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}", get(crate::group_mod::room).delete(remove))
         .route("/api/groups/{group}/join", post(join))
         .route("/api/groups/{group}/leave", post(leave))
+        .route("/api/groups/{group}/primary", put(set_primary).delete(clear_primary))
         .route("/api/groups/{group}/channels", post(create_channel).put(reorder_channels))
         .route("/api/groups/{group}/channels/{channel}", put(rename_channel).delete(delete_channel))
         .route("/api/groups/{group}/channels/{channel}/cooldown", put(set_channel_cooldown))

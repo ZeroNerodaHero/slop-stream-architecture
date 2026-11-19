@@ -583,11 +583,13 @@ async fn get_streamer(State(s): State<AppState>, Name(name): Name, me: Me) -> Ap
     let follows = follows::stats(&s.db, &name, me.0.as_ref().map(|a| a.id)).await?;
     // when the last stream ended and when the account was made: the person card's lines
     let last_live = last_live(&s.db, &name).await?;
+    // the one group badge the card shows under the name: the primary group, else the first joined
+    let badge = if p.verified { groups::badge_of(&s.db, &name).await? } else { None };
     Ok(Json(json!({
         "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified, "oauth_verified": p.oauth_verified, "presence": presence, "thumbs": thumbs,
         "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials, "about": p.about,
         "followers": follows.followers, "following": follows.following, "follows_you": follows.follows_you,
-        "last_live": last_live, "joined_at": p.joined,
+        "last_live": last_live, "joined_at": p.joined, "badge": badge,
     })))
 }
 

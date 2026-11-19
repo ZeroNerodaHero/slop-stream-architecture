@@ -251,6 +251,12 @@ const MIGRATIONS: &[Migration] = &[
         present: "SELECT to_regclass('public.oauth_identities') IS NOT NULL
             AND to_regclass('public.admin_pins') IS NOT NULL",
     },
+    Migration {
+        version: 33,
+        name: "migrate-33.sql",
+        sql: include_str!("../migrations/migrate-33.sql"),
+        present: "SELECT to_regclass('public.memberships_one_primary_idx') IS NOT NULL",
+    },
 ];
 
 /// Apply every migration that has not run. The chat process does not call this.

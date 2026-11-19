@@ -2,10 +2,13 @@ import { useAtomValue } from 'jotai';
 import { type CSSProperties, type FocusEvent, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import type { GroupBadge } from '@/infra/api';
+import { BOT_GROUP } from '@/infra/atoms/chat-atoms';
 import { loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
 import { type Presence, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { profilePopupAtom } from '@/infra/atoms/profile-popup-atoms';
 import type { PanelSide } from '@/infra/atoms/settings-atoms';
+import { Badge } from '@/shared-components/Badge';
 import { Face } from '@/shared-components/Face';
 import { PresenceSquare, Who } from '@/shared-components/PersonRow';
 import { StreamStill } from '@/shared-components/StreamStill';
@@ -29,6 +32,8 @@ export interface CardPerson {
   bio?: string;
   /** The word for how they are. Not known: the card asks. */
   presence?: Presence;
+  /** The badges a chat line carried: the group badge under the name until (or when an older api does not say) the card's answer has `badge`. */
+  groups?: GroupBadge[];
 }
 
 /** Where the card goes: level with the row pointed at, beside the column the row is in. */
@@ -111,7 +116,9 @@ interface PersonCardProps {
 
 /**
  * Somebody, beside the column their row is in, while the pointer or the focus is on the row:
- * the face with the presence square on its corner, the name, then their status under the two.
+ * the face with the presence square on its corner, the name at the top beside it with their
+ * group's badge under the name (the primary group, else the first joined; none for no group),
+ * then their status under the two.
  * Streaming, a frame of the stream (StreamStill.tsx, kept a few seconds old) stands between
  * the name and the status, the card's width: the preview of what they are streaming, the
  * sidebar's small one made big. The sidebar's rows, the chat window's tabs, a chat line's
@@ -138,6 +145,8 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
   const known = person.verified && peek && !peek.verified ? undefined : peek;
   const bio = person.bio ?? known?.bio ?? '';
   const presence = person.presence ?? known?.presence;
+  // their primary group's badge, else the first group their chat lines wear (the api's `badge`); an older api's answer has none, so the line's own
+  const badge = known?.badge !== undefined ? known.badge : (person.groups?.find((g) => g.name !== BOT_GROUP) ?? null);
   const root = at.host.ownerDocument.documentElement;
   const w = root.clientWidth;
   const h = root.clientHeight;
@@ -156,7 +165,8 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
       data-presence={presence}
       className="pointer-events-none fixed z-[60] flex flex-col gap-2.5 border border-primaryStroke bg-backgroundSecondary p-3 text-base text-textPrimary"
     >
-      <span className="flex items-center gap-3">
+      {/* the name at the top beside the face, not centred on it, and their group's badge under the name */}
+      <span className="flex items-start gap-3">
         <span className="relative shrink-0">
           <Face name={person.name} version={person.avatar} className="h-12 w-12 text-lg" />
           {presence && (
@@ -167,7 +177,10 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
             </>
           )}
         </span>
-        <Who name={person.name} verified={person.verified} oauthVerified={person.oauth_verified ?? known?.oauth_verified} className="flex-1" />
+        <span className="flex min-w-0 flex-1 flex-col items-start gap-1">
+          <Who name={person.name} verified={person.verified} oauthVerified={person.oauth_verified ?? known?.oauth_verified} className="max-w-full leading-tight" />
+          {badge && <Badge group={badge} className="max-w-full" />}
+        </span>
       </span>
       {presence === 'streaming' && <StreamStill name={person.name} className="w-full" />}
       {/* the status, the width of the card: whole words, four lines at most */}
