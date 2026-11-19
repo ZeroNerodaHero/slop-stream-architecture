@@ -13,7 +13,7 @@ Why the picture in picture window showed a group's `#general` under the stream `
 | corner player (your stream) | `MiniPlayer` `LiveCorner` → `CornerPlayer` → `ChatPanel embedded owner` | `chat-atoms.ts` | ws `/chat/<name>` |
 | popped out window (Document Picture-in-Picture) | the same `CornerPlayer` portalled into `documentPictureInPicture.window` (`infra/popout.ts`) | `chat-atoms.ts` (the same jotai store: the window is the same JS realm) | as the corner |
 | direct messages | `FriendChat` | `dm-atoms.ts`: threads by peer name (`dmThreadsAtom`), drafts and pictures per thread in the component | http to send and read, the events socket (`dm` frames) to hear |
-| history, search, a speaker's lines | `ChatPanel`, `ChatSearch`, `ProfilePopup` | `chat-atoms.ts` | http `/chat/<room>/before|search|by|around` |
+| history, search, a speaker's lines | `ChatPanel`, `ChatSearch`, `ProfilePopup` | `chat-atoms.ts` | http `/chat/<room>/before`, `/search`, `/by/<name>`, `/around/<id>` |
 
 ## bugs found
 
