@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { cn } from '@/utils/cn';
 
 /**
@@ -91,52 +91,95 @@ export function useLockedDocument(on: boolean) {
       el.style.width = '100%';
       return () => Object.assign(el.style, { overflow, overscrollBehavior, position, inset, width });
     });
-    let frame = 0;
     const top = () => {
       if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
     };
-    // now, and again once iOS has run its own scroll to the box
+    // now, the next frame, and again once iOS has run its own scroll to the box (100 to 300ms later)
+    let frame = 0;
+    let later: number[] = [];
     const focused = () => {
       top();
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(top);
+      later.forEach(clearTimeout);
+      later = [100, 300].map((ms) => window.setTimeout(top, ms));
     };
     document.addEventListener('focusin', focused);
     return () => {
       document.removeEventListener('focusin', focused);
       cancelAnimationFrame(frame);
+      later.forEach(clearTimeout);
       restores.forEach((restore) => restore());
     };
   }, [on]);
 }
 
-/** How the pinned player's box eases between its full 16:9 and the strip (`useKeyboardStrip`). */
-const STRIP_EASE = 'duration-200 ease-out motion-reduce:transition-none';
+/** The stream chat's box (ChatPanel.tsx): its focus is what makes a phone's player a strip. */
+const CHAT_TEXT = 'chat-text';
+
+/** How long a blur waits before the player grows back: a tap on send blurs and refocuses within it. */
+const BLUR_GRACE_MS = 150;
 
 /**
- * The pinned player of a phone page that is the window (WatchPage.tsx, LivePage.tsx) while the
- * keyboard is up: its box eases from the full 16:9 of its width to a strip a third as tall, and
- * back once the keyboard goes, so the chat under it (flex-1) has the height while typing. Only the
- * box's height moves: the frame inside keeps its 16:9 and is scaled down to fit the strip, whole,
- * so the video is never remounted and plays on. `ref`, `style` and `box` go on the box, `frame`
- * on the frame. The height is px from the measured width (a height in px is what eases).
+ * Someone is typing in the stream's chat on a phone page that is the window (WatchPage.tsx,
+ * LivePage.tsx): `#chat-text` has the focus. The focus, not the visual viewport, is the sign: iOS
+ * Safari often pans the page (`offsetTop`) instead of shrinking it, and its `innerHeight` follows
+ * the visual viewport, so no height gap says the keyboard is up. A blur waits `BLUR_GRACE_MS`, so
+ * a tap on send does not flicker the player. `keyboard` is `useVisibleViewport`'s: where the
+ * browser does shrink the window (Android), the keyboard going while the box keeps its focus (the
+ * back button) blurs the box, so the player comes back with it.
  */
-export function useKeyboardStrip(strip: boolean) {
-  const [box, setBox] = useState<HTMLDivElement | null>(null);
-  const [width, setWidth] = useState(0);
+export function useChatTyping(on: boolean, keyboard: boolean): boolean {
+  const [typing, setTyping] = useState(false);
   useEffect(() => {
-    if (!box) return;
-    const seen = new ResizeObserver(() => setWidth(box.clientWidth));
-    seen.observe(box);
-    return () => seen.disconnect();
-  }, [box]);
-  const full = (width * 9) / 16;
+    if (!on) return;
+    let timer = 0;
+    const now = () => document.activeElement?.id === CHAT_TEXT;
+    const focusin = () => {
+      clearTimeout(timer);
+      if (now()) setTyping(true);
+    };
+    const focusout = () => {
+      clearTimeout(timer);
+      timer = window.setTimeout(() => setTyping(now()), BLUR_GRACE_MS);
+    };
+    setTyping(now());
+    document.addEventListener('focusin', focusin);
+    document.addEventListener('focusout', focusout);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('focusin', focusin);
+      document.removeEventListener('focusout', focusout);
+      setTyping(false);
+    };
+  }, [on]);
+  const hadKeyboard = useRef(false);
+  useEffect(() => {
+    if (hadKeyboard.current && !keyboard && document.activeElement?.id === CHAT_TEXT) (document.activeElement as HTMLElement).blur();
+    hadKeyboard.current = keyboard;
+  }, [keyboard]);
+  return on && typing;
+}
+
+/** How the pinned player's box eases between its full 16:9 and the strip (`keyboardStrip`). */
+const STRIP_EASE = 'duration-200 ease-out motion-reduce:transition-none';
+
+/** The phone page's width: the window less the side safe areas the page's root pads. */
+const PAGE_WIDTH = '(100vw - env(safe-area-inset-left) - env(safe-area-inset-right))';
+
+/**
+ * The pinned player of a phone page that is the window (WatchPage.tsx, LivePage.tsx) while its chat
+ * is typed in (`useChatTyping`): its box eases from the full 16:9 of the width to a strip a third
+ * as tall, full width, and back on the blur, so the chat under it (flex-1) has the height. The box
+ * has an explicit height (an aspect ratio would not shrink): the frame inside keeps its whole 16:9
+ * and slides up a third, so the strip is its middle, cropped as `object-fit: cover` would, and the
+ * video is never remounted and plays on. `style` and `box` go on the box, `frame` on the frame.
+ */
+export function keyboardStrip(strip: boolean) {
   return {
-    ref: setBox,
-    // until it is measured the box is as tall as the frame in it
-    style: width ? { height: strip ? full / 3 : full } : undefined,
+    style: { height: strip ? `calc(${PAGE_WIDTH} * 3 / 16)` : `calc(${PAGE_WIDTH} * 9 / 16)` },
     box: `overflow-hidden transition-[height] ${STRIP_EASE}`,
-    frame: cn(`origin-top transition-transform ${STRIP_EASE}`, strip && 'scale-[0.3333]')
+    frame: cn(`transition-transform ${STRIP_EASE}`, strip && '-translate-y-1/3')
   };
 }
 
