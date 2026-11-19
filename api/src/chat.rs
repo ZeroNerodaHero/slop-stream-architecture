@@ -474,7 +474,7 @@ struct Face {
 }
 
 /// Whose picture a line wears: the account's for a login (`uid`, which every login's line in
-/// every stream has: scripts/migrate-scripts/migrate-1.sh filled the ones from before), the
+/// every stream has: the chat writes it on every line), the
 /// name's for the room's streamer, nobody's for a nick.
 enum FaceKey<'a> {
     Id(Uuid),

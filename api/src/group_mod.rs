@@ -5,7 +5,7 @@
 //! them. A custom role is a name, a colour and a set of the powers below. It cannot grant
 //! owner, it cannot touch an owner, and it reaches only the powers its holder has: whoever
 //! makes, changes, deletes, gives or takes a role must hold every power on it. A role is
-//! known by a uuid postgres made (migrate-23, docs/ids.md), so a rename is a save like any
+//! known by a uuid postgres made (schema.sql, docs/ids.md), so a rename is a save like any
 //! other, and a page holds a role open while its name changes under it.
 
 use axum::body::Bytes;

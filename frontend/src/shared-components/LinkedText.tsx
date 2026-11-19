@@ -18,7 +18,7 @@ import { cn } from '@/utils/cn';
  * U+FF3B, U+FF3D, U+FF5B, U+FF5D). U+3002/U+FF0E would be a host's dot to the URL parser
  * (UTS #46): the cut is on purpose, since `。` ending a sentence before unspaced prose is far more
  * common than a fullwidth dot typed inside a host. The same start as `has_link` in postgres
- * (migrate-22.sql), which says nothing about where a link ends, so what the panel draws as a
+ * (schema.sql), which says nothing about where a link ends, so what the panel draws as a
  * link is what `has:link` finds.
  */
 const LINK_RE =

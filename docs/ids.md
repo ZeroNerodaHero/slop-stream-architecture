@@ -25,7 +25,7 @@ flowchart LR
 - a name picked at signup is not the name wanted a month later. today it cannot change at all ("it is yours alone, and it does not change", the profile tab).
 - `follows.md` wants edges that survive a rename, and pictures that do not have to be copied when a name does.
 - a row that can be named by something other than its name is also what account deletion, a merge or an admin's "who is this" would want. none of those are here; the id makes them possible without another migration.
-- a group's custom roles (`groups.md`) are keyed the same way since migrate-23: `roles.id` is a uuid postgres made, so the manage dialog opens a role in place and saves it by its id, and a rename moves nothing.
+- a group's custom roles (`groups.md`) are keyed the same way since schema.sql: `roles.id` is a uuid postgres made, so the manage dialog opens a role in place and saves it by its id, and a rename moves nothing.
 
 ## the rules
 
@@ -38,7 +38,7 @@ flowchart LR
 - **a free name's row under the new name goes.** its bio and picture were anyone's and yours arrive with you; its followers become yours, exactly as signup claiming a free name keeps that name's followers (`follows.md`): they followed the word, and the word is now you.
 - **links follow for the hold's length.** `GET /watch/<old>` is a 302 to `/watch/<new>` (the preview bots follow redirects). `POST /api/streams/<old>/watch` answers with the *new* name's grant outright, and the grant now carries `name`: a page that asked for one name and was granted another moves to it (`replace`, so back does not bounce). no 308: the page learns the name from the body, which it needs anyway.
 - **what does not follow**: chat lines already said (a line keeps the name it was said under, as it keeps its badges; its face does follow, since a login's line carries `uid` and the picture is looked up when the line is read, `chat.md`), past sessions (`sessions.name` was the url that night; the row gains `user_id`, backfilled for the sessions the account started, so its history is still one list), and the `verified` of a running stream (there is none: not while live). `stream_thumbs` *does* follow: it has no key to cascade, so the rename updates its `name` in the same transaction.
-- **`ADMIN_NAMES`** is still names in `.env` (it is how a person writes it), but each is pinned (`admin_pins`, migrate-32.sql) to the account that had it the first time a boot saw it with an account, and compared by id from then on. a renamed admin stays admin across restarts, and whoever later signs up as the released name is not one (the boot log says the name is pinned to another account). moving a pin is by hand: `DELETE FROM admin_pins WHERE name = '...'` and restart.
+- **`ADMIN_NAMES`** is still names in `.env` (it is how a person writes it), but each is pinned (`admin_pins`, schema.sql) to the account that had it the first time a boot saw it with an account, and compared by id from then on. a renamed admin stays admin across restarts, and whoever later signs up as the released name is not one (the boot log says the name is pinned to another account). moving a pin is by hand: `DELETE FROM admin_pins WHERE name = '...'` and restart.
 - **`api passwd <old>`** refuses a held name like signup does: a reset on it would make a stranger's account on a name that is somebody's for 30 more days.
 
 ## database

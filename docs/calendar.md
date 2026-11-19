@@ -1,6 +1,6 @@
 # calendar
 
-built, the first half: a calendar on a person's page of when they stream: one block per stream, on the day and at the hour it ran, and a line read off the blocks, `usually tuesdays and thursdays around 8pm`. the blocks already existed. `sessions` is one row per go-live with `started_at` and `ended_at`, filling since the first deploy, and a dropped connection is already what closes a row. what was missing, and is in the repo now: a range on the route that reads them, two columns so a block whose tab vanished ends where the stream did and not where the sweeper found it and says who closed it, and the strip, on the watch page's `calendar` tab beside `about` (`about.md`). `api/migrations/migrate-8.sql`, `main.rs` (`heartbeat`, `stop`, `sweep_once`, `list_sessions`), `video/src/main.rs` (`by=video`), `frontend/src/infra/calendar.ts`, `atoms/calendar-atoms.ts`, `shared-components/Calendar.tsx`, `WatchPage.tsx`, `test/calendar.js`. still a plan: the totals on the profile tab, `show everything`, the schedule under *later*.
+built, the first half: a calendar on a person's page of when they stream: one block per stream, on the day and at the hour it ran, and a line read off the blocks, `usually tuesdays and thursdays around 8pm`. the blocks already existed. `sessions` is one row per go-live with `started_at` and `ended_at`, filling since the first deploy, and a dropped connection is already what closes a row. what was missing, and is in the repo now: a range on the route that reads them, two columns so a block whose tab vanished ends where the stream did and not where the sweeper found it and says who closed it, and the strip, on the watch page's `calendar` tab beside `about` (`about.md`). `api/schema.sql`, `main.rs` (`heartbeat`, `stop`, `sweep_once`, `list_sessions`), `video/src/main.rs` (`by=video`), `frontend/src/infra/calendar.ts`, `atoms/calendar-atoms.ts`, `shared-components/Calendar.tsx`, `WatchPage.tsx`, `test/calendar.js`. still a plan: the totals on the profile tab, `show everything`, the schedule under *later*.
 
 ```mermaid
 flowchart LR
@@ -14,7 +14,7 @@ flowchart LR
 
 ## the short answer
 
-**a block is a session row.** `sessions(id, name, user_id, verified, started_at, ended_at, token)` (`api/migrations/migrate-1.sql:14`, `user_id` from `migrate-3.sql:20`). go-live inserts the row with `started_at = now()` and `ended_at` null (`api/src/main.rs:606`): the block opens. the block closes when `ended_at` is set, and three things set it, whichever gets there first:
+**a block is a session row.** `sessions(id, name, user_id, verified, started_at, ended_at, token)` (`api/schema.sql`, `user_id` from `schema.sql:20`). go-live inserts the row with `started_at = now()` and `ended_at` null (`api/src/main.rs:606`): the block opens. the block closes when `ended_at` is set, and three things set it, whichever gets there first:
 
 | closer | when | how late `ended_at` is |
 |---|---|---|
@@ -79,7 +79,7 @@ the one case that is not in the picture is video being down too (a deploy of vid
 ## the table, in postgres
 
 ```sql
--- api/migrations/migrate-8.sql (the next number when this is built; posts.md wants the same one)
+-- api/schema.sql
 -- the last heartbeat. a block whose tab vanished ends where the stream really ended, within
 -- one beat, not where the sweep found it. written by the heartbeat's own check, no extra query.
 ALTER TABLE sessions ADD COLUMN last_beat_at timestamptz;
@@ -166,7 +166,7 @@ one column written per heartbeat, inside the round trip the heartbeat already ma
 
 built:
 
-- `api/migrations/migrate-8.sql`, the three statements above, and its entry in `migrate.rs`.
+- `api/schema.sql`, the three statements above.
 - `api/src/main.rs`: `heartbeat`'s check is the update; `stop` reads `by` (`StopQuery`); `sweep_once` and `go_live`'s cleanup set the two columns; `list_sessions` has the range (`RangeQuery`, 93 days, 1000 rows, the account's rows by `user_id` for a claimed name, a held name answers for the one it became) and the two fields, and the last 20 without one.
 - `video/src/main.rs`: `&by=` on the stop it posts: `stop` after a close frame from the page, `video` after a socket or a peer that just went (`end_session`). a `./scripts/deploy.sh video` (ends every stream, warns first): until it is deployed video's rows read `stop`, which is true enough.
 - `frontend/src/infra/calendar.ts` (the arithmetic, pure: blocks, their pieces by day column, the monday of a week, the usually line, the words for a block), `atoms/calendar-atoms.ts` (the rows for a name and a page, a page a monday-to-sunday week; asked again when the stream on screen starts or ends, and once more 3s after an end, since `ended` reaches the watcher a beat before the api has written the row; a second set of rows, the `popup` scope, is the profile popup's, `follows.md`, which shows the same grid for whoever it is about over a page that may have its own open), `shared-components/Calendar.tsx` (the grid; the popup's under `#profile-popup-calendar` and ids that start with it), `api.ts` (`sessions`), `WatchPage.tsx` (the tabs; the grid is in the page only while its tab is open, so a page nobody looks at the calendar of makes no request).

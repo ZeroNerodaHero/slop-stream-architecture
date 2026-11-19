@@ -185,7 +185,7 @@ pub(crate) async fn dropped(s: &AppState) -> i64 {
     n.unwrap_or(0)
 }
 
-/// Of `names`, the accounts that are admins. Each name is pinned (`admin_pins`, migrate-32.sql)
+/// Of `names`, the accounts that are admins. Each name is pinned (`admin_pins`, schema.sql)
 /// to the account that had it the first time a boot saw it with an account, and from then on
 /// the admin is that account, by id, whatever it is called. So an admin who renames stays one
 /// across restarts, and whoever signs up as the released name later is not one: the pin points

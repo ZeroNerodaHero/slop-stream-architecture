@@ -37,7 +37,7 @@ flowchart LR
 ## the table
 
 ```sql
--- migrate-8.sql. a login's posts, and the replies to them. the author is the account id, so a
+-- schema.sql. a login's posts, and the replies to them. the author is the account id, so a
 -- rename keeps them. the picture, when there is one, is posts/<id>.jpg in the bucket and
 -- image_at says so (and when). a reply points at a top-level post, one level.
 
@@ -68,7 +68,7 @@ CREATE TABLE likes (
 CREATE INDEX likes_user_idx ON likes (user_id, liked_at DESC);            -- what billy liked
 ```
 
-the file is `api/migrations/migrate-8.sql`, one more entry in `MIGRATIONS` (`migrate.rs:23`) with `present: SELECT to_regclass('public.posts') IS NOT NULL`, run by the api at boot like the rest. the gateway reads a table the api made, as with `follows`.
+the table goes in `api/schema.sql`, applied by the api at boot to an empty database. the gateway reads a table the api made, as with `follows`.
 
 why these shapes:
 
@@ -191,7 +191,7 @@ a post is a row of about a hundred bytes plus the text, and a jpeg of up to half
 ## code
 
 - needs `ids.md` (built) and, for the push to followers, the `followers` map of `follows.md`'s second half; without it the frame reaches the author's own sockets and the author's page, and the feed is http. ship that way first if the map is not there.
-- `api/migrations/migrate-8.sql`, `migrate.rs`: the entry. `api/src/posts.rs`, new: the routes, the multipart read, the two publishes, the delete with its keys. about 300 lines. `Cargo.toml`: axum's `multipart`.
+- `api/schema.sql`: the tables. `api/src/posts.rs`, new: the routes, the multipart read, the two publishes, the delete with its keys. about 300 lines. `Cargo.toml`: axum's `multipart`.
 - `api/src/presence.rs`: `publish_post`, `publish_unpost`. `api/src/events.rs`: two arms in `deliver`, a `fan_union` over the three sets, the `Out::Post` and `Out::Unpost` frames. about 40 lines, plus the map if it is not built.
 - `frontend/src/infra/frames.ts`, `events.ts`, `atoms/post-atoms.ts`, `api.ts` (`post`, `feed`, `thread`, `unpost`); `pages/PostsPage.tsx`, `ThreadPage.tsx`, `shared-components/PostRow.tsx`, `Composer.tsx`; `router.tsx`. about 500 lines.
 - `test/posts.js`. `docs/README.md`'s line. when it ships: `spec.md`'s api and tests tables, `accounts.md`'s `/events` row gains the two frames.
