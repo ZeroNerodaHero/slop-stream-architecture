@@ -1,3 +1,4 @@
+import { RiUserLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 
 import { type GroupBadge, groupImage } from '@/infra/api';
@@ -5,6 +6,7 @@ import { BOT_GROUP } from '@/infra/atoms/chat-atoms';
 import { groupIconsAtom } from '@/infra/atoms/groups-atoms';
 import { fromHex, isDark } from '@/infra/theme';
 import { cn } from '@/utils/cn';
+import { compactCount } from '@/utils/count';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { Tooltip } from '@/shared-components/Tooltip';
 
@@ -69,7 +71,7 @@ function Pill({ group, className }: { group: GroupBadge; className?: string }) {
  * What a chat line's badge shows on hover and focus, from what the line carried and nothing
  * asked (groups.rs `Badge`): the banner across the top when the group has one (16:5), then its
  * picture beside its full name with the badge under the name, the line about it (three lines
- * at most) and how many are in it. A line kept before these rode along has the name and the
+ * at most); how many are in it sits at the right end of the name's row. A line kept before these rode along has the name and the
  * badge alone. Drawn in the Tooltip's box, 280px wide: a stroke, no shadow.
  */
 function GroupCard({ group, icon }: { group: GroupBadge; icon: number | null | undefined }) {
@@ -78,20 +80,25 @@ function GroupCard({ group, icon }: { group: GroupBadge; icon: number | null | u
   return (
     <span id="group-badge-card" data-group={group.name} className="flex flex-col">
       {banner && <img src={banner} alt="" className="aspect-[16/5] w-full border-b border-primaryStroke object-cover" />}
-      <span className="flex flex-col gap-2 p-3">
-        <span className="flex items-center gap-2.5">
+      <span className="flex flex-col gap-1 p-[3px]">
+        <span className="flex items-center gap-1.5">
           <GroupMark name={group.name} color={group.color} icon={icon} className="h-10 w-10 text-base" />
-          <span className="flex min-w-0 flex-col items-start gap-1">
-            <span className="max-w-full break-words font-semibold leading-tight text-textPrimary">{group.name}</span>
+          <span className="flex min-w-0 flex-1 flex-col items-start gap-1">
+            {/* the name, cut short when long, with how many are in it at the right end */}
+            <span className="flex w-full min-w-0 items-center justify-between gap-2">
+              <span className="min-w-0 truncate font-semibold leading-tight text-textPrimary">{group.name}</span>
+              {members !== null && (
+                <span id="group-badge-members" className="inline-flex shrink-0 items-center gap-1 text-xs tabular-nums text-textTertiary">
+                  <RiUserLine aria-hidden size={14} />
+                  {compactCount(members)}
+                  <span className="sr-only">{members === 1 ? ' member' : ' members'}</span>
+                </span>
+              )}
+            </span>
             <Pill group={group} />
           </span>
         </span>
         {group.about && <span className="line-clamp-3 break-words leading-snug text-textSecondary">{group.about}</span>}
-        {members !== null && (
-          <span className="text-textTertiary">
-            {members} {members === 1 ? 'member' : 'members'}
-          </span>
-        )}
       </span>
     </span>
   );
