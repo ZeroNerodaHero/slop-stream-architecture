@@ -188,10 +188,22 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
       {presence === 'streaming' ? (
         <StreamStill name={person.name} className="w-full" />
       ) : (
-        // not streaming: their first home-card thumbnail at the still's size, or a plain grey box that size when they have none
-        <span id={id ? `${id}-thumb` : undefined} className="relative block aspect-video w-full shrink-0 overflow-hidden border border-primaryStroke bg-backgroundTertiary">
-          {known?.thumbs?.[0] !== undefined && (
+        // not streaming: their first home-card thumbnail at the still's size, or, when they have none, their face blown up and
+        // blurred behind the word offline (the blur kept inside by overflow-hidden)
+        <span
+          id={id ? `${id}-thumb` : undefined}
+          className="relative flex aspect-video w-full shrink-0 items-center justify-center overflow-hidden border border-primaryStroke bg-backgroundTertiary"
+        >
+          {known?.thumbs?.[0] !== undefined ? (
             <img src={api.streamThumbUrl(person.name, known.thumbs[0])} alt="" draggable={false} className="absolute inset-0 h-full w-full object-cover" />
+          ) : (
+            <>
+              <span aria-hidden className="absolute inset-0">
+                <Face name={person.name} version={person.avatar} className="absolute inset-0 h-full w-full scale-125 object-cover text-6xl blur-xl" />
+              </span>
+              <span aria-hidden className="absolute inset-0 bg-black/40" />
+              <span className="relative text-sm font-semibold uppercase tracking-wider text-white">offline</span>
+            </>
           )}
         </span>
       )}
