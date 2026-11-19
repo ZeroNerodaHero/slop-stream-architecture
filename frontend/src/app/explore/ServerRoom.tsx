@@ -2743,11 +2743,12 @@ function RolesSection({ server, room, run }: ManageProps) {
                 onFocus={(e) => e.currentTarget.select()}
                 className={INPUT}
               />
-              <div role="group" aria-label="powers" className="flex flex-wrap items-center gap-1">
+              {/* the crown pinned left, the powers pinned right (on their own line, still right, when it wraps): the role form's row */}
+              <div role="group" aria-label="powers" className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
                 <span className="flex h-6 w-6 items-center justify-center text-primaryBlue">
                   <RiVipCrownLine aria-hidden size={16} />
                 </span>
-                <span aria-hidden className="mx-2 h-6 w-px bg-primaryStroke" />
+                <span className="ml-auto flex items-center gap-1">
                 {POWERS.map((power) => (
                   <Tooltip key={power.key} content={`${power.label}: an owner's`}>
                     <button
@@ -2762,6 +2763,7 @@ function RolesSection({ server, room, run }: ManageProps) {
                     </button>
                   </Tooltip>
                 ))}
+                </span>
               </div>
               <p className="text-xs text-textTertiary">
                 an owner has every power and sees every channel. only the name changes here; who owns the group is the members tab.
@@ -2825,8 +2827,8 @@ function RolesSection({ server, room, run }: ManageProps) {
                     }}
                     className={INPUT}
                   />
-                  {/* one row: the colour, a rule, then the powers as icons. a power is a pressed icon (blue), the word its tooltip */}
-                  <div className="flex flex-wrap items-center gap-1">
+                  {/* one row: the colours pinned left, the powers as icons pinned right (on their own line, still right, when it wraps). a power is a pressed icon (blue), the word its tooltip */}
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
                     <div role="group" aria-label="colour" className="flex items-center gap-1">
                       {COLORS.map((swatch) => (
                         <button
@@ -2840,8 +2842,7 @@ function RolesSection({ server, room, run }: ManageProps) {
                         />
                       ))}
                     </div>
-                    <span aria-hidden className="mx-2 h-6 w-px bg-primaryStroke" />
-                    <div role="group" aria-label="powers" className="flex items-center gap-1">
+                    <div role="group" aria-label="powers" className="ml-auto flex items-center gap-1">
                       {POWERS.map((power) => {
                         const on = open.perms[power.key];
                         // a power this login lacks is not its to give: greyed, and the tooltip says so
