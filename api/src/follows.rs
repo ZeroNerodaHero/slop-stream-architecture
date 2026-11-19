@@ -153,8 +153,8 @@ fn rank(word: Presence) -> u8 {
     }
 }
 
-/// name, verified, avatar, bio, followed_at, mutual (that name follows this login back: a friend), status
-type FollowedRow = (String, bool, Option<i64>, String, DateTime<Utc>, bool, String);
+/// name, verified, avatar, bio, followed_at, mutual (that name follows this login back: a friend), status, oauth_verified
+type FollowedRow = (String, bool, Option<i64>, String, DateTime<Utc>, bool, String, bool);
 
 // ---- the routes -------------------------------------------------------------------------------
 
@@ -224,21 +224,22 @@ async fn unfollow(State(s): State<AppState>, Name(name): Name, Me(me): Me) -> Re
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn followed_json((name, verified, avatar, bio, followed_at, mutual, _): &FollowedRow, live: bool, word: Presence) -> Value {
-    json!({ "name": name, "verified": verified, "avatar": avatar, "bio": bio, "live": live, "presence": word, "followed_at": followed_at, "mutual": mutual })
+fn followed_json((name, verified, avatar, bio, followed_at, mutual, _, oauth_verified): &FollowedRow, live: bool, word: Presence) -> Value {
+    json!({ "name": name, "verified": verified, "oauth_verified": oauth_verified, "avatar": avatar, "bio": bio, "live": live, "presence": word, "followed_at": followed_at, "mutual": mutual })
 }
 
 /// `GET /api/following`: the login's, streaming first, then by how they are, then newest follow first.
 /// `mutual` is the other edge: they follow this login too. Nothing stores "friends"; the join is the list.
 async fn following(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
-    let rows: Vec<FollowedRow> = sqlx::query_as(
+    let rows: Vec<FollowedRow> = sqlx::query_as(concat!(
         "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio, f.followed_at,
-                EXISTS (SELECT 1 FROM follows b WHERE b.follower_id = s.id AND b.followed_id = $1), s.status
-         FROM follows f JOIN streamers s ON s.id = f.followed_id
+                EXISTS (SELECT 1 FROM follows b WHERE b.follower_id = s.id AND b.followed_id = $1), s.status, ",
+        crate::oauth::linked_sql!("s"),
+        " FROM follows f JOIN streamers s ON s.id = f.followed_id
          WHERE f.follower_id = $1
          ORDER BY f.followed_at DESC",
-    )
+    ))
     .bind(me.id)
     .fetch_all(&s.db)
     .await?;
@@ -281,8 +282,8 @@ fn search_pattern(q: &str) -> String {
     }
 }
 
-/// name, verified, avatar, bio, following, status
-type HitRow = (String, bool, Option<i64>, String, bool, String);
+/// name, verified, avatar, bio, following, status, oauth_verified
+type HitRow = (String, bool, Option<i64>, String, bool, String, bool);
 
 /// `GET /api/search?q=ali`: names holding the letters (starting with them, under three), the
 /// exact name first, then the ones that start with them, accounts before free names, 20 at
@@ -294,14 +295,15 @@ async fn search(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, q: Re
         return Ok(Json(json!([])));
     }
     crate::auth::limit(&s, &format!("rl:search:ip:{}", client_ip(&headers)), SEARCH_WINDOW_SECS, SEARCH_PER_MINUTE, "too many searches. wait a minute").await?;
-    let rows: Vec<HitRow> = sqlx::query_as(
+    let rows: Vec<HitRow> = sqlx::query_as(concat!(
         "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
-                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $2 AND f.followed_id = s.id), s.status
-         FROM streamers s
+                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $2 AND f.followed_id = s.id), s.status, ",
+        crate::oauth::linked_sql!("s"),
+        " FROM streamers s
          WHERE s.name LIKE $4
          ORDER BY s.name = $1 DESC, starts_with(s.name, $1) DESC, (s.password_hash IS NOT NULL) DESC, s.name
          LIMIT $3",
-    )
+    ))
     .bind(&q)
     .bind(me.as_ref().map(|a| a.id))
     .bind(SEARCH_LIMIT)
@@ -310,9 +312,9 @@ async fn search(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, q: Re
     .await?;
     let people: Vec<(String, Status)> = rows.iter().map(|r| choice(&r.0, &r.5)).collect();
     let words = words(&s, &people).await?;
-    let out = rows.into_iter().map(|(name, verified, avatar, bio, following, _)| {
+    let out = rows.into_iter().map(|(name, verified, avatar, bio, following, _, oauth_verified)| {
         let (live, word) = words.get(&name).copied().unwrap_or((false, Presence::Offline));
-        json!({ "name": name, "verified": verified, "avatar": avatar, "bio": bio, "live": live, "presence": word, "following": following })
+        json!({ "name": name, "verified": verified, "oauth_verified": oauth_verified, "avatar": avatar, "bio": bio, "live": live, "presence": word, "following": following })
     });
     Ok(Json(Value::Array(out.collect())))
 }
@@ -322,13 +324,14 @@ async fn search(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, q: Re
 /// word, accounts before free names, the newest change first. The fake streams are people
 /// too, when they are not live. 100 at most. `following` is for the login.
 async fn people(State(s): State<AppState>, Me(me): Me) -> ApiResult {
-    let rows: Vec<HitRow> = sqlx::query_as(
+    let rows: Vec<HitRow> = sqlx::query_as(concat!(
         "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
-                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $1 AND f.followed_id = s.id), s.status
-         FROM streamers s
+                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $1 AND f.followed_id = s.id), s.status, ",
+        crate::oauth::linked_sql!("s"),
+        " FROM streamers s
          ORDER BY (s.password_hash IS NOT NULL) DESC, s.updated_at DESC
          LIMIT $2",
-    )
+    ))
     .bind(me.as_ref().map(|a| a.id))
     .bind(PEOPLE_SCAN)
     .fetch_all(&s.db)
@@ -338,12 +341,12 @@ async fn people(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let mut list: Vec<(u8, usize, Value)> = rows
         .into_iter()
         .enumerate()
-        .filter_map(|(i, (name, verified, avatar, bio, following, _))| {
+        .filter_map(|(i, (name, verified, avatar, bio, following, _, oauth_verified))| {
             let (live, word) = words.get(&name).copied().unwrap_or((false, Presence::Offline));
             if live {
                 return None;
             }
-            Some((rank(word), i, json!({ "name": name, "verified": verified, "avatar": avatar, "bio": bio, "presence": word, "following": following })))
+            Some((rank(word), i, json!({ "name": name, "verified": verified, "oauth_verified": oauth_verified, "avatar": avatar, "bio": bio, "presence": word, "following": following })))
         })
         .collect();
     list.sort_by_key(|(r, i, _)| (*r, *i));
@@ -351,8 +354,8 @@ async fn people(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     Ok(Json(Value::Array(list.into_iter().map(|(_, _, v)| v).collect())))
 }
 
-/// name, verified, avatar, bio, following, status, ended_at
-type RecentRow = (String, bool, Option<i64>, String, bool, String, DateTime<Utc>);
+/// name, verified, avatar, bio, following, status, ended_at, oauth_verified
+type RecentRow = (String, bool, Option<i64>, String, bool, String, DateTime<Utc>, bool);
 
 /// `GET /api/recent`: the names whose last stream ended most recently, as home's recently
 /// offline (under the live cards, before the people), newest end first, 12 at most. A row's
@@ -361,10 +364,11 @@ type RecentRow = (String, bool, Option<i64>, String, bool, String, DateTime<Utc>
 /// nobody's, `list_sessions`'s rule. One live again is not offline and is left out. `ended_at`
 /// is when the last stream ended; `following` is for the login.
 async fn recent(State(s): State<AppState>, Me(me): Me) -> ApiResult {
-    let rows: Vec<RecentRow> = sqlx::query_as(
+    let rows: Vec<RecentRow> = sqlx::query_as(concat!(
         "SELECT s.name, s.password_hash IS NOT NULL, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, s.bio,
-                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $1 AND f.followed_id = s.id), s.status, last.ended_at
-         FROM (
+                EXISTS (SELECT 1 FROM follows f WHERE f.follower_id = $1 AND f.followed_id = s.id), s.status, last.ended_at, ",
+        crate::oauth::linked_sql!("s"),
+        " FROM (
              SELECT s.id, max(se.ended_at) AS ended_at
              FROM sessions se
              JOIN streamers s ON s.id = se.user_id OR (se.user_id IS NULL AND s.name = se.name AND s.password_hash IS NULL)
@@ -374,19 +378,19 @@ async fn recent(State(s): State<AppState>, Me(me): Me) -> ApiResult {
          JOIN streamers s ON s.id = last.id
          ORDER BY last.ended_at DESC
          LIMIT $2",
-    )
+    ))
     .bind(me.as_ref().map(|a| a.id))
     .bind(RECENT_SCAN)
     .fetch_all(&s.db)
     .await?;
     let people: Vec<(String, Status)> = rows.iter().map(|r| choice(&r.0, &r.5)).collect();
     let words = words(&s, &people).await?;
-    let out = rows.into_iter().filter_map(|(name, verified, avatar, bio, following, _, ended_at)| {
+    let out = rows.into_iter().filter_map(|(name, verified, avatar, bio, following, _, ended_at, oauth_verified)| {
         let (live, word) = words.get(&name).copied().unwrap_or((false, Presence::Offline));
         if live {
             return None;
         }
-        Some(json!({ "name": name, "verified": verified, "avatar": avatar, "bio": bio, "presence": word, "following": following, "ended_at": ended_at }))
+        Some(json!({ "name": name, "verified": verified, "oauth_verified": oauth_verified, "avatar": avatar, "bio": bio, "presence": word, "following": following, "ended_at": ended_at }))
     });
     Ok(Json(Value::Array(out.take(RECENT_LIMIT).collect())))
 }

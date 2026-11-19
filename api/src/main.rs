@@ -53,6 +53,7 @@ mod migrate;
 mod models;
 mod monitor;
 mod notify;
+mod oauth;
 mod presence;
 mod profile;
 mod ratelimit;
@@ -130,6 +131,8 @@ pub(crate) struct AppState {
     pub(crate) groups_per_owner: i64,
     /// Who is live, as the lists last heard it (`live_set`).
     live_cache: LiveCache,
+    /// The login providers the environment turned on (oauth.rs). Empty: password logins only.
+    pub(crate) oauth: Arc<oauth::Config>,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -581,7 +584,7 @@ async fn get_streamer(State(s): State<AppState>, Name(name): Name, me: Me) -> Ap
     // when the last stream ended and when the account was made: the person card's lines
     let last_live = last_live(&s.db, &name).await?;
     Ok(Json(json!({
-        "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified, "presence": presence, "thumbs": thumbs,
+        "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified, "oauth_verified": p.oauth_verified, "presence": presence, "thumbs": thumbs,
         "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials, "about": p.about,
         "followers": follows.followers, "following": follows.following, "follows_you": follows.follows_you,
         "last_live": last_live, "joined_at": p.joined,
@@ -933,10 +936,13 @@ async fn watch(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult
     let p = profile::load_profile(&s.db, &name).await?;
     // the ✓ belongs to the live session (started by the account), not to the name
     let verified = live && session_verified(&s.db, &name).await?;
+    // the account's oauth mark, on its stream only: live, the stream must be the account's own
+    // session, for the reason the ✓ is the session's (a stranger live under a name claimed since)
+    let oauth_verified = p.oauth_verified && (!live || verified);
     let presence = presence::presence_with(&mut s.redis.clone(), &s.db, &name, live).await?;
     let follows = follows::stats(&s.db, &name, me.0.as_ref().map(|a| a.id)).await?;
     Ok(Json(json!({
-        "url": WS_PATH, "name": name, "bio": p.bio, "live": live, "verified": verified, "avatar": p.avatar, "presence": presence,
+        "url": WS_PATH, "name": name, "bio": p.bio, "live": live, "verified": verified, "oauth_verified": oauth_verified, "avatar": p.avatar, "presence": presence,
         "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials, "about": p.about,
         "followers": follows.followers, "following": follows.following, "joined_at": p.joined,
     })))
@@ -945,6 +951,7 @@ async fn watch(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult
 fn router(state: AppState) -> Router {
     Router::new()
         .merge(auth::routes())
+        .merge(oauth::routes())
         .merge(profile::routes())
         .merge(about_page::routes())
         .merge(groups::routes())
@@ -1155,6 +1162,7 @@ async fn main() {
         s3,
         groups_per_owner,
         live_cache: Arc::default(),
+        oauth: Arc::new(oauth::Config::from_env()),
     };
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))

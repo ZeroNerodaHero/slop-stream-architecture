@@ -6,7 +6,7 @@
 
 import { atom } from 'jotai';
 
-import { api, messageOf } from '@/infra/api';
+import { api, type MeInfo, messageOf, type OAuthProvider } from '@/infra/api';
 import { store } from '@/infra/store';
 
 /** `undefined` until /api/me has answered once, `null` for nobody. The name: what every page shows and sends. */
@@ -15,6 +15,20 @@ export const meAtom = atom<string | null | undefined>(undefined);
 export const myIdAtom = atom<string | null>(null);
 /** When the name last changed (rfc3339), null for never: the profile tab says when it may change again. */
 export const renamedAtAtom = atom<string | null>(null);
+/** false for an account made with a provider that has no password yet: no "current password" to ask for. */
+export const hasPasswordAtom = atom(true);
+/** This account's old names still held for it: going back onto one never waits (docs/ids.md). */
+export const heldNamesAtom = atom<string[]>([]);
+/** This account has an outside login linked: the verified mark. The security and profile tabs say so. */
+export const oauthVerifiedAtom = atom(false);
+
+function setMeInfo(r: MeInfo) {
+  store.set(myIdAtom, r.id ?? null);
+  store.set(renamedAtAtom, r.renamed_at ?? null);
+  store.set(hasPasswordAtom, r.has_password !== false);
+  store.set(heldNamesAtom, r.held ?? []);
+  store.set(oauthVerifiedAtom, r.oauth_verified === true);
+}
 export const authBusyAtom = atom(false);
 export const authErrorAtom = atom('');
 
@@ -30,8 +44,7 @@ export function loadMe(): Promise<void> {
     asked = api
       .me()
       .then((r) => {
-        store.set(myIdAtom, r.id ?? null);
-        store.set(renamedAtAtom, r.renamed_at ?? null);
+        setMeInfo(r);
         store.set(meAtom, r.name);
       })
       .catch(() => {
@@ -47,6 +60,8 @@ export function forgetMe() {
   store.set(meAtom, null);
   store.set(myIdAtom, null);
   store.set(renamedAtAtom, null);
+  store.set(heldNamesAtom, []);
+  store.set(oauthVerifiedAtom, false);
   asked = null;
 }
 
@@ -62,9 +77,7 @@ export function reloadMe(): Promise<void> {
  */
 async function fillMeInfo(): Promise<void> {
   try {
-    const r = await api.me();
-    store.set(myIdAtom, r.id ?? null);
-    store.set(renamedAtAtom, r.renamed_at ?? null);
+    setMeInfo(await api.me());
   } catch {
     // the name is known and shown; the rest comes with the next page load
   }
@@ -103,6 +116,8 @@ export async function logout(): Promise<void> {
   store.set(meAtom, null);
   store.set(myIdAtom, null);
   store.set(renamedAtAtom, null);
+  store.set(heldNamesAtom, []);
+  store.set(oauthVerifiedAtom, false);
 }
 
 /** Every device, this one too. The cookie is dead everywhere, so the next ask is a real one. */
@@ -151,6 +166,7 @@ export async function changePassword(old: string, next: string): Promise<boolean
   store.set(passwordStatusAtom, '');
   try {
     await api.changePassword(old, next);
+    store.set(hasPasswordAtom, true);
     store.set(passwordStatusAtom, 'changed. every other login of this account is out');
     return true;
   } catch (err) {
@@ -193,6 +209,8 @@ export async function renameMe(name: string, password: string): Promise<boolean>
     const r = await api.rename(name.trim().toLowerCase(), password);
     store.set(renamedAtAtom, r.renamed_at);
     store.set(meAtom, r.name);
+    // the name I left is held for me now, the one I took is not
+    void fillMeInfo();
     store.set(renameStatusAtom, `changed. you are ${r.name} now, everywhere you are logged in`);
     return true;
   } catch (err) {
@@ -205,4 +223,35 @@ export async function renameMe(name: string, password: string): Promise<boolean>
 
 export function clearRenameStatus() {
   store.set(renameStatusAtom, '');
+}
+
+// ---- google, discord (docs/accounts.md; the words are infra/oauth.ts) ---------------------------
+
+/** The providers the api turned on, `undefined` until it answered. Asked once per page load. */
+export const oauthProvidersAtom = atom<OAuthProvider[] | undefined>(undefined);
+
+let providersAsked: Promise<void> | null = null;
+
+export function loadOAuthProviders(): Promise<void> {
+  if (!providersAsked) {
+    providersAsked = api
+      .oauthProviders()
+      .then((r) => store.set(oauthProvidersAtom, r.providers))
+      .catch(() => {
+        // an older api, or a blip: no buttons for now, ask again next mount
+        store.set(oauthProvidersAtom, []);
+        providersAsked = null;
+      });
+  }
+  return providersAsked;
+}
+
+/** Where the browser goes to log in (or, logged in, to link) with a provider: a full page load, the provider's page and back. */
+export function oauthStartUrl(provider: OAuthProvider, link = false): string {
+  return `/api/oauth/${encodeURIComponent(provider)}/start${link ? '?link=1' : ''}`;
+}
+
+/** After a link or an unlink: whether this account is verified now, and the rest of who am i. */
+export function refreshMeInfo(): Promise<void> {
+  return fillMeInfo();
 }

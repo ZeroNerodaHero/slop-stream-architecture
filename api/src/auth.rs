@@ -101,6 +101,23 @@ fn needs_rehash(hash: &str) -> bool {
     !(same_algorithm && same_version && same_params && same_len)
 }
 
+/// What `password_hash` holds for an account made with a provider (google, discord) and no
+/// password yet (oauth.rs). Not a hash: `PasswordHash::new` refuses it, so no typed password
+/// ever verifies against it. Not null either: null means "a name with no account", and every
+/// `password_hash IS NOT NULL` in the api (is_claimed, the ✓, dms, ...) must count this account.
+pub(crate) const NO_PASSWORD: &str = "!no-password";
+
+/// A stored value that is a real password, not `NO_PASSWORD`.
+pub(crate) fn is_password(stored: &str) -> bool {
+    stored != NO_PASSWORD
+}
+
+/// Does this account have a password (it may have only a provider login).
+pub(crate) async fn has_password(db: &PgPool, id: Uuid) -> Result<bool, sqlx::Error> {
+    let stored: Option<Option<String>> = sqlx::query_scalar("SELECT password_hash FROM streamers WHERE id = $1").bind(id).fetch_optional(db).await?;
+    Ok(stored.flatten().as_deref().is_some_and(is_password))
+}
+
 /// Checked against when the name does not exist, so that takes as long as a wrong
 /// password. Made the first time it is needed, on the blocking thread that needs it.
 fn decoy_hash() -> &'static str {
@@ -237,7 +254,7 @@ pub(crate) fn cookie_token(headers: &HeaderMap) -> Option<String> {
 
 /// Httponly: scripts never see it. Secure: https only (browsers allow it on localhost too).
 /// Lax: a form on another site cannot post with it. No Domain: it sticks to this host.
-fn set_cookie(token: &str) -> String {
+pub(crate) fn set_cookie(token: &str) -> String {
     format!("{COOKIE}={token}; Path=/; Max-Age={}; HttpOnly; Secure; SameSite=Lax", LOGIN_DAYS * 86400)
 }
 
@@ -249,7 +266,7 @@ fn clear_cookie() -> String {
 /// the same time: nothing else ever sweeps them. Live ones stay; a phone and a laptop
 /// are both you. The `name` column is still written while it exists (docs/ids.md): the
 /// previous image reads it, and a rename cascades into it.
-async fn open_login(db: &PgPool, account: &Account) -> Result<String, sqlx::Error> {
+pub(crate) async fn open_login(db: &PgPool, account: &Account) -> Result<String, sqlx::Error> {
     let token = new_token();
     sqlx::query(
         "WITH swept AS (DELETE FROM logins WHERE user_id = $2 AND expires_at < now())
@@ -444,6 +461,9 @@ struct Credentials {
 
 #[derive(Deserialize)]
 struct PasswordChange {
+    /// Ignored, and may be left out, when the account has no password yet (made with a
+    /// provider, oauth.rs): this sets its first one.
+    #[serde(default)]
     old: String,
     new: String,
 }
@@ -451,6 +471,8 @@ struct PasswordChange {
 #[derive(Deserialize)]
 struct NameChange {
     name: String,
+    /// Left out by an account with no password (oauth.rs): its login cookie is all it has.
+    #[serde(default)]
     password: String,
 }
 
@@ -497,6 +519,11 @@ fn with_cookie(status: StatusCode, cookie: String, body: Value) -> Response {
     (status, [(header::SET_COOKIE, cookie)], Json(body)).into_response()
 }
 
+/// The signups from one address in an hour, a password one or a provider one (oauth.rs).
+pub(crate) async fn limit_signup(s: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+    limit(s, &format!("rl:signup:ip:{}", client_ip(headers)), SIGNUP_WINDOW_SECS, SIGNUP_PER_IP, "too many signups from here. try later").await
+}
+
 async fn signup(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<Credentials>, JsonRejection>) -> Result<Response, ApiError> {
     let Json(body) = body?;
     let name = body.name.trim().to_lowercase();
@@ -507,7 +534,7 @@ async fn signup(State(s): State<AppState>, headers: HeaderMap, body: Result<Json
         return Err(ApiError::new(StatusCode::FORBIDDEN, "reserved name"));
     }
     let password = clean_new_password(&body.password)?;
-    limit(&s, &format!("rl:signup:ip:{}", client_ip(&headers)), SIGNUP_WINDOW_SECS, SIGNUP_PER_IP, "too many signups from here. try later").await?;
+    limit_signup(&s, &headers).await?;
     // a name somebody renamed away from is theirs for a while yet (docs/ids.md)
     if is_held(&s.db, &name, None).await? {
         return Err(name_taken());
@@ -601,18 +628,28 @@ async fn logout_all(State(s): State<AppState>, Me(me): Me) -> Result<Response, A
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, clear_cookie())]).into_response())
 }
 
-/// `{ id, name, renamed_at }`; every field null for nobody. The one place a person can read
+/// `{ id, name, renamed_at, has_password, held }`; every field null (`held` empty) for nobody.
+/// `has_password` is false for an account made with a provider that has not set one
+/// (oauth.rs). `held`: this account's old names still held for it (it may go back any time). The one place a person can read
 /// their own id; no page needs it. `renamed_at` is when the name last changed, for the
 /// profile tab to say when it may change again.
 async fn me(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let Some(me) = me else {
-        return Ok(Json(json!({ "id": null, "name": null, "renamed_at": null })));
+        return Ok(Json(json!({ "id": null, "name": null, "renamed_at": null, "has_password": null, "oauth_verified": null, "held": [] })));
     };
-    let renamed_at: Option<Option<DateTime<Utc>>> = sqlx::query_scalar("SELECT renamed_at FROM streamers WHERE id = $1")
+    let row: Option<(Option<DateTime<Utc>>, Option<String>, bool)> =
+        sqlx::query_as(concat!("SELECT s.renamed_at, s.password_hash, ", crate::oauth::linked_sql!("s"), " FROM streamers s WHERE s.id = $1"))
+            .bind(me.id)
+            .fetch_optional(&s.db)
+            .await?;
+    let (renamed_at, hash, oauth_verified) = row.unwrap_or((None, None, false));
+    let has_password = hash.as_deref().is_some_and(is_password);
+    // the names held for me: going back onto one is allowed any time (rename_wait)
+    let held: Vec<String> = sqlx::query_scalar("SELECT name FROM held_names WHERE user_id = $1 AND until > now() ORDER BY name")
         .bind(me.id)
-        .fetch_optional(&s.db)
+        .fetch_all(&s.db)
         .await?;
-    Ok(Json(json!({ "id": me.id, "name": me.name, "renamed_at": renamed_at.flatten() })))
+    Ok(Json(json!({ "id": me.id, "name": me.name, "renamed_at": renamed_at, "has_password": has_password, "oauth_verified": oauth_verified, "held": held })))
 }
 
 /// The login's own password, counted on the login limiter first: a stolen cookie is not
@@ -645,7 +682,11 @@ async fn change_password(
     let me = me.ok_or_else(not_logged_in)?;
     let Json(body) = body?;
     let new = clean_new_password(&body.new)?;
-    check_password(&s, &headers, &me, &body.old).await?;
+    // an account made with a provider sets its first password with its login alone, the way
+    // it renames; one with a password needs it
+    if has_password(&s.db, me.id).await? {
+        check_password(&s, &headers, &me, &body.old).await?;
+    }
     let hash = hash_blocking(new).await?;
     // every other login is out, this one stays: in the one statement with the new hash,
     // so a failure between the two cannot leave the password changed and the others in
@@ -661,6 +702,22 @@ async fn change_password(
     .await?;
     log::info!("{}: password changed", me.name);
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// May an account whose name last changed at `last` rename now? Always when it goes back to a
+/// name held for it (`returning`): the hold is its own, and waiting out RENAME_DAYS would end
+/// the hold at the same moment, a race with everyone else for the name. Otherwise once in
+/// RENAME_DAYS.
+fn rename_wait(last: Option<DateTime<Utc>>, returning: bool, now: DateTime<Utc>) -> Result<(), ApiError> {
+    let Some(at) = last.filter(|_| !returning) else { return Ok(()) };
+    let again = at + chrono::Duration::days(RENAME_DAYS);
+    if again > now {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            format!("you changed your name on {}. again from {}", at.format("%Y-%m-%d"), again.format("%Y-%m-%d")),
+        ));
+    }
+    Ok(())
 }
 
 /// Takes the free row (no account) under `new` for `me`, who is about to be renamed onto it:
@@ -700,9 +757,11 @@ pub(crate) async fn take_free_row(conn: &mut PgConnection, free: Uuid, me: Uuid,
 }
 
 /// `POST /api/name` `{ name, password }`: the login's name changes; its logins, groups and
-/// pictures stay, because they point at the id. Once in RENAME_DAYS, with the password (a
-/// stolen cookie must not walk off with the name), never while live (the stream's url, key
-/// and room are the name). The old name is held HOLD_DAYS for this account. See docs/ids.md.
+/// pictures stay, because they point at the id. Once in RENAME_DAYS (but back onto a name held
+/// for this account at any time, `rename_wait`), with the password (a stolen cookie must not
+/// walk off with the name; an account with no password, made with a provider, has only its
+/// cookie), never while live (the stream's url, key and room are the name). The old name is
+/// held HOLD_DAYS for this account. See docs/ids.md.
 async fn change_name(
     State(s): State<AppState>,
     headers: HeaderMap,
@@ -721,19 +780,8 @@ async fn change_name(
     if new == me.name {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "that is your name"));
     }
-    check_password(&s, &headers, &me, &body.password).await?;
-    let last: Option<Option<DateTime<Utc>>> = sqlx::query_scalar("SELECT renamed_at FROM streamers WHERE id = $1")
-        .bind(me.id)
-        .fetch_optional(&s.db)
-        .await?;
-    if let Some(at) = last.flatten() {
-        let again = at + chrono::Duration::days(RENAME_DAYS);
-        if again > Utc::now() {
-            return Err(ApiError::new(
-                StatusCode::FORBIDDEN,
-                format!("you changed your name on {}. again from {}", at.format("%Y-%m-%d"), again.format("%Y-%m-%d")),
-            ));
-        }
+    if has_password(&s.db, me.id).await? {
+        check_password(&s, &headers, &me, &body.password).await?;
     }
     // the stream's url, its live key and its chat room are the name: it ends first. the key
     // too, not only video's word: a go-live whose page has not reached video yet holds it
@@ -746,7 +794,20 @@ async fn change_name(
     profile::lift_pictures(&s, me.id, &me.name).await;
 
     let mut tx = s.db.begin().await?;
+    // the account's row, locked: two renames at once (two tabs) take turns, and the second
+    // sees the first's renamed_at. the once-in-RENAME_DAYS check is here, in the transaction
+    let last: Option<Option<DateTime<Utc>>> = sqlx::query_scalar("SELECT renamed_at FROM streamers WHERE id = $1 FOR UPDATE")
+        .bind(me.id)
+        .fetch_optional(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM held_names WHERE until < now()").execute(&mut *tx).await?;
+    // a name of mine, held for me: going back to it is always allowed (rename_wait)
+    let own_hold: Option<DateTime<Utc>> = sqlx::query_scalar("SELECT until FROM held_names WHERE name = $1 AND user_id = $2 AND until > now()")
+        .bind(&new)
+        .bind(me.id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    rename_wait(last.flatten(), own_hold.is_some(), Utc::now())?;
     // another account's name, or held for another account: the same answer for both
     let taken: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM streamers WHERE name = $1 AND password_hash IS NOT NULL)
@@ -768,9 +829,13 @@ async fn change_name(
     };
     // the one statement the id is for. logins.name, memberships.name and groups.created_by
     // follow by ON UPDATE CASCADE while those columns live; stream_thumbs has no key and is told
-    let renamed_at: DateTime<Utc> = match sqlx::query_scalar("UPDATE streamers SET name = $2, renamed_at = now() WHERE id = $1 RETURNING renamed_at")
+    // going back is not a new rename: renamed_at stays, so the 30 days still run from the real one
+    let renamed_at: Option<DateTime<Utc>> = match sqlx::query_scalar(
+        "UPDATE streamers SET name = $2, renamed_at = CASE WHEN $3 THEN renamed_at ELSE now() END WHERE id = $1 RETURNING renamed_at",
+    )
         .bind(me.id)
         .bind(&new)
+        .bind(own_hold.is_some())
         .fetch_one(&mut *tx)
         .await
     {
@@ -784,13 +849,16 @@ async fn change_name(
     sqlx::query("UPDATE about_files SET name = $2 WHERE name = $1").bind(&me.name).bind(&new).execute(&mut *tx).await?;
     // going back to a name of mine ends its hold; the name I leave is held from now
     sqlx::query("DELETE FROM held_names WHERE name = $1 AND user_id = $2").bind(&new).bind(me.id).execute(&mut *tx).await?;
+    // a fresh rename holds the name I leave HOLD_DAYS. going back holds it only as long as the
+    // hold I went back from had left: flipping between two names never stretches a hold
     sqlx::query(
-        "INSERT INTO held_names (name, user_id, until) VALUES ($1, $2, now() + make_interval(days => $3))
+        "INSERT INTO held_names (name, user_id, until) VALUES ($1, $2, COALESCE($4, now() + make_interval(days => $3)))
          ON CONFLICT (name) DO UPDATE SET user_id = EXCLUDED.user_id, until = EXCLUDED.until",
     )
     .bind(&me.name)
     .bind(me.id)
     .bind(HOLD_DAYS as i32)
+    .bind(own_hold)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -1097,5 +1165,44 @@ pub(crate) mod tests {
         sqlx::query("UPDATE held_names SET until = now() - interval '1 second' WHERE name = $1").bind(&alice).execute(&pool).await.unwrap();
         assert!(!is_claimed(&pool, &alice).await.unwrap(), "a lapsed hold holds nothing");
         may_act_as(&pool, &alice, None).await.expect("free again");
+    }
+
+    #[test]
+    fn going_back_to_your_own_held_name_never_waits() {
+        let now = Utc::now();
+        let yesterday = Some(now - chrono::Duration::days(1));
+        let long_ago = Some(now - chrono::Duration::days(RENAME_DAYS + 1));
+        assert!(rename_wait(None, false, now).is_ok(), "never renamed");
+        assert!(rename_wait(long_ago, false, now).is_ok(), "the wait is over");
+        let refused = rename_wait(yesterday, false, now).expect_err("once in 30 days");
+        assert_eq!(refused.into_response().status(), StatusCode::FORBIDDEN);
+        assert!(rename_wait(yesterday, true, now).is_ok(), "back onto a name held for me: any time");
+    }
+
+    #[test]
+    fn no_password_is_not_a_password() {
+        assert!(!is_password(NO_PASSWORD));
+        assert!(is_password("$argon2id$v=19$m=19456,t=2,p=1$abc$def"));
+        // nothing typed verifies against it, and it is never "rehashed"
+        assert!(!verify_password("!no-password", NO_PASSWORD));
+        assert!(!verify_password("", NO_PASSWORD));
+        assert!(!needs_rehash(NO_PASSWORD));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn the_admin_pin_survives_a_rename_and_is_not_handed_on() {
+        let pool = test_db().await;
+        let run = std::process::id();
+        let boss = format!("boss-{run}");
+        let id = row(&pool, &boss, Some("boss-hash")).await;
+        let admins = crate::debug::admins_with_accounts(&pool, vec![boss.clone()]).await.unwrap();
+        assert_eq!(admins, vec![Account { id, name: boss.clone() }]);
+        // the admin renames, and a stranger signs up as the released name
+        sqlx::query("UPDATE streamers SET name = $2 WHERE id = $1").bind(id).bind(format!("boss2-{run}")).execute(&pool).await.unwrap();
+        let stranger = row(&pool, &boss, Some("stranger-hash")).await;
+        let admins = crate::debug::admins_with_accounts(&pool, vec![boss.clone()]).await.unwrap();
+        assert_eq!(admins.iter().map(|a| a.id).collect::<Vec<_>>(), vec![id], "still the first account, by id");
+        assert!(!admins.iter().any(|a| a.id == stranger), "the stranger is no admin");
     }
 }

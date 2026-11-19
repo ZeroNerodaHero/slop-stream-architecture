@@ -185,21 +185,45 @@ pub(crate) async fn dropped(s: &AppState) -> i64 {
     n.unwrap_or(0)
 }
 
-/// Of `names`, the ones with an account, as accounts: the admin check is by id from here on,
-/// so an admin who renames stays one until the next restart (docs/ids.md). A name nobody has
-/// signed up as goes to whoever signs up as it first (auth.rs), so it must not be an admin until then.
+/// Of `names`, the accounts that are admins. Each name is pinned (`admin_pins`, migrate-32.sql)
+/// to the account that had it the first time a boot saw it with an account, and from then on
+/// the admin is that account, by id, whatever it is called. So an admin who renames stays one
+/// across restarts, and whoever signs up as the released name later is not one: the pin points
+/// at the old id, not at the name. A name nobody has signed up as goes to whoever signs up as
+/// it first (auth.rs), so it is not pinned, and not an admin, until then. Moving a pin is by
+/// hand: `DELETE FROM admin_pins WHERE name = '...'`, then a restart pins it afresh.
 pub(crate) async fn admins_with_accounts(db: &PgPool, names: Vec<String>) -> Result<Vec<Account>, sqlx::Error> {
-    let claimed: Vec<(Uuid, String)> =
-        sqlx::query_as("SELECT id, name FROM streamers WHERE name = ANY($1) AND password_hash IS NOT NULL")
-            .bind(&names)
-            .fetch_all(db)
-            .await?;
-    for name in names.iter().filter(|n| !claimed.iter().any(|(_, c)| c == *n)) {
-        log::error!(
-            "ADMIN_NAMES: {name} has no account, so it is not an admin. sign up as it, or: docker compose exec api api passwd {name}. then ./scripts/deploy.sh api"
-        );
+    sqlx::query(
+        "INSERT INTO admin_pins (name, user_id)
+         SELECT name, id FROM streamers WHERE name = ANY($1) AND password_hash IS NOT NULL
+         ON CONFLICT (name) DO NOTHING",
+    )
+    .bind(&names)
+    .execute(db)
+    .await?;
+    let pinned: Vec<(String, Uuid, String)> = sqlx::query_as(
+        "SELECT p.name, s.id, s.name FROM admin_pins p JOIN streamers s ON s.id = p.user_id WHERE p.name = ANY($1)",
+    )
+    .bind(&names)
+    .fetch_all(db)
+    .await?;
+    let mut admins: Vec<Account> = Vec::new();
+    for name in &names {
+        match pinned.iter().find(|(pin, _, _)| pin == name) {
+            None => log::error!(
+                "ADMIN_NAMES: {name} has no account, so it is not an admin. sign up as it, or: docker compose exec api api passwd {name}. then ./scripts/deploy.sh api"
+            ),
+            Some((_, id, now)) => {
+                if now != name {
+                    log::warn!("ADMIN_NAMES: {name} is pinned to the account now called {now}; that account is the admin, not whoever is called {name} now");
+                }
+                if !admins.iter().any(|a| a.id == *id) {
+                    admins.push(Account { id: *id, name: now.clone() });
+                }
+            }
+        }
     }
-    Ok(claimed.into_iter().map(|(id, name)| Account { id, name }).collect())
+    Ok(admins)
 }
 
 // ---- POST /api/errors ---------------------------------------------------------------

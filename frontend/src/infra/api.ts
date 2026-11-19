@@ -28,7 +28,12 @@ export interface LiveStream {
   viewers: number | null;
 }
 
-export interface Streamer {
+/** The account has a Google, Discord (any provider) login linked: the verified mark beside the ✓ (`OAuthMark`). Absent on an older api, which means not. */
+interface OAuthVerified {
+  oauth_verified?: boolean;
+}
+
+export interface Streamer extends OAuthVerified {
   name: string;
   /** The status: one line about them, beside the name. `bio` on the wire (the word `status` is the presence choice's, docs/status.md). */
   bio: string;
@@ -118,7 +123,7 @@ export interface NotifySettings {
 }
 
 /** Somebody the login follows, as `GET /api/following` lists them: streaming first. See docs/follows.md. */
-export interface Followed {
+export interface Followed extends OAuthVerified {
   name: string;
   verified: boolean;
   avatar: number | null;
@@ -131,7 +136,7 @@ export interface Followed {
 }
 
 /** One of home's people (`GET /api/people`): a name with a row who is not live, with the word beside it. */
-export interface Person {
+export interface Person extends OAuthVerified {
   name: string;
   verified: boolean;
   avatar: number | null;
@@ -141,7 +146,7 @@ export interface Person {
 }
 
 /** One of home's recently offline (`GET /api/recent`): a name whose last stream ended lately, and when. Not live now. */
-export interface Recent {
+export interface Recent extends OAuthVerified {
   name: string;
   verified: boolean;
   avatar: number | null;
@@ -153,7 +158,7 @@ export interface Recent {
 }
 
 /** One answer of `GET /api/search?q=`: a name holding the letters, and whether the login follows it. */
-export interface SearchHit {
+export interface SearchHit extends OAuthVerified {
   name: string;
   verified: boolean;
   avatar: number | null;
@@ -412,7 +417,7 @@ export interface Grant {
   token: number;
 }
 
-export interface WatchGrant {
+export interface WatchGrant extends OAuthVerified {
   url: string;
   /** The name this grant is for. Another than the one asked for: that name was renamed, go there (docs/ids.md). Absent on an older api. */
   name?: string;
@@ -456,6 +461,23 @@ export interface MeInfo {
   name: string | null;
   /** When the name last changed, rfc3339. null: never. The profile tab says when it may change again. */
   renamed_at: string | null;
+  /** false: an account made with a provider (Google, Discord) that has no password yet. null for nobody; absent on an older api (which means true). */
+  has_password?: boolean | null;
+  /** This account has an outside login linked: the verified mark (`OAuthMark`). null for nobody; absent on an older api. */
+  oauth_verified?: boolean | null;
+  /** This account's old names still held for it: going back onto one is allowed any time. Absent on an older api. */
+  held?: string[];
+}
+
+/** A login provider's slug (docs/accounts.md): `google`, `discord`, or one added to the api later. The api turns each on from its env vars; infra/oauth.ts has the words for them. */
+export type OAuthProvider = string;
+
+/** `GET /api/oauth/identities`: the providers linked to this login, whether it has a password, and whether it is verified (anything linked). */
+export interface OAuthIdentities {
+  has_password: boolean;
+  /** Absent on an older api: then it is `identities.length > 0`. */
+  oauth_verified?: boolean;
+  identities: { provider: OAuthProvider; linked_at: string }[];
 }
 
 /** Proof that this page is the one that went live. Heartbeat and stop carry it. */
@@ -578,6 +600,14 @@ export const api = {
   /** Every login of the account, this one included. */
   logoutAll: () => request<null>('POST', '/api/logout-all'),
   changePassword: (old: string, next: string) => request<null>('POST', '/api/password', { old, new: next }),
+  /** The providers turned on here, for the "continue with" buttons. Public. */
+  oauthProviders: () => request<{ providers: OAuthProvider[] }>('GET', '/api/oauth/providers'),
+  oauthIdentities: () => request<OAuthIdentities>('GET', '/api/oauth/identities'),
+  /** 409 when it is the last way in (no password, nothing else linked). */
+  oauthUnlink: (provider: OAuthProvider) => request<null>('POST', `/api/oauth/${provider}/unlink`),
+  /** The pending newcomer (after a provider login nobody here has): which provider, and a name to start from. 404 when there is none. */
+  oauthSignupInfo: () => request<{ provider: OAuthProvider; suggested: string }>('GET', '/api/oauth/signup'),
+  oauthSignup: (name: string) => request<{ id: string; name: string }>('POST', '/api/oauth/signup', { name }),
   /** The account's name changes; its logins, groups and pictures stay. Once a month, with the password, not while live. See docs/ids.md. */
   rename: (name: string, password: string) => request<{ id: string; name: string; renamed_at: string }>('POST', '/api/name', { name, password }),
   /** Every group, `bot` first; `mine` says which the login is in. See docs/groups.md. */

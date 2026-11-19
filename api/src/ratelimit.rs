@@ -72,6 +72,10 @@ pub(crate) const SEARCH: Rule = rule("search", 60, 60, Key::Who);
 pub(crate) const WRITE: Rule = rule("write", 120, 60, Key::Who);
 /// Signup, login, logout, password and name changes, on top of their own counts.
 pub(crate) const AUTH: Rule = rule("auth", 30, 60, Key::Ip);
+/// Logging in with google or discord: starting one, the provider's redirect back, the
+/// pick-a-name step, unlinking. By address: a start is a redis write each, a callback two
+/// outbound https calls. A person needs a handful.
+pub(crate) const OAUTH: Rule = rule("oauth", 30, 60, Key::Ip);
 /// A group's moderation and setup: kick, timeout, ban, roles, owners, channels, access.
 pub(crate) const MODERATE: Rule = rule("moderate", 120, 600, Key::Who);
 /// Anything that puts a file in the bucket: avatar, card pictures, offline picture,
@@ -109,6 +113,8 @@ pub(crate) fn api_rule(method: &Method, path: &str) -> Rule {
         "/api/streams/{name}/attached" | "/api/streams/{name}/viewers" | "/api/streams/{name}/heartbeat" | "/api/streams/{name}/stop" => STREAM,
         "/api/signup" | "/api/login" | "/api/logout" | "/api/logout-all" | "/api/password" | "/api/name" if !read => AUTH,
         "/api/errors" if !read => REPORT,
+        "/api/oauth/{provider}/start" | "/api/oauth/{provider}/callback" | "/api/oauth/{provider}/unlink" => OAUTH,
+        "/api/oauth/signup" if !read => OAUTH,
         // `/api/search` is the people search, typed into: READ, with its own 180 a minute
         p if read && p != "/api/search" && p.ends_with("/search") => SEARCH,
         _ if read => READ,
@@ -425,6 +431,13 @@ mod tests {
         assert_eq!(api_rule(&post, "/api/streams/{name}/heartbeat"), STREAM);
         assert_eq!(api_rule(&post, "/api/login"), AUTH);
         assert_eq!(api_rule(&get, "/api/me"), READ);
+        assert_eq!(api_rule(&get, "/api/oauth/{provider}/start"), OAUTH);
+        assert_eq!(api_rule(&get, "/api/oauth/{provider}/callback"), OAUTH);
+        assert_eq!(api_rule(&post, "/api/oauth/{provider}/unlink"), OAUTH);
+        assert_eq!(api_rule(&post, "/api/oauth/signup"), OAUTH);
+        assert_eq!(api_rule(&get, "/api/oauth/signup"), READ);
+        assert_eq!(api_rule(&get, "/api/oauth/providers"), READ);
+        assert_eq!(api_rule(&get, "/api/oauth/identities"), READ);
         assert_eq!(api_rule(&post, "/api/errors"), REPORT);
         assert_eq!(api_rule(&get, "/api/errors"), READ);
         assert_eq!(api_rule(&get, "/api/dm/{name}/search"), SEARCH);

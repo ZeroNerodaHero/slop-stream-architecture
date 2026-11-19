@@ -142,6 +142,10 @@ pub(crate) struct Line {
     /// `avatar` as everywhere in the api. only a `verified` or `streamer` line can have one.
     /// as it is now, not as it was when the line was said: `with_faces` on the way out of redis
     pub(crate) avatar: Option<i64>,
+    /// the speaker's account has an outside login linked (oauth.rs `linked_sql!`): the second
+    /// mark. read with the face, and the same way: only a `verified` or `streamer` line can have
+    /// it, and it is the row's as it is now (`with_faces`, history.rs's join)
+    pub(crate) oauth_verified: bool,
     /// the account behind a `verified` line (`uid` in the stream, `user_id` on the row): what its
     /// face is looked up by, so a rename keeps it. not on the wire: no page reads an id (docs/ids.md)
     #[serde(skip)]
@@ -427,30 +431,46 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
     Ok(Who { from, streamer, verified, groups, user_id })
 }
 
-/// The picture of the name on the line, as it is now (its upload time, the `?v=`): the account's
+/// The picture (and the oauth mark) of the name on the line, as it is now (its upload time, the `?v=`): the account's
 /// for a login (by id, so a rename keeps it), the room's for its streamer, nobody's for a nick,
 /// whoever's name it happens to be. Read at the say, not the hello, so a picture changed
 /// mid-chat is on the next line. The database not answering, or not in 2 s (awaited on the
 /// socket: bounded like `remember`'s insert), is a line with no face until it is read back
 /// (`with_faces`): a say does not fail for a picture.
-async fn face_now(db: &PgPool, room: &str, w: &Who) -> Option<i64> {
+async fn face_now(db: &PgPool, room: &str, w: &Who) -> Face {
+    const BY_ID: &str = concat!("SELECT (EXTRACT(EPOCH FROM s.avatar_at))::bigint, ", crate::oauth::linked_sql!("s"), " FROM streamers s WHERE s.id = $1");
+    const BY_NAME: &str = concat!("SELECT (EXTRACT(EPOCH FROM s.avatar_at))::bigint, ", crate::oauth::linked_sql!("s"), " FROM streamers s WHERE s.name = $1");
     let query = match (w.user_id, w.streamer) {
-        (Some(id), _) => sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE id = $1").bind(id),
-        (None, true) => sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM avatar_at))::bigint FROM streamers WHERE name = $1").bind(&w.from),
-        (None, false) => return None,
+        (Some(id), _) => sqlx::query_as(BY_ID).bind(id),
+        (None, true) => sqlx::query_as(BY_NAME).bind(&w.from),
+        (None, false) => return Face::default(),
     };
-    let looked: Result<Result<Option<Option<i64>>, sqlx::Error>, _> = tokio::time::timeout(Duration::from_secs(2), query.fetch_optional(db)).await;
+    let looked: Result<Result<Option<FaceRow>, sqlx::Error>, _> = tokio::time::timeout(Duration::from_secs(2), query.fetch_optional(db)).await;
     match looked {
-        Ok(Ok(version)) => version.flatten(),
+        Ok(Ok(row)) => row.map(|(avatar, oauth_verified)| Face { avatar, oauth_verified }).unwrap_or_default(),
         Ok(Err(e)) => {
             log::warn!("{room}: cannot read the picture of {}: {e}", w.from);
-            None
+            Face::default()
         }
         Err(_) => {
             log::warn!("{room}: reading the picture of {} timed out", w.from);
-            None
+            Face::default()
         }
     }
+}
+
+/// The picture's version and the oauth mark, as `face_now` reads them.
+type FaceRow = (Option<i64>, bool);
+
+/// A row `with_faces` reads: id, name, the picture's version, the names held for it, the oauth mark.
+type FacesRow = (Uuid, String, Option<i64>, Vec<String>, bool);
+
+/// What a line wears of its speaker's row, as the row is now: the picture's version and the
+/// oauth mark. The default: no picture, no mark (a nick, or the database not answering).
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+struct Face {
+    avatar: Option<i64>,
+    oauth_verified: bool,
 }
 
 /// Whose picture a line wears: the account's for a login (`uid`, which every login's line in
@@ -493,13 +513,14 @@ pub(crate) async fn with_faces<'a>(db: &PgPool, lines: impl IntoIterator<Item = 
     }
     // each row with the names still held for it: a login's line wears the row's face only while
     // `from` leads to the row, which is for as long as `/api/streamers/<from>/avatar` answers for it
-    let rows: Vec<(Uuid, String, Option<i64>, Vec<String>)> = match tokio::time::timeout(
+    let rows: Vec<FacesRow> = match tokio::time::timeout(
         Duration::from_secs(2),
-        sqlx::query_as(
+        sqlx::query_as(concat!(
             "SELECT s.id, s.name, (EXTRACT(EPOCH FROM s.avatar_at))::bigint,
-                    ARRAY(SELECT h.name FROM held_names h WHERE h.user_id = s.id AND h.until > now())::text[]
-             FROM streamers s WHERE s.id = ANY($1::uuid[]) OR s.name = ANY($2::text[])",
-        )
+                    ARRAY(SELECT h.name FROM held_names h WHERE h.user_id = s.id AND h.until > now())::text[], ",
+            crate::oauth::linked_sql!("s"),
+            " FROM streamers s WHERE s.id = ANY($1::uuid[]) OR s.name = ANY($2::text[])",
+        ))
         .bind(&ids)
         .bind(&names)
         .fetch_all(db),
@@ -517,16 +538,17 @@ pub(crate) async fn with_faces<'a>(db: &PgPool, lines: impl IntoIterator<Item = 
         }
     };
     for line in lines {
-        let face = match face_key(line) {
+        let row = match face_key(line) {
             Some(FaceKey::Id(id)) => rows
                 .iter()
-                .find(|(row, _, _, _)| *row == id)
-                .filter(|(_, name, _, held)| *name == line.from || held.iter().any(|h| *h == line.from))
-                .and_then(|(_, _, v, _)| *v),
-            Some(FaceKey::Name(name)) => rows.iter().find(|(_, row, _, _)| row == name).and_then(|(_, _, v, _)| *v),
+                .find(|(row, _, _, _, _)| *row == id)
+                .filter(|(_, name, _, held, _)| *name == line.from || held.iter().any(|h| *h == line.from)),
+            Some(FaceKey::Name(name)) => rows.iter().find(|(_, row, _, _, _)| row == name),
             None => continue,
         };
-        line.avatar = face;
+        // no row (gone, or the name leads elsewhere now): no picture and no mark, as the join has it
+        line.avatar = row.and_then(|(_, _, v, _, _)| *v);
+        line.oauth_verified = row.is_some_and(|(_, _, _, _, linked)| *linked);
     }
 }
 
@@ -896,7 +918,8 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
     }
     pictures_exist(&s.db, room, images).await?;
     // the face as the row has it this moment, so the line fanned out now wears the right one
-    let avatar = face_now(&s.db, room, w).await.map(|v| v.to_string());
+    let face = face_now(&s.db, room, w).await;
+    let avatar = face.avatar.map(|v| v.to_string());
     let mut r = s.redis.clone();
     // the cooldowns: a key still alive from the last line is the wait (the longest, when both are);
     // none alive, the keys are set for this line, each to live its cooldown long
@@ -937,6 +960,9 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
     }
     if let Some(uid) = &uid {
         fields.push(("uid", uid.as_str()));
+    }
+    if face.oauth_verified {
+        fields.push(("o", "1"));
     }
     if let Some(image) = images.first() {
         fields.push(("img", image.as_str()));
@@ -1451,6 +1477,8 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
     let avatar: Option<i64> = entry.get::<String>("a").and_then(|a| a.parse().ok());
     // the account behind a login's line: what its face is looked up by
     let user_id: Option<Uuid> = entry.get::<String>("uid").and_then(|u| Uuid::parse_str(&u).ok());
+    // no `o` field is no oauth mark (as written; `with_faces` has the last word here too)
+    let oauth_verified = entry.get::<String>("o").as_deref() == Some("1");
     let images = {
         let mut images = split_pictures(entry.get::<String>("img"));
         for part in split_pictures(entry.get::<String>("imgs")) {
@@ -1470,6 +1498,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         verified: verified == "1",
         groups,
         avatar,
+        oauth_verified,
         user_id,
         image,
         images,
@@ -1565,6 +1594,7 @@ mod tests {
             verified: true,
             groups: Vec::new(),
             avatar: None,
+            oauth_verified: false,
             user_id: Some(Uuid::nil()),
             at: 1729000000000,
             image: None,
@@ -1815,7 +1845,7 @@ mod tests {
         let started = Instant::now();
         let face = face_now(&pool, "room", &who).await;
         let took = started.elapsed();
-        assert_eq!(face, None);
+        assert_eq!(face, Face::default());
         assert!(took < Duration::from_secs(3), "face_now held the socket for {took:?}");
     }
 
@@ -1832,6 +1862,7 @@ mod tests {
             verified: true,
             groups: Vec::new(),
             avatar: Some(7),
+            oauth_verified: true,
             user_id: Some(Uuid::nil()),
             at: 1729000000000,
             image: None,
@@ -1841,6 +1872,7 @@ mod tests {
         with_faces(&pool, &mut lines).await;
         let took = started.elapsed();
         assert_eq!(lines[0].avatar, Some(7), "a line the database did not answer for is left as written");
+        assert!(lines[0].oauth_verified, "and so is its mark");
         assert!(took < Duration::from_secs(3), "with_faces held the socket for {took:?}");
     }
 
@@ -1867,6 +1899,7 @@ mod tests {
             verified: true,
             groups: Vec::new(),
             avatar: None,
+            oauth_verified: false,
             user_id: Some(alice),
             at: 1729000000000,
             image: None,
@@ -1875,6 +1908,16 @@ mod tests {
         // her own name: her picture
         with_faces(&pool, &mut lines).await;
         assert_eq!(lines[0].avatar, Some(1690000000));
+        assert!(!lines[0].oauth_verified, "nothing linked: no oauth mark");
+        // she links a provider: her lines wear the mark, read back as the row is now
+        sqlx::query("INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES ($1, 'google', $2)")
+            .bind(alice)
+            .bind(format!("face-{run}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        with_faces(&pool, &mut lines).await;
+        assert!(lines[0].oauth_verified, "linked: the mark, on her old lines too");
 
         // what change_name leaves behind: the row is bob, and alice is held for it. the face follows
         let bob_name = format!("bob5-{run}");
@@ -1888,11 +1931,13 @@ mod tests {
         lines[0].avatar = None;
         with_faces(&pool, &mut lines).await;
         assert_eq!(lines[0].avatar, Some(1690000000), "the face follows a rename for the hold's length");
+        assert!(lines[0].oauth_verified, "and the mark with it");
 
         // the hold runs out: the old name is nobody's, so the line is the letter, not an <img> that 404s
         sqlx::query("UPDATE held_names SET until = now() - interval '1 second' WHERE name = $1").bind(&alice_name).execute(&pool).await.unwrap();
         with_faces(&pool, &mut lines).await;
         assert_eq!(lines[0].avatar, None, "after the hold the old name is not the account's: the letter");
+        assert!(!lines[0].oauth_verified, "nor the mark");
 
         // a stranger signs up as alice and uploads a picture: still the letter, not theirs and not bob's.
         // the line comes out of redis with the `a` the say wrote, and must be overwritten

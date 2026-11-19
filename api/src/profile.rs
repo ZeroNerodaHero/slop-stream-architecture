@@ -118,6 +118,8 @@ pub(crate) struct Profile {
     pub(crate) avatar: Option<i64>,
     /// The name has an account, so only its owner can be behind it.
     pub(crate) verified: bool,
+    /// The account has an outside login linked (oauth.rs `linked_sql!`): the second mark.
+    pub(crate) oauth_verified: bool,
     /// When the offline picture was saved, unix seconds. None: none. The `?v=` of its url.
     pub(crate) offline: Option<i64>,
     /// The line under the word while they are not live. Empty for none.
@@ -133,21 +135,27 @@ pub(crate) struct Profile {
     pub(crate) about: String,
 }
 
-/// Bio, picture versions, account flag, the offline line, when the account was made, the links and the about me, in one query. A name nobody saved anything for is all defaults.
+/// bio, picture, account, offline picture, offline note, joined, socials, about, oauth verified
+type ProfileRow = (String, Option<i64>, bool, Option<i64>, String, Option<DateTime<Utc>>, Value, String, bool);
+
+/// Bio, picture versions, account flag, oauth-verified flag, the offline line, when the account was made, the links and the about me, in one query. A name nobody saved anything for is all defaults.
 pub(crate) async fn load_profile(db: &PgPool, name: &str) -> Result<Profile, sqlx::Error> {
-    let row: Option<(String, Option<i64>, bool, Option<i64>, String, Option<DateTime<Utc>>, Value, String)> = sqlx::query_as(
+    let row: Option<ProfileRow> = sqlx::query_as(concat!(
         "SELECT bio, (EXTRACT(EPOCH FROM avatar_at))::bigint, password_hash IS NOT NULL,
                 (EXTRACT(EPOCH FROM offline_at))::bigint, offline_note,
-                CASE WHEN password_hash IS NOT NULL THEN created_at END, socials, about
-         FROM streamers WHERE name = $1",
-    )
+                CASE WHEN password_hash IS NOT NULL THEN created_at END, socials, about, ",
+        crate::oauth::linked_sql!("streamers"),
+        " FROM streamers WHERE name = $1",
+    ))
     .bind(name)
     .fetch_optional(db)
     .await?;
-    let (bio, avatar, verified, offline, offline_note, joined, socials, about) = row.unwrap_or_default();
+    let (bio, avatar, verified, offline, offline_note, joined, socials, about, oauth_verified) = row.unwrap_or_default();
     // the row's json as the document, and the empty one for a row that has none (or one from before the column)
     let socials = serde_json::from_value(socials).unwrap_or_default();
-    Ok(Profile { name: name.to_owned(), bio, avatar, verified, offline, offline_note, joined, socials, about })
+    // only an account can have a login linked; said twice so a free name never wears it
+    let oauth_verified = oauth_verified && verified;
+    Ok(Profile { name: name.to_owned(), bio, avatar, verified, oauth_verified, offline, offline_note, joined, socials, about })
 }
 
 // ---- the row behind a name ---------------------------------------------------------------
@@ -1475,7 +1483,7 @@ mod tests {
     }
 
     fn profile(bio: &str, avatar: Option<i64>, verified: bool) -> Profile {
-        Profile { name: "bob".into(), bio: bio.into(), avatar, verified, offline: None, offline_note: String::new(), joined: None, socials: Socials::default(), about: String::new() }
+        Profile { name: "bob".into(), bio: bio.into(), avatar, verified, oauth_verified: false, offline: None, offline_note: String::new(), joined: None, socials: Socials::default(), about: String::new() }
     }
 
     #[test]

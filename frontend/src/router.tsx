@@ -5,6 +5,7 @@ import { CrashPage } from '@/app/CrashPage';
 import { NotFoundPage } from '@/app/NotFoundPage';
 import { AdminPage } from '@/app/admin/AdminPage';
 import { AuthPage } from '@/app/auth/AuthPage';
+import { OAuthPage } from '@/app/auth/OAuthPage';
 import { HomePage } from '@/app/home/HomePage';
 import { ExplorePage } from '@/app/explore/ExplorePage';
 import { ServerPage } from '@/app/explore/ServerRoom';
@@ -92,6 +93,7 @@ export const router = createBrowserRouter([
       { path: '/watch/:name', element: <WatchRoute /> },
       { path: '/login', element: <AuthPage mode="login" /> },
       { path: '/signup', element: <AuthPage mode="signup" /> },
+      { path: '/oauth', element: <OAuthPage /> },
       { path: '/admin', element: <AdminPage /> },
       { path: '*', element: <NotFoundPage /> }
     ]

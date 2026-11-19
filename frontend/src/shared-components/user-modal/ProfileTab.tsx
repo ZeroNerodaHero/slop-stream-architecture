@@ -3,7 +3,20 @@ import { useAtomValue } from 'jotai';
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { clearRenameStatus, meAtom, RENAME_DAYS, renameAgainAtom, renameBusyAtom, renameMe, renameStatusAtom } from '@/infra/atoms/auth-atoms';
+import {
+  clearRenameStatus,
+  hasPasswordAtom,
+  heldNamesAtom,
+  loadOAuthProviders,
+  meAtom,
+  oauthProvidersAtom,
+  oauthVerifiedAtom,
+  RENAME_DAYS,
+  renameAgainAtom,
+  renameBusyAtom,
+  renameMe,
+  renameStatusAtom
+} from '@/infra/atoms/auth-atoms';
 import { MAX_CHAT_CHARS, chars, nickAtom, setNick } from '@/infra/atoms/chat-atoms';
 import {
   myPresenceAtom,
@@ -40,10 +53,12 @@ import {
 import { closeUserModal, pickTab } from '@/infra/atoms/user-modal-atoms';
 import { api, groupWords } from '@/infra/api';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
+import { providerList } from '@/infra/oauth';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
+import { OAuthMark } from '@/shared-components/OAuthMark';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { BUTTON, Field, INPUT, OptionCard, PasswordInput, SECTION_TITLE, Section, Status } from '@/shared-components/user-modal/parts';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -57,7 +72,9 @@ import { cn } from '@/utils/cn';
 function Rename({ me }: { me: string }) {
   const busy = useAtomValue(renameBusyAtom);
   const status = useAtomValue(renameStatusAtom);
-  const again = useAtomValue(renameAgainAtom);
+  const wait = useAtomValue(renameAgainAtom);
+  const held = useAtomValue(heldNamesAtom);
+  const hasPassword = useAtomValue(hasPasswordAtom);
   const [next, setNext] = useState('');
   const [password, setPassword] = useState('');
   const [sure, setSure] = useState(false);
@@ -68,7 +85,9 @@ function Rename({ me }: { me: string }) {
   }, []);
 
   const wanted = cleanName(next);
-  const ready = !busy && !again && isValidName(wanted) && !isDummyName(wanted) && wanted !== me && password.length >= 8;
+  // going back onto one of my own held names never waits (docs/ids.md)
+  const again = held.includes(wanted) ? null : wait;
+  const ready = !busy && !again && isValidName(wanted) && !isDummyName(wanted) && wanted !== me && (!hasPassword || password.length >= 8);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -88,8 +107,16 @@ function Rename({ me }: { me: string }) {
     <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
       {/* for password managers: which account the password belongs to */}
       <input type="text" name="username" value={me} autoComplete="username" readOnly tabIndex={-1} aria-hidden className="sr-only" />
-      <fieldset disabled={!!again} className="m-0 flex flex-col gap-4 border-0 p-0 disabled:opacity-60">
-        <Field id="profile-new-name" label="new name" hint="a-z 0-9 _ and -. up to 32. lowercase.">
+      <fieldset className="m-0 flex flex-col gap-4 border-0 p-0">
+        <Field
+          id="profile-new-name"
+          label="new name"
+          hint={
+            held.length
+              ? `a-z 0-9 _ and -. up to 32. lowercase. ${held.join(', ')} is still held for you: going back is allowed any time.`
+              : 'a-z 0-9 _ and -. up to 32. lowercase.'
+          }
+        >
           <input
             id="profile-new-name"
             value={next}
@@ -106,9 +133,11 @@ function Rename({ me }: { me: string }) {
             className={INPUT}
           />
         </Field>
-        <Field id="profile-rename-password" label="your password">
-          <PasswordInput id="profile-rename-password" value={password} onChange={setPassword} autoComplete="current-password" />
-        </Field>
+        {hasPassword && (
+          <Field id="profile-rename-password" label="your password">
+            <PasswordInput id="profile-rename-password" value={password} onChange={setPassword} autoComplete="current-password" />
+          </Field>
+        )}
       </fieldset>
       <div className="flex flex-wrap items-center gap-3">
         {sure ? (
@@ -166,6 +195,12 @@ const PRESENCE_OPTIONS: readonly { choice: PresenceChoice; label: string; detail
  */
 export function ProfileTab() {
   const me = useAtomValue(meAtom);
+  const oauthVerified = useAtomValue(oauthVerifiedAtom);
+  const oauthProviders = useAtomValue(oauthProvidersAtom);
+  // which providers are on here: the line that says how to get verified names them
+  useEffect(() => {
+    if (me) void loadOAuthProviders();
+  }, [me]);
   const nick = useAtomValue(nickAtom);
   const name = useAtomValue(myNameAtom);
   const avatar = useAtomValue(myAvatarVersionAtom);
@@ -316,7 +351,16 @@ export function ProfileTab() {
                   ✓
                 </span>
               </Tooltip>
+              {oauthVerified && <OAuthMark id="profile-oauth-verified" />}
             </p>
+            {!oauthVerified && !!oauthProviders?.length && (
+              <p id="profile-get-verified" className="text-sm text-textTertiary">
+                link {providerList(oauthProviders)} to get the blue verified mark beside your name.{' '}
+                <button type="button" onClick={() => pickTab('security')} className="text-primaryBlue underline-offset-2 hover:underline">
+                  link a login
+                </button>
+              </p>
+            )}
             <Rename me={me} />
           </>
         ) : (

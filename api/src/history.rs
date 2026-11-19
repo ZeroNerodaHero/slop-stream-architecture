@@ -69,8 +69,14 @@ pub(crate) const VIDEO_LINK: &str = r"(^|[^[:alnum:]])(https?://|www\.)[^[:space
 /// by name for the streamer's. A nick's line joins nothing: it is nobody's picture, whoever
 /// holds that name later. A line out of redis gets the same from `chat::with_faces`, so the
 /// two sides of the window agree.
-const LINE_COLUMNS: &str = "l.id, l.at, l.speaker, l.user_id, l.\"text\", l.streamer, l.verified, l.badges, l.image,
-                            (EXTRACT(EPOCH FROM COALESCE(u.avatar_at, r.avatar_at)))::bigint, l.room";
+const LINE_COLUMNS: &str = concat!(
+    "l.id, l.at, l.speaker, l.user_id, l.\"text\", l.streamer, l.verified, l.badges, l.image,
+     (EXTRACT(EPOCH FROM COALESCE(u.avatar_at, r.avatar_at)))::bigint, l.room, (",
+    crate::oauth::linked_sql!("u"),
+    " OR ",
+    crate::oauth::linked_sql!("r"),
+    ")"
+);
 const LINE_TABLES: &str = "chat_lines l
                            LEFT JOIN streamers u ON l.verified AND u.id = l.user_id
                                AND (u.name = l.speaker OR EXISTS (SELECT 1 FROM held_names h WHERE h.user_id = u.id AND h.name = l.speaker AND h.until > now()))
@@ -620,10 +626,11 @@ async fn pg_side(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, side: Sid
 }
 
 /// `LINE_COLUMNS`, in order: `image` is the picture ids on the line (one, or several joined by
-/// commas), then the speaker's face the join found, and the room last.
-type LineRow = (String, DateTime<Utc>, String, Option<Uuid>, String, bool, bool, Value, Option<String>, Option<i64>, String);
+/// commas), then the speaker's face the join found, the room, and the oauth mark of the row the
+/// join found (false when it found none: `u.id` and `r.id` are null, and so is no EXISTS).
+type LineRow = (String, DateTime<Utc>, String, Option<Uuid>, String, bool, bool, Value, Option<String>, Option<i64>, String, bool);
 
-fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, avatar, _room): LineRow) -> Line {
+fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, avatar, _room, oauth_verified): LineRow) -> Line {
     let groups = serde_json::from_value::<Vec<Badge>>(badges).unwrap_or_default();
     let images = crate::chat::split_pictures(image);
     let image = images.first().cloned();
@@ -635,6 +642,7 @@ fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, a
         verified,
         groups,
         avatar,
+        oauth_verified,
         user_id,
         image,
         images,
@@ -749,7 +757,7 @@ mod tests {
     #[test]
     fn a_hit_says_its_channel_for_a_servers_search_alone() {
         let row = |room: &str| -> LineRow {
-            ("1729000000000-0".to_owned(), DateTime::from_timestamp_millis(1729000000000).unwrap(), "bob".to_owned(), None, "hi".to_owned(), false, false, json!([]), None, None, room.to_owned())
+            ("1729000000000-0".to_owned(), DateTime::from_timestamp_millis(1729000000000).unwrap(), "bob".to_owned(), None, "hi".to_owned(), false, false, json!([]), None, None, room.to_owned(), false)
         };
         assert_eq!(hit_of(row("vip/clips"), Some("vip")).channel.as_deref(), Some("clips"));
         assert_eq!(hit_of(row("alice"), None).channel, None, "a stream's room has no channel");
@@ -879,6 +887,18 @@ mod tests {
         store(&pool, &room, "1729000000000-0", &alice_name, Some(alice), "hi", None, false, true, &[]).await.unwrap();
         // her own name: her picture
         assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, Some(1690000000));
+        let mark = |pool: PgPool, room: String| async move {
+            let (at, seq) = at_seq("1729000000001-0").unwrap();
+            pg_older(&pool, &room, at, seq, PAGE).await.unwrap()[0].oauth_verified
+        };
+        assert!(!mark(pool.clone(), room.clone()).await, "nothing linked: no oauth mark");
+        sqlx::query("INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES ($1, 'discord', $2)")
+            .bind(alice)
+            .bind(format!("hist-{run}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(mark(pool.clone(), room.clone()).await, "linked: the stored line wears the mark, as the row is now");
 
         // what change_name leaves behind: the row is bob, and alice is held for it. the face follows
         let bob_name = format!("bob6-{run}");
