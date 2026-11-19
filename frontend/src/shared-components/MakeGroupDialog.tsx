@@ -11,7 +11,7 @@ import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { GroupMark } from '@/shared-components/GroupMark';
-import { SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
+import { SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack, useSheetKeyboard } from '@/shared-components/MobileSheet';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
@@ -64,7 +64,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
     dialog.showModal();
-    dialog.querySelector<HTMLElement>('#groups-make-name')?.focus();
+    focusOnOpen(dialog, '#groups-make-name');
     return () => {
       if (dialog.open) dialog.close();
     };
@@ -119,6 +119,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
     if (pressedBackdrop.current && e.target === e.currentTarget) onClose();
   };
   useSheetBack(onClose);
+  useSheetKeyboard(dialogRef);
 
   return (
     <dialog

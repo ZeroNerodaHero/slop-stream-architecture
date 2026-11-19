@@ -48,7 +48,8 @@ import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
-import { CHAT_MOBILE, useIsMobile, useKeyboardStrip, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
+import { CHAT_MOBILE, keyboardStrip, useChatTyping, useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
+import { KbdDebug } from '@/shared-components/KbdDebug';
 import { dummyPage } from '@/infra/about';
 import { api } from '@/infra/api';
 import { cleanName, isDummyName } from '@/infra/names';
@@ -142,8 +143,9 @@ export function WatchPage() {
   // a phone's page is the window (as go live's is): the visual viewport (mobile.ts) is its box, so the send row stays over the keyboard
   const view = useVisibleViewport(mobile, true);
   useLockedDocument(mobile);
-  // a phone's player is a strip while the keyboard is up, so the chat has the room
-  const strip = useKeyboardStrip(view?.keyboard ?? false);
+  // a phone's player is a strip while the chat is typed in, so the chat has the room; the tabs hide
+  const typing = useChatTyping(mobile, view?.keyboard ?? false);
+  const strip = keyboardStrip(typing);
   const [phoneTab, setPhoneTab] = useState<PhoneTab>('chat');
   // a phone's tabs once opened stay mounted, hidden while another is open (the chat keeps its place and
   // the line being typed); the calendar and the socials wait for their first open
@@ -321,7 +323,7 @@ export function WatchPage() {
             )}
           </Skeleton>
         ) : (
-          <div id="profile" data-presence={presence} ref={mobile ? strip.ref : undefined} className={cn('relative', mobile && strip.box)} style={mobile ? strip.style : undefined}>
+          <div id="profile" data-presence={presence} data-kbd-video={mobile || undefined} className={cn('relative', mobile && strip.box)} style={mobile ? strip.style : undefined}>
             <div className={cn('relative aspect-video w-full overflow-hidden border border-primaryStroke bg-black max-md:border-x-0 max-md:border-t-0', mobile && strip.frame)}>
               {shownThumb && (
                 <img
@@ -348,12 +350,12 @@ export function WatchPage() {
           </div>
         )
       ) : (
-        <div ref={mobile ? strip.ref : undefined} className={cn('group relative', mobile && strip.box)} style={mobile ? strip.style : undefined}>
+        <div data-kbd-video={mobile || undefined} className={cn('group relative', mobile && strip.box)} style={mobile ? strip.style : undefined}>
           {/* the streamer's frame as they laid it out (docs/screen.md): `#video`, the one with the sound,
               stands in for the bottom video layer; a video layer clicked is shown alone */}
           <SceneView
             id="scene"
-            // a phone's player sits right on the row's own stroke: no second line between them. scaled into the strip while typing
+            // a phone's player sits right on the row's own stroke: no second line between them. its middle third is the strip while typing
             className={cn('max-md:border-t-0', mobile && strip.frame)}
             layers={layers}
             streamFor={slotStreamAtom}
@@ -514,7 +516,7 @@ export function WatchPage() {
       );
     return (
       <div
-        data-keyboard={view?.keyboard ?? false}
+        data-keyboard={typing || (view?.keyboard ?? false)}
         className="group/phone fixed inset-x-0 top-0 flex h-[100dvh] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
         style={view ? { height: view.height, transform: view.top ? `translateY(${view.top}px)` : undefined } : undefined}
       >
@@ -535,7 +537,7 @@ export function WatchPage() {
           </div>
           {tabs.length > 0 && (
             <div id="watch-tabs" className="flex min-h-0 flex-1 flex-col">
-              <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className="flex shrink-0 border-b border-primaryStroke px-1">
+              <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className={cn('flex shrink-0 border-b border-primaryStroke px-1', typing && 'hidden')}>
                 {tabs.map((t) => {
                   const on = t === shown;
                   return (
@@ -582,6 +584,7 @@ export function WatchPage() {
             </div>
           )}
         </PageFrame>
+        <KbdDebug typing={typing} />
       </div>
     );
   }
