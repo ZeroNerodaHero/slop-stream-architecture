@@ -672,9 +672,12 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
   }
 
   return (
-    <aside id="chat" data-phase={phase} className={embedded ? cn('flex flex-col', className) : panelClassName(cn('flex min-h-[320px] flex-col', className))}>
+    <aside id="chat" data-phase={phase} className={embedded ? cn('relative flex flex-col', className) : panelClassName(cn('relative flex min-h-[320px] flex-col', className))}>
+      {/* on a phone a stream's chat (watch, go live) drops this bar to leave the lines room over the keyboard: kept for screen readers, ids and the hide-bots setting as they are. a group's bar stays, it names the channel */}
       {!embedded && (
-        <header className="flex items-center justify-between gap-3 border-b border-primaryStroke px-4 py-2 text-base">
+        <header
+          className={cn('flex items-center justify-between gap-3 border-b border-primaryStroke px-4 py-2 text-base', !server && 'max-md:sr-only')}
+        >
           <span id={server ? 'channel' : undefined} className="truncate font-semibold">
             {server ? `#${channel}` : 'chat'}
           </span>
