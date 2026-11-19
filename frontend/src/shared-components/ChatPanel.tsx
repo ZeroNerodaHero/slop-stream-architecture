@@ -79,6 +79,7 @@ import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { CHIP_BUTTON, ControlTip } from '@/shared-components/VideoControls';
+import { useIsMobile } from '@/infra/mobile';
 import { compressChatImage } from '@/infra/picture';
 import { cn } from '@/utils/cn';
 
@@ -531,6 +532,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
   // true while the view sits at the newest line. someone who scrolled up to read is left there.
   const stuck = useRef(true);
   const shown = useRef(0);
+  const mobile = useIsMobile();
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const lines = useAtomValue(visibleChatLinesAtom);
@@ -615,6 +617,18 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
     shown.current = lines.length;
     hold.current = el.scrollHeight;
   }, [lines, total, scrollTick, aside]);
+
+  // A phone's list changes height under the reader (the keyboard, the player easing to a strip and
+  // back, mobile.ts): one sitting at the newest line stays there through it
+  useEffect(() => {
+    const el = listRef.current;
+    if (!mobile || !el) return;
+    const seen = new ResizeObserver(() => {
+      if (stuck.current) el.scrollTop = el.scrollHeight;
+    });
+    seen.observe(el);
+    return () => seen.disconnect();
+  }, [mobile, aside]);
 
   function onScroll(e: UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;
@@ -886,13 +900,14 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                 placeholder={`say something as ${asStreamer ? name : speaker}`}
                 autoComplete="off"
                 // a phone zooms in on a focused box under 16px: never smaller there, whatever text size the appearance tab picked
-                className="h-10 min-w-0 flex-1 border border-primaryStroke bg-background px-3 text-base max-md:text-[length:max(1rem,16px)]"
+                className="h-10 min-w-0 flex-1 border border-primaryStroke bg-background px-3 text-base max-md:h-11 max-md:text-[length:max(1rem,16px)]"
               />
               {/* refused for the rate: the button goes red and counts down to the next line, and shakes at each try meanwhile. still a button, so a try can shake it */}
               <Button
                 id="chat-send"
                 variant={wait > 0 ? 'danger' : 'primary'}
-                className="h-10 shrink-0 px-4 text-base tabular-nums"
+                // a phone's: a 44px target at least, as tall as the box beside it
+                className="h-10 shrink-0 px-4 text-base tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
                 disabled={!canSend}
                 title={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : undefined}
                 data-wait={wait > 0 ? wait : undefined}

@@ -1,4 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
+import { cn } from '@/utils/cn';
 
 /**
  * A phone: narrower than tailwind's `md` (768px). Below it the sidebar and a group's side columns
@@ -106,6 +107,36 @@ export function useLockedDocument(on: boolean) {
       restores.forEach((restore) => restore());
     };
   }, [on]);
+}
+
+/** How the pinned player's box eases between its full 16:9 and the strip (`useKeyboardStrip`). */
+const STRIP_EASE = 'duration-200 ease-out motion-reduce:transition-none';
+
+/**
+ * The pinned player of a phone page that is the window (WatchPage.tsx, LivePage.tsx) while the
+ * keyboard is up: its box eases from the full 16:9 of its width to a strip a third as tall, and
+ * back once the keyboard goes, so the chat under it (flex-1) has the height while typing. Only the
+ * box's height moves: the frame inside keeps its 16:9 and is scaled down to fit the strip, whole,
+ * so the video is never remounted and plays on. `ref`, `style` and `box` go on the box, `frame`
+ * on the frame. The height is px from the measured width (a height in px is what eases).
+ */
+export function useKeyboardStrip(strip: boolean) {
+  const [box, setBox] = useState<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    if (!box) return;
+    const seen = new ResizeObserver(() => setWidth(box.clientWidth));
+    seen.observe(box);
+    return () => seen.disconnect();
+  }, [box]);
+  const full = (width * 9) / 16;
+  return {
+    ref: setBox,
+    // until it is measured the box is as tall as the frame in it
+    style: width ? { height: strip ? full / 3 : full } : undefined,
+    box: `overflow-hidden transition-[height] ${STRIP_EASE}`,
+    frame: cn(`origin-top transition-transform ${STRIP_EASE}`, strip && 'scale-[0.3333]')
+  };
 }
 
 /**

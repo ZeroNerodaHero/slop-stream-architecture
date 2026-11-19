@@ -43,7 +43,7 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
-import { CHAT_MOBILE, useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
+import { CHAT_MOBILE, useIsMobile, useKeyboardStrip, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
@@ -93,6 +93,8 @@ export function LivePage() {
   // the visual viewport (mobile.ts): the page is what the keyboard leaves, panned with it
   const view = useVisibleViewport(mobile, true);
   useLockedDocument(mobile);
+  // a phone's preview is a strip while the keyboard is up, so the chat has the room
+  const strip = useKeyboardStrip(view?.keyboard ?? false);
   const [tab, setTab] = useState<LiveTab>(keptTab);
   const previewRef = useRef<HTMLVideoElement | null>(null);
   const message = useAtomValue(publishMessageAtom);
@@ -161,13 +163,13 @@ export function LivePage() {
   // the preview, as the desktop and the phone both have it. a phone has no chat button on it:
   // the chat is a tab there, never closed
   const preview = (
-    <div className="group relative">
+    <div ref={mobile ? strip.ref : undefined} className={cn('group relative', mobile && strip.box)} style={mobile ? strip.style : undefined}>
       {/* the frame as every watcher gets it (docs/screen.md): the sources on the stream, laid out
           in fractions. taken hold of here; the watchers' players follow within a beat */}
       <SceneView
         id="scene"
-        // a phone's preview sits right on the row's own stroke: no second line between them
-        className="max-md:border-t-0"
+        // a phone's preview sits right on the row's own stroke: no second line between them. scaled into the strip while typing
+        className={cn('max-md:border-t-0', mobile && strip.frame)}
         layers={scene.layers}
         streamFor={sentStreamAtom}
         imageUrl={(asset) => api.assetUrl(name, asset)}
