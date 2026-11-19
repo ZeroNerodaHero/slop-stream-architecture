@@ -32,7 +32,7 @@ import { OAuthMark } from '@/shared-components/OAuthMark';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
-import { CHIP_BUTTON, ControlTip } from '@/shared-components/VideoControls';
+import { CHIP, CHIP_BUTTON, ControlTip } from '@/shared-components/VideoControls';
 import { useIsMobile } from '@/infra/mobile';
 import { compressChatImage } from '@/infra/picture';
 import { cn } from '@/utils/cn';
@@ -407,6 +407,10 @@ function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
       </button>
       {many && (
         <>
+          {/* which picture this is, top right just left of close: only when there is more than one */}
+          <span id="chat-picture-count" aria-hidden className={cn(CHIP, 'pointer-events-none absolute right-16 top-3 h-10 items-center px-3 text-sm font-semibold tabular-nums')}>
+            {at + 1} / {ids.length}
+          </span>
           <button
             type="button"
             id="chat-picture-prev"
