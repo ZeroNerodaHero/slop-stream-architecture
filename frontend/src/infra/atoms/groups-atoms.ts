@@ -25,6 +25,12 @@ export const groupsBusyAtom = atom(false);
 export const groupsStatusAtom = atom('');
 /** The groups the login is in, in the list's order: the badges its chat lines wear. */
 export const myGroupsAtom = atom((get) => get(groupsAtom).filter((g) => g.mine));
+/** The badges my name wears in chat, as the api picks them (groups.rs `badges_of`): my primary group's alone when I picked one, else every one of mine. */
+export const myBadgesAtom = atom((get) => {
+  const mine = get(myGroupsAtom);
+  const primary = mine.find((g) => g.primary);
+  return primary ? [primary] : mine;
+});
 /** The servers the login is in, as the sidebar lists them (docs/follows.md). `undefined` until asked once this page load; `[]` for nobody. */
 export const myServersAtom = atom<Server[] | undefined>(undefined);
 /** The public servers the login is not in, the explorer's `discover`: what the sidebar's box finds past the ones you are in. `undefined` until asked once this page load. */
@@ -166,6 +172,16 @@ export function joinGroup(name: string): Promise<boolean> {
 
 export function leaveGroup(name: string): Promise<boolean> {
   return act('left', () => api.leaveGroup(name), `left ${name}`, true);
+}
+
+/** `on`: my name wears this group's badge alone. Off: every group's again. My lines follow at once. */
+export function setPrimaryGroup(name: string, on: boolean): Promise<boolean> {
+  return act(
+    on ? 'set' : 'cleared',
+    () => (on ? api.setPrimaryGroup(name) : api.clearPrimaryGroup(name)),
+    on ? `${name} is your primary group` : 'no primary group: every badge again',
+    true
+  );
 }
 
 /** `mine`: I was in it, so my lines lose its badge. */

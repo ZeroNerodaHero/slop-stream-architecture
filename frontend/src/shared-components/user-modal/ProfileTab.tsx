@@ -27,7 +27,7 @@ import {
   presenceChoiceNoteAtom,
   setPresenceChoice
 } from '@/infra/atoms/presence-atoms';
-import { loadGroups, myGroupsAtom } from '@/infra/atoms/groups-atoms';
+import { loadGroups, myBadgesAtom } from '@/infra/atoms/groups-atoms';
 import {
   canEditProfileAtom,
   identityChanged,
@@ -209,7 +209,7 @@ export function ProfileTab() {
   const bioStatus = useAtomValue(profileBioStatusAtom);
   const canEdit = useAtomValue(canEditProfileAtom);
   const whyNot = useAtomValue(whyNotEditAtom);
-  const badges = useAtomValue(myGroupsAtom);
+  const badges = useAtomValue(myBadgesAtom);
   const presence = useAtomValue(myPresenceAtom);
   const choice = useAtomValue(presenceChoiceAtom);
   const presenceNote = useAtomValue(presenceChoiceNoteAtom);
@@ -264,7 +264,7 @@ export function ProfileTab() {
               ) : (
                 <span className="shrink-0 border border-primaryStroke px-1.5 text-xs font-semibold uppercase leading-5 tracking-wider text-textTertiary">guest</span>
               )}
-              {/* the badges my chat lines wear: my groups, in the order joined. the groups tab changes them */}
+              {/* the badges my chat lines wear: my primary group's, else my groups in the order joined. the groups tab changes them */}
               {me &&
                 badges.map((group) => {
                   const words = groupWords(group);

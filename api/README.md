@@ -17,6 +17,6 @@ compose starts four containers from this image: `api`, `chat`, `events`, `home`.
 
 routes are registered in `src/main.rs` (`fn router`) and in each module's `routes()`. the contract is `docs/spec.md`. health: `GET /api/health`. errors: `POST|GET /api/errors` (get needs `ADMIN_NAMES` or `OPS_TOKEN`).
 
-schema: `migrations/migrate-1.sql` … `migrate-31.sql`, applied by `src/migrate.rs`, recorded in `schema_migrations`. no down migrations. data migrations that are not schema live in `scripts/migrate-scripts/` and are run by `scripts/migrate.sh` after a healthy deploy.
+schema: `migrations/migrate-1.sql` … `migrate-33.sql`, applied by `src/migrate.rs`, recorded in `schema_migrations`. no down migrations. data migrations that are not schema live in `scripts/migrate-scripts/` and are run by `scripts/migrate.sh` after a healthy deploy.
 
 the watch page html (`GET /watch/<name>`) is served here so a shared link gets a preview card (`src/profile.rs`).
