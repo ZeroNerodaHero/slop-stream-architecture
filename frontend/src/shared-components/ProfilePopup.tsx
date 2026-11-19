@@ -21,6 +21,7 @@ import { buttonClassName } from '@/shared-components/Button';
 import { Calendar } from '@/shared-components/Calendar';
 import { Face } from '@/shared-components/Face';
 import { FollowButton } from '@/shared-components/FollowButton';
+import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { OfflinePicture } from '@/shared-components/OfflinePicture';
 import { Who, Word } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
@@ -196,6 +197,8 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
 
   // every way out goes through the element: close() restores focus, then fires `close`
   const close = () => dialogRef.current?.close();
+  // a phone's is a page over the page (MobileSheet.tsx): the back button shuts it, and the page under it stays
+  useSheetBack(close);
 
   const presence = (trusted ? heard : undefined) ?? card?.presence;
   const live = presence === 'streaming';
@@ -232,11 +235,11 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
         'open:flex flex-col',
         // full bleed on a phone: the browser's margins and size caps of a modal dialog go
         'm-0 h-dvh max-h-none w-full max-w-none border-0',
-        // past that, as tall as what is in it, between a floor and the window: hung from a fixed top, so a tab with more in it grows the box downward and the head stays put.
+        // past a phone (mobile.ts), as tall as what is in it, between a floor and the window: hung from a fixed top, so a tab with more in it grows the box downward and the head stays put.
         // `h-fit`, not `h-auto`: a modal dialog is pinned top and bottom, and an auto height would stretch between the two
-        'sm:mx-auto sm:mb-auto sm:mt-[8dvh] sm:h-fit sm:max-h-[calc(92dvh-1.5rem)] sm:min-h-[min(22rem,calc(92dvh-1.5rem))] sm:w-[min(720px,calc(100vw-3rem))]',
-        'sm:border sm:border-primaryStroke',
-        'backdrop:bg-black/60 sm:backdrop:backdrop-blur-sm'
+        'md:mx-auto md:mb-auto md:mt-[8dvh] md:h-fit md:max-h-[calc(92dvh-1.5rem)] md:min-h-[min(22rem,calc(92dvh-1.5rem))] md:w-[min(720px,calc(100vw-3rem))]',
+        'md:border md:border-primaryStroke',
+        'backdrop:bg-black/60 md:backdrop:backdrop-blur-sm'
       )}
     >
       <header className="flex shrink-0 items-start gap-4 px-5 pt-5">
@@ -261,7 +264,10 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             aria-label="close"
             aria-keyshortcuts="Escape"
             onClick={close}
-            className="flex h-8 w-8 shrink-0 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue"
+            className={cn(
+              'flex h-8 w-8 shrink-0 items-center justify-center border border-primaryStroke bg-backgroundSecondary text-textSecondary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
+              SHEET_CLOSE
+            )}
           >
             <RiCloseLine aria-hidden size={20} />
           </button>

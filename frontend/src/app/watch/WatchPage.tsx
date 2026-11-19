@@ -46,8 +46,8 @@ import { followingAtom } from '@/infra/atoms/follow-atoms';
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
 import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-atoms';
-import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
-import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
+import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
+import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
 import { dummyPage } from '@/infra/about';
 import { api } from '@/infra/api';
 import { cleanName, isDummyName } from '@/infra/names';
@@ -180,7 +180,7 @@ export function WatchPage() {
   const renamedTo = useAtomValue(watchRenamedToAtom);
   // the layout setting: a column on the left, a column on the right, or a window over the page.
   // closed, a column slides out to that side and the video takes the row
-  const chatSide = useAtomValue(chatSideAtom);
+  const chatSide = useChatSide();
   const chatOpen = useAtomValue(chatModalOpenAtom);
   // one corner player at a time: while your own stream is in it (left on air on the go live
   // page), this stream cannot go there too, and the button says so. the other way round, start

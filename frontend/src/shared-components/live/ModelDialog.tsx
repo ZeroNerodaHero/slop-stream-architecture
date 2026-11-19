@@ -21,6 +21,7 @@ import type { KeptModel } from '@/infra/model-store';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { LoadBar, loadFraction, loadWords, loadWordsShort } from '@/shared-components/live/ModelLoading';
 import { KeptPicture, LetterTile } from '@/shared-components/live/ModelPicture';
+import { SHEET_CLOSE, SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -147,17 +148,24 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
   const onClick = (e: MouseEvent<HTMLDialogElement>) => {
     if (pressedBackdrop.current && e.target === e.currentTarget) onClose();
   };
+  useSheetBack(onClose);
 
   return (
     <dialog
       ref={dialogRef}
       id="model-dialog"
+      data-sheet=""
       aria-labelledby="model-dialog-title"
       onPointerDown={onPointerDown}
       onClick={onClick}
       onClose={onClose}
-      className="m-auto max-h-[calc(100dvh-2rem)] w-[min(640px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60"
+      // a phone's is a sheet up from the foot (MobileSheet.tsx)
+      className={cn(
+        'm-auto max-h-[calc(100dvh-2rem)] w-[min(640px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60',
+        SHEET_DIALOG
+      )}
     >
+      <SheetGrab onDismiss={onClose} />
       <div className="relative flex flex-col gap-5">
         <div className="pr-10">
           <h2 id="model-dialog-title" className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
@@ -166,7 +174,7 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
           <p className="mt-2 text-sm text-textSecondary">it wears your face: your camera reads it here, in this browser, and only the model is sent.</p>
         </div>
         <Tooltip content="close" at="left">
-          <button id="model-dialog-close" type="button" aria-label="close" onClick={onClose} className={cn(ICON_BUTTON, 'absolute right-0 top-0')}>
+          <button id="model-dialog-close" type="button" aria-label="close" onClick={onClose} className={cn(ICON_BUTTON, 'absolute right-0 top-0', SHEET_CLOSE)}>
             <RiCloseLine aria-hidden size={18} />
           </button>
         </Tooltip>
