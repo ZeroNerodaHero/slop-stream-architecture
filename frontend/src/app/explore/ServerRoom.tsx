@@ -101,10 +101,16 @@ const ABOUT_CAP = 200;
  * further in (SIDE_INSET): 14px under the row, and the roster ends 14px over the foot, which
  * it may not pass.
  */
-const ROOM_GRID = 'grid snap-start items-start gap-4 py-[7px] -mb-10';
+const ROOM_GRID = 'grid snap-start items-start gap-4 py-[7px] -mb-10 max-md:mb-0 max-md:gap-0 max-md:py-0';
 /** The room's three columns on a wide screen: the channels, the chat, the roster. The skeleton has the same, so the chat lands at its width. */
 const ROOM_COLUMNS = 'lg:grid-cols-[200px_minmax(0,1fr)_240px]';
-const ROOM_HEIGHT = 'h-[calc(100dvh-var(--title-row,4rem)-14px)] max-md:h-[calc(100dvh-var(--title-row,4rem)-14px-env(safe-area-inset-bottom))] min-h-[420px]';
+const ROOM_HEIGHT = 'h-[calc(100dvh-var(--title-row,4rem)-14px)] max-md:h-[calc(100dvh-var(--title-row,4rem))] min-h-[420px] max-md:min-h-[320px]';
+/**
+ * A phone's room is the chat alone, edge to edge under the title row (PageFrame's `bleed`): no
+ * box around it, and the safe area at the foot is the send row's padding, not a gap.
+ */
+const ROOM_CHAT_MOBILE =
+  'max-md:border-0 max-md:bg-background max-md:[&>header]:px-3 max-md:[&_#chat-lines]:px-3 max-md:[&>footer]:px-3 max-md:[&>footer]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] max-md:[&>footer]:pt-2';
 const SIDE_INSET = 'mt-[7px]';
 const ROSTER_HEIGHT = 'max-h-[calc(100dvh-var(--title-row,4rem)-28px)]';
 
@@ -618,7 +624,7 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
         <Bone className="h-6 w-56 max-w-full" />
         <Bone className="h-4 w-80 max-w-full" />
       </div>
-      <div ref={gridRef} className={cn(ROOM_GRID, ROOM_COLUMNS)}>
+      <div ref={gridRef} className={cn(ROOM_GRID, ROOM_COLUMNS, 'max-md:gap-4')}>
         <div className={cn('flex flex-col gap-1.5', SIDE_INSET)}>
           <Bone className="mb-1 h-3 w-24" />
           {Array.from({ length: 3 }, (_, i) => (
@@ -1013,6 +1019,7 @@ export function ServerPage() {
       titleId={titleId}
       mobileTitle={noChannel ? undefined : mobileTitle}
       mobileEnd={noChannel ? undefined : drawerOpener}
+      bleed={!noChannel}
       title={
         <span className="flex min-w-0 items-center gap-3">
           <Badge group={{ name: server, badge: room.badge, color }} />
@@ -1054,7 +1061,7 @@ export function ServerPage() {
                 name={server}
                 channel={channel}
                 onChannel={(to) => navigate(to === 'general' ? `/groups/${server}` : `/groups/${server}/${to}`)}
-                className="h-full"
+                className={cn('h-full', ROOM_CHAT_MOBILE)}
               />
             </div>
             {!mobile && <Roster room={room} />}

@@ -2,15 +2,19 @@ import { RiAddLine, RiCloseLine, RiImageAddLine, RiSearchLine } from '@remixicon
 import { useAtomValue } from 'jotai';
 import {
   type CSSProperties,
+  type DOMAttributes,
   type FormEvent,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   type UIEvent,
   useEffect,
   useLayoutEffect,
   useRef,
   useState
 } from 'react';
+import { createPortal } from 'react-dom';
+import { useLocation } from 'react-router-dom';
 
 import { api, messageOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
@@ -38,10 +42,12 @@ import {
   sendDm,
   showDmNotice
 } from '@/infra/atoms/dm-atoms';
-import { followingAtom } from '@/infra/atoms/follow-atoms';
+import { followingAtom, friendsOpenAtom } from '@/infra/atoms/follow-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatStyleAtom, type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
+import { useIsMobile } from '@/infra/mobile';
 import { compressChatImage } from '@/infra/picture';
+import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
 import { ChatLineShape, placeOf } from '@/shared-components/ChatLine';
 import { ChatImages, pictureSrc } from '@/shared-components/ChatPanel';
@@ -317,6 +323,174 @@ function Picker({ dms }: { dms: Dm[] }) {
   );
 }
 
+/** How far up a phone's sheet comes: this share of the window's height, its top 20% down. */
+const SHEET = 0.8;
+/** At least this much of the dimmed page stays above the sheet while the keyboard is up, to tap it shut. */
+const SHEET_GAP = 24;
+/** Let go past this share of its height and the sheet shuts. */
+const SHEET_SNAP = 0.3;
+/** A flick down this fast (px per ms) shuts it, however short. */
+const SHEET_FLICK = 0.5;
+const SHEET_MS = 200;
+const SHEET_SLIDE = 'duration-200 ease-out motion-reduce:transition-none';
+/** How dark the page behind the sheet gets. */
+const SHEET_DIM = 0.6;
+
+/**
+ * The part of the window the keyboard leaves: how far up from the layout viewport's foot the
+ * visible part ends (the keyboard's height, 0 without one), and how tall the visible part is.
+ * null where the browser has no `visualViewport`: the sheet then sits on the foot at 80dvh.
+ */
+function useVisibleViewport(on: boolean): { bottom: number; height: number } | null {
+  const [view, setView] = useState<{ bottom: number; height: number } | null>(null);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!on || !vv) return;
+    const read = () => {
+      const bottom = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+      const height = Math.round(vv.height);
+      setView((was) => (was && was.bottom === bottom && was.height === height ? was : { bottom, height }));
+    };
+    read();
+    vv.addEventListener('resize', read);
+    vv.addEventListener('scroll', read);
+    return () => {
+      vv.removeEventListener('resize', read);
+      vv.removeEventListener('scroll', read);
+    };
+  }, [on]);
+  return on ? view : null;
+}
+
+/** The handlers a drag down by the grabber or the sheet's head goes through. */
+type SheetGrip = Pick<DOMAttributes<HTMLElement>, 'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel'>;
+
+/**
+ * A phone's chat sheet, while `active` (a phone, the chat open): the slide up once it is on
+ * screen, the slide down before `onDismiss` takes it off (a tap on the dim page, a drag down
+ * let go past `SHEET_SNAP` of its height or flicked, Escape), and the keyboard's place
+ * (`useVisibleViewport`). `grip` goes on the grabber and on the head: the sheet follows the finger.
+ */
+function useSheet(active: boolean, onDismiss: () => void) {
+  const view = useVisibleViewport(active);
+  // in: a frame after it is on screen, so the slide up has a place to start from. leaving: sliding down, then gone
+  const [entered, setEntered] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  // px pulled down while a finger holds it; null while nobody does
+  const [drag, setDrag] = useState<number | null>(null);
+  const [wasActive, setWasActive] = useState(active);
+  if (wasActive !== active) {
+    setWasActive(active);
+    setEntered(false);
+    setLeaving(false);
+    setDrag(null);
+  }
+  const held = useRef<{ id: number; y: number; lastY: number; lastT: number; speed: number } | null>(null);
+  const dismiss = useRef(onDismiss);
+  useLayoutEffect(() => {
+    dismiss.current = onDismiss;
+  });
+
+  useEffect(() => {
+    if (!active) return;
+    const frame = window.requestAnimationFrame(() => setEntered(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [active]);
+
+  useEffect(() => {
+    if (!leaving) return;
+    const done = window.setTimeout(() => dismiss.current(), SHEET_MS);
+    return () => window.clearTimeout(done);
+  }, [leaving]);
+
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape' && !document.querySelector('dialog[open]')) setLeaving(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [active]);
+
+  const grip: SheetGrip = {
+    onPointerDown(e) {
+      if (e.button !== 0 || held.current || (e.target as Element).closest('button, input, textarea, a')) return;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      held.current = { id: e.pointerId, y: e.clientY, lastY: e.clientY, lastT: e.timeStamp, speed: 0 };
+    },
+    onPointerMove(e) {
+      const h = held.current;
+      if (!h || e.pointerId !== h.id) return;
+      const dt = e.timeStamp - h.lastT;
+      if (dt > 0) h.speed = (e.clientY - h.lastY) / dt;
+      h.lastY = e.clientY;
+      h.lastT = e.timeStamp;
+      setDrag(Math.max(0, e.clientY - h.y));
+    },
+    onPointerUp(e) {
+      const h = held.current;
+      if (!h || e.pointerId !== h.id) return;
+      held.current = null;
+      const pulled = Math.max(0, e.clientY - h.y);
+      const tall = e.currentTarget.closest('#friend-chat')?.getBoundingClientRect().height ?? window.innerHeight * SHEET;
+      setDrag(null);
+      if (h.speed > SHEET_FLICK || pulled > tall * SHEET_SNAP) setLeaving(true);
+    },
+    onPointerCancel(e) {
+      if (held.current?.id !== e.pointerId) return;
+      held.current = null;
+      setDrag(null);
+    }
+  };
+
+  return { view, drag, up: entered && !leaving, leave: () => setLeaving(true), grip, raised: (view?.bottom ?? 0) > 0 };
+}
+
+type Sheet = ReturnType<typeof useSheet>;
+
+/**
+ * A phone's chat (below 768px, mobile.ts): a sheet up from the foot of the window to 20% from its
+ * top, over the page dimmed, with a grabber at its head (`useSheet`). It sits on the keyboard
+ * while one is up, so the box stays in sight, and it is never taller than what the keyboard
+ * leaves (`useVisibleViewport`). The page under it does not scroll (globals.css,
+ * `data-sheet-open`). Drawn into the body, over the drawers.
+ */
+function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; label: string; with?: string; children: ReactNode }) {
+  const { view, drag, up, grip } = sheet;
+  const height = view ? Math.max(0, Math.min(window.innerHeight * SHEET, view.height - SHEET_GAP)) : window.innerHeight * SHEET;
+  const shown = up ? 1 - Math.min(1, (drag ?? 0) / Math.max(1, height)) : 0;
+  return createPortal(
+    <div data-sheet-open="" className="fixed inset-0 z-[55] overflow-hidden">
+      {/* the page, dimmed: a tap shuts the sheet. no panning on it, so the page under does not scroll */}
+      <div
+        aria-hidden
+        onClick={sheet.leave}
+        className={cn('absolute inset-0 touch-none bg-black', drag === null && cn('transition-opacity', SHEET_SLIDE))}
+        style={{ opacity: shown * SHEET_DIM }}
+      />
+      <section
+        id="friend-chat"
+        role="dialog"
+        aria-modal
+        aria-label={label}
+        data-with={name}
+        className={cn(
+          'absolute inset-x-0 bottom-0 flex h-[80dvh] flex-col border-t border-primaryStroke bg-backgroundSecondary pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] text-base text-textPrimary',
+          drag === null && cn('transition-transform', SHEET_SLIDE)
+        )}
+        style={{ ...(view ? { bottom: view.bottom, height } : {}), transform: up ? `translateY(${drag ?? 0}px)` : 'translateY(100%)' }}
+      >
+        {/* the grabber: a bar to pull the sheet down by */}
+        <div aria-hidden {...grip} className={cn('flex shrink-0 justify-center pb-1 pt-2', GRIP)}>
+          <span className="h-1 w-10 bg-primaryStroke" />
+        </div>
+        {children}
+      </section>
+    </div>,
+    document.body
+  );
+}
+
 /**
  * Direct chats with friends (docs/dms.md), opened from the sidebar: one window, a tab per
  * friend down its side, dragged by its header, resized from a corner. The lines are the
@@ -351,6 +525,10 @@ export function FriendChat() {
   const shape = useAtomValue(chatStyleAtom);
   const myAvatar = useAtomValue(myAvatarVersionAtom);
   const following = useAtomValue(followingAtom);
+  /** A phone: the chat is a sheet up from the foot (MobileSheet), not the window. */
+  const mobile = useIsMobile();
+  const sheet = useSheet(mobile && open, hideDms);
+  const { pathname } = useLocation();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   /** The search box is under the header. One box for the window: its words stay through a change of tab, the hits are the thread's they were asked of. */
   const [searching, setSearching] = useState(false);
@@ -427,8 +605,9 @@ export function FriendChat() {
   }, [box]);
 
   // A moved or resized window is pulled back on screen when the browser window shrinks, and on showing, in case it did while this was hidden.
+  // not on a phone: the sheet has no box, and the kept one is the desktop's
   useEffect(() => {
-    if (!open) return;
+    if (!open || mobile) return;
     const fit = () =>
       setBox((b) => {
         if (!b) return b;
@@ -438,11 +617,24 @@ export function FriendChat() {
     fit();
     window.addEventListener('resize', fit);
     return () => window.removeEventListener('resize', fit);
-  }, [open]);
+  }, [open, mobile]);
 
-  // a tab shown: the box takes focus. not while the arrow keys walk the tabs: focus stays on the face they landed on
+  // a phone: the sheet opens in place of the sidebar's drawer (a chat button in it, most often), and a page change
+  // (a name in the sheet tapped) takes it down, so the page it went to is not under it
   useEffect(() => {
-    if (!name || !open) return;
+    if (mobile && open) store.set(friendsOpenAtom, false);
+  }, [mobile, open]);
+  const lastPath = useRef(pathname);
+  useEffect(() => {
+    if (pathname === lastPath.current) return;
+    lastPath.current = pathname;
+    if (mobile && open) hideDms();
+  }, [pathname, mobile, open]);
+
+  // a tab shown: the box takes focus. not while the arrow keys walk the tabs: focus stays on the face they landed on.
+  // not on a phone either: the keyboard would come up over the lines before they were read
+  useEffect(() => {
+    if (!name || !open || mobile) return;
     const focused = document.activeElement;
     if (focused instanceof Element && focused.closest('#friend-chat-tabs')) return;
     input.current?.focus();
@@ -634,30 +826,26 @@ export function FriendChat() {
   const style: CSSProperties | undefined = box ? { left: box.x, top: box.y, width: box.w, height: box.h } : undefined;
   const rail = <Rail dms={people} active={name ?? null} side={side} />;
   const left = MAX_CHARS - [...draft.trim()].length;
+  // a phone's header buttons are a finger's 44px square, their icons a size up
+  const headerButton = mobile ? cn(HEADER_BUTTON, 'flex h-11 w-11 items-center justify-center p-0') : HEADER_BUTTON;
+  const headerIcon = mobile ? 20 : 16;
+  // a phone's sheet is the thread alone: the column of faces is the window's, and the drawer's chat buttons pick another
+  const tabbed = Boolean(name) && !mobile;
 
-  return (
-    <section
-      ref={ref}
-      id="friend-chat"
-      role="dialog"
-      aria-label={name ? `chat with ${name}` : 'chat'}
-      data-with={name}
-      style={style}
-      className={panelClassName(
-        cn(
-          'group fixed z-50 flex text-base',
-          // until moved or resized: 400 by 440, just inside the page, clear of the open sidebar
-          !box && cn('bottom-6 h-[min(440px,70vh)] w-[min(400px,calc(100vw-3rem))]', side === 'right' ? 'right-96' : 'left-96')
-        )
-      )}
-    >
-      {side === 'left' && rail}
-      <div id="friend-chat-thread" role={name ? 'tabpanel' : undefined} aria-labelledby={name ? tabId(name) : undefined} className="flex min-w-0 flex-1 flex-col">
-        {/* the name alone: the face, with how they are on its corner, is in the column beside it. no tab shown: what the window is doing instead */}
+  const content = (
+    <>
+      {side === 'left' && !mobile && rail}
+      <div
+        id="friend-chat-thread"
+        role={tabbed ? 'tabpanel' : undefined}
+        aria-labelledby={tabbed && name ? tabId(name) : undefined}
+        className={cn('flex min-w-0 flex-1 flex-col', mobile && 'min-h-0')}
+      >
+        {/* the name alone: the face, with how they are on its corner, is in the column beside it. no tab shown: what the window is doing instead.
+            a phone's is the sheet's head, under the grabber: a drag on it pulls the sheet down, and it moves nothing */}
         <header
-          onPointerDown={(e) => press(e, 'move')}
-          title="drag to move"
-          className={cn('flex cursor-move items-center gap-2 border-b border-primaryStroke px-3 py-2', GRIP)}
+          {...(mobile ? sheet.grip : { onPointerDown: (e: ReactPointerEvent) => press(e, 'move'), title: 'drag to move' })}
+          className={cn('flex cursor-move items-center gap-2 border-b border-primaryStroke px-3 py-2', GRIP, mobile && 'cursor-auto gap-1 py-0.5 pr-1')}
         >
           {name && dm ? (
             <>
@@ -680,9 +868,9 @@ export function FriendChat() {
                   aria-pressed={searching}
                   aria-label={searching ? 'close the search' : `search the chat with ${name}`}
                   onClick={() => (searching ? closeSearch() : setSearching(true))}
-                  className={cn(HEADER_BUTTON, searching ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
+                  className={cn(headerButton, searching ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
                 >
-                  <RiSearchLine aria-hidden size={16} />
+                  <RiSearchLine aria-hidden size={headerIcon} />
                 </button>
               </Tooltip>
             </>
@@ -696,10 +884,10 @@ export function FriendChat() {
               id="friend-chat-close"
               type="button"
               aria-label="hide the chat window"
-              onClick={hideDms}
-              className={cn(HEADER_BUTTON, 'text-textTertiary hover:text-textPrimary')}
+              onClick={mobile ? sheet.leave : hideDms}
+              className={cn(headerButton, 'text-textTertiary hover:text-textPrimary')}
             >
-              <RiCloseLine aria-hidden size={16} />
+              <RiCloseLine aria-hidden size={headerIcon} />
             </button>
           </Tooltip>
         </header>
@@ -725,7 +913,7 @@ export function FriendChat() {
                       }
                     }}
                     placeholder="search this chat"
-                    className={cn(INPUT, 'py-1 text-sm')}
+                    className={cn(INPUT, 'py-1 text-sm', mobile && 'text-base')}
                   />
                   <SearchSuggestions id="friend-chat-search-list" search={search} />
                   <button
@@ -824,7 +1012,11 @@ export function FriendChat() {
                 </SearchResults>
               )}
             </div>
-            <form onSubmit={(e) => void send(e)} className="border-t border-primaryStroke p-2">
+            {/* a phone's foot: room for the home bar under the box, unless the keyboard is up and has taken that place */}
+            <form
+              onSubmit={(e) => void send(e)}
+              className={cn('border-t border-primaryStroke p-2', mobile && !sheet.raised && 'pb-[calc(0.5rem+env(safe-area-inset-bottom))]')}
+            >
               {/* the pictures going with the next line, each with its × (the room chat's strip, ChatPanel.tsx) */}
               {pictures.length > 0 && (
                 <div id="friend-chat-picture-preview" className="mb-2 flex flex-wrap gap-2">
@@ -854,7 +1046,10 @@ export function FriendChat() {
                     type="button"
                     id="friend-chat-picture"
                     aria-label="picture"
-                    className="flex h-8 w-8 shrink-0 items-center justify-center text-textTertiary hover:text-textPrimary disabled:opacity-40"
+                    className={cn(
+                      'flex h-8 w-8 shrink-0 items-center justify-center text-textTertiary hover:text-textPrimary disabled:opacity-40',
+                      mobile && 'h-11 w-11'
+                    )}
                     disabled={uploading || pictures.length >= MAX_CHAT_IMAGES}
                     onClick={() => fileRef.current?.click()}
                   >
@@ -884,13 +1079,14 @@ export function FriendChat() {
                   placeholder={pictures.length > 0 ? 'say something with it, or just send' : `message ${name}`}
                   maxLength={MAX_CHARS + 50}
                   autoComplete="off"
-                  className={cn(INPUT, 'py-1.5 text-sm')}
+                  // a phone's box is 16px text: a smaller one zooms the page in when it takes focus (ios)
+                  className={cn(INPUT, 'py-1.5 text-sm', mobile && 'h-11 py-0 text-base')}
                 />
                 <Button
                   id="friend-chat-send"
                   type="submit"
                   variant="primary"
-                  className="px-3 py-1.5 text-sm"
+                  className={cn('px-3 py-1.5 text-sm', mobile && 'h-11 py-0 text-base')}
                   disabled={(!draft.trim() && pictures.length === 0) || left < 0 || sending || uploading}
                 >
                   send
@@ -913,7 +1109,35 @@ export function FriendChat() {
           <Picker dms={dms} />
         )}
       </div>
-      {side === 'right' && rail}
+      {side === 'right' && !mobile && rail}
+    </>
+  );
+
+  if (mobile) {
+    return (
+      <MobileSheet sheet={sheet} label={name ? `chat with ${name}` : 'chat'} with={name}>
+        {content}
+      </MobileSheet>
+    );
+  }
+
+  return (
+    <section
+      ref={ref}
+      id="friend-chat"
+      role="dialog"
+      aria-label={name ? `chat with ${name}` : 'chat'}
+      data-with={name}
+      style={style}
+      className={panelClassName(
+        cn(
+          'group fixed z-50 flex text-base',
+          // until moved or resized: 400 by 440, just inside the page, clear of the open sidebar
+          !box && cn('bottom-6 h-[min(440px,70vh)] w-[min(400px,calc(100vw-3rem))]', side === 'right' ? 'right-96' : 'left-96')
+        )
+      )}
+    >
+      {content}
       {/* the corners show while the pointer is over the window: pull one, and the opposite corner stays put */}
       {CORNERS.map((c) => (
         <div

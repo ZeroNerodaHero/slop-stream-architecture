@@ -57,8 +57,9 @@ html:has(dialog:modal) {
   overflow: hidden;
 }
 
-/* and under a phone's open drawer (SwipeDrawer.tsx), which only a phone's width ever draws */
-html:has([data-drawer-open]) {
+/* and under a phone's open drawer (SwipeDrawer.tsx) or chat sheet (FriendChat.tsx), which only a phone's width ever draws */
+html:has([data-drawer-open]),
+html:has([data-sheet-open]) {
   overflow: hidden;
 }
 
