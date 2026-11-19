@@ -396,12 +396,7 @@ export function LivePage() {
               {publishing && <Mixer />}
             </div>
           </div>
-          {/* the stream's status and who is watching. no name box: a login streams as its account, a guest
-              as the nick in the corner panel; start and stop are the foot of the sources panel */}
-          <div className="flex flex-wrap items-baseline gap-x-4">
-            <StatusLine text={message} tone={tone} />
-            <ViewerCount id="viewers" count={viewers} className="text-lg text-textSecondary" />
-          </div>
+          {/* the stream's status and who is watching are at the foot of the sources panel, under stop (Sources.tsx) */}
 
           {link}
         </div>
