@@ -45,10 +45,10 @@ export function HomeLink({ reload = false, className }: { reload?: boolean; clas
 
 /**
  * A phone's way home, where the desktop has the back caret: the house, a 44px square, beside
- * the menu. Named `home` and no tooltip, the caret's way (tooltips.mdc): the row is pinned to
+ * the menu (a group's row, by its drawer opener, draws it as a back caret). Named `home` and no tooltip, the caret's way (tooltips.mdc): the row is pinned to
  * the window's top edge. The tests click `header a[href="/"]`.
  */
-function MobileHomeLink() {
+function MobileHomeLink({ caret = false }: { caret?: boolean }) {
   return (
     <Link
       id="home"
@@ -56,7 +56,7 @@ function MobileHomeLink() {
       aria-label="home"
       className="flex h-11 w-11 shrink-0 items-center justify-center border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
     >
-      <RiHome5Line aria-hidden size={22} />
+      {caret ? <RiArrowLeftSLine aria-hidden size={24} /> : <RiHome5Line aria-hidden size={22} />}
     </Link>
   );
 }
@@ -146,8 +146,8 @@ function useCurrentPart(on: boolean, main: RefObject<HTMLElement | null>, row: R
  * on every page, `mobileStart` beside it, then where you are on one line, cut with an ellipsis
  * when it is long: `mobileTitle` or the title, or on home the part you have scrolled to
  * (`useCurrentPart`), whose headings then scroll with the page under the row. Then home (every
- * page but home) just left of go live, or `mobileEnd`; where the row has no go live (its own
- * page, a `mobileEnd`), home stays beside the menu. No bell: a phone's is in the sidebar's drawer, beside the gear
+ * page but home) just left of go live, or just left of `mobileEnd` (a group's drawer opener);
+ * on go live's own page, which has neither, home stays beside the menu. No bell: a phone's is in the sidebar's drawer, beside the gear
  * (UserPanel.tsx). Always measured into `--title-row`, home's too: the page starts under it.
  * `bleed` takes the page's padding away, so what is under the row reaches the window's edges.
  */
@@ -183,6 +183,8 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
     const headed = mobileTitle !== undefined || title !== undefined;
     // home just left of go live when the row has go live, else beside the menu
     const homeByGoLive = Boolean(title) && mobileEnd === undefined && !onLivePage;
+    // a mobileEnd (a group's drawer opener) gets home just left of it, on the right
+    const homeByEnd = Boolean(title) && mobileEnd !== undefined;
     return (
       <main ref={mainRef} className={cn('mx-auto', bleed ? 'px-0' : 'px-4 pb-8', width, fill && 'flex h-full min-h-0 w-full flex-col')}>
         {/* the buttons are 44px; the notch or the status bar is over them */}
@@ -195,7 +197,7 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
         >
           <DrawerOpener />
           {mobileStart}
-          {title && !homeByGoLive && <MobileHomeLink />}
+          {title && !homeByGoLive && !homeByEnd && <MobileHomeLink />}
           {headed ? (
             <h1 id={titleId} className="min-w-0 flex-1 truncate text-xl font-semibold leading-tight">
               {named}
@@ -207,7 +209,14 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
             </p>
           )}
           {aside && <div className="shrink-0">{aside}</div>}
-          {mobileEnd ?? <TopActions bell={false} home={homeByGoLive} />}
+          {mobileEnd !== undefined ? (
+            <div className="ml-auto flex shrink-0 items-center gap-1">
+              {homeByEnd && <MobileHomeLink caret />}
+              {mobileEnd}
+            </div>
+          ) : (
+            <TopActions bell={false} home={homeByGoLive} />
+          )}
         </header>
         {children}
       </main>
