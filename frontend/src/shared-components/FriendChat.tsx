@@ -45,7 +45,7 @@ import {
 import { followingAtom, friendsOpenAtom } from '@/infra/atoms/follow-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatStyleAtom, type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
-import { useIsMobile } from '@/infra/mobile';
+import { useIsMobile, useVisibleViewport } from '@/infra/mobile';
 import { compressChatImage } from '@/infra/picture';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
@@ -397,32 +397,6 @@ const SHEET_SLIDE = 'duration-200 ease-out motion-reduce:transition-none';
 /** How dark the page behind the sheet gets. */
 const SHEET_DIM = 0.6;
 
-/**
- * The part of the window the keyboard leaves: how far up from the layout viewport's foot the
- * visible part ends (the keyboard's height, 0 without one), and how tall the visible part is.
- * null where the browser has no `visualViewport`: the sheet then sits on the foot at 80dvh.
- */
-function useVisibleViewport(on: boolean): { bottom: number; height: number } | null {
-  const [view, setView] = useState<{ bottom: number; height: number } | null>(null);
-  useEffect(() => {
-    const vv = window.visualViewport;
-    if (!on || !vv) return;
-    const read = () => {
-      const bottom = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
-      const height = Math.round(vv.height);
-      setView((was) => (was && was.bottom === bottom && was.height === height ? was : { bottom, height }));
-    };
-    read();
-    vv.addEventListener('resize', read);
-    vv.addEventListener('scroll', read);
-    return () => {
-      vv.removeEventListener('resize', read);
-      vv.removeEventListener('scroll', read);
-    };
-  }, [on]);
-  return on ? view : null;
-}
-
 /** The handlers a drag down by the grabber or the sheet's head goes through. */
 type SheetGrip = Pick<DOMAttributes<HTMLElement>, 'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel'>;
 
@@ -541,7 +515,7 @@ function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; lab
         aria-label={label}
         data-with={name}
         className={cn(
-          'absolute inset-x-0 bottom-0 flex h-[80dvh] flex-col border-t border-primaryStroke bg-backgroundSecondary pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] text-base text-textPrimary',
+          'absolute inset-x-0 bottom-0 flex h-[80dvh] flex-col overflow-x-hidden border-t border-primaryStroke bg-backgroundSecondary pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] text-base text-textPrimary',
           drag === null && cn('transition-transform', SHEET_SLIDE)
         )}
         style={{ ...(view ? { bottom: view.bottom, height } : {}), transform: up ? `translateY(${drag ?? 0}px)` : 'translateY(100%)' }}
@@ -1172,14 +1146,15 @@ export function FriendChat() {
                   placeholder={pictures.length > 0 ? 'say something with it, or just send' : `message ${name}`}
                   maxLength={MAX_CHARS + 50}
                   autoComplete="off"
-                  // a phone's box is 16px text: a smaller one zooms the page in when it takes focus (ios)
-                  className={cn(INPUT, 'py-1.5 text-sm', mobile && 'h-11 py-0 text-base')}
+                  // a phone's box is 16px text: a smaller one zooms the page in when it takes focus (ios; globals.css keeps
+                  // it at 16px under a smaller text size too). it takes the row's room and gives it back, so send never leaves the row
+                  className={cn(INPUT, 'py-1.5 text-sm', mobile && 'h-11 min-w-0 flex-1 py-0 text-base')}
                 />
                 <Button
                   id="friend-chat-send"
                   type="submit"
                   variant="primary"
-                  className={cn('px-3 py-1.5 text-sm', mobile && 'h-11 py-0 text-base')}
+                  className={cn('px-3 py-1.5 text-sm', mobile && 'h-11 min-w-[44px] shrink-0 py-0 text-base')}
                   disabled={(!draft.trim() && pictures.length === 0) || left < 0 || sending || uploading}
                 >
                   send

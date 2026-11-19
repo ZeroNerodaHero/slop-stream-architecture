@@ -43,7 +43,7 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
-import { useIsMobile } from '@/infra/mobile';
+import { useIsMobile, useVisibleViewport } from '@/infra/mobile';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
@@ -86,30 +86,6 @@ function keepTab(tab: LiveTab) {
   }
 }
 
-/**
- * The part of the window the page can use on a phone: the visual viewport, which is shorter
- * while the on-screen keyboard is up, and how far the browser has panned the page to keep a
- * focused box in sight. `keyboard`: the window is a good deal shorter than the layout's, so
- * the keyboard is what is under it. null while off, or where there is no visual viewport (the
- * page then falls back to `100dvh`).
- */
-function useVisibleWindow(on: boolean): { height: number; top: number; keyboard: boolean } | null {
-  const [view, setView] = useState<{ height: number; top: number; keyboard: boolean } | null>(null);
-  useEffect(() => {
-    const vv = window.visualViewport;
-    if (!on || !vv) return;
-    const read = () => setView({ height: vv.height, top: vv.offsetTop, keyboard: window.innerHeight - vv.height > 120 });
-    read();
-    vv.addEventListener('resize', read);
-    vv.addEventListener('scroll', read);
-    return () => {
-      vv.removeEventListener('resize', read);
-      vv.removeEventListener('scroll', read);
-    };
-  }, [on]);
-  return on ? view : null;
-}
-
 /** While on: the document does not scroll (nor bounce), so the page is the window and nothing else moves. */
 function useLockedDocument(on: boolean) {
   useEffect(() => {
@@ -136,7 +112,8 @@ const CHAT_MOBILE =
 export function LivePage() {
   const navigate = useNavigate();
   const mobile = useIsMobile();
-  const view = useVisibleWindow(mobile);
+  // the visual viewport (mobile.ts): the page is what the keyboard leaves, panned with it
+  const view = useVisibleViewport(mobile);
   useLockedDocument(mobile);
   const [tab, setTab] = useState<LiveTab>(keptTab);
   const previewRef = useRef<HTMLVideoElement | null>(null);
