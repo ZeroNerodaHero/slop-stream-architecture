@@ -8,7 +8,7 @@ import { meAtom } from '@/infra/atoms/auth-atoms';
 import { dmUnreadAtom, openDm, showDms } from '@/infra/atoms/dm-atoms';
 import { followNoteAtom, followingAtom, loadFollowing, searchQueryAtom, searchResultsAtom, setSearchQuery, unfollow } from '@/infra/atoms/follow-atoms';
 import { loadMyServers, loadServers, myServersAtom, publicServersAtom, SERVERS_FRESH_MS } from '@/infra/atoms/groups-atoms';
-import { type Presence, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
+import { type Presence, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import {
   type PanelSide,
   setSidebarFolded,
@@ -78,6 +78,12 @@ const ROW_BORDER_PX = 2;
  */
 const ROW_TAP_PX = 2;
 const ROW_TAP = 'max-md:py-px';
+/**
+ * A row's link, pinned to `Sizes.face` (the face and its border; on a phone the tap pixels too), so
+ * opening the panel, which puts the name beside the face, cannot make it taller and move the faces.
+ * `relative`: the sr-only word inside it has its place there.
+ */
+const ROW_H = 'relative h-[calc(2rem+2px)] max-md:h-[calc(2.5rem+4px)]';
 /** The icon line over a list: the icon, and the word in text-xs, are both 16px. The chat button at the friends line's end is 14. */
 const HEAD_PX = 16;
 /** The line between two lists. The room to grab it reaches into the gaps on either side. */
@@ -223,7 +229,7 @@ interface Person {
 
 /**
  * The picture and the presence square in its bottom right corner, the way the closed panel
- * shows everyone (PersonRow.tsx): streaming, the square carries the broadcast icon. Closed, the
+ * shows everyone (PersonRow.tsx): grey, green, the accent streaming. Closed, the
  * column has no words; the word is in the row's label, and the square says it on hover.
  */
 export function RailFace({ name, avatar, presence }: { name: string; avatar: number | null; presence: Presence }) {
@@ -251,10 +257,11 @@ interface RowProps {
 
 /**
  * One person, closed and open alike: the face is in the same place either way, and opening
- * puts the name, the word for how they are, and the buttons beside it instead of moving
- * anything. Streaming, a frame of the stream (StreamStill.tsx, a few seconds old and kept so)
- * stands between the word and the buttons, the row's height, so the open column says what each
- * of them is streaming at a glance; closed, the column has no room for it, and the red mark on
+ * puts the name and the buttons beside it instead of moving anything: the row is one height
+ * open and closed (`ROW_H`), and how they are is the square's colour (the word is for readers).
+ * Streaming, a frame of the stream (StreamStill.tsx, a few seconds old and kept so)
+ * stands between the name and the buttons, the row's height, so the open column says what each
+ * of them is streaming at a glance; closed, the column has no room for it, and the blue square on
  * the face says that they are. The face and the name are one link to their page, and so is
  * the frame. The pointer resting on the row, or the focus landing in it, puts the person's
  * card (PersonCard.tsx, the chat window's too) beside the panel: the face, the name, how they
@@ -284,14 +291,16 @@ function Row({ id, person, side, open, folded = false, onPick, children }: RowPr
         className={cn(
           'flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue',
           ROW_TAP,
+          ROW_H,
           mirrored && 'flex-row-reverse'
         )}
       >
         <RailFace name={person.name} avatar={person.avatar} presence={person.presence} />
+        {/* the name alone, one line centered on the face: the word is the square's colour and the label's, and a reader's here */}
+        <span className="sr-only">{PRESENCE_WORD[person.presence]}</span>
         {open && (
-          <span className={cn('flex min-w-0 flex-1 flex-col leading-tight', mirrored && 'items-end text-right')}>
+          <span className={cn('flex min-w-0 flex-1 leading-tight', mirrored && 'justify-end')}>
             <Who name={person.name} verified={person.verified} oauthVerified={person.oauth_verified} className="max-w-full text-sm" />
-            <span className={cn('text-xs', PRESENCE_TEXT[person.presence])}>{PRESENCE_WORD[person.presence]}</span>
           </span>
         )}
         {/* the face's height: 32px (40 on a phone), and 16:9 of that. not in a folded list: the still asks video for a frame every 5s while mounted, and a folded row shows nothing */}
@@ -580,7 +589,8 @@ function Divider({ value, min, max, above, below, onMove, pitch, gap, open, side
 /**
  * One group you are in (docs/groups.md), the shape of a person's row: its square where the face
  * goes (the picture, or its letter on its colour, the size of a face), and open, the title with
- * its four digits and how many in it are live, else how many are in it. Live members are the
+ * its four digits on one line, the row's height closed (`ROW_H`); how many are in it, or live, is
+ * in its label. Live members are the
  * number on the square's corner, closed or open, in the blue of the streaming count. The whole
  * row is the way to the group's page. No card: the page is a click away and says it all. The
  * same row stands in the search's hits (`Results`), under its own `id`.
@@ -601,11 +611,17 @@ function GroupRow({ id, server, side, open, onPick }: { id: string; server: Serv
         className={cn(
           'flex min-w-0 flex-1 items-center gap-2 border border-transparent outline-none hover:border-primaryStroke focus-visible:border-primaryBlue',
           ROW_TAP,
+          ROW_H,
           mirrored && 'flex-row-reverse'
         )}
       >
         <span className="relative block shrink-0">
-          <GroupMark name={server.name} color={server.color} icon={server.icon} className="h-8 w-8 border border-primaryStroke text-base max-md:h-10 max-md:w-10 max-md:text-lg" />
+          <GroupMark
+            name={server.name}
+            color={server.color}
+            icon={server.icon}
+            className="h-8 w-8 border border-primaryStroke text-base max-md:h-10 max-md:w-10 max-md:text-lg"
+          />
           {live > 0 && (
             <span
               aria-hidden
@@ -615,13 +631,12 @@ function GroupRow({ id, server, side, open, onPick }: { id: string; server: Serv
             </span>
           )}
         </span>
+        <span className="sr-only">{count}</span>
+        {/* the title alone, one line like a person's: the count is the label's, and live members the number on the square */}
         {open && (
-          <span className={cn('flex min-w-0 flex-1 flex-col leading-tight', mirrored && 'items-end text-right')}>
-            <span className={cn('flex min-w-0 max-w-full items-baseline gap-1 text-sm', mirrored && 'flex-row-reverse')}>
-              <span className="truncate font-semibold">{words.title}</span>
-              {words.tag && <span className="shrink-0 text-xs text-textTertiary">#{words.tag}</span>}
-            </span>
-            <span className={cn('text-xs', live > 0 ? 'text-primaryBlue' : 'text-textSecondary')}>{count}</span>
+          <span className={cn('flex min-w-0 flex-1 items-baseline gap-1 text-sm leading-tight', mirrored && 'flex-row-reverse')}>
+            <span className="truncate font-semibold">{words.title}</span>
+            {words.tag && <span className="shrink-0 text-xs text-textTertiary">#{words.tag}</span>}
           </span>
         )}
       </Link>
