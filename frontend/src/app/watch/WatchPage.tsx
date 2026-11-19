@@ -42,13 +42,13 @@ import {
   watchViewersAtom
 } from '@/infra/atoms/watch-atoms';
 import { dmActiveAtom, dmOpenAtom, hideDms, openDm } from '@/infra/atoms/dm-atoms';
-import { followingAtom } from '@/infra/atoms/follow-atoms';
+import { followingAtom, loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD, presenceOfAtom } from '@/infra/atoms/presence-atoms';
 import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
-import { CHAT_MOBILE, useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
+import { CHAT_MOBILE, useIsMobile, useKeyboardStrip, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
 import { dummyPage } from '@/infra/about';
 import { api } from '@/infra/api';
 import { cleanName, isDummyName } from '@/infra/names';
@@ -120,20 +120,37 @@ type Ask = 'before' | 'asking' | 'done';
  * window on their thread (or shows the one they have), lit while that thread is the one on
  * screen, and then it hides the window, the chat button's way.
  */
-function DmButton({ name, className }: { name: string; className?: string }) {
+function DmButton({ name, className, onPage = false }: { name: string; className?: string; onPage?: boolean }) {
   const friend = useAtomValue(followingAtom)?.find((f) => f.name === name && f.mutual);
   const open = useAtomValue(dmOpenAtom);
   const active = useAtomValue(dmActiveAtom);
   if (!friend) return null;
   const on = open && active === name;
+  const label = on ? `hide the chat with ${name}` : `message ${name}`;
+  const toggle = () => (on ? hideDms() : openDm({ id: '', name, avatar: friend.avatar, verified: friend.verified, bio: friend.bio, presence: friend.presence }));
+  // a phone's is on the page (the top of the about tab), not on the picture: the glyph alone, 44px, lit blue while on
+  if (onPage) {
+    return (
+      <Tooltip content={label}>
+        <button
+          id="dm-open"
+          type="button"
+          aria-label={label}
+          aria-pressed={on || undefined}
+          onClick={toggle}
+          className={cn(
+            'flex h-11 w-11 shrink-0 items-center justify-center border border-transparent transition-colors duration-150 focus-visible:border-primaryBlue focus-visible:outline-none',
+            on ? 'text-primaryBlue' : 'text-textSecondary hover:text-primaryBlue',
+            className
+          )}
+        >
+          <MailIcon />
+        </button>
+      </Tooltip>
+    );
+  }
   return (
-    <IconButton
-      id="dm-open"
-      label={on ? `hide the chat with ${name}` : `message ${name}`}
-      active={on}
-      className={className}
-      onClick={() => (on ? hideDms() : openDm({ id: '', name, avatar: friend.avatar, verified: friend.verified, bio: friend.bio, presence: friend.presence }))}
-    >
+    <IconButton id="dm-open" label={label} active={on} className={className} onClick={toggle}>
       <MailIcon />
     </IconButton>
   );
@@ -145,6 +162,8 @@ export function WatchPage() {
   // a phone's page is the window (as go live's is): the visual viewport (mobile.ts) is its box, so the send row stays over the keyboard
   const view = useVisibleViewport(mobile, true);
   useLockedDocument(mobile);
+  // a phone's player is a strip while the keyboard is up, so the chat has the room
+  const strip = useKeyboardStrip(view?.keyboard ?? false);
   const [phoneTab, setPhoneTab] = useState<PhoneTab>('chat');
   // a phone's tabs once opened stay mounted, hidden while another is open (the chat keeps its place and
   // the line being typed); the calendar and the socials wait for their first open
@@ -202,6 +221,15 @@ export function WatchPage() {
   const cornerTaken = useAtomValue(publishPipAtom);
   // a fake stream gets a page from its name. anyone else's is read from the api.
   const about = useMemo(() => (isDummyName(name) ? dummyPage(name, { offline }) : null), [name, offline]);
+  // a phone's offline box is a thumbnail where the player goes: their offline picture, else the first of
+  // their home card's pictures (the profile read the person card keeps, follow-atoms' loadPeek), else none
+  const thumbs = useAtomValue(peeksAtom)[name]?.card.thumbs;
+  const [brokenThumb, setBrokenThumb] = useState<string | null>(null);
+  useEffect(() => {
+    if (mobile && name && !isDummyName(name)) void loadPeek(name);
+  }, [mobile, name]);
+  const offlineThumb = offline !== null ? api.offlineUrl(name, offline) : thumbs?.[0] !== undefined ? api.streamThumbUrl(name, thumbs[0]) : null;
+  const phoneThumb = offlineThumb !== brokenThumb ? offlineThumb : null;
 
   // Mount only: start watching the name in the url (or take back the stream picture in picture
   // kept alive), and on the way out stop, unless picture in picture keeps it going in the corner.
@@ -306,17 +334,50 @@ export function WatchPage() {
         expecting ? (
           <Skeleton id="player-loading" label="loading the stream" className="relative aspect-video w-full border border-primaryStroke bg-backgroundSecondary max-md:border-t-0">
             <Bone className="absolute inset-0" />
-            <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
-              {mobile ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
-              <DmButton name={name} />
-            </div>
+            {/* a phone's chat is a tab and its line to a friend is at the top of the about tab */}
+            {!mobile && (
+              <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
+                <ChatOpenButton className="ml-auto" />
+                <DmButton name={name} />
+              </div>
+            )}
           </Skeleton>
+        ) : mobile ? (
+          // a phone's profile is the player's box, the same 16:9 in the same place (and a strip while typing,
+          // as the player is), so the tabs sit where they will when the stream starts: a thumbnail of the
+          // stream, or their face and the word on black. the word, their line and the sentence stay for
+          // screen readers and the tests (docs/spec.md)
+          <div id="profile" data-presence={presence} ref={strip.ref} className={cn('relative', strip.box)} style={strip.style}>
+            <div className={cn('relative aspect-video w-full overflow-hidden bg-black', strip.frame)}>
+              {phoneThumb ? (
+                <img
+                  id={offline !== null ? 'offline-picture' : undefined}
+                  src={phoneThumb}
+                  alt=""
+                  draggable={false}
+                  className="absolute inset-0 h-full w-full object-cover"
+                  onError={() => setBrokenThumb(phoneThumb)}
+                />
+              ) : (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+                  <Face name={name} version={avatar} className="h-16 w-16 text-2xl" />
+                  <span aria-hidden className="text-sm text-white/70">
+                    offline
+                  </span>
+                </div>
+              )}
+            </div>
+            <div className="sr-only">
+              <p>{PRESENCE_WORD[presence]}</p>
+              {offlineNote && <p id="offline-note">{offlineNote}</p>}
+              <p>{phase === 'loading' ? 'loading' : NOT_LIVE_WORDS[presence]}</p>
+            </div>
+          </div>
         ) : (
           <>
             {offline !== null && <OfflinePicture id="offline-picture" src={api.offlineUrl(name, offline)} className="mb-3 w-full" />}
-            {/* a phone's is smaller: it is pinned over the tabs, and the open tab gets what it leaves */}
-            <div id="profile" className={cn(panelClassName('flex flex-wrap items-center gap-6 p-6 max-md:gap-3 max-md:p-3'))} data-presence={presence}>
-              <Face name={name} version={avatar} className="h-28 w-28 text-5xl max-md:h-14 max-md:w-14 max-md:text-2xl" />
+            <div id="profile" className={cn(panelClassName('flex flex-wrap items-center gap-6 p-6'))} data-presence={presence}>
+              <Face name={name} version={avatar} className="h-28 w-28 text-5xl" />
               <div className="min-w-0 flex-1">
                 <p className={cn('flex items-center gap-2 text-lg font-semibold', PRESENCE_TEXT[presence])}>
                   <span aria-hidden className={cn('inline-block h-3 w-3', PRESENCE_SQUARE[presence])} />
@@ -338,13 +399,13 @@ export function WatchPage() {
           </>
         )
       ) : (
-        <div className="group relative">
+        <div ref={mobile ? strip.ref : undefined} className={cn('group relative', mobile && strip.box)} style={mobile ? strip.style : undefined}>
           {/* the streamer's frame as they laid it out (docs/screen.md): `#video`, the one with the sound,
               stands in for the bottom video layer; a video layer clicked is shown alone */}
           <SceneView
             id="scene"
-            // a phone's player sits right on the row's own stroke: no second line between them
-            className="max-md:border-t-0"
+            // a phone's player sits right on the row's own stroke: no second line between them. scaled into the strip while typing
+            className={cn('max-md:border-t-0', mobile && strip.frame)}
             layers={layers}
             streamFor={slotStreamAtom}
             imageUrl={(asset) => api.assetUrl(name, asset)}
@@ -384,7 +445,7 @@ export function WatchPage() {
             <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || (!mobile && !chatOpen)))}>
               {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
               {mobile ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
-              <DmButton name={name} />
+              {!mobile && <DmButton name={name} />}
               <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'picture in picture'} disabled={cornerTaken} onClick={toCorner}>
                 <PipIcon />
               </IconButton>
@@ -467,7 +528,11 @@ export function WatchPage() {
         <ChatPanel name={name} className={cn('h-full min-h-0 flex-1', CHAT_MOBILE)} />
       ) : t === 'about' ? (
         <>
-          <div className="[&>div]:mt-0">{status}</div>
+          {/* the line to a friend at the right end: the row's follow leaves the name too little for it there */}
+          <div className="flex items-start gap-2">
+            <div className="min-w-0 flex-1 [&>div]:mt-0">{status}</div>
+            <DmButton name={name} onPage className="-mr-2.5 -mt-2.5" />
+          </div>
           <About key={name} name={name} doc={about} edit={mine} />
         </>
       ) : t === 'calendar' ? (
@@ -484,7 +549,19 @@ export function WatchPage() {
         <PageFrame
           title={title}
           titleId="who"
-          mobileTitle={name}
+          // the name, cut with an ellipsis, and their presence square right after it (the word was the card under the player)
+          mobileTitle={
+            name ? (
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate">{name}</span>
+                <Tooltip content={PRESENCE_WORD[presence]}>
+                  <span role="img" aria-label={PRESENCE_WORD[presence]} className={cn('relative h-2 w-2 shrink-0', PRESENCE_SQUARE[presence])} />
+                </Tooltip>
+              </span>
+            ) : (
+              name
+            )
+          }
           // the row: the menu, their face, the name over how many follow and watch, home, and follow at the right end
           mobileStart={name ? <Face name={name} version={avatar} className="h-8 w-8 text-sm" /> : undefined}
           mobileSub={streamNumbers(name && !isDummyName(name) ? followers : null, viewers)}
