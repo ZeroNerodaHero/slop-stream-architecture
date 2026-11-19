@@ -1,5 +1,5 @@
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { api } from '@/infra/api';
@@ -42,11 +42,12 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatModalOpenAtom, chatSideAtom } from '@/infra/atoms/settings-atoms';
+import { useIsMobile } from '@/infra/mobile';
 import { ChatOpenButton, ChatSlot, chatLayoutClass } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Mixer } from '@/shared-components/live/Mixer';
 import { Rigging } from '@/shared-components/live/Rigging';
-import { Sources } from '@/shared-components/live/Sources';
+import { Sources, StartStop } from '@/shared-components/live/Sources';
 import { ModelLoading } from '@/shared-components/live/ModelLoading';
 import { MicMeter } from '@/shared-components/MicMeter';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -57,9 +58,85 @@ import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { IconButton, PipIcon, revealClassName } from '@/shared-components/VideoControls';
 import { cn } from '@/utils/cn';
+import { roveTabs } from '@/utils/tabs';
+
+/** A phone's tabs under the preview, in the bar's order. Chat first: it is where a phone's page opens. */
+const LIVE_TABS = ['chat', 'about', 'sources', 'sound', 'thumbnails'] as const;
+type LiveTab = (typeof LIVE_TABS)[number];
+
+/** The tab open last, for this browser tab: back on the page, it is open again. */
+const TAB_KEY = 'live-tab';
+
+function keptTab(): LiveTab {
+  try {
+    const kept = sessionStorage.getItem(TAB_KEY);
+    return LIVE_TABS.find((t) => t === kept) ?? 'chat';
+  } catch {
+    return 'chat';
+  }
+}
+
+function keepTab(tab: LiveTab) {
+  try {
+    sessionStorage.setItem(TAB_KEY, tab);
+  } catch {
+    // private mode: the tab is just not kept
+  }
+}
+
+/**
+ * The part of the window the page can use on a phone: the visual viewport, which is shorter
+ * while the on-screen keyboard is up, and how far the browser has panned the page to keep a
+ * focused box in sight. `keyboard`: the window is a good deal shorter than the layout's, so
+ * the keyboard is what is under it. null while off, or where there is no visual viewport (the
+ * page then falls back to `100dvh`).
+ */
+function useVisibleWindow(on: boolean): { height: number; top: number; keyboard: boolean } | null {
+  const [view, setView] = useState<{ height: number; top: number; keyboard: boolean } | null>(null);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!on || !vv) return;
+    const read = () => setView({ height: vv.height, top: vv.offsetTop, keyboard: window.innerHeight - vv.height > 120 });
+    read();
+    vv.addEventListener('resize', read);
+    vv.addEventListener('scroll', read);
+    return () => {
+      vv.removeEventListener('resize', read);
+      vv.removeEventListener('scroll', read);
+    };
+  }, [on]);
+  return on ? view : null;
+}
+
+/** While on: the document does not scroll (nor bounce), so the page is the window and nothing else moves. */
+function useLockedDocument(on: boolean) {
+  useEffect(() => {
+    if (!on) return;
+    const root = document.documentElement;
+    const { overflow, overscrollBehavior } = root.style;
+    root.style.overflow = 'hidden';
+    root.style.overscrollBehavior = 'none';
+    return () => {
+      root.style.overflow = overflow;
+      root.style.overscrollBehavior = overscrollBehavior;
+    };
+  }, [on]);
+}
+
+/**
+ * The chat on a phone: edge to edge in its tab, no box, no least height (the tab is what is
+ * left of the window, less with the keyboard up), and the send row's padding is the safe area
+ * at the foot, but not while the keyboard covers that edge (ServerRoom.tsx's room does the same).
+ */
+const CHAT_MOBILE =
+  'min-h-0 border-0 bg-background [&>header]:px-3 [&_#chat-lines]:px-3 [&>footer]:px-3 [&>footer]:pt-2 [&>footer]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] group-data-[keyboard=true]/live:[&>footer]:pb-2';
 
 export function LivePage() {
   const navigate = useNavigate();
+  const mobile = useIsMobile();
+  const view = useVisibleWindow(mobile);
+  useLockedDocument(mobile);
+  const [tab, setTab] = useState<LiveTab>(keptTab);
   const previewRef = useRef<HTMLVideoElement | null>(null);
   const message = useAtomValue(publishMessageAtom);
   const tone = useAtomValue(publishToneAtom);
@@ -118,6 +195,201 @@ export function LivePage() {
     navigate('/');
   };
 
+  const openTab = (t: LiveTab) => {
+    setTab(t);
+    keepTab(t);
+  };
+
+  // the preview, as the desktop and the phone both have it. a phone has no chat button on it:
+  // the chat is a tab there, never closed
+  const preview = (
+    <div className="group relative">
+      {/* the frame as every watcher gets it (docs/screen.md): the sources on the stream, laid out
+          in fractions. taken hold of here; the watchers' players follow within a beat */}
+      <SceneView
+        id="scene"
+        layers={scene.layers}
+        streamFor={sentStreamAtom}
+        imageUrl={(asset) => api.assetUrl(name, asset)}
+        // the avatar moves with the mic: the mixer's own reading once that is up (the layer rebinds on that, the way the mic chip does)
+        avatar={{ name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined }}
+        main={{ id: 'preview', streamAtom: previewStreamAtom, videoRef: previewRef, slot: previewSlot, muted: true }}
+        edit={edit}
+      />
+      {/* a model on its way on (docs/vtuber.md): its picture and how far along it is, where the model will be */}
+      <ModelLoading />
+      {/* top left, while the stream is up: the mic, as loud as it is right now, read off the mixer once
+          that is up (the key: a chip mounted before it opens would otherwise keep its own reader);
+          beside it, once live, how the upload is going (up on its own while something limits it) */}
+      {publishing && <MicMeter key={mixerOpen ? 'mixer' : 'own'} id="live-mic" streamAtom={cameraAtom} read={mixerOpen ? micLevelReader : undefined} />}
+      {(phase === 'live' || phase === 'reconnecting') && <StreamStatsButton id="live-stats" role="publish" stats={stats} className="left-[3.25rem] top-3" />}
+      {/* while the chat is closed the bar stays up, so it can be opened again off the preview. once
+          live, picture in picture beside it: the same button as the watch page's, for your own stream
+          (here any way off the page keeps the stream; the button is the one that says so). the bar
+          itself takes no presses, only its buttons do: it lies across the bottom of the frame, where a
+          layer in a corner is taken hold of */}
+      <div className={cn('pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 p-3 [&>*]:pointer-events-auto', revealClassName(mobile || !chatOpen))}>
+        {mobile ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
+        {publishing && (
+          <IconButton id="live-pip" label="picture in picture" onClick={toCorner}>
+            <PipIcon />
+          </IconButton>
+        )}
+      </div>
+    </div>
+  );
+
+  const link = watchUrl && (
+    <p id="link" className="my-3 [overflow-wrap:anywhere]">
+      watch link:{' '}
+      <a id="watchurl" href={watchUrl} target="_blank" rel="noopener">
+        {watchUrl}
+      </a>{' '}
+      <button id="copy" type="button" className="ml-2 text-base font-semibold text-primaryBlue" onClick={copyWatchUrl}>
+        copy
+      </button>
+    </p>
+  );
+
+  // pictures for the card on home. none, and that card shows the camera. the status and the picture are
+  // not here: the profile tab (the user modal) is where they are set
+  const thumbnails = (
+    <section className={panelClassName(mobile ? 'px-4 py-4' : 'my-5 px-5 py-4')}>
+      <p className="text-textSecondary">thumbnails</p>
+      <p className="mt-1 text-sm text-textSecondary">one picture on your card on home, until that page is refreshed. with none, home shows one frame of the camera.</p>
+      {thumbs.length > 0 && (
+        <ul className="mt-3 flex list-none flex-wrap gap-3 p-0">
+          {thumbs.map((id) => (
+            <li key={id} className="w-36">
+              <img src={api.streamThumbUrl(name, id)} alt="" draggable={false} className="aspect-video w-full border border-primaryStroke object-cover" />
+              <button id={`thumb-remove-${id}`} type="button" className="mt-2 text-sm font-semibold text-textTertiary" onClick={() => void removeStreamThumb(id)}>
+                remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <input
+          ref={thumbFileRef}
+          id="thumb-file"
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file) void addStreamThumb(file);
+          }}
+        />
+        <button id="thumb-add" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={thumbs.length >= 6 || thumbStatus === 'saving'} onClick={() => thumbFileRef.current?.click()}>
+          add a thumbnail
+        </button>
+        <span id="thumbstatus" className="text-textSecondary" aria-live="polite">
+          {thumbStatus}
+        </span>
+      </div>
+    </section>
+  );
+
+  // the streamer's own chat, in the room of the settled name. once live, `owner` makes its lines marked
+  const chat = (className: string) =>
+    chatRoom ? (
+      <ChatPanel name={chatRoom} owner={owner} className={className} />
+    ) : (
+      <aside
+        id="chat"
+        className="flex h-full min-h-[200px] flex-1 items-center justify-center border border-dashed border-secondaryStroke p-6 text-center text-textTertiary"
+      >
+        pick a name and the chat opens here. once you are live, your lines are marked.
+      </aside>
+    );
+
+  if (mobile) {
+    // a phone's page is the window and never scrolls: the row, the preview pinned under it, start
+    // or stop with the status beside it, the tabs, and the open tab in what is left. only a tab's
+    // own content scrolls. every tab stays mounted, hidden while another is open, so the chat
+    // keeps its place and the line being typed. the box follows the visual viewport, so the send
+    // row stays over the keyboard
+    const panel = (t: LiveTab, children: ReactNode, className?: string) => (
+      <div
+        id={`live-panel-${t}`}
+        role="tabpanel"
+        aria-labelledby={`live-tab-${t}`}
+        inert={tab !== t ? true : undefined}
+        className={cn('absolute inset-0', tab !== t && 'invisible', className ?? 'overflow-y-auto overscroll-contain px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-4')}
+      >
+        {children}
+      </div>
+    );
+    return (
+      <div
+        id="live-mobile"
+        data-keyboard={view?.keyboard ?? false}
+        className="group/live fixed inset-x-0 top-0 flex h-[100dvh] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
+        style={view ? { height: view.height, transform: view.top ? `translateY(${view.top}px)` : undefined } : undefined}
+      >
+        <PageFrame title="go live" mobileTitle={name || 'go live'} wide bleed fill>
+          <div className="shrink-0">{preview}</div>
+          {/* the stream's state and the press that changes it, always in sight. not while typing: the keyboard has that room */}
+          <div className={cn('flex shrink-0 items-center gap-3 border-b border-primaryStroke px-4 py-2', view?.keyboard && 'hidden')}>
+            <div className="min-w-0 flex-1">
+              <StatusLine text={message} tone={tone} className="my-0 truncate text-lg leading-tight" />
+              <ViewerCount id="viewers" count={viewers} className="text-sm text-textSecondary" />
+            </div>
+            <StartStop className="flex w-32 shrink-0 flex-col items-stretch gap-1 [&>button:first-child]:h-11 [&>button:first-child]:py-0" />
+          </div>
+          <div role="tablist" aria-label="go live" onKeyDown={roveTabs} className="flex shrink-0 border-b border-primaryStroke">
+            {LIVE_TABS.map((t) => {
+              const on = t === tab;
+              return (
+                <button
+                  key={t}
+                  id={`live-tab-${t}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={on}
+                  aria-controls={`live-panel-${t}`}
+                  tabIndex={on ? 0 : -1}
+                  onClick={() => openTab(t)}
+                  className={cn(
+                    '-mb-px h-11 flex-auto whitespace-nowrap border-b-2 px-2 text-sm font-semibold leading-tight transition-colors duration-150 focus-visible:outline-none focus-visible:text-primaryBlue',
+                    on ? 'border-primaryBlue bg-backgroundTertiary text-textPrimary' : 'border-transparent text-textSecondary'
+                  )}
+                >
+                  {t}
+                </button>
+              );
+            })}
+          </div>
+          <div className="relative min-h-0 flex-1">
+            {panel('chat', chat(cn('h-full min-h-0 flex-1', CHAT_MOBILE)), 'flex flex-col')}
+            {panel(
+              'about',
+              <>
+                <p className="text-textSecondary">
+                  {publishing ? 'you are live. the link is where anyone watches.' : 'press start and you are live. the link is where anyone watches.'}
+                </p>
+                {link || <p className="my-3 text-textTertiary">the watch link is here once your name is picked.</p>}
+              </>
+            )}
+            {panel(
+              'sources',
+              <>
+                <Sources startStop={false} />
+                {/* what the face reader sees of the streamer, while a model is on (docs/vtuber.md) */}
+                <Rigging />
+              </>
+            )}
+            {/* the mixer's own top margin is for under the preview; the tab's padding is that here */}
+            {panel('sound', publishing ? <div className="[&>section]:mt-0"><Mixer /></div> :<p className="text-textTertiary">the sound, a fader for the mic and for the mix that goes out, is here once you are live.</p>)}
+            {panel('thumbnails', thumbnails)}
+          </div>
+        </PageFrame>
+      </div>
+    );
+  }
+
   return (
     <PageFrame title="go live" wide>
       {/* the same arrangement as the watch page, for the same layout setting: the preview, the
@@ -130,40 +402,7 @@ export function LivePage() {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
             <Sources />
             <div className="min-w-0 flex-1">
-              <div className="group relative">
-                {/* the frame as every watcher gets it (docs/screen.md): the sources on the stream, laid out
-                    in fractions. taken hold of here; the watchers' players follow within a beat */}
-                <SceneView
-                  id="scene"
-                  layers={scene.layers}
-                  streamFor={sentStreamAtom}
-                  imageUrl={(asset) => api.assetUrl(name, asset)}
-                  // the avatar moves with the mic: the mixer's own reading once that is up (the layer rebinds on that, the way the mic chip does)
-                  avatar={{ name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined }}
-                  main={{ id: 'preview', streamAtom: previewStreamAtom, videoRef: previewRef, slot: previewSlot, muted: true }}
-                  edit={edit}
-                />
-                {/* a model on its way on (docs/vtuber.md): its picture and how far along it is, where the model will be */}
-                <ModelLoading />
-                {/* top left, while the stream is up: the mic, as loud as it is right now, read off the mixer once
-                    that is up (the key: a chip mounted before it opens would otherwise keep its own reader);
-                    beside it, once live, how the upload is going (up on its own while something limits it) */}
-                {publishing && <MicMeter key={mixerOpen ? 'mixer' : 'own'} id="live-mic" streamAtom={cameraAtom} read={mixerOpen ? micLevelReader : undefined} />}
-                {(phase === 'live' || phase === 'reconnecting') && <StreamStatsButton id="live-stats" role="publish" stats={stats} className="left-[3.25rem] top-3" />}
-                {/* while the chat is closed the bar stays up, so it can be opened again off the preview. once
-                    live, picture in picture beside it: the same button as the watch page's, for your own stream
-                    (here any way off the page keeps the stream; the button is the one that says so). the bar
-                    itself takes no presses, only its buttons do: it lies across the bottom of the frame, where a
-                    layer in a corner is taken hold of */}
-                <div className={cn('pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 p-3 [&>*]:pointer-events-auto', revealClassName(!chatOpen))}>
-                  <ChatOpenButton className="ml-auto" />
-                  {publishing && (
-                    <IconButton id="live-pip" label="picture in picture" onClick={toCorner}>
-                      <PipIcon />
-                    </IconButton>
-                  )}
-                </div>
-              </div>
+              {preview}
               {/* under the picture that is sent, while a model is on: what the face reader sees of the streamer, on this page only (docs/vtuber.md) */}
               <Rigging />
               {publishing && <Mixer />}
@@ -176,75 +415,12 @@ export function LivePage() {
             <ViewerCount id="viewers" count={viewers} className="text-lg text-textSecondary" />
           </div>
 
-          {watchUrl && (
-            <p id="link" className="my-3 [overflow-wrap:anywhere]">
-              watch link:{' '}
-              <a id="watchurl" href={watchUrl} target="_blank" rel="noopener">
-                {watchUrl}
-              </a>{' '}
-              <button id="copy" type="button" className="ml-2 text-base font-semibold text-primaryBlue" onClick={copyWatchUrl}>
-                copy
-              </button>
-            </p>
-          )}
+          {link}
         </div>
 
-        {/* the streamer's own chat, in the room of the settled name. once live, `owner` makes its lines marked */}
-        <ChatSlot>
-          {chatRoom ? (
-            <ChatPanel name={chatRoom} owner={owner} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
-          ) : (
-            <aside
-              id="chat"
-              className="flex h-full min-h-[200px] flex-1 items-center justify-center border border-dashed border-secondaryStroke p-6 text-center text-textTertiary"
-            >
-              pick a name and the chat opens here. once you are live, your lines are marked.
-            </aside>
-          )}
-        </ChatSlot>
+        <ChatSlot>{chat(cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0'))}</ChatSlot>
 
-        <div className={cn('min-w-0', chatSide === 'right' && 'lg:col-start-1', chatSide === 'left' && 'lg:col-start-2 lg:row-start-2')}>
-          {/* pictures for the card on home. none, and that card shows the camera. the status and the picture are
-              not here: the profile tab (the user modal) is where they are set */}
-          <section className={panelClassName('my-5 px-5 py-4')}>
-            <p className="text-textSecondary">thumbnails</p>
-            <p className="mt-1 text-sm text-textSecondary">
-              one picture on your card on home, until that page is refreshed. with none, home shows one frame of the camera.
-            </p>
-            {thumbs.length > 0 && (
-              <ul className="mt-3 flex list-none flex-wrap gap-3 p-0">
-                {thumbs.map((id) => (
-                  <li key={id} className="w-36">
-                    <img src={api.streamThumbUrl(name, id)} alt="" draggable={false} className="aspect-video w-full border border-primaryStroke object-cover" />
-                    <button id={`thumb-remove-${id}`} type="button" className="mt-2 text-sm font-semibold text-textTertiary" onClick={() => void removeStreamThumb(id)}>
-                      remove
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <input
-                ref={thumbFileRef}
-                id="thumb-file"
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = '';
-                  if (file) void addStreamThumb(file);
-                }}
-              />
-              <button id="thumb-add" type="button" className="text-base font-semibold text-primaryBlue disabled:opacity-40" disabled={thumbs.length >= 6 || thumbStatus === 'saving'} onClick={() => thumbFileRef.current?.click()}>
-                add a thumbnail
-              </button>
-              <span id="thumbstatus" className="text-textSecondary" aria-live="polite">
-                {thumbStatus}
-              </span>
-            </div>
-          </section>
-        </div>
+        <div className={cn('min-w-0', chatSide === 'right' && 'lg:col-start-1', chatSide === 'left' && 'lg:col-start-2 lg:row-start-2')}>{thumbnails}</div>
       </div>
     </PageFrame>
   );
