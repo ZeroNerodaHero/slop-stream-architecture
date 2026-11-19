@@ -157,14 +157,15 @@ export interface CornerChat {
   place: PipChatPlace;
   /** The button is on. */
   open: boolean;
-  /** The page has a chat of its own: the button is disabled, and the chat waits for the next page without one. */
-  pageHasChat: boolean;
   /**
-   * That chat of the page's is this very room (the go live page, for the broadcast's player). In
-   * the page it changes nothing, the player is not shown there. In the player's own window the
-   * button works: the chat there is a second panel on the page's room (ChatPanel `guest`).
+   * The page's own chat is this very room (the go live page, for the broadcast's player; the
+   * stream's own watch page, for the watch player). In the page the button is disabled then
+   * (the player is not shown there anyway). In the player's own window the button works: the
+   * chat there is a second panel on the page's room (ChatPanel `guest`). Any other page's chat
+   * is another room, and no bar: each panel has its own room (chat-atoms.ts), so the player's
+   * chat is always the stream in the player, your own included while you watch someone else.
    */
-  pageChatIsOurs?: boolean;
+  pageChatIsOurs: boolean;
   onToggle: () => void;
 }
 
@@ -289,10 +290,10 @@ export function CornerPlayer({
   const shown = visible || away;
   /** × was pressed and `closeConfirm` is asking. The dialog unmounts with the box, and says no then. */
   const [asking, setAsking] = useState(false);
-  /** The page's own chat is no bar to the player's: there is none, or, in the player's own window, it is this very room. */
-  const chatFree = (inWindow: boolean) => !chat.pageHasChat || (inWindow && chat.pageChatIsOurs === true);
+  /** The page's own chat is no bar to the player's: it is another room, or, in the player's own window, this very one. */
+  const chatFree = (inWindow: boolean) => !chat.pageChatIsOurs || inWindow;
   /** In the window, over a page whose chat is this room: the chat is a second panel on the page's. */
-  const guest = popped && chat.pageHasChat && chat.pageChatIsOurs === true;
+  const guest = popped && chat.pageChatIsOurs;
   const canChat = chatFree(popped);
   const showChat = chat.open && canChat;
   const place: Place = showChat ? chat.place : 'off';
@@ -611,6 +612,7 @@ export function CornerPlayer({
       )}
       style={side ? { width: PIP_CHAT_W } : undefined}
     >
+      {/* the room of the stream in the player, whatever the page's chat is (each panel has its own room) */}
       <ChatPanel name={chat.name} owner={chat.owner} embedded guest={guest} className="min-h-0 flex-1" />
     </div>
   );

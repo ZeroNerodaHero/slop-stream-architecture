@@ -65,16 +65,13 @@ function isWatchPageOf(pathname: string, name: string): boolean {
 
 const isLivePage = (pathname: string) => pathname.replace(/\/$/, '') === '/live';
 
-/** The pages with a chat of their own. The chat atoms hold one room, so the players' chats stay closed there. */
-const hasOwnChat = (pathname: string) => /^\/(watch\/|live\/?$)/.test(pathname);
-
 /** The two players, by the id prefix each puts on its elements. */
 type Corner = 'pip' | 'live-pip';
 
 /**
- * Which player's chat button is on, if any. One, not one each: the chat atoms hold one room
- * (and only one player shows at a time anyway). Kept while a page with its own chat hides the
- * chat, and across streams: the button is a choice for the visit.
+ * Which player's chat button is on, if any. One, not one each: only one player shows at a time.
+ * Each player's chat is its own stream's room (chat-atoms.ts), whatever the page's chat is, so
+ * the button stays on across pages and streams: it is a choice for the visit.
  */
 const cornerChatAtom = atom<Corner | null>(null);
 
@@ -123,7 +120,8 @@ function WatchCorner() {
       volume={volume}
       onPlaying={markPlaying}
       onAutoplayBlocked={markAutoplayBlocked}
-      chat={{ name, place: pipChat, open: cornerChat === 'pip', pageHasChat: hasOwnChat(pathname), onToggle: () => toggleCornerChat('pip') }}
+      // the stream's own room: over a group's channel, a friend's chat or another stream's page alike, the corner's chat is this stream's
+      chat={{ name, place: pipChat, open: cornerChat === 'pip', pageChatIsOurs: isWatchPageOf(pathname, name), onToggle: () => toggleCornerChat('pip') }}
       closeLabel="stop watching"
       onClose={endWatch}
       center={
@@ -209,13 +207,13 @@ function LiveCorner() {
         imageUrl: (asset) => api.assetUrl(name, asset),
         avatar: { name, version: myAvatar, streamAtom: cameraAtom, read: mixerOpen ? micLevelReader : undefined }
       }}
-      // the go live page's chat is this same room: out in the window the player may show it too
+      // your own room, as the streamer, on every page: while you watch someone else their page's chat is theirs and this
+      // one stays yours. the go live page's chat is this same room: out in the window the player shows it as a guest
       chat={{
         name,
         owner,
         place: pipChat,
         open: cornerChat === 'live-pip',
-        pageHasChat: hasOwnChat(pathname),
         pageChatIsOurs: isLivePage(pathname),
         onToggle: () => toggleCornerChat('live-pip')
       }}

@@ -303,7 +303,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             type="button"
             className={WORDS}
             onClick={() => {
-              void showSpeaker(name);
+              if (target.lines) void showSpeaker(name, target.lines);
               close();
             }}
           >

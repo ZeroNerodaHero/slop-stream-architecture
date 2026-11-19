@@ -203,14 +203,20 @@ const waitUnlisted = async (p, name, timeout = 20000) => {
     return `${flow} · "${await text(s, '#live-pip-viewers')}"`;
   });
 
-  await step(`watching different stuff while live: ${OTHER}'s page plays, the corner stays, its chat button yields to the page's chat; the page's picture in picture is disabled: one corner at a time`, async () => {
+  await step(`watching different stuff while live: ${OTHER}'s page plays, the corner stays, its chat is your own room beside the page's ${OTHER} chat; the page's picture in picture is disabled: one corner at a time`, async () => {
     await s.click(`#list a[aria-label="watch ${OTHER}"]`);
     await s.waitForURL(`**/watch/${OTHER}`, { timeout: 10000 });
     await waitStatus(s, /^watching$/);
     const page = await framesFlow(s, '#video');
     expect((await s.$('#live-pip-player')) !== null, "the corner player is gone on another stream's page");
     expect(/^live$/i.test(await text(s, '#live-pip-status')), `the corner says "${await text(s, '#live-pip-status')}"`);
-    expect(await s.$eval('#live-pip-chat', (b) => b.disabled), 'the corner chat button is not disabled on a page with its own chat');
+    // each panel has its own room: the corner's is yours, the page's is theirs, both at once
+    expect(!(await s.$eval('#live-pip-chat', (b) => b.disabled)), "the corner chat button is disabled on another stream's page");
+    await s.click('#live-pip-chat');
+    await s.waitForSelector(`#live-pip-player #chat[data-room="${ME}"]`, { timeout: 5000 });
+    await s.waitForSelector(`#chat-modal #chat[data-room="${OTHER}"]`, { timeout: 5000 });
+    await s.click('#live-pip-chat');
+    await s.waitForSelector('#live-pip-player #chat', { state: 'detached', timeout: 5000 });
     // your stream has the corner: theirs cannot go there too, and the button says why
     const label = await s.getAttribute('#pip', 'aria-label');
     expect(await s.$eval('#pip', (b) => b.disabled), 'the picture in picture button is enabled with your own stream in the corner');
