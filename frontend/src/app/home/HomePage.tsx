@@ -219,7 +219,7 @@ function Card({
                 </span>
               )}
             </h2>
-            {stream.bio && <p className="mt-1 line-clamp-2 text-base leading-snug text-textSecondary [overflow-wrap:anywhere]">{stream.bio}</p>}
+            {/* the status is hover only (the card's title), never a line under the name */}
           </div>
         </div>
       </Link>
