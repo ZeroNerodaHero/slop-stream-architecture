@@ -13,9 +13,9 @@ export const CHECKBOX =
   'h-4 w-4 shrink-0 appearance-none border border-primaryStroke bg-background checked:border-primaryBlue checked:bg-primaryBlue disabled:opacity-40';
 
 /** One block of a pane. The parent is `divide-y divide-primaryStroke`, which draws the rule between blocks. */
-export function Section({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
+export function Section({ id, title, description, children }: { id?: string; title: string; description?: ReactNode; children: ReactNode }) {
   return (
-    <section className="py-6 first:pt-0 last:pb-0">
+    <section id={id} className="py-6 first:pt-0 last:pb-0">
       <h3 className={SECTION_TITLE}>{title}</h3>
       {description && <p className="mt-1 text-textSecondary">{description}</p>}
       <div className="mt-4 flex flex-col gap-4">{children}</div>

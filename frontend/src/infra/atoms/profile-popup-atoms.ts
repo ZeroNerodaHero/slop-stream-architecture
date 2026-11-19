@@ -14,6 +14,8 @@ import { store } from '@/infra/store';
 export interface ProfilePopupTarget {
   name: string;
   verified: boolean;
+  /** The verified mark (a provider linked), when the row clicked knows it. */
+  oauth_verified?: boolean;
   avatar: number | null;
   /** Opened from a chat line of this account: the popup has the way to that account's lines in the chat, which is what the click did before the popup. */
   lines?: boolean;

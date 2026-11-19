@@ -1,13 +1,28 @@
+import { RiDiscordFill, RiGoogleFill, RiLoginBoxLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect } from 'react';
 
-import { loadOAuthProviders, oauthProvidersAtom, oauthStartUrl, PROVIDER_LABEL } from '@/infra/atoms/auth-atoms';
+import type { OAuthProvider } from '@/infra/api';
+import { loadOAuthProviders, oauthProvidersAtom, oauthStartUrl } from '@/infra/atoms/auth-atoms';
+import { providerLabel, rememberReturn } from '@/infra/oauth';
+
+/** The provider's mark, or a plain one for a provider this build has no icon for (infra/oauth.ts). */
+export function ProviderIcon({ provider, size = 18 }: { provider: OAuthProvider; size?: number }) {
+  switch (provider) {
+    case 'google':
+      return <RiGoogleFill aria-hidden size={size} />;
+    case 'discord':
+      return <RiDiscordFill aria-hidden size={size} />;
+    default:
+      return <RiLoginBoxLine aria-hidden size={size} />;
+  }
+}
 
 /**
- * "continue with Google / Twitch / Discord", under the log in and sign up forms. Only the
- * providers the api turned on (their env vars are set); none, and this is nothing at all.
- * Plain links: the browser goes to the provider and comes back to /oauth (OAuthPage.tsx).
- * A provider login nobody here has asks for a name first; a known one logs straight in.
+ * "continue with Google / Discord", under the log in and sign up forms. Only the providers the
+ * api turned on (their env vars are set); none, and this is nothing at all. Plain links: the
+ * browser goes to the provider and comes back to /oauth (OAuthPage.tsx), then to the page it
+ * left. A provider login nobody here has asks for a name first; a known one logs straight in.
  */
 export function OAuthButtons() {
   const providers = useAtomValue(oauthProvidersAtom);
@@ -26,9 +41,11 @@ export function OAuthButtons() {
             key={p}
             id={`oauth-${p}`}
             href={oauthStartUrl(p)}
-            className="border border-primaryStroke px-4 py-2 text-base font-semibold text-textPrimary hover:border-primaryBlue"
+            onClick={() => rememberReturn(false)}
+            className="flex items-center gap-2 border border-primaryStroke px-4 py-2 text-base font-semibold text-textPrimary hover:border-primaryBlue"
           >
-            continue with {PROVIDER_LABEL[p]}
+            <ProviderIcon provider={p} />
+            continue with {providerLabel(p)}
           </a>
         ))}
       </div>

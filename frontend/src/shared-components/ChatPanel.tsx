@@ -74,6 +74,7 @@ import { LinkedText } from '@/shared-components/LinkedText';
 import { LiveMark } from '@/shared-components/LiveMark';
 import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
+import { OAuthMark } from '@/shared-components/OAuthMark';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { CHIP_BUTTON, ControlTip } from '@/shared-components/VideoControls';
@@ -182,7 +183,8 @@ function useCountdown(until: number): number {
 function useSpeakerPress(line: ChatLine) {
   const popup = useAtomValue(profilePopupEnabledAtom);
   const press = (name: HTMLElement) => {
-    if (popup && name.ownerDocument === document) openProfilePopup({ name: line.from, verified: line.verified, avatar: line.avatar, lines: line.verified });
+    if (popup && name.ownerDocument === document)
+      openProfilePopup({ name: line.from, verified: line.verified, oauth_verified: line.oauth_verified, avatar: line.avatar, lines: line.verified });
     else if (line.verified) void showSpeaker(line.from);
   };
   return { popup, pressable: line.verified || (popup && line.streamer), press };
@@ -239,7 +241,15 @@ function Speaker({ line }: { line: ChatLine }) {
           {line.from}
         </span>
       )}
-      {someone && peek.at && <PersonCard id={`chat-peek-${line.from}`} person={{ name: line.from, verified: line.verified, avatar: line.avatar }} at={peek.at} />}
+      {/* the speaker's account has a provider linked: the mark, as the row is now (api chat.rs `with_faces`) */}
+      {someone && line.oauth_verified && <OAuthMark size={14} className="ml-1 align-[-2px]" />}
+      {someone && peek.at && (
+        <PersonCard
+          id={`chat-peek-${line.from}`}
+          person={{ name: line.from, verified: line.verified, oauth_verified: line.oauth_verified, avatar: line.avatar }}
+          at={peek.at}
+        />
+      )}
     </>
   );
 }

@@ -1,27 +1,40 @@
 import { useAtomValue } from 'jotai';
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { api, messageOf, type OAuthProvider } from '@/infra/api';
-import { meAtom, PROVIDER_LABEL, reloadMe } from '@/infra/atoms/auth-atoms';
+import { meAtom, reloadMe } from '@/infra/atoms/auth-atoms';
 import { identityChanged } from '@/infra/atoms/profile-atoms';
+import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
+import { providerLabel, takeReturn } from '@/infra/oauth';
 import { Button } from '@/shared-components/Button';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { BUTTON, Field, INPUT, Status } from '@/shared-components/user-modal/parts';
 
-function label(p: string | null): string {
-  return p && p in PROVIDER_LABEL ? PROVIDER_LABEL[p as OAuthProvider] : 'that account';
+const label = providerLabel;
+
+/** Back where the trip to the provider started (infra/oauth.ts `rememberReturn`), the settings open on security when it started there. */
+function useGoBack() {
+  const navigate = useNavigate();
+  return useCallback(() => {
+    const back = takeReturn();
+    navigate(back.path, { replace: true });
+    if (back.settings) openUserModal('security');
+  }, [navigate]);
 }
 
 /**
- * Where the api sends the browser back after Google, Twitch or Discord (api/src/oauth.rs):
+ * Where the api sends the browser back after Google or Discord (api/src/oauth.rs):
  * `?done=<p>` logged in, `?linked=<p>` attached to this account, `?pick=<p>` new here and
- * picking a name, `?error=<words>` it did not work. See docs/accounts.md.
+ * picking a name, `?error=<words>` it did not work. Logged in or linked, the page goes back to
+ * where the trip started (a link from the security tab opens it again, showing the new login
+ * and the verified mark). See docs/accounts.md.
  */
 export function OAuthPage() {
   const [params] = useSearchParams();
-  const navigate = useNavigate();
+  const me = useAtomValue(meAtom);
+  const goBack = useGoBack();
   const error = params.get('error');
   const done = params.get('done');
   const linked = params.get('linked');
@@ -32,20 +45,26 @@ export function OAuthPage() {
     // the login cookie is new (done) or the account gained a login (linked): who am i, again
     void reloadMe().then(() => {
       identityChanged('login');
-      if (done !== null) navigate('/', { replace: true });
+      goBack();
     });
-  }, [done, linked, navigate]);
+  }, [done, linked, goBack]);
 
   if (error !== null) {
     return (
-      <PageFrame title="log in">
+      <PageFrame title={me ? 'link' : 'log in'}>
         <p id="oauth-error" className="text-decrease">
           {error || 'that did not work. try again'}
         </p>
         <p className="mt-4">
-          <Link to="/login" className="font-semibold text-primaryBlue">
-            back to log in
-          </Link>
+          {me ? (
+            <button id="oauth-back" type="button" onClick={goBack} className="font-semibold text-primaryBlue">
+              back to where you were
+            </button>
+          ) : (
+            <Link to="/login" className="font-semibold text-primaryBlue">
+              back to log in
+            </Link>
+          )}
         </p>
       </PageFrame>
     );
@@ -53,12 +72,7 @@ export function OAuthPage() {
   if (linked !== null) {
     return (
       <PageFrame title="linked">
-        <p id="oauth-linked">you can log in with {label(linked)} now. the security tab lists your logins.</p>
-        <p className="mt-4">
-          <Link to="/" className="font-semibold text-primaryBlue">
-            carry on
-          </Link>
-        </p>
+        <p id="oauth-linked">you can log in with {label(linked)} now, and your name is verified. taking you back…</p>
       </PageFrame>
     );
   }
@@ -105,7 +119,8 @@ function PickName() {
       await api.oauthSignup(wanted);
       await reloadMe();
       identityChanged('login');
-      navigate('/', { replace: true });
+      const back = takeReturn();
+      navigate(back.path, { replace: true });
     } catch (err) {
       setStatus(messageOf(err));
     } finally {

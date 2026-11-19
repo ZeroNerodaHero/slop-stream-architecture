@@ -31,6 +31,8 @@ export interface ChatLine {
   groups: GroupBadge[];
   /** the speaker's picture (its `?v=`, as everywhere in the api), or null for none. only a `verified` or `streamer` line can have one */
   avatar: number | null;
+  /** the speaker's account has an outside login linked (the verified mark, `OAuthMark`), as the row is now. only a `verified` or `streamer` line can have it; absent on an older chat */
+  oauth_verified?: boolean;
   at: number;
   /** The first picture on the line. Null, or absent on an older chat, when there is none. `images` is the whole set. */
   image?: string | null;

@@ -200,6 +200,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
   const presence = (trusted ? heard : undefined) ?? card?.presence;
   const live = presence === 'streaming';
   const verified = card?.verified ?? target.verified;
+  const oauthVerified = card?.oauth_verified ?? target.oauth_verified;
   const avatar = card ? card.avatar : target.avatar;
   const offline = card?.offline ?? null;
   const socials = useMemo(() => cleanSocials(card?.socials), [card?.socials]);
@@ -242,7 +243,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
         <Face name={name} version={avatar} className="h-14 w-14 text-2xl" />
         <div className="min-w-0 flex-1">
           <h2 id="profile-popup-title" className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xl leading-tight">
-            <Who name={name} verified={verified} />
+            <Who name={name} verified={verified} oauthVerified={oauthVerified} />
             {presence && <Word presence={presence} className="font-normal" />}
           </h2>
           {/* their status: the one line about them (`bio` on the wire), a few lines of it here and the whole on hover */}

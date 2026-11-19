@@ -60,6 +60,8 @@ export const watchMessageAtom = atom('loading');
 export const bioAtom = atom('');
 /** The name has an account, so this really is them. */
 export const verifiedAtom = atom(false);
+/** The account has a provider linked: the verified mark beside the name (api main.rs `watch`). */
+export const oauthVerifiedAtom = atom(false);
 /** Their picture's upload time (the `?v=` of its url). `null`: none. */
 export const avatarAtom = atom<number | null>(null);
 /** Their offline picture's upload time: shown where the player would be while they are not live. `null`: none. */
@@ -361,6 +363,7 @@ async function start(name: string): Promise<void> {
   }
   store.set(bioAtom, grant.bio ?? '');
   store.set(verifiedAtom, grant.verified === true);
+  store.set(oauthVerifiedAtom, grant.oauth_verified === true);
   store.set(avatarAtom, grant.avatar ?? null);
   store.set(offlineAtom, grant.offline ?? null);
   store.set(offlineNoteAtom, grant.offline_note ?? '');
@@ -607,6 +610,7 @@ export function endWatch() {
   store.set(mutedAtom, true);
   store.set(bioAtom, '');
   store.set(verifiedAtom, false);
+  store.set(oauthVerifiedAtom, false);
   store.set(avatarAtom, null);
   store.set(offlineAtom, null);
   store.set(offlineNoteAtom, '');

@@ -28,7 +28,12 @@ export interface LiveStream {
   viewers: number | null;
 }
 
-export interface Streamer {
+/** The account has a Google, Discord (any provider) login linked: the verified mark beside the ✓ (`OAuthMark`). Absent on an older api, which means not. */
+interface OAuthVerified {
+  oauth_verified?: boolean;
+}
+
+export interface Streamer extends OAuthVerified {
   name: string;
   /** The status: one line about them, beside the name. `bio` on the wire (the word `status` is the presence choice's, docs/status.md). */
   bio: string;
@@ -118,7 +123,7 @@ export interface NotifySettings {
 }
 
 /** Somebody the login follows, as `GET /api/following` lists them: streaming first. See docs/follows.md. */
-export interface Followed {
+export interface Followed extends OAuthVerified {
   name: string;
   verified: boolean;
   avatar: number | null;
@@ -131,7 +136,7 @@ export interface Followed {
 }
 
 /** One of home's people (`GET /api/people`): a name with a row who is not live, with the word beside it. */
-export interface Person {
+export interface Person extends OAuthVerified {
   name: string;
   verified: boolean;
   avatar: number | null;
@@ -141,7 +146,7 @@ export interface Person {
 }
 
 /** One of home's recently offline (`GET /api/recent`): a name whose last stream ended lately, and when. Not live now. */
-export interface Recent {
+export interface Recent extends OAuthVerified {
   name: string;
   verified: boolean;
   avatar: number | null;
@@ -153,7 +158,7 @@ export interface Recent {
 }
 
 /** One answer of `GET /api/search?q=`: a name holding the letters, and whether the login follows it. */
-export interface SearchHit {
+export interface SearchHit extends OAuthVerified {
   name: string;
   verified: boolean;
   avatar: number | null;
@@ -412,7 +417,7 @@ export interface Grant {
   token: number;
 }
 
-export interface WatchGrant {
+export interface WatchGrant extends OAuthVerified {
   url: string;
   /** The name this grant is for. Another than the one asked for: that name was renamed, go there (docs/ids.md). Absent on an older api. */
   name?: string;
@@ -456,18 +461,22 @@ export interface MeInfo {
   name: string | null;
   /** When the name last changed, rfc3339. null: never. The profile tab says when it may change again. */
   renamed_at: string | null;
-  /** false: an account made with Google, Twitch or Discord that has no password yet. null for nobody; absent on an older api (which means true). */
+  /** false: an account made with a provider (Google, Discord) that has no password yet. null for nobody; absent on an older api (which means true). */
   has_password?: boolean | null;
+  /** This account has an outside login linked: the verified mark (`OAuthMark`). null for nobody; absent on an older api. */
+  oauth_verified?: boolean | null;
   /** This account's old names still held for it: going back onto one is allowed any time. Absent on an older api. */
   held?: string[];
 }
 
-/** A login provider (docs/accounts.md). The api turns each on from its env vars. */
-export type OAuthProvider = 'google' | 'twitch' | 'discord';
+/** A login provider's slug (docs/accounts.md): `google`, `discord`, or one added to the api later. The api turns each on from its env vars; infra/oauth.ts has the words for them. */
+export type OAuthProvider = string;
 
-/** `GET /api/oauth/identities`: the providers linked to this login, and whether it has a password. */
+/** `GET /api/oauth/identities`: the providers linked to this login, whether it has a password, and whether it is verified (anything linked). */
 export interface OAuthIdentities {
   has_password: boolean;
+  /** Absent on an older api: then it is `identities.length > 0`. */
+  oauth_verified?: boolean;
   identities: { provider: OAuthProvider; linked_at: string }[];
 }
 

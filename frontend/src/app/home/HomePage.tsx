@@ -374,7 +374,16 @@ function People() {
       <div className={PEOPLE_GRID}>
         {list.map((p) => (
           <article key={p.name} id={`person-${p.name}`} data-presence={p.presence} className={cn(CARD_LINK, 'flex items-center gap-2 p-3')}>
-            <PersonRow id={`person-link-${p.name}`} name={p.name} verified={p.verified} avatar={p.avatar} bio={p.bio} presence={p.presence} size="card" />
+            <PersonRow
+              id={`person-link-${p.name}`}
+              name={p.name}
+              verified={p.verified}
+              oauthVerified={p.oauth_verified}
+              avatar={p.avatar}
+              bio={p.bio}
+              presence={p.presence}
+              size="card"
+            />
             <FollowButton id={`person-follow-${p.name}`} name={p.name} small className="self-start" />
           </article>
         ))}
@@ -420,6 +429,7 @@ function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
               id={`recent-link-${p.name}`}
               name={p.name}
               verified={p.verified}
+              oauthVerified={p.oauth_verified}
               avatar={p.avatar}
               bio={p.bio}
               presence={p.presence}

@@ -204,6 +204,8 @@ function spend(fit: Fit, rows: number[]): Spacing {
 interface Person {
   name: string;
   verified: boolean;
+  /** The verified mark (a provider linked). Absent: not. */
+  oauth_verified?: boolean;
   avatar: number | null;
   bio: string;
   presence: Presence;
@@ -278,7 +280,7 @@ function Row({ id, person, side, open, folded = false, onPick, children }: RowPr
         <RailFace name={person.name} avatar={person.avatar} presence={person.presence} />
         {open && (
           <span className={cn('flex min-w-0 flex-1 flex-col leading-tight', mirrored && 'items-end text-right')}>
-            <Who name={person.name} verified={person.verified} className="max-w-full text-sm" />
+            <Who name={person.name} verified={person.verified} oauthVerified={person.oauth_verified} className="max-w-full text-sm" />
             <span className={cn('text-xs', PRESENCE_TEXT[person.presence])}>{PRESENCE_WORD[person.presence]}</span>
           </span>
         )}

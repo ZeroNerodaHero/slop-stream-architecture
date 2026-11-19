@@ -30,6 +30,7 @@ import {
   watchLayersAtom,
   unmuteVideo,
   verifiedAtom,
+  oauthVerifiedAtom,
   volumeAtom,
   watch,
   watchStatsAtom,
@@ -66,6 +67,7 @@ import { SocialsTab } from '@/shared-components/SocialsEditor';
 import { StatusLine } from '@/shared-components/StatusLine';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
+import { OAuthMark } from '@/shared-components/OAuthMark';
 import { StreamTile } from '@/shared-components/StreamTile';
 import { TestBadge } from '@/shared-components/TestBadge';
 import { IconButton, MailIcon, PipIcon, SoundControl, revealClassName } from '@/shared-components/VideoControls';
@@ -159,6 +161,7 @@ export function WatchPage() {
   const volume = useAtomValue(volumeAtom);
   const stats = useAtomValue(watchStatsAtom);
   const verified = useAtomValue(verifiedAtom);
+  const oauthVerified = useAtomValue(oauthVerifiedAtom);
   const avatar = useAtomValue(avatarAtom);
   const offline = useAtomValue(offlineAtom);
   const offlineNote = useAtomValue(offlineNoteAtom);
@@ -242,6 +245,7 @@ export function WatchPage() {
               </span>
             </Tooltip>
           )}
+          {oauthVerified && <OAuthMark id="watch-oauth-verified" size={22} className="ml-2 align-[-3px]" />}
           {isDummyName(name) && <TestBadge />}
           {/* the word beside the name (docs/status.md): the square and the word, from the events socket.
               not live, `online` is the reason to wait and `do not disturb` the reason not to */}

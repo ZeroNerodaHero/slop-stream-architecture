@@ -19,12 +19,15 @@ export const renamedAtAtom = atom<string | null>(null);
 export const hasPasswordAtom = atom(true);
 /** This account's old names still held for it: going back onto one never waits (docs/ids.md). */
 export const heldNamesAtom = atom<string[]>([]);
+/** This account has an outside login linked: the verified mark. The security and profile tabs say so. */
+export const oauthVerifiedAtom = atom(false);
 
 function setMeInfo(r: MeInfo) {
   store.set(myIdAtom, r.id ?? null);
   store.set(renamedAtAtom, r.renamed_at ?? null);
   store.set(hasPasswordAtom, r.has_password !== false);
   store.set(heldNamesAtom, r.held ?? []);
+  store.set(oauthVerifiedAtom, r.oauth_verified === true);
 }
 export const authBusyAtom = atom(false);
 export const authErrorAtom = atom('');
@@ -58,6 +61,7 @@ export function forgetMe() {
   store.set(myIdAtom, null);
   store.set(renamedAtAtom, null);
   store.set(heldNamesAtom, []);
+  store.set(oauthVerifiedAtom, false);
   asked = null;
 }
 
@@ -113,6 +117,7 @@ export async function logout(): Promise<void> {
   store.set(myIdAtom, null);
   store.set(renamedAtAtom, null);
   store.set(heldNamesAtom, []);
+  store.set(oauthVerifiedAtom, false);
 }
 
 /** Every device, this one too. The cookie is dead everywhere, so the next ask is a real one. */
@@ -220,9 +225,7 @@ export function clearRenameStatus() {
   store.set(renameStatusAtom, '');
 }
 
-// ---- google, twitch, discord (docs/accounts.md) -------------------------------------------------
-
-export const PROVIDER_LABEL: Record<OAuthProvider, string> = { google: 'Google', twitch: 'Twitch', discord: 'Discord' };
+// ---- google, discord (docs/accounts.md; the words are infra/oauth.ts) ---------------------------
 
 /** The providers the api turned on, `undefined` until it answered. Asked once per page load. */
 export const oauthProvidersAtom = atom<OAuthProvider[] | undefined>(undefined);
@@ -245,5 +248,10 @@ export function loadOAuthProviders(): Promise<void> {
 
 /** Where the browser goes to log in (or, logged in, to link) with a provider: a full page load, the provider's page and back. */
 export function oauthStartUrl(provider: OAuthProvider, link = false): string {
-  return `/api/oauth/${provider}/start${link ? '?link=1' : ''}`;
+  return `/api/oauth/${encodeURIComponent(provider)}/start${link ? '?link=1' : ''}`;
+}
+
+/** After a link or an unlink: whether this account is verified now, and the rest of who am i. */
+export function refreshMeInfo(): Promise<void> {
+  return fillMeInfo();
 }

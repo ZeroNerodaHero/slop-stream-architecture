@@ -7,7 +7,10 @@ import {
   clearRenameStatus,
   hasPasswordAtom,
   heldNamesAtom,
+  loadOAuthProviders,
   meAtom,
+  oauthProvidersAtom,
+  oauthVerifiedAtom,
   RENAME_DAYS,
   renameAgainAtom,
   renameBusyAtom,
@@ -50,10 +53,12 @@ import {
 import { closeUserModal, pickTab } from '@/infra/atoms/user-modal-atoms';
 import { api, groupWords } from '@/infra/api';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
+import { providerList } from '@/infra/oauth';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
+import { OAuthMark } from '@/shared-components/OAuthMark';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { BUTTON, Field, INPUT, OptionCard, PasswordInput, SECTION_TITLE, Section, Status } from '@/shared-components/user-modal/parts';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -190,6 +195,12 @@ const PRESENCE_OPTIONS: readonly { choice: PresenceChoice; label: string; detail
  */
 export function ProfileTab() {
   const me = useAtomValue(meAtom);
+  const oauthVerified = useAtomValue(oauthVerifiedAtom);
+  const oauthProviders = useAtomValue(oauthProvidersAtom);
+  // which providers are on here: the line that says how to get verified names them
+  useEffect(() => {
+    if (me) void loadOAuthProviders();
+  }, [me]);
   const nick = useAtomValue(nickAtom);
   const name = useAtomValue(myNameAtom);
   const avatar = useAtomValue(myAvatarVersionAtom);
@@ -340,7 +351,16 @@ export function ProfileTab() {
                   ✓
                 </span>
               </Tooltip>
+              {oauthVerified && <OAuthMark id="profile-oauth-verified" />}
             </p>
+            {!oauthVerified && !!oauthProviders?.length && (
+              <p id="profile-get-verified" className="text-sm text-textTertiary">
+                link {providerList(oauthProviders)} to get the blue verified mark beside your name.{' '}
+                <button type="button" onClick={() => pickTab('security')} className="text-primaryBlue underline-offset-2 hover:underline">
+                  link a login
+                </button>
+              </p>
+            )}
             <Rename me={me} />
           </>
         ) : (

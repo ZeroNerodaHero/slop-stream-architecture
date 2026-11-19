@@ -111,7 +111,7 @@ export function ExplorePage() {
             <ul className="flex flex-col gap-2">
               {people.map((hit) => (
                 <li key={hit.name}>
-                  <PersonRow id={`person-${hit.name}`} name={hit.name} verified={hit.verified} avatar={hit.avatar} bio={hit.bio} presence={hit.presence} />
+                  <PersonRow id={`person-${hit.name}`} name={hit.name} verified={hit.verified} oauthVerified={hit.oauth_verified} avatar={hit.avatar} bio={hit.bio} presence={hit.presence} />
                 </li>
               ))}
             </ul>

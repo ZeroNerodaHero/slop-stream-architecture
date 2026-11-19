@@ -5,12 +5,13 @@ import { Link } from 'react-router-dom';
 import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { isDummyName } from '@/infra/names';
 import { Face } from '@/shared-components/Face';
+import { OAuthMark } from '@/shared-components/OAuthMark';
 import { TestBadge } from '@/shared-components/TestBadge';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/** A name, its ✓ when it has an account, the test badge for a fake stream. */
-export function Who({ name, verified, className }: { name: string; verified: boolean; className?: string }) {
+/** A name, its ✓ when it has an account, the verified mark when the account has a provider linked, the test badge for a fake stream. */
+export function Who({ name, verified, oauthVerified, className }: { name: string; verified: boolean; oauthVerified?: boolean; className?: string }) {
   return (
     <span className={cn('flex min-w-0 items-center gap-1.5', className)}>
       <span className="truncate font-semibold">{name}</span>
@@ -21,6 +22,8 @@ export function Who({ name, verified, className }: { name: string; verified: boo
           </span>
         </Tooltip>
       )}
+      {/* a free name never wears it, whatever a stale row says: only an account links a login */}
+      {verified && oauthVerified && <OAuthMark />}
       {isDummyName(name) && <TestBadge />}
     </span>
   );
@@ -67,6 +70,8 @@ interface PersonRowProps {
   id: string;
   name: string;
   verified: boolean;
+  /** The verified mark (a provider linked). Absent: not. */
+  oauthVerified?: boolean;
   avatar: number | null;
   bio: string;
   presence: Presence;
@@ -83,7 +88,7 @@ interface PersonRowProps {
  * the name with its marks, the word beside it. One shape wherever a person is listed (the
  * search, home's people and recently offline).
  */
-export function PersonRow({ id, name, verified, avatar, bio, presence, onPick, size = 'row', note }: PersonRowProps) {
+export function PersonRow({ id, name, verified, oauthVerified, avatar, bio, presence, onPick, size = 'row', note }: PersonRowProps) {
   const card = size === 'card';
   return (
     <Link
@@ -105,14 +110,14 @@ export function PersonRow({ id, name, verified, avatar, bio, presence, onPick, s
       </span>
       {card ? (
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <Who name={name} verified={verified} className="text-base" />
+          <Who name={name} verified={verified} oauthVerified={oauthVerified} className="text-base" />
           <Word presence={presence} square={false} />
           {note && <span className="text-sm text-textSecondary">{note}</span>}
           {bio && <span className="truncate text-sm text-textSecondary">{bio}</span>}
         </span>
       ) : (
         <>
-          <Who name={name} verified={verified} />
+          <Who name={name} verified={verified} oauthVerified={oauthVerified} />
           <Word presence={presence} square={false} className="ml-auto" />
         </>
       )}

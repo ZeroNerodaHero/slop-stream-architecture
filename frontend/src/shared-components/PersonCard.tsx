@@ -22,6 +22,8 @@ const GAP = 4;
 export interface CardPerson {
   name: string;
   verified: boolean;
+  /** The verified mark (a provider linked). Not known: the card's answer says. */
+  oauth_verified?: boolean;
   avatar: number | null;
   /** The status, one line about them (`bio` on the wire). Not known: the card asks. */
   bio?: string;
@@ -165,7 +167,7 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
             </>
           )}
         </span>
-        <Who name={person.name} verified={person.verified} className="flex-1" />
+        <Who name={person.name} verified={person.verified} oauthVerified={person.oauth_verified ?? known?.oauth_verified} className="flex-1" />
       </span>
       {presence === 'streaming' && <StreamStill name={person.name} className="w-full" />}
       {/* the status, the width of the card: whole words, four lines at most */}
