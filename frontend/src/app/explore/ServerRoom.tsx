@@ -79,7 +79,7 @@ import { PresenceSquare } from '@/shared-components/PersonRow';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { ProfileLink } from '@/shared-components/ProfileLink';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
-import { DrawerClose, SwipeDrawer } from '@/shared-components/SwipeDrawer';
+import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { Field, SECTION_TITLE, Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
@@ -1052,7 +1052,7 @@ export function ServerPage() {
         aria-haspopup="dialog"
         aria-expanded={drawer}
         aria-controls="group-drawer"
-        onClick={() => setDrawer(true)}
+        onClick={() => setDrawer((open) => !open)}
         className="-mr-2.5 flex h-11 w-11 shrink-0 items-center justify-center border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
       >
         <RiServerLine aria-hidden size={22} />
@@ -1115,16 +1115,13 @@ export function ServerPage() {
             </div>
             {!mobile && <Roster room={room} />}
           </div>
-          {/* a phone: what the page has around the chat, in a drawer from the right. its × on a line of its own over the rest, which
-              scrolls as one: the group's head, then the channels in a box, then who is in, in a box of its own (online first, then
+          {/* a phone: what the page has around the chat, in a drawer from the right. no bar over it (no title, no ×: the dim sliver at the left or
+              the opener shuts it), and it scrolls as one: the group's head, then the channels in a box, then who is in, in a box of its own (online first, then
               offline). the dim sliver at the left shuts it too */}
           {mobile && (
             <SwipeDrawer id="group-drawer" side="right" open={drawer} onOpenChange={setDrawer} label={`${words.title}: channels and members`}>
               {() => (
                 <>
-                  <div className="flex shrink-0 items-center justify-end border-b border-primaryStroke pl-4 pr-1.5">
-                    <DrawerClose onClose={() => setDrawer(false)} />
-                  </div>
                   <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain pb-3">
                     {groupHead}
                     <div className="mx-3 flex flex-col gap-6 border border-primaryStroke bg-backgroundSecondary p-4">
