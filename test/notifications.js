@@ -1833,10 +1833,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       }
       await p.hover('#user-panel');
       await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
-      await p.waitForSelector('#chats-open', { state: 'visible', timeout: 10000 });
-      await p.click('#chats-open');
+      // the window opens from fan's chat button on star's friends row (fan is in star's threads, so the tab it adds is one of star's)
+      await p.waitForSelector(`#friend-chat-${FAN}`, { state: 'visible', timeout: 10000 });
+      await p.click(`#friend-chat-${FAN}`);
       await p.waitForSelector('#friend-chat', { timeout: 10000 });
-      // star's list has a tab for fan, which the held list does not. it is on screen before the held body is released
       await p.waitForSelector(`#friend-chat-tab-${FAN}`, { timeout: 10000 });
       const list = await body(await star.get('/api/dms'));
       expect(Array.isArray(list) && list.length > 0, `star's threads: ${JSON.stringify(list)}`);

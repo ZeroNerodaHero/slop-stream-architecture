@@ -51,13 +51,13 @@ const NOTICE_MS = 4000;
 export const dmsAtom = atom<Dm[]>([]);
 /** The tab that is showing. `null`: none, and the window shows the friends to pick from. */
 export const dmActiveAtom = atom<string | null>(null);
-/** The window is on screen. Hidden, the tabs and their lines wait for the sidebar's chat button. */
+/** The window is on screen. Hidden, the tabs and their lines wait for a friend's chat button. */
 export const dmOpenAtom = atom(false);
 /** Every thread's lines, by the other side's name. */
 export const dmThreadsAtom = atom<Record<string, Thread>>({});
 /** What the last send or load said when it failed; '' otherwise. The window shows it under the box. */
 export const dmNoticeAtom = atom('');
-/** New lines across every thread: the number on the sidebar's chat button. */
+/** New lines across every thread: the number on the sidebar's friends icon. */
 export const dmUnreadAtom = atom((get) => get(dmsAtom).reduce((n, d) => n + d.unread, 0));
 
 /** A search's hits, newest first, and the thread and the words they are for. Null when the pane is closed. The window shows them where the lines are while that thread is the one on screen. */
@@ -150,7 +150,7 @@ export function removeDm(name: string) {
 /**
  * The window on screen as it was left: the shown tab (read, now that it is looked at); with
  * none shown yet, the newest thread, which is the first tab; with no tab at all, the friends
- * to pick from. The sidebar's chat button.
+ * to pick from. The kept window put back after a reload (`restoreDmWindow`).
  */
 export function showDms() {
   store.set(dmOpenAtom, true);

@@ -51,7 +51,7 @@ node .cursor/skills/scroll-escape/scripts/probe.cjs \
   '#notifications' 'goto:/groups' 'goto:/live' 'goto:/watch/a' 'goto:/login'
 ```
 
-Logged in (`LOGIN=name:password` goes through `/login` first; make the account with `POST /api/signup` the way `test/*.js` does, or use one you have): add `'#chats-open'` for the friend chat window, `'#notifications'` for the inbox, and the group pages under `goto:/groups/<server>`.
+Logged in (`LOGIN=name:password` goes through `/login` first; make the account with `POST /api/signup` the way `test/*.js` does, or use one you have): add `'#friend-chat-<friend>'` (a friend's chat button in the sidebar; the login needs one friend, a follow both ways) for the friend chat window, `'#notifications'` for the inbox, and the group pages under `goto:/groups/<server>`.
 
 Known clips, by design, not findings: the corner panel (`div.absolute.top-0.flex` in UserPanel.tsx) reports `overflow` of ~137px in x. It is the collapsed sidebar clipping its full width until hover or focus widens it; no `focus` finding goes with it.
 

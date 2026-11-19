@@ -186,8 +186,8 @@ export function DrawerOpener() {
  * sign up and log in under it. Nobody has to. The picture, and a login's name, are the way to
  * your own page, `/watch/<you>`: your status, your about me, your links, your calendar as everyone sees them (the about me and the links are written there too); the
  * gear at the far end of the actions line is the way to the user modal (profile, groups,
- * security, notifications; appearance, chat, sidebar, advanced). The `chat` button that brings the friend chat window back is
- * the end of the friends line (Friends.tsx). Go live is the right end of the page's title row.
+ * security, notifications; appearance, chat, sidebar, advanced). The friend chat window opens
+ * from a friend's chat button on their row (Friends.tsx). Go live is the right end of the page's title row.
  * The ids are the ones the tests key on; `data-open` says which state the panel is in.
  */
 export function UserPanel() {

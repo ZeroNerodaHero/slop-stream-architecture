@@ -560,7 +560,7 @@ function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; lab
  * `SearchResults`, the lines kept under it unseen), and one clicked puts the lines back with
  * it in view, the pages back to it loaded as needed (`openDmLine`); `close` puts them back as
  * they were. The ×
- * hides the window and keeps everything; the sidebar's chat button brings it back. With no tab
+ * hides the window and keeps everything; a friend's chat button in the sidebar brings it back. With no tab
  * shown, the friends to pick from are where the thread would be, under `no chat` when there
  * are no tabs at all (a phone's sheet: under `friends`, as a list, and its back button and the
  * browser's back come to it from a chat). The lines take the shape the chat tab picked for every chat
@@ -970,7 +970,7 @@ export function FriendChat() {
               {mobile ? 'friends' : dms.length === 0 ? 'no chat' : 'new chat'}
             </span>
           )}
-          <Tooltip content="hide. your chats stay; the sidebar's chat button brings them back">
+          <Tooltip content="hide. your chats stay; a friend's chat button in the sidebar brings them back">
             <button
               id="friend-chat-close"
               type="button"
