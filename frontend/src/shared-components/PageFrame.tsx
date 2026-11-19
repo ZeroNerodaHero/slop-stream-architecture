@@ -17,9 +17,11 @@ interface PageFrameProps {
   wide?: boolean;
   /** On a phone, the title in the row instead of `title`, which may be too much for one line: a stream's name, a group's channel. */
   mobileTitle?: ReactNode;
+  /** On a phone, a small line under the title, which then reads smaller so both fit the row: a stream's followers and watchers (WatchPage.tsx, LivePage.tsx). */
+  mobileSub?: ReactNode;
   /** On a phone, the right end of the row instead of the bell and go live: a group's button for its drawer (ServerRoom.tsx). */
   mobileEnd?: ReactNode;
-  /** On a phone, beside the menu at the row's left: the go live page's picture of you (LivePage.tsx). */
+  /** On a phone, beside the menu at the row's left: the streamer's face, yours on go live (LivePage.tsx, WatchPage.tsx). */
   mobileStart?: ReactNode;
   /** On a phone, the page runs to the window's edges: no side padding, no gap under the row, no foot. A group's room (ServerRoom.tsx). */
   bleed?: boolean;
@@ -145,13 +147,15 @@ function useCurrentPart(on: boolean, main: RefObject<HTMLElement | null>, row: R
  * A phone's row is its own (below 768px, mobile.ts): the menu (the sidebar's drawer) at the left
  * on every page, `mobileStart` beside it, then where you are on one line, cut with an ellipsis
  * when it is long: `mobileTitle` or the title, or on home the part you have scrolled to
- * (`useCurrentPart`), whose headings then scroll with the page under the row. Then home (every
+ * (`useCurrentPart`), whose headings then scroll with the page under the row; with `mobileSub`
+ * the title is smaller and that line sits under it, in the same height. Then home (every
  * page but home) just left of go live, or just left of `mobileEnd` (a group's drawer opener);
- * on go live's own page, which has neither, home stays beside the menu. No bell: a phone's is in the sidebar's drawer, beside the gear
+ * on a page with neither, and no go live of its own, home stays beside the menu (go live passes an empty
+ * `mobileEnd`: its home is at the right end). No bell: a phone's is in the sidebar's drawer, beside the gear
  * (UserPanel.tsx). Always measured into `--title-row`, home's too: the page starts under it.
  * `bleed` takes the page's padding away, so what is under the row reaches the window's edges.
  */
-export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mobileEnd, mobileStart, bleed = false, fill = false, children }: PageFrameProps) {
+export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mobileSub, mobileEnd, mobileStart, bleed = false, fill = false, children }: PageFrameProps) {
   const titled = Boolean(title || aside);
   const mobile = useIsMobile();
   const onLivePage = useOnLivePage();
@@ -198,7 +202,15 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
           <DrawerOpener />
           {mobileStart}
           {title && !homeByGoLive && !homeByEnd && <MobileHomeLink />}
-          {headed ? (
+          {mobileSub !== undefined ? (
+            // a stream's row: the name over its numbers, both cut with an ellipsis, in the row's own height
+            <div className="ml-1 min-w-0 flex-1">
+              <h1 id={titleId} className="truncate text-base font-medium leading-tight">
+                {named}
+              </h1>
+              <p className="truncate text-xs leading-4 text-textSecondary">{mobileSub}</p>
+            </div>
+          ) : headed ? (
             <h1 id={titleId} className="min-w-0 flex-1 truncate text-xl font-semibold leading-tight">
               {named}
             </h1>

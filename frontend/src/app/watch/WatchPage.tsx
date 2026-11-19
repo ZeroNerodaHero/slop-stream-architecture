@@ -74,6 +74,7 @@ import { TestBadge } from '@/shared-components/TestBadge';
 import { IconButton, MailIcon, PipIcon, SoundControl, revealClassName } from '@/shared-components/VideoControls';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
+import { streamNumbers } from '@/utils/count';
 import { roveTabs } from '@/utils/tabs';
 
 /** The sentence under the word while they are not live: why to wait, or not. */
@@ -303,7 +304,7 @@ export function WatchPage() {
           profile. the chat's button sits on it where the player's does */}
       {phase === 'waiting' || phase === 'loading' ? (
         expecting ? (
-          <Skeleton id="player-loading" label="loading the stream" className="relative aspect-video w-full border border-primaryStroke bg-backgroundSecondary">
+          <Skeleton id="player-loading" label="loading the stream" className="relative aspect-video w-full border border-primaryStroke bg-backgroundSecondary max-md:border-t-0">
             <Bone className="absolute inset-0" />
             <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
               {mobile ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
@@ -342,6 +343,8 @@ export function WatchPage() {
               stands in for the bottom video layer; a video layer clicked is shown alone */}
           <SceneView
             id="scene"
+            // a phone's player sits right on the row's own stroke: no second line between them
+            className="max-md:border-t-0"
             layers={layers}
             streamFor={slotStreamAtom}
             imageUrl={(asset) => api.assetUrl(name, asset)}
@@ -417,7 +420,10 @@ export function WatchPage() {
   // grant). while the stream plays the line would say `watching`, which the picture and the word beside
   // the name already say: then it is for screen readers and the tests alone, and the count stands in its
   // place, the corner player's way. the line comes back for anything else: not live, connecting, ended.
-  // a phone has it at the top of the about tab
+  // a phone has it at the top of the about tab, and the follow button in the title row
+  const followButton = (className?: string) => (
+    <FollowButton id="follow" name={name} small={mobile} className={className} onChange={(now) => store.set(followersAtom, (followers ?? 0) + (now ? 1 : -1))} />
+  );
   const status = (
     <div className="my-3 flex flex-wrap items-baseline gap-x-4">
       <StatusLine text={message} tone={tone} className={cn('my-0', phase === 'watching' && 'sr-only')} />
@@ -429,7 +435,7 @@ export function WatchPage() {
               {followers} {followers === 1 ? 'follower' : 'followers'}
             </span>
           )}
-          <FollowButton id="follow" name={name} onChange={(now) => store.set(followersAtom, (followers ?? 0) + (now ? 1 : -1))} />
+          {!mobile && followButton()}
         </span>
       )}
     </div>
@@ -475,7 +481,18 @@ export function WatchPage() {
         className="group/phone fixed inset-x-0 top-0 flex h-[100dvh] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
         style={view ? { height: view.height, transform: view.top ? `translateY(${view.top}px)` : undefined } : undefined}
       >
-        <PageFrame title={title} titleId="who" mobileTitle={name} wide bleed fill>
+        <PageFrame
+          title={title}
+          titleId="who"
+          mobileTitle={name}
+          // the row: the menu, their face, the name over how many follow and watch, home, and follow at the right end
+          mobileStart={name ? <Face name={name} version={avatar} className="h-8 w-8 text-sm" /> : undefined}
+          mobileSub={streamNumbers(name && !isDummyName(name) ? followers : null, viewers)}
+          mobileEnd={name && !isDummyName(name) ? followButton('min-h-11 min-w-11') : undefined}
+          wide
+          bleed
+          fill
+        >
           <div className="shrink-0">
             {player}
             {retryRow && <div className="px-4">{retryRow}</div>}

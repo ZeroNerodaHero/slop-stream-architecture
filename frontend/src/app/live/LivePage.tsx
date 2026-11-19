@@ -60,6 +60,7 @@ import { ViewerCount } from '@/shared-components/ViewerCount';
 import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { IconButton, PipIcon, revealClassName } from '@/shared-components/VideoControls';
 import { cn } from '@/utils/cn';
+import { streamNumbers } from '@/utils/count';
 import { roveTabs } from '@/utils/tabs';
 
 /** A phone's tabs under the preview, in the bar's order. Chat first: it is where a phone's page opens. */
@@ -165,6 +166,8 @@ export function LivePage() {
           in fractions. taken hold of here; the watchers' players follow within a beat */}
       <SceneView
         id="scene"
+        // a phone's preview sits right on the row's own stroke: no second line between them
+        className="max-md:border-t-0"
         layers={scene.layers}
         streamFor={sentStreamAtom}
         imageUrl={(asset) => api.assetUrl(name, asset)}
@@ -290,7 +293,11 @@ export function LivePage() {
           title="go live"
           mobileTitle={name || 'go live'}
           // who is going live, beside the menu: your picture (or the letter your name makes). a picture, not a control
-          mobileStart={me ? <Face name={me} version={myAvatar} className="mr-1 h-8 w-8 text-sm" /> : undefined}
+          mobileStart={me ? <Face name={me} version={myAvatar} className="h-8 w-8 text-sm" /> : undefined}
+          // under the name, how many watch (this page has no count of followers). no follow button: it is your own
+          // stream, so home takes the row's right end
+          mobileSub={streamNumbers(null, viewers)}
+          mobileEnd={null}
           wide
           bleed
           fill
