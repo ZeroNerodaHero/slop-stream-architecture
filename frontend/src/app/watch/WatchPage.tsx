@@ -237,7 +237,13 @@ export function WatchPage() {
         <>
           {/* their picture, or the letter their name makes when they have none: a face left of the name either way */}
           {name && <Face name={name} version={avatar} className="mr-3 inline-flex align-middle" />}
-          {name}
+          {bio ? (
+            <Tooltip content={bio}>
+              <span>{name}</span>
+            </Tooltip>
+          ) : (
+            name
+          )}
           {verified && (
             <Tooltip content="has an account: this really is them">
               <span role="img" aria-label="has an account" className="ml-2 text-increase">
@@ -254,16 +260,12 @@ export function WatchPage() {
               {PRESENCE_WORD[presence]}
             </span>
           )}
-          {/* their status: the one line about them, under the name (the profile tab sets it; `bio` on the wire).
-              one line here too, the whole of it on hover. it comes with the grant: until then a line of grey
-              its height stands under the name, so the title row (and the whole page under it) does not grow
-              by a line when the grant lands */}
-          {bio ? (
-            <span id="bio" title={bio} className="mt-1 block truncate text-base font-normal text-textSecondary">
+          {/* their status (`bio` on the wire) is hover only: not drawn under the name, it shows in a tooltip
+              over the name. #bio stays, unseen, for screen readers and the tests that key on it (docs/spec.md) */}
+          {bio && (
+            <span id="bio" className="sr-only">
               {bio}
             </span>
-          ) : (
-            firstAsk && <Bone className="mt-1 h-6 w-72 max-w-full" />
           )}
         </>
       }

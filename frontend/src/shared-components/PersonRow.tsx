@@ -95,7 +95,7 @@ export function PersonRow({ id, name, verified, oauthVerified, avatar, bio, pres
           <Who name={name} verified={verified} oauthVerified={oauthVerified} className="text-base" />
           <Word presence={presence} square={false} />
           {note && <span className="text-sm text-textSecondary">{note}</span>}
-          {bio && <span className="truncate text-sm text-textSecondary">{bio}</span>}
+          {/* the status is hover only: the row's title carries it, never a line here */}
         </span>
       ) : (
         <>
