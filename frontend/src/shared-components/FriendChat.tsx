@@ -45,7 +45,7 @@ import {
 import { followingAtom, friendsOpenAtom } from '@/infra/atoms/follow-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatStyleAtom, type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
-import { useIsMobile, useVisibleViewport } from '@/infra/mobile';
+import { useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
 import { compressChatImage } from '@/infra/picture';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
@@ -393,6 +393,8 @@ function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
 const SHEET = 0.8;
 /** At least this much of the dimmed page stays above the sheet while the keyboard is up, to tap it shut. */
 const SHEET_GAP = 24;
+/** The keyboard up, the sheet keeps its top while it is at least this tall; a shorter window moves its top up instead. */
+const SHEET_MIN = 200;
 const SHEET_SLIDE = 'duration-200 ease-out motion-reduce:transition-none';
 /** How dark the page behind the sheet gets. */
 const SHEET_DIM = 0.6;
@@ -404,11 +406,15 @@ type SheetGrip = Pick<DOMAttributes<HTMLElement>, 'onPointerDown' | 'onPointerMo
  * A phone's chat sheet, while `active` (a phone, the chat open): the slide up once it is on
  * screen, the slide down before `onDismiss` takes it off (a tap on the dim page, a drag down
  * let go past `SHEET_SNAP` of its height or flicked, Escape, the browser's back button), and the
- * keyboard's place (`useVisibleViewport`). `grip` goes on the grabber and on the head: the sheet
- * follows the finger. The drag's numbers and the back button are every phone sheet's (MobileSheet.tsx).
+ * keyboard's place (`useVisibleViewport`). While it is open the document is pinned
+ * (`useLockedDocument`), as the /live page's is, so iOS cannot scroll the page to bring the box
+ * over the keyboard: any scroll it applies on a focus or a pan of the visual viewport is put back.
+ * `grip` goes on the grabber and on the head: the sheet follows the finger. The drag's numbers and
+ * the back button are every phone sheet's (MobileSheet.tsx).
  */
 function useSheet(active: boolean, onDismiss: () => void) {
-  const view = useVisibleViewport(active);
+  const view = useVisibleViewport(active, true);
+  useLockedDocument(active);
   // in: a frame after it is on screen, so the slide up has a place to start from. leaving: sliding down, then gone
   const [entered, setEntered] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -491,13 +497,24 @@ type Sheet = ReturnType<typeof useSheet>;
 /**
  * A phone's chat (below 768px, mobile.ts): a sheet up from the foot of the window to 20% from its
  * top, over the page dimmed, with a grabber at its head (`useSheet`). It sits on the keyboard
- * while one is up, so the box stays in sight, and it is never taller than what the keyboard
- * leaves (`useVisibleViewport`). The page under it does not scroll (globals.css,
- * `data-sheet-open`). Drawn into the body, over the drawers.
+ * while one is up: its top stays where it was if it can, and it shrinks so the box's row sits
+ * flush on the keyboard (the foot of the visual viewport, `useVisibleViewport`); on a window too
+ * short for that its top comes up too, never past `SHEET_GAP` from the top. The page under it
+ * does not scroll (`useLockedDocument`, and globals.css's `data-sheet-open`). Drawn into the
+ * body, over the drawers.
  */
 function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; label: string; with?: string; children: ReactNode }) {
   const { view, drag, up, grip } = sheet;
-  const height = view ? Math.max(0, Math.min(window.innerHeight * SHEET, view.height - SHEET_GAP)) : window.innerHeight * SHEET;
+  const full = window.innerHeight * SHEET;
+  let height = full;
+  let bottom: number | undefined;
+  if (view) {
+    // the keyboard's top, from the layout viewport's top
+    const foot = view.top + view.height;
+    const top = Math.min(window.innerHeight - full, Math.max(view.top + SHEET_GAP, foot - SHEET_MIN));
+    height = Math.max(0, foot - top);
+    bottom = Math.max(0, window.innerHeight - foot);
+  }
   const shown = up ? 1 - Math.min(1, (drag ?? 0) / Math.max(1, height)) : 0;
   return createPortal(
     <div data-sheet-open="" className="fixed inset-0 z-[55] overflow-hidden">
@@ -518,7 +535,7 @@ function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; lab
           'absolute inset-x-0 bottom-0 flex h-[80dvh] flex-col overflow-x-hidden border-t border-primaryStroke bg-backgroundSecondary pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] text-base text-textPrimary',
           drag === null && cn('transition-transform', SHEET_SLIDE)
         )}
-        style={{ ...(view ? { bottom: view.bottom, height } : {}), transform: up ? `translateY(${drag ?? 0}px)` : 'translateY(100%)' }}
+        style={{ ...(view ? { bottom, height } : {}), transform: up ? `translateY(${drag ?? 0}px)` : 'translateY(100%)' }}
       >
         {/* the grabber: a bar to pull the sheet down by */}
         <div aria-hidden {...grip} className={cn('flex shrink-0 justify-center pb-1 pt-2', GRIP)}>
@@ -755,6 +772,15 @@ export function FriendChat() {
     };
   }, [name, open]);
 
+  // a phone's keyboard coming up: the sheet shrinks over it, and the newest line is what stays in view over the box
+  const keyboard = mobile && (sheet.view?.keyboard ?? false);
+  useLayoutEffect(() => {
+    const el = log.current;
+    if (!keyboard || !el) return;
+    el.scrollTop = el.scrollHeight;
+    stuck.current = true;
+  }, [keyboard]);
+
   // the window going while a drag is on: its listeners go with it
   useEffect(() => () => stop.current?.(), []);
 
@@ -889,7 +915,7 @@ export function FriendChat() {
             a phone's is the sheet's head, under the grabber: a drag on it pulls the sheet down, and it moves nothing */}
         <header
           {...(mobile ? sheet.grip : { onPointerDown: (e: ReactPointerEvent) => press(e, 'move'), title: 'drag to move' })}
-          className={cn('flex cursor-move items-center gap-2 border-b border-primaryStroke px-3 py-2', GRIP, mobile && 'cursor-auto gap-1 py-0.5 pr-1', mobile && name && 'pl-1')}
+          className={cn('flex cursor-move items-center gap-2 border-b border-primaryStroke px-3 py-2', GRIP, mobile && 'shrink-0 cursor-auto gap-1 py-0.5 pr-1', mobile && name && 'pl-1')}
         >
           {name && dm ? (
             <>
@@ -1082,7 +1108,7 @@ export function FriendChat() {
             {/* a phone's foot: room for the home bar under the box, unless the keyboard is up and has taken that place */}
             <form
               onSubmit={(e) => void send(e)}
-              className={cn('border-t border-primaryStroke p-2', mobile && !sheet.raised && 'pb-[calc(0.5rem+env(safe-area-inset-bottom))]')}
+              className={cn('border-t border-primaryStroke p-2', mobile && 'shrink-0', mobile && !sheet.raised && 'pb-[calc(0.5rem+env(safe-area-inset-bottom))]')}
             >
               {/* the pictures going with the next line, each with its × (the room chat's strip, ChatPanel.tsx) */}
               {pictures.length > 0 && (

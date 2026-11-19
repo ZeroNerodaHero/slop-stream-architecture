@@ -73,7 +73,7 @@ export function useVisibleViewport(on: boolean, pinned = false): VisibleViewport
 
 /**
  * While on: the document does not scroll (nor bounce), so the page is the window and nothing else
- * moves. The go live page and the watch page on a phone. iOS scrolls a document that is only
+ * moves. The go live page, the watch page and the chat sheet (FriendChat.tsx) on a phone. iOS scrolls a document that is only
  * `overflow: hidden` anyway to bring a focused box over the keyboard, so html and body are also
  * pinned (`position: fixed`, inset 0), and a focus puts back whatever scroll it applied (the
  * visual viewport's own pans are `useVisibleViewport(on, true)`'s).
@@ -82,12 +82,13 @@ export function useLockedDocument(on: boolean) {
   useEffect(() => {
     if (!on) return;
     const restores = [document.documentElement, document.body].map((el) => {
-      const { overflow, overscrollBehavior, position, inset } = el.style;
+      const { overflow, overscrollBehavior, position, inset, width } = el.style;
       el.style.overflow = 'hidden';
       el.style.overscrollBehavior = 'none';
       el.style.position = 'fixed';
       el.style.inset = '0';
-      return () => Object.assign(el.style, { overflow, overscrollBehavior, position, inset });
+      el.style.width = '100%';
+      return () => Object.assign(el.style, { overflow, overscrollBehavior, position, inset, width });
     });
     let frame = 0;
     const top = () => {
