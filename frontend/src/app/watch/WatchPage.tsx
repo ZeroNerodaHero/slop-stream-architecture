@@ -1,3 +1,4 @@
+import { RiChat3Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -71,7 +72,7 @@ import { StreamStatsButton } from '@/shared-components/StreamStats';
 import { OAuthMark } from '@/shared-components/OAuthMark';
 import { StreamTile } from '@/shared-components/StreamTile';
 import { TestBadge } from '@/shared-components/TestBadge';
-import { IconButton, MailIcon, PipIcon, SoundControl, revealClassName } from '@/shared-components/VideoControls';
+import { IconButton, PipIcon, SoundControl, revealClassName } from '@/shared-components/VideoControls';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 import { streamNumbers } from '@/utils/count';
@@ -131,7 +132,7 @@ function DmButton({ name }: { name: string }) {
   return (
     <Tooltip content={label}>
       <IconButton id="dm-open" tone="page" label={label} active={on} onClick={toggle}>
-        <MailIcon />
+        <RiChat3Line aria-hidden size={20} />
       </IconButton>
     </Tooltip>
   );
