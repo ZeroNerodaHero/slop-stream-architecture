@@ -22,7 +22,7 @@ const LABEL = 'inline-flex items-center justify-center gap-1.5';
 
 /**
  * `follow` with the add glyph in the blue fill, or, for a name the login follows, `following`
- * with the check glyph in the page's box, which turns to `unfollow` with the cross glyph, in red,
+ * with the check glyph in the green fill, which turns to `unfollow` with the cross glyph, in red,
  * while pointed at, so the word says what the click does. The same box in every state: a
  * follow does not turn the button into bare words. A guest's follow is this browser's own
  * (follow-atoms.ts): kept here and told to nobody, so it is not one of the name's followers
@@ -57,7 +57,7 @@ export function FollowButton({ id, name, small, className, onChange }: FollowBut
   return (
     <Button
       id={id}
-      variant={following ? 'secondary' : 'primary'}
+      variant={unfollowing ? 'secondary' : following ? 'success' : 'primary'}
       aria-busy={busy}
       aria-pressed={following}
       data-following={following}
@@ -73,24 +73,22 @@ export function FollowButton({ id, name, small, className, onChange }: FollowBut
         className
       )}
     >
-      {following ? (
-        // both words in one cell: the box keeps the wider one's width and does not wobble as they swap
-        <span className="grid">
-          <span className={cn(LABEL, 'col-start-1 row-start-1', hover && 'invisible')}>
-            <RiUserFollowLine aria-hidden size={size} />
-            following
-          </span>
-          <span className={cn(LABEL, 'col-start-1 row-start-1', !hover && 'invisible')}>
-            <RiUserUnfollowLine aria-hidden size={size} />
-            unfollow
-          </span>
-        </span>
-      ) : (
-        <span className={LABEL}>
+      {/* all three words in one cell: the box keeps the widest one's width and does not wobble as a
+          follow, an unfollow or a hover swaps them (an invisible word is not read out either) */}
+      <span className="grid">
+        <span className={cn(LABEL, 'col-start-1 row-start-1', following && 'invisible')}>
           <RiUserAddLine aria-hidden size={size} />
           follow
         </span>
-      )}
+        <span className={cn(LABEL, 'col-start-1 row-start-1', (!following || hover) && 'invisible')}>
+          <RiUserFollowLine aria-hidden size={size} />
+          following
+        </span>
+        <span className={cn(LABEL, 'col-start-1 row-start-1', !unfollowing && 'invisible')}>
+          <RiUserUnfollowLine aria-hidden size={size} />
+          unfollow
+        </span>
+      </span>
     </Button>
   );
 }
