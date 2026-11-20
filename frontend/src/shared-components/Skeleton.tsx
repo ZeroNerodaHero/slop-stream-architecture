@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 
 import { cn } from '@/utils/cn';
 
@@ -20,6 +20,7 @@ interface SkeletonProps {
   /** What is on its way, for screen readers. */
   label?: string;
   className?: string;
+  style?: CSSProperties;
   children: ReactNode;
 }
 
@@ -28,9 +29,9 @@ interface SkeletonProps {
  * grey. So the page has its shape from the first paint and nothing moves when the answer
  * lands. Marked busy, and named, so a screen reader knows what the grey is.
  */
-export function Skeleton({ id, label = 'loading', className, children }: SkeletonProps) {
+export function Skeleton({ id, label = 'loading', className, style, children }: SkeletonProps) {
   return (
-    <div id={id} aria-busy="true" aria-label={label} className={className}>
+    <div id={id} aria-busy="true" aria-label={label} className={className} style={style}>
       {children}
     </div>
   );

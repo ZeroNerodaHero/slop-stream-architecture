@@ -177,19 +177,25 @@ const STRIP_EASE = 'duration-200 ease-out motion-reduce:transition-none';
 /** The phone page's width: the window less the side safe areas the page's root pads. */
 const PAGE_WIDTH = '(100vw - env(safe-area-inset-left) - env(safe-area-inset-right))';
 
+/** How tall the strip is against the full 16:9 box, and so how far the frame scales down into it. */
+const STRIP_SCALE = 0.4;
+
 /**
  * The pinned player of a phone page that is the window (WatchPage.tsx, LivePage.tsx) while its chat
- * is typed in (`useChatTyping`): its box eases from the full 16:9 of the width to a strip a third
- * as tall, full width, and back on the blur, so the chat under it (flex-1) has the height. The box
- * has an explicit height (an aspect ratio would not shrink): the frame inside keeps its whole 16:9
- * and slides up a third, so the strip is its middle, cropped as `object-fit: cover` would, and the
- * video is never remounted and plays on. `style` and `box` go on the box, `frame` on the frame.
+ * is typed in (`useChatTyping`): its box eases from the full 16:9 of the width to a strip 40% as
+ * tall, and back on the blur, so the chat under it (flex-1) has the height. The box has an explicit
+ * height (an aspect ratio would not shrink). The frame inside scales down with it from its top
+ * middle, video, canvas and pictures as one, so the strip shows the whole 16:9 picture, centred on
+ * black, nothing cropped, and the video is never remounted and plays on. `style` and `box` go on the
+ * box, `frame` on the frame, `overlay` on what sits over the picture (the stats chip, the controls
+ * bar): faded out and untouchable while a strip, since they would cover all of it.
  */
 export function keyboardStrip(strip: boolean) {
   return {
-    style: { height: strip ? `calc(${PAGE_WIDTH} * 3 / 16)` : `calc(${PAGE_WIDTH} * 9 / 16)` },
-    box: `overflow-hidden transition-[height] ${STRIP_EASE}`,
-    frame: cn(`transition-transform ${STRIP_EASE}`, strip && '-translate-y-1/3')
+    style: { height: `calc(${PAGE_WIDTH} * 9 / 16 * ${strip ? STRIP_SCALE : 1})` },
+    box: `overflow-hidden bg-black transition-[height] ${STRIP_EASE}`,
+    frame: cn(`origin-top transition-transform ${STRIP_EASE}`, strip && 'scale-[0.4]'),
+    overlay: cn('transition-[opacity,transform,visibility] delay-0 duration-200 motion-reduce:transition-none', strip && 'pointer-events-none invisible opacity-0')
   };
 }
 

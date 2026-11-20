@@ -315,7 +315,13 @@ export function WatchPage() {
           sits on either box where the player's does (a phone's chat is a tab) */}
       {phase === 'waiting' || phase === 'loading' ? (
         expecting ? (
-          <Skeleton id="player-loading" label="loading the stream" className="relative aspect-video w-full border border-primaryStroke bg-backgroundSecondary max-md:border-t-0">
+          <Skeleton
+            id="player-loading"
+            label="loading the stream"
+            // a phone's grey box is a strip while typing too, the player's height
+            className={cn(mobile ? strip.box : 'aspect-video', 'relative w-full border border-primaryStroke bg-backgroundSecondary max-md:border-t-0')}
+            style={mobile ? strip.style : undefined}
+          >
             <Bone className="absolute inset-0" />
             {!mobile && (
               <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
@@ -337,7 +343,12 @@ export function WatchPage() {
                 />
               )}
               {phase === 'waiting' && (
-                <span className="absolute bottom-2 left-2 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-xs font-semibold text-white">
+                <span
+                  className={cn(
+                    'absolute bottom-2 left-2 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-xs font-semibold text-white',
+                    mobile && strip.overlay
+                  )}
+                >
                   <span aria-hidden className="h-2 w-2 bg-textTertiary" />
                   offline
                 </span>
@@ -356,7 +367,7 @@ export function WatchPage() {
               stands in for the bottom video layer; a video layer clicked is shown alone */}
           <SceneView
             id="scene"
-            // a phone's player sits right on the row's own stroke: no second line between them. its middle third is the strip while typing
+            // a phone's player sits right on the row's own stroke: no second line between them. scaled down whole into the strip while typing
             className={cn('max-md:border-t-0', mobile && strip.frame)}
             layers={layers}
             streamFor={slotStreamAtom}
@@ -390,10 +401,10 @@ export function WatchPage() {
             </Button>
           )}
           {/* top left, once frames play: how the picture is arriving. up on its own while it is in trouble */}
-          {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} playback={{ muted, level: volume }} />}
-          {/* while the chat is closed the bar stays up, so the button that brings it back is on the picture */}
+          {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} playback={{ muted, level: volume }} className={cn('left-3 top-3', mobile && strip.overlay)} />}
+          {/* while the chat is closed the bar stays up, so the button that brings it back is on the picture. gone while a phone's player is a strip */}
           {phase !== 'bad-name' && (
-            <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || (!mobile && !chatOpen)))}>
+            <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || (!mobile && !chatOpen)), mobile && strip.overlay)}>
               {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
               {mobile ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
               <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'picture in picture'} disabled={cornerTaken} onClick={toCorner}>
