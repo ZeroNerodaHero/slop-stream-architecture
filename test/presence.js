@@ -183,6 +183,12 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await presenceIs(NAME, 'streaming', 5000);
     await shownIs(a, '#my-presence', 'streaming', 5000);
     await shownIs(w, '#presence', 'streaming', 10000);
+    // the streaming square (PresenceSquare.tsx): the red dot inside it, and the square still its 12px
+    for (const [page, sel] of [[a, '#my-presence'], [w, '#presence']]) {
+      expect((await page.$(`${sel} [data-presence-dot]`)) !== null, `${sel} is streaming with no dot inside`);
+    }
+    const box = await w.$eval('#presence', (el) => el.getBoundingClientRect().toJSON());
+    expect(Math.round(box.width) === 12 && Math.round(box.height) === 12, `#presence is ${box.width}x${box.height}, not 12x12`);
     await w.waitForFunction(() => /^watching$/.test(document.querySelector('#status')?.textContent?.trim() || ''), null, { timeout: 20000 });
     // `live` is published when video has the publisher, so the one ask on the push is answered live.
     // two is the word `streaming` running a beat ahead of the fact (the gateway's 30s recheck landing

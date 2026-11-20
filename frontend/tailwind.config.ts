@@ -39,10 +39,17 @@ export default {
           '0%, 100%': { transform: 'translateX(0)' },
           '20%, 60%': { transform: 'translateX(-4px)' },
           '40%, 80%': { transform: 'translateX(4px)' }
+        },
+        // the red dot inside a streaming presence square (PresenceSquare.tsx): the dot breathes, the
+        // square never moves. `motion-safe:` keeps it still for anyone who asked for less motion
+        'presence-pulse': {
+          '0%, 100%': { opacity: '1', transform: 'scale(1)' },
+          '50%': { opacity: '0.35', transform: 'scale(0.6)' }
         }
       },
       animation: {
-        shake: 'shake 0.4s ease-in-out'
+        shake: 'shake 0.4s ease-in-out',
+        'presence-pulse': 'presence-pulse 1.6s ease-in-out infinite'
       }
     }
   },

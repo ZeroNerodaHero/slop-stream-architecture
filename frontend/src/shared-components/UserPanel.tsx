@@ -20,7 +20,7 @@ import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { Friends, RAIL_FACE } from '@/shared-components/Friends';
-import { PresenceSquare } from '@/shared-components/PersonRow';
+import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -303,9 +303,9 @@ export function UserPanel() {
   const face = (
     <>
       <Face name={me ?? nick} version={avatar} className={RAIL_FACE} />
-      {/* the presence square in the corner of the picture: green online, blue
+      {/* the presence square in the corner of the picture: green online, blue with a red dot
           streaming, orange do not disturb, grey offline. the word is in the label; the ✓ keeps meaning login */}
-      <PresenceSquare id="my-presence" presence={presence} className="border-background" />
+      <PresenceSquare id="my-presence" status={presence} className="border-background" />
       {/* how many of them are live, on the picture's corner: the one number the closed column shows */}
       {streaming > 0 && (
         <span

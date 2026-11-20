@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
-import { type Presence, PRESENCE_SQUARE, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
+import { type Presence, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { isDummyName } from '@/infra/names';
 import { Face } from '@/shared-components/Face';
 import { OAuthMark } from '@/shared-components/OAuthMark';
+import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { TestBadge } from '@/shared-components/TestBadge';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -28,29 +29,11 @@ export function Who({ name, verified, oauthVerified, className }: { name: string
   );
 }
 
-/**
- * The presence square on a face's bottom right corner, the colours of docs/status.md, ringed
- * in the background the face sits on: `className` names it (`border-backgroundSecondary` in the
- * chat window and on the card). The face's wrapper is `relative`. One 12px square for every
- * state, no icon: only the colour says which, so nothing beside it moves when a word changes.
- * `labelled`: the square says its word itself (an image named `online`, with the word's tooltip),
- * where nothing beside the face writes it out (the watch page's title row).
- */
-export function PresenceSquare({ presence, className, id, labelled = false }: { presence: Presence; className?: string; id?: string; labelled?: boolean }) {
-  const square = cn('absolute -bottom-1 -right-1 h-3 w-3 border-2', PRESENCE_SQUARE[presence], className);
-  if (!labelled) return <span id={id} aria-hidden data-presence={presence} className={square} />;
-  return (
-    <Tooltip content={PRESENCE_WORD[presence]}>
-      <span id={id} role="img" aria-label={PRESENCE_WORD[presence]} data-presence={presence} className={square} />
-    </Tooltip>
-  );
-}
-
 /** The square and the word, the colours of docs/status.md. `square={false}`: the word alone, where the face beside it already carries the square. */
 export function Word({ presence, square = true, className }: { presence: Presence; square?: boolean; className?: string }) {
   return (
     <span className={cn('flex shrink-0 items-center gap-1.5 text-sm', PRESENCE_TEXT[presence], className)}>
-      {square && <span aria-hidden className={cn('h-2.5 w-2.5', PRESENCE_SQUARE[presence])} />}
+      {square && <PresenceSquare status={presence} size="word" />}
       {PRESENCE_WORD[presence]}
     </span>
   );
@@ -96,7 +79,7 @@ export function PersonRow({ id, name, verified, oauthVerified, avatar, bio, pres
       {/* the square on the picture's corner, the sidebar's way, ringed in what the row sits on: the card's panel colour, else the page. the word says it in letters */}
       <span className="relative flex shrink-0">
         <Face name={name} version={avatar} className={card ? 'h-12 w-12 text-lg' : 'h-8 w-8 text-sm'} />
-        <PresenceSquare presence={presence} className={card ? 'border-backgroundSecondary' : 'border-background'} />
+        <PresenceSquare status={presence} className={card ? 'border-backgroundSecondary' : 'border-background'} />
       </span>
       {card ? (
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
