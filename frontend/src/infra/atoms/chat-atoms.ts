@@ -19,7 +19,7 @@
 import { atom, type Atom, type PrimitiveAtom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
-import type { GroupBadge, Owner } from '@/infra/api';
+import { api, type GroupBadge, type Owner } from '@/infra/api';
 import { forgetMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { hideBotsAtom } from '@/infra/atoms/settings-atoms';
@@ -272,6 +272,8 @@ export class ChatRoom {
    */
   private inFlight: { text: string; images: string[]; reply: ChatLine | null }[] = [];
   private flashTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A server socket has been open before: the next open is after a drop (`refreshReactions`). */
+  private wasOpen = false;
 
   // the scroll and the history window
   private scrollPlan: ScrollPlan = null;
@@ -410,6 +412,7 @@ export class ChatRoom {
     this.me = null;
     this.tails = new Map();
     this.counts = new Map();
+    this.wasOpen = false;
     this.channel = '';
     store.set(this.channelAtom, '');
     if (shownServer === this.key) {
@@ -489,12 +492,13 @@ export class ChatRoom {
    * `channel` is a server socket's; null for a stream's.
    */
   private applyReact(channel: string | null, id: string, emoji: string, who: string, on: boolean) {
+    const me = store.get(meAtom);
     const touch = (lines: ChatLine[]) => {
       const at = lines.findIndex((l) => l.id === id);
       const line = lines[at];
       if (!line) return lines;
       const next = lines.slice();
-      next[at] = { ...line, reactions: applyReaction(line.reactions, emoji, who, on) };
+      next[at] = { ...line, reactions: applyReaction(line.reactions, emoji, who, on, me) };
       return next;
     };
     if (channel !== null && channel !== this.channel) {
@@ -512,7 +516,7 @@ export class ChatRoom {
       store.set(
         this.resultsAtom,
         results.map((l) =>
-          l.id === id && (channel === null || l.channel === undefined || l.channel === channel) ? { ...l, reactions: applyReaction(l.reactions, emoji, who, on) } : l
+          l.id === id && (channel === null || l.channel === undefined || l.channel === channel) ? { ...l, reactions: applyReaction(l.reactions, emoji, who, on, me) } : l
         )
       );
     }
@@ -615,6 +619,9 @@ export class ChatRoom {
       store.set(this.asStreamerAtom, owner !== null || me === this.key);
       // a server socket sends no history: it is told what this page has, and sends what came after
       if (this.server) this.sendSince();
+      // back after a drop: the lines it already had may have been reacted to meanwhile
+      if (this.server && this.wasOpen) void this.refreshReactions();
+      this.wasOpen = true;
     };
     ws.onmessage = (e) => {
       if (this.ws !== ws) return;
@@ -797,6 +804,35 @@ export class ChatRoom {
   /** The live tail of the channel on screen: the one parked behind a jump, else the lines. */
   private liveTail(): ChatLine[] {
     return this.pinned && this.savedTail ? this.savedTail : store.get(this.linesAtom);
+  }
+
+  /**
+   * A server socket back after a drop: `since` brings the lines that came meanwhile, but not the
+   * reactions put on or taken off the lines this page already has. The api's last lines of every
+   * channel again, their reactions onto the same lines wherever they are held; nothing else moves.
+   */
+  private async refreshReactions() {
+    const server = this.server;
+    if (!server) return;
+    let pages: Record<string, ChatLine[]>;
+    try {
+      pages = await api.groupMessages(server);
+    } catch {
+      return;
+    }
+    if (this.server !== server || !this.ws) return;
+    for (const [channel, raw] of Object.entries(pages)) {
+      if (!Array.isArray(raw)) continue;
+      const fresh = new Map(raw.map((line) => [line.id, reactionsOf(line.reactions)]));
+      const wear = (lines: ChatLine[]) => lines.map((line) => (fresh.has(line.id) ? { ...line, reactions: fresh.get(line.id) } : line));
+      if (channel === this.channel) {
+        store.set(this.linesAtom, wear(store.get(this.linesAtom)));
+        if (this.savedTail) this.savedTail = wear(this.savedTail);
+      } else {
+        const tail = this.tails.get(channel);
+        if (tail) this.tails.set(channel, wear(tail));
+      }
+    }
   }
 
   /** A line of a channel not on screen: onto its tail on the shelf, capped like the live tail. */

@@ -87,6 +87,8 @@ export interface Reaction {
   emoji: string;
   count: number;
   who: string[];
+  /** The login reading is one of `count`, named in `who` or not (reactions.rs `Reaction::me`): past the first 25 only this says so. Absent for no. */
+  me?: boolean;
 }
 
 /** A line's reactions as the wire had them: only well-formed ones, none for an older api. */
@@ -94,31 +96,40 @@ export function reactionsOf(raw: unknown): Reaction[] {
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((r): Reaction[] => {
     if (!r || typeof r !== 'object') return [];
-    const { emoji, count, who } = r as Record<string, unknown>;
+    const { emoji, count, who, me } = r as Record<string, unknown>;
     if (typeof emoji !== 'string' || typeof count !== 'number' || count < 1) return [];
-    return [{ emoji, count, who: Array.isArray(who) ? who.filter((n): n is string => typeof n === 'string') : [] }];
+    const names = Array.isArray(who) ? who.filter((n): n is string => typeof n === 'string') : [];
+    return [me === true ? { emoji, count, who: names, me: true } : { emoji, count, who: names }];
   });
 }
 
 /**
  * `who` put `emoji` on a line, or took it off (`on`): the line's reactions after it. Said twice, the
  * second is no change (a reaction between a history and its socket's first frame comes in both). A
- * name past the first 25 is not in `who`; its count still moves.
+ * name past the first 25 is not in `who`; its count still moves. `me` is the login reading: their
+ * own change sets the reaction's `me`, and their own twice is known by it even past the 25.
  */
-export function applyReaction(list: readonly Reaction[] | undefined, emoji: string, who: string, on: boolean): Reaction[] {
+export function applyReaction(list: readonly Reaction[] | undefined, emoji: string, who: string, on: boolean, me?: string | null): Reaction[] {
   const now = list ?? [];
   const at = now.findIndex((r) => r.emoji === emoji);
   const there = at >= 0 ? now[at] : undefined;
+  const self = !!me && who === me;
+  const had = there ? there.who.includes(who) || (self && there.me === true) : false;
   if (on) {
-    if (there?.who.includes(who)) return now.slice();
-    if (!there) return [...now, { emoji, count: 1, who: [who] }];
-    return now.map((r, i) => (i === at ? { ...r, count: r.count + 1, who: [...r.who, who] } : r));
+    if (had) return now.slice();
+    const mine = self ? { me: true } : {};
+    if (!there) return [...now, { emoji, count: 1, who: [who], ...mine }];
+    return now.map((r, i) => (i === at ? { ...r, count: r.count + 1, who: [...r.who, who], ...mine } : r));
   }
   if (!there) return now.slice();
-  // a name we cannot see in the first 25 may still be one of the count: it moves, once
-  if (!there.who.includes(who) && there.count <= there.who.length) return now.slice();
+  // our own off of one we do not have is no change; a name we cannot see in the first 25 may still be one of the count: it moves, once
+  if (!had && (self || there.count <= there.who.length)) return now.slice();
   if (there.count <= 1) return now.filter((_, i) => i !== at);
-  return now.map((r, i) => (i === at ? { ...r, count: r.count - 1, who: r.who.filter((n) => n !== who) } : r));
+  return now.map((r, i) => {
+    if (i !== at) return r;
+    const next: Reaction = { emoji: r.emoji, count: r.count - 1, who: r.who.filter((n) => n !== who) };
+    return r.me && !self ? { ...next, me: true } : next;
+  });
 }
 
 /**
@@ -139,7 +150,7 @@ export function whoReacted(r: Reaction, me: string | null | undefined): string {
   return `${list} reacted with ${r.emoji}`;
 }
 
-/** Whether `me` is among those who put `r` there (as far as the names shown say). */
+/** Whether `me` is among those who put `r` there: the api's word for it, or their name among the shown. */
 export function reacted(r: Reaction, me: string | null | undefined): boolean {
-  return !!me && r.who.includes(me);
+  return !!me && (r.me === true || r.who.includes(me));
 }

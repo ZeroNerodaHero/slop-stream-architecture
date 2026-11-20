@@ -117,9 +117,16 @@ async fn seen_room(s: &ChatState, viewer: (Option<Uuid>, bool), server: &str, ch
 }
 
 /// The room key of a server's channel for the login the cookie names (`seen_room`).
-async fn room_of_channel(s: &ChatState, headers: &HeaderMap, server: &str, channel: &str) -> Result<String, ApiError> {
+/// With the viewer's account, for the lines' reactions (`reactions::Reaction::me`).
+async fn room_of_channel(s: &ChatState, headers: &HeaderMap, server: &str, channel: &str) -> Result<(String, Option<Uuid>), ApiError> {
     let who = viewer(s, headers).await?;
-    Ok(seen_room(s, who, server, channel).await?.1)
+    Ok((seen_room(s, who, server, channel).await?.1, who.0))
+}
+
+/// Who reads a stream's room, for the lines' reactions (`reactions::Reaction::me`) alone: anyone
+/// may read one, so a cookie that does not read is a nick, not a refusal.
+async fn reader(s: &ChatState, headers: &HeaderMap) -> Option<Uuid> {
+    crate::auth::whoami_readonly(&s.db, headers).await.ok().flatten().map(|a| a.id)
 }
 
 async fn before_channel(
@@ -128,9 +135,9 @@ async fn before_channel(
     headers: HeaderMap,
     Query(q): Query<IdQuery>,
 ) -> Result<JsonLines, ApiError> {
-    let room = room_of_channel(&s, &headers, &server, &channel).await?;
+    let (room, me) = room_of_channel(&s, &headers, &server, &channel).await?;
     let id = stream_id(&q.id)?;
-    Ok(json_lines(&s, &room, older(&s, &room, &id).await?).await)
+    Ok(json_lines(&s, &room, me, older(&s, &room, &id).await?).await)
 }
 
 /// A server's search, from the channel on screen: every channel this viewer sees, or the one
@@ -156,7 +163,7 @@ async fn search_channel(
             .map(|name| format!("{server}/{name}"))
             .collect(),
     };
-    search_rooms(&s, &rooms, &search, Some(&server)).await
+    search_rooms(&s, &rooms, &search, Some(&server), who.0).await
 }
 
 async fn by_channel(
@@ -164,13 +171,13 @@ async fn by_channel(
     Path((server, channel, speaker)): Path<(String, String, String)>,
     headers: HeaderMap,
 ) -> Result<JsonLines, ApiError> {
-    let room = room_of_channel(&s, &headers, &server, &channel).await?;
-    lines_of(&s, &room, &speaker).await
+    let (room, me) = room_of_channel(&s, &headers, &server, &channel).await?;
+    lines_of(&s, &room, &speaker, me).await
 }
 
 async fn around_channel(State(s): State<ChatState>, Path((server, channel, id)): Path<(String, String, String)>, headers: HeaderMap) -> Result<JsonLines, ApiError> {
-    let room = room_of_channel(&s, &headers, &server, &channel).await?;
-    window(&s, &room, &id).await
+    let (room, me) = room_of_channel(&s, &headers, &server, &channel).await?;
+    window(&s, &room, &id, me).await
 }
 
 /// `CHAT_PERSIST=1` (also true, on, yes). Anything else, including unset, is off.
@@ -241,13 +248,14 @@ struct SearchQuery {
     q: String,
 }
 
-async fn before(State(s): State<ChatState>, Name(room): Name, Query(q): Query<IdQuery>) -> Result<JsonLines, ApiError> {
+async fn before(State(s): State<ChatState>, Name(room): Name, headers: HeaderMap, Query(q): Query<IdQuery>) -> Result<JsonLines, ApiError> {
     let id = stream_id(&q.id)?;
-    Ok(json_lines(&s, &room, older(&s, &room, &id).await?).await)
+    let lines = older(&s, &room, &id).await?;
+    Ok(json_lines(&s, &room, reader(&s, &headers).await, lines).await)
 }
 
-async fn search(State(s): State<ChatState>, Name(room): Name, Query(q): Query<SearchQuery>) -> Result<JsonLines, ApiError> {
-    search_room(&s, &room, &q.q).await
+async fn search(State(s): State<ChatState>, Name(room): Name, headers: HeaderMap, Query(q): Query<SearchQuery>) -> Result<JsonLines, ApiError> {
+    search_room(&s, &room, &q.q, &headers).await
 }
 
 /// The box as a search: trimmed, at most `SEARCH_CHARS`, its filters taken out from among the
@@ -267,7 +275,7 @@ pub(crate) fn read_search(q: &str) -> Result<Search, ApiError> {
 }
 
 /// A stream's room: one room, and `channel:` has nothing to name.
-async fn search_room(s: &ChatState, room: &str, q: &str) -> Result<JsonLines, ApiError> {
+async fn search_room(s: &ChatState, room: &str, q: &str, headers: &HeaderMap) -> Result<JsonLines, ApiError> {
     if !s.persist {
         return Err(not_kept());
     }
@@ -275,12 +283,12 @@ async fn search_room(s: &ChatState, room: &str, q: &str) -> Result<JsonLines, Ap
     if search.channel.is_some() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "channel: is for a group's chat"));
     }
-    search_rooms(s, &[room.to_owned()], &search, None).await
+    search_rooms(s, &[room.to_owned()], &search, None, reader(s, headers).await).await
 }
 
 /// The lines of `rooms` that match, newest first, 50 at most. `server`: the rooms are its
 /// channels, and each hit says which (`Hit::channel`); a stream's room says none.
-async fn search_rooms(s: &ChatState, rooms: &[String], search: &Search, server: Option<&str>) -> Result<JsonLines, ApiError> {
+async fn search_rooms(s: &ChatState, rooms: &[String], search: &Search, server: Option<&str>, viewer: Option<Uuid>) -> Result<JsonLines, ApiError> {
     // `from:` is the name's account too, when it has one: a login's line is its account's
     // whatever name it was said under (a rename), and the account's lines are all its names'
     let account: Option<Uuid> = match &search.from {
@@ -304,7 +312,7 @@ async fn search_rooms(s: &ChatState, rooms: &[String], search: &Search, server: 
     let rows: Vec<LineRow> = query.bind(SEARCH_LIMIT).fetch_all(&s.db).await?;
     let rooms: Vec<String> = rows.iter().map(|row| row.10.clone()).collect();
     let mut hits: Vec<Hit> = rows.into_iter().map(|row| hit_of(row, server)).collect();
-    with_reactions(&s.db, rooms.iter().map(String::as_str).zip(hits.iter_mut().map(|hit| &mut hit.line))).await;
+    with_reactions(&s.db, viewer, rooms.iter().map(String::as_str).zip(hits.iter_mut().map(|hit| &mut hit.line))).await;
     Ok(json_hits(hits))
 }
 
@@ -491,12 +499,12 @@ fn search_sql(search: &Search, account: Option<Uuid>) -> (String, Vec<Bind>) {
     (sql, binds)
 }
 
-async fn by_user(State(s): State<ChatState>, Path((room, speaker)): Path<(String, String)>) -> Result<JsonLines, ApiError> {
+async fn by_user(State(s): State<ChatState>, Path((room, speaker)): Path<(String, String)>, headers: HeaderMap) -> Result<JsonLines, ApiError> {
     let room = room_of(&room)?;
-    lines_of(&s, &room, &speaker).await
+    lines_of(&s, &room, &speaker, reader(&s, &headers).await).await
 }
 
-async fn lines_of(s: &ChatState, room: &str, speaker: &str) -> Result<JsonLines, ApiError> {
+async fn lines_of(s: &ChatState, room: &str, speaker: &str, viewer: Option<Uuid>) -> Result<JsonLines, ApiError> {
     if !s.persist {
         return Err(not_kept());
     }
@@ -514,18 +522,18 @@ async fn lines_of(s: &ChatState, room: &str, speaker: &str) -> Result<JsonLines,
          ORDER BY l.at DESC, l.seq DESC LIMIT $3"
     );
     let rows: Vec<LineRow> = sqlx::query_as(&sql).bind(room).bind(user_id).bind(SEARCH_LIMIT).fetch_all(&s.db).await?;
-    Ok(json_lines(s, room, rows.into_iter().map(line_of).collect()).await)
+    Ok(json_lines(s, room, viewer, rows.into_iter().map(line_of).collect()).await)
 }
 
-async fn around(State(s): State<ChatState>, Path((room, id)): Path<(String, String)>) -> Result<JsonLines, ApiError> {
+async fn around(State(s): State<ChatState>, Path((room, id)): Path<(String, String)>, headers: HeaderMap) -> Result<JsonLines, ApiError> {
     let room = room_of(&room)?;
-    window(&s, &room, &id).await
+    window(&s, &room, &id, reader(&s, &headers).await).await
 }
 
-async fn window(s: &ChatState, room: &str, id: &str) -> Result<JsonLines, ApiError> {
+async fn window(s: &ChatState, room: &str, id: &str, viewer: Option<Uuid>) -> Result<JsonLines, ApiError> {
     let id = stream_id(id)?;
     if let Some(lines) = redis_window(s, room, &id).await? {
-        return Ok(json_lines(s, room, lines).await);
+        return Ok(json_lines(s, room, viewer, lines).await);
     }
     if !s.persist {
         return Err(not_kept());
@@ -543,7 +551,7 @@ async fn window(s: &ChatState, room: &str, id: &str) -> Result<JsonLines, ApiErr
     let mut lines = before;
     lines.push(line_of(hit));
     lines.extend(after);
-    Ok(json_lines(s, room, lines).await)
+    Ok(json_lines(s, room, viewer, lines).await)
 }
 
 /// Lines strictly older than `id`, oldest first, one page.
@@ -677,9 +685,9 @@ fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, a
 
 type JsonLines = axum::Json<Value>;
 
-/// Lines of `room` as the reads answer them, with their reactions as they are now.
-async fn json_lines(s: &ChatState, room: &str, mut lines: Vec<Line>) -> JsonLines {
-    with_reactions(&s.db, lines.iter_mut().map(|l| (room, l))).await;
+/// Lines of `room` as the reads answer them, with their reactions as they are now, `viewer`'s own marked.
+async fn json_lines(s: &ChatState, room: &str, viewer: Option<Uuid>, mut lines: Vec<Line>) -> JsonLines {
+    with_reactions(&s.db, viewer, lines.iter_mut().map(|l| (room, l))).await;
     axum::Json(json!({ "lines": lines }))
 }
 

@@ -50,6 +50,10 @@ pub(crate) struct Reaction {
     pub(crate) emoji: String,
     pub(crate) count: i64,
     pub(crate) who: Vec<String>,
+    /// the viewer is one of the `count`, named in `who` or not: past the first `NAMES_SHOWN` the
+    /// names cannot say so, and their chip must still be lit and take theirs off. absent for no
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) me: bool,
 }
 
 pub(crate) fn allowed(emoji: &str) -> bool {
@@ -67,8 +71,20 @@ pub(crate) enum Set {
     TooMany,
 }
 
+/// The class of the advisory locks a line's new reactions take (`lock_line`): a number of its own,
+/// apart from the schema's lock.
+const LOCK_CLASS: i32 = 7_310;
+
+/// Holds the line until the transaction ends, so two new emoji at once read the cap one after the
+/// other and the line never passes `MAX_KINDS`. `line` is a key of its own per line: the room and
+/// the id, or the thread's line id.
+async fn lock_line(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, line: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext($2))").bind(LOCK_CLASS).bind(line).execute(&mut **tx).await?;
+    Ok(())
+}
+
 /// One login's `emoji` on a room's line on or off. The line is the caller's to have found in the
-/// room. The cap is read in the insert itself, so two new emoji at once can pass it by one at most.
+/// room. The cap is read in the insert itself, under the line's lock (`lock_line`).
 pub(crate) async fn set_line(db: &PgPool, room: &str, line: &str, user: Uuid, emoji: &str, on: bool) -> Result<Set, sqlx::Error> {
     if !on {
         let gone = sqlx::query("DELETE FROM chat_reactions WHERE room = $1 AND line_id = $2 AND emoji = $3 AND user_id = $4")
@@ -80,6 +96,8 @@ pub(crate) async fn set_line(db: &PgPool, room: &str, line: &str, user: Uuid, em
             .await?;
         return Ok(if gone.rows_affected() > 0 { Set::Changed } else { Set::Same });
     }
+    let mut tx = db.begin().await?;
+    lock_line(&mut tx, &format!("{room} {line}")).await?;
     let added = sqlx::query(
         "INSERT INTO chat_reactions (room, line_id, emoji, user_id)
          SELECT $1, $2, $3, $4
@@ -92,8 +110,9 @@ pub(crate) async fn set_line(db: &PgPool, room: &str, line: &str, user: Uuid, em
     .bind(emoji)
     .bind(user)
     .bind(MAX_KINDS)
-    .execute(db)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     if added.rows_affected() > 0 {
         return Ok(Set::Changed);
     }
@@ -107,7 +126,8 @@ pub(crate) async fn set_line(db: &PgPool, room: &str, line: &str, user: Uuid, em
     Ok(if mine { Set::Same } else { Set::TooMany })
 }
 
-/// `set_line` for a direct message: the line is the caller's to have found in the thread.
+/// `set_line` for a direct message: the line is the caller's to have found in the thread. The same
+/// lock, keyed `dm <id>`, which no room's `<room> <id>` is (a room's name has no space).
 pub(crate) async fn set_dm(db: &PgPool, dm: i64, user: Uuid, emoji: &str, on: bool) -> Result<Set, sqlx::Error> {
     if !on {
         let gone = sqlx::query("DELETE FROM dm_reactions WHERE dm_id = $1 AND emoji = $2 AND user_id = $3")
@@ -118,6 +138,8 @@ pub(crate) async fn set_dm(db: &PgPool, dm: i64, user: Uuid, emoji: &str, on: bo
             .await?;
         return Ok(if gone.rows_affected() > 0 { Set::Changed } else { Set::Same });
     }
+    let mut tx = db.begin().await?;
+    lock_line(&mut tx, &format!("dm {dm}")).await?;
     let added = sqlx::query(
         "INSERT INTO dm_reactions (dm_id, emoji, user_id)
          SELECT $1, $2, $3
@@ -129,8 +151,9 @@ pub(crate) async fn set_dm(db: &PgPool, dm: i64, user: Uuid, emoji: &str, on: bo
     .bind(emoji)
     .bind(user)
     .bind(MAX_KINDS)
-    .execute(db)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     if added.rows_affected() > 0 {
         return Ok(Set::Changed);
     }
@@ -143,13 +166,14 @@ pub(crate) async fn set_dm(db: &PgPool, dm: i64, user: Uuid, emoji: &str, on: bo
     Ok(if mine { Set::Same } else { Set::TooMany })
 }
 
-/// room, line id, emoji, how many, the first names
-type ReactionRow = (String, String, String, i64, Vec<String>);
+/// room, line id, emoji, how many, the first names, whether the viewer is one
+type ReactionRow = (String, String, String, i64, Vec<String>, bool);
 
 /// The reactions on room lines, each line with its room (a server's search spans channels): one
 /// query for the batch. Like the faces (chat.rs `with_faces`), a database that does not answer,
-/// or not in 2 s, leaves the lines without: they still go out, a little behind.
-pub(crate) async fn with_reactions<'a>(db: &PgPool, lines: impl IntoIterator<Item = (&'a str, &'a mut Line)>) {
+/// or not in 2 s, leaves the lines without: they still go out, a little behind. `viewer` is who
+/// the lines go to (`Reaction::me`); none for a nick.
+pub(crate) async fn with_reactions<'a>(db: &PgPool, viewer: Option<Uuid>, lines: impl IntoIterator<Item = (&'a str, &'a mut Line)>) {
     let mut lines: Vec<(&str, &mut Line)> = lines.into_iter().collect();
     if lines.is_empty() {
         return;
@@ -159,7 +183,8 @@ pub(crate) async fn with_reactions<'a>(db: &PgPool, lines: impl IntoIterator<Ite
     let rows: Vec<ReactionRow> = match tokio::time::timeout(
         Duration::from_secs(2),
         sqlx::query_as(
-            "SELECT r.room, r.line_id, r.emoji, count(*), ((array_agg(s.name ORDER BY r.at, s.name))[1:$3])::text[]
+            "SELECT r.room, r.line_id, r.emoji, count(*), ((array_agg(s.name ORDER BY r.at, s.name))[1:$3])::text[],
+                    COALESCE(bool_or(r.user_id = $4), false)
              FROM chat_reactions r JOIN streamers s ON s.id = r.user_id
              WHERE (r.room, r.line_id) IN (SELECT * FROM unnest($1::text[], $2::text[]))
              GROUP BY r.room, r.line_id, r.emoji
@@ -168,6 +193,7 @@ pub(crate) async fn with_reactions<'a>(db: &PgPool, lines: impl IntoIterator<Ite
         .bind(&rooms)
         .bind(&ids)
         .bind(NAMES_SHOWN)
+        .bind(viewer)
         .fetch_all(db),
     )
     .await
@@ -182,9 +208,9 @@ pub(crate) async fn with_reactions<'a>(db: &PgPool, lines: impl IntoIterator<Ite
             return;
         }
     };
-    for (room, line_id, emoji, count, who) in rows {
+    for (room, line_id, emoji, count, who, me) in rows {
         if let Some((_, line)) = lines.iter_mut().find(|(r, l)| *r == room && l.id == line_id) {
-            line.reactions.push(Reaction { emoji, count, who });
+            line.reactions.push(Reaction { emoji, count, who, me });
         }
     }
 }
@@ -268,9 +294,11 @@ mod tests {
             reply: None,
             reactions: Vec::new(),
         }];
-        with_reactions(&pool, lines.iter_mut().map(|l| (room.as_str(), l))).await;
+        with_reactions(&pool, Some(bob), lines.iter_mut().map(|l| (room.as_str(), l))).await;
         let first = &lines[0].reactions[0];
         assert_eq!((first.emoji.as_str(), first.count), ("👍", 2));
+        assert!(first.me, "bob is one of the thumbs");
+        assert!(!lines[0].reactions[1].me, "the heart is alice's alone");
         assert_eq!(first.who, vec![alice_name.clone(), bob_name.clone()]);
         assert_eq!(lines[0].reactions.len(), MAX_KINDS as usize);
         assert_eq!(set_line(&pool, &room, line, bob, "👍", false).await.unwrap(), Set::Changed);

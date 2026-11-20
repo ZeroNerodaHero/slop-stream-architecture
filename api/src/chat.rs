@@ -689,7 +689,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
         let _ = send(&mut socket, &Out::Error { error: "too many tabs" }).await;
         return;
     };
-    let history = history(&s, &name).await.unwrap_or_default();
+    let history = history(&s, &name, viewer_of(&who)).await.unwrap_or_default();
     let mut last_seen = history.last().map(|l| id_parts(&l.id)).unwrap_or((0, 0));
     // the one frame that can be big: 200 lines, so a slow link gets longer than for one line
     if send_within(&mut socket, &Out::History { messages: &history }, HISTORY_TIMEOUT).await.is_err() {
@@ -1298,14 +1298,14 @@ fn is_stream_id(id: &str) -> bool {
 /// The lines of a channel after `id`, oldest first, FILL_LIMIT at most: what the page missed
 /// between the api's answer and this socket, or across a drop. Taken after the room is joined,
 /// so a line in both arrives twice and is dropped by id, never in neither.
-async fn after(s: &ChatState, room: &str, id: &str) -> Vec<Line> {
+async fn after(s: &ChatState, room: &str, id: &str, viewer: Option<Uuid>) -> Vec<Line> {
     let mut r = s.redis.clone();
     let reply: Result<StreamRangeReply, _> = r.xrange_count(room_key(room), format!("({id}"), "+", FILL_LIMIT).await;
     match reply {
         Ok(reply) => {
             let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
             with_faces(&s.db, &mut lines).await;
-            reactions::with_reactions(&s.db, lines.iter_mut().map(|l| (room, l))).await;
+            reactions::with_reactions(&s.db, viewer, lines.iter_mut().map(|l| (room, l))).await;
             lines
         }
         Err(e) => {
@@ -1430,7 +1430,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                             last_seen.insert(channel.clone(), floor);
                             let room = format!("{server}/{channel}");
                             let mut failed = false;
-                            for line in after(&s, &room, &id).await {
+                            for line in after(&s, &room, &id, viewer_of(&who)).await {
                                 let id = id_parts(&line.id);
                                 if last_seen.get(&channel).is_some_and(|seen| id <= *seen) { continue; }
                                 last_seen.insert(channel.clone(), id);
@@ -1678,14 +1678,19 @@ async fn reader(client: redis::Client, name: String, start: Option<String>, reac
     log::info!("{name}: room empty, reader done");
 }
 
-/// The last lines of a room, oldest first, with the faces as they are now.
-async fn history(s: &ChatState, name: &str) -> Result<Vec<Line>, redis::RedisError> {
+/// The account a socket's lines go to, for their reactions' `me`: a login's, none for a nick.
+fn viewer_of(who: &Option<Who>) -> Option<Uuid> {
+    who.as_ref().and_then(|w| w.user_id.filter(|_| w.verified))
+}
+
+/// The last lines of a room, oldest first, with the faces and the reactions as they are now.
+async fn history(s: &ChatState, name: &str, viewer: Option<Uuid>) -> Result<Vec<Line>, redis::RedisError> {
     let mut r = s.redis.clone();
     let reply: StreamRangeReply = r.xrevrange_count(room_key(name), "+", "-", HISTORY_LINES).await?;
     let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
     lines.reverse();
     with_faces(&s.db, &mut lines).await;
-    reactions::with_reactions(&s.db, lines.iter_mut().map(|l| (name, l))).await;
+    reactions::with_reactions(&s.db, viewer, lines.iter_mut().map(|l| (name, l))).await;
     Ok(lines)
 }
 

@@ -36,7 +36,6 @@ import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { CHIP, CHIP_BUTTON, ControlTip } from '@/shared-components/VideoControls';
-import { useIsMobile } from '@/infra/mobile';
 import { compressChatImage } from '@/infra/picture';
 import { cn } from '@/utils/cn';
 
@@ -621,7 +620,6 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
   const stuck = useRef(true);
   const shown = useRef(0);
   const shownRoom = useRef<ChatRoom | null>(null);
-  const mobile = useIsMobile();
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const textRef = useRef<HTMLInputElement | null>(null);
@@ -721,17 +719,18 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
     if (lines.length > 0 && el.scrollHeight <= el.clientHeight) room.fillShort();
   }, [room, lines, total, scrollTick, aside]);
 
-  // A phone's list changes height under the reader (the keyboard, the player easing to a strip and
-  // back, mobile.ts): one sitting at the newest line stays there through it
+  // The list changes height under the reader (a phone's keyboard, the player easing to a strip and
+  // back, mobile.ts; the `replying to` bar or the pictures' strip coming up over the box): one
+  // sitting at the newest line stays there through it
   useEffect(() => {
     const el = listRef.current;
-    if (!mobile || !el) return;
+    if (!el) return;
     const seen = new ResizeObserver(() => {
       if (stuck.current) el.scrollTop = el.scrollHeight;
     });
     seen.observe(el);
     return () => seen.disconnect();
-  }, [mobile, aside]);
+  }, [aside]);
 
   function onScroll(e: UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;

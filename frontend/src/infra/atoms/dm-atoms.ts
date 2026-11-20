@@ -505,7 +505,7 @@ function reactedOn(frame: { id: number; from: string; to: string; emoji: string;
   const me = store.get(meAtom);
   if (!me || (frame.from !== me && frame.to !== me)) return;
   const peer = frame.from === me ? frame.to : frame.from;
-  touchLine(peer, frame.id, (now) => applyReaction(now, frame.emoji, frame.from, frame.on));
+  touchLine(peer, frame.id, (now) => applyReaction(now, frame.emoji, frame.from, frame.on, me));
 }
 
 let linkWasOpen = false;

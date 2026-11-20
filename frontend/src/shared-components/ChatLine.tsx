@@ -134,6 +134,8 @@ const ACTIONS_SHOWN = 'pointer-events-auto opacity-100';
 const LONG_PRESS_MS = 450;
 /** A finger that moves this far is scrolling, not pressing. */
 const PRESS_SLOP_PX = 10;
+/** The click a lifted finger makes after a long press: it would land on the bar just come up under it (the smiley opening the picker). Swallowed for this long. */
+const GHOST_CLICK_MS = 600;
 
 /**
  * The bar a long press opened, if any: one line's at a time, so the next press closes the last.
@@ -150,6 +152,7 @@ function useLongPress() {
   const [open, setOpen] = useState(false);
   const line = useRef<HTMLParagraphElement | null>(null);
   const press = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null);
+  const opened = useRef(0);
   const cancel = () => {
     if (press.current) clearTimeout(press.current.timer);
     press.current = null;
@@ -179,6 +182,7 @@ function useLongPress() {
           y,
           timer: setTimeout(() => {
             press.current = null;
+            opened.current = Date.now();
             closeOpenBar?.();
             closeOpenBar = () => setOpen(false);
             setOpen(true);
@@ -190,6 +194,13 @@ function useLongPress() {
         if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > PRESS_SLOP_PX) cancel();
       },
       onPointerUp: cancel,
+      // the finger that held the line lifts: its click is the press's, not a pick on the bar
+      onClickCapture: (e: ReactMouseEvent<HTMLParagraphElement>) => {
+        if (Date.now() - opened.current > GHOST_CLICK_MS) return;
+        opened.current = 0;
+        e.preventDefault();
+        e.stopPropagation();
+      },
       onPointerCancel: cancel,
       // the phone's own long press menu (copy, look up) would come up over the bar
       onContextMenu: (e: ReactMouseEvent<HTMLParagraphElement>) => {
