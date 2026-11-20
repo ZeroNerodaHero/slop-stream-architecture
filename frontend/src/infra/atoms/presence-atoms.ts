@@ -16,16 +16,6 @@ import { store } from '@/infra/store';
 export type { Presence, PresenceChoice } from '@/infra/frames';
 
 export const PRESENCE_WORD: Record<Presence, string> = { offline: 'offline', online: 'online', dnd: 'do not disturb', streaming: 'streaming' };
-/**
- * The square's colour: the accent streaming (the blue every live mark is), green here, orange do not
- * disturb, grey offline. `dnd` carries the bar discord's does, drawn in the panel's background.
- */
-export const PRESENCE_SQUARE: Record<Presence, string> = {
-  streaming: 'bg-primaryBlue',
-  online: 'bg-increase',
-  dnd: "bg-caution before:absolute before:inset-x-[2px] before:top-1/2 before:h-px before:-translate-y-1/2 before:bg-backgroundSecondary before:content-['']",
-  offline: 'bg-textTertiary'
-};
 /** The word's colour, where it is written out. The api's watch document uses the same classes. */
 export const PRESENCE_TEXT: Record<Presence, string> = { streaming: 'text-primaryBlue', online: 'text-increase', dnd: 'text-decrease', offline: 'text-textSecondary' };
 /** The order a list of people goes in: the ones here first. */

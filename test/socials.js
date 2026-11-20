@@ -196,6 +196,26 @@ const shown = (page, box = '#socials') =>
     return `${links.length} links, ${DOC.layout}/${DOC.size}, ${joinedLine}, nothing fetched elsewhere`;
   });
 
+  await step('a link out asks first (the links setting, on by default): a click, a cmd/ctrl click and a middle click each show the leave-site word, and no tab opens', async () => {
+    const tabs = [];
+    const onTab = (p) => tabs.push(p.url());
+    w.context().on('page', onTab);
+    const youtube = '#socials a[data-kind="youtube"]';
+    for (const [how, opts] of [['a click', {}], ['a cmd/ctrl click', { modifiers: ['ControlOrMeta'] }], ['a middle click', { button: 'middle' }]]) {
+      await w.click(youtube, opts);
+      await w.waitForSelector('#leave-site[open]', { timeout: 5000 });
+      const site = await w.getAttribute('#leave-site', 'data-site');
+      expect(site === 'youtube.com', `${how}: the word names ${site}`);
+      expect((await w.getAttribute('#leave-site-go', 'href')) === DOC.links[0].url, `${how}: the way on goes to ${await w.getAttribute('#leave-site-go', 'href')}`);
+      await w.click('#leave-site-stay');
+      await w.waitForSelector('#leave-site', { state: 'detached', timeout: 5000 });
+    }
+    await w.waitForTimeout(500);
+    w.context().off('page', onTab);
+    expect(tabs.length === 0, `tabs opened past the word: ${JSON.stringify(tabs)}`);
+    return 'three ways, three words, no tab';
+  });
+
   await step('the about tab and back: the links are out of the page under the other tab, and come back as they were', async () => {
     await w.click('#tab-about');
     await w.waitForSelector('#tab-about[aria-selected="true"]', { timeout: 10000 });

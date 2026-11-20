@@ -57,7 +57,8 @@ import { LinkedText } from '@/shared-components/LinkedText';
 import { SHEET_FLICK, SHEET_MS, SHEET_SNAP, useSheetBack } from '@/shared-components/MobileSheet';
 import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
-import { PresenceSquare, Who } from '@/shared-components/PersonRow';
+import { Who } from '@/shared-components/PersonRow';
+import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { ProfileLink, useShowProfile } from '@/shared-components/ProfileLink';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
@@ -135,7 +136,7 @@ const CORNERS = [
 
 const tabId = (name: string) => `friend-chat-tab-${name}`;
 
-/** The presence square on a face's corner (PersonRow.tsx), ringed in the window's background. */
+/** The presence square on a face's corner (PresenceSquare.tsx), ringed in the window's background. */
 const RING = 'border-backgroundSecondary';
 
 interface TabProps {
@@ -188,7 +189,7 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
         className={cn(SQUARE, selected ? SQUARE_ON : SQUARE_OFF)}
       >
         <Face name={dm.name} version={dm.avatar} />
-        <PresenceSquare presence={dm.presence} className={RING} />
+        <PresenceSquare status={dm.presence} className={RING} />
         {/* how many of their lines came while this was not on screen: the sidebar's number, in the other corner */}
         {dm.unread > 0 && (
           <span
@@ -319,7 +320,7 @@ function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
                   >
                     <span className="relative block shrink-0">
                       <Face name={f.name} version={f.avatar} />
-                      <PresenceSquare presence={f.presence} className={RING} />
+                      <PresenceSquare status={f.presence} className={RING} />
                     </span>
                     <span className="flex min-w-0 flex-1 flex-col">
                       <Who name={f.name} verified={f.verified} />
@@ -376,7 +377,7 @@ function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
                 >
                   <span className="relative block">
                     <Face name={f.name} version={f.avatar} />
-                    <PresenceSquare presence={f.presence} className={RING} />
+                    <PresenceSquare status={f.presence} className={RING} />
                   </span>
                   <span className="w-full truncate text-center text-xs">{f.name}</span>
                 </button>
@@ -945,7 +946,7 @@ export function FriendChat() {
                   {mobile && (
                     <span id="friend-chat-face" className="relative block shrink-0">
                       <Face name={name} version={dm.avatar} className="h-8 w-8 text-sm" />
-                      <PresenceSquare presence={dm.presence} className={RING} />
+                      <PresenceSquare status={dm.presence} className={RING} />
                     </span>
                   )}
                   <Who name={name} verified={dm.verified} />

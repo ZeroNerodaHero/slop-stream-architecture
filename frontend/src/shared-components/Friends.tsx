@@ -27,7 +27,8 @@ import { Face } from '@/shared-components/Face';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
-import { PresenceSquare, Who } from '@/shared-components/PersonRow';
+import { Who } from '@/shared-components/PersonRow';
+import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { StreamStill } from '@/shared-components/StreamStill';
 import { INPUT } from '@/shared-components/input';
@@ -231,7 +232,7 @@ interface Person {
 
 /**
  * The picture and the presence square in its bottom right corner, the way the closed panel
- * shows everyone (PersonRow.tsx): grey, green, the accent streaming. Closed, the
+ * shows everyone (PresenceSquare.tsx): grey, green, the accent streaming. Closed, the
  * column has no words; the word is in the row's label, and the square says it on hover.
  */
 export function RailFace({ name, avatar, presence }: { name: string; avatar: number | null; presence: Presence }) {
@@ -239,7 +240,7 @@ export function RailFace({ name, avatar, presence }: { name: string; avatar: num
     <span className="relative block shrink-0">
       <Face name={name} version={avatar} className={RAIL_FACE} />
       <Tooltip content={PRESENCE_WORD[presence]}>
-        <PresenceSquare presence={presence} className="border-background" />
+        <PresenceSquare status={presence} className="border-background" />
       </Tooltip>
     </span>
   );

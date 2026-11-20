@@ -15,6 +15,7 @@ import { type CSSProperties, type ChangeEvent, type PointerEvent as ReactPointer
 
 import { type AboutDoc, BLOCKS_MAX, TEXT_MAX, sanitizeHtml } from '@/infra/about';
 import { type PageWire, api } from '@/infra/api';
+import { ExternalLink } from '@/shared-components/ExternalLink';
 import { DragHandle, movedTo, useReorder } from '@/shared-components/Reorderable';
 import { Tooltip, type TooltipAt } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -226,9 +227,14 @@ function richNode(node: Node, key: string): ReactNode {
   if (name === 'br') return <br key={key} />;
   if (name === 'a') {
     return (
-      <a key={key} href={el.getAttribute('href') ?? ''} target="_blank" rel="noopener noreferrer nofollow" className="text-primaryBlue hover:underline">
+      <ExternalLink
+        key={key}
+        href={el.getAttribute('href') ?? ''}
+        from="the streamer put this link on their page, not this site."
+        className="text-primaryBlue hover:underline"
+      >
         {kids}
-      </a>
+      </ExternalLink>
     );
   }
   if (name === 'p') return <p key={key}>{kids}</p>;

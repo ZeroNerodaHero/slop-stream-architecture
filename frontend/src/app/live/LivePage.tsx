@@ -47,6 +47,7 @@ import { CHAT_MOBILE, keyboardStrip, useChatTyping, useIsMobile, useLockedDocume
 import { KbdDebug } from '@/shared-components/KbdDebug';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
+import { ExternalLink } from '@/shared-components/ExternalLink';
 import { Face } from '@/shared-components/Face';
 import { Mixer } from '@/shared-components/live/Mixer';
 import { Rigging } from '@/shared-components/live/Rigging';
@@ -206,9 +207,9 @@ export function LivePage() {
   const link = watchUrl && (
     <p id="link" className="my-3 [overflow-wrap:anywhere]">
       watch link:{' '}
-      <a id="watchurl" href={watchUrl} target="_blank" rel="noopener">
+      <ExternalLink id="watchurl" href={watchUrl}>
         {watchUrl}
-      </a>{' '}
+      </ExternalLink>{' '}
       <button id="copy" type="button" className="ml-2 text-base font-semibold text-primaryBlue" onClick={copyWatchUrl}>
         copy
       </button>

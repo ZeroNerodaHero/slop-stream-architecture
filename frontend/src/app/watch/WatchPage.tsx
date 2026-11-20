@@ -34,6 +34,7 @@ import {
   oauthVerifiedAtom,
   volumeAtom,
   watch,
+  watchBadgeAtom,
   watchStatsAtom,
   watchMessageAtom,
   watchNameAtom,
@@ -58,11 +59,12 @@ import { store } from '@/infra/store';
 import { About } from '@/shared-components/About';
 import { Calendar } from '@/shared-components/Calendar';
 import { FollowButton } from '@/shared-components/FollowButton';
+import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
 import { PageFrame } from '@/shared-components/PageFrame';
-import { PresenceSquare } from '@/shared-components/PersonRow';
+import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { SceneView } from '@/shared-components/SceneView';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SocialsTab } from '@/shared-components/SocialsEditor';
@@ -217,6 +219,7 @@ export function WatchPage() {
   const followers = useAtomValue(followersAtom);
   const socials = useAtomValue(socialsAtom);
   const joined = useAtomValue(joinedAtom);
+  const badge = useAtomValue(watchBadgeAtom);
   // my own page: the socials tab edits the links in place (SocialsEditor.tsx)
   const mine = useAtomValue(myNameAtom) === name;
   const phase = useAtomValue(watchPhaseAtom);
@@ -298,7 +301,7 @@ export function WatchPage() {
   const face = name ? (
     <span className="relative shrink-0">
       <Face name={name} version={avatar} className={mobile ? 'h-8 w-8 text-sm' : 'h-10 w-10 text-lg'} />
-      <PresenceSquare id="presence" labelled presence={presence} className="border-background" />
+      <PresenceSquare id="presence" labelled status={presence} className="border-background" />
     </span>
   ) : undefined;
   const title = (
@@ -310,6 +313,9 @@ export function WatchPage() {
       ) : (
         <span className="truncate">{name}</span>
       )}
+      {/* the group badge their chat lines wear, as a chat line draws it (its card on hover and focus).
+          it does not shrink: a long name is cut first */}
+      {badge && <Badge id="watch-badge" group={badge} card className="shrink-0" />}
       {verified && (
         <Tooltip content="has an account: this really is them">
           <span role="img" aria-label="has an account" className="shrink-0 text-increase">
@@ -385,7 +391,7 @@ export function WatchPage() {
                     mobile && strip.overlay
                   )}
                 >
-                  <span aria-hidden className="h-2 w-2 bg-textTertiary" />
+                  <PresenceSquare status="offline" size="chip" />
                   offline
                 </span>
               )}

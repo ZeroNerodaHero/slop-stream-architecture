@@ -1,0 +1,28 @@
+---
+description: Every link that leaves the site goes through ExternalLink (or useExternalLink), so the links setting's leave-site word covers it; never a bare target="_blank" anchor or window.open to another origin
+globs: frontend/src/**/*.tsx
+alwaysApply: false
+---
+
+# Every link out asks first
+
+A link to another origin is drawn with `ExternalLink` from `shared-components/ExternalLink.tsx`. It is the one code path for leaving the site: a new tab, `rel="noopener noreferrer nofollow"`, and, while the links setting asks (the chat tab's `ask before leaving`, `settings.linkWarning`, on by default), the leave-site word first (`#leave-site`: the site's name, the whole address, `don't ask again`). A plain click, a cmd/ctrl/shift click and a middle click all ask.
+
+- `from` is the word's first sentence: who put the link there (`the streamer put this link on their page, not this site.`). Leave it out for a link this site chose; the word says `this link goes to another site.`
+- Where the `<a>` can't be swapped (a component that owns its anchor), take `useExternalLink(href, from)`: spread `onClick` and `onAuxClick` on the anchor, draw `dialog` beside it, and give it `target="_blank"` and `rel={EXTERNAL_REL}`.
+- A link on this origin (a relative route, `/api/oauth/...`) is internal: a router `Link`, or an `<a>` as it was. `ExternalLink` lets a same-origin href through with no word, so a href that may be either is safe to give it.
+- No `target="_blank"` anchor, no `window.open`, no `location.href =` to another origin anywhere else. Not even for a site we trust: the setting is the viewer's, and it covers every link out.
+
+```tsx
+// ❌ BAD — leaves the site past the setting
+<a href={link.url} target="_blank" rel="noopener noreferrer">{word}</a>
+window.open(link.url, '_blank');
+
+// ✅ GOOD
+<ExternalLink href={link.url} from={`${name} put this link here, not this site.`}>{word}</ExternalLink>
+
+// ✅ GOOD — an anchor drawn by something else
+const out = useExternalLink(href);
+<a href={href} target="_blank" rel={EXTERNAL_REL} onClick={out.onClick} onAuxClick={out.onAuxClick}>…</a>
+{out.dialog}
+```

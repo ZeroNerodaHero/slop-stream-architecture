@@ -6,7 +6,7 @@ import { cn } from '@/utils/cn';
 /**
  * The red broadcast mark: a 16px box in `decrease` with the icon the inbox gives a go-live
  * (Notifications.tsx), drawn white on it. In the chat it stands beside the streamer's name
- * (ChatPanel.tsx); on a face, the presence square carries the icon instead (PersonRow.tsx).
+ * (ChatPanel.tsx); on a face, the presence square says it instead (PresenceSquare.tsx).
  * `className` places it; everything else (`title`, a label, a data attribute) goes on the box.
  */
 export function LiveMark({ className, ...rest }: ComponentPropsWithoutRef<'span'>) {
