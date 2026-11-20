@@ -174,7 +174,9 @@ export function sceneOf(msg: RelayReply): Scene | null {
 
 /**
  * Resolve when ICE gathering is done, or after capMs. The server advertises its own public
- * ip, so our candidates barely matter. Give the browser a moment for free ones anyway.
+ * ip, so our candidates barely matter. Give the browser a moment for free ones anyway. The
+ * publisher and home's previews wait; the watch page does not (it is on its startup path,
+ * and video learns our address from our checks).
  */
 export function waitForIceGathering(pc: RTCPeerConnection, capMs = 1000): Promise<void> {
   return new Promise((resolve) => {
@@ -225,6 +227,14 @@ interface ConnectRelayOptions {
   /** Aborting rejects with "cancelled" (the user pressed stop while we were connecting). */
   signal?: AbortSignal;
   /**
+   * A socket to `url` opened ahead (a watcher's, opened beside the grant or on the press, see
+   * watch-atoms' `warmUp`): used instead of opening one, the setup sent the moment it is open
+   * (at once when it is already). Only one that is connecting or open.
+   */
+  socket?: WebSocket;
+  /** Told as setup goes: the socket open, the setup sent, the answer applied. For the watch page's timings (watch-perf.ts). */
+  onPhase?: (phase: 'ws-open' | 'setup-sent' | 'answer') => void;
+  /**
    * The frames after the answer (`{"event":...}`). Installed on the socket before it is handed
    * back, so nothing is lost between the answer and a handler set afterwards: the first slots
    * event follows the answer at once, while `setRemoteDescription` is still being awaited here.
@@ -237,9 +247,22 @@ interface ConnectRelayOptions {
  * Open the socket, send the offer, apply the answer. Resolves with the open socket.
  * Rejects with Error(text) on {"error"}, socket trouble, timeout, or abort.
  */
-export function connectRelay({ role, name, pc, session, token, preview, url = '/ws', timeoutMs = 15000, signal, onMessage }: ConnectRelayOptions): Promise<WebSocket> {
+export function connectRelay({
+  role,
+  name,
+  pc,
+  session,
+  token,
+  preview,
+  url = '/ws',
+  timeoutMs = 15000,
+  signal,
+  socket,
+  onPhase,
+  onMessage
+}: ConnectRelayOptions): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(relayUrl(url));
+    const ws = socket ?? new WebSocket(relayUrl(url));
     let done = false;
     const pending: RelayReply[] = [];
 
@@ -259,15 +282,21 @@ export function connectRelay({ role, name, pc, session, token, preview, url = '/
       signal.addEventListener('abort', () => fail(new Error('cancelled')), { once: true });
     }
 
-    ws.onopen = () => {
+    const sendSetup = () => {
+      if (done) return;
+      onPhase?.('ws-open');
       // JSON.stringify drops the undefined ones, so a watcher's frame has no session or token
       // and only a preview's has preview
       const setup = { role, name, sdp: pc.localDescription?.sdp ?? '', session, token, preview };
       record(url, 'out', setup); // the token is taken out, the sdp clipped, before it is kept
       ws.send(JSON.stringify(setup));
+      onPhase?.('setup-sent');
     };
     ws.onerror = () => fail(new Error('socket error'));
     ws.onclose = () => fail(new Error('socket closed'));
+    if (ws.readyState === WebSocket.OPEN) sendSetup();
+    else if (ws.readyState === WebSocket.CONNECTING) ws.onopen = sendSetup;
+    else fail(new Error('socket closed'));
     ws.onmessage = async (e) => {
       if (done) return;
       const msg = parseRelayMessage(e.data);
@@ -293,6 +322,7 @@ export function connectRelay({ role, name, pc, session, token, preview, url = '/
       if (done) return;
       done = true;
       clearTimeout(timer);
+      onPhase?.('answer');
       ws.onopen = ws.onerror = ws.onclose = null;
       ws.onmessage = onMessage
         ? (ev) => {

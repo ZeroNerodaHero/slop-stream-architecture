@@ -6,27 +6,16 @@
 import { atom } from 'jotai';
 
 import { api, type GroupBadge, messageOf, type WatchGrant } from '@/infra/api';
-import { presenceChanged } from '@/infra/atoms/presence-atoms';
+import { presenceChanged, presencesAtom } from '@/infra/atoms/presence-atoms';
 import { eventsPhaseAtom, onEvents, unwatchPresence, watchPresence } from '@/infra/events';
 import { isValidName } from '@/infra/names';
-import { onPrefetch, prefetch, takePrefetched } from '@/infra/prefetch';
-import {
-  connectRelay,
-  isVideoLayer,
-  type Layer,
-  type RelayReply,
-  type Scene,
-  sceneOf,
-  SCREEN_SLOTS,
-  type SlotInfo,
-  slotsOf,
-  viewersOf,
-  waitForIceGathering
-} from '@/infra/relay';
+import { onPrefetch, prefetch, PREFETCH_TTL_MS, takePrefetched } from '@/infra/prefetch';
+import { connectRelay, isVideoLayer, type Layer, type RelayReply, relayUrl, type Scene, sceneOf, SCREEN_SLOTS, type SlotInfo, slotsOf, viewersOf } from '@/infra/relay';
 import { reportPeerFailure } from '@/infra/report';
 import { cleanSocials, EMPTY_SOCIALS, type Socials } from '@/infra/socials';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
+import { perfBegin, perfMark } from '@/infra/watch-perf';
 import type { Tone } from '@/shared-components/StatusLine';
 
 export type WatchPhase = 'loading' | 'waiting' | 'connecting' | 'connected' | 'watching' | 'reconnecting' | 'failed' | 'bad-name';
@@ -187,7 +176,95 @@ export const watchToneAtom = atom<Tone>((get) => {
   return phase === 'failed' || phase === 'bad-name' ? 'bad' : 'neutral';
 });
 
+/** The video socket's path. The grant says it too (`url`); a grant that names another drops the warm socket for one there. */
+const WS_PATH = '/ws';
+
+/**
+ * A peer and a video socket made before the grant says live: on the press on a link to the
+ * page (`onPrefetch`), and by `start` beside the grant. The peer has its sections and its offer
+ * set (no wait for ice candidates: video tells browsers its public ip and learns ours from our
+ * checks), the socket is opening; nothing is sent on it until the grant says live, so video
+ * counts nobody. One at a time.
+ */
+interface Warm {
+  name: string;
+  pc: RTCPeerConnection;
+  videoTransceivers: RTCRtpTransceiver[];
+  /** The offer, set as the local description. Rejects only with a closed peer. */
+  offer: Promise<void>;
+  ws: WebSocket;
+  /** When it was made: video closes a socket that sends no setup within 10s (video HANDSHAKE_TIMEOUT). */
+  born: number;
+}
+
+/** A warm socket older than this is not used: a slow grant could take it past video's 10s for the setup. */
+const WARM_MAX_MS = 8000;
+
+function makeWarm(name: string): Warm {
+  const warmPc = new RTCPeerConnection();
+  // One section per video slot the publisher may fill, in its order: video binds its slots
+  // to them in order, so the i-th one here is video slot i there (0 the camera). A slot with
+  // nothing in it yet is a track that stays quiet until the streamer shares a screen.
+  const videoTransceivers = Array.from({ length: VIDEO_SLOTS }, () => warmPc.addTransceiver('video', { direction: 'recvonly' }));
+  warmPc.addTransceiver('audio', { direction: 'recvonly' });
+  perfMark('peer');
+  const offer = warmPc.createOffer().then((o) => warmPc.setLocalDescription(o));
+  void offer.then(
+    () => perfMark('offer'),
+    () => undefined
+  );
+  const ws = new WebSocket(relayUrl(WS_PATH));
+  ws.addEventListener('open', () => perfMark('ws-open'), { once: true });
+  return { name, pc: warmPc, videoTransceivers, offer, ws, born: performance.now() };
+}
+
+function closeWarm(w: Warm) {
+  w.ws.close();
+  w.pc.close();
+}
+
+/** Usable: the peer not closed, the socket not going away, and young enough to send its setup in time. */
+const isFresh = (w: Warm) => w.pc.signalingState !== 'closed' && w.ws.readyState <= WebSocket.OPEN && performance.now() - w.born < WARM_MAX_MS;
+
+/** The one warmed on a press, waiting for the page; dropped after PREFETCH_TTL_MS. */
+let pressed: { warm: Warm; timer: ReturnType<typeof setTimeout> } | null = null;
+
+function dropPressed() {
+  if (!pressed) return;
+  clearTimeout(pressed.timer);
+  closeWarm(pressed.warm);
+  pressed = null;
+}
+
+/** A press on a way to `/watch/<name>`: a peer and socket for it, unless one is waiting already. */
+function warmOnPress(name: string) {
+  if (pressed?.warm.name === name && isFresh(pressed.warm)) return;
+  dropPressed();
+  perfBegin('press');
+  const warm = makeWarm(name);
+  pressed = { warm, timer: setTimeout(dropPressed, PREFETCH_TTL_MS) };
+}
+
+/** The press's peer and socket for `name`, once; any other is dropped. */
+function takePressed(name: string): Warm | null {
+  if (!pressed) return null;
+  const { warm, timer } = pressed;
+  clearTimeout(timer);
+  pressed = null;
+  if (warm.name === name && isFresh(warm)) return warm;
+  closeWarm(warm);
+  return null;
+}
+
+/** The events socket has a word for `name` and it is not `streaming`: the grant will say not live, so no peer is made ahead of it. */
+const knownNotLive = (name: string) => {
+  const word = store.get(presencesAtom).get(name);
+  return word !== undefined && word !== 'streaming';
+};
+
 let pc: RTCPeerConnection | null = null;
+/** The attempt's peer and socket while its grant is out or its offer is being answered: torn down with it. */
+let early: Warm | null = null;
 let stopStats: (() => void) | null = null;
 let ws: WebSocket | null = null;
 let connectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -339,13 +416,16 @@ function keptInCorner(name: string): boolean {
 /** The grant's key in the press's cache (prefetch.ts). */
 const grantKey = (name: string) => `watch:${name}`;
 
-// a press on a way to `/watch/<name>`: the grant, the one thing the page asks first (`start`).
-// only the grant: the peer and the video socket wait for the page. nothing when picture in
-// picture has it and the page would ask nothing. a fact about the name meanwhile (live, ended,
-// renamed) drops it, and the page asks as it always did
+// a press on a way to `/watch/<name>`: the grant, the one thing the page asks first (`start`),
+// and the peer with its offer and the video socket, opening, so the page sends its setup the
+// moment the grant says live (`warmOnPress`; nothing is sent on the press, gone after
+// PREFETCH_TTL_MS). nothing when picture in picture has it and the page would ask nothing, and
+// no peer for a name the events socket says is not streaming. a fact about the name meanwhile
+// (live, ended, renamed) drops the grant, and the page asks as it always did
 onPrefetch('watch', (name) => {
   if (keptInCorner(name)) return;
   prefetch(grantKey(name), name, 'drop', () => api.watch(name));
+  if (!knownNotLive(name)) warmOnPress(name);
 });
 
 /** One attempt at `name`, whatever was going on before. A push, the backoff timer and the retry button come here directly. */
@@ -368,19 +448,32 @@ async function start(name: string): Promise<void> {
   watchPresence(name);
   setPhase('loading', 'loading');
 
+  // the peer, its offer and the video socket beside the grant, not after it: the press's, else
+  // made now (not for a name the events socket says is not streaming: its grant will say so).
+  // nothing is sent on the socket until the grant says live
+  const fromPress = takePressed(name);
+  if (fromPress) perfMark('start');
+  else perfBegin('start');
+  early = fromPress ?? (knownNotLive(name) ? null : makeWarm(name));
+
   let grant;
   try {
     // the one asked for on the press, when there was one and nothing has happened to it since
     grant = await (takePrefetched<WatchGrant>(grantKey(name))?.answer ?? api.watch(name));
   } catch {
-    if (mine === attempt) retryLater('cannot reach the server. retrying');
+    if (mine === attempt) {
+      dropEarly();
+      retryLater('cannot reach the server. retrying');
+    }
     return;
   }
-  // left the page, or a newer call took over, while the api was answering
+  // left the page, or a newer call took over, while the api was answering (teardown dropped the peer)
   if (mine !== attempt) return;
+  perfMark('grant');
   // a grant for another name: the one asked for was renamed and is held for the hold's length.
   // the page moves there, and that mount starts over under the right name
   if (grant.name && grant.name !== name && isValidName(grant.name)) {
+    dropEarly();
     store.set(watchRenamedToAtom, grant.name);
     return;
   }
@@ -399,17 +492,18 @@ async function start(name: string): Promise<void> {
   // change, and a grant answered a beat behind a push must not undo the push); the grant's otherwise
   if (grant.presence && store.get(eventsPhaseAtom) !== 'open') presenceChanged(name, grant.presence);
   if (!grant.live) {
+    dropEarly();
     waitForLive('not live yet');
     return;
   }
 
-  const myPc = new RTCPeerConnection();
+  // the early one, unless it went stale while the api answered; a socket to another url than
+  // the grant's is replaced by one there
+  if (early && !isFresh(early)) dropEarly();
+  const warm = early ?? (early = makeWarm(name));
+  const myPc = warm.pc;
   pc = myPc;
-  // One section per video slot the publisher may fill, in its order: video binds its slots
-  // to them in order, so the i-th one here is video slot i there (0 the camera). A slot with
-  // nothing in it yet is a track that stays quiet until the streamer shares a screen.
-  const videoTransceivers = Array.from({ length: VIDEO_SLOTS }, () => myPc.addTransceiver('video', { direction: 'recvonly' }));
-  myPc.addTransceiver('audio', { direction: 'recvonly' });
+  const { videoTransceivers } = warm;
 
   const main = new MediaStream();
   primary = main;
@@ -431,7 +525,10 @@ async function start(name: string): Promise<void> {
       if (connectTimer) clearTimeout(connectTimer);
       // back from a blip: the frames resume on their own, the <video> fires no second `playing`
       if (played) setPhase('watching', 'watching');
-      else setPhase('connected', 'connected, waiting for video');
+      else {
+        setPhase('connected', 'connected, waiting for video');
+        perfMark('ice-connected');
+      }
     } else if (state === 'disconnected') setPhase('reconnecting', 'reconnecting');
     else if (state === 'failed') fail('connection failed. udp blocked?', myPc);
   };
@@ -458,11 +555,27 @@ async function start(name: string): Promise<void> {
   };
 
   try {
-    await myPc.setLocalDescription(await myPc.createOffer());
-    await waitForIceGathering(myPc, 1000);
+    // the offer as it is, host candidates or none: video advertises its public ip, and learns
+    // ours from the checks we send it, so waiting for ours to gather only delays the setup
+    await warm.offer;
     if (pc !== myPc) return;
+    // the warm socket, while it is still there and to the grant's path; else connectRelay opens one
+    const socket = grant.url === WS_PATH && warm.ws.readyState <= WebSocket.OPEN ? warm.ws : undefined;
+    if (!socket) warm.ws.close();
     setPhase('connecting', 'connecting');
-    ws = await connectRelay({ role: 'watch', name, pc: myPc, url: grant.url, onMessage });
+    ws = await connectRelay({
+      role: 'watch',
+      name,
+      pc: myPc,
+      url: grant.url,
+      socket,
+      onPhase: (phase) => {
+        // the warm socket's open was marked as it opened
+        if (phase !== 'ws-open' || !socket) perfMark(phase);
+      },
+      onMessage
+    });
+    if (early === warm) early = null;
   } catch (err) {
     if (pc !== myPc) return; // retry or leaving happened meanwhile
     if (messageOf(err) === 'not live') {
@@ -482,6 +595,13 @@ async function start(name: string): Promise<void> {
   connectTimer = setTimeout(() => {
     if (pc === myPc && myPc.connectionState !== 'connected') fail('no video. udp blocked?', myPc);
   }, NO_VIDEO_AFTER_MS);
+}
+
+/** The attempt's early peer and socket, unused (not live, renamed, the api down) or abandoned: closed. */
+function dropEarly() {
+  if (!early) return;
+  closeWarm(early);
+  early = null;
 }
 
 /** The streamer left (video said `ended`). A restart is pushed like any start. */
@@ -527,6 +647,7 @@ export function retry() {
 /** The <video> element started playing frames. */
 export function markPlaying() {
   if (!pc) return;
+  if (!played) perfMark('first-frame');
   played = true;
   failures = 0;
   store.set(needsTapAtom, false);
@@ -593,6 +714,7 @@ export function teardown() {
   connectTimer = retryTimer = null;
   played = false;
   store.set(needsTapAtom, false);
+  dropEarly();
   if (ws) {
     ws.onmessage = ws.onclose = null;
     ws.close();

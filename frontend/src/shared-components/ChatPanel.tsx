@@ -501,7 +501,8 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
  * panel's: whose lines are `mine` is said against it. Each line has the action bar (ChatLine.tsx
  * `LineActions`): react where `reacts` (the panel's own list, not a pin's copy: a login picks an
  * emoji, a nick is told to log in), reply where `replies` (the panel's own list once it can speak),
- * the caller's own buttons (`lineActions`), and `more`. A reply wears the quote of its line, a
+ * the caller's own buttons (`lineActions`), and `more`; `lineSide` puts buttons in a column of
+ * their own at the line's right (the sheet's jump and unpin). A reply wears the quote of its line, a
  * click on which goes there where `jumps` (`ChatRoom.jumpToReply`); a line's reactions stand under
  * it as chips (Reactions.tsx `ReactionChips`), a click on one putting yours on or off.
  */
@@ -511,6 +512,7 @@ export function RoomLines({
   lines,
   lineMark,
   lineActions,
+  lineSide,
   replies = false,
   reacts = false,
   jumps = false
@@ -520,6 +522,8 @@ export function RoomLines({
   lines: readonly ChatLine[];
   lineMark?: (line: ChatLine) => ReactNode;
   lineActions?: (line: ChatLine) => ReactNode;
+  /** Buttons in a column of their own at each line's right (ChatLine.tsx `side`). */
+  lineSide?: (line: ChatLine) => ReactNode;
   replies?: boolean;
   reacts?: boolean;
   jumps?: boolean;
@@ -594,6 +598,7 @@ export function RoomLines({
               )
             }
             flash={flash === line.id}
+            side={lineSide?.(line)}
             attrs={{
               'data-id': line.id,
               'data-reply-to': line.reply?.id,

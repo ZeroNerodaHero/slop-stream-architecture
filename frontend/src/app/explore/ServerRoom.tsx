@@ -1501,7 +1501,7 @@ export function ServerPage() {
                 onChannel={(to) => navigate(to === 'general' ? `/groups/${server}` : `/groups/${server}/${to}`)}
                 headerEnd={mobile ? undefined : <ChannelPins server={server} channel={channel} room={room} />}
                 lineMark={(line) => (pinnedHere.has(line.id) ? <PinMark /> : null)}
-                lineActions={room.perms.channels ? (line) => <PinAction server={server} channel={channel} line={line} pinned={pinnedHere.has(line.id)} /> : undefined}
+                lineActions={room.perms.channels && !mobile ? (line) => <PinAction server={server} channel={channel} line={line} pinned={pinnedHere.has(line.id)} /> : undefined}
                 className={cn('h-full', ROOM_CHAT_MOBILE)}
               />
             </div>

@@ -123,6 +123,8 @@ export interface ChatLineShapeProps extends Place {
   reactions?: ReactNode;
   /** The line was just jumped to (a reply's quote clicked): it lights up for a moment. */
   flash?: boolean;
+  /** Buttons in a column of their own at the line's right, always up and never over the words: a phone's pin sheet's jump and unpin (PinSheet.tsx). */
+  side?: ReactNode;
 }
 
 /** The action bar while it waits: up with the pointer on the line or the keyboard in it. Not clickable while unseen, so a tap on a phone does not land on it. */
@@ -496,6 +498,12 @@ export function ReplyQuote({ shape, quote, onJump }: { shape: ChatStyle; quote: 
   );
 }
 
+/** The line's right column: its own box, beside the words and the pictures, not over them. */
+function Side({ side }: { side?: ReactNode }) {
+  if (!side) return null;
+  return <span className="flex shrink-0 flex-col self-start border border-primaryStroke bg-backgroundSecondary">{side}</span>;
+}
+
 /**
  * One line of any chat, in the shape this browser picked (settings.chatStyle; the chat tab's
  * cards): a stream's and a group channel's (ChatPanel.tsx) and a chat with a friend's
@@ -511,7 +519,8 @@ export function ReplyQuote({ shape, quote, onJump }: { shape: ChatStyle; quote: 
  * the shape, the caller's `attrs` on it and the full stamp as its title. The pictures stand
  * under the words in every shape (inside the box in `bubbles`). The text size is the list's:
  * `text-sm` in both, the panel and the window. A reply's quote (`quote`) stands over the line;
- * the action bar (`actions`) floats at its top right.
+ * the action bar (`actions`) floats at its top right; a `side` column, if any, stands in the
+ * line's row at its right, beside the words, never over them.
  */
 export function ChatLineShape({
   shape,
@@ -531,7 +540,8 @@ export function ChatLineShape({
   actions,
   quote,
   reactions,
-  flash = false
+  flash = false,
+  side
 }: ChatLineShapeProps) {
   const title = at ? stamp(at) : undefined;
   const press = useLongPress();
@@ -575,6 +585,7 @@ export function ChatLineShape({
             {pictures}
             {reactions}
           </span>
+          <Side side={side} />
         </>
       )
     );
@@ -600,6 +611,7 @@ export function ChatLineShape({
             {pictures}
             {reactions}
           </span>
+          <Side side={side} />
         </>
       )
     );
@@ -625,6 +637,7 @@ export function ChatLineShape({
         </span>
         {reactions}
       </span>
+      <Side side={side} />
     </>
   );
 }
