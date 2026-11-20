@@ -2,7 +2,8 @@
  * The watch page's startup, phase by phase, on the performance timeline (docs/debugging.md
  * "Watch startup timings"). Every phase is a `watch:<phase>` mark and a `watch:<phase>`
  * measure from the origin: the press on a link when the attempt took the peer warmed on it,
- * else the attempt's start. Phases: press, start, grant, peer, offer, ws-open, setup-sent,
+ * the boot when the attempt took index.html's boot script's (a stream's page loaded straight), else
+ * the attempt's start. Phases: press or boot, start, grant, peer, offer, ws-open, setup-sent,
  * answer, ice-connected, first-frame.
  *
  * With `?perfdebug=1` in the url, or `localStorage.perfdebug = '1'`, the first frame prints the
@@ -22,17 +23,16 @@ function debugOn(): boolean {
   }
 }
 
-/** A new timeline from `phase` (`press` or `start`): the phases after it are measured from here. */
-export function perfBegin(phase: 'press' | 'start'): void {
-  origin = performance.now();
+/** A new timeline from `phase` (`press`, `boot` or `start`), now or at `at`: the phases after it are measured from there. */
+export function perfBegin(phase: 'press' | 'boot' | 'start', at = performance.now()): void {
+  origin = at;
   phases = [];
   printed = false;
-  perfMark(phase);
+  perfMark(phase, at);
 }
 
-/** `phase` happened now. The first frame prints the line, once, when the debug flag is on. */
-export function perfMark(phase: string): void {
-  const at = performance.now();
+/** `phase` happened now, or at `at` (the boot script's, seen once the bundle is here). The first frame prints the line, once, when the debug flag is on. */
+export function perfMark(phase: string, at = performance.now()): void {
   phases.push([phase, at]);
   try {
     performance.mark(`watch:${phase}`, { startTime: at });

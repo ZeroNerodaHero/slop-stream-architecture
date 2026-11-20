@@ -1,17 +1,13 @@
 import { useAtomValue } from 'jotai';
+import { lazy, Suspense } from 'react';
 import { Navigate, Outlet, createBrowserRouter, useParams } from 'react-router-dom';
 
 import { CrashPage } from '@/app/CrashPage';
 import { NotFoundPage } from '@/app/NotFoundPage';
-import { AdminPage } from '@/app/admin/AdminPage';
-import { AuthPage } from '@/app/auth/AuthPage';
-import { OAuthPage } from '@/app/auth/OAuthPage';
 import { HomePage } from '@/app/home/HomePage';
-import { ExplorePage } from '@/app/explore/ExplorePage';
-import { ServerPage } from '@/app/explore/ServerRoom';
-import { LivePage } from '@/app/live/LivePage';
 import { WatchPage } from '@/app/watch/WatchPage';
 import { panelSideAtom } from '@/infra/atoms/settings-atoms';
+import { loadServerPage } from '@/infra/prefetch';
 import { AuthDialog } from '@/shared-components/AuthDialog';
 import { CropDialog } from '@/shared-components/CropDialog';
 import { FriendChat } from '@/shared-components/FriendChat';
@@ -38,7 +34,9 @@ function Shell() {
     <div className={cn('flex min-h-screen items-start pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]', side === 'right' && 'flex-row-reverse')}>
       <UserPanel />
       <div className="relative min-w-0 flex-1">
-        <Outlet />
+        <Suspense fallback={null}>
+          <Outlet />
+        </Suspense>
       </div>
       <MiniPlayer />
       <FriendChat />
@@ -64,6 +62,20 @@ function ExploreRedirect() {
   const to = channel ? `/groups/${server}/${channel}` : server ? `/groups/${server}` : '/groups';
   return <Navigate to={to} replace />;
 }
+
+/**
+ * The pages in chunks of their own, loaded when their route first renders (the Suspense in Shell
+ * shows the frame meanwhile; a navigation keeps the page it leaves until the chunk is here): a
+ * stream's page opened cold downloads and parses only the bundle it needs (docs/debugging.md
+ * "Watch startup timings"). Home and the watch page stay in the main bundle: they are the pages
+ * people land on. A press on a way to a group loads its chunk with its data (prefetch.ts `prefetchRoute`).
+ */
+const ExplorePage = lazy(() => import('@/app/explore/ExplorePage').then((m) => ({ default: m.ExplorePage })));
+const ServerPage = lazy(() => loadServerPage().then((m) => ({ default: m.ServerPage })));
+const LivePage = lazy(() => import('@/app/live/LivePage').then((m) => ({ default: m.LivePage })));
+const AuthPage = lazy(() => import('@/app/auth/AuthPage').then((m) => ({ default: m.AuthPage })));
+const OAuthPage = lazy(() => import('@/app/auth/OAuthPage').then((m) => ({ default: m.OAuthPage })));
+const AdminPage = lazy(() => import('@/app/admin/AdminPage').then((m) => ({ default: m.AdminPage })));
 
 /**
  * Keyed on the server, and only the server: moving from one group to another starts that room,

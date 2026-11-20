@@ -41,6 +41,11 @@ const COLORS: [&str; 8] = [
     "0x4f8bff", "0xf85149", "0x3fb950", "0xf2cc60", "0xbc8cff", "0xff9f43", "0x39d2c0", "0xff6bcb",
 ];
 const HEARTBEAT: Duration = Duration::from_secs(15);
+/// The frame rate, and the keyframe interval in frames: a keyframe every second. ffmpeg cannot
+/// be asked for one (the PLIs video forwards when a watcher joins are read and dropped in
+/// `publish_on`), so a new watcher of a dummy waits for the next one on this schedule: half a
+/// second on average, at most one. docs/keyframes.md.
+const FPS: u32 = 15;
 const RETRY: Duration = Duration::from_secs(5);
 
 /// How many gifs bounce around one stream. The frame is 480×270 and they are 90 to 120 tall.
@@ -292,6 +297,8 @@ async fn publish_on(pc: &RTCPeerConnection, i: usize, name: &str, cfg: &Config, 
     let audio = Arc::new(TrackLocalStaticRTP::new(opus_capability(), "audio".to_owned(), name.to_owned()));
     for track in [Arc::clone(&video), Arc::clone(&audio)] {
         let sender = pc.add_track(track as Arc<dyn TrackLocal + Send + Sync>).await?;
+        // read so the rtcp does not back up, then dropped: a PLI has nothing to reach, ffmpeg makes
+        // keyframes on its own schedule (`FPS`)
         tokio::spawn(async move { while sender.read_rtcp().await.is_ok() {} });
     }
 
@@ -468,7 +475,7 @@ fn bounce(speed: usize, from_far: bool, span: &str) -> String {
 /// A dark frame, a few gifs bouncing around it like the old dvd logo, the name on top, a running
 /// clock at the bottom. Each gif starts in its own corner at its own speed and height, and the
 /// deal differs per stream, so you can tell them apart at a glance. Audio is a quiet tone, pitch
-/// per stream. Small and 15 fps on purpose: each stream costs a slice of a core to encode.
+/// per stream. Small and `FPS` (15) on purpose: each stream costs a slice of a core to encode.
 ///
 /// The gifs are inputs of their own, looped forever, and `overlay` moves them: its `x`/`y` are
 /// evaluated per frame with `t` the time. (`drawbox`, which the box used to be, evaluates once,
@@ -480,7 +487,7 @@ fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, cfg: &Co
     // inputs make ffmpeg spin at a full core each. The gif inputs have no `-re`: the overlay
     // takes their frames as the paced frame needs them.
     let base = format!(
-        "color=c=0x0f1115:s=480x270:r=15[out0];sine=frequency={freq}:sample_rate=48000,volume=0.15[out1]",
+        "color=c=0x0f1115:s=480x270:r={FPS}[out0];sine=frequency={freq}:sample_rate=48000,volume=0.15[out1]",
         freq = 220 + 55 * (i % 8)
     );
     let sprites = sprites(cfg, i);
@@ -490,7 +497,7 @@ fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, cfg: &Co
     for (j, sprite) in sprites.iter().enumerate() {
         match sprite {
             Sprite::Gif(_) => graph.push_str(&format!("[{}:v]scale=-2:{}[s{j}];", j + 1, HEIGHTS[(i + j) % HEIGHTS.len()])),
-            Sprite::Box(color) => graph.push_str(&format!("color=c={color}:s=110x60:r=15[s{j}];")),
+            Sprite::Box(color) => graph.push_str(&format!("color=c={color}:s=110x60:r={FPS}[s{j}];")),
         }
         let (from_right, from_bottom) = CORNERS[(i + j) % CORNERS.len()];
         let x = bounce(50 + 15 * ((i + 2 * j) % 5), from_right, "W-w");
@@ -518,7 +525,9 @@ fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, cfg: &Co
     cmd.args(["-filter_threads", "1", "-filter_complex_threads", "1", "-threads", "1"])
         .args(["-filter_complex", &graph])
         .args(["-map", "[vout]", "-c:v", "libvpx", "-b:v", "500k", "-deadline", "realtime", "-cpu-used", "8"])
-        .args(["-g", "30", "-keyint_min", "15", "-pix_fmt", "yuv420p"])
+        // a keyframe every second, no sooner and no later (see `FPS`). was 2s: a joining watcher
+        // sat ~1s on average, up to 2s, on a black picture
+        .args(["-g", &FPS.to_string(), "-keyint_min", &FPS.to_string(), "-pix_fmt", "yuv420p"])
         // no rtcp: the muxer would send sender reports to port+1, and the two sockets below
         // are whatever the kernel handed out, so port+1 can be the other one (or another
         // stream's); a report read as rtp is a garbage packet rewritten into a track

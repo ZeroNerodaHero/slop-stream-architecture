@@ -88,7 +88,12 @@ http:// {
 		@hit file
 		header @hit Cache-Control "public, max-age=31536000, immutable"
 		encode zstd gzip
-		file_server
+		# the build's brotli 11 beside each asset (scripts/precompress.mjs), to a browser that
+		# takes br; the rest are compressed on the fly as before. ~23% fewer bytes for the main
+		# bundle, which a cold load gets in tcp slow start (docs/debugging.md "Watch startup timings")
+		file_server {
+			precompressed br
+		}
 	}
 
 	# everything else is index.html, which must always be re-checked so a deploy never
