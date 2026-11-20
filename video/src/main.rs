@@ -59,6 +59,7 @@ mod dummy;
 mod limits;
 mod media;
 mod thumbs;
+mod voice;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -412,6 +413,10 @@ async fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("dummy") {
         return dummy::run().await;
     }
+    // `video voice` is the voice sfu, same binary, see voice.rs
+    if std::env::args().nth(1).as_deref() == Some("voice") {
+        return voice::run().await;
+    }
 
     let public_ip = std::env::var("PUBLIC_IP").unwrap_or_else(|_| "127.0.0.1".into());
     let ws_port = env_port("WS_PORT", 7880);
@@ -516,7 +521,7 @@ async fn wait_for_signal() {
 /// to many watchers does not drop packets. Asking is not getting: linux caps a
 /// plain SO_SNDBUF/SO_RCVBUF at net.core.wmem_max/rmem_max (208 KB by default)
 /// without an error, so read back what the kernel gave and say so once.
-fn media_socket(port: u16) -> anyhow::Result<tokio::net::UdpSocket> {
+pub(crate) fn media_socket(port: u16) -> anyhow::Result<tokio::net::UdpSocket> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     let _ = socket.set_send_buffer_size(UDP_BUFFER_BYTES);
     let _ = socket.set_recv_buffer_size(UDP_BUFFER_BYTES);
@@ -539,7 +544,7 @@ fn media_socket(port: u16) -> anyhow::Result<tokio::net::UdpSocket> {
     Ok(tokio::net::UdpSocket::from_std(socket.into())?)
 }
 
-fn env_port(key: &str, default: u16) -> u16 {
+pub(crate) fn env_port(key: &str, default: u16) -> u16 {
     std::env::var(key)
         .ok()
         .and_then(|v| v.parse().ok())
@@ -602,7 +607,7 @@ async fn ws(State(app): State<App>, headers: HeaderMap, upgrade: WebSocketUpgrad
 /// The browser's address as caddy saw it. 7880 is only reachable inside the compose
 /// network, and caddy replaces whatever X-Forwarded-For a browser sent with the real
 /// one, so the last entry is caddy's word. The fallback when ICE does not say.
-fn forwarded_ip(headers: &HeaderMap) -> Option<IpAddr> {
+pub(crate) fn forwarded_ip(headers: &HeaderMap) -> Option<IpAddr> {
     let value = headers.get("x-forwarded-for")?.to_str().ok()?;
     value.rsplit(',').next()?.trim().parse().ok()
 }
