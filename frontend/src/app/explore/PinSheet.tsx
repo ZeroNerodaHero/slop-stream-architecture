@@ -19,8 +19,8 @@ const LOCK_PX = 10;
 const DIM = 0.6;
 const SLIDE = 'duration-200 ease-out motion-reduce:transition-none';
 
-/** A line's buttons in the sheet: the drawn line's own hover box (ChatLine.tsx `actions`), PinAction's size. */
-const ACTION = 'flex h-6 w-6 items-center justify-center text-textSecondary focus-visible:text-primaryBlue focus-visible:outline-none max-md:h-11 max-md:w-11';
+/** A line's buttons in the sheet: a 44px square each, stacked in the line's own right column (ChatLine.tsx `side`), never over its words. */
+const ACTION = 'flex h-11 w-11 items-center justify-center text-textSecondary focus-visible:text-primaryBlue focus-visible:outline-none';
 
 /**
  * A phone's pin in a group's title row (between the back caret and the group's picture): a
@@ -62,10 +62,11 @@ export function PinSheetButton({ count, open, onClick }: { count: number; open: 
  * under the title row, 60% of the window tall, the row over it whole and still pressed. The
  * pinned lines, newest pin first, drawn as the chat draws them (`RoomLines`: the shape this
  * browser picked, the faces, the badges, the pictures), with a jump to the line in the channel
- * on each and, for the channels power, an unpin. It scrolls in itself; the grabber at its foot.
- * A swipe up shuts it, on the grabber, or on the lines once they are scrolled to their end (or
- * fit); so do the pin again, a tap on the dim page under it, Escape and the back button. The
- * slide is 200ms, none for reduced motion. Drawn into the body under the title row (z-20, the
+ * on each and, for the channels power, an unpin: 44px each, in a column of their own at the
+ * line's right, so they never sit on its words. The first line clears the sheet's top edge. It
+ * scrolls in itself; the grabber at its foot. A swipe up shuts it, on the grabber, or on the
+ * lines once they are scrolled to their end (or fit); so do the pin again, a tap on the dim
+ * page under it, Escape and the back button. The slide is 200ms, none for reduced motion. Drawn into the body under the title row (z-20, the
  * row is z-30) and clipped to the window below it, so it slides out from under the row; a
  * drawer (SwipeDrawer.tsx, z-50) and its dim go over it. The list is asked as it opens and
  * again on each pin or unpin while it is (`pinsTickAtom`).
@@ -262,7 +263,7 @@ export function PinSheet({
           ref={lines}
           id="pin-sheet-lines"
           data-style={shape}
-          className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-2 py-1 text-sm leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
+          className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain scroll-pt-3 px-2 pb-1 pt-3 text-sm leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
         >
           {error ? (
             <p id="pin-sheet-error" className="py-1 text-decrease">
@@ -280,7 +281,7 @@ export function PinSheet({
                 name={server}
                 room={room}
                 lines={list}
-                lineActions={(line) => (
+                lineSide={(line) => (
                   <>
                     <Tooltip content="go to it">
                       <button
@@ -293,13 +294,13 @@ export function PinSheet({
                         }}
                         className={cn(ACTION, 'hover:text-primaryBlue')}
                       >
-                        <RiArrowRightUpLine aria-hidden size={14} />
+                        <RiArrowRightUpLine aria-hidden size={18} />
                       </button>
                     </Tooltip>
                     {canPin && (
                       <Tooltip content="unpin">
-                        <button type="button" data-pin-unpin={line.id} aria-label="unpin" onClick={() => onUnpin(line.id)} className={cn(ACTION, 'hover:text-decrease')}>
-                          <RiUnpinLine aria-hidden size={14} />
+                        <button type="button" data-pin-unpin={line.id} aria-label="unpin" onClick={() => onUnpin(line.id)} className={cn(ACTION, 'border-t border-primaryStroke hover:text-decrease')}>
+                          <RiUnpinLine aria-hidden size={18} />
                         </button>
                       </Tooltip>
                     )}
