@@ -78,9 +78,9 @@ export function NotificationsBell() {
         aria-controls={open ? 'notifications-panel' : undefined}
         data-unread={unread || undefined}
         onClick={toggleNotifications}
-        className={cn(buttonClassName('secondary', 'relative px-2.5 py-2 max-md:h-11 max-md:w-11 max-md:p-0'), open && 'border-primaryBlue text-primaryBlue')}
+        className={cn(buttonClassName('secondary', 'relative p-1.5 max-md:h-11 max-md:w-11 max-md:p-0'), open && 'border-primaryBlue text-primaryBlue')}
       >
-        <RiNotification3Line aria-hidden size={18} />
+        <RiNotification3Line aria-hidden size={20} />
         {unread > 0 && (
           <span id="notifications-unread" aria-hidden className={COUNT}>
             {unread > 99 ? '99+' : unread}

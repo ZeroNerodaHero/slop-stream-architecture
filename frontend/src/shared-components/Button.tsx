@@ -2,12 +2,15 @@ import type { ButtonHTMLAttributes } from 'react';
 
 import { cn } from '@/utils/cn';
 
-export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'outline' | 'outline-danger';
+export type ButtonVariant = 'primary' | 'secondary' | 'success' | 'danger' | 'outline' | 'outline-danger';
 export type ButtonSize = 'md' | 'sm';
 
 const VARIANTS: Record<ButtonVariant, string> = {
   primary: 'bg-primaryBlue border-primaryBlue text-background hover:bg-primaryBlueHover hover:border-primaryBlueHover',
   secondary: 'bg-backgroundSecondary border-primaryStroke text-textPrimary hover:border-primaryBlue',
+  // a state that is on (following): the green fill, the page's colour on it as primary has (dark ink
+  // on dark themes' green, 7.4:1; white on light's, 4.7:1), and a hover a shade darker
+  success: 'bg-increase border-increase text-background hover:bg-increaseHover hover:border-increaseHover',
   danger: 'bg-decrease border-decrease text-white hover:opacity-90',
   outline: 'bg-transparent border-primaryBlue text-primaryBlue hover:bg-primaryBlue/10',
   'outline-danger': 'bg-transparent border-decrease text-decrease hover:bg-decrease/10'
@@ -17,6 +20,7 @@ const VARIANTS: Record<ButtonVariant, string> = {
 const DISABLED_HOVER: Record<ButtonVariant, string> = {
   primary: 'disabled:hover:border-primaryBlue disabled:hover:bg-primaryBlue',
   secondary: 'disabled:hover:border-primaryStroke disabled:hover:bg-backgroundSecondary',
+  success: 'disabled:hover:border-increase disabled:hover:bg-increase',
   danger: '',
   outline: 'disabled:hover:border-primaryBlue disabled:hover:bg-transparent',
   'outline-danger': 'disabled:hover:border-decrease disabled:hover:bg-transparent'

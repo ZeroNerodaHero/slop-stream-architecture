@@ -26,6 +26,8 @@ export default {
         primaryStroke: 'rgb(var(--primary-stroke) / <alpha-value>)',
         secondaryStroke: 'rgb(var(--secondary-stroke) / <alpha-value>)',
         increase: 'rgb(var(--increase) / <alpha-value>)',
+        // the green a shade darker, for a green fill's hover, in every palette (no token of its own to derive)
+        increaseHover: 'color-mix(in srgb, rgb(var(--increase)) 85%, black)',
         decrease: 'rgb(var(--decrease) / <alpha-value>)',
         caution: 'rgb(var(--caution) / <alpha-value>)'
       },
