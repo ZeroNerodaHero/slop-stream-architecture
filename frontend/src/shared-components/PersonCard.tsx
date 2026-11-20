@@ -12,6 +12,7 @@ import { Badge } from '@/shared-components/Badge';
 import { Face } from '@/shared-components/Face';
 import { PresenceSquare, Who } from '@/shared-components/PersonRow';
 import { StreamStill } from '@/shared-components/StreamStill';
+import { cn } from '@/utils/cn';
 
 /** The card's width, and how far it stands off the column and off the window's edge. */
 const CARD_W = 260;
@@ -116,9 +117,10 @@ interface PersonCardProps {
 
 /**
  * Somebody, beside the column their row is in, while the pointer or the focus is on the row:
- * the face with the presence square on its corner, the name at the top beside it with their
- * group's badge under the name (the primary group, else the first joined; none for no group),
- * then their status under the two.
+ * the face with the presence square on its corner, and beside it, as tall as the face, the name
+ * (big, cut short with an ellipsis) along its top and their group's badge along its bottom (the
+ * primary group, else the first joined; none for no group, and then the name is centred on the
+ * face), then their status under the two.
  * Not streaming, their first home-card thumbnail stands there instead at the same size (a grey
  * box when they have none).
  * Streaming, a frame of the stream (StreamStill.tsx, kept a few seconds old) stands between
@@ -168,8 +170,8 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
       data-presence={presence}
       className="pointer-events-none fixed z-[60] flex flex-col gap-2.5 border border-primaryStroke bg-backgroundSecondary p-3 text-base text-textPrimary"
     >
-      {/* the name at the top beside the face, not centred on it, and their group's badge under the name */}
-      <span className="flex items-start gap-3">
+      {/* beside the face and as tall as it: the name along its top and their group's badge along its bottom, or the name centred on it when there is no badge */}
+      <span className="flex items-center gap-3">
         <span className="relative shrink-0">
           <Face name={person.name} version={person.avatar} className="h-12 w-12 text-lg" />
           {presence && (
@@ -180,8 +182,8 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
             </>
           )}
         </span>
-        <span className="flex min-w-0 flex-1 flex-col items-start gap-1">
-          <Who name={person.name} verified={person.verified} oauthVerified={person.oauth_verified ?? known?.oauth_verified} className="max-w-full leading-tight" />
+        <span className={cn('flex h-12 min-w-0 flex-1 flex-col items-start', badge ? 'justify-between' : 'justify-center')}>
+          <Who name={person.name} verified={person.verified} oauthVerified={person.oauth_verified ?? known?.oauth_verified} className="max-w-full text-xl leading-tight" />
           {badge && <Badge group={badge} className="max-w-full" />}
         </span>
       </span>
