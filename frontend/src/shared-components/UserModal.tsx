@@ -15,7 +15,8 @@ import { Fragment, type KeyboardEvent, type ReactNode, useLayoutEffect, useRef }
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { myPresenceAtom, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { myAvatarVersionAtom, myNameAtom } from '@/infra/atoms/profile-atoms';
-import { USER_TABS, type UserTab, closeUserModal, pickTab, userModalOpenAtom, userTabAtom } from '@/infra/atoms/user-modal-atoms';
+import { DEFAULT_TAB, type UserTab, closeUserModal, pickTab, tabsFor, userModalOpenAtom, userTabAtom } from '@/infra/atoms/user-modal-atoms';
+import { useIsMobile } from '@/infra/mobile';
 import { Face } from '@/shared-components/Face';
 import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { PresenceSquare } from '@/shared-components/PersonRow';
@@ -55,13 +56,13 @@ const TAB_OFF = 'border-transparent text-textSecondary hover:bg-backgroundTertia
 const STEP: Record<string, number | undefined> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
 
 /** Arrows walk the tabs and show the one under focus; home and end jump. The buttons carry tabIndex 0/-1 themselves. */
-function roveTabs(e: KeyboardEvent<HTMLDivElement>) {
+function roveTabs(e: KeyboardEvent<HTMLDivElement>, order: readonly UserTab[]) {
   const tabs = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
   const i = tabs.indexOf(e.target as HTMLButtonElement);
   if (i < 0) return;
   const step = STEP[e.key];
   const next = step !== undefined ? (i + step + tabs.length) % tabs.length : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : -1;
-  const target = USER_TABS[next]; // rendered from USER_TABS, so dom order and this order agree
+  const target = order[next]; // the rail renders from `order`, so dom order and this order agree
   const button = tabs[next];
   if (next < 0 || !target || !button) return;
   e.preventDefault();
@@ -72,8 +73,8 @@ function roveTabs(e: KeyboardEvent<HTMLDivElement>) {
 /**
  * The user modal: who you are and how this browser shows things, the way discord does its
  * settings. A rail of tabs down the left (the account: profile, groups, security,
- * notifications; this browser: appearance, chat, sidebar, advanced), the open one's pane on
- * the right. Mounted by the Shell; it renders nothing until `openUserModal`, and the page
+ * notifications; this browser: appearance, chat, sidebar, advanced; a phone has no advanced,
+ * `tabsFor`), the open one's pane on the right. Mounted by the Shell; it renders nothing until `openUserModal`, and the page
  * behind follows every change at once, so the layout and theme cards are their own preview.
  * A native <dialog>: the browser keeps focus in it, closes it on escape and hands focus back
  * to what opened it; a click on the backdrop closes it too.
@@ -88,7 +89,11 @@ function UserDialog() {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   /** The press that began this click was on the backdrop too: a text drag that ends outside is not a close. */
   const pressedBackdrop = useRef(false);
-  const tab = useAtomValue(userTabAtom);
+  const kept = useAtomValue(userTabAtom);
+  // read as it renders (useIsMobile), so a phone never draws a desktop tab for a frame
+  const tabs = tabsFor(useIsMobile());
+  // a tab kept on a desktop that a phone has not: the default there, and the kept one is not forgotten
+  const tab = tabs.includes(kept) ? kept : DEFAULT_TAB;
 
   // A layout effect: its cleanup runs while the node is still in the document, which is when
   // close() hands focus back to the opener. (A passive cleanup would run after the removal.)
@@ -135,13 +140,13 @@ function UserDialog() {
         'backdrop:bg-black/60 md:backdrop:backdrop-blur-sm'
       )}
     >
-      <Rail tab={tab} />
+      <Rail tab={tab} tabs={tabs} />
       <Pane tab={tab} onClose={close} />
     </dialog>
   );
 }
 
-function Rail({ tab }: { tab: UserTab }) {
+function Rail({ tab, tabs }: { tab: UserTab; tabs: readonly UserTab[] }) {
   const me = useAtomValue(meAtom);
   const name = useAtomValue(myNameAtom);
   const avatar = useAtomValue(myAvatarVersionAtom);
@@ -167,13 +172,13 @@ function Rail({ tab }: { tab: UserTab }) {
         role="tablist"
         aria-orientation="vertical"
         aria-label="sections"
-        onKeyDown={roveTabs}
+        onKeyDown={(e) => roveTabs(e, tabs)}
         className="flex flex-row gap-1 overflow-x-auto p-2 sm:flex-col sm:gap-0 sm:overflow-visible"
       >
-        {USER_TABS.map((t, i) => {
+        {tabs.map((t, i) => {
           const { label, group, icon } = TABS[t];
           const on = t === tab;
-          const before = USER_TABS[i - 1];
+          const before = tabs[i - 1];
           const newGroup = before === undefined || TABS[before].group !== group;
           return (
             <Fragment key={t}>
@@ -204,7 +209,7 @@ function Rail({ tab }: { tab: UserTab }) {
       <p className="mt-auto hidden px-3 py-3 text-xs leading-5 text-textTertiary sm:block">
         profile, groups, security and notifications are the account.
         <br />
-        appearance, chat, sidebar and advanced are this browser.
+        {tabs.includes('advanced') ? 'appearance, chat, sidebar and advanced are this browser.' : 'appearance, chat and sidebar are this browser.'}
         <br />
         <span className="select-all tabular-nums" title={`build ${__BUILD__}`}>
           build {__BUILD__.slice(0, 7)}
