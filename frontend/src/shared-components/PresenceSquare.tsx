@@ -11,11 +11,13 @@ export function presenceStatus(value: Presence | PresenceChoice): PresenceStatus
 }
 
 /**
- * The square's colour (docs/status.md): the accent streaming (the blue every live mark is), green
- * online, orange do not disturb with the bar discord's has drawn in the panel's background, grey offline.
+ * The square's colour (docs/status.md): streaming cut corner to corner, online's green on the top
+ * left and the accent (the blue every live mark is) on the bottom right, a hard stop so the cut is
+ * crisp; green online, orange do not disturb with the bar discord's has drawn in the panel's
+ * background, grey offline.
  */
 const COLOUR: Record<PresenceStatus, string> = {
-  streaming: 'bg-primaryBlue',
+  streaming: 'bg-[linear-gradient(to_bottom_right,rgb(var(--increase))_50%,rgb(var(--primary-color))_50%)]',
   online: 'bg-increase',
   dnd: "bg-caution before:absolute before:inset-x-[2px] before:top-1/2 before:h-px before:-translate-y-1/2 before:bg-backgroundSecondary before:content-['']",
   offline: 'bg-textTertiary'
@@ -50,10 +52,8 @@ interface PresenceSquareProps {
 
 /**
  * Every presence indicator on the site (.cursor/rules/presence.mdc). One square per state, no icon:
- * only the colour says which, so nothing beside it moves when the word changes. Streaming adds a
- * red dot in the middle of the square that breathes (opacity and scale on the dot alone: it is
- * absolute inside the square, so the square and everything around it stay put), and holds still
- * for anyone who asked for less motion.
+ * only the colour says which, so nothing beside it moves when the word changes. Streaming is the
+ * square cut on its diagonal, green over blue; nothing in it moves.
  */
 export function PresenceSquare({ status, size = 'corner', className, id, labelled = false }: PresenceSquareProps) {
   const square = (
@@ -62,9 +62,7 @@ export function PresenceSquare({ status, size = 'corner', className, id, labelle
       data-presence={status}
       {...(labelled ? { role: 'img', 'aria-label': PRESENCE_WORD[status] } : { 'aria-hidden': true })}
       className={cn('block', SIZE[size], COLOUR[status], className)}
-    >
-      {status === 'streaming' && <span data-presence-dot className="absolute inset-0 m-auto block h-1/2 w-1/2 bg-decrease motion-safe:animate-presence-pulse" />}
-    </span>
+    />
   );
   if (!labelled) return square;
   return <Tooltip content={PRESENCE_WORD[status]}>{square}</Tooltip>;

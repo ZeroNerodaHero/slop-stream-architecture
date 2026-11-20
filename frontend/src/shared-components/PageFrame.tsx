@@ -40,12 +40,20 @@ interface PageFrameProps {
  * screen readers and for nobody else. The one icon without a tooltip (tooltips.mdc): the row
  * is pinned to the window's top edge, so above the caret there is no room for one, and under
  * it is the page. A crash reloads the document, because the router may be what broke. The
- * tests click `header a[href="/"]`.
+ * tests click `header a[href="/"]`. `square`: a 40px box, the size of the face beside it in a
+ * stream's row (`person`).
  */
-export function HomeLink({ reload = false, className }: { reload?: boolean; className?: string }) {
+export function HomeLink({ reload = false, square = false, className }: { reload?: boolean; square?: boolean; className?: string }) {
   return (
-    <Link id="home" to="/" aria-label="home" reloadDocument={reload || undefined} data-prefetch={reload ? 'off' : undefined} className={buttonClassName('secondary', cn('shrink-0 gap-1 px-3 py-1.5 text-sm', className))}>
-      <RiArrowLeftSLine aria-hidden size={18} />
+    <Link
+      id="home"
+      to="/"
+      aria-label="home"
+      reloadDocument={reload || undefined}
+      data-prefetch={reload ? 'off' : undefined}
+      className={buttonClassName('secondary', cn('shrink-0 gap-1 text-sm', square ? 'h-10 w-10 p-0' : 'px-3 py-1.5', className))}
+    >
+      <RiArrowLeftSLine aria-hidden size={square ? 20 : 18} />
     </Link>
   );
 }
@@ -247,7 +255,7 @@ export function PageFrame({ title, titleId, aside, wide = false, mobileTitle, mo
       // --page-top: where the page under the row starts (the row and its margin), for a column that fills the window (ChatSlot.tsx)
       <main ref={mainRef} className={cn('mx-auto px-5 pb-10 [--page-top:calc(var(--title-row,3.5rem)+0.5rem)]', width)}>
         <header ref={headerRef} className="sticky top-0 z-30 mb-2 flex min-h-14 items-center gap-3 border-b border-primaryStroke bg-background py-2">
-          <HomeLink />
+          <HomeLink square />
           {mobileStart}
           <div className="min-w-0 flex-1">
             <h1 id={titleId} className="truncate text-base font-medium leading-tight">

@@ -269,9 +269,11 @@ const THUMB_HOVER =
  * row share its width, cropped to fill their cells: three are two over one across the whole row,
  * five are three over two, eight are four over four. A click on any puts it over the whole page
  * (`PictureView`), in the window the chat is in: the page's, or the popped-out player's own.
- * A direct message's pictures are drawn by the same (FriendChat.tsx).
+ * A direct message's pictures are drawn by the same (FriendChat.tsx), and so are a pinned line's in
+ * a group channel's pins list (ServerRoom.tsx), `small` there: rows 4rem tall, one picture at most
+ * 5rem, to sit in the narrow list.
  */
-export function ChatImages({ ids }: { ids: string[] }) {
+export function ChatImages({ ids, small = false }: { ids: string[]; small?: boolean }) {
   const [view, setView] = useState<{ at: number; host: HTMLElement } | null>(null);
 
   if (ids.length === 0) return null;
@@ -283,7 +285,7 @@ export function ChatImages({ ids }: { ids: string[] }) {
     // the grid asks for 28rem and takes what the line has: inside a block, and inside the server line's shrink-to-fit column alike
     <span className={cn('mt-1 flex max-w-full flex-col gap-1', many && 'w-[28rem]')}>
       {rows.map((row, r) => (
-        <span key={r} className={cn('flex gap-1', many && 'h-24')}>
+        <span key={r} className={cn('flex gap-1', many && (small ? 'h-16' : 'h-24'))}>
           {row.map((id, j) => {
             const i = r * first + j;
             return (
@@ -295,7 +297,7 @@ export function ChatImages({ ids }: { ids: string[] }) {
                 className={cn(THUMB_HOVER, many ? 'min-w-0 flex-1' : 'block max-w-full')}
                 onClick={(e) => setView({ at: i, host: e.currentTarget.ownerDocument.body })}
               >
-                <img src={pictureSrc(id)} alt="" className={many ? 'h-full w-full object-cover' : 'max-h-[7.5rem] max-w-full object-contain'} />
+                <img src={pictureSrc(id)} alt="" className={many ? 'h-full w-full object-cover' : cn('max-w-full object-contain', small ? 'max-h-20' : 'max-h-[7.5rem]')} />
               </button>
             );
           })}
@@ -480,9 +482,9 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
             </div>
           );
         }
-        // one line of text-base leading-snug tall, the way a said line is
+        // one line of text-sm leading-snug tall (14px × 1.375), the way a said line is
         return (
-          <div key={i} className="flex h-[1.375rem] items-center gap-2">
+          <div key={i} className="flex h-[1.203125rem] items-center gap-2">
             <Bone className="h-3 w-8 shrink-0" />
             <Bone className={cn('h-3.5 shrink-0', name)} />
             <Bone className={cn('h-3.5', words)} />
@@ -675,7 +677,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
       {/* on a phone a stream's chat (watch, go live) drops this bar to leave the lines room over the keyboard: kept for screen readers and ids as they are. a group's bar stays, it names the channel */}
       {!embedded && (
         <header
-          className={cn('flex items-center justify-between gap-3 border-b border-primaryStroke px-3 py-1.5 text-base', !server && 'max-md:sr-only')}
+          className={cn('flex items-center justify-between gap-3 border-b border-primaryStroke px-3 py-1.5 text-sm', !server && 'max-md:sr-only')}
         >
           <span id={server ? 'channel' : undefined} className="truncate font-semibold">
             {server ? `#${channel}` : 'chat'}
@@ -714,7 +716,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
             data-style={shape}
             // its scroll is its own: the top of the history does not scroll the page under it (the room page snaps between its views).
             // a column: a log is a line each at an even gap; bubbles stand close within a minute and apart between minutes, blocks close within a run and apart between runs (ChatLine.tsx)
-            className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-2 py-1 text-base leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
+            className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-2 py-1 text-sm leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
           >
             {waiting && <ChatSkeleton shape={shape} />}
             {!waiting && lines.length === 0 && (
@@ -770,7 +772,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
 
         {/* the hits, or one speaker's lines, newest first, where the lines were (ChatSearch.tsx). one clicked puts the lines back with it in view; close puts them back as they were */}
         {results && (
-          <SearchResults id="chat-results" label={resultsFor} count={results.length} onClose={() => room.clearResults()} className="absolute inset-0 text-base">
+          <SearchResults id="chat-results" label={resultsFor} count={results.length} onClose={() => room.clearResults()} className="absolute inset-0 text-sm">
             {results.map((line) => {
               // where the hit is, when it is not here: a server's search is every channel's
               const elsewhere = line.channel !== undefined && line.channel !== channel ? line.channel : null;
@@ -813,9 +815,9 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
               placeholder="nickname"
               maxLength={24}
               autoComplete="off"
-              className={cn(INPUT, 'min-w-0 flex-1')}
+              className={cn(INPUT, 'h-[1.875rem] min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
             />
-            <Button id="chat-join" variant="primary" className={INPUT_BUTTON} disabled={!nickOk} onClick={open}>
+            <Button id="chat-join" variant="primary" className={cn(INPUT_BUTTON, 'h-[1.875rem] text-sm')} disabled={!nickOk} onClick={open}>
               join
             </Button>
             {/* "that name has an account": the refusal that sent you back here */}
@@ -879,15 +881,16 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                 placeholder="comment"
                 aria-label={`comment as ${asStreamer ? name : speaker}`}
                 autoComplete="off"
-                // a phone zooms in on a focused box under 16px: never smaller there, whatever text size the appearance tab picked
-                className={cn(INPUT, 'min-w-0 flex-1 max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
+                // text-sm like the lines, pinned at the 30px box so the row keeps its height. a phone zooms in on a focused box
+                // under 16px: never smaller there, whatever text size the appearance tab picked
+                className={cn(INPUT, 'h-[1.875rem] min-w-0 flex-1 text-sm max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
               />
               {/* refused for the rate: the button goes red and counts down to the next line, and shakes at each try meanwhile. still a button, so a try can shake it */}
               <Button
                 id="chat-send"
                 variant={wait > 0 ? 'danger' : 'primary'}
                 // a phone's: a 44px target at least, as tall as the box beside it
-                className="h-8 shrink-0 px-4 py-0 text-base tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
+                className="h-8 shrink-0 px-4 py-0 text-sm tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
                 disabled={!canSend}
                 title={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : undefined}
                 data-wait={wait > 0 ? wait : undefined}
