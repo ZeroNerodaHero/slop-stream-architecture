@@ -94,7 +94,7 @@ import { RailFace } from '@/shared-components/Friends';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack, useSheetKeyboard } from '@/shared-components/MobileSheet';
 import { when } from '@/shared-components/ChatLine';
-import { ChatPanel } from '@/shared-components/ChatPanel';
+import { ChatImages, ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { INPUT } from '@/shared-components/input';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
@@ -715,8 +715,10 @@ function PinAction({ server, channel, line, pinned }: { server: string; channel:
  * and under it, while open, the pinned lines, newest pin first. A line is a click to it in the
  * channel (`openLine`: the lines around it when it is long scrolled away); the channels power
  * has an unpin on each. The list is asked as it opens, and again on every pin or unpin while it
- * is (`pinsTickAtom`); the count is the room's (`room.pins`), kept by the facts. Escape, a click
- * outside, or the × shut it.
+ * is (`pinsTickAtom`); the count is the room's (`room.pins`), kept by the facts. A line's pictures
+ * are under its words, as the chat draws them (`ChatImages`, small), over the row's click: a click
+ * on one opens it over the page. Escape, a click outside, or the × shut it; not while a picture is
+ * open over the page, whose escape and clicks are its own.
  */
 function ChannelPins({ server, channel, room }: { server: string; channel: string; room: GroupRoom }) {
   const [open, setOpen] = useState(false);
@@ -754,11 +756,13 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
 
   useEffect(() => {
     if (!open) return;
+    // a picture open over the page is a modal <dialog> on the body, outside the box: its presses and its escape are its own
+    const inDialog = (target: EventTarget | null) => target instanceof Element && target.closest('dialog[open]') !== null;
     const away = (e: globalThis.PointerEvent) => {
-      if (e.target instanceof Node && !boxRef.current?.contains(e.target)) setOpen(false);
+      if (e.target instanceof Node && !boxRef.current?.contains(e.target) && !inDialog(e.target)) setOpen(false);
     };
     const key = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Escape' && !inDialog(e.target)) setOpen(false);
     };
     document.addEventListener('pointerdown', away);
     document.addEventListener('keydown', key);
@@ -822,28 +826,36 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
           ) : (
             <ul id="group-pins-list" className="flex min-h-0 flex-col overflow-y-auto overscroll-contain py-1">
               {list.map((pin) => {
-                const pictures = pin.images?.length ?? 0;
+                // absent on the wire when there are none
+                const pictures = pin.images ?? [];
                 return (
                   <li
                     key={pin.id}
                     data-id={pin.id}
                     className="relative flex items-start gap-2 px-3 py-1.5 transition-colors duration-150 focus-within:bg-backgroundTertiary hover:bg-backgroundTertiary"
                   >
-                    <button
-                      type="button"
-                      data-pin-open={pin.id}
-                      title={pin.pinned_by ? `pinned by ${pin.pinned_by}` : undefined}
-                      onClick={() => {
-                        setOpen(false);
-                        void serverChat(server).openLine(pin.id, channel);
-                      }}
-                      className="min-w-0 flex-1 text-left [overflow-wrap:anywhere] after:absolute after:inset-0 after:content-[''] focus-visible:outline-none"
-                    >
-                      <span className="mr-1.5 text-xs tabular-nums text-textTertiary">{when(pin.at)}</span>
-                      <span className="font-semibold text-primaryBlue">{pin.from}</span>
-                      {pin.text && <span className="text-textSecondary">: {pin.text}</span>}
-                      {pictures > 0 && <span className="ml-1 text-textTertiary">{pictures === 1 ? '(a picture)' : `(${pictures} pictures)`}</span>}
-                    </button>
+                    <div className="min-w-0 flex-1">
+                      <button
+                        type="button"
+                        data-pin-open={pin.id}
+                        title={pin.pinned_by ? `pinned by ${pin.pinned_by}` : undefined}
+                        onClick={() => {
+                          setOpen(false);
+                          void serverChat(server).openLine(pin.id, channel);
+                        }}
+                        className="w-full text-left [overflow-wrap:anywhere] after:absolute after:inset-0 after:content-[''] focus-visible:outline-none"
+                      >
+                        <span className="mr-1.5 text-xs tabular-nums text-textTertiary">{when(pin.at)}</span>
+                        <span className="font-semibold text-primaryBlue">{pin.from}</span>
+                        {pin.text && <span className="text-textSecondary">: {pin.text}</span>}
+                      </button>
+                      {/* over the row's click, so a thumbnail opens the picture and not the line */}
+                      {pictures.length > 0 && (
+                        <div data-pin-pictures={pin.id} className="relative z-10">
+                          <ChatImages ids={pictures} small />
+                        </div>
+                      )}
+                    </div>
                     {canPin && (
                       <Tooltip content="unpin">
                         <button
