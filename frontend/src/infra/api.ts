@@ -364,6 +364,8 @@ export interface GroupRoom {
   live?: string[];
   /** The roster: anyone's on a public group, a member's or a site admin's on a private one. Null for anyone else; absent on an older api. */
   roster?: GroupMember[] | null;
+  /** Asked for a page of it (`group(name, roster)`): where the next page starts (`groupMembersPage`'s `after`). Null once the roster is whole; absent on an older api. */
+  roster_next?: string | null;
   /** Who is banned, for the ban power. Null for anyone else; absent on an older api. */
   bans?: GroupBan[] | null;
 }
@@ -640,9 +642,10 @@ export const api = {
   /** An owner, the one who made it, or an admin. Its members are out with it. */
   deleteGroup: (name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(name)}`),
   /** The whole room: the group, its roles, what this login may do, the channels, who is live, and the roster and bans it may see. 404 for no such group. */
-  group: (name: string) => request<GroupRoom>('GET', `/api/groups/${encodeURIComponent(name)}`),
-  /** The last 100 lines of every channel, oldest first, keyed by channel. What the room draws before its socket says more. */
-  groupMessages: (name: string) => request<Record<string, ChatLine[]>>('GET', `/api/groups/${encodeURIComponent(name)}/messages`),
+  group: (name: string, roster?: number) => request<GroupRoom>('GET', `/api/groups/${encodeURIComponent(name)}${roster === undefined ? '' : `?roster=${roster}`}`),
+  /** The last lines of every channel (`limit` each, 100 at most and left out), oldest first, keyed by channel. What the room draws before its socket says more. */
+  groupMessages: (name: string, limit?: number) =>
+    request<Record<string, ChatLine[]>>('GET', `/api/groups/${encodeURIComponent(name)}/messages${limit === undefined ? '' : `?limit=${limit}`}`),
   /** Servers you are in, then the ones you can find. `bot` is not a server. See docs/groups.md. */
   explore: () => request<Explore>('GET', '/api/explore'),
   /** Someone who may add a channel. 403 until they have joined, or without the power. The new channel goes after the last. */
@@ -684,6 +687,13 @@ export const api = {
   saveGroupIcon: (name: string, jpeg: Blob) => request<{ icon: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/icon`, jpeg),
   saveGroupBanner: (name: string, jpeg: Blob) => request<{ banner: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/banner`, jpeg),
   groupMembers: (name: string) => request<GroupMember[]>('GET', `/api/groups/${encodeURIComponent(name)}/members`),
+  /** One page of the roster in its order: `limit` (100 at most), after the page whose `next` is `after`, and with `q` only the names, or held roles, with the words in them. `next` null at the end. */
+  groupMembersPage: (name: string, page: { limit: number; after?: string | null; q?: string }) => {
+    const query = new URLSearchParams({ limit: String(page.limit) });
+    if (page.after) query.set('after', page.after);
+    if (page.q) query.set('q', page.q);
+    return request<{ members: GroupMember[]; next: string | null }>('GET', `/api/groups/${encodeURIComponent(name)}/members?${query}`);
+  },
   groupBans: (name: string) => request<GroupBan[]>('GET', `/api/groups/${encodeURIComponent(name)}/bans`),
   /** The roles power. 201 the role, with the id the api made. 409 `name taken`, 403 past the cap or out of reach. */
   createRole: (group: string, role: RoleBody) => request<GroupRole>('POST', `/api/groups/${encodeURIComponent(group)}/roles`, role),

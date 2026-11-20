@@ -10,7 +10,7 @@
 
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody, JsonRejection};
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -367,10 +367,11 @@ pub(crate) fn routes() -> Router<AppState> {
 /// `GET /api/groups/:group`: the whole room in one answer. The group, its roles, what the
 /// login may do, its channels, who in it is live, the roster (anyone's on a public group; a
 /// member's or a site admin's on a private one), and (for the ban power) the bans. `roster`
-/// and `bans` are null for someone who may not see them. The page loads this once and then
+/// and `bans` are null for someone who may not see them. `?roster=<n>` cuts the roster to its
+/// first page, `roster_next` the cursor for `GET .../members?after=`. The page loads this once and then
 /// follows the `group` facts on the events socket (docs/groups.md); nothing here is asked
 /// again on a channel change.
-pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
+pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Query(q): Query<RoomQuery>, Me(me): Me) -> ApiResult {
     let group = server(&s.db, &group).await?;
     let user = me.as_ref().map(|a| a.id);
     #[allow(clippy::type_complexity)]
@@ -406,7 +407,15 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, M
     let pins = crate::pins::pinned_ids(&s.db, &group, &seen).await?;
     // the roster is anyone's on a public group (the lines say who talks there anyway), and a member's or a
     // site admin's on a private one, whose people chose not to be listed; the bans are the ban power's. null otherwise
-    let roster = if public || mine || admin { Some(members_of(&s.db, &group, &member_order).await?) } else { None };
+    // `?roster=` asks for its first page alone (`limit`, as `GET .../members` reads it), and
+    // `roster_next` is where the next one starts: null when the roster came whole
+    let first = page_of(q.roster, None, None)?;
+    let (roster, roster_next) = if public || mine || admin {
+        let (list, next) = members_of(&s.db, &group, &member_order, first.as_ref()).await?;
+        (Some(list), next)
+    } else {
+        (None, None)
+    };
     let bans = if powers & BAN != 0 { Some(bans_of(&s.db, &group).await?) } else { None };
     Ok(Json(json!({
         "name": group,
@@ -431,6 +440,7 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, M
         "pins": pins,
         "live": live,
         "roster": roster,
+        "roster_next": roster_next,
         "bans": bans,
     })))
 }
@@ -917,49 +927,163 @@ async fn revoke_owner(State(s): State<AppState>, Path((group, name)): Path<(Stri
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// The most of the roster one page carries (`GET .../members?limit=`, the room's `?roster=`).
+const MEMBERS_PAGE_MAX: i64 = 100;
+/// A page's size when `limit` is left out but `after` or `q` asks for a page.
+const MEMBERS_PAGE_DEFAULT: i64 = 50;
+
+/// One page of the roster: at most `limit`, after the row `after` names (`Cursor`), and with
+/// `q`, only the members whose name, or a role they hold, has it in it.
+struct Page {
+    limit: i64,
+    after: Option<Cursor>,
+    q: Option<String>,
+}
+
+/// Where a page left off: the last row's sort key (owner, when they joined in microseconds,
+/// name), so the next page goes on from there however many joined or left in between. Written
+/// `<0|1>.<micros>.<name>`; the page hands it out as `next`, opaque to the client.
+struct Cursor {
+    owner: bool,
+    joined: i64,
+    name: String,
+}
+
+impl Cursor {
+    fn text(&self) -> String {
+        format!("{}.{}.{}", u8::from(self.owner), self.joined, self.name)
+    }
+
+    fn read(raw: &str) -> Result<Cursor, ApiError> {
+        let bad = || ApiError::new(StatusCode::BAD_REQUEST, "bad cursor");
+        let mut parts = raw.splitn(3, '.');
+        let owner = match parts.next() {
+            Some("1") => true,
+            Some("0") => false,
+            _ => return Err(bad()),
+        };
+        let joined = parts.next().and_then(|j| j.parse::<i64>().ok()).ok_or_else(bad)?;
+        let name = parts.next().filter(|n| !n.is_empty()).ok_or_else(bad)?.to_owned();
+        Ok(Cursor { owner, joined, name })
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RoomQuery {
+    roster: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct MembersQuery {
+    limit: Option<i64>,
+    after: Option<String>,
+    q: Option<String>,
+}
+
+/// A page's `limit`, `after` and `q` read; none of them is the whole roster (`None`), the
+/// answer from before there were pages. `limit` is held to 1..=MEMBERS_PAGE_MAX.
+fn page_of(limit: Option<i64>, after: Option<&str>, q: Option<&str>) -> Result<Option<Page>, ApiError> {
+    let q = q.map(str::trim).filter(|w| !w.is_empty()).map(str::to_lowercase);
+    if limit.is_none() && after.is_none() && q.is_none() {
+        return Ok(None);
+    }
+    let after = after.map(Cursor::read).transpose()?;
+    Ok(Some(Page { limit: limit.unwrap_or(MEMBERS_PAGE_DEFAULT).clamp(1, MEMBERS_PAGE_MAX), after, q }))
+}
+
+/// The words as a `LIKE` pattern that means them: a `%` or `_` typed is not a wildcard.
+fn like_pattern(words: &str) -> String {
+    let mut out = String::from("%");
+    for c in words.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
+}
+
 /// The roster: every member with their picture, when they joined (unix seconds, so a room
 /// keeps the order right as people come and go), whether they own the group, and the roles
-/// they hold. Owners first, then `order` (`name`, `newest`, `oldest`).
-async fn members_of(db: &sqlx::PgPool, group: &str, order: &str) -> Result<Vec<Value>, sqlx::Error> {
-    // `timeout`: unix seconds until a timeout that is still running ends, else null
-    let rows: Vec<(String, bool, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
-        "SELECT s.name, m.owner, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, (EXTRACT(EPOCH FROM m.joined_at))::bigint,
-                (SELECT (EXTRACT(EPOCH FROM t.until))::bigint FROM timeouts t WHERE t.group_name = m.group_name AND t.user_id = m.user_id AND t.until > now())
-         FROM memberships m JOIN streamers s ON s.id = m.user_id
-         WHERE m.group_name = $1
-         ORDER BY m.owner DESC,
-                  CASE WHEN $2 = 'newest' THEN m.joined_at END DESC NULLS LAST,
-                  CASE WHEN $2 = 'oldest' THEN m.joined_at END ASC NULLS LAST,
-                  s.name",
+/// they hold. Owners first, then `order` (`name`, `newest`, `oldest`), the name breaking a tie.
+/// With a `page`, that page alone and the cursor of the one after it (`None` at the end);
+/// without, all of it and `None`.
+async fn members_of(db: &sqlx::PgPool, group: &str, order: &str, page: Option<&Page>) -> Result<(Vec<Value>, Option<String>), sqlx::Error> {
+    let after = page.and_then(|p| p.after.as_ref());
+    // `timeout`: unix seconds until a timeout that is still running ends, else null. `j`: when
+    // they joined in microseconds, the key a cursor carries (seconds would tie)
+    #[allow(clippy::type_complexity)]
+    let mut rows: Vec<(String, bool, Option<i64>, i64, Option<i64>, i64)> = sqlx::query_as(
+        "SELECT name, owner, avatar, joined, timeout, j FROM (
+             SELECT s.name, m.owner, (EXTRACT(EPOCH FROM s.avatar_at))::bigint AS avatar, (EXTRACT(EPOCH FROM m.joined_at))::bigint AS joined,
+                    (SELECT (EXTRACT(EPOCH FROM t.until))::bigint FROM timeouts t WHERE t.group_name = m.group_name AND t.user_id = m.user_id AND t.until > now()) AS timeout,
+                    (EXTRACT(EPOCH FROM m.joined_at) * 1000000)::bigint AS j
+             FROM memberships m JOIN streamers s ON s.id = m.user_id
+             WHERE m.group_name = $1
+               AND ($7::text IS NULL OR s.name ILIKE $7 OR EXISTS (
+                    SELECT 1 FROM role_members rm JOIN roles r ON r.id = rm.role_id
+                    WHERE rm.user_id = m.user_id AND r.group_name = m.group_name AND r.name ILIKE $7))
+         ) x
+         WHERE NOT $3 OR owner < $4 OR (owner = $4 AND CASE
+                   WHEN $2 = 'newest' THEN j < $5 OR (j = $5 AND name > $6)
+                   WHEN $2 = 'oldest' THEN j > $5 OR (j = $5 AND name > $6)
+                   ELSE name > $6 END)
+         ORDER BY owner DESC,
+                  CASE WHEN $2 = 'newest' THEN j END DESC,
+                  CASE WHEN $2 = 'oldest' THEN j END ASC,
+                  name
+         LIMIT $8",
     )
     .bind(group)
     .bind(order)
+    .bind(after.is_some())
+    .bind(after.is_some_and(|c| c.owner))
+    .bind(after.map_or(0, |c| c.joined))
+    .bind(after.map_or("", |c| c.name.as_str()))
+    .bind(page.and_then(|p| p.q.as_deref()).map(like_pattern))
+    // one past the page says whether there is another
+    .bind(page.map_or(i64::MAX, |p| p.limit + 1))
     .fetch_all(db)
     .await?;
+    let next = match page {
+        Some(p) if rows.len() as i64 > p.limit => {
+            rows.truncate(p.limit as usize);
+            rows.last().map(|(name, owner, _, _, _, j)| Cursor { owner: *owner, joined: *j, name: name.clone() }.text())
+        }
+        _ => None,
+    };
+    let names: Vec<String> = rows.iter().map(|row| row.0.clone()).collect();
     let roles: Vec<(String, uuid::Uuid, String, String)> = sqlx::query_as(
         "SELECT s.name, r.id, r.name, r.color FROM role_members rm
          JOIN roles r ON r.id = rm.role_id
          JOIN streamers s ON s.id = rm.user_id
-         WHERE r.group_name = $1 ORDER BY r.created_at, r.name",
+         WHERE r.group_name = $1 AND s.name = ANY($2) ORDER BY r.created_at, r.name",
     )
     .bind(group)
+    .bind(&names)
     .fetch_all(db)
     .await?;
-    let out = rows.into_iter().map(|(name, owner, avatar, joined, timeout)| {
+    let out = rows.into_iter().map(|(name, owner, avatar, joined, timeout, _)| {
         let mine: Vec<Value> = roles
             .iter()
             .filter(|(n, _, _, _)| n == &name)
             .map(|(_, id, role, color)| json!({ "id": id, "name": role, "color": color }))
             .collect();
-        json!({ "name": name, "owner": owner, "avatar": avatar, "joined": joined.unwrap_or(0), "roles": mine, "timeout": timeout })
+        json!({ "name": name, "owner": owner, "avatar": avatar, "joined": joined, "roles": mine, "timeout": timeout })
     });
-    Ok(out.collect())
+    Ok((out.collect(), next))
 }
 
 /// `GET /api/groups/:group/members`: the roster on its own, the room's rule: anyone's on a
 /// public group; on a private one a member's or a site admin's (401 for nobody, 403 otherwise).
-async fn list_members(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
+/// Bare, the whole roster as an array, as before there were pages. With `limit` (1..=100; 50
+/// when only `after` or `q` is given), `after` (the page before's `next`) or `q` (words in a
+/// member's name or a role they hold), one page: `{ members, next }`, `next` null at the end.
+/// 400 `bad cursor`.
+async fn list_members(State(s): State<AppState>, Path(group): Path<String>, Query(q): Query<MembersQuery>, Me(me): Me) -> ApiResult {
     let group = server(&s.db, &group).await?;
+    let page = page_of(q.limit, q.after.as_deref(), q.q.as_deref())?;
     let (public, order): (bool, String) = sqlx::query_as("SELECT public, member_order FROM groups WHERE name = $1").bind(&group).fetch_one(&s.db).await?;
     if !public {
         let who = me.ok_or_else(login)?;
@@ -967,7 +1091,11 @@ async fn list_members(State(s): State<AppState>, Path(group): Path<String>, Me(m
             return Err(ApiError::new(StatusCode::FORBIDDEN, "join the group first"));
         }
     }
-    Ok(Json(Value::Array(members_of(&s.db, &group, &order).await?)))
+    let (members, next) = members_of(&s.db, &group, &order, page.as_ref()).await?;
+    Ok(Json(match page {
+        Some(_) => json!({ "members": members, "next": next }),
+        None => Value::Array(members),
+    }))
 }
 
 pub(crate) async fn drop_roles(db: &sqlx::PgPool, group: &str, user: uuid::Uuid) -> Result<(), sqlx::Error> {
@@ -1226,6 +1354,36 @@ async fn put_banner(State(s): State<AppState>, Path(group): Path<String>, Me(me)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cursor_reads_back_what_it_wrote() {
+        let c = Cursor { owner: true, joined: 1_763_500_000_123_456, name: "a.b".to_owned() };
+        let back = Cursor::read(&c.text()).unwrap();
+        assert!(back.owner);
+        assert_eq!(back.joined, 1_763_500_000_123_456);
+        // the name is the rest, dots and all
+        assert_eq!(back.name, "a.b");
+        for bad in ["", "2.1.x", "1.x.x", "1.5", "1.5.", "0..x"] {
+            assert!(Cursor::read(bad).is_err(), "{bad:?} read as a cursor");
+        }
+    }
+
+    #[test]
+    fn a_page_is_asked_for_by_any_of_its_words() {
+        assert!(page_of(None, None, None).unwrap().is_none(), "bare is the whole roster");
+        assert!(page_of(None, None, Some("  ")).unwrap().is_none(), "blank words ask nothing");
+        assert_eq!(page_of(Some(0), None, None).unwrap().unwrap().limit, 1);
+        assert_eq!(page_of(Some(10_000), None, None).unwrap().unwrap().limit, MEMBERS_PAGE_MAX);
+        let q = page_of(None, None, Some(" Mod ")).unwrap().unwrap();
+        assert_eq!((q.limit, q.q.as_deref()), (MEMBERS_PAGE_DEFAULT, Some("mod")));
+        assert!(page_of(Some(5), Some("nope"), None).is_err());
+    }
+
+    #[test]
+    fn like_means_the_words() {
+        assert_eq!(like_pattern("bob"), "%bob%");
+        assert_eq!(like_pattern("50%_\\"), "%50\\%\\_\\\\%");
+    }
 
     #[test]
     fn powers_pack() {
