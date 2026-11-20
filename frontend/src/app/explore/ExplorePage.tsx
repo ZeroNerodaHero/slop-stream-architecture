@@ -68,7 +68,7 @@ export function ExplorePage() {
         <label htmlFor="groups-search" className="sr-only">
           search groups
         </label>
-        <input id="groups-search" value={text} onChange={(e) => setText(e.target.value)} placeholder="search groups and people" autoComplete="off" className={INPUT} />
+        <input id="groups-search" value={text} onChange={(e) => setText(e.target.value)} placeholder="search" autoComplete="off" className={INPUT} />
         {canMake && (
           <Button id="groups-create" variant="primary" className="shrink-0 px-4 py-2 text-sm" onClick={() => setMaking(true)}>
             create

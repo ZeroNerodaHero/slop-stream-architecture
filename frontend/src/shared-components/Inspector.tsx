@@ -252,7 +252,8 @@ function InspectorPanel() {
           id="inspector-filter"
           value={filter}
           onChange={(e) => setInspectorFilter(e.target.value)}
-          placeholder="filter: a word in the frame, its type, its socket…"
+          placeholder="filter"
+          aria-label="filter: a word in the frame, its type, its socket…"
           autoComplete="off"
           spellCheck={false}
           className="min-w-[160px] flex-1 border border-primaryStroke bg-background px-2 py-1 text-sm text-textPrimary placeholder:text-textTertiary"

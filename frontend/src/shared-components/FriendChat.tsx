@@ -1003,7 +1003,7 @@ export function FriendChat() {
                         closeSearch();
                       }
                     }}
-                    placeholder="search this chat"
+                    placeholder="search"
                     className={cn(INPUT, 'py-1 text-sm', mobile && 'text-base')}
                   />
                   <SearchSuggestions id="friend-chat-search-list" search={search} />
@@ -1169,7 +1169,8 @@ export function FriendChat() {
                       hideDms();
                     }
                   }}
-                  placeholder={pictures.length > 0 ? 'say something with it, or just send' : `message ${name}`}
+                  placeholder="message"
+                  aria-label={`message ${name}`}
                   maxLength={MAX_CHARS + 50}
                   autoComplete="off"
                   // a phone's box is 16px text: a smaller one zooms the page in when it takes focus (ios; globals.css keeps

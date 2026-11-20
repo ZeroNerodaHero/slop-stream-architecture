@@ -147,7 +147,7 @@ function PickName() {
                   .slice(0, 32)
               )
             }
-            placeholder="a-z 0-9 _ -"
+            placeholder="username"
             autoComplete="username"
             autoCapitalize="off"
             spellCheck={false}

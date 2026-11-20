@@ -718,7 +718,7 @@ function RoomSearch({ search, input, flat, className }: { search: ChatSearch; in
           if (search.onKeyDown(e)) return;
           if (e.key === 'Escape') search.setQuery('');
         }}
-        placeholder="members or every channel"
+        placeholder="search"
         autoCapitalize="off"
         spellCheck={false}
         className={cn('h-8 w-full border border-primaryStroke bg-background pr-2 text-sm text-textPrimary placeholder:text-textTertiary', flat ? 'pl-8' : 'pl-7')}
@@ -2396,8 +2396,8 @@ function BansSection({ server, room, run }: ManageProps) {
           });
         }}
       >
-        <input id="ban-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="ban a name" aria-label="ban a name" className={INPUT} />
-        <input id="ban-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason, optional" aria-label="ban reason" className={INPUT} />
+        <input id="ban-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="username" aria-label="ban a name" className={INPUT} />
+        <input id="ban-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason" aria-label="ban reason" className={INPUT} />
         <button id="ban-submit" type="submit" className="justify-self-start text-sm font-semibold text-decrease disabled:opacity-40" disabled={!name.trim()}>
           ban
         </button>
@@ -2875,7 +2875,7 @@ function RolesSection({ server, room, run }: ManageProps) {
                   id="owner-role-name"
                   value={ownerDraft}
                   onChange={(e) => setOwnerDraft(e.target.value)}
-                  placeholder="owner role name"
+                  placeholder="role"
                   maxLength={32}
                   aria-label="owner role name"
                   autoFocus
@@ -2940,7 +2940,7 @@ function RolesSection({ server, room, run }: ManageProps) {
                     id="role-name"
                     value={open.name}
                     onChange={(e) => setDraft({ ...open, name: e.target.value })}
-                    placeholder="role name"
+                    placeholder="role"
                     maxLength={32}
                     aria-label="role name"
                     autoFocus

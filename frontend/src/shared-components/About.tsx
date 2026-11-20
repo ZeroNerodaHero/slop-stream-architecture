@@ -286,7 +286,7 @@ function TextEditor({ html, autoFocus, inset, onChange }: { html: string; autoFo
       role="textbox"
       aria-label="text"
       aria-multiline
-      data-placeholder="write here"
+      data-placeholder="about"
       suppressContentEditableWarning
       onInput={() => {
         const el = ref.current;

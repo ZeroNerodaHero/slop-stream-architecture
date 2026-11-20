@@ -810,7 +810,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && nickOk) open();
               }}
-              placeholder="pick a nick"
+              placeholder="nickname"
               maxLength={24}
               autoComplete="off"
               className="min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base"
