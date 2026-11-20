@@ -19,7 +19,7 @@ import { DEFAULT_TAB, type UserTab, closeUserModal, pickTab, tabsFor, userModalO
 import { useIsMobile } from '@/infra/mobile';
 import { Face } from '@/shared-components/Face';
 import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
-import { PresenceSquare } from '@/shared-components/PersonRow';
+import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { AdvancedTab } from '@/shared-components/user-modal/AdvancedTab';
 import { AppearanceTab } from '@/shared-components/user-modal/AppearanceTab';
 import { ChatTab } from '@/shared-components/user-modal/ChatTab';
@@ -157,9 +157,9 @@ function Rail({ tab, tabs }: { tab: UserTab; tabs: readonly UserTab[] }) {
       <div className="hidden items-center gap-3 border-b border-primaryStroke px-3 py-3 sm:flex">
         <span className="relative block shrink-0" title={name ? PRESENCE_WORD[presence] : undefined}>
           <Face name={name} version={avatar} className="h-9 w-9 text-base" />
-          {/* the presence square in the picture's corner, the corner panel's way (PersonRow.tsx). the word is in
+          {/* the presence square in the picture's corner, the corner panel's way (PresenceSquare.tsx). the word is in
               the title; the ✓ keeps meaning login */}
-          {name && <PresenceSquare id="modal-presence" presence={presence} className="border-background" />}
+          {name && <PresenceSquare id="modal-presence" status={presence} className="border-background" />}
         </span>
         <span className="min-w-0">
           <span className="block truncate font-semibold leading-tight">{name || 'nobody yet'}</span>

@@ -10,7 +10,8 @@ import { profilePopupAtom } from '@/infra/atoms/profile-popup-atoms';
 import type { PanelSide } from '@/infra/atoms/settings-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Face } from '@/shared-components/Face';
-import { PresenceSquare, Who } from '@/shared-components/PersonRow';
+import { Who } from '@/shared-components/PersonRow';
+import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { StreamStill } from '@/shared-components/StreamStill';
 
 /** The card's width, and how far it stands off the column and off the window's edge. */
@@ -174,7 +175,7 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
           <Face name={person.name} version={person.avatar} className="h-12 w-12 text-lg" />
           {presence && (
             <>
-              <PresenceSquare presence={presence} className="border-backgroundSecondary" />
+              <PresenceSquare status={presence} className="border-backgroundSecondary" />
               {/* the square says it in colour; the word, for a reader */}
               <span className="sr-only">{PRESENCE_WORD[presence]}</span>
             </>

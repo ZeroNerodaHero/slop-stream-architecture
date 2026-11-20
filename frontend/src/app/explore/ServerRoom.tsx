@@ -98,7 +98,7 @@ import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { INPUT } from '@/shared-components/input';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
-import { PresenceSquare } from '@/shared-components/PersonRow';
+import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { ProfileLink } from '@/shared-components/ProfileLink';
 import { DragHandle, movedTo, useReorder } from '@/shared-components/Reorderable';
@@ -1816,7 +1816,7 @@ function Member({ member, live, ownerRole, flat }: { member: GroupMember; live: 
       >
         <span className="relative flex shrink-0">
           <Face name={member.name} version={member.avatar ?? null} className={cn('shrink-0', flat ? 'h-8 w-8' : 'h-7 w-7 text-sm')} />
-          <PresenceSquare presence={presence} className="border-backgroundSecondary" />
+          <PresenceSquare status={presence} className="border-backgroundSecondary" />
           <span className="sr-only">{PRESENCE_WORD[presence]}</span>
         </span>
         <span className="min-w-0 flex-1">

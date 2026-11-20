@@ -62,7 +62,7 @@ import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
 import { PageFrame } from '@/shared-components/PageFrame';
-import { PresenceSquare } from '@/shared-components/PersonRow';
+import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { SceneView } from '@/shared-components/SceneView';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SocialsTab } from '@/shared-components/SocialsEditor';
@@ -262,7 +262,7 @@ export function WatchPage() {
   const face = name ? (
     <span className="relative shrink-0">
       <Face name={name} version={avatar} className={mobile ? 'h-8 w-8 text-sm' : 'h-10 w-10 text-lg'} />
-      <PresenceSquare id="presence" labelled presence={presence} className="border-background" />
+      <PresenceSquare id="presence" labelled status={presence} className="border-background" />
     </span>
   ) : undefined;
   const title = (
@@ -349,7 +349,7 @@ export function WatchPage() {
                     mobile && strip.overlay
                   )}
                 >
-                  <span aria-hidden className="h-2 w-2 bg-textTertiary" />
+                  <PresenceSquare status="offline" size="chip" />
                   offline
                 </span>
               )}
