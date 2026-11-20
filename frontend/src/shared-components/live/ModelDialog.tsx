@@ -21,6 +21,7 @@ import type { KeptModel } from '@/infra/model-store';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { LoadBar, loadFraction, loadWords, loadWordsShort } from '@/shared-components/live/ModelLoading';
 import { KeptPicture, LetterTile } from '@/shared-components/live/ModelPicture';
+import { ExternalLink } from '@/shared-components/ExternalLink';
 import { SHEET_CLOSE, SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -281,9 +282,9 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
           <ul id="model-places" className="m-0 mt-2 flex list-none flex-col gap-1.5 p-0 text-sm">
             {PLACES.map((place) => (
               <li key={place.id} className="min-w-0 text-textTertiary">
-                <a id={`model-place-${place.id}`} href={place.href} target="_blank" rel="noopener noreferrer" className="font-semibold text-primaryBlue hover:underline">
+                <ExternalLink id={`model-place-${place.id}`} href={place.href} className="font-semibold text-primaryBlue hover:underline">
                   {place.name}
-                </a>
+                </ExternalLink>
                 {` · ${place.file} · ${place.about}`}
               </li>
             ))}
