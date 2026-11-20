@@ -1,4 +1,5 @@
 import type { Config } from 'tailwindcss';
+import plugin from 'tailwindcss/plugin';
 
 // The same token names as Axiom-Frontend, fed by the css variables in src/app/globals.css.
 //
@@ -46,5 +47,12 @@ export default {
       }
     }
   },
-  plugins: []
+  plugins: [
+    // `beside:` is where a stream's chat column stands beside the video (ChatSlot.tsx). a page that
+    // measures its own body says so on the box, `data-chat="beside"` or `"tabbed"` (WatchPage.tsx: the
+    // sidebar takes width the viewport does not show); anywhere else it is the lg breakpoint
+    plugin(({ addVariant }) => {
+      addVariant('beside', ['@media (min-width: 1024px) { &:where(:not([data-chat] *, [data-chat])) }', '&:where([data-chat="beside"], [data-chat="beside"] *)']);
+    })
+  ]
 } satisfies Config;

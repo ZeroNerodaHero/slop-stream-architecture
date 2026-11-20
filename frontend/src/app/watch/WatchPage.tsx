@@ -1,6 +1,6 @@
 import { RiChat3Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
 import {
@@ -90,9 +90,39 @@ const NOT_LIVE_WORDS: Record<Presence, string> = {
 type WatchTab = 'about' | 'calendar' | 'socials';
 const WATCH_TABS: readonly WatchTab[] = ['about', 'calendar', 'socials'];
 
-/** A phone's tabs under the player: the same three, and the chat at the row's right end. Chat is where a phone's page opens, as on go live (LivePage.tsx). */
+/**
+ * A phone's tabs under the player: the same three, and the chat at the row's right end. Chat is where a phone's page opens, as on go live (LivePage.tsx).
+ * A desktop whose body is too narrow for the chat column beside the player has the same row (`BESIDE_MIN`).
+ */
 type PhoneTab = WatchTab | 'chat';
 const PHONE_TABS: readonly PhoneTab[] = [...WATCH_TABS, 'chat'];
+
+/**
+ * The narrowest page body that stands the chat column beside the player: the body at the lg
+ * breakpoint beside the collapsed sidebar (1024 − the 56px rail − PageFrame's 2×20px), where the
+ * column used to drop under the picture. 360px of chat and 24px of gap leave the video 544px.
+ * Narrower, and the chat is the last tab under the player instead.
+ */
+const BESIDE_MIN = 928;
+
+/**
+ * True while the box `ref` holds is narrower than `BESIDE_MIN`: the page's own body, not the
+ * viewport, since the sidebar takes width. Measured before the first paint, then on every resize.
+ * Its width never depends on what it holds (a block in the page), so nothing feeds back.
+ */
+function useNarrowBody(on: boolean) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [narrow, setNarrow] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!on || !el) return;
+    setNarrow(el.getBoundingClientRect().width < BESIDE_MIN);
+    const watcher = new ResizeObserver(() => setNarrow(el.getBoundingClientRect().width < BESIDE_MIN));
+    watcher.observe(el);
+    return () => watcher.disconnect();
+  }, [on]);
+  return [ref, narrow] as const;
+}
 
 /**
  * The document itself was served for a stream's page: the api put its card inside `#root`, a
@@ -139,8 +169,11 @@ function DmButton({ name }: { name: string }) {
 }
 
 export function WatchPage() {
-  const [tab, setTab] = useState<WatchTab>('about');
+  // the desktop's open tab. `chat` only while the chat is a tab (`chatTab`); beside, the about tab shows
+  // in its place, and the chat is open again when the body narrows back
+  const [tab, setTab] = useState<PhoneTab>('about');
   const mobile = useIsMobile();
+  const [body, narrow] = useNarrowBody(!mobile);
   // a phone's page is the window (as go live's is): the visual viewport (mobile.ts) is its box, so the send row stays over the keyboard
   const view = useVisibleViewport(mobile, true);
   useLockedDocument(mobile);
@@ -198,6 +231,9 @@ export function WatchPage() {
   // closed, a column slides out to that side and the video takes the row
   const chatSide = useChatSide();
   const chatOpen = useAtomValue(chatModalOpenAtom);
+  // a desktop whose body is too narrow for the column beside the player: the chat is the last tab under it,
+  // the phone's row, and the player has no chat button (as a phone's has none). a window stays a window
+  const chatTab = !mobile && narrow && chatSide !== 'modal';
   // one corner player at a time: while your own stream is in it (left on air on the go live
   // page), this stream cannot go there too, and the button says so. the other way round, start
   // on the go live page ends a stream kept in the corner (publish-atoms' goLive)
@@ -323,7 +359,7 @@ export function WatchPage() {
             style={mobile ? strip.style : undefined}
           >
             <Bone className="absolute inset-0" />
-            {!mobile && (
+            {!mobile && !chatTab && (
               <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
                 <ChatOpenButton className="ml-auto" />
               </div>
@@ -353,7 +389,7 @@ export function WatchPage() {
                   offline
                 </span>
               )}
-              {!mobile && (
+              {!mobile && !chatTab && (
                 <div className="absolute bottom-0 right-0 p-3">
                   <ChatOpenButton />
                 </div>
@@ -404,9 +440,9 @@ export function WatchPage() {
           {canHear && <StreamStatsButton id="stats" role="watch" stats={stats} playback={{ muted, level: volume }} className={cn('left-3 top-3', mobile && strip.overlay)} />}
           {/* while the chat is closed the bar stays up, so the button that brings it back is on the picture. gone while a phone's player is a strip */}
           {phase !== 'bad-name' && (
-            <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || (!mobile && !chatOpen)), mobile && strip.overlay)}>
+            <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || (!mobile && !chatTab && !chatOpen)), mobile && strip.overlay)}>
               {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
-              {mobile ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
+              {mobile || chatTab ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
               <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'picture in picture'} disabled={cornerTaken} onClick={toCorner}>
                 <PipIcon />
               </IconButton>
@@ -601,6 +637,11 @@ export function WatchPage() {
     );
   }
 
+  // the desktop's tab row: the three, and while the chat is a tab, the chat at the row's right end (the phone's
+  // row; a bad name has the chat alone there, as a phone's does). the open one is kept across a resize
+  const deskTabs: readonly PhoneTab[] = !name ? [] : phase === 'bad-name' ? (chatTab ? ['chat'] : []) : chatTab ? PHONE_TABS : WATCH_TABS;
+  const deskTab: PhoneTab | undefined = deskTabs.includes(tab) ? tab : deskTabs[0];
+
   return (
     <PageFrame
       title={title}
@@ -612,38 +653,33 @@ export function WatchPage() {
       mobileEnd={rowEnd}
       wide
     >
-      {/* the video column, the chat, the tabs, in that order. left or right is a grid at lg+ (the
-          chat across both rows, the tabs under the video) whose column eases shut when the chat
-          closes; on a narrow screen the column sits under the picture. a window takes the chat
-          out of the grid. the panel itself stays mounted either way: ChatSlot is one dialog, and
-          a remount would be a reconnect. */}
-      <div className={chatLayoutClass(chatSide, chatOpen)}>
-        <div className={cn('min-w-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-1')}>
+      {/* the video column, the tabs, the chat, in that order. left or right is a grid while the body
+          is wide enough (`beside:`, BESIDE_MIN: the chat across both rows, the tabs under the video)
+          whose column eases shut when the chat closes. narrower, the chat is the last tab under the
+          video (`data-chat="tabbed"`), shown while that tab is open. a window takes the chat out of
+          the grid. the panel itself stays mounted every way: ChatSlot is one dialog, at one place in
+          the tree, and a remount would be a reconnect. */}
+      <div ref={body} data-chat={chatSide === 'modal' ? undefined : chatTab ? 'tabbed' : 'beside'} className={chatLayoutClass(chatSide, chatOpen)}>
+        <div className={cn('min-w-0', chatSide === 'left' && 'beside:col-start-2 beside:row-start-1')}>
           {player}
           {deskStatus}
 
           {retryRow}
         </div>
 
-        {name && (
-          <ChatSlot>
-            <ChatPanel name={name} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
-          </ChatSlot>
-        )}
-
         {/* under the player: the about tab (the page of their own, docs/about.md), the calendar
             (when they stream, docs/calendar.md) and the socials (where else to find them, and
-            since when they are here, docs/socials.md). the grant brought the links and the date,
-            no request; on my own page the socials tab edits the links in place. a tab's content
-            is only in the page while it is open */}
-        {name && phase !== 'bad-name' && (
+            since when they are here, docs/socials.md), and the chat while it is a tab. the grant
+            brought the links and the date, no request; on my own page the socials tab edits the
+            links in place. a tab's content is only in the page while it is open, but the chat's */}
+        {deskTabs.length > 0 && (
           <div
             id="watch-tabs"
-            className={cn('mt-4 min-w-0', chatSide === 'right' && 'lg:col-start-1 lg:mt-0', chatSide === 'left' && 'lg:col-start-2 lg:row-start-2 lg:mt-0')}
+            className={cn('mt-4 min-w-0', chatSide === 'right' && 'beside:col-start-1 beside:mt-0', chatSide === 'left' && 'beside:col-start-2 beside:row-start-2 beside:mt-0')}
           >
             <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className="flex gap-1 border-b border-primaryStroke">
-              {WATCH_TABS.map((t) => {
-                const on = t === tab;
+              {deskTabs.map((t) => {
+                const on = t === deskTab;
                 return (
                   <button
                     key={t}
@@ -651,11 +687,12 @@ export function WatchPage() {
                     type="button"
                     role="tab"
                     aria-selected={on}
-                    aria-controls={on ? `panel-${t}` : undefined}
+                    aria-controls={on || t === 'chat' ? `panel-${t}` : undefined}
                     tabIndex={on ? 0 : -1}
                     onClick={() => setTab(t)}
                     className={cn(
                       '-mb-px border-b-2 px-3 py-1.5 font-semibold leading-tight transition-colors duration-150',
+                      t === 'chat' && 'ml-auto',
                       on
                         ? 'border-primaryBlue bg-backgroundTertiary text-textPrimary'
                         : 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary'
@@ -666,18 +703,37 @@ export function WatchPage() {
                 );
               })}
             </div>
-            <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} className="pt-4">
-              {tab === 'about' ? (
-                <>
-                  {offlineWords}
-                  <About key={name} name={name} doc={about} edit={mine} />
-                </>
-              ) : tab === 'calendar' ? (
-                <Calendar name={name} />
-              ) : (
-                <SocialsTab name={name} doc={socials} joined={joined} mine={mine} />
-              )}
-            </div>
+            {deskTab !== 'chat' && (
+              <div id={`panel-${deskTab}`} role="tabpanel" aria-labelledby={`tab-${deskTab}`} className="pt-4">
+                {deskTab === 'about' ? (
+                  <>
+                    {offlineWords}
+                    <About key={name} name={name} doc={about} edit={mine} />
+                  </>
+                ) : deskTab === 'calendar' ? (
+                  <Calendar name={name} />
+                ) : (
+                  <SocialsTab name={name} doc={socials} joined={joined} mine={mine} />
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* the chat: beside or in a window, the box around it is no box (`contents`), the dialog is the
+            grid's own. as a tab it is `#panel-chat` under the row, kept laid out at no height while
+            another tab is open, so its lines keep their scroll and the room stays connected */}
+        {name && (
+          <div
+            id={chatTab ? 'panel-chat' : undefined}
+            role={chatTab ? 'tabpanel' : undefined}
+            aria-labelledby={chatTab ? 'tab-chat' : undefined}
+            inert={chatTab && deskTab !== 'chat' ? true : undefined}
+            className={cn(!chatTab ? 'contents' : deskTab !== 'chat' && 'invisible h-0 overflow-hidden')}
+          >
+            <ChatSlot tabbed={chatTab}>
+              <ChatPanel name={name} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
+            </ChatSlot>
           </div>
         )}
       </div>

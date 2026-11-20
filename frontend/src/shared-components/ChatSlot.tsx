@@ -97,10 +97,10 @@ const CORNERS = [
 export function chatLayoutClass(side: ChatSide, open: boolean): string {
   if (side !== 'left' && side !== 'right') return '';
   return cn(
-    'lg:grid lg:grid-rows-[auto_1fr] lg:items-start lg:transition-[grid-template-columns,column-gap] lg:duration-300 lg:ease-out motion-reduce:lg:transition-none',
-    open ? 'lg:gap-x-6' : 'lg:gap-x-0',
-    side === 'right' && (open ? 'lg:grid-cols-[minmax(0,1fr)_360px]' : 'lg:grid-cols-[minmax(0,1fr)_0px]'),
-    side === 'left' && (open ? 'lg:grid-cols-[360px_minmax(0,1fr)]' : 'lg:grid-cols-[0px_minmax(0,1fr)]')
+    'beside:grid beside:grid-rows-[auto_1fr] beside:items-start beside:transition-[grid-template-columns,column-gap] beside:duration-300 beside:ease-out motion-reduce:beside:transition-none',
+    open ? 'beside:gap-x-6' : 'beside:gap-x-0',
+    side === 'right' && (open ? 'beside:grid-cols-[minmax(0,1fr)_360px]' : 'beside:grid-cols-[minmax(0,1fr)_0px]'),
+    side === 'left' && (open ? 'beside:grid-cols-[360px_minmax(0,1fr)]' : 'beside:grid-cols-[0px_minmax(0,1fr)]')
   );
 }
 
@@ -112,10 +112,14 @@ export function chatLayoutClass(side: ChatSide, open: boolean): string {
  * (not `showModal`) puts that same dialog over the page without freezing it: drag the top
  * edge, pull a corner. Closing fades it and leaves the room connected; the chat button on
  * the video opens it again.
+ *
+ * `tabbed`: the column is a tab under the video instead (the watch page's body is too narrow to
+ * stand it beside, WatchPage.tsx). There is no chat button then, so it is open whatever the
+ * button last said; the page hides it while another tab is up.
  */
-export function ChatSlot({ children }: { children: ReactNode }) {
+export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; children: ReactNode }) {
   const side = useChatSide();
-  const open = useAtomValue(chatModalOpenAtom);
+  const open = useAtomValue(chatModalOpenAtom) || (tabbed && side !== 'modal');
   const ref = useRef<HTMLDialogElement | null>(null);
   /** Set for the close that happens because the page is going away, so that close does not count as the viewer shutting the window. */
   const leaving = useRef(false);
@@ -334,12 +338,14 @@ export function ChatSlot({ children }: { children: ReactNode }) {
             )
           : cn(
               'static m-0 flex w-full min-h-0 min-w-0 max-w-none flex-col border-0 bg-transparent p-0 text-textPrimary [&:not([open])]:flex',
-              'transition-[height,margin-top,opacity] duration-300 ease-out motion-reduce:transition-none lg:relative lg:transition-none',
-              'lg:row-span-2',
-              side === 'left' && 'lg:col-start-1 lg:row-start-1',
+              'transition-[height,margin-top,opacity] duration-300 ease-out motion-reduce:transition-none beside:relative beside:transition-none',
+              'beside:row-span-2',
+              side === 'left' && 'beside:col-start-1 beside:row-start-1',
+              // placed, not left to the flow: the watch page puts the chat after its tabs
+              side === 'right' && 'beside:col-start-2 beside:row-start-1',
               open ? 'mt-4 h-[min(50vh,560px)] opacity-100' : 'mt-0 h-0 overflow-hidden opacity-0',
               // beside the video: from the top of the page to the window's foot less its bottom padding (pb-10), no taller than 720px
-              tall ? 'lg:mt-0 lg:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] lg:max-h-[720px] lg:opacity-100' : 'lg:mt-0 lg:h-0 lg:max-h-0 lg:opacity-0',
+              tall ? 'beside:mt-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:max-h-[720px] beside:opacity-100' : 'beside:mt-0 beside:h-0 beside:max-h-0 beside:opacity-0',
               clip && 'overflow-hidden'
             )
       )}
@@ -371,12 +377,12 @@ export function ChatSlot({ children }: { children: ReactNode }) {
           modal
             ? 'min-h-0 w-full flex-1'
             : cn(
-                'h-[min(50vh,560px)] w-full lg:absolute lg:top-0 lg:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] lg:w-[360px]',
+                'h-[min(50vh,560px)] w-full beside:absolute beside:top-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:w-[360px]',
                 'transition-transform duration-300 ease-out motion-reduce:transition-none',
-                side === 'right' && 'lg:right-0',
-                side === 'left' && 'lg:left-0',
-                !open && side === 'right' && 'lg:translate-x-4',
-                !open && side === 'left' && 'lg:-translate-x-4'
+                side === 'right' && 'beside:right-0',
+                side === 'left' && 'beside:left-0',
+                !open && side === 'right' && 'beside:translate-x-4',
+                !open && side === 'left' && 'beside:-translate-x-4'
               )
         )}
       >
