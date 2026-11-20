@@ -226,6 +226,53 @@ const shown = (page, box = '#socials') =>
     return 'out and back';
   });
 
+  await step('a desktop body too narrow for the chat beside the player: the chat is the last tab, the desktop shell stays, and widening puts it back beside without a reconnect', async () => {
+    const tabIds = () => w.$$eval('#watch-tabs [role="tab"]', (els) => els.map((el) => el.id).join(' '));
+    // 900px: a desktop (not a phone, under 768), but 900 − the 56px rail − 40px of padding is under the 928px body the column needs
+    await w.setViewportSize({ width: 900, height: 900 });
+    await w.waitForSelector('[data-chat="tabbed"] #tab-chat', { timeout: 10000 });
+    expect((await tabIds()) === 'tab-about tab-calendar tab-socials tab-chat', `the narrow tabs are ${await tabIds()}`);
+    expect((await w.getAttribute('#tab-socials', 'aria-selected')) === 'true', 'the open tab was not kept into the narrow body');
+    const [row, chatTab] = await Promise.all([w.$eval('#watch-tabs [role="tablist"]', (el) => el.getBoundingClientRect().right), w.$eval('#tab-chat', (el) => el.getBoundingClientRect().right)]);
+    expect(Math.abs(row - chatTab) <= 1, `the chat tab ends at ${chatTab}, the row at ${row}`);
+    // the desktop's own, not the phone's: the sidebar rail and go live in the title row, and no chat button on the player
+    expect(await w.isVisible('#user-panel'), 'the sidebar is gone');
+    expect(await w.isVisible('#go-live'), 'the title row has no go live');
+    expect((await w.$$('#chat-open')).length === 0, 'the player still has the chat button');
+    // the chat is in the page and connected under another tab: the same element after the widening below says no remount
+    await w.$eval('#chat', (el) => {
+      el.dataset.kept = 'yes';
+    });
+    expect(((await w.$eval('#chat', (el) => el.getBoundingClientRect().height)) || 0) < 1, 'the chat shows under the socials tab');
+    await w.click('#tab-chat');
+    await w.waitForSelector('#tab-chat[aria-selected="true"]', { timeout: 10000 });
+    expect(await w.isVisible('#panel-chat #chat'), 'the chat tab does not show the chat');
+    expect((await w.$$('#panel-socials')).length === 0, 'the socials panel is still up beside the chat');
+    // wide again: the column beside the player, the three tabs, the chat button back, the same chat element
+    await w.setViewportSize({ width: 1280, height: 900 });
+    await w.waitForSelector('[data-chat="beside"]', { timeout: 10000 });
+    expect((await tabIds()) === 'tab-about tab-calendar tab-socials', `the wide tabs are ${await tabIds()}`);
+    expect((await w.getAttribute('#tab-about', 'aria-selected')) === 'true', 'the about tab does not stand in for the chat beside');
+    expect((await w.getAttribute('#chat', 'data-kept')) === 'yes', 'the chat was remounted by the resize');
+    expect(await w.isVisible('#chat-open'), 'the chat button did not come back');
+    const [video, chat] = await Promise.all([w.$eval('#watch-tabs', (el) => el.getBoundingClientRect().right), w.$eval('#chat', (el) => el.getBoundingClientRect().left)]);
+    expect(chat >= video, `the chat starts at ${chat}, left of the tabs' right edge ${video}`);
+    // and narrow once more: the chat tab is still the open one
+    await w.setViewportSize({ width: 900, height: 900 });
+    await w.waitForSelector('#tab-chat[aria-selected="true"]', { timeout: 10000 });
+    expect((await w.getAttribute('#chat', 'data-kept')) === 'yes', 'the chat was remounted by the second resize');
+    // the chat in a window: it stays a window, and there is no chat tab
+    await w.evaluate(() => localStorage.setItem('settings.chatSide', JSON.stringify('modal')));
+    await w.reload({ waitUntil: 'domcontentloaded' });
+    await w.waitForSelector('#tab-about[aria-selected="true"]', { timeout: 15000 });
+    expect((await tabIds()) === 'tab-about tab-calendar tab-socials', `with a window the narrow tabs are ${await tabIds()}`);
+    await w.evaluate(() => localStorage.removeItem('settings.chatSide'));
+    await w.setViewportSize({ width: 1280, height: 720 });
+    await w.reload({ waitUntil: 'domcontentloaded' });
+    await w.waitForSelector('[data-chat="beside"] #tab-about', { timeout: 15000 });
+    return 'four tabs at 900px, three beside at 1280px, the chat kept, none for a window';
+  });
+
   await step('the corner panel: the gear is at the end of your line and not in the title row, there is no following button, and the picture is a link to your page', async () => {
     o = await owner.newPage();
     await login(o, ME);
