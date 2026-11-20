@@ -744,6 +744,16 @@ export class ChatRoom {
     return plan;
   }
 
+  /**
+   * The lines on screen do not fill the list, so no scroll will ever reach its top to ask for
+   * more: a server's channel asks now. Its first page is cut to the window's height
+   * (room-atoms `loadLines`), and short lines may not fill it. A stream's room came with its
+   * whole history on the socket, so there is nothing more to want.
+   */
+  fillShort() {
+    if (this.server) void this.loadOlder();
+  }
+
   /** Older than the oldest line on screen. Redis while it still has them, postgres past that. */
   async loadOlder() {
     const name = this.httpRoom();

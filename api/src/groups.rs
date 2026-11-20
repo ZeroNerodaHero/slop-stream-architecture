@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
@@ -1198,23 +1198,44 @@ async fn read_channel(State(s): State<AppState>, Path((group, channel)): Path<(S
 /// whole server, so a room draws every channel at once and switching between them asks
 /// nothing. Redis only, like the socket's history: the room's stream holds the last 500 of
 /// each. Anyone may read a server (chat.md). 404 for `bot` and for no such group.
-async fn messages(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
+///
+/// `?limit=` (1..=MESSAGES_PER_CHANNEL) is lines per channel: a room asks for what fills its
+/// screen twice, and scrolls up for the rest. `?channel=<name>&before=<id>` is that channel's
+/// page strictly older than line `id`, in the same shape with the one key; a page shorter
+/// than the limit is the start of what redis keeps (the chat's `/before` goes on into
+/// postgres). 400 `bad id`, `before needs a channel`; 404 `no such channel` for one this
+/// login does not see.
+async fn messages(State(s): State<AppState>, Path(group): Path<String>, Query(q): Query<MessagesQuery>, Me(me): Me) -> ApiResult {
     let server = group_name(&group)?;
     if server == BOT_GROUP {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "bot is not a server"));
     }
+    let limit = q.limit.unwrap_or(MESSAGES_PER_CHANNEL).clamp(1, MESSAGES_PER_CHANNEL);
+    let before = match (&q.before, &q.channel) {
+        (Some(_), None) => return Err(ApiError::new(StatusCode::BAD_REQUEST, "before needs a channel")),
+        (Some(id), Some(_)) => Some(crate::history::stream_id(id)?),
+        (None, _) => None,
+    };
     let user = me.as_ref().map(|a| a.id);
     let admin = me.as_ref().is_some_and(|a| s.admins.iter().any(|admin| admin.id == a.id));
     // general is never kept to a role, so a group that is there always answers with at least it
-    let channels = visible_channels(&s.db, &server, user, admin).await?;
+    let mut channels = visible_channels(&s.db, &server, user, admin).await?;
     if channels.is_empty() {
         // a group without `general` is no group: it was deleted (or never was)
         return Err(no_such_group());
     }
-    // every channel's newest page in one round trip
+    if let Some(one) = &q.channel {
+        if !channels.contains(one) {
+            return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel"));
+        }
+        channels = vec![one.clone()];
+    }
+    // the newest end: `(id` is strictly older than the line the page goes back from
+    let top = before.map_or_else(|| "+".to_owned(), |id| format!("({id}"));
+    // every channel's page in one round trip
     let mut pipe = redis::pipe();
     for channel in &channels {
-        pipe.cmd("XREVRANGE").arg(room_key(&format!("{server}/{channel}"))).arg("+").arg("-").arg("COUNT").arg(MESSAGES_PER_CHANNEL);
+        pipe.cmd("XREVRANGE").arg(room_key(&format!("{server}/{channel}"))).arg(&top).arg("-").arg("COUNT").arg(limit);
     }
     let replies: Vec<StreamRangeReply> = pipe.query_async(&mut s.redis.clone()).await?;
     let mut pages: Vec<(String, Vec<Line>)> = channels
@@ -1230,6 +1251,13 @@ async fn messages(State(s): State<AppState>, Path(group): Path<String>, Me(me): 
     with_faces(&s.db, pages.iter_mut().flat_map(|(_, lines)| lines.iter_mut())).await;
     let out: serde_json::Map<String, Value> = pages.into_iter().map(|(channel, lines)| (channel, json!(lines))).collect();
     Ok(Json(Value::Object(out)))
+}
+
+#[derive(Deserialize)]
+struct MessagesQuery {
+    limit: Option<usize>,
+    channel: Option<String>,
+    before: Option<String>,
 }
 
 pub(crate) fn routes() -> Router<AppState> {

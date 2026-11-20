@@ -589,6 +589,8 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
     }
     shown.current = lines.length;
     hold.current = el.scrollHeight;
+    // too few lines to scroll: older ones are asked for here, since no scroll will reach the top
+    if (lines.length > 0 && el.scrollHeight <= el.clientHeight) room.fillShort();
   }, [room, lines, total, scrollTick, aside]);
 
   // A phone's list changes height under the reader (the keyboard, the player easing to a strip and
