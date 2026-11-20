@@ -944,10 +944,13 @@ async fn watch(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult
     let oauth_verified = p.oauth_verified && (!live || verified);
     let presence = presence::presence_with(&mut s.redis.clone(), &s.db, &name, live).await?;
     let follows = follows::stats(&s.db, &name, me.0.as_ref().map(|a| a.id)).await?;
+    // the badge beside the name in the page's header: the one their chat lines wear (the primary
+    // group, else the first joined), the card's (`get_streamer`). none for a name with no account
+    let badge = if p.verified { groups::badge_of(&s.db, &name).await? } else { None };
     Ok(Json(json!({
         "url": WS_PATH, "name": name, "bio": p.bio, "live": live, "verified": verified, "oauth_verified": oauth_verified, "avatar": p.avatar, "presence": presence,
         "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials, "about": p.about,
-        "followers": follows.followers, "following": follows.following, "joined_at": p.joined,
+        "followers": follows.followers, "following": follows.following, "joined_at": p.joined, "badge": badge,
     })))
 }
 

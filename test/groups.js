@@ -355,6 +355,27 @@ const dropAll = async (ctx, names) => {
     return `${MEMBER} ✓ [${badge.text}]`;
   });
 
+  await step('the watch page: the badge their chat lines wear sits beside the name in the header; a free name has none', async () => {
+    const grant = await body(await anon.post(`/api/streams/${MEMBER}/watch`));
+    const card = await body(await anon.get(`/api/streamers/${MEMBER}`));
+    expect(grant && grant.badge && grant.badge.name === card.badge.name && grant.badge.badge === card.badge.badge, `the grant's badge ${JSON.stringify(grant && grant.badge)}, the card's ${JSON.stringify(card && card.badge)}`);
+    const free = await body(await anon.post(`/api/streams/${ROOM}/watch`));
+    expect(free && free.badge === null, `a free name's grant says badge ${JSON.stringify(free && free.badge)}`);
+    // a page of its own: the next step listens on the member's page as it is
+    const w = await fresh();
+    await w.goto(`${BASE}/watch/${MEMBER}`, { waitUntil: 'domcontentloaded' });
+    await w.waitForSelector('#who #watch-badge', { timeout: 10000 });
+    const shown = await w.$eval('#who #watch-badge', (el) => ({ group: el.dataset.group, text: el.textContent }));
+    expect(shown.group === grant.badge.name && shown.text.toUpperCase().includes(grant.badge.badge.toUpperCase()), `#watch-badge is ${JSON.stringify(shown)}`);
+    await w.goto(`${BASE}/watch/${ROOM}`, { waitUntil: 'domcontentloaded' });
+    await w.waitForSelector('#who', { timeout: 10000 });
+    await w.waitForTimeout(1000);
+    const none = !(await w.$('#who #watch-badge'));
+    await w.context().close();
+    expect(none, 'a free name has #watch-badge');
+    return `${MEMBER} [${shown.text}], ${ROOM} none`;
+  });
+
   await step('a socket that says bot: true wears BOT, and the member\'s page sees it', async () => {
     // from a context with no login: the cookie would name the socket after the account instead of its nick
     const b = await fresh();
