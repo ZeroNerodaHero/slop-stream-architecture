@@ -50,14 +50,17 @@ const GROUPS_PER_MEMBER: i64 = 8;
 /// Groups one login may own when `GROUPS_PER_OWNER` is not set: the ones it made plus the
 /// ones it was named owner of.
 pub(crate) const DEFAULT_GROUPS_PER_OWNER: i64 = 2;
-/// Channels on one server, `general` included. The pages hold the same number, so the add
-/// form goes at the cap; and it bounds what `GET .../messages` answers for one room.
+/// Channels on one server, `general` included, voice ones too. The pages hold the same number,
+/// so the add form goes at the cap; and it bounds what `GET .../messages` answers for one room.
 const CHANNELS_PER_SERVER: i64 = 20;
 /// Lines of each channel in `GET /api/groups/:group/messages`: what a room draws before its
 /// socket says more. The socket fills from the newest of these, so nothing falls between.
 const MESSAGES_PER_CHANNEL: usize = 100;
-/// The channel a group starts with. It is not deleted, not renamed, and never kept to a role.
+/// The channel a group starts with. It is not deleted, not renamed, never kept to a role, and
+/// always text.
 pub(crate) const GENERAL: &str = "general";
+/// A channel is one of these (migration 0004): text for lines, voice for talking. Text unless asked.
+const CHANNEL_KINDS: [&str; 2] = ["text", "voice"];
 /// Words the chat history routes already use, so a channel cannot be one of them.
 const RESERVED_CHANNELS: &[&str] = &["before", "search", "by", "around"];
 /// A channel's cooldown is seconds, none to an hour, like a role's.
@@ -665,7 +668,14 @@ pub(crate) struct ChannelView {
     made_by: Option<String>,
     /// Seconds a member waits between their lines here (docs/groups.md). 0: none.
     cooldown: i32,
+    /// `text` or `voice`.
+    kind: String,
+    /// How many may be in a voice channel at once. 0: no limit, and always 0 for text.
+    user_limit: i32,
 }
+
+/// name, about, maker's id, maker's name, cooldown, kind, user_limit
+type ChannelRow = (String, String, Option<Uuid>, Option<String>, i32, String, i32);
 
 /// The channels of one server in their order (`position`, as the channels power last put them;
 /// oldest first until then, `general` first because it was made with the group), as the room
@@ -678,19 +688,19 @@ pub(crate) async fn channels_of(s: &AppState, server: &str, user: Option<Uuid>, 
         None => false,
     };
     let sql = format!(
-        "SELECT c.name, c.about, c.created_by_id, maker.name, c.cooldown FROM channels c
+        "SELECT c.name, c.about, c.created_by_id, maker.name, c.cooldown, c.kind, c.user_limit FROM channels c
          LEFT JOIN streamers maker ON maker.id = c.created_by_id
          WHERE c.server = $1 AND {} ORDER BY c.position, c.created_at, c.name",
         sees_sql("$2", "$3")
     );
-    let rows: Vec<(String, String, Option<Uuid>, Option<String>, i32)> = sqlx::query_as(&sql).bind(server).bind(user).bind(admin).fetch_all(&s.db).await?;
+    let rows: Vec<ChannelRow> = sqlx::query_as(&sql).bind(server).bind(user).bind(admin).fetch_all(&s.db).await?;
     Ok(rows
         .into_iter()
-        .map(|(name, about, made_by_id, made_by, cooldown)| {
+        .map(|(name, about, made_by_id, made_by, cooldown, kind, user_limit)| {
             let mine = user.is_some() && made_by_id == user;
             let can_delete = name != GENERAL && (mine || may_manage || admin);
             // `general` was made with the group: nobody's channel in particular
-            ChannelView { can_delete, made_by: made_by.filter(|_| name != GENERAL), name, about, cooldown }
+            ChannelView { can_delete, made_by: made_by.filter(|_| name != GENERAL), name, about, cooldown, kind, user_limit }
         })
         .collect())
 }
@@ -775,6 +785,8 @@ struct ExploreRow {
     can_delete: bool,
     made_by: Option<String>,
     cooldown: Option<i32>,
+    kind: Option<String>,
+    user_limit: Option<i32>,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for ExploreRow {
@@ -798,6 +810,8 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for ExploreRow {
             can_delete: row.try_get("can_delete")?,
             made_by: row.try_get("made_by")?,
             cooldown: row.try_get("cooldown")?,
+            kind: row.try_get("kind")?,
+            user_limit: row.try_get("user_limit")?,
         })
     }
 }
@@ -845,7 +859,7 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
                         WHERE r.group_name = g.name AND rm.user_id = $1 AND (r.perms & 4) <> 0
                     )
                 ), false) AS can_delete,
-                cm.name AS made_by, c.cooldown
+                cm.name AS made_by, c.cooldown, c.kind, c.user_limit
          FROM groups g
          LEFT JOIN channels c ON c.server = g.name AND {}
          LEFT JOIN streamers cm ON cm.id = c.created_by_id
@@ -885,7 +899,9 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
                 about: row.channel_about.unwrap_or_default(),
                 can_delete: row.can_delete,
                 made_by,
-                cooldown: row.cooldown.unwrap_or(0)
+                cooldown: row.cooldown.unwrap_or(0),
+                kind: row.kind.unwrap_or_else(|| "text".into()),
+                user_limit: row.user_limit.unwrap_or(0)
             });
         }
     }
@@ -898,9 +914,24 @@ struct NewChannel {
     name: String,
     #[serde(default)]
     about: String,
+    /// `text` (the default) or `voice`.
+    #[serde(default)]
+    kind: Option<String>,
 }
 
-/// `POST /api/groups/:group/channels`: a member adds one. 201. `general` already exists.
+/// The kind a new channel asks for: text when it says nothing, else text or voice, else 400.
+fn channel_kind(raw: Option<&str>) -> Result<&'static str, ApiError> {
+    match raw {
+        None => Ok(CHANNEL_KINDS[0]),
+        Some(kind) => CHANNEL_KINDS
+            .into_iter()
+            .find(|k| *k == kind)
+            .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "kind is text or voice")),
+    }
+}
+
+/// `POST /api/groups/:group/channels` `{ name, about?, kind? }`: a member adds one, text unless
+/// `kind` says voice. 201. `general` already exists.
 async fn create_channel(
     State(s): State<AppState>,
     Path(group): Path<String>,
@@ -911,6 +942,7 @@ async fn create_channel(
     let Json(body) = body?;
     let (server, channel) = channel_names(&group, &body.name)?;
     let about = clean_about(&body.about);
+    let kind = channel_kind(body.kind.as_deref())?;
     let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM groups WHERE name = $1)").bind(&server).fetch_one(&s.db).await?;
     if !exists {
         return Err(no_such_group());
@@ -927,22 +959,23 @@ async fn create_channel(
     }
     // after the last: the list is in the order it was put in, and a new channel joins its end
     let added = sqlx::query(
-        "INSERT INTO channels (server, name, about, created_by_id, position)
-         SELECT $1, $2, $3, $4, COALESCE(max(position), -1) + 1 FROM channels WHERE server = $1
+        "INSERT INTO channels (server, name, about, created_by_id, position, kind)
+         SELECT $1, $2, $3, $4, COALESCE(max(position), -1) + 1, $5 FROM channels WHERE server = $1
          ON CONFLICT DO NOTHING",
     )
     .bind(&server)
     .bind(&channel)
     .bind(&about)
     .bind(who.id)
+    .bind(kind)
     .execute(&s.db)
     .await?;
     if added.rows_affected() == 0 {
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     }
-    log::info!("{}: added #{channel} to {server}", who.name);
-    tell(&s, &server, "channel", json!({ "channel": { "name": channel, "about": about, "made_by": who.name, "cooldown": 0 } })).await;
-    Ok((StatusCode::CREATED, Json(json!({ "name": channel, "about": about, "can_delete": channel != GENERAL, "made_by": who.name, "cooldown": 0 }))))
+    log::info!("{}: added {kind} #{channel} to {server}", who.name);
+    tell(&s, &server, "channel", json!({ "channel": { "name": channel, "about": about, "made_by": who.name, "cooldown": 0, "kind": kind, "user_limit": 0 } })).await;
+    Ok((StatusCode::CREATED, Json(json!({ "name": channel, "about": about, "can_delete": channel != GENERAL, "made_by": who.name, "cooldown": 0, "kind": kind, "user_limit": 0 }))))
 }
 
 #[derive(Deserialize)]
@@ -1379,6 +1412,16 @@ mod tests {
         assert!(channel_names("vip", "around").is_err());
         assert!(channel_names("bot", "general").is_err());
         assert_eq!(channel_names("VIP", "General").unwrap(), ("vip".into(), "general".into()));
+    }
+
+    #[test]
+    fn a_channel_is_text_unless_it_asks_for_voice() {
+        assert_eq!(channel_kind(None).unwrap(), "text");
+        assert_eq!(channel_kind(Some("text")).unwrap(), "text");
+        assert_eq!(channel_kind(Some("voice")).unwrap(), "voice");
+        assert!(channel_kind(Some("video")).is_err());
+        assert!(channel_kind(Some("Voice")).is_err());
+        assert!(channel_kind(Some("")).is_err());
     }
 
     #[test]
