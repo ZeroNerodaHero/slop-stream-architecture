@@ -7,6 +7,7 @@ import { type Notification, roomOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { dmsAtom, openDm } from '@/infra/atoms/dm-atoms';
 import { followingAtom } from '@/infra/atoms/follow-atoms';
+import { myServersAtom } from '@/infra/atoms/groups-atoms';
 import {
   closeNotifications,
   KEEP,
@@ -21,6 +22,7 @@ import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import type { NotificationKind } from '@/infra/frames';
 import { useIsMobile } from '@/infra/mobile';
 import { store } from '@/infra/store';
+import { Badge } from '@/shared-components/Badge';
 import { buttonClassName } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { SHEET_CLOSE, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
@@ -131,6 +133,10 @@ function Row({ n, fresh, now, onPick }: RowProps) {
   const Icon = KIND_ICON[n.kind];
   const when = new Date(n.at);
   const at = roomOf(n);
+  // the list's rows carry the group's badge; a pushed one finds it among the sidebar's servers (a chat row's group is one of mine)
+  const servers = useAtomValue(myServersAtom);
+  const found = at ? (n.badge ?? servers?.find((s) => s.name === at.server)) : null;
+  const group = found?.badge ? found : null;
   const className = cn(
     'flex w-full items-start gap-3 border border-transparent px-3 py-2 text-left transition-colors duration-150',
     'hover:border-primaryStroke hover:bg-backgroundTertiary/60 focus-visible:border-primaryBlue focus-visible:outline-none'
@@ -153,8 +159,17 @@ function Row({ n, fresh, now, onPick }: RowProps) {
         <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-sm">
           <Who name={n.name} verified={n.verified} className="max-w-full" />
           {n.kind === 'chat' && at && (
-            <span className="truncate text-textSecondary">
-              in #{at.channel} of {at.server}
+            <span className="flex min-w-0 max-w-full items-center gap-1.5 text-textSecondary">
+              <span className="truncate">
+                in #{at.channel}
+                {!group && ` of ${at.server}`}
+              </span>
+              {/* the group's badge in place of its name: one picture to a screen reader, named, and its title on hover */}
+              {group && (
+                <span role="img" aria-label={`of ${at.server}`} className="inline-flex shrink-0">
+                  <Badge group={group} />
+                </span>
+              )}
             </span>
           )}
           {n.kind !== 'dm' && n.kind !== 'chat' && <span className="text-textSecondary">{KIND_WORDS[n.kind]}</span>}

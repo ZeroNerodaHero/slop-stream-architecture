@@ -425,7 +425,7 @@ type ItemRow = (i64, String, String, bool, Option<i64>, i64, bool, String, Optio
 
 /// `GET /api/notifications`: `{ settings, items }`. The login's rows, newest first, the last
 /// KEEP, each with who did it as they are now (`name`, and `actor`, the id), whether it has
-/// been read, and a `chat` row's `room`; and which kinds are kept. 401 for nobody.
+/// been read, and a `chat` row's `room` and its group's `badge` (null once the group is gone); and which kinds are kept. 401 for nobody.
 async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let doc: Option<Value> = sqlx::query_scalar("SELECT notify FROM streamers WHERE id = $1").bind(me.id).fetch_optional(&s.db).await?;
@@ -442,10 +442,16 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     .bind(KEEP)
     .fetch_all(&s.db)
     .await?;
+    // a `chat` row's group badge, the room's server: one query for every group on the list
+    let mut servers: Vec<String> = rows.iter().filter_map(|r| r.10.as_deref()?.split_once('/').map(|(server, _)| server.to_owned())).collect();
+    servers.sort();
+    servers.dedup();
+    let badges: HashMap<String, crate::groups::Badge> = crate::groups::badges_named(&s.db, &servers).await?.into_iter().map(|b| (b.name.clone(), b)).collect();
     let items: Vec<Value> = rows
         .into_iter()
         .map(|(id, kind, name, verified, avatar, at, read, text, session, actor, room)| {
-            json!({ "id": id, "kind": kind, "name": name, "verified": verified, "avatar": avatar, "at": at, "read": read, "text": text, "session": session, "actor": actor, "room": room })
+            let badge = room.as_deref().and_then(|r| r.split_once('/')).and_then(|(server, _)| badges.get(server));
+            json!({ "id": id, "kind": kind, "name": name, "verified": verified, "avatar": avatar, "at": at, "read": read, "text": text, "session": session, "actor": actor, "room": room, "badge": badge })
         })
         .collect();
     Ok(Json(json!({ "settings": settings, "items": items })))
