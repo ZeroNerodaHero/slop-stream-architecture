@@ -42,9 +42,9 @@ const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> =
   advanced: { label: 'advanced', group: 'this browser', icon: <RiToolsLine aria-hidden size={18} /> }
 };
 
-const GROUP_LABEL = 'hidden px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wider text-textTertiary first:pt-0 sm:block';
+const GROUP_LABEL = 'hidden px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wider text-textTertiary first:pt-0 sm:block';
 const TAB = cn(
-  'flex shrink-0 items-center gap-2.5 whitespace-nowrap px-3 py-2 text-left font-semibold leading-tight transition-colors duration-150',
+  'flex shrink-0 items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-sm font-semibold leading-tight transition-colors duration-150',
   // the mark: under the tab in the phone strip, at its left in the rail
   'border-b-2 sm:w-full sm:border-b-0 sm:border-l-2',
   // keyboard focus: a 1px square inside the edge (no radius in this theme, no ring)
@@ -206,14 +206,8 @@ function Rail({ tab, tabs }: { tab: UserTab; tabs: readonly UserTab[] }) {
         })}
       </div>
 
-      <p className="mt-auto hidden px-3 py-3 text-xs leading-5 text-textTertiary sm:block">
-        profile, groups, security and notifications are the account.
-        <br />
-        {tabs.includes('advanced') ? 'appearance, chat, sidebar and advanced are this browser.' : 'appearance, chat and sidebar are this browser.'}
-        <br />
-        <span className="select-all tabular-nums" title={`build ${__BUILD__}`}>
-          build {__BUILD__.slice(0, 7)}
-        </span>
+      <p className="mt-auto hidden px-3 py-2 text-[10px] text-textTertiary sm:block">
+        <span className="select-all tabular-nums">build {__BUILD__.slice(0, 7)}</span>
       </p>
     </div>
   );
@@ -253,7 +247,7 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 [scrollbar-gutter:stable] sm:px-8 sm:py-5"
       >
         <div className="max-w-[640px]">
-          <h2 id={`panel-${tab}-title`} className="mb-6 border-l-4 border-primaryBlue pl-3 pr-12 text-xl font-semibold leading-tight">
+          <h2 id={`panel-${tab}-title`} className="mb-4 border-l-4 border-primaryBlue pl-3 pr-12 text-lg font-semibold leading-tight">
             {TABS[tab].label}
           </h2>
           {tab === 'profile' && <ProfileTab />}
