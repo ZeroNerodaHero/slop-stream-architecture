@@ -30,6 +30,27 @@ export const roomGoneAtom = atom(false);
 /** A channel was renamed while the room was on screen: the page on `from` moves to `to`, and clears this. */
 export const channelRenamedAtom = atom<{ from: string; to: string } | null>(null);
 
+/** Where the next page of the roster stands: being asked for, or refused the last time (a scroll back to the end asks again). */
+export const rosterMoreAtom = atom<'idle' | 'busy' | 'failed'>('idle');
+
+/** The shortest a roster row is (ServerRoom.tsx `Member`: a 28px face and its border, no roles), so a page of them is never short of its height. */
+export const MEMBER_ROW_PX = 30;
+/** The shortest a chat line is (ChatPanel.tsx: one line of text and the gap under it), the same way. */
+const LINE_PX = 22;
+/** The fewest rows a page asks for, however short the box: one scroll's worth is not worth a round trip each. */
+const MIN_PAGE = 20;
+/** The most a page asks for: the api's cap on both the roster's pages and the lines of each channel. */
+const MAX_PAGE = 100;
+
+/**
+ * How many rows of `rowPx` fill twice `height` (the box they scroll in; the window's while the
+ * box is not on screen yet, which is what the box is at its tallest): the first page fills the
+ * box and a scroll's worth under it, and the next is asked for before the end comes into view.
+ */
+export function pageFor(rowPx: number, height: number = window.innerHeight): number {
+  return Math.min(MAX_PAGE, Math.max(MIN_PAGE, Math.ceil((2 * height) / rowPx)));
+}
+
 /** The server whose room is open. '' off the page. */
 let open = '';
 /** Which load is the current one: an answer to an older one, or to a page since left, is dropped. */
@@ -203,10 +224,15 @@ function applyRename(room: GroupRoom, from: string, to: string): void {
 async function loadRoom(): Promise<void> {
   const server = open;
   const mine = attempt;
+  // the roster's first page; asked again, as much of it as was on screen, so a long scroll down it does not jump back to the top
+  const had = store.get(roomAtom);
+  const shown = had?.name === server ? (had.roster?.length ?? 0) : 0;
   try {
-    const room = await api.group(server);
+    const room = await api.group(server, Math.min(MAX_PAGE, Math.max(pageFor(MEMBER_ROW_PX), shown)));
     if (mine !== attempt) return;
     const before = store.get(roomAtom);
+    rosterAsk++;
+    store.set(rosterMoreAtom, 'idle');
     store.set(roomAtom, room);
     store.set(roomErrorAtom, '');
     if (before && before.name === server) reconcileChannels(server, before.channels ?? [], room.channels ?? []);
@@ -251,7 +277,8 @@ async function loadLines(): Promise<void> {
   const server = open;
   const mine = attempt;
   try {
-    const lines = await api.groupMessages(server);
+    // enough of each channel to fill the chat twice; the rest scrolls in from the top (chat-atoms `loadOlder`)
+    const lines = await api.groupMessages(server, pageFor(LINE_PX));
     if (mine !== attempt) return;
     serverChat(server).seedChannels(lines);
   } catch {
@@ -262,14 +289,83 @@ async function loadLines(): Promise<void> {
 }
 
 /** Owners first, then the group's order: `name`, `newest` or `oldest` by when they joined. */
-function sortMembers(list: GroupMember[], order: string | undefined): GroupMember[] {
+function memberOrder(order: string | undefined): (a: GroupMember, b: GroupMember) => number {
   const by = order === 'newest' || order === 'oldest' ? order : 'name';
-  return [...list].sort((a, b) => {
+  return (a, b) => {
     if (a.owner !== b.owner) return a.owner ? -1 : 1;
     if (by === 'newest') return (b.joined ?? 0) - (a.joined ?? 0) || a.name.localeCompare(b.name);
     if (by === 'oldest') return (a.joined ?? 0) - (b.joined ?? 0) || a.name.localeCompare(b.name);
     return a.name.localeCompare(b.name);
-  });
+  };
+}
+
+function sortMembers(list: GroupMember[], order: string | undefined): GroupMember[] {
+  return [...list].sort(memberOrder(order));
+}
+
+/** Which roster page is the current one to ask for: a room asked again starts the pages over, and an answer to the old ones is dropped. */
+let rosterAsk = 0;
+
+/**
+ * The roster's next page (`GET .../members?after=`), onto the end of what the room has: asked
+ * when the end of the list scrolls near (ServerRoom.tsx `MoreRow`), `height` the box it
+ * scrolls in. Nothing when the roster is whole or a page is on its way. One that a fact put
+ * there already is not drawn twice.
+ */
+export async function loadMoreMembers(height?: number): Promise<void> {
+  const room = store.get(roomAtom);
+  if (!room?.roster || !room.roster_next || store.get(rosterMoreAtom) === 'busy') return;
+  const server = room.name;
+  const mine = attempt;
+  const ask = rosterAsk;
+  store.set(rosterMoreAtom, 'busy');
+  try {
+    const page = await api.groupMembersPage(server, { limit: pageFor(MEMBER_ROW_PX, height), after: room.roster_next });
+    const now = store.get(roomAtom);
+    if (mine !== attempt || ask !== rosterAsk || !now?.roster || now.name !== server) return;
+    const have = new Set(now.roster.map((m) => m.name));
+    const roster = sortMembers([...now.roster, ...page.members.filter((m) => !have.has(m.name))], now.member_order);
+    store.set(roomAtom, { ...now, roster, roster_next: page.next });
+    store.set(rosterMoreAtom, 'idle');
+  } catch {
+    if (mine === attempt && ask === rosterAsk) store.set(rosterMoreAtom, 'failed');
+  }
+}
+
+/** The roster's first page again, in the group's order as it is now: the pages so far were cut in the old one. */
+async function reloadRoster(): Promise<void> {
+  const room = store.get(roomAtom);
+  if (!room?.roster) return;
+  const server = room.name;
+  const mine = attempt;
+  const ask = ++rosterAsk;
+  store.set(rosterMoreAtom, 'idle');
+  try {
+    const page = await api.groupMembersPage(server, { limit: pageFor(MEMBER_ROW_PX) });
+    const now = store.get(roomAtom);
+    if (mine !== attempt || ask !== rosterAsk || !now || now.name !== server) return;
+    store.set(roomAtom, { ...now, roster: page.members, roster_next: page.next });
+  } catch {
+    // the room keeps the old pages, sorted the new way; the next fact or reload puts it right
+  }
+}
+
+/**
+ * Whether `member` belongs among the rows loaded so far: always when the roster is whole; on a
+ * page of it, only when they sort before the last row loaded, since after it is the next
+ * page's, which will bring them.
+ */
+function withinLoaded(room: GroupRoom, roster: GroupMember[], member: GroupMember): boolean {
+  if (!room.roster_next) return true;
+  const last = roster[roster.length - 1];
+  return !last || memberOrder(room.member_order)(member, last) < 0;
+}
+
+/** Whether `me` holds role `id`, from the roster. Not on the pages loaded so far: maybe, and the caller asks the room. */
+function iHold(room: GroupRoom, me: string | null, id: string): boolean {
+  if (!me || !room.mine) return false;
+  const row = room.roster?.find((m) => m.name === me);
+  return row ? row.roles.some((r) => r.id === id) : !!room.roster_next;
 }
 
 /**
@@ -285,7 +381,9 @@ function apply(change: GroupChange): void {
     case 'joined': {
       if (about(change.who)) return void loadRoom();
       const roster = room.roster ? room.roster.filter((m) => m.name !== change.who) : null;
-      if (roster) roster.push({ name: change.who, owner: false, avatar: change.avatar, joined: change.joined, roles: [] });
+      const came: GroupMember = { name: change.who, owner: false, avatar: change.avatar, joined: change.joined, roles: [] };
+      // on a page of the roster, one who sorts past its end comes with a later page
+      if (roster && withinLoaded(room, roster, came)) roster.push(came);
       store.set(roomAtom, { ...room, members: change.members, roster: roster ? sortMembers(roster, room.member_order) : room.roster });
       return;
     }
@@ -345,6 +443,8 @@ function apply(change: GroupChange): void {
       return;
     case 'order':
       store.set(roomAtom, { ...room, member_order: change.order, roster: room.roster ? sortMembers(room.roster, change.order) : room.roster });
+      // pages of it were cut in the old order: the first one of the new
+      if (room.roster_next) void reloadRoster();
       return;
     case 'icon':
       store.set(roomAtom, { ...room, icon: change.icon });
@@ -359,7 +459,7 @@ function apply(change: GroupChange): void {
       const roster =
         room.roster?.map((m) => ({ ...m, roles: m.roles.map((r) => (r.id === change.role.id ? { id: r.id, name: change.role.name, color: change.role.color } : r)) })) ??
         room.roster;
-      const held = room.roster?.find((m) => m.name === me)?.roles.some((r) => r.id === change.role.id) ?? false;
+      const held = iHold(room, me, change.role.id);
       // the channels kept to it changed (or it came with some): which channels anyone sees may have too
       const kept = was ? !sameNames(was.channels ?? [], change.role.channels ?? []) : (change.role.channels?.length ?? 0) > 0;
       store.set(roomAtom, { ...room, roles, roster });
@@ -369,7 +469,7 @@ function apply(change: GroupChange): void {
     }
     case 'unrole': {
       const was = room.roles.find((r) => r.id === change.id);
-      const held = room.roster?.find((m) => m.name === me)?.roles.some((r) => r.id === change.id) ?? false;
+      const held = iHold(room, me, change.id);
       store.set(roomAtom, {
         ...room,
         roles: room.roles.filter((r) => r.id !== change.id),
@@ -397,8 +497,15 @@ function apply(change: GroupChange): void {
       return;
     case 'owner': {
       if (about(change.who)) return void loadRoom();
-      const roster = room.roster?.map((m) => (m.name === change.who ? { ...m, owner: change.owner } : m));
-      store.set(roomAtom, { ...room, roster: roster ? sortMembers(roster, room.member_order) : room.roster });
+      if (!room.roster) return;
+      const row = room.roster.find((m) => m.name === change.who);
+      const others = room.roster.filter((m) => m.name !== change.who);
+      const moved = row ? { ...row, owner: change.owner } : null;
+      // on a page of the roster, a row that now sorts past its end comes with a later page
+      const roster = moved && withinLoaded(room, others, moved) ? [...others, moved] : others;
+      store.set(roomAtom, { ...room, roster: sortMembers(roster, room.member_order) });
+      // an owner made from past the pages loaded so far: the owners lead the first page, so it is asked again
+      if (!row && change.owner && room.roster_next) void reloadRoster();
       return;
     }
     case 'owner_role':

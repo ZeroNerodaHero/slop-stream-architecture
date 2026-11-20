@@ -1,9 +1,7 @@
 import {
   RiAddLine,
-  RiArrowDownLine,
   RiArrowLeftLine,
   RiArrowRightLine,
-  RiArrowUpLine,
   RiCloseLine,
   RiDeleteBinLine,
   RiImageLine,
@@ -17,6 +15,7 @@ import { type CSSProperties, type ChangeEvent, type PointerEvent as ReactPointer
 
 import { type AboutDoc, BLOCKS_MAX, TEXT_MAX, sanitizeHtml } from '@/infra/about';
 import { type PageWire, api } from '@/infra/api';
+import { DragHandle, movedTo, useReorder } from '@/shared-components/Reorderable';
 import { Tooltip, type TooltipAt } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -750,15 +749,17 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
       })
     );
 
-  const moveRow = (from: number, to: number) =>
-    touch((list) => {
-      if (to < 0 || to >= list.length) return list;
-      const next = [...list];
-      const [row] = next.splice(from, 1);
-      if (!row) return list;
-      next.splice(to, 0, row);
-      return next;
-    });
+  /** A row by its handle (Reorderable): dragged, or space and the arrow keys on it. The drop moves it and the page saves. */
+  const rowKeys = rows.map((row) => row.key);
+  const reorder = useReorder({
+    keys: rowKeys,
+    name: (key) => `row ${rowKeys.indexOf(key) + 1}`,
+    onMove: (key, to) =>
+      touch((list) => {
+        const row = list.find((r) => r.key === key);
+        return row ? movedTo(list, row, to) : list;
+      })
+  });
 
   const removeRow = (key: string) =>
     touch((list) =>
@@ -868,7 +869,9 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
 
   if (!loaded) return null;
 
-  const shown = editing ? rows : rows.filter((row) => row.cells.some(filled)).map((row) => ({ ...row, cells: row.cells.filter(filled) }));
+  const shown = editing
+    ? reorder.order.flatMap((key) => rows.filter((row) => row.key === key))
+    : rows.filter((row) => row.cells.some(filled)).map((row) => ({ ...row, cells: row.cells.filter(filled) }));
 
   if (shown.length === 0 && !editing) {
     if (!edit) {
@@ -908,20 +911,15 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
   const full = count(rows) >= BLOCKS_MAX;
 
   return (
-    <div>
-      <section id={box} aria-label={`about ${name}`} className={cn('flex flex-col', editing ? 'gap-6' : 'gap-4')}>
+    <div className="relative">
+      <section id={box} aria-label={`about ${name}`} {...(editing ? reorder.list : {})} className={cn('flex flex-col', editing ? 'gap-6' : 'gap-4')}>
         {shown.map((row, r) => (
-          <div key={row.key} className="flex flex-col gap-1.5">
+          <div key={row.key} {...reorder.item(row.key)} className="flex flex-col gap-1.5">
             {editing && (
               <div className="flex items-center gap-3">
+                <DragHandle id={`about-row-drag-${r}`} {...reorder.handle(row.key)} />
                 <span className={LABEL}>row {r + 1}</span>
                 <span className="ml-auto flex gap-0.5">
-                  <Icon label="move the row up" disabled={r === 0} onClick={() => moveRow(r, r - 1)}>
-                    <RiArrowUpLine size={16} aria-hidden />
-                  </Icon>
-                  <Icon label="move the row down" disabled={r === shown.length - 1} onClick={() => moveRow(r, r + 1)}>
-                    <RiArrowDownLine size={16} aria-hidden />
-                  </Icon>
                   <Icon label="remove the row" onClick={() => removeRow(row.key)}>
                     <RiDeleteBinLine size={16} aria-hidden />
                   </Icon>
@@ -1019,6 +1017,7 @@ export function About({ name, doc, edit = false, id }: AboutProps) {
         </div>
       )}
       <input ref={fileRef} type="file" className="hidden" onChange={onFile} />
+      {editing && reorder.status}
     </div>
   );
 }

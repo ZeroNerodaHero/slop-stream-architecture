@@ -60,7 +60,8 @@ import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { OAuthMark } from '@/shared-components/OAuthMark';
 import { PicturePick } from '@/shared-components/PicturePick';
-import { BUTTON, Field, INPUT, OptionCard, PasswordInput, SECTION_TITLE, Section, Status } from '@/shared-components/user-modal/parts';
+import { INPUT } from '@/shared-components/input';
+import { BUTTON, Field, OptionCard, PasswordInput, SECTION_TITLE, Section, Status } from '@/shared-components/user-modal/parts';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -104,10 +105,10 @@ function Rename({ me }: { me: string }) {
   }
 
   return (
-    <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
+    <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
       {/* for password managers: which account the password belongs to */}
       <input type="text" name="username" value={me} autoComplete="username" readOnly tabIndex={-1} aria-hidden className="sr-only" />
-      <fieldset className="m-0 flex flex-col gap-4 border-0 p-0">
+      <fieldset className="m-0 flex flex-col gap-3 border-0 p-0">
         <Field
           id="profile-new-name"
           label="new name"

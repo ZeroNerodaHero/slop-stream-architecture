@@ -1,4 +1,4 @@
-import { RiArrowDownLine, RiArrowUpLine, RiCloseLine } from '@remixicon/react';
+import { RiCloseLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useMemo, useState } from 'react';
 
@@ -35,8 +35,10 @@ import {
 } from '@/infra/socials';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
-import { INPUT, OptionCard, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
+import { INPUT } from '@/shared-components/input';
+import { OptionCard, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
+import { DragHandle, type DragHandleProps, useReorder } from '@/shared-components/Reorderable';
 import { SOCIAL_ICON, SOCIAL_ICON_PX, Socials } from '@/shared-components/Socials';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -88,16 +90,22 @@ function LayoutPreview({ layout, kinds }: { layout: SocialsLayout; kinds: readon
 }
 
 /**
- * One row of the draft: the kind's icon, the url and the words as typed, the arrows and ×.
- * All of it edits the draft; nothing here reaches the api until `save links`. A url that is
- * not a link is marked (red stroke) but kept: the save names the row instead of a 400.
+ * One row of the draft: the handle it is dragged by, the kind's icon, the url and the words as
+ * typed, the ×. All of it edits the draft; nothing here reaches the api until `save links`. A
+ * url that is not a link is marked (red stroke) but kept: the save names the row instead of a 400.
  */
-function LinkRow({ link, i, count, focus }: { link: SocialLink; i: number; count: number; focus: boolean }) {
+function LinkRow({ link, i, focus, handle, item }: { link: SocialLink; i: number; focus: boolean; handle: DragHandleProps; item: { 'data-reorder-item': string } }) {
   const Icon = SOCIAL_ICON[link.kind];
   const word = link.label.trim() || link.kind;
   const bad = link.url.trim() !== '' && socialHref(link.url) === null;
   return (
-    <li id={`socials-row-${i}`} data-kind={link.kind} className="flex flex-wrap items-center gap-2 px-3 py-2 sm:flex-nowrap">
+    <li
+      id={`socials-row-${i}`}
+      data-kind={link.kind}
+      {...item}
+      className={cn('flex flex-wrap items-center gap-2 px-3 py-2 sm:flex-nowrap', handle.held && 'bg-backgroundTertiary')}
+    >
+      <DragHandle id={`socials-drag-${i}`} {...handle} />
       <Tooltip content={link.kind}>
         <span role="img" aria-label={link.kind} className="flex h-9 w-9 shrink-0 items-center justify-center text-textSecondary">
           <Icon aria-hidden size={20} />
@@ -118,7 +126,7 @@ function LinkRow({ link, i, count, focus }: { link: SocialLink; i: number; count
         autoCapitalize="off"
         spellCheck={false}
         aria-invalid={bad || undefined}
-        className={cn(INPUT, 'min-w-0 flex-1 basis-48 py-1.5 text-sm', bad && 'border-decrease')}
+        className={cn(INPUT, 'min-w-0 flex-1 basis-48', bad && 'border-decrease')}
       />
       <label htmlFor={`socials-label-${i}`} className="sr-only">
         link {i + 1}: the words on it
@@ -130,26 +138,9 @@ function LinkRow({ link, i, count, focus }: { link: SocialLink; i: number; count
         placeholder={link.kind}
         maxLength={MAX_SOCIAL_LABEL_CHARS}
         autoComplete="off"
-        className={cn(INPUT, 'min-w-0 flex-1 basis-28 py-1.5 text-sm sm:max-w-[9rem]')}
+        className={cn(INPUT, 'min-w-0 flex-1 basis-28 sm:max-w-[9rem]')}
       />
       <span className="flex shrink-0 items-center">
-        <Tooltip content="up">
-          <button id={`socials-up-${i}`} type="button" aria-label={`move ${word} up`} disabled={i === 0} onClick={() => moveSocial(i, 'up')} className={ICON_BUTTON}>
-            <RiArrowUpLine aria-hidden size={16} />
-          </button>
-        </Tooltip>
-        <Tooltip content="down">
-          <button
-            id={`socials-down-${i}`}
-            type="button"
-            aria-label={`move ${word} down`}
-            disabled={i === count - 1}
-            onClick={() => moveSocial(i, 'down')}
-            className={ICON_BUTTON}
-          >
-            <RiArrowDownLine aria-hidden size={16} />
-          </button>
-        </Tooltip>
         <Tooltip content="remove">
           <button
             id={`socials-remove-${i}`}
@@ -191,6 +182,17 @@ export function SocialsEditor({ canEdit, whyNot, onDone }: SocialsEditorProps) {
   const [focusRow, setFocusRow] = useState(-1);
   const kinds = useMemo(() => draft.links.map((l) => l.kind), [draft]);
   const full = draft.links.length >= MAX_SOCIALS;
+  // the links have no ids: a row's key is its place, and the drop moves the draft
+  const keys = useMemo(() => draft.links.map((_, i) => String(i)), [draft]);
+  const reorder = useReorder({
+    keys,
+    name: (key) => {
+      const link = draft.links[Number(key)];
+      return link ? link.label.trim() || link.kind : 'link';
+    },
+    onMove: (key, to) => moveSocial(Number(key), to),
+    keyedByIndex: true
+  });
 
   return (
     <div id="socials-editor" className="border border-primaryStroke bg-backgroundSecondary p-4">
@@ -205,11 +207,16 @@ export function SocialsEditor({ canEdit, whyNot, onDone }: SocialsEditorProps) {
               no links yet. pick a place below and a row appears here.
             </div>
           ) : (
-            <ul id="socials-list" className="m-0 list-none divide-y divide-primaryStroke border border-primaryStroke bg-background p-0">
-              {draft.links.map((link, i) => (
-                <LinkRow key={i} link={link} i={i} count={draft.links.length} focus={i === focusRow} />
-              ))}
-            </ul>
+            <div className="relative">
+              <ul id="socials-list" {...reorder.list} className="m-0 list-none divide-y divide-primaryStroke border border-primaryStroke bg-background p-0">
+                {reorder.order.map((key) => {
+                  const i = Number(key);
+                  const link = draft.links[i];
+                  return link && <LinkRow key={key} link={link} i={i} focus={i === focusRow} handle={reorder.handle(key)} item={reorder.item(key)} />;
+                })}
+              </ul>
+              {reorder.status}
+            </div>
           )}
 
           {/* the places: a square per kind. not a form: a click makes a row, the row is where the typing goes */}

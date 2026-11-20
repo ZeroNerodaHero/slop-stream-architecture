@@ -113,7 +113,7 @@ const BOT_OPTIONS: readonly { hide: boolean; id: string; label: string; detail: 
     hide: true,
     id: 'bots-hide',
     label: 'hide the bots',
-    detail: 'their lines stay off the screen. the chat header says how many',
+    detail: 'their lines stay off the screen, in every room',
     icon: <RiEyeOffLine aria-hidden size={28} />
   }
 ];
@@ -315,10 +315,9 @@ export function ChatTab() {
       </fieldset>
 
       <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
-        <legend className={SECTION_TITLE}>bots</legend>
+        <legend className={SECTION_TITLE}>hide bots</legend>
         <p className="mt-1 text-textSecondary">
-          the fake streams have pretend chatters, there to show the chat works. their lines wear the <span className="font-semibold">bot</span> badge; the robot in the
-          chat header is this same switch.
+          the fake streams have pretend chatters, there to show the chat works. their lines wear the <span className="font-semibold">bot</span> badge. hide them here.
         </p>
         <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           {BOT_OPTIONS.map(({ hide, id, label, detail, icon }) => (

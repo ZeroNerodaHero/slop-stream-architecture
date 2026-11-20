@@ -50,7 +50,7 @@ load, per action), not a measurement.
 | ✅ | `GET /api/search` | People search (typed into) | 180 / IP | same **+ 600** | IP; account / IP | 1 min | medium (per keystroke pause) |
 | ✅ | `GET /api/explore`, `GET /api/groups` | Browse / my groups | none | **600** | account / IP | 1 min | medium |
 | ✅ | `POST /api/groups` | Create group | owner cap (2 groups) only | **120** + cap | account | 1 min | rare |
-| ✅ | `GET /api/groups/{group}`, `/messages`, `/members`, `/roles`, `/bans`, `/icon`, `/banner` | Read a group room | none | **600** | account / IP | 1 min | high (room page) |
+| ✅ | `GET /api/groups/{group}`, `/messages`, `/members`, `/roles`, `/bans`, `/icon`, `/banner` | Read a group room (`/members` and `/messages` also in pages: `?limit=&after=` / `?channel=&before=`, one request per page scrolled to) | none | **600** | account / IP | 1 min | high (room page) |
 | ✅ | `DELETE /api/groups/{group}` | Delete group | none | **120** (moderate tier) | account | 10 min | rare (owner) |
 | ✅ | `POST /api/groups/{group}/join`, `/leave` | Join / leave | members cap (8) only | **120** | account | 1 min | low |
 | ✅ | `POST/PUT /api/groups/{group}/channels`, `PUT/DELETE /channels/{channel}`, `PUT /channels/{channel}/cooldown`, `PUT /channels/{channel}/roles` | Channel setup | channel cap (20) only | **120** (moderate) | account | 10 min | rare (owner/mod) |
