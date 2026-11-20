@@ -15,6 +15,7 @@ import {
   markAutoplayBlocked,
   markPlaying,
   mutedAtom,
+  NOT_LIVE_MESSAGE,
   needsTapAtom,
   offlineAtom,
   offlineNoteAtom,
@@ -348,6 +349,37 @@ export function WatchPage() {
   // 320px wide. a tall window never reaches the cap
   const videoCap = chatTab && deskTab === 'chat' && 'mx-auto max-w-[max(320px,calc((100dvh_-_var(--page-top,4rem)_-_4.25rem_-_260px_-_2.5rem)_*_16_/_9))]';
 
+  // what is up, on the picture where the stream is (or was), the offline picture's chip: so no line comes
+  // and goes under the player and moves the page. every status but the quiet ones: `watching` (the
+  // picture says it), `loading` (the grey says it) and `not live yet` (the offline chip says it). the
+  // status line's own words, red for a bad one; `connected, waiting for video` is still `connecting`.
+  // after a failure the retry button is under the words. the words are aria-hidden: the status line,
+  // sr-only under the player, reads them out
+  const chipWords =
+    phase === 'connecting' || phase === 'connected'
+      ? 'connecting'
+      : phase === 'watching' || phase === 'loading' || (phase === 'waiting' && message === NOT_LIVE_MESSAGE)
+        ? null
+        : message;
+  const playerChip = chipWords !== null && (
+    <div className={cn('pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2', mobile && strip.overlay)}>
+      <span
+        aria-hidden
+        className={cn(
+          'border border-white/10 bg-black/70 px-3 py-1 text-sm font-semibold uppercase tracking-wide backdrop-blur-sm',
+          tone === 'bad' ? 'text-decrease' : 'text-white'
+        )}
+      >
+        {chipWords}
+      </span>
+      {canRetry && (
+        <Button id="retry" size="sm" className="pointer-events-auto" onClick={retry}>
+          retry
+        </Button>
+      )}
+    </div>
+  );
+
   // the player, or the profile while they are not live, and the streamer's pictures beside it: the
   // desktop's video column, and a phone's pinned top. a phone has no chat button on it: the chat is
   // a tab there, never closed
@@ -378,6 +410,7 @@ export function WatchPage() {
             style={mobile ? strip.style : undefined}
           >
             <Bone className="absolute inset-0" />
+            {playerChip}
             {!mobile && !chatTab && (
               <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
                 <ChatOpenButton className="ml-auto" />
@@ -408,6 +441,7 @@ export function WatchPage() {
                   offline
                 </span>
               )}
+              {playerChip}
               {!mobile && !chatTab && (
                 <div className="absolute bottom-0 right-0 p-3">
                   <ChatOpenButton />
@@ -443,17 +477,9 @@ export function WatchPage() {
           />
           {/* the same grey over the frame until frames play (`playing` on #video, markPlaying): the box
               that was loading goes on loading, instead of turning black for the connection. inside the
-              stroke, under the controls and tap to play, and no pointer of its own. `connecting` sits on it,
-              the offline picture's chip, so no line comes and goes under the player (the line is for
-              screen readers then) */}
-          {(phase === 'connecting' || phase === 'connected') && (
-            <>
-              <Bone className="pointer-events-none absolute inset-px" />
-              <span aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <span className="border border-white/10 bg-black/70 px-3 py-1 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">connecting</span>
-              </span>
-            </>
-          )}
+              stroke, under the controls and tap to play, and no pointer of its own */}
+          {(phase === 'connecting' || phase === 'connected') && <Bone className="pointer-events-none absolute inset-px" />}
+          {playerChip}
           {needsTap && (
             <Button
               id="tap-to-play"
@@ -521,24 +547,22 @@ export function WatchPage() {
 
   // a phone's top of the about tab: what is up, who is watching, how many follow them. while the stream
   // plays the line would say `watching`, which the picture already says: then it is for screen readers
-  // and the tests alone, and the count stands in its place, the corner player's way. so is `connecting`:
-  // the chip on the player says it
-  const joining = phase === 'connecting' || phase === 'connected';
+  // and the tests alone, and the count stands in its place, the corner player's way. so is every line
+  // the chip on the player says
   const status = (
-    <div className="my-3 flex flex-wrap items-baseline gap-x-4">
-      <StatusLine text={message} tone={tone} className={cn('my-0', (phase === 'watching' || joining) && 'sr-only')} />
+    <div className="relative my-3 flex flex-wrap items-baseline gap-x-4">
+      <StatusLine text={message} tone={tone} className={cn('my-0', (phase === 'watching' || chipWords !== null) && 'sr-only')} />
       <ViewerCount id="viewers" count={viewers} className="text-lg text-textSecondary" />
       {followersCount && <span className="ml-auto text-lg text-textSecondary">{followersCount}</span>}
     </div>
   );
-  // the desktop's under the picture: only what the title row does not already say. the numbers are its
-  // small line, offline and connecting are chips on the player, so `not live yet`, `connecting` and
-  // `watching` (and #viewers and #followers) are for screen readers and the tests alone. ended, a lost
-  // connection show
-  const quiet = phase === 'watching' || phase === 'waiting' || phase === 'loading' || joining;
+  // the desktop's under the picture: only what the title row does not already say, which is nothing. the
+  // numbers are its small line, and every status is the picture's (`watching`, the grey, the offline
+  // chip) or a chip on it, so the line (and #viewers and #followers) is for screen readers and the tests
+  // alone, and nothing under the player comes and goes
   const deskStatus = (
-    <div className={cn('relative', !quiet && 'my-3')}>
-      <StatusLine text={message} tone={tone} className={cn('my-0', quiet && 'sr-only')} />
+    <div className="relative">
+      <StatusLine text={message} tone={tone} className="my-0 sr-only" />
       <span className="sr-only">
         <ViewerCount id="viewers" count={viewers} />
         {followersCount}
@@ -555,15 +579,6 @@ export function WatchPage() {
         </p>
       )}
       <p>{NOT_LIVE_WORDS[presence]}</p>
-    </div>
-  );
-
-  // after a connection failed, under the picture on a phone too: it is what the picture is waiting on
-  const retryRow = canRetry && (
-    <div className="my-3">
-      <button id="retry" type="button" className="text-base font-semibold text-primaryBlue" onClick={retry}>
-        retry
-      </button>
     </div>
   );
 
@@ -610,10 +625,7 @@ export function WatchPage() {
           bleed
           fill
         >
-          <div className="shrink-0">
-            {player}
-            {retryRow && <div className="px-4">{retryRow}</div>}
-          </div>
+          <div className="shrink-0">{player}</div>
           {tabs.length > 0 && (
             <div id="watch-tabs" className="flex min-h-0 flex-1 flex-col">
               <div role="tablist" aria-label="about them" onKeyDown={roveTabs} className={cn('flex shrink-0 border-b border-primaryStroke px-1', typing && 'hidden')}>
@@ -689,8 +701,6 @@ export function WatchPage() {
         <div className={cn('min-w-0', chatSide === 'left' && 'beside:col-start-2 beside:row-start-1')}>
           {player}
           {deskStatus}
-
-          {retryRow}
         </div>
 
         {/* under the player: the about tab (the page of their own, docs/about.md), the calendar
