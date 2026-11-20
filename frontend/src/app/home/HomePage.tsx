@@ -31,7 +31,7 @@ const PEOPLE_POLL_MS = 10_000;
 const FEATURED = 2;
 
 /** One card per column, as many columns as fit: 1 on a phone, 2 on a tablet, 4 at full width. */
-const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-6';
+const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4';
 /** The smaller grid of the people: a rectangle each, as many as fit. */
 const PEOPLE_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3';
 /** The recently offline: the same rectangle, the live cards' width, so "last live 12 min ago" has room beside the face and the button. */
@@ -39,7 +39,7 @@ const RECENT_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3'
 /** The groups as squares, as many as fit. */
 const GROUPS_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3';
 /** The two cards played live at the top, side by side at lg and up. */
-const FEATURED_GRID = 'grid grid-cols-1 gap-6 lg:grid-cols-2';
+const FEATURED_GRID = 'grid grid-cols-1 gap-4 lg:grid-cols-2';
 /** How many grey squares and rectangles stand in for the groups and the people before they have answered. */
 const GROUPS_GUESS = 6;
 const PEOPLE_GUESS = 8;
@@ -142,11 +142,11 @@ function PreviewVideo({ name }: { name: string }) {
 
 /** The streamer's picture, or their first letter when they have none, so every card lines up the same. */
 function Face({ stream }: { stream: LiveStream }) {
-  if (stream.avatar !== null) return <Avatar name={stream.name} version={stream.avatar} className="mr-0 h-11 w-11 shrink-0" />;
+  if (stream.avatar !== null) return <Avatar name={stream.name} version={stream.avatar} className="mr-0 h-9 w-9 shrink-0" />;
   return (
     <span
       aria-hidden
-      className="flex h-11 w-11 shrink-0 items-center justify-center border border-primaryStroke bg-backgroundTertiary text-lg font-semibold uppercase text-textSecondary"
+      className="flex h-9 w-9 shrink-0 items-center justify-center border border-primaryStroke bg-backgroundTertiary text-base font-semibold uppercase text-textSecondary"
     >
       {stream.name[0]}
     </span>
@@ -201,10 +201,10 @@ function Card({
             </span>
           )}
         </div>
-        <div className="flex items-start gap-3 p-4">
+        <div className="flex items-start gap-2.5 px-3 py-2.5">
           <Face stream={stream} />
           <div className="min-w-0 flex-1">
-            <h2 className="flex min-w-0 items-center text-xl font-semibold leading-tight">
+            <h2 className="flex min-w-0 items-center text-base font-semibold leading-5">
               <span className="truncate">{stream.name}</span>
               {stream.verified && (
                 <Tooltip content="has an account: this really is them">
@@ -219,7 +219,7 @@ function Card({
                 </span>
               )}
             </h2>
-            {stream.bio && <p className="mt-1 line-clamp-2 text-base leading-snug text-textSecondary [overflow-wrap:anywhere]">{stream.bio}</p>}
+            {stream.bio && <p className="mt-0.5 line-clamp-2 text-sm leading-snug text-textSecondary [overflow-wrap:anywhere]">{stream.bio}</p>}
           </div>
         </div>
       </Link>
