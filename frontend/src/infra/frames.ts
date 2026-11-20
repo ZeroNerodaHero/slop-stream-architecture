@@ -4,6 +4,8 @@
  * worker bundle can import it too.
  */
 
+import type { GroupBadge } from '@/infra/api';
+
 export type Presence = 'offline' | 'online' | 'dnd' | 'streaming';
 /** The one you pick. `invisible` shows as `offline` to everyone else. */
 export type PresenceChoice = 'online' | 'dnd' | 'invisible';
@@ -74,7 +76,7 @@ export type ServerFrame =
   | { type: 'me'; name: string | null; presence: Presence; status: PresenceChoice }
   | { type: 'presence'; name: string; presence: Presence }
   /** A stream started. The card fields ride along for home (absent from an older gateway). */
-  | { type: 'live'; name: string; since: number; verified?: boolean; avatar?: number | null; bio?: string; thumbs?: number[] }
+  | { type: 'live'; name: string; since: number; verified?: boolean; avatar?: number | null; bio?: string; thumbs?: number[]; badge?: GroupBadge | null }
   | { type: 'ended'; name: string }
   /** How many are receiving a stream now, as video counts them. To the name's watchers and to `watch *`. */
   | { type: 'viewers'; name: string; viewers: number }

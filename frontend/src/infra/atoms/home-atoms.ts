@@ -130,7 +130,8 @@ function apply(frame: ServerFrame): void {
       verified: frame.verified ?? false,
       avatar: frame.avatar ?? null,
       thumbs: frame.thumbs ?? [],
-      viewers: null
+      viewers: null,
+      badge: frame.badge ?? null
     };
     const at = list.findIndex((s) => s.name === frame.name);
     // first on, first shown: a new stream goes to the end

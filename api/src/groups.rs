@@ -128,17 +128,26 @@ pub(crate) async fn badges_of(db: &PgPool, user: Option<Uuid>, bot: bool) -> Res
 /// primary group, else the first it joined, the first its chat lines wear. None for a name with
 /// no account or no group.
 pub(crate) async fn badge_of(db: &PgPool, name: &str) -> Result<Option<Badge>, sqlx::Error> {
-    let row: Option<BadgeRow> = sqlx::query_as(&format!(
-        "SELECT {BADGE_COLUMNS} FROM streamers st
+    Ok(badges_by_name(db, &[name.to_owned()]).await?.remove(name))
+}
+
+/// `badge_of` for many names in one query: the home list's cards. A name with no account or
+/// no group is not in the map.
+pub(crate) async fn badges_by_name(db: &PgPool, names: &[String]) -> Result<HashMap<String, Badge>, sqlx::Error> {
+    let rows: Vec<(String, String, String, String, Option<i64>, String, i64, Option<i64>)> = sqlx::query_as(&format!(
+        "SELECT DISTINCT ON (st.name) st.name, {BADGE_COLUMNS} FROM streamers st
          JOIN memberships m ON m.user_id = st.id
          JOIN groups g ON g.name = m.group_name
-         WHERE st.name = $1 AND st.password_hash IS NOT NULL
-         ORDER BY m.is_primary DESC, m.joined_at LIMIT 1"
+         WHERE st.name = ANY($1) AND st.password_hash IS NOT NULL
+         ORDER BY st.name, m.is_primary DESC, m.joined_at"
     ))
-    .bind(name)
-    .fetch_optional(db)
+    .bind(names)
+    .fetch_all(db)
     .await?;
-    Ok(row.map(Badge::from))
+    Ok(rows
+        .into_iter()
+        .map(|(who, name, badge, color, icon, about, members, banner)| (who, Badge::from((name, badge, color, icon, about, members, banner))))
+        .collect())
 }
 
 // ---- rules -----------------------------------------------------------------------------
