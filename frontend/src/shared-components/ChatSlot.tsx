@@ -1,5 +1,15 @@
 import { useAtomValue } from 'jotai';
-import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  createContext,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState
+} from 'react';
 
 import { type ChatBox as Box, keepStreamBox, keptStreamBox } from '@/infra/atoms/chat-layout-atoms';
 import { type ChatSide,chatModalOpenAtom, chatSideAtom, setChatModalOpen } from '@/infra/atoms/settings-atoms';
@@ -67,6 +77,21 @@ function fitted(box: Box): Box {
   return { w, h, x: clamp(box.x, 0, Math.max(0, r.w - w)), y: clamp(box.y, 0, Math.max(0, r.h - h)) };
 }
 
+/** In a window, what the chat's own header needs to be the window's one bar: a press on it moves the window, and the close at its right end. */
+interface ChatWindowBar {
+  grip: (e: ReactPointerEvent) => void;
+  close: ReactNode;
+}
+
+const ChatWindowContext = createContext<ChatWindowBar | null>(null);
+
+/** The window's bar, for the chat's header (ChatPanel.tsx) to be it. `null` beside the video, as a tab, and anywhere outside a ChatSlot. */
+export function useChatWindowBar(): ChatWindowBar | null {
+  return useContext(ChatWindowContext);
+}
+
+export const CHAT_GRIP = GRIP;
+
 /**
  * Where the stream's chat is: the layout setting, except that a phone (mobile.ts) has no window
  * floating over the page. There the "window" is the column under the video, as left and right
@@ -109,8 +134,8 @@ export function chatLayoutClass(side: ChatSide, open: boolean): string {
  * of the page, so a change of the setting never remounts the panel inside (a remount is a
  * reconnect). Left or right, the dialog is just the column: it is not open, and it is drawn
  * in the page, sliding out to that side when the chat button closes it. In a window, `show`
- * (not `showModal`) puts that same dialog over the page without freezing it: drag the top
- * edge, pull a corner. Closing fades it and leaves the room connected; the chat button on
+ * (not `showModal`) puts that same dialog over the page without freezing it: drag the chat's
+ * header (its one bar, with the close at its right), pull a corner. Closing fades it and leaves the room connected; the chat button on
  * the video opens it again.
  *
  * `tabbed`: the column is a tab under the video instead (the watch page's body is too narrow to
@@ -335,6 +360,28 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
   const fromLeft = box !== null && box.x + box.w / 2 < room().w / 2;
   const style: CSSProperties | undefined = modal && box ? { left: box.x, top: box.y, width: box.w, height: box.h } : undefined;
 
+  const bar: ChatWindowBar | null = modal
+    ? {
+        grip: (e) => press(e, 'move'),
+        close: (
+          <button
+            id="chat-modal-close"
+            type="button"
+            aria-label="close the chat"
+            // a press here is the button's, not the start of a drag
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              setChatModalOpen(false);
+              document.getElementById('chat-open')?.focus();
+            }}
+            className="-my-1 flex h-7 w-7 shrink-0 items-center justify-center text-lg leading-none text-textSecondary hover:text-primaryBlue"
+          >
+            ×
+          </button>
+        )
+      }
+    : null;
+
   return (
     <dialog
       ref={ref}
@@ -375,26 +422,6 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
             )
       )}
     >
-      {modal && (
-        <div
-          className={cn('flex h-8 shrink-0 cursor-move items-center border-b border-primaryStroke px-1', GRIP)}
-          onPointerDown={(e) => press(e, 'move')}
-          title="drag to move"
-        >
-          <button
-            id="chat-modal-close"
-            type="button"
-            aria-label="close the chat"
-            onClick={() => {
-              setChatModalOpen(false);
-              document.getElementById('chat-open')?.focus();
-            }}
-            className="ml-auto flex h-7 w-7 items-center justify-center text-lg leading-none text-textSecondary hover:text-primaryBlue"
-          >
-            ×
-          </button>
-        </div>
-      )}
       {/* a fixed width, pinned to the outer edge, so the shrinking cell uncovers it from the video side instead of squashing the lines */}
       <div
         className={cn(
@@ -412,7 +439,7 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
               )
         )}
       >
-        {children}
+        <ChatWindowContext.Provider value={bar}>{children}</ChatWindowContext.Provider>
       </div>
       {modal &&
         CORNERS.map((c) => (
