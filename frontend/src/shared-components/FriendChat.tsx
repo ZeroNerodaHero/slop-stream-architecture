@@ -617,6 +617,8 @@ export function FriendChat() {
   const hold = useRef(0);
   /** Older lines are on their way: the next paint keeps the view where it was instead of jumping to the bottom. */
   const prepending = useRef(false);
+  /** The thread a line of yours is on its way to: its next paint that brings lines goes to the newest, wherever the reader had scrolled. */
+  const sentJump = useRef<string | null>(null);
   /** The thread the log last showed: a change of thread starts at the bottom. */
   const shownThread = useRef<string | undefined>(undefined);
   /** The oldest line the log last drew: one older than it next time is a page put above (the scroll's, or a hit's). */
@@ -720,7 +722,14 @@ export function FriendChat() {
     const oldest = lines[0]?.id;
     // a page put above the lines on screen: the scroll asked for it, or a hit is loading its way back (`openDmLine`)
     const older = shownThread.current === name && oldestShown.current !== undefined && oldest !== undefined && oldest < oldestShown.current;
-    if (prepending.current || older) {
+    // another thread on screen since the send: that one starts at its bottom anyway
+    if (sentJump.current !== name) sentJump.current = null;
+    if (sentJump.current && shownThread.current === name) {
+      // your own send: to the bottom. a page of older lines still on its way keeps its flag, and holds its place when it lands
+      sentJump.current = null;
+      el.scrollTop = el.scrollHeight;
+      stuck.current = true;
+    } else if (prepending.current || older) {
       el.scrollTop += el.scrollHeight - hold.current;
       prepending.current = false;
     } else if (stuck.current || shownThread.current !== name) {
@@ -840,8 +849,11 @@ export function FriendChat() {
     e?.preventDefault();
     if (!name || (!draft.trim() && pictures.length === 0) || sending || uploading) return;
     setSending(true);
+    // the thread's lines are one run from the newest back (dm-atoms.ts), so the newest is always loaded: the line just goes on the bottom, and the view with it
+    sentJump.current = name;
     const sent = await sendDm(name, draft, pictures);
     setSending(false);
+    if (!sent) sentJump.current = null;
     if (sent) {
       setDraft('');
       setPictures([]);

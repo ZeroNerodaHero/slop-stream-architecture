@@ -1,6 +1,7 @@
 // The text chat: two viewers talk, history survives a reload, 501 chars is refused,
 // the streamer's lines are marked, their name wears the person card on hover, a nick's
 // third line in a minute waits on the send button and the chat refuses it on any socket.
+// scrolled up, someone else's line leaves the view where it is and your own send jumps to the bottom.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node chat.js
 const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'https://127.0.0.1';
@@ -129,6 +130,44 @@ async function say(page, text) {
     await a.mouse.move(5, 5);
     await a.waitForSelector(`#chat-peek-${ROOM}`, { state: 'detached', timeout: 5000 });
     return `"${text}"`;
+  });
+
+  await step('scrolled up: someone else\'s line leaves the view, your own send jumps to the bottom', async () => {
+    const d = await fresh();
+    const e = await fresh();
+    await d.goto(`${BASE}/watch/${ROOM}`, { waitUntil: 'domcontentloaded' });
+    await e.goto(`${BASE}/watch/${ROOM}`, { waitUntil: 'domcontentloaded' });
+    await joinAs(d, 'dave');
+    await joinAs(e, 'erin');
+    // a short list, so the lines so far scroll; then up to the top, the way a reader goes back
+    await d.evaluate(() => {
+      const el = document.querySelector('#chat-lines');
+      el.style.flex = 'none';
+      el.style.height = '40px';
+    });
+    await d.waitForFunction(() => {
+      const el = document.querySelector('#chat-lines');
+      return el.scrollHeight > el.clientHeight + 100;
+    }, null, { timeout: 5000 });
+    await d.evaluate(() => { document.querySelector('#chat-lines').scrollTop = 0; });
+    await sleep(300);
+    const gap = () => d.evaluate(() => {
+      const el = document.querySelector('#chat-lines');
+      return { top: el.scrollTop, gap: el.scrollHeight - el.scrollTop - el.clientHeight };
+    });
+    await say(e, 'erin while dave reads');
+    await d.waitForFunction(() => /erin while dave reads/.test(document.querySelector('#chat-lines').textContent), null, { timeout: 10000 });
+    await sleep(200);
+    const theirs = await gap();
+    if (theirs.top > 5) throw new Error(`someone else's line moved the view to ${theirs.top}`);
+    await say(d, 'dave says something');
+    await d.waitForFunction(() => /dave says something/.test(document.querySelector('#chat-lines').textContent), null, { timeout: 10000 });
+    await sleep(200);
+    const mine = await gap();
+    if (mine.gap > 4) throw new Error(`after the send the view is ${mine.gap}px over the bottom`);
+    await d.close();
+    await e.close();
+    return `theirs left it at ${theirs.top}, mine ${mine.gap}px from the bottom`;
   });
 
   await step('two lines a minute without an account: the third waits on the button, and the chat agrees across sockets', async () => {
