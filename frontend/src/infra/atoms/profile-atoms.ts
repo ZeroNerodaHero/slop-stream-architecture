@@ -286,13 +286,13 @@ export function removeSocial(i: number) {
   editSocials((doc) => ({ ...doc, links: doc.links.filter((_, n) => n !== i) }));
 }
 
-/** The row's arrows: towards the first, or the last. Display order, so `up` is i − 1. At an end, nothing. */
-export function moveSocial(i: number, dir: 'up' | 'down') {
+/** The row's drag handle: the link at `from` put at `to`, display order. Out of range, nothing. */
+export function moveSocial(from: number, to: number) {
   editSocials((doc) => {
-    const links = [...doc.links];
-    const j = dir === 'up' ? i - 1 : i + 1;
-    if (i < 0 || j < 0 || j >= links.length) return doc;
-    [links[i], links[j]] = [links[j]!, links[i]!];
+    const link = doc.links[from];
+    if (!link || to < 0 || to >= doc.links.length || to === from) return doc;
+    const links = doc.links.filter((_, i) => i !== from);
+    links.splice(to, 0, link);
     return { ...doc, links };
   });
 }

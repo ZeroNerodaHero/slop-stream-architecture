@@ -282,7 +282,7 @@ const shown = (page, box = '#socials') =>
     return `grid/large, ${back.links.length} links, the strip followed`;
   });
 
-  await step('the editor again: a web row takes the kind its link lands on, the arrows move a row, × takes one out; none of it saved until the button, and done shows the saved document', async () => {
+  await step('the editor again: a web row takes the kind its link lands on, the drag handle's keys move a row, × takes one out; none of it saved until the button, and done shows the saved document', async () => {
     await o.click('#socials-edit');
     await o.waitForSelector('#socials-row-2', { timeout: 10000 });
     await o.click('#socials-add-web');
@@ -291,13 +291,22 @@ const shown = (page, box = '#socials') =>
     await o.waitForSelector('#socials-row-3[data-kind="twitch"]', { timeout: 5000 });
     // the strip above follows: four links while the draft has four
     await o.waitForFunction(() => document.querySelectorAll('#socials a').length === 4, null, { timeout: 5000 });
-    // up: the twitch row trades places with github
-    await o.click('#socials-up-3');
+    // the handle: space picks the twitch row up, the up arrow takes it over github, space drops it
+    expect(!(await o.$('#socials-up-0')) && !(await o.$('#socials-down-3')), 'a row still has up and down buttons');
+    await o.focus('#socials-drag-3');
+    await o.keyboard.press('Space');
+    await o.keyboard.press('ArrowUp');
+    await o.keyboard.press('Space');
     await o.waitForSelector('#socials-row-2[data-kind="twitch"]', { timeout: 5000 });
     expect((await o.getAttribute('#socials-row-3', 'data-kind')) === 'github', 'github did not move down');
-    // the first row's up arrow and the last row's down arrow do nothing: they are disabled
-    expect(await o.isDisabled('#socials-up-0'), 'the first row can move up');
-    expect(await o.isDisabled('#socials-down-3'), 'the last row can move down');
+    // escape puts a picked-up row back where it was
+    const firstKind = await o.getAttribute('#socials-row-0', 'data-kind');
+    await o.focus('#socials-drag-0');
+    await o.keyboard.press('Space');
+    await o.keyboard.press('ArrowDown');
+    await o.keyboard.press('Escape');
+    expect((await o.getAttribute('#socials-row-0', 'data-kind')) === firstKind, 'escape did not put the first row back');
+    expect(await o.$('#socials-editor'), 'escape on the handle closed the editor');
     await o.click('#socials-remove-2');
     await o.waitForSelector('#socials-row-3', { state: 'detached', timeout: 5000 });
     expect((await o.getAttribute('#socials-row-2', 'data-kind')) === 'github', 'github is not back in the third row');

@@ -1380,8 +1380,11 @@ const dropAll = async (ctx, names) => {
     expect(!(await q.$('#channel-remove-general')) && !(await q.$('#channel-rename-general')), 'general has a delete or a pencil');
     expect(!(await q.$('#channel-up-clips')) && !(await q.$('#channel-down-clips')), 'the row still has up and down');
     const put = q.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === `/api/groups/${madeName}/channels`, { timeout: 10000 });
+    // the handle's keys: space picks the row up, the arrow moves it, space drops it and the api is told
     await q.focus('#channel-drag-clips');
+    await q.keyboard.press('Space');
     await q.keyboard.press('ArrowUp');
+    await q.keyboard.press('Space');
     const putRes = await put;
     expect(putRes.status() === 200, `the move got ${putRes.status()}`);
     await q.waitForFunction(() => document.querySelector('#manage-channels li')?.dataset.channel === 'clips', null, { timeout: 10000 });
