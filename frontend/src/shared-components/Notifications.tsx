@@ -9,6 +9,7 @@ import { dmsAtom, openDm } from '@/infra/atoms/dm-atoms';
 import { followingAtom } from '@/infra/atoms/follow-atoms';
 import {
   closeNotifications,
+  dismissNotification,
   KEEP,
   loadNotifications,
   markNotificationsRead,
@@ -46,6 +47,13 @@ const ICON_BUTTON =
 /** The number on the bell: the sidebar's blue square, as its counts have it. */
 export const COUNT =
   'absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background';
+
+/** The × on a row: up while the pointer or the focus is on the row, always on a phone or a screen with no hover. */
+const REMOVE_BUTTON = cn(
+  ICON_BUTTON,
+  'absolute right-2 top-2 bg-backgroundSecondary opacity-0 transition-opacity duration-150 focus-visible:opacity-100',
+  'group-hover/notification:opacity-100 group-focus-within/notification:opacity-100 max-md:h-9 max-md:w-9 max-md:opacity-100 [@media(hover:none)]:opacity-100'
+);
 
 /** The small mark in the corner of the face: what kind of thing this is. */
 const KIND_ICON: Record<NotificationKind, typeof RiBroadcastLine> = { live: RiBroadcastLine, follow: RiUserFollowLine, dm: RiChat3Line, chat: RiHashtag };
@@ -132,8 +140,9 @@ function Row({ n, fresh, now, onPick }: RowProps) {
   const when = new Date(n.at);
   const at = roomOf(n);
   const className = cn(
-    'flex w-full items-start gap-3 border border-transparent px-3 py-2 text-left transition-colors duration-150',
-    'hover:border-primaryStroke hover:bg-backgroundTertiary/60 focus-visible:border-primaryBlue focus-visible:outline-none'
+    // `pr-11`: room for the × on the row's right (RemoveButton), so it never covers the words or the new mark
+    'flex w-full items-start gap-3 border border-transparent py-2 pl-3 pr-11 text-left transition-colors duration-150 max-md:pr-12',
+    'group-hover/notification:border-primaryStroke group-hover/notification:bg-backgroundTertiary/60 focus-visible:border-primaryBlue focus-visible:outline-none'
   );
   const inner = (
     <>
@@ -217,6 +226,36 @@ function Row({ n, fresh, now, onPick }: RowProps) {
     >
       {inner}
     </Link>
+  );
+}
+
+/**
+ * The × at a row's right: the row goes, here and on the login's other devices
+ * (`dismissNotification`). A sibling of the row's link, not inside it, so a press on it never
+ * opens what the row leads to; the events stop here too, so the row's hover and the list's
+ * outside-press do not see them as theirs.
+ */
+function RemoveButton({ id }: { id: number }) {
+  return (
+    <Tooltip content="remove">
+      <button
+        id={`notification-remove-${id}`}
+        type="button"
+        aria-label="remove notification"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          // the focus would be lost with the row: the list keeps it, on the next row's × or the close
+          const li = e.currentTarget.closest('li');
+          const next = (li?.nextElementSibling ?? li?.previousElementSibling)?.querySelector<HTMLElement>('[id^="notification-remove-"]');
+          (next ?? document.getElementById('notifications-close'))?.focus();
+          dismissNotification(id);
+        }}
+        className={REMOVE_BUTTON}
+      >
+        <RiCloseLine aria-hidden size={16} />
+      </button>
+    </Tooltip>
   );
 }
 
@@ -396,8 +435,9 @@ function NotificationsList() {
         <>
           <ul id="notifications-list" aria-label="notifications" className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-1">
             {list.map((n) => (
-              <li key={n.id}>
+              <li key={n.id} className="group/notification relative">
                 <Row n={n} fresh={fresh.has(n.id) || !n.read} now={now} onPick={closeNotifications} />
+                <RemoveButton id={n.id} />
               </li>
             ))}
           </ul>

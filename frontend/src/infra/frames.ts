@@ -112,6 +112,8 @@ export type ServerFrame =
     }
   /** `name` saw its inbox up to `id` on some device: the others drop their count. */
   | { type: 'notify_read'; name: string; id: number }
+  /** `name` dismissed the row `id` on some device: the others drop it too. */
+  | { type: 'notify_removed'; name: string; id: number }
   /** `name` had the channel `room` (`<server>/<channel>`) on screen on some device: its `chat` rows for it are read there too. */
   | { type: 'chat_read'; name: string; room: string }
   /** A group changed (docs/groups.md), to the sockets watching `group:<group>`. `what` says how; the rest is the change. */

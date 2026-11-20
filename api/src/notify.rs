@@ -22,9 +22,9 @@
 use std::collections::HashMap;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{get, put};
+use axum::routing::{delete, get, put};
 use axum::{Json, Router};
 use redis::aio::ConnectionManager;
 use serde::{Deserialize, Serialize};
@@ -473,6 +473,27 @@ async fn read(State(s): State<AppState>, Me(me): Me, body: Result<Json<IdBody>, 
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// One of `user`'s rows goes. True when there was one: another login's row is never touched,
+/// however its id is asked for.
+async fn remove(db: &PgPool, user: Uuid, id: i64) -> Result<bool, sqlx::Error> {
+    let done = sqlx::query("DELETE FROM notifications WHERE id = $1 AND user_id = $2").bind(id).bind(user).execute(db).await?;
+    Ok(done.rows_affected() > 0)
+}
+
+/// `DELETE /api/notifications/:id`: the login dismissed a row by hand (the × on it). 204, and a
+/// `notify_removed` fact tells the login's other devices to drop it too. 404 for a row that is
+/// not theirs or is gone already (the same answer: whose a row is never leaks). 401 for nobody.
+async fn dismiss(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    let me = me.ok_or_else(not_logged_in)?;
+    let no_such = || ApiError::new(StatusCode::NOT_FOUND, "no such notification");
+    let id: i64 = id.parse().map_err(|_| no_such())?;
+    if !remove(&s.db, me.id, id).await? {
+        return Err(no_such());
+    }
+    presence::publish_notify_removed(&mut s.redis.clone(), &me.name, id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// The body of a settings save: a kind left out stays on.
 #[derive(Deserialize)]
 struct SettingsBody {
@@ -507,6 +528,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/notifications", get(list))
         .route("/api/notifications/read", put(read))
         .route("/api/notifications/settings", put(settings))
+        .route("/api/notifications/{id}", delete(dismiss))
 }
 
 #[cfg(test)]
@@ -541,5 +563,53 @@ mod tests {
     fn a_chat_rows_room_is_the_chats_key() {
         assert_eq!(room_of("gaming-0042", "clips"), "gaming-0042/clips");
         assert_eq!(crate::chat::room_key(&room_of("gaming-0042", "clips")), "chat:gaming-0042/clips");
+    }
+
+    /// A dismiss is a write like any other: the shared per-caller limit counts it.
+    #[test]
+    fn a_dismiss_is_a_write() {
+        assert_eq!(crate::ratelimit::api_rule(&axum::http::Method::DELETE, "/api/notifications/{id}"), crate::ratelimit::WRITE);
+    }
+
+    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored dismiss` against a throwaway postgres (see auth.rs's `test_db`).
+    #[tokio::test]
+    #[ignore]
+    async fn a_dismiss_takes_only_the_logins_own_row() {
+        use crate::auth::tests::{row, test_db};
+        let pool = test_db().await;
+        let run = std::process::id();
+        let owner = row(&pool, &format!("owner5-{run}"), Some("owner-hash")).await;
+        let other = row(&pool, &format!("other5-{run}"), Some("other-hash")).await;
+        let actor = row(&pool, &format!("actor5-{run}"), Some("actor-hash")).await;
+        let made = |user: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>("INSERT INTO notifications (user_id, kind, actor_id) VALUES ($1, 'follow', $2) RETURNING id")
+                    .bind(user)
+                    .bind(actor)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("a row")
+            }
+        };
+        let mine = made(owner).await;
+        let kept = made(owner).await;
+        let theirs = made(other).await;
+        let count = |id: i64| {
+            let pool = pool.clone();
+            async move { sqlx::query_scalar::<_, i64>("SELECT count(*) FROM notifications WHERE id = $1").bind(id).fetch_one(&pool).await.unwrap() }
+        };
+
+        // another login's row, asked for by id: not found, and still there
+        assert!(!remove(&pool, owner, theirs).await.unwrap(), "another login's row is not theirs to take");
+        assert_eq!(count(theirs).await, 1);
+        // their own: gone, and only that one
+        assert!(remove(&pool, owner, mine).await.unwrap());
+        assert_eq!(count(mine).await, 0);
+        assert_eq!(count(kept).await, 1, "the rest of the inbox stays");
+        // twice: the second finds nothing, the 404
+        assert!(!remove(&pool, owner, mine).await.unwrap());
+
+        sqlx::query("DELETE FROM streamers WHERE id = ANY($1)").bind(vec![owner, other, actor]).execute(&pool).await.unwrap();
     }
 }

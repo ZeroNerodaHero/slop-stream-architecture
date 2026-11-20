@@ -299,6 +299,11 @@ pub(crate) async fn publish_notify_read<C: AsyncCommands>(r: &mut C, reader: &st
     publish(r, &[("type", "notify_read".into()), ("name", reader.into()), ("id", id.to_string())]).await;
 }
 
+/// A login dismissed one of its notifications by hand, on one device: its other devices drop the row.
+pub(crate) async fn publish_notify_removed<C: AsyncCommands>(r: &mut C, owner: &str, id: i64) {
+    publish(r, &[("type", "notify_removed".into()), ("name", owner.into()), ("id", id.to_string())]).await;
+}
+
 /// A login had a channel on screen, on one device (`room` is `<server>/<channel>`): the `chat`
 /// rows for it are read, and its other devices drop their count, the way a `dm_read` does.
 pub(crate) async fn publish_chat_read<C: AsyncCommands>(r: &mut C, reader: &str, room: &str) {
