@@ -27,6 +27,8 @@ export interface LiveStream {
   thumbs?: number[];
   /** Different addresses receiving the stream, from video. `null`: video did not answer, nobody knows. */
   viewers: number | null;
+  /** The group badge after the name, the one their chat lines wear (primary, else the first joined). null: no group, or a stream without the ✓. Absent on an older api. */
+  badge?: GroupBadge | null;
 }
 
 /** The account has a Google, Discord (any provider) login linked: the verified mark beside the ✓ (`OAuthMark`). Absent on an older api, which means not. */

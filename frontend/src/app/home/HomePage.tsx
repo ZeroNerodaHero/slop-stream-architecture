@@ -12,6 +12,7 @@ import { enterHome, homeErrorAtom, homeGroups, homeNowAtom, homePeople, homeStre
 import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { Avatar } from '@/shared-components/Avatar';
+import { Badge } from '@/shared-components/Badge';
 import { GroupSquare } from '@/shared-components/GroupSquare';
 import { Button, buttonClassName } from '@/shared-components/Button';
 import { FollowButton } from '@/shared-components/FollowButton';
@@ -213,6 +214,8 @@ function Card({
                   </span>
                 </Tooltip>
               )}
+              {/* the badge their chat lines wear; plain (a title, no card) since the whole card is the link */}
+              {stream.badge && <Badge group={stream.badge} className="ml-1.5 shrink-0" />}
               {isDummyName(stream.name) && (
                 <span className="shrink-0">
                   <TestBadge />

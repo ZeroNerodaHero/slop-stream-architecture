@@ -30,6 +30,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use tokio::sync::Mutex;
 
+use crate::groups;
 use crate::presence::{self, EVENTS_KEY};
 use crate::profile;
 use crate::socket::READ_BLOCK_MS;
@@ -115,10 +116,13 @@ async fn list(State(h): State<Home>) -> ApiResult {
     let cards = cards_of(&h.db, &names).await?;
     // oldest first. empty means the card shows the camera, which is what a stream with none has always done
     let thumbs = profile::thumb_ids(&h.db, &names).await?;
+    // the group badge after the name, as the profile card's: an unverified session (a stranger on a free name) wears none
+    let mut badges = groups::badges_by_name(&h.db, &names).await?;
     let out = live.into_iter().map(|(name, l)| {
         let (bio, avatar) = cards.get(&name).cloned().unwrap_or_default();
         let pictures = thumbs.get(&name).cloned().unwrap_or_default();
-        json!({ "name": name, "bio": bio, "since": l.since, "verified": l.verified, "avatar": avatar, "thumbs": pictures, "viewers": l.viewers })
+        let badge = if l.verified { badges.remove(&name) } else { None };
+        json!({ "name": name, "bio": bio, "since": l.since, "verified": l.verified, "avatar": avatar, "thumbs": pictures, "viewers": l.viewers, "badge": badge })
     });
     Ok(Json(Value::Array(out.collect())))
 }

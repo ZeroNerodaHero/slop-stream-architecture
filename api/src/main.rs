@@ -688,7 +688,9 @@ async fn card_of(s: &AppState, name: &str, session: i64) -> Result<Value, ApiErr
     let p = profile::load_profile(&s.db, name).await?;
     let names = [name.to_owned()];
     let thumbs = profile::thumb_ids(&s.db, &names).await?.remove(name).unwrap_or_default();
-    Ok(json!({ "verified": verified.unwrap_or(false), "avatar": p.avatar, "bio": p.bio, "thumbs": thumbs }))
+    let verified = verified.unwrap_or(false);
+    let badge = if verified { groups::badge_of(&s.db, name).await? } else { None };
+    Ok(json!({ "verified": verified, "avatar": p.avatar, "bio": p.bio, "thumbs": thumbs, "badge": badge }))
 }
 
 async fn go_live(
