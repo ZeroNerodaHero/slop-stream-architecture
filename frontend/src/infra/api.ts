@@ -121,6 +121,8 @@ export interface Notification {
   text: string;
   session: number | null;
   room?: string | null;
+  /** A `chat` row's group, as its badge: on the list's rows (null once the group is gone), absent on a pushed one and on an older api. */
+  badge?: GroupBadge | null;
 }
 
 /** A `chat` row's room, split: the server and the channel. Null for a row that is not one. */

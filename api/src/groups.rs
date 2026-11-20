@@ -141,6 +141,16 @@ pub(crate) async fn badge_of(db: &PgPool, name: &str) -> Result<Option<Badge>, s
     Ok(row.map(Badge::from))
 }
 
+/// The badges of these groups, by name (the inbox's channel rows, notify.rs `list`). One query
+/// for any number; a name no group has any more is left out.
+pub(crate) async fn badges_named(db: &PgPool, names: &[String]) -> Result<Vec<Badge>, sqlx::Error> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<BadgeRow> = sqlx::query_as(&format!("SELECT {BADGE_COLUMNS} FROM groups g WHERE g.name = ANY($1)")).bind(names).fetch_all(db).await?;
+    Ok(rows.into_iter().map(Badge::from).collect())
+}
+
 // ---- rules -----------------------------------------------------------------------------
 
 fn not_logged_in() -> ApiError {
