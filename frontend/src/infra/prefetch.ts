@@ -7,9 +7,10 @@
  * hand spreads `usePrefetchOnPointerDown(path)` on itself.
  *
  * Each page's module says what its page asks (`onPrefetch`), beside its own loader, so the two
- * cannot drift. Reads only: a press that goes nowhere costs one answer that is dropped after
- * `PREFETCH_TTL_MS`, and a `watch` of the page's topic on the events socket for as long. No
- * peer, no socket of the page's own, nothing written.
+ * cannot drift. Reads: a press that goes nowhere costs one answer that is dropped after
+ * `PREFETCH_TTL_MS`, and a `watch` of the page's topic on the events socket for as long. The
+ * watch page's prefetcher also warms its peer and video socket for as long, sending nothing
+ * (watch-atoms.ts `warmOnPress`). Nothing written.
  *
  * The topic is watched from the press, as the page would from its mount, so what the socket
  * says about it between the answer and the mount is not lost: a fact that makes the answer
