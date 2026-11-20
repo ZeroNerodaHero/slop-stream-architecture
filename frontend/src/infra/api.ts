@@ -652,6 +652,9 @@ export const api = {
   /** A member waits `seconds` (0 to 3600; 0 none) between their lines in the channel. The channels power. */
   setChannelCooldown: (server: string, channel: string, seconds: number) =>
     request<{ cooldown: number }>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/cooldown`, { seconds }),
+  /** Who sees the channel (docs/groups.md): kept to exactly these roles, by id, in one go; `[]` is everyone. The channels power; a role carrying a power the login lacks is out of reach. `general` stays everyone's. */
+  setChannelRoles: (server: string, channel: string, roles: string[]) =>
+    request<{ channel: string; roles: string[] }>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/roles`, { roles }),
   /** No inbox row for this channel's lines from now on, for this login (docs/notifications.md). 204, also when already muted. */
   muteChannel: (server: string, channel: string) => request<null>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/mute`),
   /** The channel's lines reach the bell again. 204, also when it was not muted. */
@@ -670,7 +673,7 @@ export const api = {
   groupBans: (name: string) => request<GroupBan[]>('GET', `/api/groups/${encodeURIComponent(name)}/bans`),
   /** The roles power. 201 the role, with the id the api made. 409 `name taken`, 403 past the cap or out of reach. */
   createRole: (group: string, role: RoleBody) => request<GroupRole>('POST', `/api/groups/${encodeURIComponent(group)}/roles`, role),
-  /** The role replaced whole, by id: a rename, a new colour, other powers, other channels kept to it, all this one call. */
+  /** The role replaced whole, by id: a rename, a new colour, other powers, all this one call. `channels` replaces the ones kept to it that the login sees: the manage dialog sends them back as they stand, and says who sees a channel from the channel's side (`setChannelRoles`). */
   saveRole: (group: string, id: string, role: RoleBody) => request<GroupRole>('PUT', `/api/groups/${encodeURIComponent(group)}/roles/${id}`, role),
   deleteRole: (group: string, id: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/roles/${id}`),
   giveRole: (group: string, id: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/roles/${id}/members`, { name }),

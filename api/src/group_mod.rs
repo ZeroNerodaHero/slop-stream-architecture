@@ -286,6 +286,12 @@ fn cooldown_of(raw: i32) -> Result<i32, ApiError> {
 }
 
 #[derive(Deserialize)]
+struct ChannelRolesIn {
+    /// The roles a channel is kept to, by id. Empty: everyone's.
+    roles: Vec<uuid::Uuid>,
+}
+
+#[derive(Deserialize)]
 struct TimeoutIn {
     name: String,
     seconds: i64,
@@ -343,6 +349,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}/roles/{id}", axum::routing::put(update_role).delete(delete_role))
         .route("/api/groups/{group}/roles/{id}/members", post(give_role))
         .route("/api/groups/{group}/roles/{id}/members/{name}", axum::routing::delete(take_role))
+        .route("/api/groups/{group}/channels/{channel}/roles", axum::routing::put(set_channel_roles))
         .route("/api/groups/{group}/owners", post(grant_owner))
         .route("/api/groups/{group}/owners/{name}", axum::routing::delete(revoke_owner))
         .route("/api/groups/{group}/owner-role", axum::routing::put(rename_owner_role))
@@ -656,6 +663,97 @@ async fn delete_role(State(s): State<AppState>, Path((group, id)): Path<(String,
     log::info!("{}: removed a role from {group}", who.name);
     groups::tell(&s, &group, "unrole", json!({ "id": id })).await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The roles in one list and not the other: the ones a channel's save keeps it to, or lets go.
+fn changed_roles(was: &[uuid::Uuid], now: &[uuid::Uuid]) -> Vec<uuid::Uuid> {
+    let mut changed: Vec<uuid::Uuid> = was.iter().filter(|id| !now.contains(id)).chain(now.iter().filter(|id| !was.contains(id))).copied().collect();
+    changed.sort();
+    changed.dedup();
+    changed
+}
+
+/// `PUT /api/groups/:group/channels/:channel/roles` `{ roles: [id, …] }`: who sees the channel
+/// (docs/groups.md), from the channel's side. The channel is kept to exactly these roles, in
+/// one transaction; an empty list is everyone's (no `channel_roles` rows). The channels power,
+/// and a member. Each role kept or let go must be within the caller's reach, as with a role's
+/// own save: nobody hands a channel to, or takes one from, a role carrying a power they do not
+/// hold. → `{ channel, roles }`, and a `role` fact for each role whose channels changed, so an
+/// open room asks again who sees what. 400 for `general` (everyone's), 404 for no such channel
+/// or a role not of this group, 403 without the power or out of reach.
+async fn set_channel_roles(
+    State(s): State<AppState>,
+    Path((group, channel)): Path<(String, String)>,
+    Me(me): Me,
+    body: Result<Json<ChannelRolesIn>, JsonRejection>,
+) -> ApiResult {
+    let who = me.ok_or_else(login)?;
+    let Json(body) = body?;
+    let (group, channel) = groups::channel_names(&group, &channel)?;
+    let group = server(&s.db, &group).await?;
+    if channel == groups::GENERAL {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "general is everyone's"));
+    }
+    if !groups::member(&s.db, who.id, &group).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "join the server first"));
+    }
+    let held = held(&s.db, who.id, &group).await?;
+    let admin = s.admins.iter().any(|a| a.id == who.id);
+    if !(held.owner || admin || held.perms & CHANNELS != 0) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "you can't say who sees a channel"));
+    }
+    let me = Shaper { owner: held.owner, admin, perms: held.perms };
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM channels WHERE server = $1 AND name = $2)")
+        .bind(&group)
+        .bind(&channel)
+        .fetch_one(&s.db)
+        .await?;
+    if !exists {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel"));
+    }
+    let mut roles = body.roles;
+    roles.sort();
+    roles.dedup();
+    let mut tx = s.db.begin().await?;
+    let known: Vec<(uuid::Uuid, i32)> = sqlx::query_as("SELECT id, perms FROM roles WHERE group_name = $1 AND id = ANY($2)")
+        .bind(&group)
+        .bind(&roles)
+        .fetch_all(&mut *tx)
+        .await?;
+    if known.len() != roles.len() {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "no such role"));
+    }
+    let was: Vec<(uuid::Uuid, i32)> = sqlx::query_as(
+        "SELECT cr.role_id, r.perms FROM channel_roles cr JOIN roles r ON r.id = cr.role_id WHERE cr.server = $1 AND cr.channel = $2",
+    )
+    .bind(&group)
+    .bind(&channel)
+    .fetch_all(&mut *tx)
+    .await?;
+    let changed = changed_roles(&was.iter().map(|(id, _)| *id).collect::<Vec<_>>(), &roles);
+    // every role kept or let go, as it is: within reach
+    let reach = known.iter().chain(was.iter()).filter(|(id, _)| changed.contains(id)).all(|(_, perms)| me.reaches(*perms));
+    if !reach {
+        return Err(out_of_reach());
+    }
+    sqlx::query("DELETE FROM channel_roles WHERE server = $1 AND channel = $2").bind(&group).bind(&channel).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO channel_roles (server, channel, role_id) SELECT $1, $2, unnest($3::uuid[]) ON CONFLICT DO NOTHING")
+        .bind(&group)
+        .bind(&channel)
+        .bind(&roles)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    log::info!("{}: #{channel} in {group} is kept to {} role(s)", who.name, roles.len());
+    if !changed.is_empty() {
+        // each changed role whole, as the role save says it: the rooms open ask again who sees what
+        for role in roles_of(&s.db, &group).await? {
+            if role["id"].as_str().and_then(|id| id.parse::<uuid::Uuid>().ok()).is_some_and(|id| changed.contains(&id)) {
+                groups::tell(&s, &group, "role", json!({ "role": role })).await;
+            }
+        }
+    }
+    Ok(Json(json!({ "channel": channel, "roles": roles })))
 }
 
 async fn give_role(
@@ -1143,5 +1241,14 @@ mod tests {
         assert!(!shaper.reaches(ROLES | KICK | APPEARANCE));
         assert!(Shaper { owner: true, admin: false, perms: 0 }.reaches(ALL));
         assert!(Shaper { owner: false, admin: true, perms: 0 }.reaches(ALL));
+    }
+
+    #[test]
+    fn a_channel_save_touches_the_roles_kept_or_let_go() {
+        let [a, b, c] = [uuid::Uuid::from_u128(1), uuid::Uuid::from_u128(2), uuid::Uuid::from_u128(3)];
+        assert_eq!(changed_roles(&[a, b], &[b, c]), vec![a, c]);
+        assert_eq!(changed_roles(&[a], &[a]), Vec::<uuid::Uuid>::new());
+        assert_eq!(changed_roles(&[], &[c, a]), vec![a, c]);
+        assert_eq!(changed_roles(&[b], &[]), vec![b]);
     }
 }
