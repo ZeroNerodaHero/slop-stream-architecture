@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "sh scripts/no-box-shadow.sh && sh scripts/no-native-select.sh && tsc --noEmit && vite build",
+    "build": "sh scripts/no-box-shadow.sh && sh scripts/no-native-select.sh && tsc --noEmit && vite build && node scripts/precompress.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "sh scripts/no-box-shadow.sh && sh scripts/no-native-select.sh && oxlint --quiet",

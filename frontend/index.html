@@ -28,6 +28,49 @@
         if ([80, 90, 110, 125].indexOf(size) !== -1) style.setProperty('font-size', size + '%');
       } catch (e) {}
     </script>
+    <!--
+      a stream's page opened straight (a shared link, a reload): what the page asks first, sent
+      now, while the bundle is still downloading (~1s on a cold load, docs/debugging.md "Watch
+      startup timings"). the grant, and the peer with its offer and the video socket, the same as
+      a press warms (watch-atoms.ts `makeWarm`), sending nothing. `start` in watch-atoms.ts takes
+      them as window.__bootWatch, once; past WARM_MAX_MS it closes them and asks itself, and one
+      nobody took is closed after 10s (video's own handshake timeout). the name
+      rule is names.ts NAME_RE after cleanName, the 4 video sections are VIDEO_SLOTS (1 + relay.ts
+      SCREEN_SLOTS), the path is api.ts `watch`: change them together.
+    -->
+    <script>
+      try {
+        var watchPath = /^\/watch\/([^/]+)\/?$/.exec(location.pathname);
+        var watchName = watchPath && decodeURIComponent(watchPath[1]).trim().toLowerCase();
+        if (watchName && /^[a-z0-9_-]{1,32}$/.test(watchName) && window.RTCPeerConnection) {
+          var boot = { name: watchName, born: performance.now() };
+          boot.grant = fetch('/api/streams/' + watchName + '/watch', { method: 'POST', signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined });
+          boot.pc = new RTCPeerConnection();
+          boot.videoTransceivers = [];
+          for (var slot = 0; slot < 4; slot++) boot.videoTransceivers.push(boot.pc.addTransceiver('video', { direction: 'recvonly' }));
+          boot.pc.addTransceiver('audio', { direction: 'recvonly' });
+          boot.offer = boot.pc.createOffer().then(function (o) {
+            return boot.pc.setLocalDescription(o);
+          });
+          boot.offer.then(function () {
+            boot.offerAt = performance.now();
+          }, function () {});
+          boot.grant.catch(function () {});
+          boot.ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+          boot.ws.addEventListener('open', function () {
+            boot.wsAt = performance.now();
+          });
+          window.__bootWatch = boot;
+          // never taken (the bundle failed, the page is not the watch page after all): closed
+          setTimeout(function () {
+            if (window.__bootWatch !== boot) return;
+            delete window.__bootWatch;
+            boot.ws.close();
+            boot.pc.close();
+          }, 10000);
+        }
+      } catch (e) {}
+    </script>
     <title>streams</title>
     <!-- the site icon. ?v= so a browser that kept the old one asks again after a change: bump it with the files -->
     <link rel="icon" href="/favicon.ico?v=2" sizes="any" />

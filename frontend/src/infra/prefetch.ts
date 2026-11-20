@@ -70,8 +70,14 @@ export function prefetchRoute(path: string): void {
   if (!route) return;
   const here = prefetchRouteOf(location.pathname);
   if (here && here.kind === route.kind && here.name === route.name) return;
+  // a group's page is a chunk of its own (router.tsx): asked for beside its data. a failure is
+  // the router's to show when the route asks again
+  if (route.kind === 'group') loadServerPage().catch(() => undefined);
   prefetchers.get(route.kind)?.(route.name);
 }
+
+/** The group page's chunk. The router loads it from here too, so a press and the route share one download. */
+export const loadServerPage = () => import('@/app/explore/ServerRoom');
 
 interface Entry {
   answer: Promise<unknown>;

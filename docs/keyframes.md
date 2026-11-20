@@ -27,6 +27,10 @@ so join requests stay at one per 300ms per slot (3.3 keyframes/s under any join 
 
 a request unanswered after 500ms is taken as lost (RTCP has no retransmission), and the next join asks again.
 
+## a publisher that cannot be asked
+
+the dummy (`video dummy`, `video/src/dummy.rs`) is ffmpeg encoding to rtp, and ffmpeg takes no PLI: the dummy reads its peer's rtcp and drops it. so every request above goes nowhere for a dummy slot, and a joining watcher waits for ffmpeg's next scheduled keyframe. that schedule is `-g` = `-keyint_min` = the frame rate (`FPS`, 15): one keyframe a second, so half a second on average and a second at most. it was `-g 30` (2s, ~1s on average, up to 2s): most of the ~0.9-1.6s between `ice-connected` and `first-frame` that `watchperf` measured on prod, whose streams are all dummies. a browser publisher answers a PLI in one round trip and is not on a schedule.
+
 ## why not a keyframe cache
 
 the other way, which some sfus do: keep each slot's last keyframe and the packets after it (a GOP), and on join send that GOP to the new watcher at once, then live packets. no round trip to the publisher. it was looked at and not built:
@@ -35,6 +39,8 @@ the other way, which some sfus do: keep each slot's last keyframe and the packet
 - **fan-out is one shared track per slot.** every watcher of a slot is a binding of the same `TrackLocalStaticRTP`, and one `write_rtp` goes to all of them. a replay to one watcher needs a track per watcher (or a custom `TrackLocal`), the publish loop writing to each, and a way to know the moment a watcher's binding is up so the replay goes before its first live packet. that rebuilds the hot path every stream's packets go through.
 - **the replay's timestamps.** the cached frames are up to 2s old and arrive in a burst. sent as they are, the browser's jitter buffer plays them at their own pace and the watcher sits ~2s behind live for good, or its timing gives up. they would need rewriting per watcher (squeezed together just behind the live timestamp) so the decoder runs through them and lands on live. how chrome, firefox and safari handle that was not tested: `test/` declares playwright but it is not installed, so no browser checked it.
 - **the burst itself.** 2-3MB at once to a new watcher overflows home routers and our shared udp buffer (4MB for every peer), and the nack responder keeps 512 packets per stream, fewer than a big GOP, so a lost early packet of the keyframe cannot be resent and the watcher sends a PLI anyway.
+
+the dummy is the one publisher whose keyframes come on a schedule, so a cache would be full for it: a join would get a picture with no wait at all instead of half a second on average. that is not worth the rebuild above for fake streams; the 1s gop gets most of it.
 
 if it is built later (a box-made 360 rung, `bitrates.md`, would make keyframes on the box's own schedule and give the cache something to hold): per-watcher tracks, per-watcher sequence and timestamp offsets, a paced replay, and a browser test. the PLI path above stays as the fallback.
 

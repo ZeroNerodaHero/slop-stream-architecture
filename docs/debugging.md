@@ -196,13 +196,35 @@ from then on `./scripts/deploy.sh --pull` is the normal update again, and it reb
 
 ## watch startup timings
 
-`frontend/src/infra/watch-perf.ts`: every watch attempt puts its phases on the performance timeline as `watch:<phase>` marks, and `watch:<phase>` measures from the origin (the press on the link when the page took the peer the press warmed, else the start of the attempt): `press`, `start`, `peer`, `offer`, `ws-open`, `grant`, `setup-sent`, `answer`, `ice-connected`, `first-frame` (`playing` on `#video`). They show in devtools' performance panel. `?perfdebug=1` on the url, or `localStorage.perfdebug = '1'`, prints the line with `console.debug` at the first frame:
+`frontend/src/infra/watch-perf.ts`: every watch attempt puts its phases on the performance timeline as `watch:<phase>` marks, and `watch:<phase>` measures from the origin (the press on the link when the page took the peer the press warmed, the boot script's start when the page took what index.html's boot script made, else the start of the attempt): `press` or `boot`, `start`, `peer`, `offer`, `ws-open`, `grant`, `setup-sent`, `answer`, `ice-connected`, `first-frame` (`playing` on `#video`). They show in devtools' performance panel. `?perfdebug=1` on the url, or `localStorage.perfdebug = '1'`, prints the line with `console.debug` at the first frame:
 
 ```
 [watch perf] press 0 · peer 3 · offer 7 · start 172 · ws-open 418 · grant 576 · setup-sent 577 · answer 901 · ice-connected 1318 · first-frame 1851 ms
 ```
 
-From outside, `node watchperf/measure.js <label>` (kept beside the worktrees, not in the repo) loads `/watch/<a|b|c|d>` cold ten times and presses a link on home ten times, and writes the medians and p90s per phase to `watchperf/<label>.json`.
+From outside, `node watchperf/measure.js <label>` (kept beside the worktrees, not in the repo) loads `/watch/<a|b|c|d>` cold ten times and presses a link on home ten times, and writes the medians and p90s per phase to `watchperf/<label>.json`. `THROTTLE=<kbit/s>,<ms>` puts chrome's network emulation on the page, to compare two builds served locally as if from far away. `node watchperf/profile.js` prints a cold load's resource timings: the document, every script and stylesheet (bytes on the wire and decoded, start and end), the api calls before the grant, and the grant's own phases.
+
+### a cold load
+
+measured on prod (2026-11-20, median of 6 cold loads, ms from navigation start, a laptop ~90ms from the box):
+
+| | ms |
+|---|---|
+| tcp + tls | 0 → 185 |
+| the document (`/watch/<name>` from the api) | → 361 |
+| the main bundle, 345 kB on the wire (1.1 MB js), and the css | 364 → 1322 |
+| `watch:start` (the bundle ran, react rendered the page) | 1376 |
+| the grant | 1384 → 1499 (115, one round trip) |
+
+so ~70% of the time to the grant was the bundle coming down: one connection, in tcp slow start, where every ~14 kB more is part of another round trip. parsing and running it was ~50ms, the grant itself one round trip. the video socket, opened at `start` too, was open ~365ms later (its own tls handshake), and that, not the grant, held the setup back.
+
+what changed for it:
+
+- **index.html's boot script** (an inline script, before the bundle): on `/watch/<name>` it asks for the grant and makes the peer with its offer and opens the video socket at once, at ~360ms, the same things a press warms. `start` takes them (`takeBoot` in `watch-atoms.ts`), so by the time the bundle runs the grant is in and the socket open, and the setup goes at `start`.
+- **the pages split**: groups, a group, go live, admin, log in, sign up and oauth are chunks of their own (`router.tsx`, `React.lazy`). a stream's page loads ~980 kB of js, not 1.1 MB (home and the watch page stay in the main bundle).
+- **brotli 11 built beside every asset** (`frontend/scripts/precompress.mjs`, the Caddyfile's `precompressed br`): the js a stream's page loads is ~250 kB on the wire, not 345 kB.
+
+the rest of a cold load is the box's: the document's ~180ms of tls and ~170ms to its first byte, and after the setup one round trip for the answer and ice plus dtls (~0.5-0.8s). what would cut it further is in `.slop-fixes/firstframe-notes.md`: the boot script sending the setup itself, the grant inside the document, a cdn, more cpu for the box.
 
 ## code
 

@@ -582,12 +582,18 @@ interface RequestOptions {
  */
 async function request<T>(method: string, path: string, body?: unknown, options: RequestOptions = {}): Promise<T> {
   const raw = body instanceof Blob;
-  const res = await fetch(path, {
+  const res = fetch(path, {
     method,
     headers: body === undefined ? {} : { 'content-type': raw ? body.type : 'application/json' },
     body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
     signal: options.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs)
   });
+  return answerOf<T>(method, path, res, options);
+}
+
+/** `request`'s reading of the answer, for a request already sent: the watch grant index.html's boot script asks before the bundle is here. */
+async function answerOf<T>(method: string, path: string, response: Promise<Response>, options: RequestOptions = {}): Promise<T> {
+  const res = await response;
   const text = await res.text();
   let data: unknown = null;
   try {
@@ -822,6 +828,8 @@ export const api = {
   stopBeacon: (owner: Owner) => navigator.sendBeacon(`/api/streams/${owner.name}/stop?${ownerQuery(owner)}`),
   /** Bounded: the watch page keeps a grant in flight as "under way", so one must always land or fail. */
   watch: (name: string) => request<WatchGrant>('POST', `/api/streams/${name}/watch`, undefined, { timeoutMs: 15000 }),
+  /** The same grant, asked by index.html's boot script (`fetch` of that path, the same timeout): read like `watch`'s. */
+  watchAsked: (name: string, response: Promise<Response>) => answerOf<WatchGrant>('POST', `/api/streams/${name}/watch`, response),
   /** The picture of a stream, made on the video machine. `bucket` changes every few seconds so the browser re-fetches. */
   thumbUrl: (name: string, bucket: number) => `/thumb/${encodeURIComponent(name)}.jpg?t=${bucket}`,
   /** The body is wanted on a 503 too (it says which part is down), so not through `request`. */

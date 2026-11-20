@@ -256,6 +256,53 @@ function takePressed(name: string): Warm | null {
   return null;
 }
 
+/** What index.html's boot script asked for and made, for a stream's page loaded straight (the comment there says why). */
+interface BootWatch {
+  name: string;
+  born: number;
+  grant: Promise<Response>;
+  pc: RTCPeerConnection;
+  videoTransceivers: RTCRtpTransceiver[];
+  offer: Promise<void>;
+  offerAt?: number;
+  ws: WebSocket;
+  wsAt?: number;
+}
+
+declare global {
+  interface Window {
+    __bootWatch?: BootWatch;
+  }
+}
+
+/**
+ * The boot script's peer and socket for `name`, once, as a warm one, with its grant read like
+ * `api.watch`'s. Null when there was none (any page but the first one loaded), or it was for
+ * another name or went stale: closed then, and the page asks for itself.
+ */
+function takeBoot(name: string): { warm: Warm; grant: Promise<WatchGrant> } | null {
+  const boot = window.__bootWatch;
+  if (!boot) return null;
+  delete window.__bootWatch;
+  const warm: Warm = { name: boot.name, pc: boot.pc, videoTransceivers: boot.videoTransceivers, offer: boot.offer, ws: boot.ws, born: boot.born };
+  if (boot.name !== name || !isFresh(warm)) {
+    closeWarm(warm);
+    return null;
+  }
+  // the timeline from the boot, with what it did before the bundle was here
+  perfBegin('boot', boot.born);
+  perfMark('peer', boot.born);
+  if (boot.offerAt !== undefined) perfMark('offer', boot.offerAt);
+  else
+    void boot.offer.then(
+      () => perfMark('offer'),
+      () => undefined
+    );
+  if (boot.wsAt !== undefined) perfMark('ws-open', boot.wsAt);
+  else boot.ws.addEventListener('open', () => perfMark('ws-open'), { once: true });
+  return { warm, grant: api.watchAsked(name, boot.grant) };
+}
+
 /** The events socket has a word for `name` and it is not `streaming`: the grant will say not live, so no peer is made ahead of it. */
 const knownNotLive = (name: string) => {
   const word = store.get(presencesAtom).get(name);
@@ -448,18 +495,21 @@ async function start(name: string): Promise<void> {
   watchPresence(name);
   setPhase('loading', 'loading');
 
-  // the peer, its offer and the video socket beside the grant, not after it: the press's, else
-  // made now (not for a name the events socket says is not streaming: its grant will say so).
-  // nothing is sent on the socket until the grant says live
+  // the peer, its offer and the video socket beside the grant, not after it: the press's, or
+  // index.html's boot script's on a page loaded straight, else made now (not for a name the
+  // events socket says is not streaming: its grant will say so). nothing is sent on the socket
+  // until the grant says live
   const fromPress = takePressed(name);
-  if (fromPress) perfMark('start');
+  const boot = fromPress ? null : takeBoot(name);
+  if (fromPress || boot) perfMark('start');
   else perfBegin('start');
-  early = fromPress ?? (knownNotLive(name) ? null : makeWarm(name));
+  early = fromPress ?? boot?.warm ?? (knownNotLive(name) ? null : makeWarm(name));
 
   let grant;
   try {
-    // the one asked for on the press, when there was one and nothing has happened to it since
-    grant = await (takePrefetched<WatchGrant>(grantKey(name))?.answer ?? api.watch(name));
+    // the one asked for on the press, when there was one and nothing has happened to it since,
+    // or by the boot script
+    grant = await (takePrefetched<WatchGrant>(grantKey(name))?.answer ?? boot?.grant ?? api.watch(name));
   } catch {
     if (mine === attempt) {
       dropEarly();
