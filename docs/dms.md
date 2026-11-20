@@ -50,6 +50,7 @@ CREATE TABLE dms (
   text text NOT NULL,
   sent_at timestamptz NOT NULL DEFAULT now(),
   image text,  -- schema.sql: the pictures' ids joined by commas, null for none
+  reply_to bigint,  -- migration 0002-replies: the line of the thread this one answers, null for none. no foreign key
   CHECK (from_id <> to_id)
 );
 CREATE INDEX dms_thread_idx ON dms (LEAST(from_id, to_id), GREATEST(from_id, to_id), id DESC);  -- one thread, newest first
@@ -79,11 +80,15 @@ CREATE TABLE dm_reads (
 
 `at` is unix milliseconds, `id` the row's, so a page's `before`, a hit's place in the thread and the dedupe of a frame against the api's own answer are the same number.
 
+### replies
+
+a line may answer another line of its thread (`chat.md` "replies", the same thing on the room chat): `POST /api/dm/:name` takes `reply`, the id of the line answered, which must be a line of this same pair (`quote` in dms.rs), or 400 `no such line`; it is looked up after the rate, like the pictures. the row keeps the id (`reply_to`). every line the api hands out (a page, a search hit, the 201, the `dm` frame) has `reply`: null for none, else the quote joined at read time from the line answered, of the same pair, `{ id, from, text, verified, avatar, images }` (`from` the writer's name now, `text` its first 120 characters, `avatar` their picture's version, `images` how many pictures it had: the room chat's `Reply`). a line answered that is not there any more reads `{ id, gone: true }`, which the window draws as `original message was deleted`. the window has the room chat's action bar on every line, the `replying to` bar over the box (`#friend-chat-replying`, its × `#friend-chat-reply-cancel`; escape lets go of the reply before it hides the window), and the quote over a reply, which goes to the line (the pages back to it asked for, `openDmLine`) and lights it.
+
 ## the facts, the frames
 
 | fact on `events` | the gateway | the frame |
 |---|---|---|
-| `type dm name <to> from <from> id text at [images]` | to every socket that *is* `to` and every socket that *is* `from` (`Gateway::tell`, the own-name index, not the watchers'). `images` is the ids joined by commas, left out of the fact and the frame when the line has none | `{"type":"dm","id":12,"from":"alice","to":"billy","text":"hi","at":1729…,"images":["6b1e…"]}` |
+| `type dm name <to> from <from> id text at [images] [reply]` | to every socket that *is* `to` and every socket that *is* `from` (`Gateway::tell`, the own-name index, not the watchers'). `images` is the ids joined by commas, left out of the fact and the frame when the line has none; `reply` the quote of the line it answers (json in the fact, an object in the frame), left out for none | `{"type":"dm","id":12,"from":"alice","to":"billy","text":"hi","at":1729…,"images":["6b1e…"]}` |
 | `type dm_read name <reader> peer <peer> id` | to every socket that is `reader` | `{"type":"dm_read","name":"billy","peer":"alice","id":12}` |
 
 the writer's own devices get the `dm` frame too: the page that sent it already has the line from the 201 and drops the frame by id; its other tabs learn it from the frame alone. a socket that is nobody (a guest) is never one of the two names and hears nothing. the inbox row a line makes (`notifications.md`, `notify::messaged`) carries the words as before; a line of pictures alone is a row with none, and the list says `a picture` for it.

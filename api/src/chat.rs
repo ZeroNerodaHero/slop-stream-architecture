@@ -159,6 +159,49 @@ pub(crate) struct Line {
     /// every picture on the line, the ids `POST /api/chat-images` handed back. absent when there are none
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) images: Vec<String>,
+    /// the line this one answers, as that line was when the reply was said (`Reply`). absent for
+    /// a line that answers nothing
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reply: Option<Reply>,
+}
+
+/// The words of a quote: the start of the line answered, enough for the one row the panel draws.
+const REPLY_QUOTE_CHARS: usize = 120;
+/// The words for a reply whose line is not in this room (never said here, or long gone).
+pub(crate) const NO_SUCH_LINE: &str = "no such line";
+
+/// What a reply answers (docs/chat.md "replies"): the line's id, who said it with their marks and
+/// face, the start of its words and how many pictures it had, as it was when the reply was said.
+/// Kept with the reply (`r` in the stream, `reply` on the row, json both), so the quote outlives the
+/// room's stream trimming the line it points at; the panel finds the line itself by `id`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub(crate) struct Reply {
+    pub(crate) id: String,
+    pub(crate) from: String,
+    pub(crate) text: String,
+    #[serde(default)]
+    pub(crate) streamer: bool,
+    #[serde(default)]
+    pub(crate) verified: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) avatar: Option<i64>,
+    /// how many pictures the line had, so a quote of pictures alone has something to say
+    #[serde(default)]
+    pub(crate) images: usize,
+}
+
+impl Reply {
+    pub(crate) fn of(line: &Line) -> Reply {
+        Reply {
+            id: line.id.clone(),
+            from: line.from.clone(),
+            text: line.text.chars().take(REPLY_QUOTE_CHARS).collect(),
+            streamer: line.streamer,
+            verified: line.verified,
+            avatar: line.avatar,
+            images: line.images.len(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -176,6 +219,9 @@ enum In {
         /// On a server socket (`/chat/<server>/*`): which channel the line is for. Ignored elsewhere.
         #[serde(default)]
         channel: Option<String>,
+        /// The id of the line in the same room this one answers (docs/chat.md "replies").
+        #[serde(default)]
+        reply: Option<String>,
     },
     /// A server socket: follow one more channel, added since the socket opened (docs/groups.md).
     Join { channel: String },
@@ -653,7 +699,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                     _ => continue,
                 };
-                let Ok(In::Say { text, image, images, .. }) = serde_json::from_str::<In>(&text) else { continue };
+                let Ok(In::Say { text, image, images, reply, .. }) = serde_json::from_str::<In>(&text) else { continue };
                 let (text, images) = match parse_say(text, image, images) {
                     Ok(Some(say)) => say,
                     Ok(None) => continue,
@@ -685,7 +731,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     }
                 }
                 let Some(w) = who.as_ref() else { continue };
-                if let Err(why) = accept(&s, &name, server.as_deref(), w, &text, &images).await {
+                if let Err(why) = accept(&s, &name, server.as_deref(), w, &text, &images, reply.as_deref()).await {
                     let _ = send(&mut socket, &why.frame()).await;
                     continue;
                 }
@@ -873,8 +919,9 @@ type Standing = (bool, bool, Option<i64>, i32, i32);
 /// one, but waits on its roles' like anyone. The pictures must be ones the api kept;
 /// then the line and the room's ttl in one atomic round trip (a room whose first line landed
 /// but whose expire did not would otherwise live forever), and the row for history on its own
-/// task. `Err` is what the socket hears, and the line is not kept.
-async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: &str, images: &[String]) -> Result<(), Refused> {
+/// task. A reply's line must be in the same room (`reply_to`). `Err` is what the socket hears,
+/// and the line is not kept.
+async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: &str, images: &[String], reply: Option<&str>) -> Result<(), Refused> {
     // the cooldown keys this line sets, with their life in ms and the words when one is still alive
     let mut cooldowns: Vec<(String, i64, &'static str)> = Vec::new();
     // a channel is open to read. talking is for people in the server.
@@ -918,6 +965,10 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
         }
     }
     pictures_exist(&s.db, room, images).await?;
+    let reply = match reply {
+        Some(id) => Some(reply_to(s, room, id).await?),
+        None => None,
+    };
     // the face as the row has it this moment, so the line fanned out now wears the right one
     let face = face_now(&s.db, room, w).await;
     let avatar = face.avatar.map(|v| v.to_string());
@@ -972,6 +1023,10 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
     if let Some(rest) = &rest {
         fields.push(("imgs", rest.as_str()));
     }
+    let quoted = reply.as_ref().and_then(|r| serde_json::to_string(r).ok());
+    if let Some(quoted) = &quoted {
+        fields.push(("r", quoted.as_str()));
+    }
     let key = room_key(room);
     let added: Result<(Option<String>, bool), _> = redis::pipe()
         .atomic()
@@ -990,7 +1045,7 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
     // follows on its own, so a slow database does not hold this socket.
     if s.persist {
         if let Some(id) = id {
-            remember(s, room, &id, w, text, images);
+            remember(s, room, &id, w, text, images, reply);
         }
     }
     // a channel's line is news to the server's other members (docs/notifications.md): their
@@ -999,6 +1054,20 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
         notify_members(s, server, room, actor, text);
     }
     Ok(())
+}
+
+/// The line a reply answers, by its id, from this room only: redis while the stream has it, else
+/// the kept rows (history.rs `line_at`). Another room's id, a junk one, or a line long gone with
+/// nothing kept is `no such line`; a quote of a quote is the line alone, not its own quote.
+async fn reply_to(s: &ChatState, room: &str, id: &str) -> Result<Reply, Refused> {
+    if !is_stream_id(id) {
+        return Err(NO_SUCH_LINE.into());
+    }
+    match history::line_at(&s.db, &mut s.redis.clone(), room, id).await {
+        Ok(Some(line)) => Ok(Reply::of(&line)),
+        Ok(None) => Err(NO_SUCH_LINE.into()),
+        Err(_) => Err("chat is busy, try again".into()),
+    }
 }
 
 /// The inbox rows for a channel's line are written within this long, or not at all.
@@ -1222,7 +1291,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                             let _ = send(&mut socket, &Out::Error { error: "too many tabs" }).await;
                         }
                     }
-                    Ok(In::Say { text, image, images, channel }) => {
+                    Ok(In::Say { text, image, images, channel, reply }) => {
                         let Some(channel) = channel.map(|c| c.trim().to_lowercase()).filter(|c| joined.iter().any(|j| j.as_ref() == c)) else {
                             let _ = send(&mut socket, &Out::Error { error: "say which channel" }).await;
                             continue;
@@ -1258,7 +1327,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                         }
                         let Some(w) = who.as_ref() else { continue };
                         let room = format!("{server}/{channel}");
-                        if let Err(why) = accept(&s, &room, Some(&server), w, &text, &images).await {
+                        if let Err(why) = accept(&s, &room, Some(&server), w, &text, &images, reply.as_deref()).await {
                             let _ = send(&mut socket, &why.frame()).await;
                             continue;
                         }
@@ -1276,7 +1345,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
 }
 
 /// The row for a line redis already accepted. Its own task: the socket goes back to the room.
-fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[String]) {
+fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[String], reply: Option<Reply>) {
     let db = s.db.clone();
     let room = room.to_owned();
     let id = id.to_owned();
@@ -1290,7 +1359,7 @@ fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[
     tokio::spawn(async move {
         let inserted = tokio::time::timeout(
             Duration::from_secs(2),
-            history::store(&db, &room, &id, &speaker, user_id, &text, image.as_deref(), streamer, verified, &groups),
+            history::store(&db, &room, &id, &speaker, user_id, &text, image.as_deref(), streamer, verified, &groups, reply.as_ref()),
         )
         .await;
         match inserted {
@@ -1490,6 +1559,8 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         images
     };
     let image = images.first().cloned();
+    // no `r` field (or one this build cannot read) is a line that answers nothing
+    let reply: Option<Reply> = entry.get::<String>("r").and_then(|r| serde_json::from_str(&r).ok());
     Some(Line {
         at: id_parts(&entry.id).0,
         id: entry.id,
@@ -1503,6 +1574,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         user_id,
         image,
         images,
+        reply,
     })
 }
 
@@ -1600,6 +1672,7 @@ mod tests {
             at: 1729000000000,
             image: None,
             images: Vec::new(),
+            reply: None,
         };
         let text = serde_json::to_string(&Out::ChannelMessage { channel: "general", line: &line }).unwrap();
         let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -1613,6 +1686,46 @@ mod tests {
         assert_eq!(serde_json::to_string(&Out::ChannelCount { channel: "general", count: 3 }).unwrap(), r#"{"type":"count","channel":"general","count":3}"#);
         // the channel of `*` is no channel: the name rule keeps it free
         assert!(!crate::valid_name(EVERY_CHANNEL));
+    }
+
+    /// A reply's quote is the start of the line it answers, kept beside the reply on the wire and
+    /// in the stream, and a say names the line by id alone.
+    #[test]
+    fn a_reply_carries_a_short_quote_of_its_line() {
+        let long: String = "a".repeat(400);
+        let line = Line {
+            id: "1729000000000-0".into(),
+            from: "ann".into(),
+            text: long,
+            streamer: false,
+            verified: true,
+            groups: Vec::new(),
+            avatar: Some(1700000000),
+            oauth_verified: false,
+            user_id: Some(Uuid::nil()),
+            at: 1729000000000,
+            image: Some("6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e".into()),
+            images: vec!["6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e".into()],
+            reply: None,
+        };
+        let quote = Reply::of(&line);
+        assert_eq!(quote.text.chars().count(), REPLY_QUOTE_CHARS);
+        assert_eq!((quote.id.as_str(), quote.from.as_str(), quote.images, quote.avatar), ("1729000000000-0", "ann", 1, Some(1700000000)));
+        let answer = Line { id: "1729000000001-0".into(), text: "yes".into(), reply: Some(quote.clone()), ..line.clone() };
+        let frame: serde_json::Value = serde_json::to_value(&answer).unwrap();
+        assert_eq!(frame["reply"]["id"], "1729000000000-0");
+        assert_eq!(frame["reply"]["from"], "ann");
+        let plain: serde_json::Value = serde_json::to_value(&line).unwrap();
+        assert!(plain.get("reply").is_none(), "a line that answers nothing has no reply key");
+        // a pin keeps the line as json: one with a reply reads back the same, and one kept before replies too
+        let back: Line = serde_json::from_value(frame).unwrap();
+        assert_eq!(back.reply, Some(quote));
+        let old: Line = serde_json::from_str(r#"{"id":"1-0","from":"bob","text":"hi","streamer":false,"verified":false,"groups":[],"avatar":null,"oauth_verified":false,"at":1}"#).unwrap();
+        assert!(old.reply.is_none());
+        match serde_json::from_str::<In>(r#"{"type":"say","text":"yes","reply":"1729000000000-0"}"#).unwrap() {
+            In::Say { reply, .. } => assert_eq!(reply.as_deref(), Some("1729000000000-0")),
+            _ => panic!("a say"),
+        }
     }
 
     #[test]
@@ -1868,6 +1981,7 @@ mod tests {
             at: 1729000000000,
             image: None,
             images: Vec::new(),
+            reply: None,
         }];
         let started = Instant::now();
         with_faces(&pool, &mut lines).await;
@@ -1905,6 +2019,7 @@ mod tests {
             at: 1729000000000,
             image: None,
             images: Vec::new(),
+            reply: None,
         }];
         // her own name: her picture
         with_faces(&pool, &mut lines).await;

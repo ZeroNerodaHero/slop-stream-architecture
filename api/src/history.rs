@@ -34,7 +34,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::chat::{line_from, room_key, with_faces, ChatState, Line};
+use crate::chat::{line_from, room_key, with_faces, ChatState, Line, Reply};
 use crate::groups::Badge;
 use crate::socket::id_parts;
 use crate::{valid_name, ApiError, Name};
@@ -75,7 +75,7 @@ const LINE_COLUMNS: &str = concat!(
     crate::oauth::linked_sql!("u"),
     " OR ",
     crate::oauth::linked_sql!("r"),
-    ")"
+    "), l.reply"
 );
 const LINE_TABLES: &str = "chat_lines l
                            LEFT JOIN streamers u ON l.verified AND u.id = l.user_id
@@ -197,6 +197,7 @@ pub(crate) async fn store(
     streamer: bool,
     verified: bool,
     groups: &[Badge],
+    reply: Option<&Reply>,
 ) -> Result<(), sqlx::Error> {
     let Some((at, seq)) = at_seq(id) else {
         log::warn!("{room}: history id {id} is not a redis stream id");
@@ -206,9 +207,10 @@ pub(crate) async fn store(
     // in as somebody else, are null, so "this user's lines" cannot be a guess.
     let user_id = user_id.filter(|_| verified);
     let badges = serde_json::to_value(groups).unwrap_or_else(|_| json!([]));
+    let reply = reply.and_then(|r| serde_json::to_value(r).ok());
     sqlx::query(
-        "INSERT INTO chat_lines (room, id, at, seq, speaker, user_id, \"text\", streamer, verified, badges, image)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        "INSERT INTO chat_lines (room, id, at, seq, speaker, user_id, \"text\", streamer, verified, badges, image, reply)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          ON CONFLICT (room, id) DO NOTHING",
     )
     .bind(room)
@@ -222,6 +224,7 @@ pub(crate) async fn store(
     .bind(verified)
     .bind(badges)
     .bind(image)
+    .bind(reply)
     .execute(db)
     .await?;
     Ok(())
@@ -642,10 +645,11 @@ async fn pg_side(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, side: Sid
 
 /// `LINE_COLUMNS`, in order: `image` is the picture ids on the line (one, or several joined by
 /// commas), then the speaker's face the join found, the room, and the oauth mark of the row the
-/// join found (false when it found none: `u.id` and `r.id` are null, and so is no EXISTS).
-type LineRow = (String, DateTime<Utc>, String, Option<Uuid>, String, bool, bool, Value, Option<String>, Option<i64>, String, bool);
+/// join found (false when it found none: `u.id` and `r.id` are null, and so is no EXISTS), and
+/// what the line answers (`chat::Reply` as json, null for nothing).
+type LineRow = (String, DateTime<Utc>, String, Option<Uuid>, String, bool, bool, Value, Option<String>, Option<i64>, String, bool, Option<Value>);
 
-fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, avatar, _room, oauth_verified): LineRow) -> Line {
+fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, avatar, _room, oauth_verified, reply): LineRow) -> Line {
     let groups = serde_json::from_value::<Vec<Badge>>(badges).unwrap_or_default();
     let images = crate::chat::split_pictures(image);
     let image = images.first().cloned();
@@ -661,6 +665,7 @@ fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, a
         user_id,
         image,
         images,
+        reply: reply.and_then(|r| serde_json::from_value(r).ok()),
         at: at.timestamp_millis().max(0) as u64,
     }
 }
@@ -772,7 +777,7 @@ mod tests {
     #[test]
     fn a_hit_says_its_channel_for_a_servers_search_alone() {
         let row = |room: &str| -> LineRow {
-            ("1729000000000-0".to_owned(), DateTime::from_timestamp_millis(1729000000000).unwrap(), "bob".to_owned(), None, "hi".to_owned(), false, false, json!([]), None, None, room.to_owned(), false)
+            ("1729000000000-0".to_owned(), DateTime::from_timestamp_millis(1729000000000).unwrap(), "bob".to_owned(), None, "hi".to_owned(), false, false, json!([]), None, None, room.to_owned(), false, None)
         };
         assert_eq!(hit_of(row("vip/clips"), Some("vip")).channel.as_deref(), Some("clips"));
         assert_eq!(hit_of(row("alice"), None).channel, None, "a stream's room has no channel");
@@ -899,7 +904,7 @@ mod tests {
         let alice_name = format!("alice6-{run}");
         let alice = row(&pool, &alice_name, Some("alice-hash")).await;
         sqlx::query("UPDATE streamers SET avatar_at = to_timestamp(1690000000) WHERE id = $1").bind(alice).execute(&pool).await.unwrap();
-        store(&pool, &room, "1729000000000-0", &alice_name, Some(alice), "hi", None, false, true, &[]).await.unwrap();
+        store(&pool, &room, "1729000000000-0", &alice_name, Some(alice), "hi", None, false, true, &[], None).await.unwrap();
         // her own name: her picture
         assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, Some(1690000000));
         let mark = |pool: PgPool, room: String| async move {
@@ -974,28 +979,28 @@ mod tests {
         let oct30 = 1_793_318_400_000u64;
         let line = |ms: u64, seq: u64| format!("{ms}-{seq}");
         // ann, logged in: plain words
-        store(&pool, &room, &line(oct29, 0), &ann_name, Some(ann), "morning everyone", None, false, true, &[]).await.unwrap();
+        store(&pool, &room, &line(oct29, 0), &ann_name, Some(ann), "morning everyone", None, false, true, &[], None).await.unwrap();
         // a nick, Bob as typed, with a link
-        store(&pool, &room, &line(oct29, 1), "Bob", None, "look https://example.com/page.", None, false, false, &[]).await.unwrap();
+        store(&pool, &room, &line(oct29, 1), "Bob", None, "look https://example.com/page.", None, false, false, &[], None).await.unwrap();
         // ann with a picture and no words
-        store(&pool, &room, &line(oct30, 0), &ann_name, Some(ann), "", Some("11111111-1111-1111-1111-111111111111"), false, true, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 0), &ann_name, Some(ann), "", Some("11111111-1111-1111-1111-111111111111"), false, true, &[], None).await.unwrap();
         // a nick with a video link, scheme-less
-        store(&pool, &room, &line(oct30, 1), "cy", None, "this one www.youtube.com/watch?v=abc", None, false, false, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 1), "cy", None, "this one www.youtube.com/watch?v=abc", None, false, false, &[], None).await.unwrap();
         // a nick with a link to a video file
-        store(&pool, &room, &line(oct30, 2), "cy", None, "or http://files.test/clip.mp4?x=1 later", None, false, false, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 2), "cy", None, "or http://files.test/clip.mp4?x=1 later", None, false, false, &[], None).await.unwrap();
         // "example.com" in words is not a link
-        store(&pool, &room, &line(oct30, 3), "Bob", None, "example.com is a domain not a link", None, false, false, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 3), "Bob", None, "example.com is a domain not a link", None, false, false, &[], None).await.unwrap();
         // a video file link that ends a sentence: the period, the bracket and the exclamation are
         // the sentence's, not the link's, as the panel draws it (LinkedText.tsx)
-        store(&pool, &room, &line(oct30, 4), "cy", None, "watch this https://files.test/clip.mp4.", None, false, false, &[]).await.unwrap();
-        store(&pool, &room, &line(oct30, 5), "cy", None, "clip (https://files.test/clip.mp4)", None, false, false, &[]).await.unwrap();
-        store(&pool, &room, &line(oct30, 6), "cy", None, "lol https://x.test/a.webm!", None, false, false, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 4), "cy", None, "watch this https://files.test/clip.mp4.", None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 5), "cy", None, "clip (https://files.test/clip.mp4)", None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 6), "cy", None, "lol https://x.test/a.webm!", None, false, false, &[], None).await.unwrap();
         // a video-looking word beside a link that is not one: linked, not a video
-        store(&pool, &room, &line(oct30, 7), "cy", None, "I saw a.mov yesterday https://example.com", None, false, false, &[]).await.unwrap();
-        store(&pool, &room, &line(oct30, 8), "cy", None, "x.movie https://example.com", None, false, false, &[]).await.unwrap();
-        store(&pool, &room, &line(oct30, 9), "cy", None, "the youtube.com/watch page is slow, see https://example.com/help", None, false, false, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 7), "cy", None, "I saw a.mov yesterday https://example.com", None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 8), "cy", None, "x.movie https://example.com", None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 9), "cy", None, "the youtube.com/watch page is slow, see https://example.com/help", None, false, false, &[], None).await.unwrap();
         // the extension inside a host is not a video file
-        store(&pool, &room, &line(oct30, 10), "cy", None, "see https://clip.mp4.example.com/a", None, false, false, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 10), "cy", None, "see https://clip.mp4.example.com/a", None, false, false, &[], None).await.unwrap();
 
         assert_eq!(found(&pool, &room, "everyone").await, vec![line(oct29, 0)], "the words alone, as before");
         assert_eq!(found(&pool, &room, "has:image").await, vec![line(oct30, 0)]);

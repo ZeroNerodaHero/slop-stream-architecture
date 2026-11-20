@@ -72,6 +72,18 @@ export interface DmLine {
   text: string;
   at: number;
   images: string[];
+  /** The line of the thread this one answers (dms.rs `quote_json`): who wrote it as they are named now, the start of its words, their face, how many pictures; `gone` for one not there any more. Null or absent for none. */
+  reply?: DmReply | null;
+}
+
+/** What a direct message answers: the room chat's quote (`ChatReply`), by the thread's numeric id. */
+export interface DmReply {
+  id: number;
+  from?: string;
+  text?: string;
+  avatar?: number | null;
+  images?: number;
+  gone?: boolean;
 }
 
 /** A thread the login is in, as `GET /api/dms` lists them, newest line first: the other side as the sidebar has people (`id` is that account), the last line, and how many of theirs are new. */
@@ -744,7 +756,8 @@ export const api = {
   dmThread: (name: string, before?: number) =>
     request<{ name: string; friends: boolean; lines: DmLine[] }>('GET', `/api/dm/${encodeURIComponent(name)}${before === undefined ? '' : `?before=${before}`}`),
   /** A line to a friend: the words, and the pictures on it (`uploadChatImage`'s ids, ten at most; the words may be empty then). 201 with the line as kept; it also comes back on the events socket. 400 `too long`, `nothing to say`, `no such picture`, 403 not friends, 429 `slow down`. */
-  sendDm: (name: string, text: string, images: string[] = []) => request<DmLine & { to: string }>('POST', `/api/dm/${encodeURIComponent(name)}`, { text, images }),
+  sendDm: (name: string, text: string, images: string[] = [], reply: number | null = null) =>
+    request<DmLine & { to: string }>('POST', `/api/dm/${encodeURIComponent(name)}`, reply === null ? { text, images } : { text, images, reply }),
   /** The login has seen the thread with `name` up to that line. Its other devices hear it on the socket. */
   readDm: (name: string, id: number) => request<null>('PUT', `/api/dm/${encodeURIComponent(name)}/read`, { id }),
   /** The lines of the thread with `name` that match, newest first, 50 at most. The box is the room chat's (`ChatSearch.tsx`): words, a quoted phrase, and the filters among them. 400 with the words when it cannot be read. */

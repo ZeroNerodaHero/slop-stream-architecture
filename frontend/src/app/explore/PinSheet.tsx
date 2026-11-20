@@ -7,6 +7,7 @@ import { api, messageOf, type PinnedLine } from '@/infra/api';
 import { serverChat } from '@/infra/atoms/chat-atoms';
 import { pinsTickAtom } from '@/infra/atoms/room-atoms';
 import { chatStyleAtom } from '@/infra/atoms/settings-atoms';
+import { BAR_BUTTON } from '@/shared-components/ChatLine';
 import { RoomLines } from '@/shared-components/ChatPanel';
 import { SHEET_FLICK, SHEET_MS, SHEET_SNAP, useSheetBack } from '@/shared-components/MobileSheet';
 import { COUNT } from '@/shared-components/Notifications';
@@ -19,8 +20,8 @@ const LOCK_PX = 10;
 const DIM = 0.6;
 const SLIDE = 'duration-200 ease-out motion-reduce:transition-none';
 
-/** A line's buttons in the sheet: the drawn line's own hover box (ChatLine.tsx `actions`), PinAction's size. */
-const ACTION = 'flex h-6 w-6 items-center justify-center text-textSecondary focus-visible:text-primaryBlue focus-visible:outline-none max-md:h-11 max-md:w-11';
+/** A line's buttons in the sheet: in the drawn line's action bar (ChatLine.tsx `LineActions`), its buttons' size. */
+const ACTION = BAR_BUTTON;
 
 /**
  * A phone's pin in a group's title row (between the back caret and the group's picture): a

@@ -243,7 +243,8 @@ function setThread(name: string, next: (prev: Thread | undefined) => Thread) {
 /** A line as the api or a frame gave it: `images` left off (an older api, a frame with no pictures) is no pictures. */
 function lineOf(line: Omit<DmLine, 'images'> & { images?: unknown }): DmLine {
   const images = Array.isArray(line.images) ? line.images.filter((id): id is string => typeof id === 'string' && id.length > 0) : [];
-  return { id: line.id, from: line.from, text: line.text, at: line.at, images };
+  const reply = line.reply && typeof line.reply === 'object' && typeof line.reply.id === 'number' ? line.reply : null;
+  return { id: line.id, from: line.from, text: line.text, at: line.at, images, reply };
 }
 
 /** Both sets of lines as one, by id, oldest first: a page over the lines already here, a frame over a page. */
@@ -305,11 +306,11 @@ function append(name: string, line: DmLine) {
  * socket is dropped by id. False, with the api's words under the box, when it was not kept:
  * not friends, too long, too fast, a picture the upload never kept.
  */
-export async function sendDm(name: string, raw: string, images: string[] = []): Promise<boolean> {
+export async function sendDm(name: string, raw: string, images: string[] = [], reply: number | null = null): Promise<boolean> {
   const text = raw.trim();
   if (!text && images.length === 0) return false;
   try {
-    const line = await api.sendDm(name, text, images);
+    const line = await api.sendDm(name, text, images, reply);
     append(name, lineOf(line));
     return true;
   } catch (err) {
@@ -369,9 +370,9 @@ export function clearDmResults() {
  * from the newest back, so the pages before the oldest on screen are asked for one after
  * another (`loadOlderDm`) until the line is among them, or the thread's start is; then the
  * window centres it (`dmJumpAtom`). A line already loaded is centred at once. Nothing when the
- * line is not in the thread (gone, or another login's hits).
+ * line is not in the thread (gone, or another login's hits). True when the line is in view.
  */
-export async function openDmLine(name: string, id: number): Promise<void> {
+export async function openDmLine(name: string, id: number): Promise<boolean> {
   const lines = () => store.get(dmThreadsAtom)[name]?.lines ?? [];
   const loaded = () => lines().some((l) => l.id === id);
   while (!loaded()) {
@@ -386,7 +387,9 @@ export async function openDmLine(name: string, id: number): Promise<void> {
     }
     if (!(await loadOlderDm(name))) break;
   }
-  if (loaded()) store.set(dmJumpAtom, { name, id, n: ++jumps });
+  if (!loaded()) return false;
+  store.set(dmJumpAtom, { name, id, n: ++jumps });
+  return true;
 }
 
 /** Words under the box for a few seconds: the api's refusal, a page that did not come, a picture that would not go up. */

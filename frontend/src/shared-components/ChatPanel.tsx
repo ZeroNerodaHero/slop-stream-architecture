@@ -22,7 +22,7 @@ import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
 import { type ChatStyle, chatStyleAtom, profilePopupEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
-import { ChatLineShape, placeOf } from '@/shared-components/ChatLine';
+import { ChatLineShape, LineActions, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
 import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
@@ -86,7 +86,7 @@ interface ChatPanelProps {
   onChannel?: (channel: string) => void;
   /** A group channel's own controls in the header, before the count: the pins (ServerRoom.tsx). */
   headerEnd?: ReactNode;
-  /** A mark always at a line's top right, and buttons there on hover: a group line's pin (ServerRoom.tsx). Nothing on a stream's chat. */
+  /** A mark always at a line's top right, and buttons in its action bar beside react and reply: a group line's pin (ServerRoom.tsx). Nothing on a stream's chat. */
   lineMark?: (line: ChatLine) => ReactNode;
   lineActions?: (line: ChatLine) => ReactNode;
   className?: string;
@@ -498,22 +498,30 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
 /**
  * A room's lines in the shape this browser picked, each as the panel draws it: the panel's
  * list, and a group channel's pinned lines in a phone's sheet (PinSheet.tsx). `name` is the
- * panel's: whose lines are `mine` is said against it.
+ * panel's: whose lines are `mine` is said against it. Each line has the action bar (ChatLine.tsx
+ * `LineActions`): react (to come), reply where `replies` (the panel's own list once it can speak,
+ * not a pin's copy), the caller's own buttons (`lineActions`), and `more`. A reply wears the quote
+ * of its line, a click on which goes there where `jumps` (`ChatRoom.jumpToReply`).
  */
 export function RoomLines({
   name,
   room,
   lines,
   lineMark,
-  lineActions
+  lineActions,
+  replies = false,
+  jumps = false
 }: {
   name: string;
   room: ChatRoom;
   lines: readonly ChatLine[];
   lineMark?: (line: ChatLine) => ReactNode;
   lineActions?: (line: ChatLine) => ReactNode;
+  replies?: boolean;
+  jumps?: boolean;
 }) {
   const shape = useAtomValue(chatStyleAtom);
+  const flash = useAtomValue(room.flashAtom);
   const asStreamer = useAtomValue(room.asStreamerAtom);
   const speaker = useAtomValue(chatSpeakerAtom);
   const me = useAtomValue(meAtom);
@@ -553,9 +561,20 @@ export function RoomLines({
             }
             pictures={<ChatImages ids={line.images} />}
             mark={lineMark?.(line)}
-            actions={lineActions?.(line)}
+            actions={<LineActions onReply={replies ? () => room.setReply(line) : undefined} extra={lineActions?.(line)} text={line.text} />}
+            quote={
+              line.reply && (
+                <ReplyQuote
+                  shape={shape}
+                  quote={{ from: line.reply.from, text: line.reply.text, avatar: line.reply.avatar ?? null, images: line.reply.images ?? 0 }}
+                  onJump={jumps ? () => void room.jumpToReply(line.reply!.id) : undefined}
+                />
+              )
+            }
+            flash={flash === line.id}
             attrs={{
               'data-id': line.id,
+              'data-reply-to': line.reply?.id,
               'data-streamer': line.streamer || undefined,
               'data-verified': line.verified || undefined,
               'data-bot': isBotLine(line) || undefined,
@@ -596,6 +615,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
   const phase = useAtomValue(room.phaseAtom);
   const draft = useAtomValue(room.draftAtom);
   const images = useAtomValue(room.imagesAtom);
+  const replyTo = useAtomValue(room.replyAtom);
   const notice = useAtomValue(room.noticeAtom);
   const nick = useAtomValue(nickAtom);
   const nickOk = useAtomValue(nickIsValidAtom);
@@ -638,6 +658,11 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
 
   /** The nick box's join: the socket as the panels want it. */
   const open = () => room.open();
+
+  // a reply begun (the action bar's reply): the box takes the focus, so the words go straight in
+  useEffect(() => {
+    if (replyTo) textRef.current?.focus();
+  }, [replyTo]);
 
   // Keep the newest line in view, unless the reader has scrolled up, or a jump asked for one line.
   // A layout effect: the store fires before react has put the new lines in the dom.
@@ -794,7 +819,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
             {!waiting && lines.length === 0 && (
               <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>
             )}
-            <RoomLines name={name} room={room} lines={lines} lineMark={lineMark} lineActions={lineActions} />
+            <RoomLines name={name} room={room} lines={lines} lineMark={lineMark} lineActions={lineActions} replies={!needsNick} jumps />
           </div>
         </div>
 
@@ -863,6 +888,29 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
             <span id="chat-notice" className={cn('text-sm text-decrease', notice ? 'mb-1 block' : 'sr-only')} aria-live="polite">
               {notice}
             </span>
+            {/* the line the next send answers, discord's bar over the box: who, and the × (escape in the box too) */}
+            {replyTo && (
+              <div id="chat-replying" data-reply-to={replyTo.id} className="mb-1.5 flex items-center gap-2 border-l-2 border-primaryBlue bg-backgroundTertiary py-0.5 pl-2 text-xs">
+                <span className="min-w-0 flex-1 truncate text-textSecondary">
+                  replying to <span className="font-semibold text-textPrimary">{replyTo.from}</span>
+                  <span className="sr-only">: {quoteWords({ text: replyTo.text, images: replyTo.images.length })}</span>
+                </span>
+                <Tooltip content="cancel reply">
+                  <button
+                    type="button"
+                    id="chat-reply-cancel"
+                    aria-label="cancel reply"
+                    className="flex h-6 w-6 shrink-0 items-center justify-center text-textTertiary hover:text-textPrimary max-md:h-11 max-md:w-11"
+                    onClick={() => {
+                      room.setReply(null);
+                      textRef.current?.focus();
+                    }}
+                  >
+                    <RiCloseLine aria-hidden size={14} />
+                  </button>
+                </Tooltip>
+              </div>
+            )}
             {images.length > 0 && (
               <div id="chat-picture-preview" className="mb-2 flex flex-wrap gap-2">
                 {images.map((id) => (
@@ -902,6 +950,13 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                 value={draft}
                 onChange={(e) => room.setDraft(e.target.value)}
                 onKeyDown={(e) => {
+                  // escape lets go of the reply first, and goes no further (a sheet or a window over the chat stays up)
+                  if (e.key === 'Escape' && replyTo) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    room.setReply(null);
+                    return;
+                  }
                   if (!isSendKey(e)) return;
                   e.preventDefault();
                   room.send();

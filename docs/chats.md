@@ -61,6 +61,8 @@ the cleaning is one function. a channel line and a direct message both go throug
 
 badges (`groups.md`) are a stream and channel thing. a verified line wears the speaker's groups, read once when the socket says hello, kept on the line. a direct message has no badges. `hide bots` is this browser's, and it holds from a stream's room to a channel and back.
 
+replies are all three's (`chat.md` "replies", `dms.md`): every line has the same action bar (react, reply, `more`), a reply carries a quote of the line it answers and draws it over itself, and a click on the quote goes to that line. a room's quote is kept with the line (redis `r`, the row's `reply`); a direct message keeps the id (`reply_to`) and joins the quote as it is read.
+
 a logout drops the direct-message window. a stream or a channel keeps going: the next hello is a nick, or the new login.
 
 ## not a chat

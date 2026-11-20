@@ -209,7 +209,9 @@ pub(crate) async fn publish_renamed<C: AsyncCommands>(r: &mut C, old: &str, new:
 /// entries deep it is gone. So do the pictures' ids (`images`, joined by commas, left out when
 /// there are none): the bytes stay in the bucket, the page fetches them by id.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, text: &str, images: &[String], at_ms: i64, from_id: &str) {
+/// `reply` is the quote of the line it answers (dms.rs `quote_json`), json in the fact.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, text: &str, images: &[String], at_ms: i64, from_id: &str, reply: Option<&serde_json::Value>) {
     let mut fields = vec![
         ("type", "dm".to_owned()),
         ("name", to.to_owned()),
@@ -221,6 +223,9 @@ pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str
     ];
     if !images.is_empty() {
         fields.push(("images", images.join(",")));
+    }
+    if let Some(reply) = reply {
+        fields.push(("reply", reply.to_string()));
     }
     publish(r, &fields).await;
 }

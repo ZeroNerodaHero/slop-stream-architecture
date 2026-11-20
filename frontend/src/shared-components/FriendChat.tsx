@@ -16,7 +16,7 @@ import {
 import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 
-import { api, messageOf } from '@/infra/api';
+import { api, type DmLine, messageOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { MAX_CHAT_IMAGES } from '@/infra/atoms/chat-atoms';
 import { type ChatBox as Box, keepDmBox, keptDmBox } from '@/infra/atoms/chat-layout-atoms';
@@ -50,7 +50,7 @@ import { compressChatImage } from '@/infra/picture';
 import { usePrefetchOnPointerDown } from '@/infra/prefetch';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
-import { ChatLineShape, placeOf } from '@/shared-components/ChatLine';
+import { ChatLineShape, LineActions, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ChatImages, pictureSrc } from '@/shared-components/ChatPanel';
 import { comboProps, SearchFilters, SearchHit, SearchResults, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
@@ -600,6 +600,11 @@ export function FriendChat() {
   const [searching, setSearching] = useState(false);
   /** Each thread's pictures waiting to go with its next line: the ids `POST /api/chat-images` handed back, kept like the draft while another tab is shown. */
   const [pending, setPending] = useState<Record<string, string[]>>({});
+  /** Each thread's line the next send answers (the action bar's reply), kept like the draft while another tab is shown. */
+  const [replies, setReplies] = useState<Record<string, DmLine | null>>({});
+  /** The line a reply's quote just jumped to, lit for a moment. */
+  const [flash, setFlash] = useState<number | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sending, setSending] = useState(false);
   /** A picked picture is being shrunk and put up: the picture button waits, and so does send, so a line does not go without the picture meant for it. */
   const [uploading, setUploading] = useState(false);
@@ -640,6 +645,7 @@ export function FriendChat() {
   const lines = thread?.lines ?? [];
   const draft = (name && drafts[name]) || '';
   const pictures = (name && pending[name]) || [];
+  const replyTo = (name && replies[name]) || null;
   // the hits over the lines: a search's, while the thread it asked is the one on screen
   const hits = results?.name === name ? results : null;
   // the box's words and the filter words, the room chat's; submitting asks the thread on screen. `from:` is one of the two, each with their face
@@ -666,6 +672,7 @@ export function FriendChat() {
     setLastMe(me);
     setSearching(false);
     search.setQuery('');
+    setReplies({});
   }
 
   useEffect(() => {
@@ -798,6 +805,18 @@ export function FriendChat() {
   // the window going while a drag is on: its listeners go with it
   useEffect(() => () => stop.current?.(), []);
 
+  // a reply begun (the action bar's reply): the box takes the focus, so the words go straight in
+  useEffect(() => {
+    if (replyTo) input.current?.focus();
+  }, [replyTo]);
+
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    []
+  );
+
   if (!open) return null;
 
   function setDraft(text: string) {
@@ -806,6 +825,22 @@ export function FriendChat() {
 
   function setPictures(ids: string[]) {
     if (name) setPending((prev) => ({ ...prev, [name]: ids }));
+  }
+
+  function setReply(line: DmLine | null) {
+    if (name) setReplies((prev) => ({ ...prev, [name]: line }));
+  }
+
+  /** A reply's quote clicked: its line in view (`openDmLine`, the pages back to it asked for), lit for a moment; or, when the thread has no such line, a word under the box. */
+  async function jumpTo(id: number) {
+    if (!name) return;
+    if (!(await openDmLine(name, id))) {
+      showDmNotice('that line is not here any more');
+      return;
+    }
+    setFlash(id);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlash(null), 1600);
   }
 
   /** The search box down, its words and the hits with it: the glass pressed again, or escape in the box. The focus back to the text box, where it was. */
@@ -855,12 +890,13 @@ export function FriendChat() {
     setSending(true);
     // the thread's lines are one run from the newest back (dm-atoms.ts), so the newest is always loaded: the line just goes on the bottom, and the view with it
     sentJump.current = name;
-    const sent = await sendDm(name, draft, pictures);
+    const sent = await sendDm(name, draft, pictures, replyTo?.id ?? null);
     setSending(false);
     if (!sent) sentJump.current = null;
     if (sent) {
       setDraft('');
       setPictures([]);
+      setReply(null);
     }
     input.current?.focus();
   }
@@ -1087,7 +1123,24 @@ export function FriendChat() {
                         ) : null
                       }
                       pictures={<ChatImages ids={line.images} />}
-                      attrs={{ 'data-id': line.id, 'data-mine': mine || undefined }}
+                      actions={<LineActions onReply={() => setReply(line)} text={line.text} />}
+                      quote={
+                        line.reply && (
+                          <ReplyQuote
+                            shape={shape}
+                            quote={{
+                              from: line.reply.from ?? '',
+                              text: line.reply.text ?? '',
+                              avatar: line.reply.avatar ?? null,
+                              images: line.reply.images ?? 0,
+                              gone: line.reply.gone
+                            }}
+                            onJump={() => void jumpTo(line.reply!.id)}
+                          />
+                        )
+                      }
+                      flash={flash === line.id}
+                      attrs={{ 'data-id': line.id, 'data-mine': mine || undefined, 'data-reply-to': line.reply?.id }}
                       {...placeOf(line.at, prev?.at, prev?.from === line.from)}
                     />
                   );
@@ -1127,6 +1180,29 @@ export function FriendChat() {
               onSubmit={(e) => void send(e)}
               className={cn('border-t border-primaryStroke p-2', mobile && 'shrink-0', mobile && !sheet.raised && 'pb-[calc(0.5rem+env(safe-area-inset-bottom))]')}
             >
+              {/* the line the next send answers, the room chat's bar over the box (ChatPanel.tsx `#chat-replying`): who, and the × (escape in the box too) */}
+              {replyTo && (
+                <div id="friend-chat-replying" data-reply-to={replyTo.id} className="mb-1.5 flex items-center gap-2 border-l-2 border-primaryBlue bg-backgroundTertiary py-0.5 pl-2 text-xs">
+                  <span className="min-w-0 flex-1 truncate text-textSecondary">
+                    replying to <span className="font-semibold text-textPrimary">{replyTo.from === me ? 'yourself' : replyTo.from}</span>
+                    <span className="sr-only">: {quoteWords({ text: replyTo.text, images: replyTo.images.length })}</span>
+                  </span>
+                  <Tooltip content="cancel reply">
+                    <button
+                      type="button"
+                      id="friend-chat-reply-cancel"
+                      aria-label="cancel reply"
+                      className={cn('flex h-6 w-6 shrink-0 items-center justify-center text-textTertiary hover:text-textPrimary', mobile && 'h-11 w-11')}
+                      onClick={() => {
+                        setReply(null);
+                        input.current?.focus();
+                      }}
+                    >
+                      <RiCloseLine aria-hidden size={14} />
+                    </button>
+                  </Tooltip>
+                </div>
+              )}
               {/* the pictures going with the next line, each with its × (the room chat's strip, ChatPanel.tsx) */}
               {pictures.length > 0 && (
                 <div id="friend-chat-picture-preview" className="mb-2 flex flex-wrap gap-2">
@@ -1183,7 +1259,9 @@ export function FriendChat() {
                   onKeyDown={(e) => {
                     if (e.key === 'Escape') {
                       e.stopPropagation();
-                      hideDms();
+                      // a reply is let go of first; the window goes on the next
+                      if (replyTo) setReply(null);
+                      else hideDms();
                     }
                   }}
                   placeholder="message"

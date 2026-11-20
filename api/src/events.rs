@@ -224,6 +224,9 @@ enum Out {
         from_id: Option<String>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         images: Vec<String>,
+        /// the quote of the line it answers (dms.rs `quote_json`). absent for none
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reply: Option<Value>,
     },
     /// `name` read its thread with `peer` up to `id` on some device. To `name`'s sockets: the others drop their count.
     /// `peer_id` is that account. Absent when an older api wrote the fact.
@@ -693,7 +696,8 @@ impl Gateway {
                 let at: i64 = entry.get("at").unwrap_or(0);
                 let from_id: Option<String> = entry.get("from_id").filter(|id: &String| !id.is_empty());
                 let images = crate::chat::split_pictures(entry.get("images"));
-                self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id, images }).await;
+                let reply: Option<Value> = entry.get::<String>("reply").and_then(|r| serde_json::from_str(&r).ok());
+                self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id, images, reply }).await;
             }
             // `name` read a thread somewhere: its other devices drop their count
             "dm_read" => {
