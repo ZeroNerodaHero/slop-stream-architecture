@@ -88,14 +88,18 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
                 .slice(0, 32)
             )
           }
-          placeholder="a-z 0-9 _ -"
+          placeholder="username"
           autoComplete="username"
           autoCapitalize="off"
           spellCheck={false}
           maxLength={32}
           required
+          aria-describedby="auth-name-hint"
           className={INPUT}
         />
+        <p id="auth-name-hint" className="text-xs text-textTertiary">
+          a-z 0-9 _ -
+        </p>
       </div>
 
       <div className="flex flex-col gap-1">

@@ -370,7 +370,7 @@ export function ProfileTab() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') e.currentTarget.blur();
               }}
-              placeholder="pick a name"
+              placeholder="name"
               maxLength={24}
               autoComplete="off"
               autoCapitalize="off"
@@ -407,7 +407,7 @@ export function ProfileTab() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') void saveMyBio();
             }}
-            placeholder="what are you up to. what is this stream."
+            placeholder="status"
             maxLength={MAX_BIO_CHARS}
             disabled={!canEdit}
             autoComplete="off"
@@ -503,7 +503,7 @@ export function ProfileTab() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') void saveMyOfflineNote();
             }}
-            placeholder="back tuesday at 8"
+            placeholder="note"
             maxLength={MAX_OFFLINE_NOTE_CHARS}
             disabled={!canEdit}
             autoComplete="off"

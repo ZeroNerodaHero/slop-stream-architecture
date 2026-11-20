@@ -207,7 +207,8 @@ export function AdminPage() {
           id="admin-page-filter"
           value={pageFilter}
           onChange={(e) => setPageFilter(e.target.value)}
-          placeholder="page contains…"
+          placeholder="filter"
+          aria-label="page contains…"
           autoComplete="off"
           spellCheck={false}
           className="w-[200px] border border-primaryStroke bg-backgroundSecondary px-3 py-1.5 text-sm text-textPrimary"

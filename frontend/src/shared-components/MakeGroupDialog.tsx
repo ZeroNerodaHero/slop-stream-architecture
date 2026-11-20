@@ -209,7 +209,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
           id="groups-make-about"
           value={about}
           onChange={(e) => setAbout(e.target.value)}
-          placeholder="about, optional"
+          placeholder="about"
           maxLength={MAX_ABOUT_CHARS}
           autoComplete="off"
           aria-label="about"
