@@ -125,10 +125,11 @@ export function PasswordInput({
 }
 
 /** What the last action did, read aloud. Always rendered: a live region announces only text that arrives after it exists. */
-export function Status({ id, text }: { id: string; text: string }) {
+export function Status({ id, text, quiet }: { id: string; text: string; quiet?: boolean }) {
   const bad = /^not |^wrong|^too /.test(text);
   return (
-    <p id={id} aria-live="polite" className={cn('min-h-[1.5em] text-sm', bad ? 'text-decrease' : 'text-textSecondary')}>
+    // quiet: no room kept while it says nothing, for a line under a row that is usually empty
+    <p id={id} aria-live="polite" className={cn('text-sm', !quiet && 'min-h-[1.5em]', quiet && text && 'mt-1', bad ? 'text-decrease' : 'text-textSecondary')}>
       {text}
     </p>
   );

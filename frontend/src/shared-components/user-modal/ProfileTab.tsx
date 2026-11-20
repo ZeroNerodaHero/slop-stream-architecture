@@ -1,4 +1,4 @@
-import { RiCheckboxBlankCircleLine, RiEyeOffLine, RiIndeterminateCircleLine } from '@remixicon/react';
+import { RiCameraLine, RiCheckboxBlankCircleLine, RiEyeOffLine, RiIndeterminateCircleLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -18,15 +18,7 @@ import {
   renameStatusAtom
 } from '@/infra/atoms/auth-atoms';
 import { MAX_CHAT_CHARS, chars, nickAtom, setNick } from '@/infra/atoms/chat-atoms';
-import {
-  myPresenceAtom,
-  PRESENCE_TEXT,
-  PRESENCE_WORD,
-  type PresenceChoice,
-  presenceChoiceAtom,
-  presenceChoiceNoteAtom,
-  setPresenceChoice
-} from '@/infra/atoms/presence-atoms';
+import { type PresenceChoice, presenceChoiceAtom, presenceChoiceNoteAtom, setPresenceChoice } from '@/infra/atoms/presence-atoms';
 import { loadGroups, myBadgesAtom } from '@/infra/atoms/groups-atoms';
 import {
   canEditProfileAtom,
@@ -53,7 +45,6 @@ import {
 import { closeUserModal, pickTab } from '@/infra/atoms/user-modal-atoms';
 import { api, groupWords } from '@/infra/api';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
-import { providerList } from '@/infra/oauth';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
@@ -61,7 +52,7 @@ import { Face } from '@/shared-components/Face';
 import { OAuthMark } from '@/shared-components/OAuthMark';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { INPUT } from '@/shared-components/input';
-import { BUTTON, Field, OptionCard, PasswordInput, SECTION_TITLE, Section, Status } from '@/shared-components/user-modal/parts';
+import { Block, OptionCard, PasswordInput, Status } from '@/shared-components/user-modal/parts';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -104,59 +95,59 @@ function Rename({ me }: { me: string }) {
     }
   }
 
+  const hint = ['a-z 0-9 _ -', '32 max', again && `next ${again.toISOString().slice(0, 10)}`, held.length > 0 && `held: ${held.join(', ')}`].filter(Boolean).join(' · ');
+
   return (
-    <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
+    <form onSubmit={(e) => void submit(e)}>
       {/* for password managers: which account the password belongs to */}
       <input type="text" name="username" value={me} autoComplete="username" readOnly tabIndex={-1} aria-hidden className="sr-only" />
-      <fieldset className="m-0 flex flex-col gap-3 border-0 p-0">
-        <Field
+      <div className="flex flex-wrap gap-1.5">
+        <input
           id="profile-new-name"
-          label="new name"
-          hint={
-            held.length
-              ? `a-z 0-9 _ and -. up to 32. lowercase. ${held.join(', ')} is still held for you: going back is allowed any time.`
-              : 'a-z 0-9 _ and -. up to 32. lowercase.'
-          }
-        >
-          <input
-            id="profile-new-name"
-            value={next}
-            onChange={(e) => {
-              setNext(e.target.value);
-              setSure(false);
-            }}
-            placeholder={me}
-            maxLength={32}
-            autoComplete="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            aria-describedby="profile-new-name-hint"
-            className={INPUT}
-          />
-        </Field>
+          value={next}
+          onChange={(e) => {
+            setNext(e.target.value);
+            setSure(false);
+          }}
+          aria-label="new name"
+          placeholder="name"
+          maxLength={32}
+          autoComplete="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          aria-describedby="profile-new-name-hint"
+          className={cn(INPUT, 'min-w-0 flex-1 basis-40 text-sm')}
+        />
         {hasPassword && (
-          <Field id="profile-rename-password" label="your password">
-            <PasswordInput id="profile-rename-password" value={password} onChange={setPassword} autoComplete="current-password" />
-          </Field>
+          <PasswordInput
+            id="profile-rename-password"
+            value={password}
+            onChange={setPassword}
+            autoComplete="current-password"
+            placeholder="password"
+            label="your password"
+            className="min-w-0 flex-1 basis-40 [&_input]:text-sm"
+          />
         )}
-      </fieldset>
-      <div className="flex flex-wrap items-center gap-3">
         {sure ? (
-          <Button id="profile-rename" type="submit" variant="danger" className={BUTTON} disabled={!ready}>
-            {`sure? /watch/${me} becomes /watch/${wanted}`}
-          </Button>
+          <>
+            <Button id="profile-rename" type="submit" size="sm" variant="danger" disabled={!ready}>
+              {`sure? /watch/${me} becomes /watch/${wanted}`}
+            </Button>
+            <Button size="sm" onClick={() => setSure(false)}>
+              keep {me}
+            </Button>
+          </>
         ) : (
           <Button id="profile-rename" type="submit" size="sm" variant="outline" disabled={!ready}>
-            change name
+            rename
           </Button>
         )}
-        {sure && (
-          <Button size="sm" onClick={() => setSure(false)}>
-            keep {me}
-          </Button>
-        )}
-        <Status id="profile-rename-status" text={status || (again ? `you can change it again on ${again.toISOString().slice(0, 10)}` : '')} />
       </div>
+      <p id="profile-new-name-hint" className="mt-1 text-xs text-textTertiary">
+        {hint}
+      </p>
+      <Status id="profile-rename-status" text={status} quiet />
     </form>
   );
 }
@@ -164,24 +155,21 @@ function Rename({ me }: { me: string }) {
 /** The api caps the status here (in characters, the way `chars` counts). `bio` on the wire: the word `status` is the presence choice's (docs/status.md). */
 const MAX_BIO_CHARS = MAX_CHAT_CHARS;
 
-/** The three choices as cards. `invisible` shows as `offline` to everyone else; the word on the card says so. */
-const PRESENCE_OPTIONS: readonly { choice: PresenceChoice; label: string; detail: string; icon: ReactNode }[] = [
+/** The three choices as cards. `invisible` shows as `offline` to everyone else. */
+const PRESENCE_OPTIONS: readonly { choice: PresenceChoice; label: string; icon: ReactNode }[] = [
   {
     choice: 'online',
     label: 'online',
-    detail: 'the green square while a tab is open',
     icon: <RiCheckboxBlankCircleLine aria-hidden size={28} className="text-increase" />
   },
   {
     choice: 'dnd',
     label: 'do not disturb',
-    detail: 'here, but say so. the red square',
     icon: <RiIndeterminateCircleLine aria-hidden size={28} className="text-decrease" />
   },
   {
     choice: 'invisible',
     label: 'appear offline',
-    detail: 'grey to everyone else. you still see everything',
     icon: <RiEyeOffLine aria-hidden size={28} className="text-textTertiary" />
   }
 ];
@@ -211,7 +199,6 @@ export function ProfileTab() {
   const canEdit = useAtomValue(canEditProfileAtom);
   const whyNot = useAtomValue(whyNotEditAtom);
   const badges = useAtomValue(myBadgesAtom);
-  const presence = useAtomValue(myPresenceAtom);
   const choice = useAtomValue(presenceChoiceAtom);
   const presenceNote = useAtomValue(presenceChoiceNoteAtom);
   const offline = useAtomValue(myOfflineVersionAtom);
@@ -229,6 +216,7 @@ export function ProfileTab() {
   }, []);
 
   const left = MAX_BIO_CHARS - chars(bio.trim());
+  const noteLeft = MAX_OFFLINE_NOTE_CHARS - chars(offlineNote.trim());
   const named = isValidName(name) && !isDummyName(name);
 
   function commitNick() {
@@ -237,167 +225,143 @@ export function ProfileTab() {
 
   return (
     <div className="divide-y divide-primaryStroke">
-      {/* the card: the face, the name, how I am here. the face itself is the way to a new picture, as a
-          group's picture is: the pointer over it puts a camera on it, and the crop dialog takes it from there */}
-      <div className="flex flex-wrap items-start gap-5 border border-primaryStroke bg-background p-5">
-        <div className="group/avatar relative flex">
-          <Face name={name} version={avatar} className="h-24 w-24 text-4xl" />
+      {/* the card: the face, the name, the way to my page. the face itself is the way to a new picture, as a
+          group's picture is: a camera sits on its corner, and the crop dialog takes it from there */}
+      <section className="flex flex-wrap items-center gap-3 pb-4">
+        <div className="group/avatar relative flex shrink-0">
+          <Face name={name} version={avatar} className="h-14 w-14 text-2xl" />
           {canEdit && (
-            <PicturePick
-              id="profile-avatar-file"
-              label={avatar === null ? 'choose picture' : 'change picture'}
-              reveal="group-hover/avatar:opacity-100"
-              className="inset-0"
-              onPick={(file) => void saveMyAvatar(file)}
-            />
+            <>
+              <span
+                aria-hidden
+                className="absolute bottom-0 right-0 flex h-5 w-5 items-center justify-center bg-black/70 text-white group-hover/avatar:opacity-0 [@media(hover:none)]:hidden"
+              >
+                <RiCameraLine size={12} />
+              </span>
+              <PicturePick
+                id="profile-avatar-file"
+                label="change picture"
+                icon={20}
+                reveal="group-hover/avatar:opacity-100"
+                className="inset-0"
+                onPick={(file) => void saveMyAvatar(file)}
+              />
+            </>
           )}
         </div>
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="min-w-0">
-            <p className="flex items-center gap-2 text-xl font-semibold leading-tight">
-              <span className={cn('truncate', !name && 'font-normal text-textTertiary')}>{me ?? (nick || 'pick a name')}</span>
-              {me ? (
-                <Tooltip content="logged in: this name is yours">
-                  <span role="img" aria-label="logged in" className="shrink-0 text-increase">
-                    ✓
-                  </span>
-                </Tooltip>
-              ) : (
-                <span className="shrink-0 border border-primaryStroke px-1.5 text-xs font-semibold uppercase leading-5 tracking-wider text-textTertiary">guest</span>
-              )}
-              {/* the badges my chat lines wear: one only: my primary group's, else my first group's. the groups tab changes them */}
-              {me &&
-                badges.map((group) => {
-                  const words = groupWords(group);
-                  return (
-                    <button
-                      key={group.name}
-                      type="button"
-                      onClick={() => pickTab('groups')}
-                      className="shrink-0"
-                      title={`in the group ${words.title}${words.tag ? ` #${words.tag}` : ''}. groups are in the next tab`}
-                    >
-                      <Badge group={group} />
-                    </button>
-                  );
-                })}
-            </p>
-            <p className="mt-1 text-sm text-textSecondary">
-              {me ? 'your account. only you can go live, edit this or talk as it.' : 'a free name, kept in this browser. sign up to make it yours.'}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            {avatar !== null && (
-              <Button id="profile-avatar-remove" size="sm" variant="outline-danger" disabled={!canEdit} onClick={() => void removeMyAvatar()}>
-                remove picture
-              </Button>
-            )}
-            <Status
-              id="profile-avatar-status"
-              text={
-                avatarStatus ||
-                (canEdit ? 'click the picture to change it: a square you cut out of any picture, 256px. on your stream and in the preview of its link.' : whyNot)
-              }
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* the presence choice (docs/status.md): three cards like the layout and theme pickers. the
-          chosen one is what the server has; the square in the corner follows the `me` frame */}
-      <fieldset disabled={!canEdit} className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0 disabled:opacity-60">
-        <legend className={SECTION_TITLE}>presence</legend>
-        <p className="mt-1 text-textSecondary">
-          the word next to your name while a tab of this site is open. right now:{' '}
-          <span className={cn('font-semibold', PRESENCE_TEXT[presence])}>{PRESENCE_WORD[presence]}</span>
-        </p>
-        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {PRESENCE_OPTIONS.map(({ choice: c, label, detail, icon }) => (
-            <OptionCard
-              key={c}
-              id={`presence-${c}`}
-              name="presence"
-              checked={c === choice}
-              onChange={() => void setPresenceChoice(name, c)}
-              picture={icon}
-              label={label}
-              detail={detail}
-            />
-          ))}
-        </div>
-        <p className="mt-4 text-sm text-textTertiary">streaming while you are live, whatever you pick. kept with the name, so your phone agrees.</p>
-        <Status id="presence-note" text={presenceNote || (canEdit ? '' : whyNot)} />
-      </fieldset>
-
-      <Section
-        title="username"
-        description={
-          me
-            ? `your account name. it is yours alone. it can change once every ${RENAME_DAYS} days, and the old one is kept for you as long.`
-            : 'your chat name and your go live default. sign up to make it yours.'
-        }
-      >
-        {me ? (
-          <>
-            <p className="flex items-center gap-2 font-semibold">
-              <span id="profile-me">{me}</span>
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-1.5 font-semibold leading-tight">
+            <span className={cn('truncate', !name && 'font-normal text-textTertiary')}>{me ?? (nick || 'pick a name')}</span>
+            {me ? (
               <Tooltip content="logged in: this name is yours">
-                <span role="img" aria-label="logged in" className="text-increase">
+                <span role="img" aria-label="logged in" className="shrink-0 text-increase">
                   ✓
                 </span>
               </Tooltip>
-              {oauthVerified && <OAuthMark id="profile-oauth-verified" />}
-            </p>
-            {!oauthVerified && !!oauthProviders?.length && (
-              <p id="profile-get-verified" className="text-sm text-textTertiary">
-                link {providerList(oauthProviders)} to get the blue verified mark beside your name.{' '}
-                <button type="button" onClick={() => pickTab('security')} className="text-primaryBlue underline-offset-2 hover:underline">
-                  link a login
-                </button>
-              </p>
+            ) : (
+              <span className="shrink-0 border border-primaryStroke px-1.5 text-xs font-semibold uppercase leading-5 tracking-wider text-textTertiary">guest</span>
             )}
-            <Rename me={me} />
-          </>
-        ) : (
-          <Field id="profile-name" label="name" hint={`letters, digits, _ and -. up to 24.${nick && name !== nick ? ` saved as ${name}.` : ''}`}>
-            <input
-              id="profile-name"
-              value={nick}
-              onChange={(e) => setNick(e.target.value)}
-              onFocus={(e) => {
-                nickAtFocus.current = e.currentTarget.value;
-              }}
-              onBlur={commitNick}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.currentTarget.blur();
-              }}
-              placeholder="name"
-              maxLength={24}
-              autoComplete="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              aria-describedby="profile-name-hint"
-              className={INPUT}
-            />
-          </Field>
-        )}
-        {!me && (
-          <p className="text-sm text-textTertiary">
-            an account keeps the name yours.{' '}
-            <button type="button" onClick={() => pickTab('security')} className="text-primaryBlue underline-offset-2 hover:underline">
-              sign up or log in
-            </button>
+            {me && oauthVerified && <OAuthMark id="profile-oauth-verified" size={14} />}
+            {/* the badges my chat lines wear: one only: my primary group's, else my first group's. the groups tab changes them */}
+            {me &&
+              badges.map((group) => {
+                const words = groupWords(group);
+                return (
+                  <Tooltip key={group.name} content={`${words.title}${words.tag ? ` #${words.tag}` : ''}: change it in groups`}>
+                    <button type="button" onClick={() => pickTab('groups')} className="shrink-0">
+                      <Badge group={group} />
+                    </button>
+                  </Tooltip>
+                );
+              })}
           </p>
+          {named && (
+            <Link id="profile-your-page" to={`/watch/${name}`} onClick={closeUserModal} className="text-sm text-primaryBlue underline-offset-2 hover:underline">
+              /watch/{name}
+            </Link>
+          )}
+          <Status id="profile-avatar-status" text={avatarStatus || (canEdit ? '' : whyNot)} quiet />
+        </div>
+        {(avatar !== null || (me && !oauthVerified && !!oauthProviders?.length)) && (
+          <div className="flex flex-wrap gap-1.5">
+            {me && !oauthVerified && !!oauthProviders?.length && (
+              <Button id="profile-get-verified" size="sm" variant="outline" onClick={() => pickTab('security')}>
+                get verified
+              </Button>
+            )}
+            {avatar !== null && (
+              <Button id="profile-avatar-remove" size="sm" variant="outline-danger" disabled={!canEdit} onClick={() => void removeMyAvatar()}>
+                remove
+              </Button>
+            )}
+          </div>
         )}
-      </Section>
+      </section>
+
+      {/* the presence choice (docs/status.md): three cards in a row. the chosen one is what the server has;
+          the square in the corner follows the `me` frame */}
+      <Block title="presence" tip="live shows streaming, whatever you pick">
+        <fieldset disabled={!canEdit} className="m-0 border-0 p-0 disabled:opacity-60">
+          <legend className="sr-only">presence</legend>
+          <div role="presentation" className="grid grid-cols-3 gap-2">
+            {PRESENCE_OPTIONS.map(({ choice: c, label, icon }) => (
+              <OptionCard
+                key={c}
+                id={`presence-${c}`}
+                name="presence"
+                checked={c === choice}
+                onChange={() => void setPresenceChoice(name, c)}
+                picture={icon}
+                label={label}
+                stacked
+              />
+            ))}
+          </div>
+        </fieldset>
+        <Status id="presence-note" text={presenceNote || (canEdit ? '' : whyNot)} quiet />
+      </Block>
+
+      <Block title="username" tip={me ? `once every ${RENAME_DAYS} days. the old one stays held for you` : undefined}>
+        {me ? (
+          <Rename me={me} />
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-1.5">
+              <input
+                id="profile-name"
+                value={nick}
+                onChange={(e) => setNick(e.target.value)}
+                onFocus={(e) => {
+                  nickAtFocus.current = e.currentTarget.value;
+                }}
+                onBlur={commitNick}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+                aria-label="name"
+                placeholder="name"
+                maxLength={24}
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                aria-describedby="profile-name-hint"
+                className={cn(INPUT, 'min-w-0 flex-1 basis-40 text-sm')}
+              />
+              <Button id="profile-sign-up" size="sm" variant="outline" onClick={() => pickTab('security')}>
+                sign up
+              </Button>
+            </div>
+            <p id="profile-name-hint" className="mt-1 text-xs text-textTertiary">
+              a-z 0-9 _ - · 24 max{nick && name !== nick ? ` · saved as ${name}` : ''}
+            </p>
+          </>
+        )}
+      </Block>
 
       {/* the status: one line about me, the way a custom status is. under my name on my page, beside it on home,
           in the sidebar and in the preview of my link. `bio` on the wire (the word `status` is the presence choice's) */}
-      <Section
-        title="status"
-        description="one line about you: what you are up to, what the stream is. under your name on your page, beside it on home and in the sidebar, and in the preview of your link."
-      >
-        <Field id="profile-bio" label="status" hint={`${MAX_BIO_CHARS} characters, one line. empty takes it off.`}>
+      <Block title="status">
+        <div className="flex gap-1.5">
           <input
             id="profile-bio"
             value={bio}
@@ -408,117 +372,93 @@ export function ProfileTab() {
             onKeyDown={(e) => {
               if (e.key === 'Enter') void saveMyBio();
             }}
+            aria-label="status"
             placeholder="status"
             maxLength={MAX_BIO_CHARS}
             disabled={!canEdit}
             autoComplete="off"
-            aria-describedby="profile-bio-hint"
-            className={INPUT}
+            aria-describedby="profile-bio-count"
+            className={cn(INPUT, 'min-w-0 flex-1 text-sm')}
           />
-        </Field>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button id="profile-save-bio" size="sm" variant="outline" disabled={!canEdit} onClick={() => void saveMyBio()}>
-            save status
-          </Button>
-          <span id="profile-bio-count" className={cn('text-sm tabular-nums text-textTertiary', left < 20 && 'text-decrease')}>
+          <span id="profile-bio-count" className={cn('self-center text-xs tabular-nums text-textTertiary', left < 20 && 'text-decrease')}>
             {left}
           </span>
-          <Status id="profile-bio-status" text={bioStatus || (canEdit ? '' : whyNot)} />
+          <Button id="profile-save-bio" size="sm" variant="outline" disabled={!canEdit} onClick={() => void saveMyBio()}>
+            save
+          </Button>
         </div>
-      </Section>
-
-      {/* the about me (docs/about.md) and the links (docs/socials.md) are edited on my page itself, under the player,
-          where they show: this is the way there, since they used to be here */}
-      <Section
-        title="your page"
-        description="the longer piece about you and where else to find you are written on your page itself, under the player, where everyone reads them: the about tab and the socials tab."
-      >
-        {named ? (
-          <p>
-            <Link id="profile-your-page" to={`/watch/${name}`} onClick={closeUserModal} className="font-semibold text-primaryBlue underline-offset-2 hover:underline">
-              /watch/{name}
-            </Link>
-          </p>
-        ) : (
-          <p className="text-sm text-textTertiary">{whyNot}</p>
-        )}
-      </Section>
+        <Status id="profile-bio-status" text={bioStatus || (canEdit ? '' : whyNot)} quiet />
+      </Block>
 
       {/* what the stream's page shows while I am not live: a picture where the player would be (the
           way twitch has an offline banner) and a line under the word. the picture is the card of a
           shared link too while I am off (docs/spec.md, "the watch document") */}
-      <Section
-        title="while you are offline"
-        description="your stream's page has no player then: a picture goes where it would be, and a line of yours under the word. the picture is the preview of your link too."
-      >
-        <div className="flex flex-col gap-3">
-          {/* the picture, or the dashed box where it would go, is the click for a new one, the way a group's banner is */}
-          <div className="group/offline relative w-full max-w-[480px]">
-            {offline !== null ? (
-              <img
-                id="profile-offline-preview"
-                src={api.offlineUrl(name, offline)}
-                alt=""
-                draggable={false}
-                className="aspect-video w-full border border-primaryStroke bg-black object-cover"
-              />
-            ) : (
-              <div className="flex aspect-video w-full items-center justify-center border border-dashed border-secondaryStroke p-4 text-center text-sm text-textTertiary">
-                no picture yet. the page shows your face and the word, which it does anyway.
-              </div>
-            )}
-            {canEdit && (
-              <PicturePick
-                id="profile-offline-file"
-                label={offline === null ? 'choose picture' : 'change picture'}
-                reveal="group-hover/offline:opacity-100"
-                className="inset-0"
-                onPick={(file) => void saveMyOffline(file)}
-              />
-            )}
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
+      <Block title="offline screen" tip="where the player goes while you're not live">
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="flex shrink-0 flex-col gap-1.5">
+            {/* the picture, or the dashed box where it would go, is the click for a new one, the way a group's banner is */}
+            <div className="group/offline relative w-40">
+              {offline !== null ? (
+                <img
+                  id="profile-offline-preview"
+                  src={api.offlineUrl(name, offline)}
+                  alt=""
+                  draggable={false}
+                  className="aspect-video w-full border border-primaryStroke bg-black object-cover"
+                />
+              ) : (
+                <div className="flex aspect-video w-full flex-col items-center justify-center gap-1 border border-dashed border-secondaryStroke text-xs text-textTertiary">
+                  <RiCameraLine aria-hidden size={18} />
+                  16:9
+                </div>
+              )}
+              {canEdit && (
+                <PicturePick
+                  id="profile-offline-file"
+                  label="change picture"
+                  icon={20}
+                  reveal="group-hover/offline:opacity-100"
+                  className="inset-0"
+                  onPick={(file) => void saveMyOffline(file)}
+                />
+              )}
+            </div>
             {offline !== null && (
-              <Button id="profile-offline-remove" size="sm" variant="outline-danger" disabled={!canEdit} onClick={() => void removeMyOffline()}>
-                remove picture
+              <Button id="profile-offline-remove" size="sm" variant="outline-danger" className="self-start" disabled={!canEdit} onClick={() => void removeMyOffline()}>
+                remove
               </Button>
             )}
-            <Status
-              id="profile-offline-status"
-              text={offlineStatus || (canEdit ? 'click the picture to change it. a wide jpeg, 1920×1080: the 16:9 you cut out of yours.' : whyNot)}
+          </div>
+          <div className="flex min-w-0 flex-1 basis-48 gap-1.5 self-center">
+            <input
+              id="profile-offline-note"
+              value={offlineNote}
+              onChange={(e) => {
+                store.set(profileOfflineNoteAtom, e.target.value);
+                if (store.get(profileOfflineNoteStatusAtom)) store.set(profileOfflineNoteStatusAtom, '');
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void saveMyOfflineNote();
+              }}
+              aria-label="offline note"
+              placeholder="note"
+              maxLength={MAX_OFFLINE_NOTE_CHARS}
+              disabled={!canEdit}
+              autoComplete="off"
+              aria-describedby="profile-offline-note-count"
+              className={cn(INPUT, 'min-w-0 flex-1 text-sm')}
             />
+            <span id="profile-offline-note-count" className={cn('self-center text-xs tabular-nums text-textTertiary', noteLeft < 10 && 'text-decrease')}>
+              {noteLeft}
+            </span>
+            <Button id="profile-save-offline-note" size="sm" variant="outline" disabled={!canEdit} onClick={() => void saveMyOfflineNote()}>
+              save
+            </Button>
           </div>
         </div>
-        <Field
-          id="profile-offline-note"
-          label="the line"
-          hint={`${MAX_OFFLINE_NOTE_CHARS} characters, one line. when you are back, where else to find you. empty takes it off.`}
-        >
-          <input
-            id="profile-offline-note"
-            value={offlineNote}
-            onChange={(e) => {
-              store.set(profileOfflineNoteAtom, e.target.value);
-              if (store.get(profileOfflineNoteStatusAtom)) store.set(profileOfflineNoteStatusAtom, '');
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void saveMyOfflineNote();
-            }}
-            placeholder="note"
-            maxLength={MAX_OFFLINE_NOTE_CHARS}
-            disabled={!canEdit}
-            autoComplete="off"
-            aria-describedby="profile-offline-note-hint"
-            className={INPUT}
-          />
-        </Field>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button id="profile-save-offline-note" size="sm" variant="outline" disabled={!canEdit} onClick={() => void saveMyOfflineNote()}>
-            save line
-          </Button>
-          <Status id="profile-offline-note-status" text={offlineNoteStatus || (canEdit ? '' : whyNot)} />
-        </div>
-      </Section>
+        <Status id="profile-offline-status" text={offlineStatus || (canEdit ? '' : whyNot)} quiet />
+        <Status id="profile-offline-note-status" text={offlineNoteStatus} quiet />
+      </Block>
     </div>
   );
 }
