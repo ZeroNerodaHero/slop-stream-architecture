@@ -43,6 +43,7 @@ import {
 import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
+import { PinSheet, PinSheetButton } from '@/app/explore/PinSheet';
 import {
   api,
   type Channel,
@@ -1082,6 +1083,8 @@ export function ServerPage() {
   // a phone: the group's drawer from the right (its picture and name, the channels, who is in), the room the chat alone
   const mobile = useIsMobile();
   const [drawer, setDrawer] = useState(false);
+  // a phone's pins: a sheet from under the title row, its pin in the row (PinSheet.tsx); a desktop's are the chat header's (ChannelPins)
+  const [pinSheet, setPinSheet] = useState(false);
   // the roster beside the chat, or folded to its strip of faces (a wide screen's: the phone's drawer and a narrow screen's column always have it whole)
   const membersOpen = useAtomValue(roomMembersOpenAtom);
   const live = room?.live ?? [];
@@ -1130,6 +1133,7 @@ export function ServerPage() {
   if (drawerChannel !== channel) {
     setDrawerChannel(channel);
     setDrawer(false);
+    setPinSheet(false);
   }
 
   useEffect(() => {
@@ -1393,7 +1397,7 @@ export function ServerPage() {
       {live.length > FACES && <p className="mt-2 text-xs text-textTertiary">{live.length - FACES} more live</p>}
     </section>
   );
-  // a phone's title row: the group's picture, then its name, small, over the channel; the button at the right end opens the drawer
+  // a phone's title row: the back caret and the pins (PageFrame `mobileBack`, `mobileStart`), the group's picture, then its name, small, over the channel; the button at the right end opens the drawer
   const mobileTitle = (
     <span className="flex min-w-0 items-center gap-2.5">
       <GroupMark name={server} color={color} icon={room.icon} className="h-9 w-9 shrink-0 text-sm" />
@@ -1425,6 +1429,8 @@ export function ServerPage() {
       wide
       titleId={titleId}
       mobileTitle={noChannel ? undefined : mobileTitle}
+      mobileStart={noChannel ? undefined : <PinSheetButton count={room.pins?.[channel]?.length ?? 0} open={pinSheet} onClick={() => setPinSheet((open) => !open)} />}
+      mobileBack={!noChannel}
       mobileEnd={noChannel ? undefined : drawerOpener}
       bleed={!noChannel}
       title={
@@ -1470,7 +1476,7 @@ export function ServerPage() {
                 name={server}
                 channel={channel}
                 onChannel={(to) => navigate(to === 'general' ? `/groups/${server}` : `/groups/${server}/${to}`)}
-                headerEnd={<ChannelPins server={server} channel={channel} room={room} />}
+                headerEnd={mobile ? undefined : <ChannelPins server={server} channel={channel} room={room} />}
                 lineMark={(line) => (pinnedHere.has(line.id) ? <PinMark /> : null)}
                 lineActions={room.perms.channels ? (line) => <PinAction server={server} channel={channel} line={line} pinned={pinnedHere.has(line.id)} /> : undefined}
                 className={cn('h-full', ROOM_CHAT_MOBILE)}
@@ -1478,6 +1484,16 @@ export function ServerPage() {
             </div>
             {!mobile && <Roster room={room} />}
           </div>
+          {mobile && (
+            <PinSheet
+              server={server}
+              channel={channel}
+              open={pinSheet}
+              onOpenChange={setPinSheet}
+              canPin={room.perms.channels}
+              onUnpin={(id) => togglePin(server, channel, id, false)}
+            />
+          )}
           {/* a phone: what the page has around the chat, in a drawer from the right. no bar over it (no title, no ×: the dim sliver at the left or
               the opener shuts it), and it scrolls as one: the group's head, then the channels in a box, then who is in, in a box of its own (online first, then
               offline). the dim sliver at the left shuts it too */}
