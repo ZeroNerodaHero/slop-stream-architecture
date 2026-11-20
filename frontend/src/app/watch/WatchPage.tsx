@@ -443,8 +443,17 @@ export function WatchPage() {
           />
           {/* the same grey over the frame until frames play (`playing` on #video, markPlaying): the box
               that was loading goes on loading, instead of turning black for the connection. inside the
-              stroke, under the controls and tap to play, and no pointer of its own */}
-          {(phase === 'connecting' || phase === 'connected') && <Bone className="pointer-events-none absolute inset-px" />}
+              stroke, under the controls and tap to play, and no pointer of its own. `connecting` sits on it,
+              the offline picture's chip, so no line comes and goes under the player (the line is for
+              screen readers then) */}
+          {(phase === 'connecting' || phase === 'connected') && (
+            <>
+              <Bone className="pointer-events-none absolute inset-px" />
+              <span aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <span className="border border-white/10 bg-black/70 px-3 py-1 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">connecting</span>
+              </span>
+            </>
+          )}
           {needsTap && (
             <Button
               id="tap-to-play"
@@ -512,18 +521,21 @@ export function WatchPage() {
 
   // a phone's top of the about tab: what is up, who is watching, how many follow them. while the stream
   // plays the line would say `watching`, which the picture already says: then it is for screen readers
-  // and the tests alone, and the count stands in its place, the corner player's way
+  // and the tests alone, and the count stands in its place, the corner player's way. so is `connecting`:
+  // the chip on the player says it
+  const joining = phase === 'connecting' || phase === 'connected';
   const status = (
     <div className="my-3 flex flex-wrap items-baseline gap-x-4">
-      <StatusLine text={message} tone={tone} className={cn('my-0', phase === 'watching' && 'sr-only')} />
+      <StatusLine text={message} tone={tone} className={cn('my-0', (phase === 'watching' || joining) && 'sr-only')} />
       <ViewerCount id="viewers" count={viewers} className="text-lg text-textSecondary" />
       {followersCount && <span className="ml-auto text-lg text-textSecondary">{followersCount}</span>}
     </div>
   );
   // the desktop's under the picture: only what the title row does not already say. the numbers are its
-  // small line, and offline is the chip on the player, so `not live yet` and `watching` (and #viewers and
-  // #followers) are for screen readers and the tests alone. connecting, ended, a lost connection show
-  const quiet = phase === 'watching' || phase === 'waiting' || phase === 'loading';
+  // small line, offline and connecting are chips on the player, so `not live yet`, `connecting` and
+  // `watching` (and #viewers and #followers) are for screen readers and the tests alone. ended, a lost
+  // connection show
+  const quiet = phase === 'watching' || phase === 'waiting' || phase === 'loading' || joining;
   const deskStatus = (
     <div className={cn('relative', !quiet && 'my-3')}>
       <StatusLine text={message} tone={tone} className={cn('my-0', quiet && 'sr-only')} />
