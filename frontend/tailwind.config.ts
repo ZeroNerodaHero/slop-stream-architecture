@@ -34,16 +34,23 @@ export default {
       },
       // the chat's send button, when a line is refused for the rate: the countdown on it shakes
       // once. a refusal, not a press effect (buttons.mdc); `motion-safe:` keeps it off for anyone
-      // who asked for less motion
+      // who asked for less motion. `dot`: the watch page's `connecting . . .` chip, each dot
+      // lighting up in turn (staggered delays on the dots); only opacity moves, so the chip
+      // keeps its size
       keyframes: {
         shake: {
           '0%, 100%': { transform: 'translateX(0)' },
           '20%, 60%': { transform: 'translateX(-4px)' },
           '40%, 80%': { transform: 'translateX(4px)' }
+        },
+        dot: {
+          '0%, 60%, 100%': { opacity: '0.2' },
+          '30%': { opacity: '1' }
         }
       },
       animation: {
-        shake: 'shake 0.4s ease-in-out'
+        shake: 'shake 0.4s ease-in-out',
+        dot: 'dot 1.2s ease-in-out infinite both'
       }
     }
   },
