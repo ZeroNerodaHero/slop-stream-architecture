@@ -10,6 +10,8 @@ a publisher's offer can carry several video sections (camera and screens). each 
 
 `src/main.rs` is the room and the signaling. `src/media.rs` is codecs and ice. `src/thumbs.rs` is the side ffmpeg that writes a jpeg every few seconds for home cards. `src/dummy.rs` is `video dummy`: fake gif streams, off unless `DUMMY_STREAMS` is set.
 
+`src/voice.rs` is `video voice`: a small voice sfu, a spike with no grant yet. a room (`<server>/<channel>`) has 16 seats; each person's offer is one sending audio m-line (their mic) and up to 15 recvonly ones (the others), and joins and leaves swap tracks with `replace_track`, so nobody renegotiates. websocket on `VOICE_WS_PORT` (7881) at `/ws`, `GET /health` there, media on udp `VOICE_UDP_PORT` (7883), advertised as `PUBLIC_IP`. it turns every join away with "voice is not open" unless `VOICE_DEV_OPEN=1`. at most 4 voice peers per address.
+
 a new watcher's first picture is a keyframe the box asks the publisher for (a pli per video slot on join). joins in a burst share one, and a join that may have just missed it gets one trailing request 300ms on, never the 1.5s wait. there is no keyframe cache, on purpose: browsers send keyframes only when asked, so a bounded one is nearly always empty. see `docs/keyframes.md`.
 
 redeploying this container ends every live stream. `./scripts/deploy.sh video` warns first. see `docs/architecture-picture.md` and `docs/viewers.md`.

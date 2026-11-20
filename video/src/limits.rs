@@ -28,8 +28,11 @@ pub(crate) fn per_minute(path: &str) -> u32 {
     }
 }
 
+/// (address, route) to (window start, count)
+type Counts = HashMap<(String, &'static str), (Instant, u32)>;
+
 #[derive(Clone, Default)]
-pub(crate) struct Limits(Arc<Mutex<HashMap<(String, &'static str), (Instant, u32)>>>);
+pub(crate) struct Limits(Arc<Mutex<Counts>>);
 
 impl Limits {
     /// One more for `ip` on `route`: Err(seconds left) past `max` this window.
