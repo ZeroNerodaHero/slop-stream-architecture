@@ -13,7 +13,7 @@
 
 import { atom } from 'jotai';
 
-import { api, messageOf, type Notification, type NotifySettings, roomOf } from '@/infra/api';
+import { api, messageOf, type Notification, type NotifySettings, roomOf, statusOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { chatChannelAtom } from '@/infra/atoms/chat-atoms';
 import { dmActiveAtom, dmOpenAtom } from '@/infra/atoms/dm-atoms';
@@ -69,6 +69,12 @@ let pending: Notification[] = [];
  */
 let readTo = 0;
 
+/**
+ * Rows dismissed (here, or by a `notify_removed`) while an inbox ask was in flight. The snapshot
+ * may have been taken before the delete, so the apply leaves them out. The login changing drops them.
+ */
+let removedDuring = new Set<number>();
+
 /** The list and the settings again. One ask at a time for the login that started it; a second caller for that login waits. Logout drops the ask, and a late answer is kept only if that login is still the one here and this ask is still in flight. Its rows are applied then, with any row that arrived during the ask, and every row up to a read that arrived during the ask is marked read; its settings only when no save has started since the ask. A dropped ask writes no list and no settings, and leaves those rows. A failed ask leaves the list unloaded and keeps those rows, and that read id, for the next one. Nobody: an empty list, no request. */
 export function loadNotifications(): Promise<void> {
   const me = store.get(meAtom);
@@ -94,8 +100,13 @@ export function loadNotifications(): Promise<void> {
         store.set(notifySettingsLoadedAtom, true);
       }
       const remembered = pending;
+      const removed = removedDuring;
       pending = [];
-      store.set(notificationsAtom, foldIn(items, remembered));
+      removedDuring = new Set();
+      store.set(
+        notificationsAtom,
+        foldIn(items, remembered).filter((n) => !removed.has(n.id))
+      );
       // a channel on screen while the ask was out: what the snapshot says is new there is not
       const viewed = viewedRoom();
       if (viewed) readChannelNotifications(viewed.server, viewed.channel);
@@ -117,6 +128,7 @@ export function forgetNotifications() {
   asking = null;
   pending = [];
   readTo = 0;
+  removedDuring = new Set();
   // a save still in flight must not match: its answer belongs to the login that left
   settingsGen += 1;
   store.set(notificationsAtom, undefined);
@@ -172,6 +184,39 @@ export function markNotificationsRead() {
       notificationsAtom,
       current.map((n) => (unreadIds.has(n.id) ? { ...n, read: false } : n))
     );
+  });
+}
+
+/** A row off the list here, and out of what an ask in flight will apply. True when the list had it. */
+function dropRow(id: number): boolean {
+  if (asking) removedDuring.add(id);
+  pending = pending.filter((n) => n.id !== id);
+  const list = store.get(notificationsAtom);
+  if (!list?.some((n) => n.id === id)) return false;
+  store.set(
+    notificationsAtom,
+    list.filter((n) => n.id !== id)
+  );
+  return true;
+}
+
+/**
+ * The × on a row: it goes from the list at once (an unread one takes its count off the bell
+ * with it), then `DELETE /api/notifications/:id`, which tells the login's other devices through
+ * `notify_removed`. A 404 is a row gone already (another device, the clip): it stays gone. Any
+ * other refusal puts it back in its place, newest first, when this login's list is still here.
+ */
+export function dismissNotification(id: number) {
+  const me = store.get(meAtom);
+  const row = store.get(notificationsAtom)?.find((n) => n.id === id);
+  if (!me || !row || !dropRow(id)) return;
+  api.dismissNotification(id).catch((err) => {
+    if (statusOf(err) === 404) return;
+    if (store.get(meAtom) !== me) return;
+    removedDuring.delete(id);
+    const current = store.get(notificationsAtom);
+    if (!current || current.some((n) => n.id === id)) return;
+    store.set(notificationsAtom, [...current, row].toSorted((a, b) => b.id - a.id).slice(0, KEEP));
   });
 }
 
@@ -415,6 +460,12 @@ function readElsewhere(frame: { name: string; id: number }) {
   );
 }
 
+/** A `notify_removed` frame: this login dismissed a row somewhere. It goes here too. */
+function removedElsewhere(frame: { name: string; id: number }) {
+  if (frame.name !== store.get(meAtom)) return;
+  dropRow(frame.id);
+}
+
 /** A `dm_read` frame: this login read its thread with `peer` somewhere. What that account wrote is not news any more. `peer_id` is the account; without it (an older gateway) the name is the match. */
 function dmReadElsewhere(frame: { name: string; peer: string; peer_id?: string }) {
   if (frame.name !== store.get(meAtom)) return;
@@ -444,6 +495,7 @@ let linkWasOpen = false;
 onEvents((event) => {
   if (event.type === 'notification') arrived(event);
   else if (event.type === 'notify_read') readElsewhere(event);
+  else if (event.type === 'notify_removed') removedElsewhere(event);
   else if (event.type === 'dm_read') dmReadElsewhere(event);
   else if (event.type === 'chat_read') chatReadElsewhere(event);
   else if (event.type === 'link') {

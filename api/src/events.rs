@@ -12,7 +12,7 @@
 //!
 //! Facts come from one redis stream, `events`, written by the api (`live`, `ended`, `viewers`,
 //! `status`, `renamed`, and `dm` / `dm_react` / `dm_read` for the direct messages of docs/dms.md and
-//! `notify` / `notify_read` / `chat_read` for the inbox of docs/notifications.md, which go to
+//! `notify` / `notify_read` / `notify_removed` / `chat_read` for the inbox of docs/notifications.md, which go to
 //! the sockets that *are* a name rather than to its watchers; the chat process writes `notify`
 //! too, for a line in a channel) and by this module (`seen`).
 //! One task per process tails it and routes
@@ -263,6 +263,9 @@ enum Out {
     /// `name` saw its inbox up to `id` on some device. To `name`'s sockets: the others drop their count.
     #[serde(rename = "notify_read")]
     NotifyRead { name: String, id: i64 },
+    /// `name` dismissed the row `id` on some device. To `name`'s sockets: the others drop it too.
+    #[serde(rename = "notify_removed")]
+    NotifyRemoved { name: String, id: i64 },
     /// `name` had the channel `room` on screen on some device: its `chat` rows for it are read. To `name`'s sockets.
     #[serde(rename = "chat_read")]
     ChatRead { name: String, room: String },
@@ -748,6 +751,11 @@ impl Gateway {
             "notify_read" => {
                 let Some(id): Option<i64> = entry.get("id") else { return };
                 self.tell(&[&name], Out::NotifyRead { name: name.clone(), id }).await;
+            }
+            // `name` dismissed a row somewhere: its other devices drop it
+            "notify_removed" => {
+                let Some(id): Option<i64> = entry.get("id") else { return };
+                self.tell(&[&name], Out::NotifyRemoved { name: name.clone(), id }).await;
             }
             // `name` had a channel on screen somewhere: its other devices read that channel's rows
             "chat_read" => {

@@ -782,6 +782,8 @@ export const api = {
   notifications: () => request<{ settings: NotifySettings; items: Notification[] }>('GET', '/api/notifications'),
   /** The login has seen its inbox up to that row. Its other devices hear it on the socket. */
   readNotifications: (id: number) => request<null>('PUT', '/api/notifications/read', { id }),
+  /** One row of the inbox gone, dismissed by hand. 204; 404 when it is not this login's or is gone already. Its other devices hear it on the socket. */
+  dismissNotification: (id: number) => request<null>('DELETE', `/api/notifications/${id}`),
   /** Which kinds go in the inbox from now on, replaced whole; the answer is what was kept. */
   saveNotifySettings: (settings: NotifySettings) => request<NotifySettings>('PUT', '/api/notifications/settings', settings),
   /** The status, one line beside the name: runs of whitespace become one space, 500 characters at most. `bio` on the wire. */
