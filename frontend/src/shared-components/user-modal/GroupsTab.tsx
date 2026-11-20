@@ -1,221 +1,182 @@
+import { RiCloseLine, RiGroupLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { groupWords, type Group } from '@/infra/api';
+import { groupWords, type Group, type Server } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import {
   clearGroupsStatus,
-  deleteGroup,
   groupsAtom,
   groupsBusyAtom,
   groupsLoadedAtom,
   groupsStatusAtom,
-  joinGroup,
   leaveGroup,
   loadGroups,
-  setGroupListed,
-  setPrimaryGroup,
-  myBadgesAtom
+  loadMyServers,
+  myServersAtom,
+  setPrimaryGroup
 } from '@/infra/atoms/groups-atoms';
 import { closeUserModal, pickTab } from '@/infra/atoms/user-modal-atoms';
-import { Badge } from '@/shared-components/Badge';
-import { Button } from '@/shared-components/Button';
+import { useIsMobile } from '@/infra/mobile';
+import { Button, buttonClassName } from '@/shared-components/Button';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
+import { GROUP_SQUARE_BOX, GroupSquareFace } from '@/shared-components/GroupSquare';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { Tooltip } from '@/shared-components/Tooltip';
-import { Section, Status } from '@/shared-components/user-modal/parts';
-import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
+import { Block, Status } from '@/shared-components/user-modal/parts';
+import { cn } from '@/utils/cn';
 
-/** The buttons in a row of the list: a size down from the pane's. */
-const SMALL = 'px-3 py-1.5 text-sm';
+const GRID = 'grid grid-cols-2 gap-2 md:grid-cols-4 md:gap-3';
 
 /**
- * Groups: the badges a name wears in chat. Everyone sees the list; a login joins and leaves,
- * picks one of its groups as primary (its name then wears that badge alone, and its card shows
- * it), and deletes the one it owns. Making one is the groups page's and home's (MakeGroupDialog.tsx),
- * where the banner and the picture go on with it; this tab only points there. `bot` is
- * automatic (a bot's socket says so), so it has no join. Every change says hello to the open
- * chat again, so the badges follow at once.
+ * Groups: the ones I am in, as home's squares. A click makes one my primary (my name then wears
+ * its badge alone), a second click unsets it. On a desktop a hovered or focused square has an x
+ * to leave; a phone leaves from the group's page. Joining, making, deleting and the public or
+ * private switch are the groups pages' (MakeGroupDialog.tsx, ServerRoom.tsx); `bot` is automatic,
+ * so it is not here. Every change says hello to the open chat again, so the badges follow at once.
  */
 export function GroupsTab() {
   const me = useAtomValue(meAtom);
   const groups = useAtomValue(groupsAtom);
   const loaded = useAtomValue(groupsLoadedAtom);
-  const mine = useAtomValue(myBadgesAtom);
+  const servers = useAtomValue(myServersAtom);
   const busy = useAtomValue(groupsBusyAtom);
   const status = useAtomValue(groupsStatusAtom);
+  const mobile = useIsMobile();
 
-  // Mount only: the list as the server has it, and no status left over from an earlier open.
+  // Mount only: the list as the server has it (`mine`, `primary`), the pictures from the sidebar's
+  // list of my servers, and no status left over from an earlier open.
   useEffect(() => {
     clearGroupsStatus();
     void loadGroups();
+    void loadMyServers();
   }, []);
+
+  if (!me)
+    return (
+      <div className="divide-y divide-primaryStroke">
+        <Block title="groups">
+          <Button id="groups-log-in" size="sm" variant="outline" onClick={() => pickTab('security')}>
+            log in to join
+          </Button>
+        </Block>
+      </div>
+    );
+
+  const mine = groups.filter((g) => g.mine && !g.automatic);
 
   return (
     <div className="divide-y divide-primaryStroke">
-      <Section
-        title="your badges"
-        description={
-          me
-            ? "what your name wears in chat: your primary group's badge, or with none picked, the badge of every group you are in, in the order you joined."
-            : 'a group puts a badge next to your name in chat. groups are for accounts; nobody has to have one.'
-        }
-      >
-        {me ? (
-          <p id="my-badges" className="flex flex-wrap items-center gap-1 font-semibold">
-            <span className="text-primaryBlue">{me}</span>
-            <Tooltip content="logged in: this name is yours">
-              <span role="img" aria-label="logged in" className="text-increase">
-                ✓
-              </span>
-            </Tooltip>
-            {mine.map((group) => (
-              <Badge key={group.name} group={group} className="ml-1" />
-            ))}
-            {mine.length === 0 && <span className="ml-2 font-normal text-textTertiary">no badges yet. join a group below.</span>}
-          </p>
-        ) : (
-          <p className="text-sm text-textTertiary">
-            <button type="button" onClick={() => pickTab('security')} className="text-primaryBlue underline-offset-2 hover:underline">
-              sign up or log in
-            </button>{' '}
-            to join one.
-          </p>
-        )}
-      </Section>
-
-      <Section
-        title="groups"
-        description={
-          <>
-            join one and its badge goes on your lines. to make one, with a picture and a banner, go to{' '}
-            <Link id="group-make-there" to="/groups" onClick={closeUserModal} className="text-primaryBlue underline-offset-2 hover:underline">
-              the groups page
-            </Link>
-            . bot is automatic: the fake streams&apos; chatters wear it, nobody joins it, and the chat can hide those lines.
-          </>
-        }
-      >
-        {/* before the list has answered: the list's box with a few rows' worth of grey in it, the badge and the words */}
+      <Block title="groups" tip={mobile ? 'tap one to wear its badge. leave from the group page' : 'click one to wear its badge in chat'}>
+        {/* before the list has answered: the squares' boxes with grey in them */}
         {loaded === undefined && (
-          <Skeleton id="group-list-loading" className="divide-y divide-primaryStroke border border-primaryStroke bg-background">
-            {Array.from({ length: 3 }, (_, i) => (
-              <div key={i} className="flex items-center gap-4 px-4 py-3">
-                <Bone className="h-5 w-14 shrink-0" />
-                <Bone className="h-4 w-40 max-w-full" />
-              </div>
+          <Skeleton id="group-list-loading" className={GRID}>
+            {Array.from({ length: 4 }, (_, i) => (
+              <Bone key={i} className="aspect-square" />
             ))}
           </Skeleton>
         )}
         {loaded === false && (
-          <Button id="group-reload" size="sm" className="self-start" onClick={() => void loadGroups()}>
+          <Button id="group-reload" size="sm" onClick={() => void loadGroups()}>
             try again
           </Button>
         )}
-        {groups.length > 0 && (
-          <ul id="group-list" className="divide-y divide-primaryStroke border border-primaryStroke bg-background">
-            {groups.map((group) => (
-              <GroupRow key={group.name} group={group} me={me ?? null} busy={busy} />
+        {loaded && mine.length === 0 && (
+          <div id="groups-empty" className="flex flex-col items-center gap-2 border border-dashed border-secondaryStroke px-4 py-8 text-sm text-textTertiary">
+            <RiGroupLine aria-hidden size={28} />
+            no groups yet
+            <Link id="groups-find" to="/groups" onClick={closeUserModal} className={buttonClassName('outline', undefined, 'sm')}>
+              find groups
+            </Link>
+          </div>
+        )}
+        {mine.length > 0 && (
+          <ul id="group-list" role="radiogroup" aria-label="primary group" className={GRID}>
+            {mine.map((group) => (
+              <GroupPick key={group.name} group={group} server={servers?.find((s) => s.name === group.name)} busy={busy} mobile={mobile} />
             ))}
           </ul>
         )}
-        <Status id="group-status" text={status} />
-      </Section>
+        <Status id="group-status" text={status} quiet />
+      </Block>
     </div>
   );
 }
 
-function GroupRow({ group, me, busy }: { group: Group; me: string | null; busy: boolean }) {
-  const [sure, setSure] = useState(false);
-  const [leaveSure, setLeaveSure] = useState(false);
-  // the one who made it deletes it. an admin may too, through the api; the page does not know who those are
-  const canDelete = me !== null && group.made_by === me;
+/**
+ * One of my groups as home's square, and a radio: a click makes it my primary, a click on the
+ * primary one unsets it. The pictures come from my servers' list; a group not on it yet (just
+ * joined) shows its colour until it is.
+ */
+function GroupPick({ group, server, busy, mobile }: { group: Group; server: Server | undefined; busy: boolean; mobile: boolean }) {
+  const [leaving, setLeaving] = useState(false);
   const words = groupWords(group);
+  const primary = group.primary === true;
+  // an older api has no `primary`: nothing to pick
+  const pickable = group.primary !== undefined;
+  const shown: Server = {
+    ...group,
+    icon: server?.icon ?? null,
+    banner: server?.banner ?? null,
+    live: server?.live,
+    channels: []
+  };
   return (
-    <li id={`group-${group.name}`} data-title={words.title} data-mine={group.mine || undefined} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
-      <Badge group={group} className="shrink-0" />
-      <span className="min-w-0 flex-1 basis-48">
-        <span className="flex flex-wrap items-baseline gap-x-2">
-          <span className="font-semibold">{words.title}</span>
-          {words.tag && <span className="text-sm text-textTertiary">#{words.tag}</span>}
-          <span className="text-sm tabular-nums text-textTertiary">
-            {group.members} {group.members === 1 ? 'member' : 'members'}
-          </span>
-          {group.made_by && <span className="text-sm text-textTertiary">by {group.made_by}</span>}
-        </span>
-        {group.about && <span className="block text-sm text-textSecondary">{group.about}</span>}
-      </span>
-      <span className="flex flex-wrap items-center gap-2">
-        {group.automatic ? (
-          <span className="text-sm text-textTertiary">automatic</span>
-        ) : me === null ? null : group.mine && leaveSure ? (
-          <>
-            <Button id={`group-leave-${group.name}`} variant="danger" className={SMALL} disabled={busy} onClick={() => void leaveGroup(group.name)}>
-              {group.members <= 1 ? 'sure? deletes it' : 'sure?'}
-            </Button>
-            <Button size="sm" onClick={() => setLeaveSure(false)}>
-              keep
-            </Button>
-          </>
-        ) : group.mine ? (
-          <>
-            {/* the one badge the name wears. an older api has no `primary`: nothing to pick */}
-            {group.primary !== undefined &&
-              (group.primary ? (
-                <>
-                  <span id={`group-primary-${group.name}`} className="text-sm font-semibold text-primaryBlue">
-                    primary
-                  </span>
-                  <Button id={`group-unprimary-${group.name}`} size="sm" disabled={busy} onClick={() => void setPrimaryGroup(group.name, false)}>
-                    unset
-                  </Button>
-                </>
-              ) : (
-                <Button id={`group-make-primary-${group.name}`} size="sm" variant="outline" disabled={busy} onClick={() => void setPrimaryGroup(group.name, true)}>
-                  make primary
-                </Button>
-              ))}
-            <Button id={`group-leave-${group.name}`} size="sm" variant="outline-danger" disabled={busy} onClick={() => setLeaveSure(true)}>
-              leave
-            </Button>
-          </>
-        ) : (
-          <Button id={`group-join-${group.name}`} variant="primary" className={SMALL} disabled={busy} onClick={() => void joinGroup(group.name)}>
-            join
+    <li id={`group-${group.name}`} data-title={words.title} data-primary={primary || undefined} className="group/sq relative">
+      <button
+        id={`group-primary-${group.name}`}
+        type="button"
+        role="radio"
+        aria-checked={primary}
+        aria-label={words.tag ? `${words.title} #${words.tag}` : words.title}
+        disabled={busy || !pickable}
+        onClick={() => void setPrimaryGroup(group.name, !primary)}
+        className={cn(
+          GROUP_SQUARE_BOX,
+          'group relative flex w-full flex-col justify-end overflow-hidden text-left transition-[border-color] duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none disabled:cursor-default',
+          primary && 'border-2 border-primaryBlue'
+        )}
+      >
+        <GroupSquareFace
+          server={shown}
+          compact
+          corner={
+            primary && (
+              <span className="absolute right-2 top-2 bg-primaryBlue px-1.5 py-0.5 text-xs font-semibold text-white md:group-hover/sq:opacity-0 md:group-focus-within/sq:opacity-0">
+                primary
+              </span>
+            )
+          }
+        />
+      </button>
+      {!mobile && (
+        <Tooltip content="leave group">
+          <Button
+            id={`group-leave-${group.name}`}
+            size="sm"
+            aria-label={`leave ${words.title}`}
+            disabled={busy}
+            onClick={() => setLeaving(true)}
+            className="absolute right-2 top-2 h-7 w-7 bg-background/90 p-0 opacity-0 focus-visible:opacity-100 group-hover/sq:opacity-100 group-focus-within/sq:opacity-100"
+          >
+            <RiCloseLine aria-hidden size={16} />
           </Button>
-        )}
-        {canDelete && group.public !== undefined && (
-          <span id={`group-access-${group.name}`} data-public={group.public !== false}>
-            <VisibilityToggle
-              isPublic={group.public !== false}
-              ids={[`group-access-${group.name}-public`, `group-access-${group.name}-private`]}
-              disabled={busy}
-              onChange={(next) => {
-                if (next !== (group.public !== false)) void setGroupListed(group.name, next, words.title);
-              }}
-            />
-          </span>
-        )}
-        {canDelete && (
-          <Button id={`group-delete-${group.name}`} size="sm" variant="outline-danger" disabled={busy} onClick={() => setSure(true)}>
-            delete
-          </Button>
-        )}
-        {sure && (
-          <ConfirmDialog
-            id={`group-delete-${group.name}-confirm`}
-            title={`delete ${words.title}?`}
-            message="the group goes, and everyone in it is out."
-            yes="yes, delete"
-            onYes={() => {
-              setSure(false);
-              void deleteGroup(group.name, group.mine);
-            }}
-            onNo={() => setSure(false)}
-          />
-        )}
-      </span>
+        </Tooltip>
+      )}
+      {leaving && (
+        <ConfirmDialog
+          id={`group-leave-${group.name}-confirm`}
+          title={`leave ${words.title}?`}
+          message={group.members <= 1 ? 'you are the last one in it: it goes with you.' : 'its badge comes off your name. you can join again from its page.'}
+          yes={group.members <= 1 ? 'yes, leave and delete' : 'yes, leave'}
+          onYes={() => {
+            setLeaving(false);
+            void leaveGroup(group.name);
+          }}
+          onNo={() => setLeaving(false)}
+        />
+      )}
     </li>
   );
 }
