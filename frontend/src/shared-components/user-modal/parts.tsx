@@ -7,6 +7,12 @@ import { cn } from '@/utils/cn';
 
 /** The small label every block starts with. */
 export const SECTION_TITLE = 'text-xs font-semibold uppercase tracking-wider text-textTertiary';
+/**
+ * A block of a tab that is one set of choices: a fieldset, its legend the small title. The legend
+ * floats, so it no longer sits on the rule `divide-y` draws above the block and cut a gap in it.
+ */
+export const FIELDSET =
+  'relative m-0 border-0 p-0 py-4 first:pt-0 last:pb-0 [&>legend+*]:clear-left [&>legend+*]:!mt-0 [&>legend]:float-left [&>legend]:w-full [&>legend]:pb-2';
 /** The buttons in a pane: a size down from the page's. */
 export const BUTTON = 'px-4 py-2 text-base';
 /** A square to tick: the theme's box, blue when on. */
@@ -106,7 +112,7 @@ export function PasswordInput({
         placeholder={placeholder}
         aria-label={label}
         aria-describedby={describedBy}
-        className={cn(INPUT, 'pr-9')}
+        className={cn(INPUT, 'h-full pr-9')}
       />
       <Tooltip content={word}>
         <button
@@ -195,7 +201,7 @@ export function OptionCard({ id, name, checked, onChange, picture, label, detail
       <span className={cn('flex items-start justify-between gap-3', checked ? 'text-primaryBlue' : 'text-textSecondary')}>
         {picture}
         <span
-          className={cn('text-xs font-semibold uppercase tracking-wider', checked ? 'text-primaryBlue' : 'text-transparent', compact && 'max-md:hidden')}
+          className={cn('shrink-0 text-xs font-semibold uppercase tracking-wider', checked ? 'text-primaryBlue' : 'text-transparent', compact && 'max-md:hidden')}
           aria-hidden={!checked}
         >
           on

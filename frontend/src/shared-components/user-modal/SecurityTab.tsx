@@ -185,7 +185,7 @@ function LoggedIn({ me }: { me: string }) {
                 autoComplete="current-password"
                 placeholder="current"
                 label="current password"
-                className="min-w-0 flex-1 basis-40 [&_input]:text-sm"
+                className="min-w-0 flex-1 basis-40"
               />
             )}
             <PasswordInput
@@ -197,7 +197,7 @@ function LoggedIn({ me }: { me: string }) {
               placeholder="new"
               label="new password"
               describedBy="sec-new-hint"
-              className="min-w-0 flex-1 basis-40 [&_input]:text-sm"
+              className="min-w-0 flex-1 basis-40"
             />
             <Button id="sec-change" type="submit" size="sm" variant="outline" disabled={busy || (hasPassword && !old) || !fresh || !!problem}>
               {hasPassword ? 'change' : 'set'}

@@ -116,7 +116,7 @@ function Rename({ me }: { me: string }) {
           autoCapitalize="off"
           spellCheck={false}
           aria-describedby="profile-new-name-hint"
-          className={cn(INPUT, 'min-w-0 flex-1 basis-40 text-sm')}
+          className={cn(INPUT, 'min-w-0 flex-1 basis-40')}
         />
         {hasPassword && (
           <PasswordInput
@@ -126,7 +126,7 @@ function Rename({ me }: { me: string }) {
             autoComplete="current-password"
             placeholder="password"
             label="your password"
-            className="min-w-0 flex-1 basis-40 [&_input]:text-sm"
+            className="min-w-0 flex-1 basis-40"
           />
         )}
         {sure ? (
@@ -241,7 +241,7 @@ export function ProfileTab() {
               <PicturePick
                 id="profile-avatar-file"
                 label="change picture"
-                icon={20}
+                icon={12}
                 reveal="group-hover/avatar:opacity-100"
                 className="inset-0"
                 onPick={(file) => void saveMyAvatar(file)}
@@ -301,7 +301,7 @@ export function ProfileTab() {
       {/* the presence choice (docs/status.md): three cards in a row. the chosen one is what the server has;
           the square in the corner follows the `me` frame */}
       <Block title="presence" tip="live shows streaming, whatever you pick">
-        <fieldset disabled={!canEdit} className="m-0 border-0 p-0 disabled:opacity-60">
+        <fieldset disabled={!canEdit} className="relative m-0 border-0 p-0 disabled:opacity-60">
           <legend className="sr-only">presence</legend>
           <div role="presentation" className="grid grid-cols-3 gap-2">
             {PRESENCE_OPTIONS.map(({ choice: c, label, icon }) => (
@@ -345,7 +345,7 @@ export function ProfileTab() {
                 autoCapitalize="off"
                 spellCheck={false}
                 aria-describedby="profile-name-hint"
-                className={cn(INPUT, 'min-w-0 flex-1 basis-40 text-sm')}
+                className={cn(INPUT, 'min-w-0 flex-1 basis-40')}
               />
               <Button id="profile-sign-up" size="sm" variant="outline" onClick={() => pickTab('security')}>
                 sign up
@@ -378,7 +378,7 @@ export function ProfileTab() {
             disabled={!canEdit}
             autoComplete="off"
             aria-describedby="profile-bio-count"
-            className={cn(INPUT, 'min-w-0 flex-1 text-sm')}
+            className={cn(INPUT, 'min-w-0 flex-1')}
           />
           <span id="profile-bio-count" className={cn('self-center text-xs tabular-nums text-textTertiary', left < 20 && 'text-decrease')}>
             {left}
@@ -408,7 +408,7 @@ export function ProfileTab() {
                 />
               ) : (
                 <div className="flex aspect-video w-full flex-col items-center justify-center gap-1 border border-dashed border-secondaryStroke text-xs text-textTertiary">
-                  <RiCameraLine aria-hidden size={18} />
+                  <RiCameraLine aria-hidden size={18} className="[@media(hover:none)]:hidden" />
                   16:9
                 </div>
               )}
@@ -416,7 +416,7 @@ export function ProfileTab() {
                 <PicturePick
                   id="profile-offline-file"
                   label="change picture"
-                  icon={20}
+                  icon={16}
                   reveal="group-hover/offline:opacity-100"
                   className="inset-0"
                   onPick={(file) => void saveMyOffline(file)}
@@ -446,7 +446,7 @@ export function ProfileTab() {
               disabled={!canEdit}
               autoComplete="off"
               aria-describedby="profile-offline-note-count"
-              className={cn(INPUT, 'min-w-0 flex-1 text-sm')}
+              className={cn(INPUT, 'min-w-0 flex-1')}
             />
             <span id="profile-offline-note-count" className={cn('self-center text-xs tabular-nums text-textTertiary', noteLeft < 10 && 'text-decrease')}>
               {noteLeft}

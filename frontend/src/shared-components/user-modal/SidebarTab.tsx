@@ -4,7 +4,7 @@ import { useAtomValue } from 'jotai';
 import { type PanelSide, type SidebarList, moveSidebarList, panelSideAtom, setPanelSide, setSidebarListOn, sidebarListsAtom } from '@/infra/atoms/settings-atoms';
 import { useIsMobile } from '@/infra/mobile';
 import { DragHandle, useReorder } from '@/shared-components/Reorderable';
-import { CHECKBOX, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
+import { FIELDSET, CHECKBOX, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 const PANEL_SIDE_OPTIONS: readonly { side: PanelSide; label: string }[] = [
@@ -122,7 +122,7 @@ export function SidebarTab() {
   return (
     <div className="divide-y divide-primaryStroke">
       {!mobile && (
-        <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+        <fieldset className={FIELDSET}>
           <legend className={SECTION_TITLE}>where it sits</legend>
           <div role="presentation" className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
             {PANEL_SIDE_OPTIONS.map(({ side, label }) => (
@@ -140,7 +140,7 @@ export function SidebarTab() {
         </fieldset>
       )}
 
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>its lists</legend>
         <div className="mt-2">
           <SidebarLists />

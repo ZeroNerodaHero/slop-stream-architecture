@@ -3,7 +3,7 @@ import { useAtomValue } from 'jotai';
 import { customFrom, paletteAtom, setCustomColor, setTextSize, setTheme, TEXT_SIZES, type TextSize, textSizeAtom, themeAtom } from '@/infra/atoms/settings-atoms';
 import { contrast, hex, type Palette, PRESET_NAMES, PRESETS, type TokenName, TOKENS } from '@/infra/theme';
 import { Button } from '@/shared-components/Button';
-import { Block, Field, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
+import { FIELDSET, Block, Field, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 const TOKEN_LABEL: Record<TokenName, string> = {
@@ -28,21 +28,20 @@ function Swatch({ palette }: { palette: Palette }) {
   return (
     <span
       aria-hidden
-      className="flex h-16 w-full items-center p-2 max-md:h-12 max-md:p-1.5"
+      className="flex h-16 w-full min-w-0 items-center overflow-hidden p-1 max-md:h-12"
       style={{ backgroundColor: css(palette.background), border: `1px solid ${css(palette.primaryStroke)}` }}
     >
       <span
-        className="flex h-full flex-1 items-center gap-2 px-2"
+        className="flex h-full min-w-0 flex-1 items-center gap-1 px-1"
         style={{
           backgroundColor: css(palette.backgroundSecondary),
           border: `1px solid ${css(palette.primaryStroke)}`
         }}
       >
-        <span className="h-5 w-1" style={{ backgroundColor: css(palette.primaryColor) }} />
-        <span className="text-base font-semibold leading-none" style={{ color: css(palette.textPrimary) }}>
+        <span className="h-3 w-0.5 shrink-0" style={{ backgroundColor: css(palette.primaryColor) }} />
+        <span className="text-sm font-semibold leading-none" style={{ color: css(palette.textPrimary) }}>
           Aa
         </span>
-        <span className="ml-auto h-2 w-2" style={{ backgroundColor: css(palette.increase) }} />
       </span>
     </span>
   );
@@ -91,7 +90,7 @@ export function AppearanceTab() {
 
   return (
     <div className="divide-y divide-primaryStroke">
-      <fieldset className="m-0 border-0 p-0 py-4 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>theme</legend>
         {/* one row of five on a desktop; a phone has the three presets in thirds, then midnight and custom in halves */}
         <div role="presentation" className="mt-2 grid grid-cols-6 gap-2 md:grid-cols-5 md:gap-3">
@@ -194,7 +193,7 @@ export function AppearanceTab() {
 
       {/* the root font size as a percentage (settings.textSize): every rem in the stylesheet follows it,
           so the words and the room around them shrink and grow together, the way the browser's zoom does */}
-      <fieldset className="m-0 border-0 p-0 py-4 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>size</legend>
         <div role="presentation" className="mt-2 grid grid-cols-5 gap-1.5 md:gap-3">
           {TEXT_SIZES.map((s) => (

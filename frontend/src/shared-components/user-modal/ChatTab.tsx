@@ -21,7 +21,7 @@ import {
 } from '@/infra/atoms/settings-atoms';
 import { useIsMobile } from '@/infra/mobile';
 import { GeneratedAvatar } from '@/shared-components/GeneratedAvatar';
-import { OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
+import { FIELDSET, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 /** The places the stream's chat can sit. The card's picture is the page. */
@@ -262,7 +262,7 @@ export function ChatTab() {
   return (
     <div className="divide-y divide-primaryStroke">
       {!mobile && (
-        <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+        <fieldset className={FIELDSET}>
           <legend className={SECTION_TITLE}>on the watch page</legend>
           <div role="presentation" className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-3">
             {CHAT_SIDE_OPTIONS.map(({ side, label }) => (
@@ -280,7 +280,7 @@ export function ChatTab() {
         </fieldset>
       )}
 
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>on the corner player</legend>
         <div role="presentation" className="mt-2 grid grid-cols-3 gap-2 sm:gap-4">
           {PIP_CHAT_OPTIONS.map(({ place, label }) => (
@@ -302,7 +302,7 @@ export function ChatTab() {
         </div>
       </fieldset>
 
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>hide bots</legend>
         <div role="presentation" className="mt-2 grid grid-cols-2 gap-2 sm:gap-4">
           {BOT_OPTIONS.map(({ hide, id, label, icon }) => (
@@ -311,7 +311,7 @@ export function ChatTab() {
         </div>
       </fieldset>
 
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>the lines</legend>
         <div role="presentation" className="mt-2 grid grid-cols-3 gap-2 sm:gap-4">
           {STYLE_OPTIONS.map(({ style, label }) => (
@@ -333,7 +333,7 @@ export function ChatTab() {
         </div>
       </fieldset>
 
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>people</legend>
         <div role="presentation" className="mt-2 grid grid-cols-2 gap-2 sm:gap-4">
           {PEOPLE_OPTIONS.map(({ popup, id, label, icon }) => (
@@ -351,7 +351,7 @@ export function ChatTab() {
         </div>
       </fieldset>
 
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>links</legend>
         <div role="presentation" className="mt-2 grid grid-cols-2 gap-2 sm:gap-4">
           {LINK_OPTIONS.map(({ ask, id, label, icon }) => (

@@ -14,7 +14,7 @@ import {
 import { pickTab } from '@/infra/atoms/user-modal-atoms';
 import type { NotificationKind } from '@/infra/frames';
 import { Button } from '@/shared-components/Button';
-import { SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
+import { FIELDSET, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 /** The four kinds, as switches. */
@@ -73,7 +73,7 @@ export function NotificationsTab() {
 
   return (
     <div className="divide-y divide-primaryStroke">
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>inbox</legend>
         <ul className="mt-2 flex flex-col gap-3">
           {KINDS.map(({ kind, label, icon }) => {
