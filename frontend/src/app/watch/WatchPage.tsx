@@ -34,6 +34,7 @@ import {
   oauthVerifiedAtom,
   volumeAtom,
   watch,
+  watchBadgeAtom,
   watchStatsAtom,
   watchMessageAtom,
   watchNameAtom,
@@ -58,6 +59,7 @@ import { store } from '@/infra/store';
 import { About } from '@/shared-components/About';
 import { Calendar } from '@/shared-components/Calendar';
 import { FollowButton } from '@/shared-components/FollowButton';
+import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
@@ -184,6 +186,7 @@ export function WatchPage() {
   const followers = useAtomValue(followersAtom);
   const socials = useAtomValue(socialsAtom);
   const joined = useAtomValue(joinedAtom);
+  const badge = useAtomValue(watchBadgeAtom);
   // my own page: the socials tab edits the links in place (SocialsEditor.tsx)
   const mine = useAtomValue(myNameAtom) === name;
   const phase = useAtomValue(watchPhaseAtom);
@@ -274,6 +277,9 @@ export function WatchPage() {
       ) : (
         <span className="truncate">{name}</span>
       )}
+      {/* the group badge their chat lines wear, as a chat line draws it (its card on hover and focus).
+          it does not shrink: a long name is cut first */}
+      {badge && <Badge id="watch-badge" group={badge} card className="shrink-0" />}
       {verified && (
         <Tooltip content="has an account: this really is them">
           <span role="img" aria-label="has an account" className="shrink-0 text-increase">
