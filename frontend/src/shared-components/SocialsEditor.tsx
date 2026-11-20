@@ -162,7 +162,7 @@ interface SocialsEditorProps {
   canEdit: boolean;
   /** Why they are off, for the status. '' while they are on. */
   whyNot: string;
-  /** `done`: the editor folds away. The draft stays where it is, saved or not. */
+  /** `done`, or a `save links` the api kept: the editor folds away. The draft stays where it is, saved or not. */
   onDone: () => void;
 }
 
@@ -297,7 +297,7 @@ export function SocialsEditor({ canEdit, whyNot, onDone }: SocialsEditorProps) {
 
       {/* outside the fieldset: `done` works whether or not the boxes are on */}
       <div className="mt-5 flex flex-wrap items-center gap-3">
-        <Button id="socials-save" size="sm" variant="outline" disabled={!canEdit} onClick={() => void saveMySocials()}>
+        <Button id="socials-save" size="sm" variant="outline" disabled={!canEdit} onClick={() => void saveMySocials().then((kept) => kept && onDone())}>
           save links
         </Button>
         <Button id="socials-done" size="sm" onClick={onDone}>

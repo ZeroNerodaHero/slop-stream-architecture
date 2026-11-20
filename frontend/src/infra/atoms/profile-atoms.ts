@@ -312,11 +312,12 @@ export function setSocialsSize(size: SocialsSize) {
  * url written the parser's way, a label cut) and the boxes show that, unless something was
  * typed meanwhile. My own page open in this tab follows at once.
  */
-export async function saveMySocials(): Promise<void> {
+/** true once the api kept the links: the editor folds away on it. */
+export async function saveMySocials(): Promise<boolean> {
   const name = store.get(myNameAtom);
   if (!isValidName(name)) {
     store.set(profileSocialsStatusAtom, 'pick a name first');
-    return;
+    return false;
   }
   const draft = store.get(profileSocialsAtom);
   const links: SocialLink[] = [];
@@ -324,7 +325,7 @@ export async function saveMySocials(): Promise<void> {
     const url = socialHref(link.url);
     if (!url) {
       store.set(profileSocialsStatusAtom, `not saved: link ${i + 1} is not a web address`);
-      return;
+      return false;
     }
     links.push({ kind: link.kind, url, label: link.label.trim() });
   }
@@ -338,8 +339,10 @@ export async function saveMySocials(): Promise<void> {
     }
     store.set(profileSocialsStatusAtom, kept.links.length > 0 ? 'saved' : 'cleared');
     alsoOnWatchPage(name, { socials: kept });
+    return true;
   } catch (err) {
     store.set(profileSocialsStatusAtom, `not saved: ${messageOf(err)}`);
+    return false;
   }
 }
 
