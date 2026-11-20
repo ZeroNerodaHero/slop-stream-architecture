@@ -358,6 +358,8 @@ export interface GroupRoom {
   channels?: Channel[];
   /** The channels this login has muted (docs/notifications.md): no inbox row for their lines. Empty for nobody; absent on an older api. */
   muted?: string[];
+  /** The ids pinned in each channel this login sees, newest pin first (docs/groups.md "pins"). A channel with none is absent; absent on an older api. */
+  pins?: Record<string, string[]>;
   /** Members streaming right now. Absent on an older api. */
   live?: string[];
   /** The roster: anyone's on a public group, a member's or a site admin's on a private one. Null for anyone else; absent on an older api. */
@@ -365,6 +367,9 @@ export interface GroupRoom {
   /** Who is banned, for the ban power. Null for anyone else; absent on an older api. */
   bans?: GroupBan[] | null;
 }
+
+/** A channel's pinned line (`GET .../pins`): the line as it was said, its face as it is now, and who pinned it (null for an account since gone) and when (unix ms). */
+export type PinnedLine = ChatLine & { pinned_by: string | null; pinned_at: number };
 
 export interface GroupMember {
   name: string;
@@ -657,6 +662,15 @@ export const api = {
     request<{ channel: string; roles: string[] }>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/roles`, { roles }),
   /** No inbox row for this channel's lines from now on, for this login (docs/notifications.md). 204, also when already muted. */
   muteChannel: (server: string, channel: string) => request<null>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/mute`),
+  /** A channel's pinned lines, newest pin first, each a line plus who pinned it and when. Whoever sees the channel. */
+  channelPins: (server: string, channel: string) =>
+    request<{ pins: PinnedLine[] }>('GET', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/pins`),
+  /** Pin a line of the channel (the channels power). The pin back; the same when it was pinned already. 50 a channel at most. */
+  pinLine: (server: string, channel: string, id: string) =>
+    request<PinnedLine>('POST', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/pins/${encodeURIComponent(id)}`),
+  /** Unpin it. 204, also when it was not pinned. */
+  unpinLine: (server: string, channel: string, id: string) =>
+    request<null>('DELETE', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/pins/${encodeURIComponent(id)}`),
   /** The channel's lines reach the bell again. 204, also when it was not muted. */
   unmuteChannel: (server: string, channel: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/mute`),
   /** The login has the channel on screen: its inbox rows for it are read. Its other devices hear it on the socket. */

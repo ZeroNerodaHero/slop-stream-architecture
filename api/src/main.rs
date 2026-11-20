@@ -54,6 +54,7 @@ mod models;
 mod monitor;
 mod notify;
 mod oauth;
+mod pins;
 mod presence;
 mod profile;
 mod ratelimit;
@@ -958,6 +959,7 @@ fn router(state: AppState) -> Router {
         .merge(about_page::routes())
         .merge(groups::routes())
         .merge(group_mod::routes())
+        .merge(pins::routes())
         .merge(follows::routes())
         .merge(dms::routes())
         .merge(chat_images::routes())

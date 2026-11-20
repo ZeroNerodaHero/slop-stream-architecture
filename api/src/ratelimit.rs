@@ -451,6 +451,9 @@ mod tests {
         assert_eq!(api_rule(&del, "/api/groups/{group}/roles/{id}/members/{name}"), MODERATE);
         assert_eq!(api_rule(&put, "/api/groups/{group}/channels/{channel}/cooldown"), MODERATE);
         assert_eq!(api_rule(&del, "/api/groups/{group}"), MODERATE);
+        assert_eq!(api_rule(&post, "/api/groups/{group}/channels/{channel}/pins/{message}"), MODERATE);
+        assert_eq!(api_rule(&del, "/api/groups/{group}/channels/{channel}/pins/{message}"), MODERATE);
+        assert_eq!(api_rule(&get, "/api/groups/{group}/channels/{channel}/pins"), READ);
         assert_eq!(api_rule(&post, "/api/groups/{group}/join"), WRITE);
         assert_eq!(api_rule(&put, "/api/groups/{group}/channels/{channel}/read"), WRITE);
         assert_eq!(api_rule(&put, "/api/groups/{group}/channels/{channel}/mute"), WRITE);

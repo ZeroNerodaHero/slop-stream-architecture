@@ -128,7 +128,8 @@ enum Event {
     Count(usize),
 }
 
-#[derive(Serialize, Clone)]
+/// Deserialize too: a pin keeps the line as this json (pins.rs), read back the same way.
+#[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct Line {
     pub(crate) id: String,
     pub(crate) from: String,
@@ -153,10 +154,10 @@ pub(crate) struct Line {
     /// unix ms, from the stream id
     pub(crate) at: u64,
     /// the first picture on the line. absent when there is none. `images` is the whole set
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) image: Option<String>,
     /// every picture on the line, the ids `POST /api/chat-images` handed back. absent when there are none
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) images: Vec<String>,
 }
 

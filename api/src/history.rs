@@ -591,6 +591,21 @@ async fn redis_window(s: &ChatState, room: &str, id: &str) -> Result<Option<Vec<
     Ok(Some(lines))
 }
 
+/// One line of `room` by its id: from redis while the stream has it, else from `chat_lines`
+/// (asked whatever this process's `CHAT_PERSIST`: the chat process is the one that writes it).
+/// None when neither has it (never said here, or trimmed with nothing kept). Not faced: the
+/// caller keeps it as said (a channel's pins, pins.rs). 400 `bad id` for a junk id.
+pub(crate) async fn line_at(db: &PgPool, redis: &mut redis::aio::ConnectionManager, room: &str, id: &str) -> Result<Option<Line>, ApiError> {
+    let id = stream_id(id)?;
+    let hit: StreamRangeReply = redis.xrange_count(room_key(room), &id, &id, 1).await?;
+    if let Some(line) = hit.ids.into_iter().find_map(line_from) {
+        return Ok(Some(line));
+    }
+    let sql = format!("SELECT {LINE_COLUMNS} FROM {LINE_TABLES} WHERE l.room = $1 AND l.id = $2");
+    let row: Option<LineRow> = sqlx::query_as(&sql).bind(room).bind(&id).fetch_optional(db).await?;
+    Ok(row.map(line_of))
+}
+
 async fn pg_older(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, limit: i64) -> Result<Vec<Line>, sqlx::Error> {
     let sql = format!(
         "SELECT {LINE_COLUMNS} FROM {LINE_TABLES}
@@ -670,7 +685,7 @@ fn room_of(raw: &str) -> Result<String, ApiError> {
 
 /// A redis stream id, `milliseconds-sequence`. Anything else is a 400, so a junk
 /// id cannot become (0, 0) and read the whole table.
-fn stream_id(raw: &str) -> Result<String, ApiError> {
+pub(crate) fn stream_id(raw: &str) -> Result<String, ApiError> {
     if at_seq(raw).is_none() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad id"));
     }

@@ -401,6 +401,9 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, M
     let live = groups::live_in(&s, &group).await?;
     // the channels this login has muted (docs/notifications.md): its own, so the list can say so
     let muted = groups::muted_in(&s.db, user, &group).await?;
+    // the lines pinned in each channel this login sees, by id (pins.rs): the header's count and the lines' marks
+    let seen = groups::visible_channels(&s.db, &group, user, admin).await?;
+    let pins = crate::pins::pinned_ids(&s.db, &group, &seen).await?;
     // the roster is anyone's on a public group (the lines say who talks there anyway), and a member's or a
     // site admin's on a private one, whose people chose not to be listed; the bans are the ban power's. null otherwise
     let roster = if public || mine || admin { Some(members_of(&s.db, &group, &member_order).await?) } else { None };
@@ -425,6 +428,7 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, M
         "roles": roles,
         "channels": channels,
         "muted": muted,
+        "pins": pins,
         "live": live,
         "roster": roster,
         "bans": bans,

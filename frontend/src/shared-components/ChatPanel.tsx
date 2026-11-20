@@ -3,6 +3,7 @@ import { useAtomValue } from 'jotai';
 import {
   type FocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
   type SyntheticEvent,
   type UIEvent,
   useCallback,
@@ -82,6 +83,11 @@ interface ChatPanelProps {
   channel?: string;
   /** A hit from another channel of the group was opened: the page puts that channel in its address (the lines have moved already, `openLine`). */
   onChannel?: (channel: string) => void;
+  /** A group channel's own controls in the header, before the count: the pins (ServerRoom.tsx). */
+  headerEnd?: ReactNode;
+  /** A mark always at a line's top right, and buttons there on hover: a group line's pin (ServerRoom.tsx). Nothing on a stream's chat. */
+  lineMark?: (line: ChatLine) => ReactNode;
+  lineActions?: (line: ChatLine) => ReactNode;
   className?: string;
 }
 
@@ -486,7 +492,7 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
   );
 }
 
-export function ChatPanel({ name, owner = null, embedded = false, guest = false, channel, onChannel, className }: ChatPanelProps) {
+export function ChatPanel({ name, owner = null, embedded = false, guest = false, channel, onChannel, headerEnd, lineMark, lineActions, className }: ChatPanelProps) {
   const server = channel !== undefined;
   const listRef = useRef<HTMLDivElement | null>(null);
   // height before the last paint, so prepending older lines can put the same pixels back
@@ -670,6 +676,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
             {server ? `#${channel}` : 'chat'}
           </span>
           <span className="flex min-w-0 items-center gap-3">
+            {headerEnd}
             <span id="chat-count" className="truncate text-textSecondary">
               {count} here · {phase === 'open' ? 'live' : phase}
             </span>
@@ -753,6 +760,8 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                     ) : null
                   }
                   pictures={<ChatImages ids={line.images} />}
+                  mark={lineMark?.(line)}
+                  actions={lineActions?.(line)}
                   attrs={{
                     'data-id': line.id,
                     'data-streamer': line.streamer || undefined,

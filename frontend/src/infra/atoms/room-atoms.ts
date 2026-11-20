@@ -89,6 +89,40 @@ export async function setChannelMuted(server: string, channel: string, muted: bo
   }
 }
 
+/** `room.pins` with `id` pinned in `channel` (first: the newest pin), or unpinned. A channel left with none drops out. */
+function withPin(pins: Record<string, string[]> | undefined, channel: string, id: string, on: boolean): Record<string, string[]> {
+  const was = pins?.[channel] ?? [];
+  const now = on ? (was.includes(id) ? was : [id, ...was]) : was.filter((p) => p !== id);
+  const out = { ...pins };
+  if (now.length > 0) out[channel] = now;
+  else delete out[channel];
+  return out;
+}
+
+/** Bumped on every pin or unpin of the room on screen: an open pins panel asks its list again. */
+export const pinsTickAtom = atom(0);
+
+/**
+ * The channels power pins a line of `channel`, or unpins it (docs/groups.md "pins"). The mark
+ * and the count move at once; the api is told, and the fact it sends lands on every other room
+ * open. A refusal (the cap among them) puts it back and throws, for the page to say why.
+ */
+export async function setPinned(server: string, channel: string, id: string, on: boolean): Promise<void> {
+  const room = store.get(roomAtom);
+  if (!room || room.name !== server) return;
+  const was = room.pins;
+  store.set(roomAtom, { ...room, pins: withPin(was, channel, id, on) });
+  try {
+    if (on) await api.pinLine(server, channel, id);
+    else await api.unpinLine(server, channel, id);
+    store.set(pinsTickAtom, store.get(pinsTickAtom) + 1);
+  } catch (err) {
+    const current = store.get(roomAtom);
+    if (current && current.name === server) store.set(roomAtom, { ...current, pins: was });
+    throw err;
+  }
+}
+
 /**
  * The channels in `order`, from the top. One the order does not name (added since the order
  * was drawn up) keeps its place after the named ones, as the api puts it.
@@ -150,7 +184,9 @@ function applyRename(room: GroupRoom, from: string, to: string): void {
   store.set(roomAtom, {
     ...room,
     channels: channels.filter((c) => c.name !== to).map((c) => (c.name === from ? { ...c, name: to } : c)),
-    muted: room.muted?.map((c) => (c === from ? to : c)) ?? room.muted
+    muted: room.muted?.map((c) => (c === from ? to : c)) ?? room.muted,
+    // the pins follow the channel (the api's table moves them with it)
+    pins: room.pins && from in room.pins ? Object.fromEntries(Object.entries(room.pins).map(([c, ids]) => [c === from ? to : c, ids])) : room.pins
   });
   const chat = findServerChat(room.name);
   chat?.moveChannelLines(from, to);
@@ -279,9 +315,18 @@ function apply(change: GroupChange): void {
       store.set(roomAtom, {
         ...room,
         channels: (room.channels ?? []).filter((c) => c.name !== change.channel),
-        muted: room.muted?.filter((c) => c !== change.channel) ?? room.muted
+        muted: room.muted?.filter((c) => c !== change.channel) ?? room.muted,
+        // its pins went with it too
+        pins: room.pins ? Object.fromEntries(Object.entries(room.pins).filter(([c]) => c !== change.channel)) : room.pins
       });
       findServerChat(room.name)?.dropChannel(change.channel);
+      return;
+    case 'pin':
+    case 'unpin':
+      // a channel this login does not see has no list here to keep
+      if (!(room.channels ?? []).some((c) => c.name === change.channel)) return;
+      store.set(roomAtom, { ...room, pins: withPin(room.pins, change.channel, change.id, change.what === 'pin') });
+      store.set(pinsTickAtom, store.get(pinsTickAtom) + 1);
       return;
     case 'channel_renamed':
       applyRename(room, change.channel, change.name);
