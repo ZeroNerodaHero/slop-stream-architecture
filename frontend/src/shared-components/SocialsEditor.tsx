@@ -35,7 +35,8 @@ import {
 } from '@/infra/socials';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
-import { INPUT, OptionCard, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
+import { INPUT } from '@/shared-components/input';
+import { OptionCard, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
 import { ICON_BUTTON } from '@/shared-components/live/Collapsible';
 import { SOCIAL_ICON, SOCIAL_ICON_PX, Socials } from '@/shared-components/Socials';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -118,7 +119,7 @@ function LinkRow({ link, i, count, focus }: { link: SocialLink; i: number; count
         autoCapitalize="off"
         spellCheck={false}
         aria-invalid={bad || undefined}
-        className={cn(INPUT, 'min-w-0 flex-1 basis-48 py-1.5 text-sm', bad && 'border-decrease')}
+        className={cn(INPUT, 'min-w-0 flex-1 basis-48', bad && 'border-decrease')}
       />
       <label htmlFor={`socials-label-${i}`} className="sr-only">
         link {i + 1}: the words on it
@@ -130,7 +131,7 @@ function LinkRow({ link, i, count, focus }: { link: SocialLink; i: number; count
         placeholder={link.kind}
         maxLength={MAX_SOCIAL_LABEL_CHARS}
         autoComplete="off"
-        className={cn(INPUT, 'min-w-0 flex-1 basis-28 py-1.5 text-sm sm:max-w-[9rem]')}
+        className={cn(INPUT, 'min-w-0 flex-1 basis-28 sm:max-w-[9rem]')}
       />
       <span className="flex shrink-0 items-center">
         <Tooltip content="up">

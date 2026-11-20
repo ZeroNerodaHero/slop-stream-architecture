@@ -10,7 +10,8 @@ import { cleanName, isDummyName, isValidName } from '@/infra/names';
 import { providerLabel, takeReturn } from '@/infra/oauth';
 import { Button, buttonClassName } from '@/shared-components/Button';
 import { PageFrame } from '@/shared-components/PageFrame';
-import { BUTTON, Field, INPUT, Status } from '@/shared-components/user-modal/parts';
+import { INPUT } from '@/shared-components/input';
+import { BUTTON, Field, Status } from '@/shared-components/user-modal/parts';
 
 const label = providerLabel;
 
@@ -134,7 +135,7 @@ function PickName() {
       <p className="mb-4 text-textSecondary">
         {provider ? `${label(provider)} is new here.` : ''} your name is yours alone: your page is /watch/&lt;name&gt;, and it can change once every 30 days.
       </p>
-      <form onSubmit={(e) => void submit(e)} className="flex max-w-md flex-col gap-4">
+      <form onSubmit={(e) => void submit(e)} className="flex max-w-md flex-col gap-3">
         <Field id="oauth-name" label="name" hint="a-z 0-9 _ -, up to 32. a free name is yours, status, page and picture too.">
           <input
             id="oauth-name"
@@ -147,7 +148,7 @@ function PickName() {
                   .slice(0, 32)
               )
             }
-            placeholder="a-z 0-9 _ -"
+            placeholder="username"
             autoComplete="username"
             autoCapitalize="off"
             spellCheck={false}

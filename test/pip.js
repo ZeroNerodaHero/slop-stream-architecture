@@ -179,8 +179,8 @@ async function drag(p, sel, dx, dy) {
     await w.fill('#chat-nick', 'pipviewer');
     await w.click('#chat-join');
     await w.waitForSelector('#pip-player #chat[data-phase="open"]', { timeout: 10000 });
-    // the corner chat is the lines and the text box alone: no header (the count, hide bots) and no search box
-    expect((await w.$('#pip-player #chat-count, #pip-player #chat-hide-bots, #pip-player #chat-search')) === null, 'the corner chat has a header or a search box');
+    // the corner chat is the lines and the text box alone: no header (the name, the count) and no search box
+    expect((await w.$('#pip-player #chat-count, #pip-player #chat-search')) === null, 'the corner chat has a header or a search box');
     await w.click('#pip-chat');
     await w.waitForSelector('#pip-player #chat', { state: 'detached', timeout: 5000 });
     expect((await w.getAttribute('#pip-chat', 'aria-pressed')) === null, 'the chat button is still pressed');

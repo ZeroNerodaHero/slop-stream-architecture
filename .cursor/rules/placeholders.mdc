@@ -1,0 +1,29 @@
+---
+description: A text box's placeholder is one lowercase word; what the box is for goes in its label, aria-label or a hint line
+globs: frontend/src/**/*.tsx
+alwaysApply: false
+---
+
+# A placeholder is one word
+
+Every `placeholder=` and `data-placeholder=` on a text box is **one lowercase word**: what goes in the box, named (`search`, `name`, `username`, `message`, `reason`, `filter`). No sentences, no "optional", no examples in prose, no character rules.
+
+The description goes somewhere that stays when the box has text in it:
+
+- a `<label>` (visible, or `sr-only`) or an `aria-label` names the box for a screen reader. A placeholder is not a label: it goes away on the first key.
+- a hint line under the box (`Field`'s `hint`, or a small `text-xs text-textTertiary` `<p>` tied on with `aria-describedby`) carries a rule the typer needs while typing, like the allowed characters `a-z 0-9 _ -`.
+
+A link box may show a bare example as its one token (`https://twitch.tv/you`, `SOCIAL_EXAMPLE` in `infra/socials.ts`).
+
+```tsx
+// ❌ BAD — the box's only name is a sentence that vanishes on the first key
+<input id="friends-search" placeholder="find someone or a group" />
+<input id="auth-name" placeholder="a-z 0-9 _ -" />
+
+// ✅ GOOD — one word in the box, the description in the label, the rule under it
+<label htmlFor="friends-search" className="sr-only">find someone or a group</label>
+<input id="friends-search" placeholder="search" />
+
+<input id="auth-name" placeholder="username" aria-describedby="auth-name-hint" />
+<p id="auth-name-hint" className="text-xs text-textTertiary">a-z 0-9 _ -</p>
+```

@@ -32,7 +32,8 @@ import { Button, buttonClassName } from '@/shared-components/Button';
 import { OAuthButtons, ProviderIcon } from '@/shared-components/OAuthButtons';
 import { OAUTH_MARK_WORDS, OAuthMark } from '@/shared-components/OAuthMark';
 import { Tooltip } from '@/shared-components/Tooltip';
-import { BUTTON, Field, INPUT, PasswordInput, Section, Status } from '@/shared-components/user-modal/parts';
+import { INPUT } from '@/shared-components/input';
+import { BUTTON, Field, PasswordInput, Section, Status } from '@/shared-components/user-modal/parts';
 
 /**
  * The account. Nobody has to have one; with one the name is yours. Logged out: log in or sign
@@ -78,8 +79,8 @@ function LoggedOut() {
   return (
     <Section title="account" description="an account keeps your name yours: only you can go live, edit your status and your page, or talk as it. nobody has to.">
       {/* no method="dialog": a submit would close the modal. onSubmit owns enter */}
-      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
-        <Field id="sec-name" label="name" hint={signingUp ? 'a-z 0-9 _ -, up to 32. a free name is yours on sign up, status, page and picture too.' : undefined}>
+      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
+        <Field id="sec-name" label="name" hint={signingUp ? 'a-z 0-9 _ -, up to 32. a free name is yours on sign up, status, page and picture too.' : 'a-z 0-9 _ -'}>
           <input
             id="sec-name"
             name="username"
@@ -92,13 +93,13 @@ function LoggedOut() {
                   .slice(0, 32)
               )
             }
-            placeholder="a-z 0-9 _ -"
+            placeholder="username"
             autoComplete="username"
             autoCapitalize="off"
             spellCheck={false}
             maxLength={32}
             required
-            aria-describedby={signingUp ? 'sec-name-hint' : undefined}
+            aria-describedby="sec-name-hint"
             className={INPUT}
           />
         </Field>
@@ -180,7 +181,7 @@ function LoggedIn({ me }: { me: string }) {
             : `this account has no password yet: you log in with a linked account below. set one to log in with your name too. ${NEW_PASSWORD_RULE}.`
         }
       >
-        <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
+        <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
           {/* for password managers: which account the new password belongs to */}
           <input type="text" name="username" value={me} autoComplete="username" readOnly tabIndex={-1} aria-hidden className="sr-only" />
           {hasPassword && (

@@ -420,7 +420,7 @@ export function UserPanel() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') e.currentTarget.blur();
                 }}
-                placeholder="pick a name"
+                placeholder="name"
                 title="your name. click to change it"
                 maxLength={24}
                 autoComplete="off"

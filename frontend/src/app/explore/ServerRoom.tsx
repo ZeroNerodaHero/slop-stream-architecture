@@ -97,6 +97,7 @@ import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useShee
 import { when } from '@/shared-components/ChatLine';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { INPUT } from '@/shared-components/input';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { PresenceSquare } from '@/shared-components/PersonRow';
 import { PicturePick } from '@/shared-components/PicturePick';
@@ -107,6 +108,7 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
 import { Field, SECTION_TITLE, Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
+import { compactCount } from '@/utils/count';
 
 /** Cameras played in the room. The same peers home uses, muted, and not counted as viewers. */
 const FACES = 4;
@@ -114,8 +116,6 @@ const FACES = 4;
 const TILE = 'block overflow-hidden border border-primaryStroke bg-backgroundSecondary transition-[border-color] duration-150 hover:border-primaryBlue';
 
 const RESERVED = new Set(['before', 'search', 'by', 'around']);
-
-const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary';
 
 /** Matches `MAX_ABOUT_CHARS` in the api: a channel's line about it, like the group's. */
 const ABOUT_CAP = 200;
@@ -934,7 +934,7 @@ function RoomSearch({ search, input, flat, className }: { search: ChatSearch; in
           if (search.onKeyDown(e)) return;
           if (e.key === 'Escape') search.setQuery('');
         }}
-        placeholder="members or every channel"
+        placeholder="search"
         autoCapitalize="off"
         spellCheck={false}
         className={cn('h-8 w-full border border-primaryStroke bg-background pr-2 text-sm text-textPrimary placeholder:text-textTertiary', flat ? 'pl-8' : 'pl-7')}
@@ -1704,15 +1704,18 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
         onClose();
       }}
       // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop. a phone's is a sheet (MobileSheet.tsx)
-      className={cn('m-auto w-[min(460px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60', SHEET_DIALOG)}
+      className={cn(
+        'm-auto w-[min(460px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary px-6 py-4 text-base text-textPrimary backdrop:bg-black/60',
+        SHEET_DIALOG
+      )}
     >
       <SheetGrab onDismiss={close} />
-      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-5">
+      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
         <div>
           <h2 id="channel-make-title" className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
             add a channel
           </h2>
-          <p className="mt-3 text-sm text-textSecondary">a name, and a line about it if you like. it goes under the last channel; manage moves it.</p>
+          <p className="mt-2 text-sm text-textSecondary">a name, and a line about it if you like. it goes under the last channel; manage moves it.</p>
         </div>
         <Field id="channel-make-name" label="name" hint={fault || 'letters, digits, _ and -. up to 32.'}>
           <div className="relative">
@@ -1736,7 +1739,7 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
               spellCheck={false}
               aria-describedby="channel-make-name-hint"
               aria-invalid={fault !== '' || undefined}
-              className={cn(INPUT, 'w-full pl-7')}
+              className={cn(INPUT, 'pl-7')}
             />
           </div>
         </Field>
@@ -1748,7 +1751,7 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
             maxLength={ABOUT_CAP}
             autoComplete="off"
             aria-describedby="channel-make-about-hint"
-            className={cn(INPUT, 'w-full')}
+            className={INPUT}
           />
         </Field>
         {status && (
@@ -2175,10 +2178,13 @@ function MembersStrip({ room, showRef, onShow }: { room: GroupRoom; showRef: Ref
           </button>
         </Tooltip>
       </div>
-      <p className="my-1 flex h-4 shrink-0 items-center justify-center text-xs font-semibold text-textTertiary">
-        {room.members}
-        <span className="sr-only">&nbsp;{room.members === 1 ? 'member' : 'members'}</span>
-      </p>
+      <Tooltip content={`${room.members} ${room.members === 1 ? 'member' : 'members'}`} at="left">
+        <p className="my-1 inline-flex h-4 shrink-0 items-center justify-center gap-1 text-xs font-semibold tabular-nums text-textTertiary">
+          <RiGroupLine aria-hidden size={14} />
+          {compactCount(room.members)}
+          <span className="sr-only">&nbsp;{room.members === 1 ? 'member' : 'members'}</span>
+        </p>
+      </Tooltip>
       {/* the faces 10px in from the strip's border, and room under the last one for its presence square, which hangs below its face */}
       <ul
         ref={listRef}
@@ -2473,7 +2479,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
           id={tab ? `manage-panel-${tab}` : undefined}
           role={tab ? 'tabpanel' : undefined}
           aria-labelledby={tab ? `manage-tab-${tab}` : undefined}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 [scrollbar-gutter:stable] sm:px-8 sm:py-6"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 [scrollbar-gutter:stable] sm:px-8 sm:py-5"
         >
           <h2 id="group-manage-title" tabIndex={-1} className="min-w-0 border-l-4 border-primaryBlue pl-3 pr-12 text-xl font-semibold leading-tight outline-none">
             {tab ?? 'manage'} <span className="font-normal text-textTertiary">· {words.title}</span>
@@ -2576,7 +2582,7 @@ function AboutSection({ server, room, run }: ManageProps) {
           onChange={(e) => setDraft({ base: room.about, text: e.target.value })}
           maxLength={200}
           aria-label="about"
-          className={INPUT}
+          className={cn(INPUT, 'min-w-0 flex-1')}
         />
         <button type="submit" className="text-sm font-semibold text-primaryBlue">
           save
@@ -2782,8 +2788,8 @@ function BansSection({ server, room, run }: ManageProps) {
           });
         }}
       >
-        <input id="ban-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="ban a name" aria-label="ban a name" className={INPUT} />
-        <input id="ban-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason, optional" aria-label="ban reason" className={INPUT} />
+        <input id="ban-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="username" aria-label="ban a name" className={INPUT} />
+        <input id="ban-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason" aria-label="ban reason" className={INPUT} />
         <button id="ban-submit" type="submit" className="justify-self-start text-sm font-semibold text-decrease disabled:opacity-40" disabled={!name.trim()}>
           ban
         </button>
@@ -3261,12 +3267,12 @@ function RolesSection({ server, room, run }: ManageProps) {
                   id="owner-role-name"
                   value={ownerDraft}
                   onChange={(e) => setOwnerDraft(e.target.value)}
-                  placeholder="owner role name"
+                  placeholder="role"
                   maxLength={32}
                   aria-label="owner role name"
                   autoFocus
                   onFocus={(e) => e.currentTarget.select()}
-                  className={INPUT}
+                  className={cn(INPUT, 'min-w-0 flex-1')}
                 />
               </div>
               {/* the role form's list of powers, every one on and locked: an owner's */}
@@ -3326,7 +3332,7 @@ function RolesSection({ server, room, run }: ManageProps) {
                     id="role-name"
                     value={open.name}
                     onChange={(e) => setDraft({ ...open, name: e.target.value })}
-                    placeholder="role name"
+                    placeholder="role"
                     maxLength={32}
                     aria-label="role name"
                     autoFocus

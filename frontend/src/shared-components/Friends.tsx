@@ -30,8 +30,8 @@ import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { PresenceSquare, Who } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { StreamStill } from '@/shared-components/StreamStill';
+import { INPUT } from '@/shared-components/input';
 import { Tooltip } from '@/shared-components/Tooltip';
-import { INPUT } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 /** How long the pointer rests on a row before the person's card shows: past the panel's 100ms widening (UserPanel.tsx), so the card is measured against the open panel. */
@@ -990,7 +990,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
               type="search"
               value={query}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="find someone or a group"
+              placeholder="search"
               autoComplete="off"
               autoCapitalize="off"
               spellCheck={false}

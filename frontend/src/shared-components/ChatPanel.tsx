@@ -1,4 +1,4 @@
-import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine, RiRobot2Line } from '@remixicon/react';
+import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type FocusEvent,
@@ -19,12 +19,13 @@ import { api, messageOf, type Owner } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { type ChatLine, type ChatRoom, chatRoomFor, chatSpeakerAtom, isBotLine, MAX_CHAT_IMAGES, nickAtom, nickIsValidAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
-import { type ChatStyle, chatStyleAtom, hideBotsAtom, profilePopupEnabledAtom, setHideBots } from '@/infra/atoms/settings-atoms';
+import { type ChatStyle, chatStyleAtom, profilePopupEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ChatLineShape, placeOf } from '@/shared-components/ChatLine';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
+import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
 import { LinkedText } from '@/shared-components/LinkedText';
 import { LiveMark } from '@/shared-components/LiveMark';
 import { panelClassName } from '@/shared-components/Panel';
@@ -509,7 +510,6 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
   const lines = useAtomValue(room.visibleLinesAtom);
   const total = useAtomValue(room.linesAtom).length;
   const loaded = useAtomValue(room.loadedAtom);
-  const hideBots = useAtomValue(hideBotsAtom);
   const hiddenBots = useAtomValue(room.hiddenBotLinesAtom);
   const shape = useAtomValue(chatStyleAtom);
   const count = useAtomValue(room.countAtom);
@@ -669,7 +669,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
       data-room={room.key}
       className={embedded ? cn('relative flex flex-col', className) : panelClassName(cn('relative flex min-h-[320px] flex-col', className))}
     >
-      {/* on a phone a stream's chat (watch, go live) drops this bar to leave the lines room over the keyboard: kept for screen readers, ids and the hide-bots setting as they are. a group's bar stays, it names the channel */}
+      {/* on a phone a stream's chat (watch, go live) drops this bar to leave the lines room over the keyboard: kept for screen readers and ids as they are. a group's bar stays, it names the channel */}
       {!embedded && (
         <header
           className={cn('flex items-center justify-between gap-3 border-b border-primaryStroke px-3 py-1.5 text-base', !server && 'max-md:sr-only')}
@@ -679,24 +679,10 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
           </span>
           <span className="flex min-w-0 items-center gap-3">
             {headerEnd}
-            <span id="chat-count" className="truncate text-textSecondary">
+            {/* who is here and the socket's state: read out, not shown. the bots' switch is the settings' chat tab */}
+            <span id="chat-count" className="sr-only">
               {count} here · {phase === 'open' ? 'live' : phase}
             </span>
-            {/* the bots' lines: shown, or held back with how many. a setting of this browser, so it follows you from room to room */}
-            <button
-              id="chat-hide-bots"
-              type="button"
-              aria-pressed={hideBots}
-              title={hideBots ? `the bots' lines are hidden. click to show them` : "hide the bots' lines (the fake streams' chatters)"}
-              onClick={() => setHideBots(!hideBots)}
-              className={cn(
-                'flex shrink-0 items-center gap-1 whitespace-nowrap border px-1.5 py-0.5 text-xs font-semibold tabular-nums transition-colors duration-150',
-                hideBots ? 'border-primaryBlue text-primaryBlue' : 'border-primaryStroke text-textTertiary hover:border-secondaryStroke hover:text-textSecondary'
-              )}
-            >
-              <RiRobot2Line aria-hidden size={14} />
-              {hideBots ? `${hiddenBots} hidden` : 'hide bots'}
-            </button>
           </span>
         </header>
       )}
@@ -821,12 +807,12 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && nickOk) open();
               }}
-              placeholder="pick a nick"
+              placeholder="nickname"
               maxLength={24}
               autoComplete="off"
-              className="min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base"
+              className={cn(INPUT, 'min-w-0 flex-1')}
             />
-            <Button id="chat-join" variant="primary" className="px-4 py-2 text-base" disabled={!nickOk} onClick={open}>
+            <Button id="chat-join" variant="primary" className={INPUT_BUTTON} disabled={!nickOk} onClick={open}>
               join
             </Button>
             {/* "that name has an account": the refusal that sent you back here */}
@@ -869,7 +855,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                   type="button"
                   id="chat-picture"
                   aria-label="picture"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
                   disabled={uploading || images.length >= MAX_CHAT_IMAGES}
                   onClick={() => fileRef.current?.click()}
                 >
@@ -890,14 +876,14 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                 aria-label={`comment as ${asStreamer ? name : speaker}`}
                 autoComplete="off"
                 // a phone zooms in on a focused box under 16px: never smaller there, whatever text size the appearance tab picked
-                className="h-9 min-w-0 flex-1 border border-primaryStroke bg-background px-3 text-base max-md:h-11 max-md:text-[length:max(1rem,16px)]"
+                className={cn(INPUT, 'min-w-0 flex-1 max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
               />
               {/* refused for the rate: the button goes red and counts down to the next line, and shakes at each try meanwhile. still a button, so a try can shake it */}
               <Button
                 id="chat-send"
                 variant={wait > 0 ? 'danger' : 'primary'}
                 // a phone's: a 44px target at least, as tall as the box beside it
-                className="h-9 shrink-0 px-4 text-base tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
+                className="h-8 shrink-0 px-4 py-0 text-base tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
                 disabled={!canSend}
                 title={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : undefined}
                 data-wait={wait > 0 ? wait : undefined}

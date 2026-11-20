@@ -11,14 +11,12 @@ import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { GroupMark } from '@/shared-components/GroupMark';
+import { INPUT } from '@/shared-components/input';
 import { SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack, useSheetKeyboard } from '@/shared-components/MobileSheet';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
 import { cn } from '@/utils/cn';
-
-/** The auth modal's box (AuthForm.tsx), in a row. */
-const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base leading-snug text-textPrimary placeholder:text-textTertiary focus:border-primaryBlue';
 
 /** The api's caps, as the boxes know them. */
 const MAX_BADGE_CHARS = 12;
@@ -141,7 +139,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       // a phone's is a sheet up from the foot (MobileSheet.tsx)
       className={cn(
-        'm-auto max-h-[calc(100dvh-2rem)] w-[min(520px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-4 text-base text-textPrimary backdrop:bg-black/60',
+        'm-auto max-h-[calc(100dvh-2rem)] w-[min(520px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary px-4 py-3 text-base text-textPrimary backdrop:bg-black/60',
         SHEET_DIALOG
       )}
     >
@@ -192,7 +190,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
             maxLength={32}
             autoComplete="off"
             aria-label="group name"
-            className={INPUT}
+            className={cn(INPUT, 'min-w-0 flex-1')}
           />
           <input
             id="groups-make-badge"
@@ -202,14 +200,14 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
             maxLength={MAX_BADGE_CHARS}
             autoComplete="off"
             aria-label="badge"
-            className={cn(INPUT, 'max-w-40')}
+            className={cn(INPUT, 'min-w-0 max-w-40 flex-1')}
           />
         </div>
         <input
           id="groups-make-about"
           value={about}
           onChange={(e) => setAbout(e.target.value)}
-          placeholder="about, optional"
+          placeholder="about"
           maxLength={MAX_ABOUT_CHARS}
           autoComplete="off"
           aria-label="about"
