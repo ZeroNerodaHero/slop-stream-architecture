@@ -15,3 +15,5 @@ needs node and google chrome. a fake camera is used. stream names are fixed, so 
 the default suite is listed in `scripts/test.sh`: e2e, dup, chat, auth, groups, follows, dms, notifications, preview, errors, pip, live-pip, screen, vtuber, presence, calendar, about, socials, prefetch. a local docker stack also runs regress and monitor. `--all` adds redeploy and dummy.
 
 `fixtures/` holds puppet models used by the vtuber tests.
+
+`voice-spike.js` is not in the suite: it needs `video voice` running with VOICE_DEV_OPEN=1 (VOICE_URL, default ws://127.0.0.1:7881/ws) and checks two browsers hear each other.
