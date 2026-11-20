@@ -60,7 +60,7 @@ import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { PresenceSquare, Who } from '@/shared-components/PersonRow';
 import { ProfileLink, useShowProfile } from '@/shared-components/ProfileLink';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
-import { INPUT } from '@/shared-components/user-modal/parts';
+import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -1004,7 +1004,7 @@ export function FriendChat() {
                       }
                     }}
                     placeholder="search"
-                    className={cn(INPUT, 'py-1 text-sm', mobile && 'text-base')}
+                    className={INPUT}
                   />
                   <SearchSuggestions id="friend-chat-search-list" search={search} />
                   <button
@@ -1175,13 +1175,13 @@ export function FriendChat() {
                   autoComplete="off"
                   // a phone's box is 16px text: a smaller one zooms the page in when it takes focus (ios; globals.css keeps
                   // it at 16px under a smaller text size too). it takes the row's room and gives it back, so send never leaves the row
-                  className={cn(INPUT, 'py-1.5 text-sm', mobile && 'h-11 min-w-0 flex-1 py-0 text-base')}
+                  className={cn(INPUT, mobile && 'h-11 min-w-0 flex-1 py-0')}
                 />
                 <Button
                   id="friend-chat-send"
                   type="submit"
                   variant="primary"
-                  className={cn('px-3 py-1.5 text-sm', mobile && 'h-11 min-w-[44px] shrink-0 py-0 text-base')}
+                  className={cn(INPUT_BUTTON, mobile && 'h-11 min-w-[44px] shrink-0 py-0')}
                   disabled={(!draft.trim() && pictures.length === 0) || left < 0 || sending || uploading}
                 >
                   send

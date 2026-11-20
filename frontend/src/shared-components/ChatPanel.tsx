@@ -25,6 +25,7 @@ import { Button } from '@/shared-components/Button';
 import { ChatLineShape, placeOf } from '@/shared-components/ChatLine';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
+import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
 import { LinkedText } from '@/shared-components/LinkedText';
 import { LiveMark } from '@/shared-components/LiveMark';
 import { panelClassName } from '@/shared-components/Panel';
@@ -822,9 +823,9 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
               placeholder="nickname"
               maxLength={24}
               autoComplete="off"
-              className="min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base"
+              className={cn(INPUT, 'min-w-0 flex-1')}
             />
-            <Button id="chat-join" variant="primary" className="px-4 py-2 text-base" disabled={!nickOk} onClick={open}>
+            <Button id="chat-join" variant="primary" className={INPUT_BUTTON} disabled={!nickOk} onClick={open}>
               join
             </Button>
             {/* "that name has an account": the refusal that sent you back here */}
@@ -867,7 +868,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                   type="button"
                   id="chat-picture"
                   aria-label="picture"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
                   disabled={uploading || images.length >= MAX_CHAT_IMAGES}
                   onClick={() => fileRef.current?.click()}
                 >
@@ -888,14 +889,14 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                 aria-label={`comment as ${asStreamer ? name : speaker}`}
                 autoComplete="off"
                 // a phone zooms in on a focused box under 16px: never smaller there, whatever text size the appearance tab picked
-                className="h-9 min-w-0 flex-1 border border-primaryStroke bg-background px-3 text-base max-md:h-11 max-md:text-[length:max(1rem,16px)]"
+                className={cn(INPUT, 'min-w-0 flex-1 max-md:h-11 max-md:text-[length:max(1rem,16px)]')}
               />
               {/* refused for the rate: the button goes red and counts down to the next line, and shakes at each try meanwhile. still a button, so a try can shake it */}
               <Button
                 id="chat-send"
                 variant={wait > 0 ? 'danger' : 'primary'}
                 // a phone's: a 44px target at least, as tall as the box beside it
-                className="h-9 shrink-0 px-4 text-base tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
+                className="h-8 shrink-0 px-4 py-0 text-base tabular-nums max-md:h-11 max-md:min-w-11 max-md:text-[length:max(1rem,16px)]"
                 disabled={!canSend}
                 title={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : undefined}
                 data-wait={wait > 0 ? wait : undefined}

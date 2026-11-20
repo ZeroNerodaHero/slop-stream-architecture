@@ -66,7 +66,7 @@ function AuthBox({ mode }: { mode: AuthMode }) {
       // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
       // a phone's is a sheet up from the foot (MobileSheet.tsx)
       className={cn(
-        'm-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-5 text-textPrimary backdrop:bg-black/60 backdrop:backdrop-blur-sm',
+        'm-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary px-5 py-4 text-textPrimary backdrop:bg-black/60 backdrop:backdrop-blur-sm',
         SHEET_DIALOG
       )}
     >
