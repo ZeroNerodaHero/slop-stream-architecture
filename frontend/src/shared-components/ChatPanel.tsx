@@ -32,6 +32,7 @@ import { LiveMark } from '@/shared-components/LiveMark';
 import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { OAuthMark } from '@/shared-components/OAuthMark';
+import { CHAT_GRIP, useChatWindowBar } from '@/shared-components/ChatSlot';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -618,6 +619,8 @@ export function RoomLines({
 
 export function ChatPanel({ name, owner = null, embedded = false, guest = false, channel, onChannel, headerEnd, lineMark, lineActions, className }: ChatPanelProps) {
   const server = channel !== undefined;
+  // in the chat window (ChatSlot.tsx) this header is the window's bar: drag it to move, the close at its right
+  const bar = useChatWindowBar();
   const listRef = useRef<HTMLDivElement | null>(null);
   // height before the last paint, so prepending older lines can put the same pixels back
   const hold = useRef(0);
@@ -787,6 +790,16 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
         data-away=""
         className={embedded ? cn('flex flex-col', className) : panelClassName(cn('flex min-h-[320px] flex-col', className))}
       >
+        {bar && (
+          <header
+            onPointerDown={bar.grip}
+            title="drag to move"
+            className={cn('flex cursor-move items-center justify-between gap-3 border-b border-primaryStroke py-1.5 pl-3 pr-1 text-sm', CHAT_GRIP)}
+          >
+            <span className="truncate font-semibold">chat</span>
+            {bar.close}
+          </header>
+        )}
         <p className="m-auto px-6 text-center text-textTertiary">the chat is out in your stream's window. it is back here when that closes.</p>
       </aside>
     );
@@ -802,7 +815,14 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
       {/* on a phone this bar is dropped, kept for screen readers and ids as they are: a stream's chat (watch, go live) leaves the lines room over the keyboard, and a
           group's title row already names the channel and has the pins (ServerRoom.tsx, which gives a phone no `headerEnd`) */}
       {!embedded && (
-        <header className="flex items-center justify-between gap-3 border-b border-primaryStroke px-3 py-1.5 text-sm max-md:sr-only">
+        <header
+          onPointerDown={bar?.grip}
+          title={bar ? 'drag to move' : undefined}
+          className={cn(
+            'flex items-center justify-between gap-3 border-b border-primaryStroke px-3 py-1.5 text-sm max-md:sr-only',
+            bar && cn('cursor-move pr-1', CHAT_GRIP)
+          )}
+        >
           <span id={server ? 'channel' : undefined} className="truncate font-semibold">
             {server ? `#${channel}` : 'chat'}
           </span>
@@ -812,6 +832,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
             <span id="chat-count" className="sr-only">
               {count} here · {phase === 'open' ? 'live' : phase}
             </span>
+            {bar?.close}
           </span>
         </header>
       )}
