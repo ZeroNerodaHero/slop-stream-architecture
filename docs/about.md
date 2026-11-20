@@ -36,7 +36,7 @@ flowchart LR
 
 - **words** are text nodes. a heading is 80 characters at most, a paragraph 2000, a caption 200, a label 80; longer is cut, not refused.
 - **a picture, a clip, a track** load only from a path on this origin: it starts with `/`, is printable ascii with no whitespace, has no `..`, no backslash, no `//`, no scheme, and is under `/api/streamers/`, `/thumb/` or `/about-demo/` (`mediaPath`). a `data:` picture, an `https://elsewhere` picture, a `javascript:` anything is not drawn. the reason is not only script: a picture from elsewhere hands every viewer's address to whoever put it there. the real upload route, when it exists, lands under `/api/streamers/<name>/`, so the list does not change.
-- **a link** is `http:` or `https:` after `new URL(href, origin)` (`linkHref`), nothing else. on this origin it is a router link; elsewhere it opens in a new tab with `rel="noopener noreferrer nofollow"`.
+- **a link** is `http:` or `https:` after `new URL(href, origin)` (`linkHref`), nothing else. on this origin it is a router link; elsewhere it is an `ExternalLink`: a new tab with `rel="noopener noreferrer nofollow"`, after the leave-site word while the links setting asks (`spec.md`).
 - **the music player and the clip are the site's own elements** (`<audio>` and `<video>` with `controls`, `preload="metadata"`), skinned by their classes (`about-music`, `about-music-track`, `about-music-bar`, `about-music-play`). a page cannot bring a player of its own. the player plays on a press, as the browser wants, and is silent the moment the tab is left (it unmounts).
 - **the css**, `safeCss(css, scope)`:
   - 20 000 characters at most, 400 rules, 2000 declarations, 300 characters a selector or a condition. past a cap, the rest is dropped.

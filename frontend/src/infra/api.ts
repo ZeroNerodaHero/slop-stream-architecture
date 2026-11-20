@@ -457,6 +457,8 @@ export interface WatchGrant extends OAuthVerified {
   following?: boolean;
   /** When the account was made, rfc3339, for the socials tab's `joined` line; null for a free name. Absent on an older api. */
   joined_at?: string | null;
+  /** The group badge beside the name in the header: the one their chat lines wear (primary, else the first joined). null: no group or no account. Absent on an older api. */
+  badge?: GroupBadge | null;
 }
 
 /**

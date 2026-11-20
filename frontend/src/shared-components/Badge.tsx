@@ -18,6 +18,8 @@ interface BadgeProps {
   card?: boolean;
   /** `md` is 24px tall instead of 16: the create dialog's preview, beside its colour swatches. */
   size?: 'sm' | 'md';
+  /** On the badge's own box: the one beside the name in the watch page's header is #watch-badge. */
+  id?: string;
   className?: string;
 }
 
@@ -31,11 +33,12 @@ interface BadgeProps {
  * with any colour a group picked. With `card` it is a tab stop, and hovering or focusing it
  * shows the group's card instead of the browser's title.
  */
-export function Badge({ group, src, card, size = 'sm', className }: BadgeProps) {
+export function Badge({ group, src, card, size = 'sm', id, className }: BadgeProps) {
   const icons = useAtomValue(groupIconsAtom);
   const icon = icons.has(group.name) ? icons.get(group.name) : group.icon;
   const pill = (
     <span
+      id={id}
       data-group={group.name}
       title={card ? undefined : `in the group ${group.name}`}
       tabIndex={card ? 0 : undefined}

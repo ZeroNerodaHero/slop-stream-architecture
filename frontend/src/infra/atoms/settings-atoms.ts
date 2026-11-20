@@ -273,8 +273,9 @@ export function setChatStyle(style: ChatStyle) {
 }
 
 /**
- * A link somebody put in a line (the chat's, a direct message's) is drawn as one and opens in
- * a new tab; first, a word that you are leaving this site for that one (LinkedText.tsx). On
+ * Every link that leaves this site (ExternalLink.tsx: a chat's line, a direct message, a page's
+ * about, socials, the model sites) opens in a new tab; first, a word that you are leaving this
+ * site for that one. On
  * unless this browser turned it off: the links block of the chat tab, or `don't ask again` on
  * the word itself, which is this same switch.
  */

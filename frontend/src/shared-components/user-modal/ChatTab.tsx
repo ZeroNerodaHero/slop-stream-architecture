@@ -118,13 +118,13 @@ const BOT_OPTIONS: readonly { hide: boolean; id: string; label: string; detail: 
   }
 ];
 
-/** A link in a line: a word first, or the new tab at once. */
+/** Every link that leaves this site (ExternalLink.tsx): a word first, or the new tab at once. */
 const LINK_OPTIONS: readonly { ask: boolean; id: string; label: string; detail: string; icon: ReactNode }[] = [
   {
     ask: true,
     id: 'links-ask',
     label: 'ask before leaving',
-    detail: 'a link in a line opens in a new tab, after a word that says which site it goes to',
+    detail: 'a link out opens in a new tab, after a word that says which site it goes to',
     icon: <RiShieldCheckLine aria-hidden size={28} />
   },
   {
@@ -373,7 +373,7 @@ export function ChatTab() {
       <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
         <legend className={SECTION_TITLE}>links</legend>
         <p className="mt-1 text-textSecondary">
-          a link somebody puts in a line is drawn as one and opens in a new tab. it goes where they said, not anywhere this site chose; so, first, a word that says which
+          every link that leaves this site opens in a new tab: in a chat, a message, a page, socials. it goes where someone else chose; so, first, a word that says which
           site that is.
         </p>
         <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -381,7 +381,7 @@ export function ChatTab() {
             <OptionCard key={id} id={id} name="links" checked={ask === linkWarning} onChange={() => setLinkWarning(ask)} picture={icon} label={label} detail={detail} />
           ))}
         </div>
-        <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every room and for direct messages.</p>
+        <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every link on the site that leaves it.</p>
       </fieldset>
     </div>
   );

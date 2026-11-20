@@ -22,6 +22,7 @@ import {
 
 import { hostOf, type SocialKind, type Socials as SocialsDoc, type SocialsSize } from '@/infra/socials';
 import { buttonClassName } from '@/shared-components/Button';
+import { ExternalLink } from '@/shared-components/ExternalLink';
 import { cn } from '@/utils/cn';
 
 /** The icon for each kind: the brand's mark, filled, the way it is recognised small; a globe for any other site. */
@@ -84,8 +85,8 @@ interface SocialsProps {
 
 /**
  * Where else to find them (docs/socials.md): their links as icons, in a line that wraps or as
- * a grid of squares, at the size they picked. Every link leaves this origin in a new tab with
- * `rel="noopener noreferrer nofollow"` (about.md's rule for a link), its host in the title so
+ * a grid of squares, at the size they picked. Every link leaves this origin through
+ * `ExternalLink` (a new tab, the word first while the links setting asks), its host in the title so
  * a hover says where a `twitch` icon really goes. The watch page's tab, where the owner's
  * editor opens under it on the draft. `data-layout` and `data-size` are for the tests.
  */
@@ -112,10 +113,9 @@ export function Socials({ name, doc, onEdit, id = 'socials', className }: Social
           const host = hostOf(link.url);
           return (
             <li key={`${link.url}-${i}`} className="min-w-0">
-              <a
+              <ExternalLink
                 href={link.url}
-                target="_blank"
-                rel="noopener noreferrer nofollow"
+                from={`${name} put this link here, not this site.`}
                 data-kind={link.kind}
                 title={`${word} · ${host}`}
                 aria-label={`${word}, ${host}, opens in a new tab`}
@@ -129,7 +129,7 @@ export function Socials({ name, doc, onEdit, id = 'socials', className }: Social
                 <Icon aria-hidden size={px} className="shrink-0" />
                 <span className="min-w-0 truncate font-semibold leading-tight">{word}</span>
                 {doc.layout === 'grid' && <span className="min-w-0 max-w-full truncate text-xs text-textTertiary">{host}</span>}
-              </a>
+              </ExternalLink>
             </li>
           );
         })}
