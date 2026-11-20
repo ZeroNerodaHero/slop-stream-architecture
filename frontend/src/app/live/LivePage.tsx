@@ -170,7 +170,7 @@ export function LivePage() {
           in fractions. taken hold of here; the watchers' players follow within a beat */}
       <SceneView
         id="scene"
-        // a phone's preview sits right on the row's own stroke: no second line between them. its middle third is the strip while typing
+        // a phone's preview sits right on the row's own stroke: no second line between them. scaled down whole into the strip while typing
         className={cn('max-md:border-t-0', mobile && strip.frame)}
         layers={scene.layers}
         streamFor={sentStreamAtom}
@@ -185,14 +185,14 @@ export function LivePage() {
       {/* top left, while the stream is up: the mic, as loud as it is right now, read off the mixer once
           that is up (the key: a chip mounted before it opens would otherwise keep its own reader);
           beside it, once live, how the upload is going (up on its own while something limits it) */}
-      {publishing && <MicMeter key={mixerOpen ? 'mixer' : 'own'} id="live-mic" streamAtom={cameraAtom} read={mixerOpen ? micLevelReader : undefined} />}
-      {(phase === 'live' || phase === 'reconnecting') && <StreamStatsButton id="live-stats" role="publish" stats={stats} className="left-[3.25rem] top-3" />}
+      {publishing && <MicMeter key={mixerOpen ? 'mixer' : 'own'} id="live-mic" streamAtom={cameraAtom} read={mixerOpen ? micLevelReader : undefined} className={cn('left-3 top-3', mobile && strip.overlay)} />}
+      {(phase === 'live' || phase === 'reconnecting') && <StreamStatsButton id="live-stats" role="publish" stats={stats} className={cn('left-[3.25rem] top-3', mobile && strip.overlay)} />}
       {/* while the chat is closed the bar stays up, so it can be opened again off the preview. once
           live, picture in picture beside it: the same button as the watch page's, for your own stream
           (here any way off the page keeps the stream; the button is the one that says so). the bar
           itself takes no presses, only its buttons do: it lies across the bottom of the frame, where a
           layer in a corner is taken hold of */}
-      <div className={cn('pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 p-3 [&>*]:pointer-events-auto', revealClassName(mobile || !chatOpen))}>
+      <div className={cn('pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 p-3 [&>*]:pointer-events-auto', revealClassName(mobile || !chatOpen), mobile && strip.overlay)}>
         {mobile ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
         {publishing && (
           <IconButton id="live-pip" label="picture in picture" onClick={toCorner}>

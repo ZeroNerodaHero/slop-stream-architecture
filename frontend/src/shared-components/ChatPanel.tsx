@@ -504,6 +504,9 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
   const mobile = useIsMobile();
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const textRef = useRef<HTMLInputElement | null>(null);
+  // a touch on send came while the box was being typed in: the box gets the focus back after the send
+  const sendKeepsFocus = useRef(false);
   // this panel's room, and none other's: its lines, its box, its socket (chat-atoms.ts)
   const room = chatRoomFor(name, server);
   const lines = useAtomValue(room.visibleLinesAtom);
@@ -876,6 +879,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
               </Tooltip>
               <input ref={fileRef} id="chat-picture-file" type="file" accept="image/*" multiple className="hidden" onChange={(e) => void pickPictures(e.target.files)} />
               <input
+                ref={textRef}
                 id="chat-text"
                 value={draft}
                 onChange={(e) => room.setDraft(e.target.value)}
@@ -899,7 +903,18 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                 disabled={!canSend}
                 title={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : undefined}
                 data-wait={wait > 0 ? wait : undefined}
-                onClick={() => room.send()}
+                // a touch while typing: the box keeps the focus (and is given it back after, should the
+                // browser blur it anyway), so a phone's keyboard stays up and its player stays a strip
+                // (mobile.ts, `useChatTyping`). a mouse's press is left as it was
+                onPointerDown={(e) => {
+                  sendKeepsFocus.current = e.pointerType !== 'mouse' && document.activeElement === textRef.current;
+                  if (sendKeepsFocus.current) e.preventDefault();
+                }}
+                onClick={() => {
+                  room.send();
+                  if (sendKeepsFocus.current) textRef.current?.focus();
+                  sendKeepsFocus.current = false;
+                }}
               >
                 {wait > 0 ? (
                   <span key={shake} className="inline-block motion-safe:animate-shake">
