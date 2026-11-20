@@ -3,36 +3,40 @@ import { useAtomValue } from 'jotai';
 import { type ReactNode, useEffect } from 'react';
 
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { clearNotifySettingsNote, KEEP, loadNotifications, notifySettingsAtom, notifySettingsLoadedAtom, notifySettingsNoteAtom, setNotifySetting } from '@/infra/atoms/notification-atoms';
+import {
+  clearNotifySettingsNote,
+  loadNotifications,
+  notifySettingsAtom,
+  notifySettingsLoadedAtom,
+  notifySettingsNoteAtom,
+  setNotifySetting
+} from '@/infra/atoms/notification-atoms';
 import { pickTab } from '@/infra/atoms/user-modal-atoms';
 import type { NotificationKind } from '@/infra/frames';
-import { SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
+import { Button } from '@/shared-components/Button';
+import { FIELDSET, SECTION_TITLE, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
-/** The four kinds, as switches. The words say what a row of that kind reads. */
-const KINDS: readonly { kind: NotificationKind; label: string; detail: string; icon: ReactNode }[] = [
+/** The four kinds, as switches. */
+const KINDS: readonly { kind: NotificationKind; label: string; icon: ReactNode }[] = [
   {
     kind: 'live',
-    label: 'someone you follow goes live',
-    detail: 'their name and a way to watch, the moment the video is up. once per stream',
+    label: 'someone goes live',
     icon: <RiBroadcastLine aria-hidden size={24} />
   },
   {
     kind: 'follow',
-    label: 'someone follows you',
-    detail: 'who it was, with their page a click away. once per person',
+    label: 'new follower',
     icon: <RiUserFollowLine aria-hidden size={24} />
   },
   {
     kind: 'dm',
-    label: 'a friend messages you',
-    detail: 'the newest line from each friend, one row a friend. reading the chat reads it',
+    label: 'friend messages',
     icon: <RiChat3Line aria-hidden size={24} />
   },
   {
     kind: 'chat',
-    label: 'someone writes in a group you are in',
-    detail: 'the newest line in each channel, one row a channel. opening the channel reads it. a channel too noisy for this is muted on its own page, in the channel list',
+    label: 'group messages',
     icon: <RiHashtag aria-hidden size={24} />
   }
 ];
@@ -59,26 +63,20 @@ export function NotificationsTab() {
 
   if (!me) {
     return (
-      <p id="notify-nobody" className="text-textSecondary">
-        notifications are for accounts: someone you follow going live, a new follower, a friend&apos;s line, a line in a group you are in, kept for you and pushed to
-        every device you are logged in on.{' '}
-        <button type="button" onClick={() => pickTab('security')} className="text-primaryBlue underline-offset-2 hover:underline">
-          sign up or log in
-        </button>
-        .
-      </p>
+      <div id="notify-nobody">
+        <Button size="sm" variant="outline" onClick={() => pickTab('security')}>
+          log in for notifications
+        </Button>
+      </div>
     );
   }
 
   return (
     <div className="divide-y divide-primaryStroke">
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
-        <legend className={SECTION_TITLE}>what is kept</legend>
-        <p className="mt-1 text-textSecondary">
-          what goes in your inbox, the bell at the top right of every page. each is a switch: off, nothing of that kind is kept from then on.
-        </p>
-        <ul className="mt-4 flex flex-col gap-3">
-          {KINDS.map(({ kind, label, detail, icon }) => {
+      <fieldset className={FIELDSET}>
+        <legend className={SECTION_TITLE}>inbox</legend>
+        <ul className="mt-2 flex flex-col gap-3">
+          {KINDS.map(({ kind, label, icon }) => {
             const on = settings[kind];
             return (
               <li key={kind}>
@@ -92,10 +90,7 @@ export function NotificationsTab() {
                   )}
                 >
                   <span className={cn('shrink-0', on ? 'text-primaryBlue' : 'text-textTertiary')}>{icon}</span>
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="font-semibold leading-tight">{label}</span>
-                    <span className="text-sm text-textSecondary">{detail}</span>
-                  </span>
+                  <span className="min-w-0 flex-1 font-semibold leading-tight">{label}</span>
                   <span className={cn('shrink-0 text-xs font-semibold uppercase tracking-wider', on ? 'text-primaryBlue' : 'text-textTertiary')}>
                     {on ? 'on' : 'off'}
                   </span>
@@ -112,10 +107,7 @@ export function NotificationsTab() {
             );
           })}
         </ul>
-        <p className="mt-4 text-sm text-textTertiary">
-          kept with the account, so your phone agrees. the last {KEEP} are kept and older ones go; what is in the inbox already stays when a switch goes off.
-        </p>
-        <Status id="notify-settings-note" text={note} />
+        <Status id="notify-settings-note" text={note} quiet />
       </fieldset>
     </div>
   );

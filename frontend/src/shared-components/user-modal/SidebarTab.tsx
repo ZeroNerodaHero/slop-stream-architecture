@@ -4,12 +4,12 @@ import { useAtomValue } from 'jotai';
 import { type PanelSide, type SidebarList, moveSidebarList, panelSideAtom, setPanelSide, setSidebarListOn, sidebarListsAtom } from '@/infra/atoms/settings-atoms';
 import { useIsMobile } from '@/infra/mobile';
 import { DragHandle, useReorder } from '@/shared-components/Reorderable';
-import { CHECKBOX, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
+import { FIELDSET, CHECKBOX, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
-const PANEL_SIDE_OPTIONS: readonly { side: PanelSide; label: string; detail: string }[] = [
-  { side: 'left', label: 'left of the page', detail: 'a column beside the streams. hover it and the names cover the page' },
-  { side: 'right', label: 'right of the page', detail: 'the same column on the right. hover covers the streams; the picture in picture player stays above' }
+const PANEL_SIDE_OPTIONS: readonly { side: PanelSide; label: string }[] = [
+  { side: 'left', label: 'left of the page' },
+  { side: 'right', label: 'right of the page' }
 ];
 
 /** The page in miniature: the open column covering the streams from one side. */
@@ -32,11 +32,11 @@ function YouPreview({ side }: { side: PanelSide }) {
   );
 }
 
-/** The column's three lists (Friends.tsx), each with the icon it stands under there and a line on what it holds. */
-const SIDEBAR_LIST_WORDS: Record<SidebarList, { icon: typeof RiUserHeartLine; label: string; detail: string }> = {
-  friends: { icon: RiUserHeartLine, label: 'friends', detail: 'who you follow that follows you back. each has a chat button, with what is new on it' },
-  following: { icon: RiUserFollowLine, label: 'following', detail: 'the rest of who you follow, streaming first' },
-  groups: { icon: RiGroupLine, label: 'groups', detail: 'the groups you are in, and how many in each are live' }
+/** The column's three lists (Friends.tsx), each with the icon it stands under there. */
+const SIDEBAR_LIST_WORDS: Record<SidebarList, { icon: typeof RiUserHeartLine; label: string }> = {
+  friends: { icon: RiUserHeartLine, label: 'friends' },
+  following: { icon: RiUserFollowLine, label: 'following' },
+  groups: { icon: RiGroupLine, label: 'groups' }
 };
 
 /**
@@ -62,7 +62,7 @@ function SidebarLists() {
       <ul id="sidebar-lists" {...reorder.list} className="flex flex-col gap-2">
         {reorder.order.map((list) => {
           const on = byList.get(list)?.on ?? false;
-          const { icon: Icon, label, detail } = SIDEBAR_LIST_WORDS[list];
+          const { icon: Icon, label } = SIDEBAR_LIST_WORDS[list];
           const last = on && shown <= 1;
           return (
             <li
@@ -82,7 +82,6 @@ function SidebarLists() {
               </span>
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className={cn('font-semibold leading-tight', on ? 'text-textPrimary' : 'text-textTertiary')}>{label}</span>
-                <span className={cn('text-sm', on ? 'text-textSecondary' : 'text-textTertiary')}>{detail}</span>
               </span>
               <label
                 className={cn(
@@ -123,14 +122,10 @@ export function SidebarTab() {
   return (
     <div className="divide-y divide-primaryStroke">
       {!mobile && (
-        <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+        <fieldset className={FIELDSET}>
           <legend className={SECTION_TITLE}>where it sits</legend>
-          <p className="mt-1 text-textSecondary">
-            which side of the page the column sits on. collapsed it is pictures and the streams stay put. hover widens it over the streams. each card is the page with
-            the column there.
-          </p>
-          <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {PANEL_SIDE_OPTIONS.map(({ side, label, detail }) => (
+          <div role="presentation" className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {PANEL_SIDE_OPTIONS.map(({ side, label }) => (
               <OptionCard
                 key={side}
                 id={`panel-side-${side}`}
@@ -139,24 +134,17 @@ export function SidebarTab() {
                 onChange={() => setPanelSide(side)}
                 picture={<YouPreview side={side} />}
                 label={label}
-                detail={detail}
               />
             ))}
           </div>
-          <p className="mt-4 text-sm text-textTertiary">kept in this browser. the column follows as you pick.</p>
         </fieldset>
       )}
 
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>its lists</legend>
-        <p className="mt-1 text-textSecondary">
-          what the column shows under the search box, top to bottom: friends, the rest of who you follow, the groups you are in. drag a row to move it, or switch it off
-          and the column skips it. one stays on.
-        </p>
-        <div className="mt-4">
+        <div className="mt-2">
           <SidebarLists />
         </div>
-        <p className="mt-4 text-sm text-textTertiary">kept in this browser. the column follows as you pick; a list nobody is in is skipped anyway.</p>
       </fieldset>
     </div>
   );

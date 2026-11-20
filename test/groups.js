@@ -1529,21 +1529,24 @@ const dropAll = async (ctx, names) => {
     await q.click('#tab-groups');
     await q.waitForSelector(`#group-list #group-${madeName} #group-leave-${madeName}`, { timeout: 10000 });
     expect(!(await q.$('#group-create')), 'the tab still has a make form');
-    expect(await q.$(`#my-badges [data-group="${madeName}"]`), 'the badge is not on your badges');
+    expect(!(await q.$(`#group-delete-${madeName}`)), 'the tab still has a delete: that is the group page\'s');
     const row = await q.textContent(`#group-${madeName}`);
-    expect(/1 member/.test(row) && new RegExp(`by ${MAKER}`).test(row) && row.includes(name), `the row reads "${row}"`);
+    expect(/1 member/.test(row) && row.includes(name), `the square reads "${row}"`);
+    // a click makes it the primary, a second click unsets it
+    await q.click(`#group-primary-${madeName}`);
+    await q.waitForSelector(`#group-${madeName}[data-primary="true"]`, { timeout: 10000 });
+    await q.click(`#group-primary-${madeName}`);
+    await q.waitForFunction((n) => !document.querySelector(`#group-${n}`)?.hasAttribute('data-primary'), madeName, { timeout: 10000 });
     // the profile card wears it too
     await q.click('#tab-profile');
     await q.waitForSelector(`#panel-profile [data-group="${madeName}"]`, { timeout: 5000 });
+    // deleting is the group page's now; the api drops it, and the tab follows on its next open
+    await dropAll(maker, [madeName]);
     await q.click('#tab-groups');
-    await q.waitForSelector(`#group-delete-${madeName}`, { timeout: 5000 });
-    await q.click(`#group-delete-${madeName}`); // asks first
-    await q.waitForSelector(`#group-delete-${madeName}-confirm`, { timeout: 5000 });
-    await q.click(`#group-delete-${madeName}-confirm-yes`);
     await q.waitForFunction((n) => !document.querySelector(`#group-${n}`), madeName, { timeout: 10000 });
     expect(find(await body(await anon.get('/api/groups')), madeName) === undefined, 'the api still lists it');
     await q.close();
-    return `${madeName} made from /groups, landed on its room, deleted from the tab`;
+    return `${madeName} made from /groups, landed on its room, primary set and unset from the tab`;
   });
 
   if (LOCAL) {

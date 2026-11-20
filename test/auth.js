@@ -350,8 +350,8 @@ const body = async (res) => {
     await p.click('#tab-profile');
     await p.waitForSelector('#profile-new-name', { timeout: 10000 });
     // the date comes with /api/me, a beat after the login
-    await p.waitForFunction(() => /change it again on/.test(document.querySelector('#profile-rename-status')?.textContent || ''), null, { timeout: 10000 });
-    const note = await p.textContent('#profile-rename-status');
+    await p.waitForFunction(() => /next \d{4}-\d\d-\d\d/.test(document.querySelector('#profile-new-name-hint')?.textContent || ''), null, { timeout: 10000 });
+    const note = await p.textContent('#profile-new-name-hint');
     await p.close();
     return `#me is ${NEW}; "${(note || '').trim()}"`;
   });

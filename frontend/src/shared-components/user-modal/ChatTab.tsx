@@ -21,21 +21,21 @@ import {
 } from '@/infra/atoms/settings-atoms';
 import { useIsMobile } from '@/infra/mobile';
 import { GeneratedAvatar } from '@/shared-components/GeneratedAvatar';
-import { OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
+import { FIELDSET, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 /** The places the stream's chat can sit. The card's picture is the page. */
-const CHAT_SIDE_OPTIONS: readonly { side: ChatSide; label: string; detail: string }[] = [
-  { side: 'left', label: 'left of the stream', detail: 'a column on the left of the video. the chat button slides it shut' },
-  { side: 'right', label: 'right of the stream', detail: 'a column on the right, the usual way. the chat button slides it shut' },
-  { side: 'modal', label: 'in a window', detail: 'the video full width, the chat in a window you can move and close' }
+const CHAT_SIDE_OPTIONS: readonly { side: ChatSide; label: string }[] = [
+  { side: 'left', label: 'left of the stream' },
+  { side: 'right', label: 'right of the stream' },
+  { side: 'modal', label: 'in a window' }
 ];
 
 /** The three places the corner player's chat can open. The card's picture is the player. */
-const PIP_CHAT_OPTIONS: readonly { place: PipChatPlace; label: string; detail: string }[] = [
-  { place: 'bottom', label: 'under the video', detail: 'the chat opens beneath the picture, and the player grows upward' },
-  { place: 'left', label: 'left of the video', detail: 'a column on the left, as tall as the picture' },
-  { place: 'right', label: 'right of the video', detail: 'a column on the right, as tall as the picture' }
+const PIP_CHAT_OPTIONS: readonly { place: PipChatPlace; label: string }[] = [
+  { place: 'bottom', label: 'under the video' },
+  { place: 'left', label: 'left of the video' },
+  { place: 'right', label: 'right of the video' }
 ];
 
 /** The chat block in a miniature: the word, and two lines. */
@@ -101,71 +101,63 @@ function PipChatPreview({ place }: { place: PipChatPlace }) {
 }
 
 /** The bots' lines: on screen, or not. */
-const BOT_OPTIONS: readonly { hide: boolean; id: string; label: string; detail: string; icon: ReactNode }[] = [
+const BOT_OPTIONS: readonly { hide: boolean; id: string; label: string; icon: ReactNode }[] = [
   {
     hide: false,
     id: 'bots-show',
     label: 'show the bots',
-    detail: 'every line, the fake streams\u2019 chatters too. each wears a BOT badge',
     icon: <RiRobot2Line aria-hidden size={28} />
   },
   {
     hide: true,
     id: 'bots-hide',
     label: 'hide the bots',
-    detail: 'their lines stay off the screen, in every room',
     icon: <RiEyeOffLine aria-hidden size={28} />
   }
 ];
 
 /** Every link that leaves this site (ExternalLink.tsx): a word first, or the new tab at once. */
-const LINK_OPTIONS: readonly { ask: boolean; id: string; label: string; detail: string; icon: ReactNode }[] = [
+const LINK_OPTIONS: readonly { ask: boolean; id: string; label: string; icon: ReactNode }[] = [
   {
     ask: true,
     id: 'links-ask',
     label: 'ask before leaving',
-    detail: 'a link out opens in a new tab, after a word that says which site it goes to',
     icon: <RiShieldCheckLine aria-hidden size={28} />
   },
   {
     ask: false,
     id: 'links-open',
     label: 'open at once',
-    detail: 'a link opens in a new tab with no word first. \u201cdon\u2019t ask again\u201d on the word is this same choice',
     icon: <RiExternalLinkLine aria-hidden size={28} />
   }
 ];
 
 /** A click on somebody, a member in a group's roster or a name in a chat: them in a popup over the page (ProfilePopup.tsx), or where the click went before there was one. */
-const PEOPLE_OPTIONS: readonly { popup: boolean; id: string; label: string; detail: string; icon: ReactNode }[] = [
+const PEOPLE_OPTIONS: readonly { popup: boolean; id: string; label: string; icon: ReactNode }[] = [
   {
     popup: true,
     id: 'people-popup',
     label: 'show them in a popup',
-    detail: 'a click on someone opens them over the page you are on: how they are, their stream while they are live, their page under it, and a button that goes there',
     icon: <RiProfileLine aria-hidden size={28} />
   },
   {
     popup: false,
     id: 'people-page',
     label: 'go to their page',
-    detail: 'a click on a member of a group goes straight to their page, and a name in a chat lists what that account said there',
     icon: <RiArrowRightUpLine aria-hidden size={28} />
   }
 ];
 
 /** The three shapes every chat's lines can take (docs/chat.md, ChatLine.tsx). The card's picture is the chat. */
-const STYLE_OPTIONS: readonly { style: ChatStyle; label: string; detail: string }[] = [
-  { style: 'log', label: 'a log', detail: 'one line each: the time, the name, then the words. nothing offset, and the most lines on screen' },
+const STYLE_OPTIONS: readonly { style: ChatStyle; label: string }[] = [
+  { style: 'log', label: 'a log' },
   {
     style: 'bubbles',
-    label: 'bubbles',
-    detail: 'each line in a box of its own: yours on the right, theirs on the left, under their name in a room. a minute\u2019s lines stand together, the time at the left once'
+    label: 'bubbles'
   },
   {
     style: 'blocks',
-    label: 'blocks',
-    detail: 'the face (their picture, or the letter their name makes), the name and the time over the words. one person\u2019s lines in a row stand together under one head'
+    label: 'blocks'
   }
 ];
 
@@ -270,11 +262,10 @@ export function ChatTab() {
   return (
     <div className="divide-y divide-primaryStroke">
       {!mobile && (
-        <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+        <fieldset className={FIELDSET}>
           <legend className={SECTION_TITLE}>on the watch page</legend>
-          <p className="mt-1 text-textSecondary">where the chat sits on the watch page and the go live page. each card is the page with the chat in that place.</p>
-          <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-            {CHAT_SIDE_OPTIONS.map(({ side, label, detail }) => (
+          <div role="presentation" className="mt-2 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            {CHAT_SIDE_OPTIONS.map(({ side, label }) => (
               <OptionCard
                 key={side}
                 id={`chat-side-${side}`}
@@ -283,105 +274,90 @@ export function ChatTab() {
                 onChange={() => setChatSide(side)}
                 picture={<StreamChatPreview side={side} />}
                 label={label}
-                detail={detail}
               />
             ))}
           </div>
-          <p className="mt-4 text-sm text-textTertiary">
-            kept in this browser. the page behind follows as you pick. on a narrow screen a column sits under the video. the chat button on the video closes it and
-            opens it again.
-          </p>
         </fieldset>
       )}
 
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>on the corner player</legend>
-        <p className="mt-1 text-textSecondary">where the chat opens on the corner player, picture in picture. each card is the player with the chat in that place.</p>
-        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {PIP_CHAT_OPTIONS.map(({ place, label, detail }) => (
+        <div role="presentation" className="mt-2 grid grid-cols-3 gap-2 sm:gap-4">
+          {PIP_CHAT_OPTIONS.map(({ place, label }) => (
             <OptionCard
               key={place}
               id={`pip-chat-${place}`}
               name="pip-chat-place"
               checked={place === pipChat}
               onChange={() => setPipChatPlace(place)}
-              picture={<PipChatPreview place={place} />}
+              picture={
+                <span className="contents max-md:[&>span]:[zoom:0.6]">
+                  <PipChatPreview place={place} />
+                </span>
+              }
+              compact
               label={label}
-              detail={detail}
             />
           ))}
         </div>
-        <p className="mt-4 text-sm text-textTertiary">kept in this browser. a player that is up follows as you pick.</p>
       </fieldset>
 
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>hide bots</legend>
-        <p className="mt-1 text-textSecondary">
-          the fake streams have pretend chatters, there to show the chat works. their lines wear the <span className="font-semibold">bot</span> badge. hide them here.
-        </p>
-        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {BOT_OPTIONS.map(({ hide, id, label, detail, icon }) => (
-            <OptionCard key={id} id={id} name="bots" checked={hide === hideBots} onChange={() => setHideBots(hide)} picture={icon} label={label} detail={detail} />
+        <div role="presentation" className="mt-2 grid grid-cols-2 gap-2 sm:gap-4">
+          {BOT_OPTIONS.map(({ hide, id, label, icon }) => (
+            <OptionCard key={id} id={id} name="bots" checked={hide === hideBots} onChange={() => setHideBots(hide)} picture={icon} label={label} compact />
           ))}
         </div>
-        <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every room.</p>
       </fieldset>
 
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>the lines</legend>
-        <p className="mt-1 text-textSecondary">
-          how every chat draws its lines: a stream's, a group channel's, and a chat with a friend in the window beside the sidebar. each card is the chat in that
-          shape: the same three lines, two of them yours.
-        </p>
-        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {STYLE_OPTIONS.map(({ style, label, detail }) => (
+        <div role="presentation" className="mt-2 grid grid-cols-3 gap-2 sm:gap-4">
+          {STYLE_OPTIONS.map(({ style, label }) => (
             <OptionCard
               key={style}
               id={`chat-style-${style}`}
               name="chat-style"
               checked={style === chatStyle}
               onChange={() => setChatStyle(style)}
-              picture={<StylePreview style={style} />}
+              picture={
+                <span className="contents max-md:[&>span]:[zoom:0.6]">
+                  <StylePreview style={style} />
+                </span>
+              }
+              compact
               label={label}
-              detail={detail}
             />
           ))}
         </div>
-        <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every chat. one that is open follows as you pick.</p>
       </fieldset>
 
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>people</legend>
-        <p className="mt-1 text-textSecondary">what a click on someone does: a member in a group's list, or a name in a chat.</p>
-        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {PEOPLE_OPTIONS.map(({ popup, id, label, detail, icon }) => (
+        <div role="presentation" className="mt-2 grid grid-cols-2 gap-2 sm:gap-4">
+          {PEOPLE_OPTIONS.map(({ popup, id, label, icon }) => (
             <OptionCard
               key={id}
               id={id}
               name="people"
               checked={popup === profilePopup}
               onChange={() => setProfilePopupEnabled(popup)}
+              compact
               picture={icon}
               label={label}
-              detail={detail}
             />
           ))}
         </div>
-        <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every group and every chat.</p>
       </fieldset>
 
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>links</legend>
-        <p className="mt-1 text-textSecondary">
-          every link that leaves this site opens in a new tab: in a chat, a message, a page, socials. it goes where someone else chose; so, first, a word that says which
-          site that is.
-        </p>
-        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {LINK_OPTIONS.map(({ ask, id, label, detail, icon }) => (
-            <OptionCard key={id} id={id} name="links" checked={ask === linkWarning} onChange={() => setLinkWarning(ask)} picture={icon} label={label} detail={detail} />
+        <div role="presentation" className="mt-2 grid grid-cols-2 gap-2 sm:gap-4">
+          {LINK_OPTIONS.map(({ ask, id, label, icon }) => (
+            <OptionCard key={id} id={id} name="links" checked={ask === linkWarning} onChange={() => setLinkWarning(ask)} picture={icon} label={label} compact />
           ))}
         </div>
-        <p className="mt-4 text-sm text-textTertiary">kept in this browser, for every link on the site that leaves it.</p>
       </fieldset>
     </div>
   );

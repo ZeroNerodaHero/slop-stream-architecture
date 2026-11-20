@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { groupImage, groupWords, type Server } from '@/infra/api';
@@ -7,11 +8,47 @@ import { cn } from '@/utils/cn';
 /** The square's box: its size, stroke and fill. A stand-in square takes the same, so the two cannot drift. */
 export const GROUP_SQUARE_BOX = 'aspect-square border border-primaryStroke bg-backgroundSecondary';
 
+/**
+ * What a square shows, inside a box that is `relative overflow-hidden` and a `group`: the banner
+ * or its colour, the picture, the name and the members. `corner` goes at the top right. `compact`:
+ * a smaller picture and padding on a phone, for a grid of two across a narrow pane.
+ */
+export function GroupSquareFace({ server, corner, compact }: { server: Server; corner?: ReactNode; compact?: boolean }) {
+  const banner = groupImage(server.name, 'banner', server.banner);
+  const words = groupWords(server);
+  return (
+    <>
+      <span
+        className="absolute inset-0 transition-transform duration-300 ease-out group-hover:scale-105 group-focus-visible:scale-105 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+        style={{ backgroundColor: server.color }}
+      >
+        {banner && <img src={banner} alt="" className="h-full w-full object-cover" />}
+      </span>
+      <span className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/10" />
+      <GroupMark
+        name={server.name}
+        color={server.color}
+        icon={server.icon}
+        className={cn('absolute left-3 top-3 h-16 w-16 border-2 border-black/40 text-xl', compact && 'max-md:left-2 max-md:top-2 max-md:h-12 max-md:w-12')}
+      />
+      {corner}
+      <span className={cn('relative px-3 py-2.5 text-white', compact && 'max-md:px-2 max-md:py-2')}>
+        <span className="flex items-baseline gap-1 font-semibold">
+          <span className="truncate">{words.title}</span>
+          {words.tag && <span className="shrink-0 font-normal text-white/70">#{words.tag}</span>}
+        </span>
+        <span className="block truncate text-xs text-white/75">
+          {server.public === false ? 'private · ' : ''}
+          {server.members} {server.members === 1 ? 'member' : 'members'}
+        </span>
+      </span>
+    </>
+  );
+}
+
 /** One group as a square: the banner or its colour, the picture, the name. */
 export function GroupSquare({ server, id }: { server: Server; id: string }) {
-  const banner = groupImage(server.name, 'banner', server.banner);
   const live = server.live?.length ?? 0;
-  const words = groupWords(server);
   return (
     <li>
       <Link
@@ -22,25 +59,10 @@ export function GroupSquare({ server, id }: { server: Server; id: string }) {
           'group relative flex flex-col justify-end overflow-hidden transition-[border-color] duration-150 hover:border-primaryBlue focus-visible:border-primaryBlue'
         )}
       >
-        <span
-          className="absolute inset-0 transition-transform duration-300 ease-out group-hover:scale-105 group-focus-visible:scale-105 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
-          style={{ backgroundColor: server.color }}
-        >
-          {banner && <img src={banner} alt="" className="h-full w-full object-cover" />}
-        </span>
-        <span className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-black/10" />
-        <GroupMark name={server.name} color={server.color} icon={server.icon} className="absolute left-3 top-3 h-16 w-16 border-2 border-black/40 text-xl" />
-        {live > 0 && <span className="absolute right-2 top-2 bg-black/55 px-1.5 py-0.5 text-xs font-semibold text-increase">{live} live</span>}
-        <span className="relative px-3 py-2.5 text-white">
-          <span className="flex items-baseline gap-1 font-semibold">
-            <span className="truncate">{words.title}</span>
-            {words.tag && <span className="shrink-0 font-normal text-white/70">#{words.tag}</span>}
-          </span>
-          <span className="block truncate text-xs text-white/75">
-            {server.public === false ? 'private · ' : ''}
-            {server.members} {server.members === 1 ? 'member' : 'members'}
-          </span>
-        </span>
+        <GroupSquareFace
+          server={server}
+          corner={live > 0 && <span className="absolute right-2 top-2 bg-black/55 px-1.5 py-0.5 text-xs font-semibold text-increase">{live} live</span>}
+        />
       </Link>
     </li>
   );
