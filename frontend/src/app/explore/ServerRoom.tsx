@@ -92,6 +92,7 @@ import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useShee
 import { when } from '@/shared-components/ChatLine';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { INPUT } from '@/shared-components/input';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { PresenceSquare } from '@/shared-components/PersonRow';
 import { PicturePick } from '@/shared-components/PicturePick';
@@ -110,8 +111,6 @@ const FACES = 4;
 const TILE = 'block overflow-hidden border border-primaryStroke bg-backgroundSecondary transition-[border-color] duration-150 hover:border-primaryBlue';
 
 const RESERVED = new Set(['before', 'search', 'by', 'around']);
-
-const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary';
 
 /** Matches `MAX_ABOUT_CHARS` in the api: a channel's line about it, like the group's. */
 const ABOUT_CAP = 200;
@@ -1700,15 +1699,18 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
         onClose();
       }}
       // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop. a phone's is a sheet (MobileSheet.tsx)
-      className={cn('m-auto w-[min(460px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60', SHEET_DIALOG)}
+      className={cn(
+        'm-auto w-[min(460px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary px-6 py-4 text-base text-textPrimary backdrop:bg-black/60',
+        SHEET_DIALOG
+      )}
     >
       <SheetGrab onDismiss={close} />
-      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-5">
+      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
         <div>
           <h2 id="channel-make-title" className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
             add a channel
           </h2>
-          <p className="mt-3 text-sm text-textSecondary">a name, and a line about it if you like. it goes under the last channel; manage moves it.</p>
+          <p className="mt-2 text-sm text-textSecondary">a name, and a line about it if you like. it goes under the last channel; manage moves it.</p>
         </div>
         <Field id="channel-make-name" label="name" hint={fault || 'letters, digits, _ and -. up to 32.'}>
           <div className="relative">
@@ -1732,7 +1734,7 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
               spellCheck={false}
               aria-describedby="channel-make-name-hint"
               aria-invalid={fault !== '' || undefined}
-              className={cn(INPUT, 'w-full pl-7')}
+              className={cn(INPUT, 'pl-7')}
             />
           </div>
         </Field>
@@ -1744,7 +1746,7 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
             maxLength={ABOUT_CAP}
             autoComplete="off"
             aria-describedby="channel-make-about-hint"
-            className={cn(INPUT, 'w-full')}
+            className={INPUT}
           />
         </Field>
         {status && (
@@ -2312,7 +2314,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
           id={tab ? `manage-panel-${tab}` : undefined}
           role={tab ? 'tabpanel' : undefined}
           aria-labelledby={tab ? `manage-tab-${tab}` : undefined}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 [scrollbar-gutter:stable] sm:px-8 sm:py-6"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 [scrollbar-gutter:stable] sm:px-8 sm:py-5"
         >
           <h2 id="group-manage-title" tabIndex={-1} className="min-w-0 border-l-4 border-primaryBlue pl-3 pr-12 text-xl font-semibold leading-tight outline-none">
             {tab ?? 'manage'} <span className="font-normal text-textTertiary">· {words.title}</span>
@@ -2415,7 +2417,7 @@ function AboutSection({ server, room, run }: ManageProps) {
           onChange={(e) => setDraft({ base: room.about, text: e.target.value })}
           maxLength={200}
           aria-label="about"
-          className={INPUT}
+          className={cn(INPUT, 'min-w-0 flex-1')}
         />
         <button type="submit" className="text-sm font-semibold text-primaryBlue">
           save
@@ -3100,7 +3102,7 @@ function RolesSection({ server, room, run }: ManageProps) {
                   aria-label="owner role name"
                   autoFocus
                   onFocus={(e) => e.currentTarget.select()}
-                  className={INPUT}
+                  className={cn(INPUT, 'min-w-0 flex-1')}
                 />
               </div>
               {/* the role form's list of powers, every one on and locked: an owner's */}

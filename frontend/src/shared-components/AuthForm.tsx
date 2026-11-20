@@ -7,7 +7,9 @@ import { identityChanged } from '@/infra/atoms/profile-atoms';
 import { passwordChecks, passwordOk } from '@/infra/password';
 import { Button } from '@/shared-components/Button';
 import { OAuthButtons } from '@/shared-components/OAuthButtons';
+import { INPUT } from '@/shared-components/input';
 import { BUTTON } from '@/shared-components/user-modal/parts';
+import { cn } from '@/utils/cn';
 
 interface AuthFormProps {
   mode: AuthMode;
@@ -18,7 +20,6 @@ interface AuthFormProps {
 }
 
 const LABEL = 'text-sm font-semibold text-textSecondary';
-const INPUT = 'w-full border border-primaryStroke bg-background px-3 py-2 text-base leading-snug text-textPrimary focus:border-primaryBlue';
 
 /**
  * Log in and sign up, one form: a name, a password, a button. The password goes to the api as
@@ -71,7 +72,7 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
   }
 
   return (
-    <form onSubmit={(e) => void submit(e)} className="mt-4 flex flex-col gap-3">
+    <form onSubmit={(e) => void submit(e)} className="mt-3 flex flex-col gap-3">
       <div className="flex flex-col gap-1">
         <label htmlFor="auth-name" className={LABEL}>
           username
@@ -97,7 +98,7 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
           aria-describedby="auth-name-hint"
           className={INPUT}
         />
-        <p id="auth-name-hint" className="text-xs text-textTertiary">
+        <p id="auth-name-hint" className="text-sm text-textTertiary">
           a-z 0-9 _ -
         </p>
       </div>
@@ -119,7 +120,7 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
             required
             aria-invalid={password && unmet ? true : undefined}
             aria-describedby={checks ? 'auth-password-rules' : undefined}
-            className={`${INPUT} pr-16`}
+            className={cn(INPUT, 'pr-16')}
           />
           <button
             id="auth-show"
@@ -131,7 +132,7 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
           </button>
         </div>
         {checks && (
-          <ul id="auth-password-rules" aria-live="polite" className="mt-0.5 flex flex-col gap-0.5">
+          <ul id="auth-password-rules" aria-live="polite" className="flex flex-col gap-0.5">
             <Rule ok={checks.length}>8–128 characters</Rule>
             <Rule ok={checks.number}>a number</Rule>
             <Rule ok={checks.symbol}>a symbol</Rule>

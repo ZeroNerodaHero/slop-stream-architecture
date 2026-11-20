@@ -92,7 +92,7 @@ sign up and the name is yours: nobody else can go live as it, change its status 
 
 the square in the corner of your picture is your presence: green while a tab of the site is open, blue while you are live, red if you picked `do not disturb`, grey if you picked `appear offline` or closed the last tab. the picker is in the profile tab; the word shows next to your name on your stream's page. see `status.md`.
 
-an account can join groups, and each puts a badge next to your name in chat, the way discord tags a bot. the fake streams' chatters wear `BOT`, and the robot button in the chat hides their lines. see `groups.md`.
+an account can join groups, and each puts a badge next to your name in chat, the way discord tags a bot. the fake streams' chatters wear `BOT`, and `hide bots` in the settings' chat tab hides their lines. see `groups.md`.
 
 no email, so no reset. on the server: `./scripts/deploy.sh passwd <name>` prints a new one.
 
