@@ -17,6 +17,7 @@
 // The sidebar's search box finds the group by its letters, its row above the people's, and
 // the row goes to its page. The channels power pins a channel's lines (50 at most), anyone
 // who sees the channel lists them, a watcher hears `pin` / `unpin`, and they go with the channel.
+// The roster and the lines come in pages: `limit`, the cursor (`after` / `before`) and the end.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node groups.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
@@ -291,6 +292,43 @@ const dropAll = async (ctx, names) => {
     return `${guest.channels.length} channel(s), the roster anyone's while public, the members' once private`;
   });
 
+  await step('the roster comes in pages: limit, the cursor, the end, the words; the room brings the first page when asked', async () => {
+    const members = (query) => anon.get(`/api/groups/${slug}/members?${query}`);
+    // two in: the owner, then the member
+    const first = await body(await members('limit=1'));
+    expect(first && Array.isArray(first.members) && first.members.length === 1 && first.members[0].name === MAKER && typeof first.next === 'string', `the first page ${JSON.stringify(first)}`);
+    const second = await body(await members(`limit=1&after=${encodeURIComponent(first.next)}`));
+    expect(second && second.members.length === 1 && second.members[0].name === MEMBER && second.next === null, `the second page, the last ${JSON.stringify(second)}`);
+    // a page as long as the roster is the end at once; limit is held to 1..100
+    const whole = await body(await members('limit=500'));
+    expect(whole.members.length === 2 && whole.next === null, `limit 500 ${JSON.stringify(whole)}`);
+    const zero = await body(await members('limit=0'));
+    expect(zero.members.length === 1 && zero.members[0].name === MAKER, `limit 0 is one ${JSON.stringify(zero)}`);
+    // the words find a member past the pages loaded: by name, a role's name too, and a % is no wildcard
+    const words = await body(await members(`q=${encodeURIComponent(MEMBER.toUpperCase())}&limit=5`));
+    expect(words.members.length === 1 && words.members[0].name === MEMBER && words.next === null, `q ${JSON.stringify(words)}`);
+    const wild = await body(await members('q=%25'));
+    expect(wild.members.length === 0, `q=% ${JSON.stringify(wild)}`);
+    const badCursor = await members('after=nonsense');
+    expect(badCursor.status() === 400 && (await body(badCursor)).error === 'bad cursor', `a bad cursor got ${badCursor.status()}`);
+    // the order is the group's: newest puts the member (who joined last) right after the owner, and the cursor follows it
+    expect((await maker.put(`/api/groups/${slug}/order`, { data: { order: 'newest' } })).status() === 200, 'newest order');
+    const newest = await body(await members('limit=1'));
+    const newestNext = await body(await members(`limit=1&after=${encodeURIComponent(newest.next)}`));
+    expect(newest.members[0].name === MAKER && newestNext.members[0].name === MEMBER && newestNext.next === null, `newest pages ${JSON.stringify([newest, newestNext])}`);
+    expect((await maker.put(`/api/groups/${slug}/order`, { data: { order: 'name' } })).status() === 200, 'name order again');
+    // bare is the whole array, as before there were pages; the room's ?roster= is its first page and where the next starts
+    const bare = await body(await members(''));
+    expect(Array.isArray(bare) && bare.length === 2, `bare members ${JSON.stringify(bare)}`);
+    const paged = await body(await anon.get(`/api/groups/${slug}?roster=1`));
+    expect(paged.roster.length === 1 && paged.roster[0].name === MAKER && typeof paged.roster_next === 'string' && paged.members === 2, `the room's first page ${JSON.stringify([paged.roster, paged.roster_next])}`);
+    const rest = await body(await members(`limit=1&after=${encodeURIComponent(paged.roster_next)}`));
+    expect(rest.members[0].name === MEMBER && rest.next === null, `after the room's page ${JSON.stringify(rest)}`);
+    const unpaged = await body(await anon.get(`/api/groups/${slug}`));
+    expect(unpaged.roster.length === 2 && unpaged.roster_next === null, `the room unasked ${JSON.stringify([unpaged.roster, unpaged.roster_next])}`);
+    return 'two pages of one, the end, q, newest, and the room\'s first page';
+  });
+
   // the pages: a member's lines wear the badge, a bot's wear BOT, and the panel hides the bots
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true, args: ARGS });
   const fresh = async () => (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();
@@ -349,13 +387,24 @@ const dropAll = async (ctx, names) => {
     return `beepboop${RUN} [BOT]`;
   });
 
-  await step('hide bots: the line goes, the header counts it, a reload keeps the choice, show brings it back', async () => {
-    const before = await p.$eval('#chat-hide-bots', (b) => ({ pressed: b.getAttribute('aria-pressed'), text: b.textContent.trim() }));
-    expect(before.pressed === 'false' && /hide bots/.test(before.text), `before: ${JSON.stringify(before)}`);
-    await p.click('#chat-hide-bots');
-    await p.waitForFunction(() => !document.querySelector('#chat-lines p[data-bot="true"]') && document.querySelector('#chat-hide-bots').getAttribute('aria-pressed') === 'true', null, { timeout: 5000 });
-    const hiding = await p.$eval('#chat-hide-bots', (b) => b.textContent.trim());
-    expect(/^1 hidden$/.test(hiding), `the header says "${hiding}"`);
+  await step('hide bots: the settings switch takes the line away, a reload keeps the choice, show brings it back', async () => {
+    // the switch is the chat tab's two cards (the header has no button): the gear, the tab, a card, close
+    const pickBots = async (id) => {
+      await p.hover('#user-panel');
+      await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+      await p.click('#settings');
+      await p.waitForSelector('#user-modal[open]', { timeout: 5000 });
+      await p.click('#tab-chat');
+      await p.waitForSelector(`#${id}`, { state: 'attached', timeout: 5000 });
+      await p.click(`label[for="${id}"]`);
+      expect(await p.isChecked(`#${id}`), `the ${id} card is not the one on`);
+      await p.click('#user-modal-close');
+      await p.waitForSelector('#user-modal', { state: 'detached', timeout: 5000 });
+    };
+    expect((await p.$('#chat-hide-bots')) === null, 'the chat header still has a hide bots button');
+    await pickBots('bots-hide');
+    await p.waitForFunction(() => !document.querySelector('#chat-lines p[data-bot="true"]'), null, { timeout: 5000 });
+    expect((await p.evaluate(() => localStorage.getItem('settings.hideBots'))) === 'true', 'the choice was not kept in the browser');
     const memberLine = await p.$(`#chat-lines p[data-groups="${slug}"]`);
     expect(memberLine, 'the member\'s line went too');
     // the choice is this browser's: a reload (history again) still hides the bot
@@ -363,13 +412,9 @@ const dropAll = async (ctx, names) => {
     await p.waitForSelector('#chat-text', { timeout: 15000 });
     await p.waitForFunction((group) => document.querySelector(`#chat-lines p[data-groups="${group}"]`), slug, { timeout: 10000 });
     expect((await p.$('#chat-lines p[data-bot="true"]')) === null, 'the bot line is back after a reload');
-    const afterReload = await p.$eval('#chat-hide-bots', (b) => b.textContent.trim());
-    expect(/^1 hidden$/.test(afterReload), `after the reload the header says "${afterReload}"`);
-    await p.click('#chat-hide-bots');
+    await pickBots('bots-show');
     await p.waitForSelector('#chat-lines p[data-bot="true"]', { timeout: 5000 });
-    const shown = await p.$eval('#chat-hide-bots', (b) => b.textContent.trim());
-    expect(/hide bots/.test(shown), `after showing the header says "${shown}"`);
-    return 'hidden, counted, kept, shown';
+    return 'hidden, kept, shown';
   });
 
   await step('a watcher of group:<name> on the events socket hears a channel added, the channels put in order, one renamed, and one deleted', async () => {
@@ -535,6 +580,27 @@ const dropAll = async (ctx, names) => {
     expect(lines.general.some((l) => l.text === 'hello general ' + RUN && l.from === MEMBER), `messages has it: ${JSON.stringify(lines.general)}`);
     await p.close();
     return `#general: "${outcome.line.text}", filled once`;
+  });
+
+  await step('messages come in pages: limit per channel, a channel\'s page before a line, and the end', async () => {
+    const all = (await body(await anon.get(`/api/groups/${slug}/messages`))).general;
+    expect(Array.isArray(all) && all.length >= 1, `general has ${JSON.stringify(all)}`);
+    // the newest one of each channel, oldest first as always
+    const one = await body(await anon.get(`/api/groups/${slug}/messages?limit=1`));
+    expect(one.general.length === 1 && one.general[0].id === all[all.length - 1].id, `limit 1 ${JSON.stringify(one.general)}`);
+    // one channel, older than the newest: the line before it, or nothing at the start
+    const before = await body(await anon.get(`/api/groups/${slug}/messages?channel=general&limit=1&before=${encodeURIComponent(all[all.length - 1].id)}`));
+    expect(Object.keys(before).join(' ') === 'general', `a channel's page has only it: ${Object.keys(before).join(' ')}`);
+    const want = all.length >= 2 ? [all[all.length - 2].id] : [];
+    expect(before.general.map((l) => l.id).join(' ') === want.join(' '), `before the newest ${JSON.stringify(before.general)}, wanted ${want}`);
+    // before the oldest is the end: a short page, here an empty one
+    const end = await body(await anon.get(`/api/groups/${slug}/messages?channel=general&before=${encodeURIComponent(all[0].id)}`));
+    expect(Array.isArray(end.general) && end.general.length === 0, `before the oldest ${JSON.stringify(end)}`);
+    const noChannel = await anon.get(`/api/groups/${slug}/messages?before=${encodeURIComponent(all[0].id)}`);
+    const badId = await anon.get(`/api/groups/${slug}/messages?channel=general&before=nonsense`);
+    const noSuch = await anon.get(`/api/groups/${slug}/messages?channel=nosuch`);
+    expect(noChannel.status() === 400 && badId.status() === 400 && noSuch.status() === 404, `before alone ${noChannel.status()}, a bad id ${badId.status()}, no such channel ${noSuch.status()}`);
+    return `${all.length} line(s) in general, paged one at a time`;
   });
 
   await step('a channel kept to a role: its holders, the owners and the channels power see it, nobody else does, anywhere', async () => {

@@ -16,6 +16,7 @@ import {
   RiPencilLine,
   RiPushpinFill,
   RiPushpinLine,
+  RiRefreshLine,
   RiSearchLine,
   RiServerLine,
   RiSettings3Line,
@@ -63,6 +64,9 @@ import {
   channelRenamedAtom,
   enterRoom,
   leaveRoom,
+  loadMoreMembers,
+  MEMBER_ROW_PX,
+  pageFor,
   pinsTickAtom,
   reloadLines,
   reloadRoom,
@@ -70,6 +74,7 @@ import {
   roomAtom,
   roomErrorAtom,
   roomGoneAtom,
+  rosterMoreAtom,
   setChannelMuted,
   setChannelOrder,
   setPinned
@@ -91,6 +96,7 @@ import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useShee
 import { when } from '@/shared-components/ChatLine';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { INPUT } from '@/shared-components/input';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { PresenceSquare } from '@/shared-components/PersonRow';
 import { PicturePick } from '@/shared-components/PicturePick';
@@ -110,8 +116,6 @@ const FACES = 4;
 const TILE = 'block overflow-hidden border border-primaryStroke bg-backgroundSecondary transition-[border-color] duration-150 hover:border-primaryBlue';
 
 const RESERVED = new Set(['before', 'search', 'by', 'around']);
-
-const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary';
 
 /** Matches `MAX_ABOUT_CHARS` in the api: a channel's line about it, like the group's. */
 const ABOUT_CAP = 200;
@@ -1700,15 +1704,18 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
         onClose();
       }}
       // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop. a phone's is a sheet (MobileSheet.tsx)
-      className={cn('m-auto w-[min(460px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60', SHEET_DIALOG)}
+      className={cn(
+        'm-auto w-[min(460px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary px-6 py-4 text-base text-textPrimary backdrop:bg-black/60',
+        SHEET_DIALOG
+      )}
     >
       <SheetGrab onDismiss={close} />
-      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-5">
+      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
         <div>
           <h2 id="channel-make-title" className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
             add a channel
           </h2>
-          <p className="mt-3 text-sm text-textSecondary">a name, and a line about it if you like. it goes under the last channel; manage moves it.</p>
+          <p className="mt-2 text-sm text-textSecondary">a name, and a line about it if you like. it goes under the last channel; manage moves it.</p>
         </div>
         <Field id="channel-make-name" label="name" hint={fault || 'letters, digits, _ and -. up to 32.'}>
           <div className="relative">
@@ -1732,7 +1739,7 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
               spellCheck={false}
               aria-describedby="channel-make-name-hint"
               aria-invalid={fault !== '' || undefined}
-              className={cn(INPUT, 'w-full pl-7')}
+              className={cn(INPUT, 'pl-7')}
             />
           </div>
         </Field>
@@ -1744,7 +1751,7 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
             maxLength={ABOUT_CAP}
             autoComplete="off"
             aria-describedby="channel-make-about-hint"
-            className={cn(INPUT, 'w-full')}
+            className={INPUT}
           />
         </Field>
         {status && (
@@ -1856,6 +1863,126 @@ function rosterQuery(query: string): string {
     .toLowerCase();
 }
 
+/** How long the box rests on its words before the server is asked for the members they match. */
+const ROSTER_SEARCH_MS = 250;
+
+/**
+ * The roster's words asked of the server (`GET .../members?q=`), for a roster that is not all
+ * here yet: the rows loaded so far are not everyone the words may find. `hits` null until the
+ * answer for these words is in (and for no words); `next` the page after it, which `more`
+ * asks for, `height` the box the rows scroll in. An answer for words since changed is dropped.
+ */
+function useRosterSearch(server: string, q: string, box: RefObject<HTMLElement | null>) {
+  const [found, setFound] = useState<{ q: string; hits: GroupMember[]; next: string | null } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const asked = useRef('');
+  useEffect(() => {
+    asked.current = q;
+    if (!q) return;
+    const timer = setTimeout(() => {
+      api
+        .groupMembersPage(server, { limit: pageFor(MEMBER_ROW_PX, box.current?.clientHeight), q })
+        .then((page) => {
+          if (asked.current === q) setFound({ q, hits: page.members, next: page.next });
+        })
+        // the rows loaded so far stand for the answer; the next word typed asks again
+        .catch(() => undefined);
+    }, ROSTER_SEARCH_MS);
+    return () => clearTimeout(timer);
+  }, [server, q, box]);
+  const now = found && found.q === q ? found : null;
+  const more = (height: number) => {
+    if (!now?.next || busy) return;
+    setBusy(true);
+    setFailed(false);
+    api
+      .groupMembersPage(server, { limit: pageFor(MEMBER_ROW_PX, height), after: now.next, q })
+      .then((page) => {
+        if (asked.current !== q) return;
+        const have = new Set(now.hits.map((m) => m.name));
+        setFound({ q, hits: [...now.hits, ...page.members.filter((m) => !have.has(m.name))], next: page.next });
+      })
+      .catch(() => setFailed(true))
+      .finally(() => setBusy(false));
+  };
+  return { hits: now?.hits ?? null, next: now?.next ?? null, busy, failed, more };
+}
+
+/**
+ * The row under a list of members that is not all here yet: `loading…` while the next page is
+ * asked for, which happens as the row comes within half a box of the bottom of `root` (the list's
+ * own scroll; the window's when it has none), `onMore` given that box's height. Watched again
+ * at each new page (`at`, the cursor), so a page too short to push the row out of reach asks for
+ * the one after it. A refused page says so, with a way to ask again, rather than asking on and on.
+ */
+function MoreRow({
+  id,
+  root,
+  at,
+  busy,
+  failed,
+  onMore,
+  compact = false
+}: {
+  id?: string;
+  root?: RefObject<HTMLElement | null>;
+  at: string;
+  busy: boolean;
+  failed: boolean;
+  onMore: (height: number) => void;
+  /** The folded strip's, a face wide: a mark for the words, which are there for a reader. */
+  compact?: boolean;
+}) {
+  const ref = useRef<HTMLLIElement | null>(null);
+  const ask = useRef(onMore);
+  useLayoutEffect(() => {
+    ask.current = onMore;
+  });
+  const height = () => (root?.current ?? document.documentElement).clientHeight;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || failed) return;
+    const box = root?.current ?? null;
+    const seen = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && ask.current((box ?? document.documentElement).clientHeight), {
+      root: box,
+      rootMargin: '0px 0px 50% 0px'
+    });
+    seen.observe(el);
+    return () => seen.disconnect();
+  }, [root, at, failed]);
+  return (
+    <li ref={ref} id={id} data-more aria-busy={busy} className="flex min-h-7 shrink-0 items-center justify-center gap-2 text-xs text-textTertiary">
+      {failed && compact ? (
+        <Tooltip content="could not load more: try again" at="left">
+          <button
+            type="button"
+            aria-label="could not load more: try again"
+            className="flex h-7 w-7 items-center justify-center border border-primaryStroke text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none"
+            onClick={() => ask.current(height())}
+          >
+            <RiRefreshLine aria-hidden size={14} />
+          </button>
+        </Tooltip>
+      ) : failed ? (
+        <>
+          could not load more
+          <Button size="sm" onClick={() => ask.current(height())}>
+            try again
+          </Button>
+        </>
+      ) : compact ? (
+        <>
+          <span aria-hidden>…</span>
+          <span className="sr-only">loading</span>
+        </>
+      ) : (
+        'loading…'
+      )}
+    </li>
+  );
+}
+
 /**
  * The right of the room, for everyone in it: who is in. The room's search box first, its own
  * row (`RoomSearch`): the words in it narrow the names and the roles under it as they are
@@ -1868,6 +1995,10 @@ function rosterQuery(query: string): string {
  * list scrolls. A click on a row shows the member over the room, or goes to their page where
  * this browser said so; their card on hover (`Member`). Nothing here acts on a member: what a
  * power does is in the manage dialog, from the header.
+ *
+ * A long roster comes in pages (`room.roster_next`): the room brings enough to fill the list
+ * twice, and the next page is asked as the end of the list comes near (`MoreRow`). While it is
+ * not all here, the words are matched by the server (`useRosterSearch`), whose hits page the same way.
  *
  * On a wide screen the arrow's square at the search box's end folds the roster to a strip of faces
  * (`MembersStrip`), kept per browser (settings.roomMembersOpen). The roster stays mounted under
@@ -1899,7 +2030,28 @@ function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
     channels: (room.channels ?? []).map((item) => item.name)
   });
   const q = rosterQuery(search.query);
-  const shown = q ? members.filter((member) => member.name.toLowerCase().includes(q) || member.roles.some((role) => role.name.toLowerCase().includes(q))) : members;
+  const listRef = useRef<HTMLUListElement | null>(null);
+  const more = useAtomValue(rosterMoreAtom);
+  // the roster not all here yet (`roster_next`): the words are the server's to match, over every member (`found`)
+  const partial = !!room.roster_next;
+  const found = useRosterSearch(room.name, partial ? q : '', listRef);
+  const matched = q ? members.filter((member) => member.name.toLowerCase().includes(q) || member.roles.some((role) => role.name.toLowerCase().includes(q))) : members;
+  // until the server answers, the rows loaded so far that match
+  const shown = found.hits ?? matched;
+  const pending = partial && !!q && found.hits === null;
+  // the row under the list while there is more of it: the roster's next page, or the search's
+  const moreRow = q
+    ? found.next && <MoreRow id="group-members-more" root={flat ? undefined : listRef} at={found.next} busy={found.busy} failed={found.failed} onMore={found.more} />
+    : room.roster_next && (
+        <MoreRow
+          id="group-members-more"
+          root={flat ? undefined : listRef}
+          at={room.roster_next}
+          busy={more === 'busy'}
+          failed={more === 'failed'}
+          onMore={(height) => void loadMoreMembers(height)}
+        />
+      );
   const row = (member: GroupMember) => <Member key={member.name} member={member} live={live.includes(member.name)} ownerRole={ownerRoleOf(room)} flat={flat} />;
   // a phone's drawer: the ones here first, then the rest under their own heading, each in the group's order
   const isAway = (member: GroupMember) => (presences.get(member.name) ?? 'offline') === 'offline';
@@ -1955,7 +2107,7 @@ function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
             this group is private: who is in it is for its members.
           </p>
         )}
-        {q && shown.length === 0 && (
+        {q && !pending && shown.length === 0 && (
           <p id="group-members-nobody" className="text-textTertiary">
             nobody by that name.
           </p>
@@ -1976,11 +2128,18 @@ function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
                 </ul>
               </>
             )}
+            {/* the drawer scrolls as one, so the next page is asked as the end of the drawer comes near */}
+            {moreRow && <ul className="flex flex-col">{moreRow}</ul>}
           </>
         ) : (
           // no bar: it would take width from the rows. the padding under the last row is for its presence square, which hangs 4px below its face and would otherwise be 4px of scroll. its scroll is its own: the end of a long roster does not send the page to its other view
-          <ul id="group-members" className="flex min-h-0 flex-col gap-0.5 overflow-y-auto overscroll-contain pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <ul
+            ref={listRef}
+            id="group-members"
+            className="flex min-h-0 flex-col gap-0.5 overflow-y-auto overscroll-contain pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          >
             {shown.map(row)}
+            {moreRow}
           </ul>
         )}
       </aside>
@@ -1999,6 +2158,8 @@ function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
 function MembersStrip({ room, showRef, onShow }: { room: GroupRoom; showRef: RefObject<HTMLButtonElement | null>; onShow: () => void }) {
   const presences = useAtomValue(presencesAtom);
   const members = room.roster ?? [];
+  const more = useAtomValue(rosterMoreAtom);
+  const listRef = useRef<HTMLUListElement | null>(null);
   return (
     <aside id="group-members-strip" aria-label="members" className={cn('hidden w-14 flex-col border border-primaryStroke bg-backgroundSecondary lg:flex', ROSTER_HEIGHT)}>
       <div className="flex shrink-0 justify-center pt-1.5">
@@ -2025,7 +2186,10 @@ function MembersStrip({ room, showRef, onShow }: { room: GroupRoom; showRef: Ref
         </p>
       </Tooltip>
       {/* the faces 10px in from the strip's border, and room under the last one for its presence square, which hangs below its face */}
-      <ul className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overscroll-contain px-2.5 pb-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <ul
+        ref={listRef}
+        className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overscroll-contain px-2.5 pb-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
         {members.map((member) => {
           const presence = presences.get(member.name) ?? 'offline';
           return (
@@ -2044,6 +2208,9 @@ function MembersStrip({ room, showRef, onShow }: { room: GroupRoom; showRef: Ref
             </li>
           );
         })}
+        {room.roster_next && (
+          <MoreRow root={listRef} at={room.roster_next} busy={more === 'busy'} failed={more === 'failed'} onMore={(height) => void loadMoreMembers(height)} compact />
+        )}
       </ul>
     </aside>
   );
@@ -2312,7 +2479,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
           id={tab ? `manage-panel-${tab}` : undefined}
           role={tab ? 'tabpanel' : undefined}
           aria-labelledby={tab ? `manage-tab-${tab}` : undefined}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 [scrollbar-gutter:stable] sm:px-8 sm:py-6"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 [scrollbar-gutter:stable] sm:px-8 sm:py-5"
         >
           <h2 id="group-manage-title" tabIndex={-1} className="min-w-0 border-l-4 border-primaryBlue pl-3 pr-12 text-xl font-semibold leading-tight outline-none">
             {tab ?? 'manage'} <span className="font-normal text-textTertiary">· {words.title}</span>
@@ -2415,7 +2582,7 @@ function AboutSection({ server, room, run }: ManageProps) {
           onChange={(e) => setDraft({ base: room.about, text: e.target.value })}
           maxLength={200}
           aria-label="about"
-          className={INPUT}
+          className={cn(INPUT, 'min-w-0 flex-1')}
         />
         <button type="submit" className="text-sm font-semibold text-primaryBlue">
           save
@@ -2450,6 +2617,7 @@ function MembersSection({ server, room, me, run }: ManageProps & { me: string | 
   /** The member the group is about to be handed to, while the question is up. */
   const [handing, setHanding] = useState<string | null>(null);
   const members = room.roster ?? [];
+  const more = useAtomValue(rosterMoreAtom);
   const owners = members.filter((member) => member.owner).length;
   const order = room.member_order === 'newest' || room.member_order === 'oldest' ? room.member_order : 'name';
   /** The powers a role carries, by id: what the roster's held roles do not say. */
@@ -2578,6 +2746,10 @@ function MembersSection({ server, room, me, run }: ManageProps & { me: string | 
             </li>
           );
         })}
+        {/* the roster's pages are the room's, so a page asked here is on the room's list too */}
+        {room.roster_next && (
+          <MoreRow id="manage-members-more" at={room.roster_next} busy={more === 'busy'} failed={more === 'failed'} onMore={(height) => void loadMoreMembers(height)} />
+        )}
       </ul>
       {handing && (
         <ConfirmDialog
@@ -3005,7 +3177,7 @@ function RolesSection({ server, room, run }: ManageProps) {
                   aria-label="owner role name"
                   autoFocus
                   onFocus={(e) => e.currentTarget.select()}
-                  className={INPUT}
+                  className={cn(INPUT, 'min-w-0 flex-1')}
                 />
               </div>
               {/* the role form's list of powers, every one on and locked: an owner's */}

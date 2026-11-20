@@ -6,13 +6,12 @@ import { api, groupMatches, mayMakeGroup, messageOf, type SearchHit, type Server
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { Button } from '@/shared-components/Button';
 import { GROUP_SQUARE_BOX, GroupSquare } from '@/shared-components/GroupSquare';
+import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
 import { MakeGroupDialog } from '@/shared-components/MakeGroupDialog';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { PersonRow } from '@/shared-components/PersonRow';
 import { Skeleton } from '@/shared-components/Skeleton';
 import { cn } from '@/utils/cn';
-
-const INPUT = 'min-w-0 flex-1 border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary';
 
 const SQUARES = 'grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3';
 const SECTION_TITLE = 'mb-4 text-sm font-semibold uppercase tracking-wider text-textTertiary';
@@ -68,14 +67,21 @@ export function ExplorePage() {
         <label htmlFor="groups-search" className="sr-only">
           search groups
         </label>
-        <input id="groups-search" value={text} onChange={(e) => setText(e.target.value)} placeholder="search" autoComplete="off" className={INPUT} />
+        <input
+          id="groups-search"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="search"
+          autoComplete="off"
+          className={cn(INPUT, 'min-w-0 flex-1')}
+        />
         {canMake && (
-          <Button id="groups-create" variant="primary" className="shrink-0 px-4 py-2 text-sm" onClick={() => setMaking(true)}>
+          <Button id="groups-create" variant="primary" className={cn('shrink-0', INPUT_BUTTON)} onClick={() => setMaking(true)}>
             create
           </Button>
         )}
         {me === null && (
-          <Button id="groups-create" variant="primary" className="shrink-0 px-4 py-2 text-sm" onClick={() => openAuthDialog('login')}>
+          <Button id="groups-create" variant="primary" className={cn('shrink-0', INPUT_BUTTON)} onClick={() => openAuthDialog('login')}>
             log in to create
           </Button>
         )}

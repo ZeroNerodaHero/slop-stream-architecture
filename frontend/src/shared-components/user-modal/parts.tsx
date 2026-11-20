@@ -1,11 +1,10 @@
 import { type ReactNode, useState } from 'react';
 
+import { INPUT } from '@/shared-components/input';
 import { cn } from '@/utils/cn';
 
 /** The small label every block starts with. */
 export const SECTION_TITLE = 'text-xs font-semibold uppercase tracking-wider text-textTertiary';
-/** A box to type in, on the page colour so it stands off the pane. */
-export const INPUT = 'w-full border border-primaryStroke bg-background px-3 py-2 text-base text-textPrimary placeholder:text-textTertiary disabled:opacity-40';
 /** The buttons in a pane: a size down from the page's. */
 export const BUTTON = 'px-4 py-2 text-base';
 /** A square to tick: the theme's box, blue when on. */
@@ -18,7 +17,7 @@ export function Section({ id, title, description, children }: { id?: string; tit
     <section id={id} className="py-6 first:pt-0 last:pb-0">
       <h3 className={SECTION_TITLE}>{title}</h3>
       {description && <p className="mt-1 text-textSecondary">{description}</p>}
-      <div className="mt-4 flex flex-col gap-4">{children}</div>
+      <div className="mt-3 flex flex-col gap-3">{children}</div>
     </section>
   );
 }
@@ -26,7 +25,7 @@ export function Section({ id, title, description, children }: { id?: string; tit
 /** A label over a control, a hint under it. The control carries `id`, and `aria-describedby={`${id}-hint`}` when there is a hint. */
 export function Field({ id, label, hint, children }: { id: string; label: ReactNode; hint?: ReactNode; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-1">
       <label htmlFor={id} className="text-sm font-semibold text-textSecondary">
         {label}
       </label>
