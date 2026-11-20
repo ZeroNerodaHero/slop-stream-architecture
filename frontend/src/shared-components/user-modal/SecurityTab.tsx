@@ -25,7 +25,7 @@ import {
 import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { identityChanged } from '@/infra/atoms/profile-atoms';
 import { cleanName } from '@/infra/names';
-import { providerLabel, providerList, rememberReturn } from '@/infra/oauth';
+import { providerLabel, rememberReturn } from '@/infra/oauth';
 import { NEW_PASSWORD_RULE, newPasswordProblem } from '@/infra/password';
 import { store } from '@/infra/store';
 import { Button, buttonClassName } from '@/shared-components/Button';
@@ -33,7 +33,7 @@ import { OAuthButtons, ProviderIcon } from '@/shared-components/OAuthButtons';
 import { OAUTH_MARK_WORDS, OAuthMark } from '@/shared-components/OAuthMark';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { INPUT } from '@/shared-components/input';
-import { BUTTON, Field, PasswordInput, Section, Status } from '@/shared-components/user-modal/parts';
+import { BUTTON, Block, Field, PasswordInput, Status } from '@/shared-components/user-modal/parts';
 
 /**
  * The account. Nobody has to have one; with one the name is yours. Logged out: log in or sign
@@ -77,10 +77,10 @@ function LoggedOut() {
   }
 
   return (
-    <Section title="account" description="an account keeps your name yours: only you can go live, edit your status and your page, or talk as it. nobody has to.">
+    <Block title="account">
       {/* no method="dialog": a submit would close the modal. onSubmit owns enter */}
       <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
-        <Field id="sec-name" label="name" hint={signingUp ? 'a-z 0-9 _ -, up to 32. a free name is yours on sign up, status, page and picture too.' : 'a-z 0-9 _ -'}>
+        <Field id="sec-name" label="name" hint="a-z 0-9 _ -">
           <input
             id="sec-name"
             name="username"
@@ -130,7 +130,7 @@ function LoggedOut() {
         <Status id="sec-error" text={error} />
         <OAuthButtons />
       </form>
-    </Section>
+    </Block>
   );
 }
 
@@ -160,51 +160,60 @@ function LoggedIn({ me }: { me: string }) {
 
   return (
     <>
-      <Section title="account">
-        <p className="flex items-center gap-2 font-semibold">
-          logged in as <span>{me}</span>
+      <Block title="account" tip="a login lasts 30 days on each device">
+        <p className="flex items-center gap-1.5 text-sm font-semibold">
+          <span>{me}</span>
           <Tooltip content="logged in: this name is yours">
             <span role="img" aria-label="logged in" className="text-increase">
               ✓
             </span>
           </Tooltip>
-          {oauthVerified && <OAuthMark id="sec-oauth-verified" />}
+          {oauthVerified && <OAuthMark id="sec-oauth-verified" size={14} />}
         </p>
-        <p className="text-sm text-textTertiary">a login lasts 30 days on each device.</p>
-      </Section>
+      </Block>
 
-      <Section
-        title="password"
-        description={
-          hasPassword
-            ? `${NEW_PASSWORD_RULE}. once it changes, every other login of this account is out; this one stays.`
-            : `this account has no password yet: you log in with a linked account below. set one to log in with your name too. ${NEW_PASSWORD_RULE}.`
-        }
-      >
-        <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
+      <Block title="password">
+        <form onSubmit={(e) => void submit(e)}>
           {/* for password managers: which account the new password belongs to */}
           <input type="text" name="username" value={me} autoComplete="username" readOnly tabIndex={-1} aria-hidden className="sr-only" />
-          {hasPassword && (
-            <Field id="sec-old" label="current password">
-              <PasswordInput id="sec-old" value={old} onChange={setOld} autoComplete="current-password" />
-            </Field>
-          )}
-          <Field id="sec-new" label="new password" hint={<PasswordHint problem={problem} />}>
-            <PasswordInput id="sec-new" value={fresh} onChange={setFresh} autoComplete="new-password" minLength={8} />
-          </Field>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap gap-1.5">
+            {hasPassword && (
+              <PasswordInput
+                id="sec-old"
+                value={old}
+                onChange={setOld}
+                autoComplete="current-password"
+                placeholder="current"
+                label="current password"
+                className="min-w-0 flex-1 basis-40 [&_input]:text-sm"
+              />
+            )}
+            <PasswordInput
+              id="sec-new"
+              value={fresh}
+              onChange={setFresh}
+              autoComplete="new-password"
+              minLength={8}
+              placeholder="new"
+              label="new password"
+              describedBy="sec-new-hint"
+              className="min-w-0 flex-1 basis-40 [&_input]:text-sm"
+            />
             <Button id="sec-change" type="submit" size="sm" variant="outline" disabled={busy || (hasPassword && !old) || !fresh || !!problem}>
-              {hasPassword ? 'change password' : 'set password'}
+              {hasPassword ? 'change' : 'set'}
             </Button>
-            <Status id="sec-status" text={status} />
           </div>
+          <p id="sec-new-hint" className="mt-1 text-xs text-textTertiary">
+            {problem ? <span className="text-decrease">{problem}</span> : `${hasPassword ? '' : 'no password yet · '}8–128 · a number and a symbol · no reset`}
+          </p>
+          <Status id="sec-status" text={status} quiet />
         </form>
-      </Section>
+      </Block>
 
       <LinkedLogins />
 
-      <Section title="sessions" description="this browser, or every browser this account is logged in on.">
-        <div className="flex flex-wrap items-center gap-3">
+      <Block title="sessions">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Button
             id="sec-logout"
             size="sm"
@@ -218,13 +227,13 @@ function LoggedIn({ me }: { me: string }) {
             <>
               <Button
                 id="sec-logout-all"
+                size="sm"
                 variant="danger"
-                className={BUTTON}
                 onClick={() => {
                   void logoutAll().then(() => identityChanged('login'));
                 }}
               >
-                sure? log out everywhere
+                sure? every device
               </Button>
               <Button size="sm" onClick={() => setSure(false)}>
                 keep
@@ -232,12 +241,11 @@ function LoggedIn({ me }: { me: string }) {
             </>
           ) : (
             <Button id="sec-logout-all" size="sm" variant="outline-danger" onClick={() => setSure(true)}>
-              log out everywhere
+              log out all
             </Button>
           )}
         </div>
-        <p className="text-sm text-textTertiary">everywhere ends every login of this account on every device, this one too.</p>
-      </Section>
+      </Block>
     </>
   );
 }
@@ -278,7 +286,6 @@ function LinkedLogins() {
   if (!shown.length) return null;
   const lastWayIn = !!linked && !linked.has_password && mine.length <= 1;
   const verified = linked ? (linked.oauth_verified ?? mine.length > 0) : false;
-  const offered = (providers ?? []).filter((p) => !mine.includes(p));
 
   async function unlink(p: string) {
     setBusy(true);
@@ -298,68 +305,68 @@ function LinkedLogins() {
   }
 
   return (
-    <Section
-      id="sec-linked"
-      title="linked logins"
-      description="log in with these instead of a password. linking never happens on its own, not even when an email matches. your password, if you have one, keeps working."
-    >
-      <p id="sec-verified" className="flex flex-wrap items-center gap-2 text-sm">
-        {verified ? (
-          <>
-            <OAuthMark />
-            <span className="font-semibold">verified.</span>
-            <span className="text-textSecondary">your name wears the blue mark in chat, on your page and in search.</span>
-          </>
-        ) : (
-          <span className="text-textSecondary">
-            link {offered.length ? providerList(offered) : 'an account'} to get verified: the blue mark beside your name in chat, on your page and in search.
-          </span>
-        )}
-      </p>
-      <ul className="flex flex-col gap-2">
-        {shown.map((p) => {
-          const on = linked?.identities.find((i) => i.provider === p);
-          return (
-            <li key={p} id={`sec-provider-${p}`} data-linked={on ? 'true' : 'false'} className="flex flex-wrap items-center gap-3">
-              <span className="flex min-w-28 items-center gap-2 font-semibold">
-                <ProviderIcon provider={p} />
-                {providerLabel(p)}
-              </span>
-              {on ? (
-                <>
-                  <span className="text-sm text-increase" title={new Date(on.linked_at).toLocaleString()}>
-                    linked
-                  </span>
-                  {lastWayIn ? (
-                    <span id={`sec-unlink-${p}-why`} className="text-sm text-textTertiary">
-                      your only way to log in: set a password above or link another to unlink this
-                    </span>
-                  ) : sure === p ? (
+    <Block id="sec-linked" title="linked logins" tip="verified: the blue mark by your name">
+      <div className="relative">
+        <ul id="sec-verified" data-verified={verified} className="flex flex-col">
+          {shown.map((p) => {
+            const on = linked?.identities.find((i) => i.provider === p);
+            return (
+              <li key={p} id={`sec-provider-${p}`} data-linked={on ? 'true' : 'false'} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 py-1.5">
+                <span className="flex items-center gap-2 text-sm font-semibold">
+                  <ProviderIcon provider={p} />
+                  {providerLabel(p)}
+                </span>
+                <span className="flex flex-wrap items-center gap-1.5">
+                  {on ? (
                     <>
-                      <Button id={`sec-unlink-${p}`} size="sm" variant="outline-danger" disabled={busy} onClick={() => void unlink(p)}>
-                        sure? unlink {providerLabel(p)}
-                      </Button>
-                      <Button size="sm" onClick={() => setSure(null)}>
-                        keep
-                      </Button>
+                      <Tooltip content={`since ${new Date(on.linked_at).toLocaleDateString()}`}>
+                        <span tabIndex={0} className="text-xs text-increase">
+                          linked
+                        </span>
+                      </Tooltip>
+                      {lastWayIn ? (
+                        <Tooltip content="your only login">
+                          {/* a disabled button takes no hover: the span around it does */}
+                          <span id={`sec-unlink-${p}-why`} tabIndex={0} aria-label="unlink: your only login" className="inline-flex">
+                            <Button size="sm" variant="outline-danger" disabled className="pointer-events-none">
+                              unlink
+                            </Button>
+                          </span>
+                        </Tooltip>
+                      ) : sure === p ? (
+                        <>
+                          <Button id={`sec-unlink-${p}`} size="sm" variant="outline-danger" disabled={busy} onClick={() => void unlink(p)}>
+                            sure? unlink
+                          </Button>
+                          <Button size="sm" onClick={() => setSure(null)}>
+                            keep
+                          </Button>
+                        </>
+                      ) : (
+                        <Button id={`sec-unlink-${p}`} size="sm" variant="outline-danger" onClick={() => setSure(p)}>
+                          unlink
+                        </Button>
+                      )}
                     </>
-                  ) : (
-                    <Button id={`sec-unlink-${p}`} size="sm" variant="outline-danger" onClick={() => setSure(p)}>
-                      unlink
-                    </Button>
-                  )}
-                </>
-              ) : providers?.includes(p) ? (
-                <a id={`sec-link-${p}`} href={oauthStartUrl(p, true)} onClick={() => rememberReturn(true)} className={buttonClassName('outline', undefined, 'sm')}>
-                  link {providerLabel(p)}
-                </a>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
-      <p className="sr-only">{OAUTH_MARK_WORDS}</p>
-      <Status id="sec-linked-status" text={status} />
-    </Section>
+                  ) : providers?.includes(p) ? (
+                    <a
+                      id={`sec-link-${p}`}
+                      href={oauthStartUrl(p, true)}
+                      onClick={() => rememberReturn(true)}
+                      aria-label={`link ${providerLabel(p)}`}
+                      className={buttonClassName('outline', undefined, 'sm')}
+                    >
+                      link
+                    </a>
+                  ) : null}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+        <p className="sr-only">{OAUTH_MARK_WORDS}</p>
+      </div>
+      <Status id="sec-linked-status" text={status} quiet />
+    </Block>
   );
 }
