@@ -72,6 +72,41 @@ pub fn media_setup(twcc: bool) -> anyhow::Result<(MediaEngine, Registry)> {
     Ok((media, registry))
 }
 
+/// Opus for voice only: mono speech at a low bitrate, with DTX so silence costs
+/// almost nothing. Never use it for the stream; music must not get DTX.
+// not called yet; the voice rooms wire it up
+#[allow(dead_code)]
+pub fn opus_voice_capability() -> RTCRtpCodecCapability {
+    RTCRtpCodecCapability {
+        mime_type: MIME_TYPE_OPUS.to_owned(),
+        clock_rate: 48000,
+        channels: 2,
+        sdp_fmtp_line: "minptime=10;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0;maxaveragebitrate=32000"
+            .to_owned(),
+        rtcp_feedback: vec![],
+    }
+}
+
+/// Like `media_setup`, but for voice: only the voice Opus, no VP8 and no TWCC.
+#[allow(dead_code)]
+pub fn voice_media_setup() -> anyhow::Result<(MediaEngine, Registry)> {
+    let mut media = MediaEngine::default();
+    media.register_codec(
+        RTCRtpCodecParameters {
+            capability: opus_voice_capability(),
+            payload_type: 111,
+            ..Default::default()
+        },
+        RTPCodecType::Audio,
+    )?;
+
+    let mut registry = Registry::new();
+    registry.add(Box::new(Responder::builder().with_log2_size(9)));
+    registry.add(Box::new(Generator::builder()));
+    registry = configure_rtcp_reports(registry);
+    Ok((media, registry))
+}
+
 /// Whether a VP8 RTP payload starts a keyframe (RFC 7741): the first packet of
 /// partition 0 (S set, PID 0), past the payload descriptor, with the P bit of the
 /// VP8 frame tag clear. Only VP8 is registered above, so it is the one codec a
@@ -131,5 +166,17 @@ mod tests {
         assert!(!is_vp8_keyframe(&[0x90]));
         assert!(!is_vp8_keyframe(&[0x90, 0x80]));
         assert!(!is_vp8_keyframe(&[0x90, 0x80, 0x92, 0x00]));
+    }
+
+    #[test]
+    fn voice_opus_has_dtx_and_fec() {
+        let fmtp = super::opus_voice_capability().sdp_fmtp_line;
+        assert!(fmtp.split(';').any(|p| p == "usedtx=1"));
+        assert!(fmtp.split(';').any(|p| p == "useinbandfec=1"));
+    }
+
+    #[test]
+    fn voice_media_setup_works() {
+        assert!(super::voice_media_setup().is_ok());
     }
 }
