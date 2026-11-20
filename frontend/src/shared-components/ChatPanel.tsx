@@ -495,6 +495,81 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
   );
 }
 
+/**
+ * A room's lines in the shape this browser picked, each as the panel draws it: the panel's
+ * list, and a group channel's pinned lines in a phone's sheet (PinSheet.tsx). `name` is the
+ * panel's: whose lines are `mine` is said against it.
+ */
+export function RoomLines({
+  name,
+  room,
+  lines,
+  lineMark,
+  lineActions
+}: {
+  name: string;
+  room: ChatRoom;
+  lines: readonly ChatLine[];
+  lineMark?: (line: ChatLine) => ReactNode;
+  lineActions?: (line: ChatLine) => ReactNode;
+}) {
+  const shape = useAtomValue(chatStyleAtom);
+  const asStreamer = useAtomValue(room.asStreamerAtom);
+  const speaker = useAtomValue(chatSpeakerAtom);
+  const me = useAtomValue(meAtom);
+  // the name the server echoes our own lines under: the stream's when we are the streamer, else the login or nick
+  const myName = asStreamer ? name : speaker;
+  return (
+    <>
+      {lines.map((line, i) => {
+        // ours by name and by kind, since a nick may wear a free room's name: the streamer's lines wear `streamer`, a login's `verified`, a nick's neither
+        const mine = line.from === myName && (asStreamer ? line.streamer : me ? line.verified : !line.verified && !line.streamer);
+        // a run is one speaker's lines in a row: the same name of the same kind, since a nick may wear a name a login holds elsewhere
+        const prev = lines[i - 1];
+        const same = prev !== undefined && prev.from === line.from && prev.verified === line.verified && prev.streamer === line.streamer;
+        return (
+          <ChatLineShape
+            key={line.id}
+            shape={shape}
+            mine={mine}
+            at={line.at}
+            name={line.from}
+            crowd
+            who={
+              <>
+                <Speaker line={line} room={room} />
+                <span className="ml-1 inline-flex items-center gap-1 align-middle">
+                  <Marks line={line} mine={mine} />
+                </span>
+              </>
+            }
+            face={<SpeakerFace line={line} room={room} />}
+            words={
+              line.text ? (
+                <span className="whitespace-pre-wrap">
+                  <LinkedText text={line.text} />
+                </span>
+              ) : null
+            }
+            pictures={<ChatImages ids={line.images} />}
+            mark={lineMark?.(line)}
+            actions={lineActions?.(line)}
+            attrs={{
+              'data-id': line.id,
+              'data-streamer': line.streamer || undefined,
+              'data-verified': line.verified || undefined,
+              'data-bot': isBotLine(line) || undefined,
+              'data-groups': line.groups.length ? line.groups.map((g) => g.name).join(' ') : undefined,
+              'data-mine': mine || undefined
+            }}
+            {...placeOf(line.at, prev?.at, same)}
+          />
+        );
+      })}
+    </>
+  );
+}
+
 export function ChatPanel({ name, owner = null, embedded = false, guest = false, channel, onChannel, headerEnd, lineMark, lineActions, className }: ChatPanelProps) {
   const server = channel !== undefined;
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -649,8 +724,6 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
   // arrives; a stream's come down the socket, which opens once /api/me has answered and, without a login, once a nick
   // is picked (the nick box waits on nobody, so there the room is as empty as it says)
   const waiting = !loaded && total === 0 && (server || me === undefined || phase !== 'off');
-  // the name the server echoes our own lines under: the stream's when we are the streamer, else the login or nick
-  const myName = asStreamer ? name : speaker;
 
   // the room is being drawn in the player's own window: the panel's box, and where the chat went. the tab is
   // behind another while that window is up, so this is seen only where a browser leaves the window open
@@ -674,11 +747,10 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
       data-room={room.key}
       className={embedded ? cn('relative flex flex-col', className) : panelClassName(cn('relative flex min-h-[320px] flex-col', className))}
     >
-      {/* on a phone a stream's chat (watch, go live) drops this bar to leave the lines room over the keyboard: kept for screen readers and ids as they are. a group's bar stays, it names the channel */}
+      {/* on a phone this bar is dropped, kept for screen readers and ids as they are: a stream's chat (watch, go live) leaves the lines room over the keyboard, and a
+          group's title row already names the channel and has the pins (ServerRoom.tsx, which gives a phone no `headerEnd`) */}
       {!embedded && (
-        <header
-          className={cn('flex items-center justify-between gap-3 border-b border-primaryStroke px-3 py-1.5 text-sm', !server && 'max-md:sr-only')}
-        >
+        <header className="flex items-center justify-between gap-3 border-b border-primaryStroke px-3 py-1.5 text-sm max-md:sr-only">
           <span id={server ? 'channel' : undefined} className="truncate font-semibold">
             {server ? `#${channel}` : 'chat'}
           </span>
@@ -722,51 +794,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
             {!waiting && lines.length === 0 && (
               <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>
             )}
-            {lines.map((line, i) => {
-              // ours by name and by kind, since a nick may wear a free room's name: the streamer's lines wear `streamer`, a login's `verified`, a nick's neither
-              const mine = line.from === myName && (asStreamer ? line.streamer : me ? line.verified : !line.verified && !line.streamer);
-              // a run is one speaker's lines in a row: the same name of the same kind, since a nick may wear a name a login holds elsewhere
-              const prev = lines[i - 1];
-              const same = prev !== undefined && prev.from === line.from && prev.verified === line.verified && prev.streamer === line.streamer;
-              return (
-                <ChatLineShape
-                  key={line.id}
-                  shape={shape}
-                  mine={mine}
-                  at={line.at}
-                  name={line.from}
-                  crowd
-                  who={
-                    <>
-                      <Speaker line={line} room={room} />
-                      <span className="ml-1 inline-flex items-center gap-1 align-middle">
-                        <Marks line={line} mine={mine} />
-                      </span>
-                    </>
-                  }
-                  face={<SpeakerFace line={line} room={room} />}
-                  words={
-                    line.text ? (
-                      <span className="whitespace-pre-wrap">
-                        <LinkedText text={line.text} />
-                      </span>
-                    ) : null
-                  }
-                  pictures={<ChatImages ids={line.images} />}
-                  mark={lineMark?.(line)}
-                  actions={lineActions?.(line)}
-                  attrs={{
-                    'data-id': line.id,
-                    'data-streamer': line.streamer || undefined,
-                    'data-verified': line.verified || undefined,
-                    'data-bot': isBotLine(line) || undefined,
-                    'data-groups': line.groups.length ? line.groups.map((g) => g.name).join(' ') : undefined,
-                    'data-mine': mine || undefined
-                  }}
-                  {...placeOf(line.at, prev?.at, same)}
-                />
-              );
-            })}
+            <RoomLines name={name} room={room} lines={lines} lineMark={lineMark} lineActions={lineActions} />
           </div>
         </div>
 

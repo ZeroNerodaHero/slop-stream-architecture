@@ -44,7 +44,7 @@ const TICK_MS = 30_000;
 const ICON_BUTTON =
   'flex h-7 w-7 shrink-0 items-center justify-center border border-transparent text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none';
 /** The number on the bell: the sidebar's blue square, as its counts have it. */
-const COUNT =
+export const COUNT =
   'absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background';
 
 /** The small mark in the corner of the face: what kind of thing this is. */
