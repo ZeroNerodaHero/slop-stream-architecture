@@ -44,6 +44,7 @@ import {
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
 import { CHAT_MOBILE, keyboardStrip, useChatTyping, useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
+import { usePrefetchOnPointerDown } from '@/infra/prefetch';
 import { KbdDebug } from '@/shared-components/KbdDebug';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
 import { ChatPanel } from '@/shared-components/ChatPanel';
@@ -157,6 +158,8 @@ export function LivePage() {
     startPublishPip();
     navigate('/');
   };
+  // home's data, asked for on the press (infra/prefetch.ts); the corner itself waits for the click
+  const homePress = usePrefetchOnPointerDown('/');
 
   const openTab = (t: LiveTab) => {
     setTab(t);
@@ -196,7 +199,7 @@ export function LivePage() {
       <div className={cn('pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 p-3 [&>*]:pointer-events-auto', revealClassName(mobile || !chatOpen), mobile && strip.overlay)}>
         {mobile ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
         {publishing && (
-          <IconButton id="live-pip" label="picture in picture" onClick={toCorner}>
+          <IconButton id="live-pip" label="picture in picture" {...homePress} onClick={toCorner}>
             <PipIcon />
           </IconButton>
         )}

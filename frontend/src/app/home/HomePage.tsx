@@ -8,7 +8,7 @@ import { stillPictures } from '@/app/home/stills';
 import { api, mayMakeGroup, messageOf, type LiveStream, type Person, type Recent, type Server } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { followingAtom, followingNamesAtom } from '@/infra/atoms/follow-atoms';
-import { enterHome, homeErrorAtom, homeNowAtom, homeStreamsAtom, leaveHome } from '@/infra/atoms/home-atoms';
+import { enterHome, homeErrorAtom, homeGroups, homeNowAtom, homePeople, homeStreamsAtom, leaveHome } from '@/infra/atoms/home-atoms';
 import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { Avatar } from '@/shared-components/Avatar';
@@ -326,7 +326,7 @@ function Followed({
  * first, the api's order. The fake streams are people too when they are not on.
  */
 function People() {
-  const people = useQuery({ queryKey: ['people'], queryFn: api.people, refetchInterval: PEOPLE_POLL_MS, refetchOnWindowFocus: false });
+  const people = useQuery({ queryKey: ['people'], queryFn: homePeople, refetchInterval: PEOPLE_POLL_MS, refetchOnWindowFocus: false });
   const list: Person[] = people.data ?? [];
   // before the first answer: the heading and a row of grey rectangles, the people's shape, so the part is
   // there from the first paint instead of arriving under the groups
@@ -457,7 +457,7 @@ function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
 function Groups() {
   const me = useAtomValue(meAtom);
   const [making, setMaking] = useState(false);
-  const query = useQuery({ queryKey: ['explore'], queryFn: api.explore, refetchInterval: PEOPLE_POLL_MS, refetchOnWindowFocus: false });
+  const query = useQuery({ queryKey: ['explore'], queryFn: homeGroups, refetchInterval: PEOPLE_POLL_MS, refetchOnWindowFocus: false });
   const groups: Server[] = query.data ? [...query.data.yours, ...query.data.discover].filter((group) => group.mine || group.public !== false) : [];
   const loading = !query.data && !query.error;
   const canMake = !!me && !!query.data && mayMakeGroup(query.data);

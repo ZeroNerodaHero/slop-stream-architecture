@@ -88,6 +88,8 @@
 #              layout and the size, nothing fetched from elsewhere, the owner editing them on that tab (the editor under the strip: the
 #              cards, a row from its square, the arrows, ×; the strip follows the draft, done shows the saved document); the corner
 #              panel's picture is your page and the gear is in it
+#   prefetch   a press on a link to a stream's page, home or a group asks for that page's data on pointerdown, once: the page takes it
+#              (one grant, one /api/streams, one room and one lines), and a press that goes nowhere asks once and nothing more
 #   regress    token-gated stop, auto-recovery, trailing slash, fast restart, races, bad offers
 #   monitor    (local only) `api monitor` watches this stack and a dead address: up with the right build,
 #              down with a reason, the page shows both, a restart keeps its memory. runs monitor/docker-compose.yml
@@ -185,6 +187,7 @@ run presence
 run calendar
 run about
 run socials
+run prefetch
 if [ "$LOCAL" = 1 ]; then
   run regress
   run monitor

@@ -55,6 +55,7 @@ import { KbdDebug } from '@/shared-components/KbdDebug';
 import { dummyPage } from '@/infra/about';
 import { api } from '@/infra/api';
 import { cleanName, isDummyName } from '@/infra/names';
+import { usePrefetchOnPointerDown } from '@/infra/prefetch';
 import { store } from '@/infra/store';
 import { About } from '@/shared-components/About';
 import { Calendar } from '@/shared-components/Calendar';
@@ -294,6 +295,8 @@ export function WatchPage() {
     startPip();
     navigate('/');
   };
+  // home's data, asked for on the press (infra/prefetch.ts); the corner itself waits for the click
+  const homePress = usePrefetchOnPointerDown('/');
 
   // the title row, desktop and phone alike (PageFrame's `person` row): their face with the presence square on
   // its corner (`#presence`, the word on hover and for screen readers), the name over how many follow and
@@ -449,7 +452,7 @@ export function WatchPage() {
             <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || (!mobile && !chatTab && !chatOpen)), mobile && strip.overlay)}>
               {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
               {mobile || chatTab ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
-              <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'picture in picture'} disabled={cornerTaken} onClick={toCorner}>
+              <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'picture in picture'} disabled={cornerTaken} {...homePress} onClick={toCorner}>
                 <PipIcon />
               </IconButton>
             </div>

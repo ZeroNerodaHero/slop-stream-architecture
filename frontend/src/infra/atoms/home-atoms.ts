@@ -12,9 +12,10 @@
 
 import { atom } from 'jotai';
 
-import { api, type LiveStream, messageOf } from '@/infra/api';
+import { api, type Explore, type LiveStream, messageOf, type Person } from '@/infra/api';
 import { onEvents, unwatchPresence, watchPresence } from '@/infra/events';
 import type { ServerFrame } from '@/infra/frames';
+import { onPrefetch, prefetch, takePrefetched } from '@/infra/prefetch';
 import { store } from '@/infra/store';
 
 /** The streams, in the order the page shows them. `null` before the first answer. */
@@ -65,14 +66,32 @@ export function leaveHome(): void {
   retryTimer = null;
 }
 
+/** The snapshot's key in the press's cache (prefetch.ts). */
+const SNAPSHOT = 'home:streams';
+
+/** Home's other two lists (HomePage.tsx `People`, `Groups`): their `queryFn`, the press's answer the first time, if there was a press. */
+export const homePeople = () => takePrefetched<Person[]>('home:people')?.answer ?? api.people();
+export const homeGroups = () => takePrefetched<Explore>('home:explore')?.answer ?? api.explore();
+
+// a press on a way home: the snapshot, under `watch *` from the press on, the facts since held
+// for `load` to apply on top of it, as it does with the ones that land while its own ask is out.
+// and the people and the groups under it, which nothing pushes
+onPrefetch('home', () => {
+  if (open > 0) return;
+  prefetch(SNAPSHOT, EVERYONE, 'hold', () => api.streams());
+  prefetch('home:people', null, 'drop', () => api.people());
+  prefetch('home:explore', null, 'drop', () => api.explore());
+});
+
 async function load(): Promise<void> {
   const mine = ++attempt;
   if (retryTimer) clearTimeout(retryTimer);
   retryTimer = null;
-  inflight = [];
+  const pressed = takePrefetched<LiveStream[]>(SNAPSHOT);
+  inflight = pressed ? [...pressed.frames] : [];
   let list: LiveStream[];
   try {
-    list = await api.streams();
+    list = await (pressed?.answer ?? api.streams());
   } catch (err) {
     if (mine !== attempt) return;
     inflight = null;

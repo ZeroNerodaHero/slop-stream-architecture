@@ -44,7 +44,7 @@ interface PageFrameProps {
  */
 export function HomeLink({ reload = false, className }: { reload?: boolean; className?: string }) {
   return (
-    <Link id="home" to="/" aria-label="home" reloadDocument={reload || undefined} className={buttonClassName('secondary', cn('shrink-0 gap-1 px-3 py-1.5 text-sm', className))}>
+    <Link id="home" to="/" aria-label="home" reloadDocument={reload || undefined} data-prefetch={reload ? 'off' : undefined} className={buttonClassName('secondary', cn('shrink-0 gap-1 px-3 py-1.5 text-sm', className))}>
       <RiArrowLeftSLine aria-hidden size={18} />
     </Link>
   );

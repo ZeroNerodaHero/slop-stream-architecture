@@ -4,6 +4,7 @@ import { RouterProvider } from 'react-router-dom';
 
 import { applyStoredTextSize, applyStoredTheme } from '@/infra/atoms/settings-atoms';
 import { startEvents } from '@/infra/events';
+import { installPrefetch } from '@/infra/prefetch';
 import { installReporting, report } from '@/infra/report';
 import { router } from '@/router';
 
@@ -31,6 +32,10 @@ installReporting();
 // page. here and not in a component: it is the page's for its whole life, and a crash that
 // unmounts the Shell must not close it
 startEvents();
+
+// a press on a link to home, a stream's page or a group asks for that page's data before the
+// click lands (docs/spec.md "Prefetch on press", infra/prefetch.ts)
+installPrefetch();
 
 // no picture lifts off as a ghost when dragged: nothing on these pages is a thing to drop
 // anywhere. at the document, not on each <img>: that reaches the pre-react avatar card the api

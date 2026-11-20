@@ -16,9 +16,10 @@ import { atom } from 'jotai';
 
 import { api, type Channel, type GroupMember, type GroupRoom, messageOf, statusOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { findServerChat, serverChat } from '@/infra/atoms/chat-atoms';
+import { type ChatLine, findServerChat, serverChat } from '@/infra/atoms/chat-atoms';
 import { holdPresence, onEvents, releasePresence, unwatchPresence, watchPresence } from '@/infra/events';
 import { type GroupChange, groupTopic } from '@/infra/frames';
+import { onPrefetch, prefetch, takePrefetched } from '@/infra/prefetch';
 import { store } from '@/infra/store';
 
 /** The room on screen, as loaded and then patched. `null` before the first answer, and off the page. */
@@ -70,6 +71,23 @@ export function enterRoom(server: string): void {
   void loadRoom();
   void loadLines();
 }
+
+/** The room's and the lines' keys in the press's cache (prefetch.ts): the roster's first page is in the room's, so a window of another height asks for itself. */
+const roomKey = (server: string, roster: number) => `group:${server}?roster=${roster}`;
+const linesKey = (server: string, limit: number) => `group-lines:${server}?limit=${limit}`;
+
+// a press on a way to `/groups/<server>`: the room and the last lines, the two things the page
+// asks first, as it asks them (`loadRoom` with no roster on screen yet, `loadLines`). a group
+// fact meanwhile drops the room; the lines are the chat's to reconcile (the socket is told the
+// newest id it has, `seedChannels`), so they are kept. nothing for the room already open
+onPrefetch('group', (server) => {
+  if (open === server) return;
+  const topic = groupTopic(server);
+  const roster = pageFor(MEMBER_ROW_PX);
+  const limit = pageFor(LINE_PX);
+  prefetch(roomKey(server, roster), topic, 'drop', () => api.group(server, roster));
+  prefetch(linesKey(server, limit), null, 'drop', () => api.groupMessages(server, limit));
+});
 
 /** The room page left: the feed off. The room is dropped; the next arrival asks again. */
 export function leaveRoom(): void {
@@ -228,7 +246,9 @@ async function loadRoom(): Promise<void> {
   const had = store.get(roomAtom);
   const shown = had?.name === server ? (had.roster?.length ?? 0) : 0;
   try {
-    const room = await api.group(server, Math.min(MAX_PAGE, Math.max(pageFor(MEMBER_ROW_PX), shown)));
+    const roster = Math.min(MAX_PAGE, Math.max(pageFor(MEMBER_ROW_PX), shown));
+    // the one asked for on the press, when there was one and no fact has come about the group since
+    const room = await (takePrefetched<GroupRoom>(roomKey(server, roster))?.answer ?? api.group(server, roster));
     if (mine !== attempt) return;
     const before = store.get(roomAtom);
     rosterAsk++;
@@ -278,7 +298,8 @@ async function loadLines(): Promise<void> {
   const mine = attempt;
   try {
     // enough of each channel to fill the chat twice; the rest scrolls in from the top (chat-atoms `loadOlder`)
-    const lines = await api.groupMessages(server, pageFor(LINE_PX));
+    const limit = pageFor(LINE_PX);
+    const lines = await (takePrefetched<Record<string, ChatLine[]>>(linesKey(server, limit))?.answer ?? api.groupMessages(server, limit));
     if (mine !== attempt) return;
     serverChat(server).seedChannels(lines);
   } catch {
