@@ -7,7 +7,7 @@ import { loadMe, logout, meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms
 import { nickAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { closeAllDms, loadDms } from '@/infra/atoms/dm-atoms';
 import { forgetFollowing, friendsOpenAtom, loadFollowing } from '@/infra/atoms/follow-atoms';
-import { forgetMyServers, loadMyServers } from '@/infra/atoms/groups-atoms';
+import { forgetMyServers, loadGroups, loadMyServers, myGroupsAtom } from '@/infra/atoms/groups-atoms';
 import { openInspector } from '@/infra/atoms/inspector-atoms';
 import { forgetNotifications, loadNotifications, toggleNotifications, unreadNotificationsAtom } from '@/infra/atoms/notification-atoms';
 import { myPresenceAtom, type Presence, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
@@ -17,6 +17,7 @@ import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { useIsMobile } from '@/infra/mobile';
 import { isValidName } from '@/infra/names';
 import { store } from '@/infra/store';
+import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { Friends, RAIL_FACE } from '@/shared-components/Friends';
@@ -196,7 +197,7 @@ export function DrawerOpener() {
  * them (Friends.tsx), you at the bottom. Hover or focus widens it
  * over the streams (the page does not move, and neither do the pictures): the box, and beside
  * each picture the name, how they are, unfollow, chat for a friend, and your actions. Logged
- * in: your account name and a ✓. Not logged in: a name box (localstorage,
+ * in: your account name and a ✓, and under it the badge you picked (`#you-badge`, your primary group's), none if you picked none. Not logged in: a name box (localstorage,
  * used in chat and as the go-live default) that reads as plain text until you point at it, with
  * sign up and log in under it. Nobody has to. At the far end of your row, boxed icons: the
  * messages (while that setting is on), a phone's bell, the gear, and log out. The picture, and a login's name, are the way to
@@ -214,6 +215,8 @@ export function UserPanel() {
   const presence = useAtomValue(myPresenceAtom);
   const inspectorOn = useAtomValue(inspectorEnabledAtom);
   const side = useAtomValue(panelSideAtom);
+  // the badge you picked in the groups tab (your primary group's), the chip chat puts beside your name. none picked: none here
+  const myBadge = useAtomValue(myGroupsAtom).find((g) => g.primary) ?? null;
   const mobile = useIsMobile();
   const { pathname } = useLocation();
   const panel = useRef<HTMLElement | null>(null);
@@ -240,7 +243,11 @@ export function UserPanel() {
     forgetMyServers();
     closeAllDms();
     forgetNotifications();
-    if (me !== undefined) void loadFollowing();
+    if (me !== undefined) {
+      void loadFollowing();
+      // which groups are mine, and the primary one: the badge under your name
+      void loadGroups();
+    }
     if (me) {
       void loadMyServers();
       void loadDms();
@@ -395,11 +402,14 @@ export function UserPanel() {
                 </span>
               </Tooltip>
             </Link>
-            {/* a phone's line under the name: how you are. a desktop has none, and the row is the name alone, centred on the picture.
+            {/* the line under the name: your badge, the chip chat shows beside your name, and on a phone how you are after it. no badge
+                and a desktop: no line, and the row is the name alone, centred on the picture. closed it is invisible with the name.
                 leading-5, not tight: tight is 17.5px on text-sm, and a half pixel here puts the whole footer, and the column over it, off the pixel grid */}
-            {mobile && (
-              <span className="flex items-center text-sm leading-5">
-                <Status presence={presence} />
+            {(myBadge || mobile) && (
+              <span id="you-badge" className={cn('flex items-center text-xs leading-5', mirrored && 'flex-row-reverse')}>
+                {myBadge && <Badge group={myBadge} card className="min-w-0" />}
+                {myBadge && mobile && <Dot />}
+                {mobile && <Status presence={presence} />}
               </span>
             )}
           </span>
