@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 
 import { api, type GroupBadge } from '@/infra/api';
 import { BOT_GROUP } from '@/infra/atoms/chat-atoms';
+import { homeStreamsAtom } from '@/infra/atoms/home-atoms';
 import { loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
 import { type Presence, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { profilePopupAtom } from '@/infra/atoms/profile-popup-atoms';
@@ -13,7 +14,7 @@ import { Face } from '@/shared-components/Face';
 import { Who } from '@/shared-components/PersonRow';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { StreamStill } from '@/shared-components/StreamStill';
-import { cn } from '@/utils/cn';
+import { ViewerCount } from '@/shared-components/ViewerCount';
 
 /** The card's width, and how far it stands off the column and off the window's edge. */
 const CARD_W = 260;
@@ -119,9 +120,10 @@ interface PersonCardProps {
 /**
  * Somebody, beside the column their row is in, while the pointer or the focus is on the row:
  * the face with the presence square on its corner, and beside it, as tall as the face, the name
- * (big, cut short with an ellipsis) along its top and their group's badge along its bottom (the
- * primary group, else the first joined; none for no group, and then the name is centred on the
- * face), then their status under the two.
+ * (cut short with an ellipsis) along its top and along its bottom their group's badge (the
+ * primary group, else the first joined; none for no group) then, while they stream, how many
+ * are watching, home's count (homeStreamsAtom; nothing until home has had the list). With
+ * neither the bottom is empty and the name stays at the top. Then their status under the two.
  * Not streaming, their first home-card thumbnail stands there instead at the same size (a grey
  * box when they have none).
  * Streaming, a frame of the stream (StreamStill.tsx, kept a few seconds old) stands between
@@ -153,6 +155,8 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
   const presence = person.presence ?? known?.presence;
   // their primary group's badge, else the first group their chat lines wear (the api's `badge`); an older api's answer has none, so the line's own
   const badge = known?.badge !== undefined ? known.badge : (person.groups?.find((g) => g.name !== BOT_GROUP) ?? null);
+  // home's list, the count its cards show: null while it has not come, or did not say
+  const viewers = useAtomValue(homeStreamsAtom)?.find((s) => s.name === person.name)?.viewers ?? null;
   const root = at.host.ownerDocument.documentElement;
   const w = root.clientWidth;
   const h = root.clientHeight;
@@ -169,12 +173,12 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
       role="tooltip"
       style={style}
       data-presence={presence}
-      className="pointer-events-none fixed z-[60] flex flex-col gap-2.5 border border-primaryStroke bg-backgroundSecondary p-3 text-base text-textPrimary"
+      className="pointer-events-none fixed z-[60] flex flex-col gap-2.5 border border-primaryStroke bg-backgroundSecondary p-3 text-sm text-textPrimary"
     >
-      {/* beside the face and as tall as it: the name along its top and their group's badge along its bottom, or the name centred on it when there is no badge */}
-      <span className="flex items-center gap-3">
+      {/* beside the face and as tall as it: the name along its top (leading-4, so its cap sits level with the face's top), the badge and the count along its bottom */}
+      <span className="flex items-center gap-2.5">
         <span className="relative shrink-0">
-          <Face name={person.name} version={person.avatar} className="h-12 w-12 text-lg" />
+          <Face name={person.name} version={person.avatar} className="h-10 w-10 text-base" />
           {presence && (
             <>
               <PresenceSquare status={presence} className="border-backgroundSecondary" />
@@ -183,9 +187,12 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
             </>
           )}
         </span>
-        <span className={cn('flex h-12 min-w-0 flex-1 flex-col items-start', badge ? 'justify-between' : 'justify-center')}>
-          <Who name={person.name} verified={person.verified} oauthVerified={person.oauth_verified ?? known?.oauth_verified} className="max-w-full text-xl leading-tight" />
-          {badge && <Badge group={badge} className="max-w-full" />}
+        <span className="flex h-10 min-w-0 flex-1 flex-col items-start justify-between">
+          <Who name={person.name} verified={person.verified} oauthVerified={person.oauth_verified ?? known?.oauth_verified} className="max-w-full text-sm font-semibold leading-4" />
+          <span className="flex min-w-0 max-w-full items-center gap-2 text-xs leading-4">
+            {badge && <Badge group={badge} className="min-w-0" />}
+            {presence === 'streaming' && <ViewerCount count={viewers} className="shrink-0 whitespace-nowrap text-textSecondary" />}
+          </span>
         </span>
       </span>
       {presence === 'streaming' ? (

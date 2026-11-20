@@ -16,7 +16,7 @@ export async function watch(name: string): Promise<void> {
 
 the page's `<video>` binds to the same `remoteStreamAtom` MediaStream and nothing is renegotiated. `test/pip.js:190` asserts the property wanted here: one `/watch` call in total when a page takes a live connection over. a hover preview is that handoff with a different trigger.
 
-the server already treats a join as "a watcher": a new peer on `Connected` asks the publisher for a keyframe on every slot at once (`video/src/main.rs:802`), rate limited so a burst of joins shares one (`FORCED_KEYFRAME_GAP`, 300ms, `main.rs:75`). nothing on the server needs to change for a preview. a preview is a watcher.
+the server already treats a join as "a watcher": a new peer on `Connected` asks the publisher for a keyframe on every slot at once, rate limited so a burst of joins shares them (`FORCED_KEYFRAME_GAP`, 300ms; `keyframes.md`). nothing on the server needs to change for a preview. a preview is a watcher.
 
 ## where a click's time goes
 
@@ -28,7 +28,7 @@ the route change is free: `WatchPage` is in the main bundle, nothing is lazy (`r
 | `createOffer`, `setLocalDescription` | 10–50ms | no wait for ice gathering on the watch page any more: video learns our address from our checks. made beside the grant (and on the press), so off the path |
 | `/ws` open, offer, answer | 1 rtt once the grant is in | the socket opens beside the grant (and on the press); only the setup and the answer wait for it |
 | ice checks, dtls handshake | 100–400ms | 2–4 rtt. the big fixed cost |
-| the keyframe | 100–300ms | video's pli to the publisher on `Connected`, the publisher encodes one, it is copied out. a join inside 300ms of the last request is dropped and waits for the browser's own pli, which passes on a 1.5s gap (`KEYFRAME_GAP`, `main.rs:72`) |
+| the keyframe | 100–300ms | video's pli to the publisher on `Connected`, the publisher encodes one, it is copied out. a join while a keyframe is on its way shares it; a join inside 300ms of the last join's request gets one trailing request at the gap's end (`keyframes.md`) |
 | decode, `playing` | ~50ms | |
 
 0.5–1.5s, most of it ice/dtls and the keyframe. only a real connection can warm those. prefetching the grant alone saves one row.
@@ -62,13 +62,13 @@ a hover that does pause past the delay costs one join, which is what a click cos
 | the grant | none: the preview skips it (above). if kept: one `POST /watch` = one `GET video/live` + two postgres queries | api, postgres, video |
 | the socket | one wss through caddy, one text frame each way | caddy, video |
 | the peer | ice, a dtls handshake (a few ms of cpu), srtp contexts, one task | video |
-| the keyframe | one pli per slot to the publisher, shared with every join in the same 300ms. a vp8 keyframe is several to ten delta frames in size (tens of kB against ~10kB at 2.5Mbps/30fps), and every watcher of that stream downloads it | the publisher's upload, every watcher's download |
+| the keyframe | at most one pli per slot per 300ms of joins, shared by every join in it. a vp8 keyframe is several to ten delta frames in size (tens of kB against ~10kB at 2.5Mbps/30fps), and every watcher of that stream downloads it | the publisher's upload, every watcher's download |
 | while it is up | a copy of every packet of the stream, 2.5Mbps for a camera (`publish-atoms.ts:21`), up to 3.5Mbps with a screen | video's egress |
 | leaving | one close | video |
 
 for scale, what home does already, per open tab: `GET /api/streams` every 3s (each one an api→video `/live` hop, a redis scan and postgres) and `GET /thumb/<name>.jpg` every 5s per card (`HomePage.tsx:14`, `:16`). a preview is a burst on top of that steady floor, bounded to one per tab at a time.
 
-the one cost that is not the hoverer's own is the keyframe. a stream's watchers all pay for every join. the forced gap bounds it to 3.3 keyframes/s per slot under any join rate, which at tens of kB each can add 1–2Mbps to a 2.5Mbps stream for everyone watching it while joins churn. a preview join could request on the 1.5s gap instead of the 300ms one: a slower first frame for the hoverer, a third of the tax on the room. the knob is one bool (`request_keyframe(.., force)`, `main.rs:913`).
+the one cost that is not the hoverer's own is the keyframe. a stream's watchers all pay for every join. the forced gap bounds it to 3.3 keyframes/s per slot under any join rate, which at tens of kB each can add 1–2Mbps to a 2.5Mbps stream for everyone watching it while joins churn. a preview join could request on the 1.5s gap instead of the 300ms one: a slower first frame for the hoverer, a third of the tax on the room. the knob is the reason a preview's join asks with (`request_keyframe(.., Ask::Join)`; `Ask::Lost` is the 1.5s gap).
 
 so: a delay, one preview per tab, teardown on leave, no grant on the hover path. with those four, hovering is not spam. without the delay it is: a sweep across four cards opens and closes four peers in 200ms and asks the publisher for four keyframes.
 

@@ -92,13 +92,18 @@ use webrtc::rtp_transceiver::rtp_codec::RTPCodecType;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
 
-use crate::media::{media_setup, opus_capability, vp8_capability};
+use crate::media::{is_vp8_keyframe, media_setup, opus_capability, vp8_capability};
+use webrtc::api::media_engine::MIME_TYPE_VP8;
 
 /// Forwarded keyframe requests are rate limited to one per this gap, per slot.
 const KEYFRAME_GAP: Duration = Duration::from_millis(1500);
-/// Even a forced request (a joining watcher, the thumbnail) waits this long after
-/// the last one: a burst of joins then shares one keyframe instead of one each.
+/// Joins ask at most once per this gap per slot, and the thumbnail waits this long
+/// after any request: a burst of joins shares keyframes instead of one each.
+/// docs/keyframes.md.
 const FORCED_KEYFRAME_GAP: Duration = Duration::from_millis(300);
+/// A request this recent with no keyframe forwarded since is taken as on its way: a
+/// join in that time is served by it. Past this the request is taken as lost.
+const KEYFRAME_IN_FLIGHT: Duration = Duration::from_millis(500);
 /// The browser has this long to send its one message, and we have this long to answer.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// The api gets this long to say whether a publisher's session is real.
@@ -195,7 +200,87 @@ struct Slot {
     track: Arc<TrackLocalStaticRTP>,
     /// The publisher's ssrc for it, known once its first packet came. Keyframe requests go there.
     ssrc: Option<u32>,
-    last_keyframe: Option<Instant>,
+    /// Keyframes forwarded on this slot so far, counted by the publish loop.
+    keyframes: Arc<AtomicU64>,
+    asks: KeyframeAsks,
+}
+
+/// Why a keyframe is wanted on a slot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Ask {
+    /// A watcher joined (its peer connected).
+    Join,
+    /// A watcher lost the picture and sent a PLI or FIR.
+    Lost,
+    /// The thumbnail's ffmpeg needs one.
+    Thumb,
+    /// The one extra request a burst of joins scheduled (`Plan::Trail`).
+    Trailing,
+}
+
+/// What to do with a keyframe request.
+#[derive(Debug, PartialEq, Eq)]
+enum Plan {
+    Send,
+    Skip,
+    /// Send one more after this long: a join that may have missed the last keyframe.
+    Trail(Duration),
+}
+
+/// A slot's keyframe requests: when they went out, and whether one has been answered.
+#[derive(Default)]
+struct KeyframeAsks {
+    /// The last request of any kind, and the slot's keyframe count when it went.
+    asked: Option<Instant>,
+    asked_seen: u64,
+    /// The last request a join made (a `Join` or `Trailing`).
+    join_asked: Option<Instant>,
+    /// A trailing request is scheduled and has not fired yet.
+    trailing: bool,
+}
+
+impl KeyframeAsks {
+    /// Decide on a request at `now`, `seen` being the slot's keyframe count, and note it
+    /// as sent when it is. A join shares a keyframe that is on its way (asked, nothing
+    /// forwarded since, under KEYFRAME_IN_FLIGHT): its peer is bound before that keyframe
+    /// lands. Otherwise the first join of a burst asks now, whatever else asked lately
+    /// (a watcher's loss or the thumbnail may have been answered before this peer was
+    /// there to get it). A join inside FORCED_KEYFRAME_GAP of the last join's request
+    /// may have missed that keyframe, so it schedules one trailing request at the gap's
+    /// end, shared by every join until then: join requests stay at one per gap per slot,
+    /// and none is dropped for the browser's own PLI to cover 1.5s later.
+    fn decide(&mut self, ask: Ask, now: Instant, seen: u64) -> Plan {
+        let since = |t: Option<Instant>| t.map(|t| now.saturating_duration_since(t));
+        let in_flight = seen == self.asked_seen && since(self.asked).is_some_and(|d| d < KEYFRAME_IN_FLIGHT);
+        let join_recent = since(self.join_asked).filter(|d| *d < FORCED_KEYFRAME_GAP);
+        let send = match ask {
+            Ask::Lost => since(self.asked).is_none_or(|d| d >= KEYFRAME_GAP),
+            Ask::Thumb => since(self.asked).is_none_or(|d| d >= FORCED_KEYFRAME_GAP),
+            Ask::Join if in_flight => false,
+            Ask::Join => match join_recent {
+                Some(_) if self.trailing => false,
+                Some(d) => {
+                    self.trailing = true;
+                    return Plan::Trail(FORCED_KEYFRAME_GAP - d);
+                }
+                None => true,
+            },
+            // a join request since, or one on its way, serves the joins that scheduled it
+            Ask::Trailing => {
+                self.trailing = false;
+                !in_flight && join_recent.is_none()
+            }
+        };
+        if !send {
+            return Plan::Skip;
+        }
+        self.asked = Some(now);
+        self.asked_seen = seen;
+        if matches!(ask, Ask::Join | Ask::Trailing) {
+            self.join_asked = Some(now);
+        }
+        Plan::Send
+    }
 }
 
 /// What a publisher says is live in one of its video slots, for the watchers' layout.
@@ -646,11 +731,13 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
             // has existed since the room was claimed, so watchers who joined before
             // this first packet (a screen shared mid-stream) are bound to it already.
             let mid = transceiver.mid().map(|m| m.to_string()).unwrap_or_default();
-            let Some((local, slot, camera)) = hub.bind(&room, generation, &mid, track.ssrc()).await else {
+            let Some((local, slot, camera, keyframes)) = hub.bind(&room, generation, &mid, track.ssrc()).await else {
                 log::info!("publish {room}: {kind} packets on mid {mid:?} with no slot for them");
                 return;
             };
             log::info!("publish {room}: slot {slot} up ({kind}, mid {mid}, {})", codec.capability.mime_type);
+            // counted so a join can tell a keyframe on its way from one already gone
+            let vp8 = codec.capability.mime_type.eq_ignore_ascii_case(MIME_TYPE_VP8);
 
             // The camera slot, the first video one, also feeds a small ffmpeg that
             // makes the thumbnail. The other video slots, the screens, share
@@ -704,7 +791,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
                         if stuck {
                             wait = Duration::from_secs(10);
                         }
-                        hub.request_keyframe(&room, slot, true).await;
+                        hub.request_keyframe(&room, slot, Ask::Thumb).await;
                     }
                 });
             }
@@ -715,6 +802,9 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
             while let Ok((mut packet, _)) = track.read_rtp().await {
                 packet.header.extension = false;
                 packet.header.extensions.clear();
+                if vp8 && is_vp8_keyframe(&packet.payload) {
+                    keyframes.fetch_add(1, Ordering::Relaxed);
+                }
                 if let Some(tap) = &mut tap {
                     tap.feed(&packet);
                 }
@@ -892,7 +982,7 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
                         || any.downcast_ref::<FullIntraRequest>().is_some()
                 });
                 if wants_keyframe {
-                    hub.request_keyframe(&room, slot, false).await;
+                    hub.request_keyframe(&room, slot, Ask::Lost).await;
                 }
             }
         });
@@ -993,6 +1083,16 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
         }
     }
     let _ = peer.close().await;
+}
+
+/// One PLI to the publisher for the slot with that ssrc.
+async fn send_pli(peer: &RTCPeerConnection, ssrc: u32) {
+    let _ = peer
+        .write_rtcp(&[Box::new(PictureLossIndication {
+            sender_ssrc: 0,
+            media_ssrc: ssrc,
+        })])
+        .await;
 }
 
 /// Where this peer's media really goes: the remote side of the selected candidate
@@ -1102,8 +1202,8 @@ async fn new_peer(
         match state {
             RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => dead.notify_one(),
             // A new watcher needs a keyframe on every picture right now, not
-            // whenever the next one happens to come. Once per watcher, ignoring
-            // the rate limit.
+            // whenever the next one happens to come. Once per watcher; joins in a
+            // burst share them (`KeyframeAsks::decide`).
             RTCPeerConnectionState::Connected
                 if is_watcher && !asked_keyframe.swap(true, Ordering::SeqCst) =>
             {
@@ -1141,17 +1241,18 @@ impl Hub {
     }
 
     /// The publisher's packets for `mid` have started. The slot's track to copy them
-    /// into, the slot's index, and whether it is the camera (the first video slot,
-    /// the one the thumbnail is made from). None if that publisher's room is gone,
-    /// or its offer had no such section.
-    async fn bind(&self, name: &str, generation: u64, mid: &str, ssrc: u32) -> Option<(Arc<TrackLocalStaticRTP>, usize, bool)> {
+    /// into, the slot's index, whether it is the camera (the first video slot, the one
+    /// the thumbnail is made from), and the slot's keyframe count to bump. None if that
+    /// publisher's room is gone, or its offer had no such section.
+    #[allow(clippy::type_complexity)]
+    async fn bind(&self, name: &str, generation: u64, mid: &str, ssrc: u32) -> Option<(Arc<TrackLocalStaticRTP>, usize, bool, Arc<AtomicU64>)> {
         let mut rooms = self.rooms.lock().await;
         let room = rooms.get_mut(name).filter(|r| r.generation == generation)?;
         let camera = room.slots.iter().position(|s| s.kind == RTPCodecType::Video);
         let index = room.slots.iter().position(|s| s.mid == mid)?;
         let slot = &mut room.slots[index];
         slot.ssrc = Some(ssrc);
-        Some((Arc::clone(&slot.track), index, camera == Some(index)))
+        Some((Arc::clone(&slot.track), index, camera == Some(index), Arc::clone(&slot.keyframes)))
     }
 
     /// The live room's tracks for a watcher that can receive on `wants` (audio, video)
@@ -1213,37 +1314,47 @@ impl Hub {
         Ok(())
     }
 
-    /// Ask the publisher for a keyframe on one slot: a watcher lost that picture, or
-    /// the thumbnail needs one. Rate limited per slot; nothing for audio, or for a
-    /// slot that has not sent anything yet.
-    async fn request_keyframe(&self, name: &str, slot: usize, force: bool) {
-        let (peer, ssrc) = {
-            let mut rooms = self.rooms.lock().await;
-            let Some(room) = rooms.get_mut(name) else { return };
-            let Some(peer) = room.publisher.as_ref().and_then(Weak::upgrade) else { return };
-            let Some(slot) = room.slots.get_mut(slot) else { return };
-            let Some(ssrc) = slot.ssrc.filter(|_| slot.kind == RTPCodecType::Video) else { return };
-            let now = Instant::now();
-            let gap = if force { FORCED_KEYFRAME_GAP } else { KEYFRAME_GAP };
-            if slot.last_keyframe.is_some_and(|t| now.duration_since(t) < gap) {
-                return;
+    /// Ask the publisher for a keyframe on one slot: a watcher joined or lost that
+    /// picture, or the thumbnail needs one. Rate limited per slot (`KeyframeAsks::decide`);
+    /// nothing for audio, or for a slot that has not sent anything yet.
+    async fn request_keyframe(&self, name: &str, slot: usize, ask: Ask) {
+        let Some((plan, peer, ssrc, generation)) = self.plan_keyframe(name, None, slot, ask).await else { return };
+        match plan {
+            Plan::Send => send_pli(&peer, ssrc).await,
+            Plan::Skip => {}
+            Plan::Trail(wait) => {
+                drop(peer);
+                let hub = self.clone();
+                let name = name.to_owned();
+                tokio::spawn(async move {
+                    tokio::time::sleep(wait).await;
+                    if let Some((Plan::Send, peer, ssrc, _)) = hub.plan_keyframe(&name, Some(generation), slot, Ask::Trailing).await {
+                        send_pli(&peer, ssrc).await;
+                    }
+                });
             }
-            slot.last_keyframe = Some(now);
-            (peer, ssrc)
-        };
-        let _ = peer
-            .write_rtcp(&[Box::new(PictureLossIndication {
-                sender_ssrc: 0,
-                media_ssrc: ssrc,
-            })])
-            .await;
+        }
+    }
+
+    /// `request_keyframe`'s decision, made under the lock, with the publisher, the slot's
+    /// ssrc and the room's generation. `generation`, when given, must still be the room's.
+    /// None when there is nobody to ask.
+    async fn plan_keyframe(&self, name: &str, generation: Option<u64>, slot: usize, ask: Ask) -> Option<(Plan, Arc<RTCPeerConnection>, u32, u64)> {
+        let mut rooms = self.rooms.lock().await;
+        let room = rooms.get_mut(name).filter(|r| generation.is_none_or(|g| g == r.generation))?;
+        let peer = room.publisher.as_ref().and_then(Weak::upgrade)?;
+        let generation = room.generation;
+        let slot = room.slots.get_mut(slot)?;
+        let ssrc = slot.ssrc.filter(|_| slot.kind == RTPCodecType::Video)?;
+        let plan = slot.asks.decide(ask, Instant::now(), slot.keyframes.load(Ordering::Relaxed));
+        Some((plan, peer, ssrc, generation))
     }
 
     /// A keyframe on every picture, for a watcher that just joined.
     async fn request_keyframes(&self, name: &str) {
         let count = self.rooms.lock().await.get(name).map_or(0, |room| room.slots.len());
         for slot in 0..count {
-            self.request_keyframe(name, slot, true).await;
+            self.request_keyframe(name, slot, Ask::Join).await;
         }
     }
 
@@ -1337,7 +1448,8 @@ impl Room {
                     mid,
                     kind,
                     ssrc: None,
-                    last_keyframe: None,
+                    keyframes: Arc::default(),
+                    asks: KeyframeAsks::default(),
                 }
             })
             .collect();
@@ -1549,6 +1661,115 @@ mod tests {
         hub.add_preview("f", f, thirteenth, home).await.expect("the place a leaving preview freed");
         assert_eq!(hub.viewer_counts().await["f"], 0);
         assert_eq!(hub.viewer_counts().await["g"], 0);
+    }
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    #[test]
+    fn a_join_shares_a_keyframe_on_its_way() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        assert_eq!(asks.decide(Ask::Join, t, 0), Plan::Send);
+        // nothing forwarded yet: the next joins wait for that one
+        assert_eq!(asks.decide(Ask::Join, t + ms(100), 0), Plan::Skip);
+        assert_eq!(asks.decide(Ask::Join, t + ms(250), 0), Plan::Skip);
+        assert!(!asks.trailing);
+    }
+
+    #[test]
+    fn a_join_after_the_keyframe_went_gets_one_trailing_request() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        assert_eq!(asks.decide(Ask::Join, t, 0), Plan::Send);
+        // the keyframe came at +150; a join at +200 may have missed it
+        assert_eq!(asks.decide(Ask::Join, t + ms(200), 1), Plan::Trail(ms(100)));
+        // shared by every join until the gap ends
+        assert_eq!(asks.decide(Ask::Join, t + ms(250), 1), Plan::Skip);
+        assert_eq!(asks.decide(Ask::Trailing, t + ms(300), 1), Plan::Send);
+        assert!(!asks.trailing);
+        // and that one is on its way now
+        assert_eq!(asks.decide(Ask::Join, t + ms(350), 1), Plan::Skip);
+    }
+
+    #[test]
+    fn the_first_join_of_a_burst_ignores_other_recent_requests() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        assert_eq!(asks.decide(Ask::Thumb, t, 0), Plan::Send);
+        // the thumbnail's keyframe came and went before this watcher was there
+        assert_eq!(asks.decide(Ask::Join, t + ms(120), 1), Plan::Send);
+        let mut asks = KeyframeAsks::default();
+        assert_eq!(asks.decide(Ask::Lost, t, 0), Plan::Send);
+        assert_eq!(asks.decide(Ask::Join, t + ms(50), 1), Plan::Send);
+    }
+
+    #[test]
+    fn a_request_unanswered_past_the_in_flight_window_is_taken_as_lost() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        assert_eq!(asks.decide(Ask::Join, t, 0), Plan::Send);
+        assert_eq!(asks.decide(Ask::Join, t + KEYFRAME_IN_FLIGHT, 0), Plan::Send);
+    }
+
+    #[test]
+    fn a_trailing_request_is_skipped_when_a_join_asked_since() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        assert_eq!(asks.decide(Ask::Join, t, 0), Plan::Send);
+        assert_eq!(asks.decide(Ask::Join, t + ms(200), 1), Plan::Trail(ms(100)));
+        // the gap ended first for a join that asked on its own
+        assert_eq!(asks.decide(Ask::Join, t + ms(300), 1), Plan::Send);
+        assert_eq!(asks.decide(Ask::Trailing, t + ms(301), 1), Plan::Skip);
+        assert!(!asks.trailing);
+    }
+
+    #[test]
+    fn join_requests_stay_at_one_per_gap_under_any_join_rate() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        let mut sent = 0;
+        let mut seen = 0;
+        let mut trail_at: Option<Instant> = None;
+        // a join every 10ms for 3s, every keyframe forwarded 50ms after its request
+        let mut answer_at: Option<Instant> = None;
+        for step in 0..300 {
+            let now = t + ms(step * 10);
+            if answer_at.is_some_and(|a| now >= a) {
+                seen += 1;
+                answer_at = None;
+            }
+            if trail_at.is_some_and(|a| now >= a) {
+                trail_at = None;
+                if asks.decide(Ask::Trailing, now, seen) == Plan::Send {
+                    sent += 1;
+                    answer_at = Some(now + ms(50));
+                }
+            }
+            match asks.decide(Ask::Join, now, seen) {
+                Plan::Send => {
+                    sent += 1;
+                    answer_at = Some(now + ms(50));
+                }
+                Plan::Trail(wait) => trail_at = Some(now + wait),
+                Plan::Skip => {}
+            }
+        }
+        assert!(sent <= 3000 / FORCED_KEYFRAME_GAP.as_millis() as usize + 1, "{sent} join requests in 3s");
+        assert!(sent >= 5, "joins kept getting keyframes: {sent}");
+    }
+
+    #[test]
+    fn a_watcher_loss_and_the_thumbnail_keep_their_gaps() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        assert_eq!(asks.decide(Ask::Lost, t, 0), Plan::Send);
+        assert_eq!(asks.decide(Ask::Lost, t + ms(1499), 1), Plan::Skip);
+        assert_eq!(asks.decide(Ask::Thumb, t + ms(299), 1), Plan::Skip);
+        assert_eq!(asks.decide(Ask::Thumb, t + ms(300), 1), Plan::Send);
+        assert_eq!(asks.decide(Ask::Lost, t + ms(1799), 2), Plan::Skip);
+        assert_eq!(asks.decide(Ask::Lost, t + ms(1800), 2), Plan::Send);
     }
 
     #[tokio::test]

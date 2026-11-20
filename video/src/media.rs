@@ -71,3 +71,65 @@ pub fn media_setup(twcc: bool) -> anyhow::Result<(MediaEngine, Registry)> {
     }
     Ok((media, registry))
 }
+
+/// Whether a VP8 RTP payload starts a keyframe (RFC 7741): the first packet of
+/// partition 0 (S set, PID 0), past the payload descriptor, with the P bit of the
+/// VP8 frame tag clear. Only VP8 is registered above, so it is the one codec a
+/// publisher can send us. Anything short or malformed is not a keyframe.
+pub fn is_vp8_keyframe(payload: &[u8]) -> bool {
+    let Some(&first) = payload.first() else { return false };
+    if first & 0x10 == 0 || first & 0x07 != 0 {
+        return false;
+    }
+    let mut at = 1;
+    if first & 0x80 != 0 {
+        let Some(&ext) = payload.get(at) else { return false };
+        at += 1;
+        // I: a picture id, 7 bits or (M set) 15
+        if ext & 0x80 != 0 {
+            let Some(&id) = payload.get(at) else { return false };
+            at += if id & 0x80 != 0 { 2 } else { 1 };
+        }
+        // L: TL0PICIDX
+        if ext & 0x40 != 0 {
+            at += 1;
+        }
+        // T or K: TID/Y/KEYIDX
+        if ext & 0x30 != 0 {
+            at += 1;
+        }
+    }
+    payload.get(at).is_some_and(|tag| tag & 0x01 == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_vp8_keyframe;
+
+    #[test]
+    fn a_keyframe_start_with_and_without_the_extension() {
+        // S, PID 0, frame tag with P clear
+        assert!(is_vp8_keyframe(&[0x10, 0x00, 0x9d]));
+        // X, S; I with a 15 bit picture id; L; T; then the tag
+        assert!(is_vp8_keyframe(&[0x90, 0xe0, 0x81, 0x23, 0x05, 0x40, 0x50]));
+        // X, S; I with a 7 bit picture id
+        assert!(is_vp8_keyframe(&[0x90, 0x80, 0x12, 0x00]));
+    }
+
+    #[test]
+    fn not_a_keyframe() {
+        // a delta frame: P set
+        assert!(!is_vp8_keyframe(&[0x10, 0x01]));
+        assert!(!is_vp8_keyframe(&[0x90, 0x80, 0x12, 0x01]));
+        // a middle packet of a keyframe: S clear
+        assert!(!is_vp8_keyframe(&[0x00, 0x00]));
+        // the start of a later partition: PID 1
+        assert!(!is_vp8_keyframe(&[0x11, 0x00]));
+        // cut short anywhere
+        assert!(!is_vp8_keyframe(&[]));
+        assert!(!is_vp8_keyframe(&[0x10]));
+        assert!(!is_vp8_keyframe(&[0x90]));
+        assert!(!is_vp8_keyframe(&[0x90, 0x80]));
+        assert!(!is_vp8_keyframe(&[0x90, 0x80, 0x92, 0x00]));
+    }
+}

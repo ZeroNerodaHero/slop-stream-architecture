@@ -338,6 +338,16 @@ export function WatchPage() {
     </span>
   );
 
+  // the desktop's tab row: the three, and while the chat is a tab, the chat at the row's right end (the phone's
+  // row; a bad name has the chat alone there, as a phone's does). the open one is kept across a resize
+  const deskTabs: readonly PhoneTab[] = !name ? [] : phase === 'bad-name' ? (chatTab ? ['chat'] : []) : chatTab ? PHONE_TABS : WATCH_TABS;
+  const deskTab: PhoneTab | undefined = deskTabs.includes(tab) ? tab : deskTabs[0];
+  // while the chat tab is open the chat runs down to the window's foot (ChatSlot.tsx), so the picture, still
+  // the body's width, stops at a height that leaves it 260px: the page's top, the tab row and both its 1rem
+  // gaps (4.25rem), and the page's bottom padding (2.5rem) taken off the window. 16:9 kept, centred, never under
+  // 320px wide. a tall window never reaches the cap
+  const videoCap = chatTab && deskTab === 'chat' && 'mx-auto max-w-[max(320px,calc((100dvh_-_var(--page-top,4rem)_-_4.25rem_-_260px_-_2.5rem)_*_16_/_9))]';
+
   // the player, or the profile while they are not live, and the streamer's pictures beside it: the
   // desktop's video column, and a phone's pinned top. a phone has no chat button on it: the chat is
   // a tab there, never closed
@@ -364,7 +374,7 @@ export function WatchPage() {
             id="player-loading"
             label="loading the stream"
             // a phone's grey box is a strip while typing too, the player's height
-            className={cn(mobile ? strip.box : 'aspect-video', 'relative w-full border border-primaryStroke bg-backgroundSecondary max-md:border-t-0')}
+            className={cn(mobile ? strip.box : 'aspect-video', 'relative w-full border border-primaryStroke bg-backgroundSecondary max-md:border-t-0', videoCap)}
             style={mobile ? strip.style : undefined}
           >
             <Bone className="absolute inset-0" />
@@ -375,7 +385,7 @@ export function WatchPage() {
             )}
           </Skeleton>
         ) : (
-          <div id="profile" data-presence={presence} data-kbd-video={mobile || undefined} className={cn('relative', mobile && strip.box)} style={mobile ? strip.style : undefined}>
+          <div id="profile" data-presence={presence} data-kbd-video={mobile || undefined} className={cn('relative', mobile && strip.box, videoCap)} style={mobile ? strip.style : undefined}>
             <div className={cn('relative aspect-video w-full overflow-hidden border border-primaryStroke bg-black max-md:border-x-0 max-md:border-t-0', mobile && strip.frame)}>
               {shownThumb && (
                 <img
@@ -407,7 +417,7 @@ export function WatchPage() {
           </div>
         )
       ) : (
-        <div data-kbd-video={mobile || undefined} className={cn('group relative', mobile && strip.box)} style={mobile ? strip.style : undefined}>
+        <div data-kbd-video={mobile || undefined} className={cn('group relative', mobile && strip.box, videoCap)} style={mobile ? strip.style : undefined}>
           {/* the streamer's frame as they laid it out (docs/screen.md): `#video`, the one with the sound,
               stands in for the bottom video layer; a video layer clicked is shown alone */}
           <SceneView
@@ -645,11 +655,6 @@ export function WatchPage() {
       </div>
     );
   }
-
-  // the desktop's tab row: the three, and while the chat is a tab, the chat at the row's right end (the phone's
-  // row; a bad name has the chat alone there, as a phone's does). the open one is kept across a resize
-  const deskTabs: readonly PhoneTab[] = !name ? [] : phase === 'bad-name' ? (chatTab ? ['chat'] : []) : chatTab ? PHONE_TABS : WATCH_TABS;
-  const deskTab: PhoneTab | undefined = deskTabs.includes(tab) ? tab : deskTabs[0];
 
   return (
     <PageFrame
