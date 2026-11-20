@@ -139,6 +139,15 @@ const ROOM_GRID = 'grid max-md:snap-start lg:snap-start items-start gap-2 py-[7p
  * folded to a strip of faces (`MembersStrip`). The skeleton has the same, so the chat lands at its width.
  */
 const roomColumns = (membersOpen: boolean) => (membersOpen ? 'lg:grid-cols-[176px_minmax(0,1fr)_224px]' : 'lg:grid-cols-[176px_minmax(0,1fr)_56px]');
+/**
+ * The chat's column is a size container, so the pins under its header (`ChannelPins`) are 80% of
+ * the chat's width (`cqw`), never narrower than a 20rem box nor wider than the window. With the
+ * roster folded the chat is wider by the roster's 224px less the strip's 56px (`roomColumns`):
+ * the pins take that back off, so they keep the width they have with the roster open.
+ */
+const ROOM_CHAT_CONTAINER = '[container-type:inline-size]';
+const pinsWidth = (membersOpen: boolean) =>
+  cn('w-[max(20rem,80cqw)] max-w-[calc(100vw-2rem)]', !membersOpen && 'lg:w-[max(20rem,calc(0.8*(100cqw_-_168px)))]');
 const ROOM_HEIGHT = 'h-[calc(100dvh-var(--title-row,4rem)-14px)] max-md:h-[calc(100dvh-var(--title-row,4rem))] min-h-[420px] max-md:min-h-[320px]';
 /**
  * A phone's room is the chat alone, edge to edge under the title row (PageFrame's `bleed`): no
@@ -738,6 +747,7 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
   const [error, setError] = useState('');
   const tick = useAtomValue(pinsTickAtom);
   const boxRef = useRef<HTMLSpanElement | null>(null);
+  const membersOpen = useAtomValue(roomMembersOpenAtom);
   const count = room.pins?.[channel]?.length ?? 0;
   const canPin = room.perms.channels;
   const words = count === 0 ? 'pinned messages' : `pinned messages: ${count}`;
@@ -809,7 +819,7 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
           id="group-pins"
           role="region"
           aria-label="pinned messages"
-          className="absolute right-0 top-full z-30 mt-1 flex max-h-96 w-80 max-w-[calc(100vw-2rem)] flex-col border border-primaryStroke bg-backgroundSecondary text-sm"
+          className={cn('absolute right-0 top-full z-30 mt-1 flex max-h-96 flex-col border border-primaryStroke bg-backgroundSecondary text-sm', pinsWidth(membersOpen))}
         >
           <div className="flex items-center justify-between gap-2 border-b border-primaryStroke px-3 py-1.5">
             <span className="font-semibold">pinned messages</span>
@@ -1493,7 +1503,7 @@ export function ServerPage() {
                 {liveList}
               </div>
             )}
-            <div className={cn('min-w-0', ROOM_HEIGHT, STACKED_SNAP)}>
+            <div className={cn('min-w-0', ROOM_CHAT_CONTAINER, ROOM_HEIGHT, STACKED_SNAP)}>
               {/* the search box is the roster's (RoomSearch), for a member and a guest alike; the hits land in the panel. a search is every channel's: a hit opened in another one moves the page there */}
               <ChatPanel
                 name={server}
