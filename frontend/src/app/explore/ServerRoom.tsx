@@ -18,7 +18,6 @@ import {
   RiPushpinLine,
   RiRefreshLine,
   RiSearchLine,
-  RiServerLine,
   RiSettings3Line,
   RiShieldStarLine,
   RiTimeLine,
@@ -1430,7 +1429,7 @@ export function ServerPage() {
       {live.length > FACES && <p className="mt-2 text-xs text-textTertiary">{live.length - FACES} more live</p>}
     </section>
   );
-  // a phone's title row: the back caret and the pins (PageFrame `mobileBack`, `mobileStart`), the group's picture, then its name, small, over the channel; the button at the right end opens the drawer
+  // a phone's title row: the menu (PageFrame's, every page's), the group's picture, then its name, small, over the channel; at the right end the back caret (PageFrame's, just left of `mobileEnd`), the pins, then the button that opens the drawer
   const mobileTitle = (
     <span className="flex min-w-0 items-center gap-2.5">
       <GroupMark name={server} color={color} icon={room.icon} className="h-9 w-9 shrink-0 text-sm" />
@@ -1452,7 +1451,7 @@ export function ServerPage() {
         onClick={() => setDrawer((open) => !open)}
         className="-mr-2.5 flex h-11 w-11 shrink-0 items-center justify-center border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
       >
-        <RiServerLine aria-hidden size={22} />
+        <RiGroupLine aria-hidden size={22} />
       </button>
     </Tooltip>
   );
@@ -1462,9 +1461,14 @@ export function ServerPage() {
       wide
       titleId={titleId}
       mobileTitle={noChannel ? undefined : mobileTitle}
-      mobileStart={noChannel ? undefined : <PinSheetButton count={room.pins?.[channel]?.length ?? 0} open={pinSheet} onClick={() => setPinSheet((open) => !open)} />}
-      mobileBack={!noChannel}
-      mobileEnd={noChannel ? undefined : drawerOpener}
+      mobileEnd={
+        noChannel ? undefined : (
+          <>
+            <PinSheetButton count={room.pins?.[channel]?.length ?? 0} open={pinSheet} onClick={() => setPinSheet((open) => !open)} />
+            {drawerOpener}
+          </>
+        )
+      }
       bleed={!noChannel}
       title={
         <span className="flex min-w-0 items-center gap-3">
