@@ -131,7 +131,7 @@ function Corner({ mark, actions }: { mark?: ReactNode; actions?: ReactNode }) {
  * in the run stand under, the time at the left as the minute turns. The same `<p>` whatever
  * the shape, the caller's `attrs` on it and the full stamp as its title. The pictures stand
  * under the words in every shape (inside the box in `bubbles`). The text size is the list's:
- * the panel's `text-base`, the window's `text-sm`.
+ * `text-sm` in both, the panel and the window.
  */
 export function ChatLineShape({ shape, mine, at, name, who, face, faced = false, crowd = false, first, bucket, words, pictures, attrs, mark, actions }: ChatLineShapeProps) {
   const title = at ? stamp(at) : undefined;
