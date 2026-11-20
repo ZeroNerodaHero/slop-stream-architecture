@@ -47,6 +47,7 @@ import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatStyleAtom, type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
 import { compressChatImage } from '@/infra/picture';
+import { usePrefetchOnPointerDown } from '@/infra/prefetch';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
 import { ChatLineShape, placeOf } from '@/shared-components/ChatLine';
@@ -59,7 +60,7 @@ import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { Who } from '@/shared-components/PersonRow';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
-import { ProfileLink, useShowProfile } from '@/shared-components/ProfileLink';
+import { ProfileLink, profilePath, useShowProfile } from '@/shared-components/ProfileLink';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -157,6 +158,8 @@ interface TabProps {
 function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
   const peek = usePeek(PEEK_MS);
   const profile = useShowProfile();
+  // the shown one's tab goes to their page on a click while the popup is off: asked for on the press
+  const prefetch = usePrefetchOnPointerDown(selected && !profile.popup ? profilePath(dm.name) : null);
   return (
     <span
       className="group/tab relative shrink-0"
@@ -175,6 +178,7 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
         aria-label={`chat with ${dm.name}${dm.unread > 0 ? `, ${dm.unread} new` : ''}`}
         aria-haspopup={selected && profile.popup ? 'dialog' : undefined}
         data-unread={dm.unread || undefined}
+        {...prefetch}
         onClick={() => {
           // the shown one's face is them, the roster's way: the popup, or their page (ProfileLink.tsx)
           if (selected) {

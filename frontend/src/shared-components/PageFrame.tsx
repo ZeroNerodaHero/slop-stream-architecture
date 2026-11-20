@@ -50,6 +50,7 @@ export function HomeLink({ reload = false, square = false, className }: { reload
       to="/"
       aria-label="home"
       reloadDocument={reload || undefined}
+      data-prefetch={reload ? 'off' : undefined}
       className={buttonClassName('secondary', cn('shrink-0 gap-1 text-sm', square ? 'h-10 w-10 p-0' : 'px-3 py-1.5', className))}
     >
       <RiArrowLeftSLine aria-hidden size={square ? 20 : 18} />

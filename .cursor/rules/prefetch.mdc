@@ -1,0 +1,28 @@
+---
+description: Every way to `/`, `/watch/<name>` or `/groups/<server>` asks for the page's data on pointerdown through infra/prefetch.ts, and those pages' loaders take the pressed answer before asking
+globs: frontend/src/**/*.tsx,frontend/src/**/*.ts
+alwaysApply: false
+---
+
+# Prefetch on press
+
+A press on a way to home, a stream's page or a group asks the api for that page's first data on `pointerdown`, ~100-200ms before the click and the route land (docs/spec.md "Prefetch on press"). **One** path does it: `frontend/src/infra/prefetch.ts`.
+
+- **A link** (`<Link to=…>`, any `<a href>` to one of those paths) needs nothing: the one capturing listener on the document (`installPrefetch`, main.tsx) sees it. A link whose click does something else instead (opens a popup, reloads the document) says `data-prefetch="off"`, as `ProfileLink` does while the popup is on.
+- **Anything else that navigates there by hand** (`navigate('/')`, `navigate(profilePath(name))`, a card or button with an `onClick`) spreads `usePrefetchOnPointerDown(path)` on the element; pass `null` while the click would not navigate.
+- **No other prefetching.** No `onMouseEnter` fetches, no `queryClient.prefetchQuery`, no second cache, no hand-rolled `pointerdown` handler calling `api.*`.
+- **A page's loader** owns what is asked, beside itself: `onPrefetch(kind, fn)` in its atom module calls `prefetch(key, topic, 'drop' | 'hold', ask)` with the same request the loader makes, and the loader asks `takePrefetched(key)?.answer ?? api.…()` after it has watched its topic. A new first request on one of those pages goes in both places with the same key.
+- **Reads only.** A press that goes nowhere costs GETs (and the grant, a read despite its `POST`) that expire in 5s. Never a peer, a socket of the page's own, or a write on a press.
+- **A new route** joins by adding its kind to `prefetchRouteOf` and an `onPrefetch` beside its loader. If routes become lazy, `prefetchRoute` loads the chunk too.
+
+```tsx
+// ❌ BAD — a press-time fetch of its own, and a button that waits for the click
+<div onMouseDown={() => void api.watch(name)} onClick={() => navigate(`/watch/${name}`)} />
+
+// ✅ GOOD — a link: nothing to add
+<Link to={`/watch/${encodeURIComponent(name)}`}>{name}</Link>
+
+// ✅ GOOD — a button that navigates
+const press = usePrefetchOnPointerDown('/');
+<IconButton label="picture in picture" {...press} onClick={toCorner} />
+```

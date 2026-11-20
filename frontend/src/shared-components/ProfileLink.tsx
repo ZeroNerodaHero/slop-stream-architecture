@@ -14,7 +14,9 @@ const liveState = (live: boolean) => (live ? { live: true } : undefined);
 /**
  * Somebody, from something that is not a link (a chat window's tab): them over the page
  * (ProfilePopup.tsx) while this browser's setting says so (settings.profilePopup), else their
- * page. `popup` is the setting, for an `aria-haspopup`.
+ * page. `popup` is the setting, for an `aria-haspopup`; with it off, the thing spreads
+ * `usePrefetchOnPointerDown(profilePath(name))` on itself, the way a link to the page is
+ * prefetched (infra/prefetch.ts).
  */
 export function useShowProfile() {
   const popup = useAtomValue(profilePopupEnabledAtom);
@@ -58,6 +60,8 @@ export function ProfileLink({ person, live = false, id, twin = false, label, cla
       // not draggable: the face must not lift off the row as a ghost link
       draggable={false}
       aria-haspopup={popup ? 'dialog' : undefined}
+      // the popup asks for its own card: the page's data would be asked for nothing (infra/prefetch.ts)
+      data-prefetch={popup ? 'off' : undefined}
       onClick={(e) => {
         if (!popup || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
         e.preventDefault();

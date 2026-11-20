@@ -5,10 +5,11 @@
 
 import { atom } from 'jotai';
 
-import { api, type GroupBadge, messageOf } from '@/infra/api';
+import { api, type GroupBadge, messageOf, type WatchGrant } from '@/infra/api';
 import { presenceChanged } from '@/infra/atoms/presence-atoms';
 import { eventsPhaseAtom, onEvents, unwatchPresence, watchPresence } from '@/infra/events';
 import { isValidName } from '@/infra/names';
+import { onPrefetch, prefetch, takePrefetched } from '@/infra/prefetch';
 import {
   connectRelay,
   isVideoLayer,
@@ -326,9 +327,26 @@ const RESTART_PHASES: readonly WatchPhase[] = ['failed', 'bad-name'];
  * way all the same.
  */
 export async function watch(name: string): Promise<void> {
-  if (store.get(pipAtom) && name === store.get(watchNameAtom) && !RESTART_PHASES.includes(store.get(watchPhaseAtom))) return;
+  if (keptInCorner(name)) return;
   await start(name);
 }
+
+/** Picture in picture has `name` under way: its page, arriving, starts nothing. */
+function keptInCorner(name: string): boolean {
+  return store.get(pipAtom) && name === store.get(watchNameAtom) && !RESTART_PHASES.includes(store.get(watchPhaseAtom));
+}
+
+/** The grant's key in the press's cache (prefetch.ts). */
+const grantKey = (name: string) => `watch:${name}`;
+
+// a press on a way to `/watch/<name>`: the grant, the one thing the page asks first (`start`).
+// only the grant: the peer and the video socket wait for the page. nothing when picture in
+// picture has it and the page would ask nothing. a fact about the name meanwhile (live, ended,
+// renamed) drops it, and the page asks as it always did
+onPrefetch('watch', (name) => {
+  if (keptInCorner(name)) return;
+  prefetch(grantKey(name), name, 'drop', () => api.watch(name));
+});
 
 /** One attempt at `name`, whatever was going on before. A push, the backoff timer and the retry button come here directly. */
 async function start(name: string): Promise<void> {
@@ -352,7 +370,8 @@ async function start(name: string): Promise<void> {
 
   let grant;
   try {
-    grant = await api.watch(name);
+    // the one asked for on the press, when there was one and nothing has happened to it since
+    grant = await (takePrefetched<WatchGrant>(grantKey(name))?.answer ?? api.watch(name));
   } catch {
     if (mine === attempt) retryLater('cannot reach the server. retrying');
     return;
