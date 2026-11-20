@@ -349,13 +349,24 @@ const dropAll = async (ctx, names) => {
     return `beepboop${RUN} [BOT]`;
   });
 
-  await step('hide bots: the line goes, the header counts it, a reload keeps the choice, show brings it back', async () => {
-    const before = await p.$eval('#chat-hide-bots', (b) => ({ pressed: b.getAttribute('aria-pressed'), text: b.textContent.trim() }));
-    expect(before.pressed === 'false' && /hide bots/.test(before.text), `before: ${JSON.stringify(before)}`);
-    await p.click('#chat-hide-bots');
-    await p.waitForFunction(() => !document.querySelector('#chat-lines p[data-bot="true"]') && document.querySelector('#chat-hide-bots').getAttribute('aria-pressed') === 'true', null, { timeout: 5000 });
-    const hiding = await p.$eval('#chat-hide-bots', (b) => b.textContent.trim());
-    expect(/^1 hidden$/.test(hiding), `the header says "${hiding}"`);
+  await step('hide bots: the settings switch takes the line away, a reload keeps the choice, show brings it back', async () => {
+    // the switch is the chat tab's two cards (the header has no button): the gear, the tab, a card, close
+    const pickBots = async (id) => {
+      await p.hover('#user-panel');
+      await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+      await p.click('#settings');
+      await p.waitForSelector('#user-modal[open]', { timeout: 5000 });
+      await p.click('#tab-chat');
+      await p.waitForSelector(`#${id}`, { state: 'attached', timeout: 5000 });
+      await p.click(`label[for="${id}"]`);
+      expect(await p.isChecked(`#${id}`), `the ${id} card is not the one on`);
+      await p.click('#user-modal-close');
+      await p.waitForSelector('#user-modal', { state: 'detached', timeout: 5000 });
+    };
+    expect((await p.$('#chat-hide-bots')) === null, 'the chat header still has a hide bots button');
+    await pickBots('bots-hide');
+    await p.waitForFunction(() => !document.querySelector('#chat-lines p[data-bot="true"]'), null, { timeout: 5000 });
+    expect((await p.evaluate(() => localStorage.getItem('settings.hideBots'))) === 'true', 'the choice was not kept in the browser');
     const memberLine = await p.$(`#chat-lines p[data-groups="${slug}"]`);
     expect(memberLine, 'the member\'s line went too');
     // the choice is this browser's: a reload (history again) still hides the bot
@@ -363,13 +374,9 @@ const dropAll = async (ctx, names) => {
     await p.waitForSelector('#chat-text', { timeout: 15000 });
     await p.waitForFunction((group) => document.querySelector(`#chat-lines p[data-groups="${group}"]`), slug, { timeout: 10000 });
     expect((await p.$('#chat-lines p[data-bot="true"]')) === null, 'the bot line is back after a reload');
-    const afterReload = await p.$eval('#chat-hide-bots', (b) => b.textContent.trim());
-    expect(/^1 hidden$/.test(afterReload), `after the reload the header says "${afterReload}"`);
-    await p.click('#chat-hide-bots');
+    await pickBots('bots-show');
     await p.waitForSelector('#chat-lines p[data-bot="true"]', { timeout: 5000 });
-    const shown = await p.$eval('#chat-hide-bots', (b) => b.textContent.trim());
-    expect(/hide bots/.test(shown), `after showing the header says "${shown}"`);
-    return 'hidden, counted, kept, shown';
+    return 'hidden, kept, shown';
   });
 
   await step('a watcher of group:<name> on the events socket hears a channel added, the channels put in order, one renamed, and one deleted', async () => {

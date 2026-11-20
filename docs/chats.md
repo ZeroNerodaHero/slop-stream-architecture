@@ -18,7 +18,7 @@ flowchart LR
 | who may write | anyone: a login, or a nick | a login that has joined the group | a login, and only a friend (each follows the other) |
 | how a line goes out | a websocket for that room | one websocket for the whole server, the line naming its channel | `POST`, then the events socket tells both sides |
 | kept | the last 500 in redis; older ones in postgres only with `CHAT_PERSIST` | the same, its own room | every line, in postgres |
-| what is new | nothing counted | nothing counted in the room (the header says how many sockets are in it); the newest line in each channel is a row under each other member's bell, unless they muted the channel | a count per thread, on the sidebar, and a row under the bell |
+| what is new | nothing counted | nothing counted in the room (the header tells a screen reader how many sockets are in it); the newest line in each channel is a row under each other member's bell, unless they muted the channel | a count per thread, on the sidebar, and a row under the bell |
 | the deep file | `chat.md` | `groups.md`, and `chat.md` for the socket | `dms.md` |
 
 ## stream chat

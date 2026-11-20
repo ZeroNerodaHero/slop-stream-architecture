@@ -1,4 +1,4 @@
-import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine, RiRobot2Line } from '@remixicon/react';
+import { RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiImageAddLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type FocusEvent,
@@ -19,7 +19,7 @@ import { api, messageOf, type Owner } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { type ChatLine, type ChatRoom, chatRoomFor, chatSpeakerAtom, isBotLine, MAX_CHAT_IMAGES, nickAtom, nickIsValidAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
-import { type ChatStyle, chatStyleAtom, hideBotsAtom, profilePopupEnabledAtom, setHideBots } from '@/infra/atoms/settings-atoms';
+import { type ChatStyle, chatStyleAtom, profilePopupEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ChatLineShape, placeOf } from '@/shared-components/ChatLine';
@@ -510,7 +510,6 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
   const lines = useAtomValue(room.visibleLinesAtom);
   const total = useAtomValue(room.linesAtom).length;
   const loaded = useAtomValue(room.loadedAtom);
-  const hideBots = useAtomValue(hideBotsAtom);
   const hiddenBots = useAtomValue(room.hiddenBotLinesAtom);
   const shape = useAtomValue(chatStyleAtom);
   const count = useAtomValue(room.countAtom);
@@ -668,7 +667,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
       data-room={room.key}
       className={embedded ? cn('relative flex flex-col', className) : panelClassName(cn('relative flex min-h-[320px] flex-col', className))}
     >
-      {/* on a phone a stream's chat (watch, go live) drops this bar to leave the lines room over the keyboard: kept for screen readers, ids and the hide-bots setting as they are. a group's bar stays, it names the channel */}
+      {/* on a phone a stream's chat (watch, go live) drops this bar to leave the lines room over the keyboard: kept for screen readers and ids as they are. a group's bar stays, it names the channel */}
       {!embedded && (
         <header
           className={cn('flex items-center justify-between gap-3 border-b border-primaryStroke px-3 py-1.5 text-base', !server && 'max-md:sr-only')}
@@ -678,24 +677,10 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
           </span>
           <span className="flex min-w-0 items-center gap-3">
             {headerEnd}
-            <span id="chat-count" className="truncate text-textSecondary">
+            {/* who is here and the socket's state: read out, not shown. the bots' switch is the settings' chat tab */}
+            <span id="chat-count" className="sr-only">
               {count} here · {phase === 'open' ? 'live' : phase}
             </span>
-            {/* the bots' lines: shown, or held back with how many. a setting of this browser, so it follows you from room to room */}
-            <button
-              id="chat-hide-bots"
-              type="button"
-              aria-pressed={hideBots}
-              title={hideBots ? `the bots' lines are hidden. click to show them` : "hide the bots' lines (the fake streams' chatters)"}
-              onClick={() => setHideBots(!hideBots)}
-              className={cn(
-                'flex shrink-0 items-center gap-1 whitespace-nowrap border px-1.5 py-0.5 text-xs font-semibold tabular-nums transition-colors duration-150',
-                hideBots ? 'border-primaryBlue text-primaryBlue' : 'border-primaryStroke text-textTertiary hover:border-secondaryStroke hover:text-textSecondary'
-              )}
-            >
-              <RiRobot2Line aria-hidden size={14} />
-              {hideBots ? `${hiddenBots} hidden` : 'hide bots'}
-            </button>
           </span>
         </header>
       )}
