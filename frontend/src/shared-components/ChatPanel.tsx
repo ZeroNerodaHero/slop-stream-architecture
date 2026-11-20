@@ -505,13 +505,16 @@ export function RoomLines({
   room,
   lines,
   lineMark,
-  lineActions
+  lineActions,
+  lineSide
 }: {
   name: string;
   room: ChatRoom;
   lines: readonly ChatLine[];
   lineMark?: (line: ChatLine) => ReactNode;
   lineActions?: (line: ChatLine) => ReactNode;
+  /** Buttons in a column of their own at each line's right (ChatLine.tsx `side`). */
+  lineSide?: (line: ChatLine) => ReactNode;
 }) {
   const shape = useAtomValue(chatStyleAtom);
   const asStreamer = useAtomValue(room.asStreamerAtom);
@@ -554,6 +557,7 @@ export function RoomLines({
             pictures={<ChatImages ids={line.images} />}
             mark={lineMark?.(line)}
             actions={lineActions?.(line)}
+            side={lineSide?.(line)}
             attrs={{
               'data-id': line.id,
               'data-streamer': line.streamer || undefined,
