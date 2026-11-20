@@ -148,6 +148,8 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
   useEffect(() => {
     if (asks) void loadPeek(person.name);
   }, [person.name, asks]);
+  // home's list, the count its cards show: null while it has not come, or did not say. Above the early return: every hook runs on every render (React #300 when the popup opens over a shown card)
+  const viewers = useAtomValue(homeStreamsAtom)?.find((s) => s.name === person.name)?.viewers ?? null;
   if (covered) return null;
   // a renamed login's old lines: the name's row is a free name's for the hold, so its word and status are not this person's
   const known = person.verified && peek && !peek.verified ? undefined : peek;
@@ -155,8 +157,6 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
   const presence = person.presence ?? known?.presence;
   // their primary group's badge, else the first group their chat lines wear (the api's `badge`); an older api's answer has none, so the line's own
   const badge = known?.badge !== undefined ? known.badge : (person.groups?.find((g) => g.name !== BOT_GROUP) ?? null);
-  // home's list, the count its cards show: null while it has not come, or did not say
-  const viewers = useAtomValue(homeStreamsAtom)?.find((s) => s.name === person.name)?.viewers ?? null;
   const root = at.host.ownerDocument.documentElement;
   const w = root.clientWidth;
   const h = root.clientHeight;
