@@ -4,7 +4,6 @@ import {
   RiArrowRightSLine,
   RiCloseLine,
   RiDeleteBinLine,
-  RiDraggable,
   RiForbidLine,
   RiGroupLine,
   RiHashtag,
@@ -96,6 +95,7 @@ import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { PresenceSquare } from '@/shared-components/PersonRow';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { ProfileLink } from '@/shared-components/ProfileLink';
+import { DragHandle, movedTo, useReorder } from '@/shared-components/Reorderable';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -2641,17 +2641,6 @@ function BansSection({ server, room, run }: ManageProps) {
   );
 }
 
-/** `name` moved to index `to` in `order` (held to the ends): the order that leaves. The same order when it is not there, or already at `to`. */
-function movedTo(order: string[], name: string, to: number): string[] {
-  const from = order.indexOf(name);
-  if (from < 0) return order;
-  const at = Math.max(0, Math.min(order.length - 1, to));
-  if (at === from) return order;
-  const next = order.filter((item) => item !== name);
-  next.splice(at, 0, name);
-  return next;
-}
-
 /**
  * A channel's name on its row of the channels tab and, within reach, the way to change it: a
  * pencil beside the name (up while the pointer or the keyboard is on the name) opens the name
@@ -2772,76 +2761,14 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
   const orders = room.perms.channels;
   const [adding, setAdding] = useState(false);
   const [sure, setSure] = useState<string | null>(null);
-  /** The order while a row is dragged: the one the drag began from, with the row where the pointer has it. Null between drags. */
-  const [draft, setDraft] = useState<string[] | null>(null);
-  const [dragging, setDragging] = useState<string | null>(null);
-  const rows = useRef<HTMLUListElement | null>(null);
-  const drag = useRef<{
-    pointerId: number;
-    name: string;
-    y: number;
-    from: number;
-    pitch: number;
-    start: string[];
-    now: string[];
-  } | null>(null);
   const full = channels.length >= CHANNEL_CAP;
-  /** `list` over the room's channels: a channel gone since is dropped, one added since goes after, as the api puts it. */
-  const settle = (list: string[]) => [...list.filter((name) => byName.has(name)), ...names.filter((name) => !list.includes(name))];
-  // the rows: the draft while a row is dragged, else the room's
-  const order = draft ? settle(draft) : names;
-
-  /** The channels in `next`: moved on screen now, the api told. Nothing to tell when nothing moved. */
-  function put(next: string[]) {
-    if (next.length === names.length && next.every((name, i) => name === names[i])) return;
-    void run(() => setChannelOrder(server, next));
-  }
-
-  function startDrag(e: PointerEvent<HTMLButtonElement>, name: string, from: number) {
-    // the primary button only, and one drag at a time: a second finger on another handle takes nothing over
-    if (e.button !== 0 || drag.current) return;
-    const ul = rows.current;
-    const items = ul ? Array.from(ul.children) : [];
-    const first = items[0]?.getBoundingClientRect();
-    const second = items[1]?.getBoundingClientRect();
-    if (!ul || !first) return;
-    e.preventDefault();
-    // the list holds the pointer, not the handle: a row dragged is taken out of the document and put back
-    // by the reorder, and the browser lets go of a node that leaves. the drag ends with the capture, whatever ends it
-    ul.setPointerCapture(e.pointerId);
-    // a row and the gap after it: the distance between two rows' tops, or the one row's height when there is one
-    drag.current = {
-      pointerId: e.pointerId,
-      name,
-      y: e.clientY,
-      from,
-      pitch: second ? second.top - first.top : first.height,
-      start: order,
-      now: order
-    };
-    setDragging(name);
-  }
-  function moveDrag(e: PointerEvent<HTMLUListElement>) {
-    const d = drag.current;
-    // the drag is the pointer's that began it: another finger resting on the list neither steers nor ends it
-    if (!d || e.pointerId !== d.pointerId) return;
-    d.now = movedTo(d.start, d.name, d.from + Math.round((e.clientY - d.y) / d.pitch));
-    setDraft(d.now);
-  }
-  function endDrag(e: PointerEvent<HTMLUListElement>) {
-    const d = drag.current;
-    if (!d || e.pointerId !== d.pointerId) return;
-    drag.current = null;
-    setDragging(null);
-    // the drop: the room moves to this order at once (room-atoms), so the draft can go in the same breath
-    setDraft(null);
-    put(settle(d.now));
-  }
-  function keyMove(e: KeyboardEvent<HTMLButtonElement>, name: string, at: number) {
-    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
-    e.preventDefault();
-    put(movedTo(order, name, at + (e.key === 'ArrowUp' ? -1 : 1)));
-  }
+  // a row by its handle (Reorderable): the rows move on a draft, and the drop tells the api.
+  // the room moves to the new order at once (room-atoms), so the draft can go in the same breath
+  const reorder = useReorder({
+    keys: names,
+    name: (name) => `#${name}`,
+    onMove: (name, to) => void run(() => setChannelOrder(server, movedTo(names, name, to)))
+  });
 
   async function remove(name: string) {
     await run(async () => {
@@ -2859,63 +2786,41 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
           : 'the channels power moves and adds them; the ones you made are yours to rename and delete.'
       }`}
     >
-      <ul
-        id="manage-channels"
-        ref={rows}
-        onPointerMove={moveDrag}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        onLostPointerCapture={endDrag}
-        className="flex flex-col gap-2"
-      >
-        {order.map((name, i) => {
-          const item = byName.get(name);
-          if (!item) return null;
-          const held = dragging === name;
-          return (
-            <li
-              key={name}
-              data-channel={name}
-              className={cn(
-                'flex flex-col gap-2 border bg-background px-3 py-2 transition-[border-color] duration-150',
-                held ? 'border-primaryBlue' : 'border-primaryStroke'
-              )}
-            >
-              <div className="flex items-center gap-3">
-                {orders && (
-                  <Tooltip content={held ? null : 'drag to move'}>
-                    <button
-                      id={`channel-drag-${name}`}
-                      type="button"
-                      aria-label={`move #${name}: drag, or the arrow keys`}
-                      aria-keyshortcuts="ArrowUp ArrowDown"
-                      onPointerDown={(e) => startDrag(e, name, i)}
-                      onKeyDown={(e) => keyMove(e, name, i)}
-                      className={cn(
-                        'shrink-0 touch-none select-none border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke hover:text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none',
-                        held ? 'cursor-grabbing' : 'cursor-grab'
-                      )}
-                    >
-                      <RiDraggable aria-hidden size={18} />
+      <div className="relative">
+        <ul id="manage-channels" {...reorder.list} className="flex flex-col gap-2">
+          {reorder.order.map((name) => {
+            const item = byName.get(name);
+            if (!item) return null;
+            return (
+              <li
+                key={name}
+                data-channel={name}
+                {...reorder.item(name)}
+                className={cn(
+                  'flex flex-col gap-2 border bg-background px-3 py-2 transition-[border-color] duration-150',
+                  reorder.held === name ? 'border-primaryBlue' : 'border-primaryStroke'
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  {orders && <DragHandle id={`channel-drag-${name}`} {...reorder.handle(name)} />}
+                  {/* the api's rename rule is delete's: who made it, or the channels power, and never general */}
+                  <ChannelName item={item} channels={channels} editable={item.can_delete} onRename={(to) => void run(() => renameChannel(server, name, to))} />
+                  <KeptMark roles={keptTo(room, name)} />
+                  <CooldownMark item={item} canSet={orders} onPick={(seconds) => void run(() => api.setChannelCooldown(server, name, seconds))} />
+                  {item.can_delete && (
+                    <button id={`channel-remove-${name}`} type="button" className="shrink-0 text-sm text-decrease" onClick={() => setSure(name)}>
+                      delete
                     </button>
-                  </Tooltip>
-                )}
-                {/* the api's rename rule is delete's: who made it, or the channels power, and never general */}
-                <ChannelName item={item} channels={channels} editable={item.can_delete} onRename={(to) => void run(() => renameChannel(server, name, to))} />
-                <KeptMark roles={keptTo(room, name)} />
-                <CooldownMark item={item} canSet={orders} onPick={(seconds) => void run(() => api.setChannelCooldown(server, name, seconds))} />
-                {item.can_delete && (
-                  <button id={`channel-remove-${name}`} type="button" className="shrink-0 text-sm text-decrease" onClick={() => setSure(name)}>
-                    delete
-                  </button>
-                )}
-              </div>
-              {/* who sees it: the channels power's say, from the channel's side */}
-              {orders && <ChannelSeers server={server} name={name} room={room} run={run} />}
-            </li>
-          );
-        })}
-      </ul>
+                  )}
+                </div>
+                {/* who sees it: the channels power's say, from the channel's side */}
+                {orders && <ChannelSeers server={server} name={name} room={room} run={run} />}
+              </li>
+            );
+          })}
+        </ul>
+        {reorder.status}
+      </div>
       {orders && full && <p className="text-textTertiary">{CHANNEL_CAP} channels is the cap. delete one to add another.</p>}
       {orders && !full && (
         <button

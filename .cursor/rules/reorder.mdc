@@ -1,0 +1,43 @@
+---
+description: A reorderable list moves by a left-side RiDraggable drag handle (Reorderable.tsx), with keyboard support; never up/down arrow buttons
+globs: frontend/src/**/*.tsx
+alwaysApply: false
+---
+
+# A list is reordered by its drag handle
+
+Every list whose order the user can change (the socials editor's links, the about page's rows, a group's channels, the go live page's sources, the column's lists in settings) moves by a **drag handle at the row's left end**: `RiDraggable`, size 16, the row's first item. Never up and down arrow buttons, not beside the handle either: the handle is the one way in, and the × or the row's other actions stay on the right.
+
+Use the shared pair in `shared-components/Reorderable.tsx`, not a drag of your own:
+
+- `useReorder({ keys, name, onMove, live?, keyedByIndex?, onPickUp? })`: `keys` in the order they are kept, `name(key)` what a screen reader calls the item, `onMove(key, to)` keeps the new place however the list already keeps its order (an atom, the draft, the api). `live` when something else must follow every step (the stream's frame, the column behind the settings modal); without it the rows move on a draft and the drop keeps it. `keyedByIndex` for a list with no ids, whose keys are `String(i)`.
+- It gives `order` (draw the rows in it), `held`, `list` (spread on the rows' direct parent), `item(key)` (spread on each row), `handle(key)` (spread on the row's `DragHandle`) and `status` (the polite live region: put it beside the list, in a `relative` parent, relative-parent.mdc).
+- `<DragHandle id={…} {...reorder.handle(key)} />`: a focusable `<button>`, `aria-label="move <item>"`, `aria-roledescription="drag handle"`, `touch-action: none` (a finger on it drags and does not scroll the page), `text-textTertiary hover:text-textPrimary cursor-grab active:cursor-grabbing`, its tooltip `drag to move` (tooltips.mdc).
+
+What it does, so every list behaves the same:
+
+- **Pointer** (mouse, pen, touch): press the handle and drag; the row follows across rows of any height; let go to drop. Escape mid-drag puts it back.
+- **Keyboard**, on the focused handle: space (or enter) picks the row up, up and down arrows move it a row a press, space drops it, escape cancels and restores the order it was picked up from. Tabbing away drops it where it is.
+- **Announced**: the live region says `picked up <item>, position 2 of 5`, then `<item>, position 3 of 5` at each step, then `dropped …` or `move cancelled. …`.
+
+```tsx
+// ❌ BAD — arrow buttons, or a pointer drag written again in the list
+<button aria-label={`move ${word} up`} onClick={() => move(i, 'up')}><RiArrowUpLine size={16} /></button>
+<button aria-label={`move ${word} down`} onClick={() => move(i, 'down')}><RiArrowDownLine size={16} /></button>
+
+// ✅ GOOD
+const reorder = useReorder({ keys, name: (key) => labelOf(key), onMove: (key, to) => moveItem(key, to) });
+<div className="relative">
+  <ul {...reorder.list}>
+    {reorder.order.map((key) => (
+      <li key={key} {...reorder.item(key)} className="flex items-center gap-2">
+        <DragHandle id={`thing-drag-${key}`} {...reorder.handle(key)} />
+        …
+      </li>
+    ))}
+  </ul>
+  {reorder.status}
+</div>
+```
+
+The about page's cells within a row (left and right, a grid) are not a vertical list and keep their move left/right buttons.

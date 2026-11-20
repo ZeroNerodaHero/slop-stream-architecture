@@ -334,14 +334,23 @@ const SECOND = { x: 0.02, y: 0.631, w: 0.333, h: 0.333 };
     await dragRow(pub, 'i1', -1);
     await waitOrder(pub, ['s1', 'cam', 'i1']);
     await waitOrder(w, ['s1', 'cam', 'i1']);
+    // space picks it up, the arrows move it (the frame follows), space drops it; escape puts it back where it was picked up
     await pub.focus('#source-drag-i1');
+    await pub.keyboard.press('Space');
     await pub.keyboard.press('ArrowDown');
+    await pub.keyboard.press('Space');
     await waitOrder(pub, ['s1', 'i1', 'cam']);
     await waitOrder(w, ['s1', 'i1', 'cam']);
+    await pub.keyboard.press('Space');
     await pub.keyboard.press('ArrowUp');
+    await pub.keyboard.press('Space');
     await waitOrder(pub, ['s1', 'cam', 'i1']);
     await waitOrder(w, ['s1', 'cam', 'i1']);
-    return 'dragged down and up, then the keys';
+    await pub.keyboard.press('Space');
+    await pub.keyboard.press('ArrowDown');
+    await pub.keyboard.press('Escape');
+    await waitOrder(pub, ['s1', 'cam', 'i1']);
+    return 'dragged down and up, then the keys, then escape';
   });
 
   await step('the eye: the camera taken off the stream is a tile for the watcher, and put back it is where it was', async () => {
