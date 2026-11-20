@@ -445,6 +445,8 @@ export class ChatRoom {
     this.inFlight.push({ text, images });
     store.set(this.draftAtom, '');
     store.set(this.imagesAtom, []);
+    // your own line goes out: the view goes to the newest line, out of a jump too, and again when the line comes back
+    this.toLatest();
   }
 
   /** The tier a socket's lines are on: the streamer's grant or a login is the login's, a nick the other. */
@@ -528,7 +530,11 @@ export class ChatRoom {
         const line = fromWire(msg as ChatLine);
         // another channel's line waits on the shelf; the one on screen's goes up like a stream's
         if (tagged !== null && tagged !== this.channel) this.shelfAppend(tagged, line);
-        else this.appendLine(line);
+        else {
+          this.appendLine(line);
+          // one of ours back: it lands at the bottom, where the send put the view. someone else's leaves a reader where they are
+          if (sent >= 0) this.toLatest();
+        }
       } else if (msg.type === 'count' && typeof msg.count === 'number') {
         if (tagged !== null) {
           this.counts.set(tagged, msg.count);
@@ -859,6 +865,17 @@ export class ChatRoom {
     this.scrollPlan = 'bottom';
     if (tail) store.set(this.linesAtom, tail);
     else store.set(this.scrollAtom, store.get(this.scrollAtom) + 1);
+  }
+
+  /** To the newest line on the next paint: back to the live tail first when a jump has an old window on screen. Your own send's. */
+  private toLatest() {
+    if (this.pinned) {
+      this.backToLatest();
+      return;
+    }
+    this.following = true;
+    this.scrollPlan = 'bottom';
+    store.set(this.scrollAtom, store.get(this.scrollAtom) + 1);
   }
 
   /** A line onto the live tail (or the parked one, behind a jump). One already there, by id, is not drawn twice. */
