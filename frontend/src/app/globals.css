@@ -120,3 +120,75 @@ body {
     user-select: none;
   }
 }
+
+/* the chat window, see-through (ChatSlot.tsx's toggle, `settings.chatClear`). only the window over the page: the
+   columns, a phone's sheet and the popped out player never wear it. no fill and no stroke behind the lines, so the
+   stream shows between them; every word wears one shadow, so it reads over a bright frame or a dark one. a light
+   theme's dark text would vanish over the stream, so inside the window the tokens are the dark theme's (:root, at the top).
+   the bar and the send row keep a dark glass, so the window can still be grabbed and typed in; the action bar is a
+   solid box again, in the page's own theme (kept here as --solid-*, since inside they are swapped) */
+#chat-modal.chat-clear {
+  --solid-background: var(--background);
+  --solid-background-secondary: var(--background-secondary);
+  --solid-background-tertiary: var(--background-tertiary);
+  --solid-text-primary: var(--text-primary);
+  --solid-text-secondary: var(--text-secondary);
+  --solid-text-tertiary: var(--text-tertiary);
+  --solid-primary-stroke: var(--primary-stroke);
+  --solid-secondary-stroke: var(--secondary-stroke);
+  --solid-increase: var(--increase);
+  --solid-decrease: var(--decrease);
+  background: transparent;
+  border-color: transparent;
+  color-scheme: dark;
+}
+/* the edge shows while the pointer is on the window, for a corner to be found */
+#chat-modal.chat-clear:hover {
+  border-color: rgb(255 255 255 / 0.2);
+}
+#chat-modal.chat-clear > * {
+  --background: 15 17 21;
+  --background-secondary: 24 27 34;
+  --background-tertiary: 32 36 46;
+  --text-primary: 242 243 245;
+  --text-secondary: 214 219 228;
+  --text-tertiary: 186 193 205;
+  --primary-stroke: 150 158 172;
+  --secondary-stroke: 170 178 190;
+  --increase: 63 185 80;
+  --decrease: 248 81 73;
+  /* the dialog resolved its colour from the page's tokens, and a colour inherits resolved: say it again under the swap */
+  color: rgb(var(--text-primary));
+}
+#chat-modal.chat-clear #chat {
+  background: transparent;
+  border-color: transparent;
+  text-shadow:
+    0 1px 2px rgb(0 0 0 / 0.9),
+    0 0 4px rgb(0 0 0 / 0.7);
+}
+#chat-modal.chat-clear #chat > header,
+#chat-modal.chat-clear #chat > footer,
+#chat-modal.chat-clear #chat-latest {
+  background: rgb(0 0 0 / 0.4);
+  border-color: rgb(255 255 255 / 0.12);
+  backdrop-filter: blur(8px);
+}
+#chat-modal.chat-clear [data-bubble] {
+  background: transparent;
+  border-color: transparent;
+}
+#chat-modal.chat-clear [data-line-actions] {
+  --background: var(--solid-background);
+  --background-secondary: var(--solid-background-secondary);
+  --background-tertiary: var(--solid-background-tertiary);
+  --text-primary: var(--solid-text-primary);
+  --text-secondary: var(--solid-text-secondary);
+  --text-tertiary: var(--solid-text-tertiary);
+  --primary-stroke: var(--solid-primary-stroke);
+  --secondary-stroke: var(--solid-secondary-stroke);
+  --increase: var(--solid-increase);
+  --decrease: var(--solid-decrease);
+  color: rgb(var(--text-primary));
+  text-shadow: none;
+}

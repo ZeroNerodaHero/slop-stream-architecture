@@ -797,7 +797,10 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
             className={cn('flex cursor-move items-center justify-between gap-3 border-b border-primaryStroke py-1.5 pl-3 pr-1 text-sm', CHAT_GRIP)}
           >
             <span className="truncate font-semibold">chat</span>
-            {bar.close}
+            <span className="flex items-center gap-1">
+              {bar.clear}
+              {bar.close}
+            </span>
           </header>
         )}
         <p className="m-auto px-6 text-center text-textTertiary">the chat is out in your stream's window. it is back here when that closes.</p>
@@ -832,7 +835,12 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
             <span id="chat-count" className="sr-only">
               {count} here · {phase === 'open' ? 'live' : phase}
             </span>
-            {bar?.close}
+            {bar && (
+              <span className="flex items-center gap-1">
+                {bar.clear}
+                {bar.close}
+              </span>
+            )}
           </span>
         </header>
       )}
