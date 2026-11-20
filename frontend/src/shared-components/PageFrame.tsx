@@ -91,7 +91,8 @@ function useOnLivePage(): boolean {
  * The right end of every page's title row: the notifications bell (Notifications.tsx, the
  * inbox opens under it), then go live, absent on its own page. Search is the sidebar's
  * (Friends.tsx), and so is the settings gear, at the far end of your line in it (UserPanel.tsx).
- * A phone's home goes just before go live (`home`).
+ * A phone's home goes just before go live (`home`). Both are the follow button's height
+ * (FollowButton.tsx): `py-1.5` around a 20px line, so a stream's row is one height across.
  */
 function TopActions({ bell = true, home = false }: { bell?: boolean; home?: boolean }) {
   const onLivePage = useOnLivePage();
@@ -100,7 +101,7 @@ function TopActions({ bell = true, home = false }: { bell?: boolean; home?: bool
       {bell && <NotificationsBell />}
       {home && <MobileHomeLink />}
       {!onLivePage && (
-        <Link id="go-live" to="/live" className={buttonClassName('primary', 'px-3 py-2 text-sm max-md:h-11')}>
+        <Link id="go-live" to="/live" className={buttonClassName('primary', 'px-3 py-1.5 text-sm max-md:h-11')}>
           go live
         </Link>
       )}

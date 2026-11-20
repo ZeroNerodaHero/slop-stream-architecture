@@ -165,7 +165,8 @@ function DmButton({ name }: { name: string }) {
   const toggle = () => (on ? hideDms() : openDm({ id: '', name, avatar: friend.avatar, verified: friend.verified, bio: friend.bio, presence: friend.presence }));
   return (
     <Tooltip content={label}>
-      <IconButton id="dm-open" tone="page" label={label} active={on} onClick={toggle}>
+      {/* square at the row's height, the follow button's and the bell's (py-1.5 around a 20px line) */}
+      <IconButton id="dm-open" tone="page" label={label} active={on} onClick={toggle} className="md:h-[34px] md:w-[34px]">
         <RiChat3Line aria-hidden size={20} />
       </IconButton>
     </Tooltip>
