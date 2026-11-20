@@ -1175,14 +1175,15 @@ export function FriendChat() {
                   maxLength={MAX_CHARS + 50}
                   autoComplete="off"
                   // a phone's box is 16px text: a smaller one zooms the page in when it takes focus (ios; globals.css keeps
-                  // it at 16px under a smaller text size too). it takes the row's room and gives it back, so send never leaves the row
-                  className={cn(INPUT, mobile && 'h-11 min-w-0 flex-1 py-0')}
+                  // it at 16px under a smaller text size too). it takes the row's room and gives it back, so send never leaves the row.
+                  // a desktop's is text-sm like the lines, pinned at the 30px box
+                  className={cn(INPUT, mobile ? 'h-11 min-w-0 flex-1 py-0' : 'h-[1.875rem] text-sm')}
                 />
                 <Button
                   id="friend-chat-send"
                   type="submit"
                   variant="primary"
-                  className={cn(INPUT_BUTTON, mobile && 'h-11 min-w-[44px] shrink-0 py-0')}
+                  className={cn(INPUT_BUTTON, mobile ? 'h-11 min-w-[44px] shrink-0 py-0' : 'h-[1.875rem] text-sm')}
                   disabled={(!draft.trim() && pictures.length === 0) || left < 0 || sending || uploading}
                 >
                   send
