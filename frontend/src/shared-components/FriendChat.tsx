@@ -47,6 +47,7 @@ import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatStyleAtom, type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
 import { compressChatImage } from '@/infra/picture';
+import { usePrefetchOnPointerDown } from '@/infra/prefetch';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
 import { ChatLineShape, placeOf } from '@/shared-components/ChatLine';
@@ -59,7 +60,7 @@ import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { Who } from '@/shared-components/PersonRow';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
-import { ProfileLink, useShowProfile } from '@/shared-components/ProfileLink';
+import { ProfileLink, profilePath, useShowProfile } from '@/shared-components/ProfileLink';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -157,6 +158,8 @@ interface TabProps {
 function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
   const peek = usePeek(PEEK_MS);
   const profile = useShowProfile();
+  // the shown one's tab goes to their page on a click while the popup is off: asked for on the press
+  const prefetch = usePrefetchOnPointerDown(selected && !profile.popup ? profilePath(dm.name) : null);
   return (
     <span
       className="group/tab relative shrink-0"
@@ -175,6 +178,7 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
         aria-label={`chat with ${dm.name}${dm.unread > 0 ? `, ${dm.unread} new` : ''}`}
         aria-haspopup={selected && profile.popup ? 'dialog' : undefined}
         data-unread={dm.unread || undefined}
+        {...prefetch}
         onClick={() => {
           // the shown one's face is them, the roster's way: the popup, or their page (ProfileLink.tsx)
           if (selected) {
@@ -617,6 +621,8 @@ export function FriendChat() {
   const hold = useRef(0);
   /** Older lines are on their way: the next paint keeps the view where it was instead of jumping to the bottom. */
   const prepending = useRef(false);
+  /** The thread a line of yours is on its way to: its next paint that brings lines goes to the newest, wherever the reader had scrolled. */
+  const sentJump = useRef<string | null>(null);
   /** The thread the log last showed: a change of thread starts at the bottom. */
   const shownThread = useRef<string | undefined>(undefined);
   /** The oldest line the log last drew: one older than it next time is a page put above (the scroll's, or a hit's). */
@@ -720,7 +726,14 @@ export function FriendChat() {
     const oldest = lines[0]?.id;
     // a page put above the lines on screen: the scroll asked for it, or a hit is loading its way back (`openDmLine`)
     const older = shownThread.current === name && oldestShown.current !== undefined && oldest !== undefined && oldest < oldestShown.current;
-    if (prepending.current || older) {
+    // another thread on screen since the send: that one starts at its bottom anyway
+    if (sentJump.current !== name) sentJump.current = null;
+    if (sentJump.current && shownThread.current === name) {
+      // your own send: to the bottom. a page of older lines still on its way keeps its flag, and holds its place when it lands
+      sentJump.current = null;
+      el.scrollTop = el.scrollHeight;
+      stuck.current = true;
+    } else if (prepending.current || older) {
       el.scrollTop += el.scrollHeight - hold.current;
       prepending.current = false;
     } else if (stuck.current || shownThread.current !== name) {
@@ -840,8 +853,11 @@ export function FriendChat() {
     e?.preventDefault();
     if (!name || (!draft.trim() && pictures.length === 0) || sending || uploading) return;
     setSending(true);
+    // the thread's lines are one run from the newest back (dm-atoms.ts), so the newest is always loaded: the line just goes on the bottom, and the view with it
+    sentJump.current = name;
     const sent = await sendDm(name, draft, pictures);
     setSending(false);
+    if (!sent) sentJump.current = null;
     if (sent) {
       setDraft('');
       setPictures([]);

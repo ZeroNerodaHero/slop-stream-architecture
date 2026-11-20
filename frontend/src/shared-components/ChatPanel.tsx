@@ -269,9 +269,11 @@ const THUMB_HOVER =
  * row share its width, cropped to fill their cells: three are two over one across the whole row,
  * five are three over two, eight are four over four. A click on any puts it over the whole page
  * (`PictureView`), in the window the chat is in: the page's, or the popped-out player's own.
- * A direct message's pictures are drawn by the same (FriendChat.tsx).
+ * A direct message's pictures are drawn by the same (FriendChat.tsx), and so are a pinned line's in
+ * a group channel's pins list (ServerRoom.tsx), `small` there: rows 4rem tall, one picture at most
+ * 5rem, to sit in the narrow list.
  */
-export function ChatImages({ ids }: { ids: string[] }) {
+export function ChatImages({ ids, small = false }: { ids: string[]; small?: boolean }) {
   const [view, setView] = useState<{ at: number; host: HTMLElement } | null>(null);
 
   if (ids.length === 0) return null;
@@ -283,7 +285,7 @@ export function ChatImages({ ids }: { ids: string[] }) {
     // the grid asks for 28rem and takes what the line has: inside a block, and inside the server line's shrink-to-fit column alike
     <span className={cn('mt-1 flex max-w-full flex-col gap-1', many && 'w-[28rem]')}>
       {rows.map((row, r) => (
-        <span key={r} className={cn('flex gap-1', many && 'h-24')}>
+        <span key={r} className={cn('flex gap-1', many && (small ? 'h-16' : 'h-24'))}>
           {row.map((id, j) => {
             const i = r * first + j;
             return (
@@ -295,7 +297,7 @@ export function ChatImages({ ids }: { ids: string[] }) {
                 className={cn(THUMB_HOVER, many ? 'min-w-0 flex-1' : 'block max-w-full')}
                 onClick={(e) => setView({ at: i, host: e.currentTarget.ownerDocument.body })}
               >
-                <img src={pictureSrc(id)} alt="" className={many ? 'h-full w-full object-cover' : 'max-h-[7.5rem] max-w-full object-contain'} />
+                <img src={pictureSrc(id)} alt="" className={many ? 'h-full w-full object-cover' : cn('max-w-full object-contain', small ? 'max-h-20' : 'max-h-[7.5rem]')} />
               </button>
             );
           })}

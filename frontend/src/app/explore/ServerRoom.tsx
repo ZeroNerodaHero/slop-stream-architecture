@@ -95,7 +95,7 @@ import { RailFace } from '@/shared-components/Friends';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack, useSheetKeyboard } from '@/shared-components/MobileSheet';
 import { when } from '@/shared-components/ChatLine';
-import { ChatPanel } from '@/shared-components/ChatPanel';
+import { ChatImages, ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { INPUT } from '@/shared-components/input';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
@@ -130,8 +130,10 @@ const ABOUT_CAP = 200;
  * to is exactly what the window shows, and the page can scroll exactly that far, whether the
  * row is one line or two. The columns beside the chat, the channels and the roster, start on
  * the chat's top edge, and the roster (open or folded to its strip) ends on its foot too.
+ * Stacked (md to lg: one column, the channels over the chat over the roster) the grid is taller
+ * than the window, so it is not the snap area: each block is (STACKED_SNAP).
  */
-const ROOM_GRID = 'grid snap-start items-start gap-2 py-[7px] -mb-10 max-md:mb-0 max-md:gap-0 max-md:py-0';
+const ROOM_GRID = 'grid max-md:snap-start lg:snap-start items-start gap-2 py-[7px] -mb-10 max-md:mb-0 max-md:gap-0 max-md:py-0';
 /**
  * The room's three columns on a wide screen: the channels, the chat, the roster, or the roster
  * folded to a strip of faces (`MembersStrip`). The skeleton has the same, so the chat lands at its width.
@@ -144,6 +146,14 @@ const ROOM_HEIGHT = 'h-[calc(100dvh-var(--title-row,4rem)-14px)] max-md:h-[calc(
  */
 const ROOM_CHAT_MOBILE =
   'max-md:border-0 max-md:bg-background max-md:[&>header]:px-3 max-md:[&_#chat-lines]:px-3 max-md:[&>footer]:px-3 max-md:[&>footer]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] max-md:[&>footer]:pt-2';
+/**
+ * A block of the stacked room (md to lg) is a snap area of its own, so the page never rests
+ * halfway through the channels, and a snap to the chat shows the whole of it, the composer at the
+ * foot. The page's `scroll-padding-top` is already the title row, so the margin is the 7px breath
+ * alone: the chat, ROOM_HEIGHT, then ends 7px over the window's foot. `snap-always`: a fling from
+ * the channels stops on the chat, not past it.
+ */
+const STACKED_SNAP = 'md:max-lg:snap-start md:max-lg:snap-always md:max-lg:scroll-mt-[7px]';
 /** The roster beside the chat: the chat's height on a wide screen; under it (a narrow screen's one column) no taller than the window. */
 const ROSTER_HEIGHT = 'max-h-[calc(100dvh-var(--title-row,4rem)-14px)] lg:h-[calc(100dvh-var(--title-row,4rem)-14px)] lg:min-h-[420px]';
 
@@ -151,7 +161,8 @@ const ROSTER_HEIGHT = 'max-h-[calc(100dvh-var(--title-row,4rem)-14px)] lg:h-[cal
  * The page's two views, each a snap area (`snap-start`; the type is on <html> while the page
  * is up, see ServerPage): the top, where the banner's margin above (the title row's `mb-6`) is
  * scroll margin so the snap lands at the very top of the page, not with the banner flush under
- * the row; and the room, under the title row. The skeleton has the same two.
+ * the row; and the room, under the title row (stacked, md to lg, its channels, chat and roster
+ * each: STACKED_SNAP). The skeleton has the same.
  */
 const TOP_VIEW = 'snap-start scroll-mt-6';
 
@@ -716,8 +727,10 @@ function PinAction({ server, channel, line, pinned }: { server: string; channel:
  * and under it, while open, the pinned lines, newest pin first. A line is a click to it in the
  * channel (`openLine`: the lines around it when it is long scrolled away); the channels power
  * has an unpin on each. The list is asked as it opens, and again on every pin or unpin while it
- * is (`pinsTickAtom`); the count is the room's (`room.pins`), kept by the facts. Escape, a click
- * outside, or the × shut it.
+ * is (`pinsTickAtom`); the count is the room's (`room.pins`), kept by the facts. A line's pictures
+ * are under its words, as the chat draws them (`ChatImages`, small), over the row's click: a click
+ * on one opens it over the page. Escape, a click outside, or the × shut it; not while a picture is
+ * open over the page, whose escape and clicks are its own.
  */
 function ChannelPins({ server, channel, room }: { server: string; channel: string; room: GroupRoom }) {
   const [open, setOpen] = useState(false);
@@ -755,11 +768,13 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
 
   useEffect(() => {
     if (!open) return;
+    // a picture open over the page is a modal <dialog> on the body, outside the box: its presses and its escape are its own
+    const inDialog = (target: EventTarget | null) => target instanceof Element && target.closest('dialog[open]') !== null;
     const away = (e: globalThis.PointerEvent) => {
-      if (e.target instanceof Node && !boxRef.current?.contains(e.target)) setOpen(false);
+      if (e.target instanceof Node && !boxRef.current?.contains(e.target) && !inDialog(e.target)) setOpen(false);
     };
     const key = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Escape' && !inDialog(e.target)) setOpen(false);
     };
     document.addEventListener('pointerdown', away);
     document.addEventListener('keydown', key);
@@ -823,28 +838,36 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
           ) : (
             <ul id="group-pins-list" className="flex min-h-0 flex-col overflow-y-auto overscroll-contain py-1">
               {list.map((pin) => {
-                const pictures = pin.images?.length ?? 0;
+                // absent on the wire when there are none
+                const pictures = pin.images ?? [];
                 return (
                   <li
                     key={pin.id}
                     data-id={pin.id}
                     className="relative flex items-start gap-2 px-3 py-1.5 transition-colors duration-150 focus-within:bg-backgroundTertiary hover:bg-backgroundTertiary"
                   >
-                    <button
-                      type="button"
-                      data-pin-open={pin.id}
-                      title={pin.pinned_by ? `pinned by ${pin.pinned_by}` : undefined}
-                      onClick={() => {
-                        setOpen(false);
-                        void serverChat(server).openLine(pin.id, channel);
-                      }}
-                      className="min-w-0 flex-1 text-left [overflow-wrap:anywhere] after:absolute after:inset-0 after:content-[''] focus-visible:outline-none"
-                    >
-                      <span className="mr-1.5 text-xs tabular-nums text-textTertiary">{when(pin.at)}</span>
-                      <span className="font-semibold text-primaryBlue">{pin.from}</span>
-                      {pin.text && <span className="text-textSecondary">: {pin.text}</span>}
-                      {pictures > 0 && <span className="ml-1 text-textTertiary">{pictures === 1 ? '(a picture)' : `(${pictures} pictures)`}</span>}
-                    </button>
+                    <div className="min-w-0 flex-1">
+                      <button
+                        type="button"
+                        data-pin-open={pin.id}
+                        title={pin.pinned_by ? `pinned by ${pin.pinned_by}` : undefined}
+                        onClick={() => {
+                          setOpen(false);
+                          void serverChat(server).openLine(pin.id, channel);
+                        }}
+                        className="w-full text-left [overflow-wrap:anywhere] after:absolute after:inset-0 after:content-[''] focus-visible:outline-none"
+                      >
+                        <span className="mr-1.5 text-xs tabular-nums text-textTertiary">{when(pin.at)}</span>
+                        <span className="font-semibold text-primaryBlue">{pin.from}</span>
+                        {pin.text && <span className="text-textSecondary">: {pin.text}</span>}
+                      </button>
+                      {/* over the row's click, so a thumbnail opens the picture and not the line */}
+                      {pictures.length > 0 && (
+                        <div data-pin-pictures={pin.id} className="relative z-10">
+                          <ChatImages ids={pictures} small />
+                        </div>
+                      )}
+                    </div>
                     {canPin && (
                       <Tooltip content="unpin">
                         <button
@@ -996,7 +1019,7 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
         <Bone className="h-4 w-80 max-w-full" />
       </div>
       <div ref={gridRef} className={cn(ROOM_GRID, roomColumns(membersOpen), 'max-md:gap-4')}>
-        <div className="flex flex-col border border-primaryStroke bg-backgroundSecondary p-1">
+        <div className={cn('flex flex-col border border-primaryStroke bg-backgroundSecondary p-1', STACKED_SNAP)}>
           <div className="flex h-6 items-center px-2">
             <Bone className="h-3 w-24" />
           </div>
@@ -1006,13 +1029,13 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
             </div>
           ))}
         </div>
-        <div className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3', ROOM_HEIGHT)}>
+        <div className={cn('flex flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3', ROOM_HEIGHT, STACKED_SNAP)}>
           <Bone className="h-4 w-2/3" />
           <Bone className="h-4 w-1/2" />
           <Bone className="h-4 w-3/4" />
           <Bone className="mt-auto h-10" />
         </div>
-        <div className={cn('flex flex-col gap-2 border border-primaryStroke bg-backgroundSecondary p-2', ROSTER_HEIGHT, !membersOpen && 'lg:hidden')}>
+        <div className={cn('flex flex-col gap-2 border border-primaryStroke bg-backgroundSecondary p-2', ROSTER_HEIGHT, STACKED_SNAP, !membersOpen && 'lg:hidden')}>
           <div className="flex shrink-0 gap-1">
             <Bone className="h-8 min-w-0 flex-1" />
             <Bone className="hidden h-8 w-8 shrink-0 lg:block" />
@@ -1060,7 +1083,7 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
  * title row (ROOM_HEIGHT), which is where the page lands when it opens, and the top, the
  * banner, the picture, the name and the line about it, a scroll up away. The window is the
  * page's scroller, so the snap type goes on <html> while the page is up; each view is a
- * `snap-start` area (TOP_VIEW, `#group-room`). The landing is done once, on the first thing
+ * `snap-start` area (TOP_VIEW, `#group-room`; stacked, each block of the room). The landing is done once, on the first thing
  * with the room's shape (the skeleton, or the room itself), so the room arrives in place.
  */
 export function ServerPage() {
@@ -1465,12 +1488,12 @@ export function ServerPage() {
           <div id="group-room" ref={roomRef} className={cn(ROOM_GRID, roomColumns(membersOpen))}>
             {!mobile && (
               // no margin over the channels' box: its top edge is the chat panel's
-              <div className="flex min-w-0 flex-col gap-3">
+              <div className={cn('flex min-w-0 flex-col gap-3', STACKED_SNAP)}>
                 {channelList}
                 {liveList}
               </div>
             )}
-            <div className={cn('min-w-0', ROOM_HEIGHT)}>
+            <div className={cn('min-w-0', ROOM_HEIGHT, STACKED_SNAP)}>
               {/* the search box is the roster's (RoomSearch), for a member and a guest alike; the hits land in the panel. a search is every channel's: a hit opened in another one moves the page there */}
               <ChatPanel
                 name={server}
@@ -2086,7 +2109,7 @@ function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
         aria-label="members"
         className={cn(
           'flex flex-col border border-primaryStroke bg-backgroundSecondary text-sm',
-          flat ? 'mx-3 gap-3 p-4' : cn('gap-2 p-2', ROSTER_HEIGHT),
+          flat ? 'mx-3 gap-3 p-4' : cn('gap-2 p-2', ROSTER_HEIGHT, STACKED_SNAP),
           folded && 'lg:hidden'
         )}
       >

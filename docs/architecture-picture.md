@@ -130,6 +130,7 @@ sequenceDiagram
   V-)W: copies of billy's packets over udp 7882
   W--)V: PLI when a picture is lost
   V--)S: PLI forwarded for that slot, at most one per 1.5s
+  Note over V,S: a join asks too, shared by joins in a 300ms burst (keyframes.md)
 
   S->>S: share screen · getDisplayMedia → replaceTrack into an empty slot
   S-)V: the screen's packets on that section · routed to the slot by mid, no renegotiation

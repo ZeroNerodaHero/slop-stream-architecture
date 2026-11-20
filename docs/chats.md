@@ -47,7 +47,7 @@ the room uses the streams people already have. a camera that exists only inside 
 
 ## a direct message
 
-built. a line from a login to one friend: someone it follows who follows it back. the lines are kept. the window beside the sidebar (`FriendChat.tsx`) is a tab per friend, a grid to pick one, dragged and resized. the sidebar counts what is new, and so does the friends icon when the sidebar is closed. the newest line from a friend is also a row under the bell (`notifications.md`); reading the thread reads that row.
+built. a line from a login to one friend: someone it follows who follows it back. the lines are kept. the window beside the sidebar (`FriendChat.tsx`) is a tab per friend, a grid to pick one, dragged and resized. the sidebar counts what is new on each friend's chat button. the newest line from a friend is also a row under the bell (`notifications.md`); reading the thread reads that row.
 
 a write is `POST /api/dm/:name`. the row is in postgres. redis only carries the fact, and the events socket (`status.md`) pushes the line to every open tab of both people. a thread still reads after an unfollow; a new line is refused until both follows are back. a stranger, yourself, and a name with no account are refused.
 

@@ -183,9 +183,10 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await presenceIs(NAME, 'streaming', 5000);
     await shownIs(a, '#my-presence', 'streaming', 5000);
     await shownIs(w, '#presence', 'streaming', 10000);
-    // the streaming square (PresenceSquare.tsx): the red dot inside it, and the square still its 12px
+    // the streaming square (PresenceSquare.tsx): cut corner to corner, green over blue, and still its 12px
     for (const [page, sel] of [[a, '#my-presence'], [w, '#presence']]) {
-      expect((await page.$(`${sel} [data-presence-dot]`)) !== null, `${sel} is streaming with no dot inside`);
+      const bg = await page.$eval(sel, (el) => getComputedStyle(el).backgroundImage);
+      expect(/linear-gradient/.test(bg), `${sel} is streaming with no diagonal cut (${bg})`);
     }
     const box = await w.$eval('#presence', (el) => el.getBoundingClientRect().toJSON());
     expect(Math.round(box.width) === 12 && Math.round(box.height) === 12, `#presence is ${box.width}x${box.height}, not 12x12`);

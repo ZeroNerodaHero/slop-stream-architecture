@@ -33,8 +33,6 @@ export const followingAtom = atom((get) => {
 export const followingNamesAtom = atom(
   (get) => new Set(get(meAtom) === null ? get(guestFollowsAtom).map((f) => f.name) : (get(followingAtom) ?? []).map((f) => f.name))
 );
-/** How many of them are streaming right now: the number on the corner. */
-export const streamingFriendsAtom = atom((get) => (get(followingAtom) ?? []).filter((f) => f.live).length);
 /** The panel over the corner is open (hovered or focused; a tab into the search box opens it from the keyboard). */
 export const friendsOpenAtom = atom(false);
 /** What the last follow or unfollow said when it failed; '' otherwise. */

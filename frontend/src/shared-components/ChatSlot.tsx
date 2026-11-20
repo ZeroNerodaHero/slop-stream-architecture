@@ -115,7 +115,9 @@ export function chatLayoutClass(side: ChatSide, open: boolean): string {
  *
  * `tabbed`: the column is a tab under the video instead (the watch page's body is too narrow to
  * stand it beside, WatchPage.tsx). There is no chat button then, so it is open whatever the
- * button last said; the page hides it while another tab is up.
+ * button last said; the page hides it while another tab is up. Its height runs from where it starts
+ * to the window's foot (`--chat-top`, measured here), so the send row is on screen without
+ * scrolling the page; the page keeps the video short enough to leave it room.
  */
 export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; children: ReactNode }) {
   const side = useChatSide();
@@ -186,6 +188,24 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
     const t = window.setTimeout(() => setHeld(false), COLUMN_MS);
     return () => clearTimeout(t);
   }, [open, modal]);
+
+  // A tab fills from its top to the window's foot. Its top is in the page (the scroll counted out),
+  // so it moves only when something above it changes size, and any such change resizes the body.
+  // Written straight onto the dialog, before the paint, with no render.
+  useLayoutEffect(() => {
+    const dialog = ref.current;
+    if (!tabbed || modal || !dialog) return;
+    const measure = () => dialog.style.setProperty('--chat-top', `${dialog.getBoundingClientRect().top + window.scrollY}px`);
+    measure();
+    const watcher = new ResizeObserver(measure);
+    watcher.observe(document.body);
+    window.addEventListener('resize', measure);
+    return () => {
+      watcher.disconnect();
+      window.removeEventListener('resize', measure);
+      dialog.style.removeProperty('--chat-top');
+    };
+  }, [tabbed, modal]);
 
   // Opening and closing the window. Not in the cleanup: that close would run on every change
   // and the dialog's own `close` event would take the window straight back down. `show`, not
@@ -343,7 +363,12 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
               side === 'left' && 'beside:col-start-1 beside:row-start-1',
               // placed, not left to the flow: the watch page puts the chat after its tabs
               side === 'right' && 'beside:col-start-2 beside:row-start-1',
-              open ? 'mt-4 h-[min(50vh,560px)] opacity-100' : 'mt-0 h-0 overflow-hidden opacity-0',
+              // a tab is always open: down to the window's foot less the page's bottom padding (pb-10), no slide
+              tabbed
+                ? 'mt-4 h-[calc(100dvh-var(--chat-top,0px)-2.5rem)] min-h-60 transition-none'
+                : open
+                  ? 'mt-4 h-[min(50vh,560px)] opacity-100'
+                  : 'mt-0 h-0 overflow-hidden opacity-0',
               // beside the video: from the top of the page to the window's foot less its bottom padding (pb-10), no taller than 720px
               tall ? 'beside:mt-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:max-h-[720px] beside:opacity-100' : 'beside:mt-0 beside:h-0 beside:max-h-0 beside:opacity-0',
               clip && 'overflow-hidden'
@@ -377,7 +402,8 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
           modal
             ? 'min-h-0 w-full flex-1'
             : cn(
-                'h-[min(50vh,560px)] w-full beside:absolute beside:top-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:w-[360px]',
+                tabbed ? 'h-full' : 'h-[min(50vh,560px)]',
+                'w-full beside:absolute beside:top-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:w-[360px]',
                 'transition-transform duration-300 ease-out motion-reduce:transition-none',
                 side === 'right' && 'beside:right-0',
                 side === 'left' && 'beside:left-0',
