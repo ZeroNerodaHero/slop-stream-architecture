@@ -82,10 +82,8 @@ import { cn } from '@/utils/cn';
 import { streamNumbers } from '@/utils/count';
 import { roveTabs } from '@/utils/tabs';
 
-/** The sentence at the top of the about tab while they are not live: why to wait, or not. */
-const NOT_LIVE_WORDS: Record<Presence, string> = {
-  offline: 'not streaming right now. the stream shows up here the moment they start.',
-  online: 'around, not streaming. the stream shows up here the moment they start.',
+/** The sentence at the top of the about tab while they are not live, where there is one: why not to wait. */
+const NOT_LIVE_WORDS: Partial<Record<Presence, string>> = {
   dnd: 'do not disturb, not streaming.',
   streaming: 'starting'
 };
@@ -401,8 +399,7 @@ export function WatchPage() {
       {/* not live, and while the api is being asked: the player's own 16:9 box (`#profile`, a strip while a
           phone types, as the player is), so the tabs sit where they will when the stream starts. black, or
           their offline picture (else a thumbnail of their stream), and a small `offline` chip at its bottom
-          left once the api has said so; the sentence and the line they wrote are at the top of the about
-          tab. the player appears when they start (`live` pushed on the events socket, docs/status.md):
+          left once the api has said so, the line they wrote in it (`offline: back tuesday at 8`). the player appears when they start (`live` pushed on the events socket, docs/status.md):
           never a <video> without a stream, not even for the ask.
           the one exception is a stream that is expected: they are streaming and the page is still
           asking (or video is a beat behind the word). then the player's box stands grey where the
@@ -439,15 +436,25 @@ export function WatchPage() {
                   onError={() => setBrokenThumb(shownThumb)}
                 />
               )}
+              {/* the line they wrote rides in the chip, `offline: back tuesday at 8`, cut with an ellipsis
+                  short of the chat button (the whole line on hover) */}
               {phase === 'waiting' && (
                 <span
+                  title={offlineNote || undefined}
                   className={cn(
-                    'absolute bottom-2 left-2 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-xs font-semibold text-white',
+                    'absolute bottom-2 left-2 flex max-w-[calc(100%-5rem)] items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-xs font-semibold text-white',
                     mobile && strip.overlay
                   )}
                 >
                   <PresenceSquare status="offline" size="chip" />
-                  offline
+                  <span className="min-w-0 truncate">
+                    offline
+                    {offlineNote && (
+                      <>
+                        : <span id="offline-note">{offlineNote}</span>
+                      </>
+                    )}
+                  </span>
                 </span>
               )}
               {playerChip}
@@ -579,17 +586,10 @@ export function WatchPage() {
     </div>
   );
 
-  // at the top of the about tab while they are not live: the line they wrote (if any), then the sentence
-  const offlineWords = phase === 'waiting' && !expecting && (
-    <div className="mb-4 text-sm text-textSecondary">
-      {offlineNote && (
-        <p id="offline-note" className="text-textPrimary [overflow-wrap:anywhere]">
-          {offlineNote}
-        </p>
-      )}
-      <p>{NOT_LIVE_WORDS[presence]}</p>
-    </div>
-  );
+  // at the top of the about tab while they are not live, only for do not disturb: the line they wrote is
+  // in the offline chip on the picture, and `offline` and `online` need nothing said
+  const notLive = NOT_LIVE_WORDS[presence];
+  const offlineWords = phase === 'waiting' && !expecting && notLive && <p className="mb-4 text-sm text-textSecondary">{notLive}</p>;
 
   if (mobile) {
     // a phone's page is the window and never scrolls (go live's way, LivePage.tsx): the row, the
