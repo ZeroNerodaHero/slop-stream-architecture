@@ -194,6 +194,16 @@ from then on `./scripts/deploy.sh --pull` is the normal update again, and it reb
 - **grafana + prometheus + loki**: when there is a second video box and you want egress per box and every container's logs searchable in one place. `/metrics` on video and chat is item 5 in `kubernetes.md`.
 - **a domain**: a $10 domain and let's encrypt remove the self-signed warning everywhere, make the pages free to call a second origin, and let the monitor check certificates and sit behind caddy with a login instead of `ssh -L`. the cheapest fix for the most things in this list.
 
+## watch startup timings
+
+`frontend/src/infra/watch-perf.ts`: every watch attempt puts its phases on the performance timeline as `watch:<phase>` marks, and `watch:<phase>` measures from the origin (the press on the link when the page took the peer the press warmed, else the start of the attempt): `press`, `start`, `peer`, `offer`, `ws-open`, `grant`, `setup-sent`, `answer`, `ice-connected`, `first-frame` (`playing` on `#video`). They show in devtools' performance panel. `?perfdebug=1` on the url, or `localStorage.perfdebug = '1'`, prints the line with `console.debug` at the first frame:
+
+```
+[watch perf] press 0 · peer 3 · offer 7 · start 172 · ws-open 418 · grant 576 · setup-sent 577 · answer 901 · ice-connected 1318 · first-frame 1851 ms
+```
+
+From outside, `node watchperf/measure.js <label>` (kept beside the worktrees, not in the repo) loads `/watch/<a|b|c|d>` cold ten times and presses a link on home ten times, and writes the medians and p90s per phase to `watchperf/<label>.json`.
+
 ## code
 
 - `api/src/debug.rs` — the debug database (create, schema, lazy pool, retention), `POST` and `GET /api/errors`, the admin check.

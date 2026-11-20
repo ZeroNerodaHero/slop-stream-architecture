@@ -1,7 +1,9 @@
 // Prefetch on press (docs/spec.md "Prefetch on press", frontend/src/infra/prefetch.ts): a press
 // on a link to a stream's page, home or a group asks for that page's data on pointerdown, and the
 // page takes the answer instead of asking again, so each is asked once, not twice. A press that
-// goes nowhere asks once and nothing more. Run through ./scripts/test.sh, or:
+// goes nowhere asks once and nothing more. A press on a live stream also opens its video socket
+// (and makes its peer), which the page sends its setup on; a press that goes nowhere closes it.
+// Run through ./scripts/test.sh, or:
 // BASE_URL=https://<ip> node prefetch.js
 // A step with nothing on the box to press (no person on home, no public group) says SKIP.
 const { chromium } = require('playwright');
@@ -35,6 +37,27 @@ function count(page, method, re) {
   const seen = [];
   page.on('request', (req) => {
     if (req.method() === method && re.test(new URL(req.url()).pathname)) seen.push(Date.now());
+  });
+  return seen;
+}
+
+/**
+ * Every video socket (`/ws`) the page opens from now on: when it opened, when it closed, and
+ * whether it sent a watcher's setup (not a preview's: home's camera previews are watchers too).
+ */
+function sockets(page) {
+  const seen = [];
+  page.on('websocket', (ws) => {
+    if (new URL(ws.url()).pathname !== '/ws') return;
+    const s = { at: Date.now(), closed: null, setup: false };
+    seen.push(s);
+    ws.on('framesent', (f) => {
+      try {
+        const m = JSON.parse(f.payload);
+        if (m.role === 'watch' && !m.preview) s.setup = true;
+      } catch {}
+    });
+    ws.on('close', () => (s.closed = Date.now()));
   });
   return seen;
 }
@@ -97,6 +120,54 @@ async function press(page, selector, holdMs = 250, release = true) {
     expect(grants.length === 2, `${grants.length} grants after the late click`);
     await p.close();
     return '1 on the press, 1 more from the page after expiry';
+  });
+
+  await step('a press on a live stream opens its video socket on the press; the page sets up on it', async () => {
+    const p = await fresh();
+    await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await p.waitForSelector('#live', { timeout: 10000 });
+    const link = p.locator('#live a[href^="/watch/"]').first();
+    try {
+      await link.waitFor({ timeout: 5000 });
+    } catch {
+      return { skip: 'nobody live on this box' };
+    }
+    const href = await link.getAttribute('href');
+    await sleep(1500); // home's own previews up first
+    const ws = sockets(p);
+    const down = await press(p, `#live a[href="${href}"]`);
+    await p.waitForURL((u) => u.pathname === href, { timeout: 5000 });
+    await p.waitForSelector('#video', { timeout: 10000 });
+    await sleep(1000);
+    const mine = ws.filter((s) => s.setup);
+    expect(mine.length === 1, `${mine.length} sockets sent a watcher's setup`);
+    expect(mine[0].at - down < 200, `the socket opened ${mine[0].at - down}ms after the press, not on it`);
+    expect(ws.filter((s) => s.at - down < 200).length === 1, `${ws.filter((s) => s.at - down < 200).length} sockets opened on the press`);
+    await p.close();
+    return `${href}: socket ${mine[0].at - down}ms after pointerdown, the setup on it`;
+  });
+
+  await step('a press on a live stream that goes nowhere closes its video socket', async () => {
+    const p = await fresh();
+    await p.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await p.waitForSelector('#live', { timeout: 10000 });
+    const link = p.locator('#live a[href^="/watch/"]').first();
+    try {
+      await link.waitFor({ timeout: 5000 });
+    } catch {
+      return { skip: 'nobody live on this box' };
+    }
+    const href = await link.getAttribute('href');
+    await sleep(1500);
+    const ws = sockets(p);
+    const down = await press(p, `#live a[href="${href}"]`, 150, false);
+    await sleep(6000);
+    const pressed = ws.filter((s) => s.at - down < 200);
+    expect(pressed.length === 1, `${pressed.length} sockets opened on the press`);
+    expect(pressed[0].closed !== null, 'the press\'s socket is still open after 6s');
+    expect(!pressed[0].setup, 'the press sent a setup');
+    await p.close();
+    return `closed ${pressed[0].closed - down}ms after the press, nothing sent`;
   });
 
   await step('home from a stream page asks for the list once', async () => {

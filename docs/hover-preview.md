@@ -25,8 +25,8 @@ the route change is free: `WatchPage` is in the main bundle, nothing is lazy (`r
 | step | about | notes |
 |---|---|---|
 | `POST /api/streams/:name/watch` | 30–100ms | the api asks video `GET /live` over http, then postgres twice (`api/src/main.rs:658`, `:254`) |
-| `createOffer`, `setLocalDescription`, ice gathering | 10–50ms, up to the 1s cap | no stun, host candidates only (`relay.ts:60`) |
-| `/ws` open, offer, answer | 1–2 rtt | tls through caddy, then video negotiates (`main.rs:740`) |
+| `createOffer`, `setLocalDescription` | 10–50ms | no wait for ice gathering on the watch page any more: video learns our address from our checks. made beside the grant (and on the press), so off the path |
+| `/ws` open, offer, answer | 1 rtt once the grant is in | the socket opens beside the grant (and on the press); only the setup and the answer wait for it |
 | ice checks, dtls handshake | 100–400ms | 2–4 rtt. the big fixed cost |
 | the keyframe | 100–300ms | video's pli to the publisher on `Connected`, the publisher encodes one, it is copied out. a join inside 300ms of the last request is dropped and waits for the browser's own pli, which passes on a 1.5s gap (`KEYFRAME_GAP`, `main.rs:72`) |
 | decode, `playing` | ~50ms | |
