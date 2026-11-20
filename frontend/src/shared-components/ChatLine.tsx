@@ -97,6 +97,24 @@ export interface ChatLineShapeProps extends Place {
   pictures?: ReactNode;
   /** The `<p>`'s own attributes: `data-id` and the rest the pages and the tests key on. */
   attrs?: HTMLAttributes<HTMLParagraphElement> & Record<`data-${string}`, string | number | boolean | undefined>;
+  /** A mark that always shows at the line's top right: a group line's pin (ServerRoom.tsx). */
+  mark?: ReactNode;
+  /** Buttons up at the line's top right with the pointer on the line or the focus in it (and always on a screen with no hover): a group line's pin and unpin. */
+  actions?: ReactNode;
+}
+
+/** The hover actions: up with the pointer on the line, the keyboard in them, or no hover to wait for. */
+const ACTIONS_HIDDEN = 'opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/line:opacity-100 [@media(hover:none)]:opacity-100';
+
+/** The line's top right corner: the actions over the mark, on the line's own box (the `<p>` is `relative`: relative-parent.mdc). */
+function Corner({ mark, actions }: { mark?: ReactNode; actions?: ReactNode }) {
+  if (!mark && !actions) return null;
+  return (
+    <span className="absolute right-1 top-0 flex items-center gap-1">
+      {actions && <span className={cn('flex items-center border border-primaryStroke bg-backgroundSecondary', ACTIONS_HIDDEN)}>{actions}</span>}
+      {mark}
+    </span>
+  );
 }
 
 /**
@@ -115,11 +133,14 @@ export interface ChatLineShapeProps extends Place {
  * under the words in every shape (inside the box in `bubbles`). The text size is the list's:
  * the panel's `text-base`, the window's `text-sm`.
  */
-export function ChatLineShape({ shape, mine, at, name, who, face, faced = false, crowd = false, first, bucket, words, pictures, attrs }: ChatLineShapeProps) {
+export function ChatLineShape({ shape, mine, at, name, who, face, faced = false, crowd = false, first, bucket, words, pictures, attrs, mark, actions }: ChatLineShapeProps) {
   const title = at ? stamp(at) : undefined;
+  const corner = <Corner mark={mark} actions={actions} />;
+  // a corner sits on the line's own box, and the words stop short of it
+  const cornered = mark || actions ? 'relative pr-8' : undefined;
   if (shape === 'log') {
     return (
-      <p {...attrs} title={title} className="flex items-baseline gap-2 leading-snug">
+      <p {...attrs} title={title} className={cn('group/line flex items-baseline gap-2 leading-snug', cornered)}>
         <span className="shrink-0 text-xs tabular-nums text-textTertiary">{clock(at)}</span>
         {faced && <span className="shrink-0 self-start">{face}</span>}
         <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
@@ -127,12 +148,13 @@ export function ChatLineShape({ shape, mine, at, name, who, face, faced = false,
           {words}
           {pictures}
         </span>
+        {corner}
       </p>
     );
   }
   if (shape === 'blocks') {
     return (
-      <p {...attrs} title={title} className={cn('group/line flex gap-2 leading-snug', first && 'mt-1 first:mt-0')}>
+      <p {...attrs} title={title} className={cn('group/line flex gap-2 leading-snug', first && 'mt-1 first:mt-0', cornered)}>
         {first ? <span className={cn(GUTTER, 'mt-0.5')}>{face}</span> : <GutterClock at={at} shown={bucket} className="pt-0.5" />}
         <span className="flex min-w-0 flex-1 flex-col [overflow-wrap:anywhere]">
           {first && (
@@ -144,12 +166,13 @@ export function ChatLineShape({ shape, mine, at, name, who, face, faced = false,
           {words}
           {pictures}
         </span>
+        {corner}
       </p>
     );
   }
   const named = crowd && !mine && first;
   return (
-    <p {...attrs} title={title} className={cn('group/line flex gap-2 leading-snug', bucket && 'mt-2 first:mt-0')}>
+    <p {...attrs} title={title} className={cn('group/line flex gap-2 leading-snug', bucket && 'mt-2 first:mt-0', cornered)}>
       {faced && first ? <span className={cn(GUTTER, 'mt-0.5')}>{face}</span> : <GutterClock at={at} shown={bucket} className="pt-2.5" />}
       <span className={cn('flex min-w-0 flex-1', mine ? 'justify-end' : 'justify-start')}>
         {/* the box: a stroke and a fill, no shadow (no-box-shadow.mdc). yours wears the blue. `relative`: the reader's name is `sr-only` (relative-parent.mdc) */}
@@ -164,6 +187,7 @@ export function ChatLineShape({ shape, mine, at, name, who, face, faced = false,
           {pictures}
         </span>
       </span>
+      {corner}
     </p>
   );
 }

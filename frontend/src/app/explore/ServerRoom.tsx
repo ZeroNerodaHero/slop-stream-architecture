@@ -15,11 +15,14 @@ import {
   RiNotificationLine,
   RiNotificationOffLine,
   RiPencilLine,
+  RiPushpinFill,
+  RiPushpinLine,
   RiSearchLine,
   RiServerLine,
   RiSettings3Line,
   RiShieldStarLine,
   RiTimeLine,
+  RiUnpinLine,
   RiUserUnfollowLine,
   RiVipCrownLine
 } from '@remixicon/react';
@@ -40,15 +43,28 @@ import {
 import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import { api, type Channel, CHANNEL_CAP, groupImage, type GroupMember, type GroupRole, groupWords, messageOf, type GroupRoom, type RolePerms } from '@/infra/api';
+import {
+  api,
+  type Channel,
+  CHANNEL_CAP,
+  groupImage,
+  type GroupMember,
+  type GroupRole,
+  groupWords,
+  messageOf,
+  type GroupRoom,
+  type PinnedLine,
+  type RolePerms
+} from '@/infra/api';
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
-import { reconnectChat } from '@/infra/atoms/chat-atoms';
+import { type ChatLine, reconnectChat, serverChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { PRESENCE_WORD, presenceOfAtom, presencesAtom } from '@/infra/atoms/presence-atoms';
 import {
   channelRenamedAtom,
   enterRoom,
   leaveRoom,
+  pinsTickAtom,
   reloadLines,
   reloadRoom,
   renameChannel,
@@ -56,7 +72,8 @@ import {
   roomErrorAtom,
   roomGoneAtom,
   setChannelMuted,
-  setChannelOrder
+  setChannelOrder,
+  setPinned
 } from '@/infra/atoms/room-atoms';
 import { roomMembersOpenAtom } from '@/infra/atoms/settings-atoms';
 import { useIsMobile } from '@/infra/mobile';
@@ -72,6 +89,7 @@ import { Face } from '@/shared-components/Face';
 import { RailFace } from '@/shared-components/Friends';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack, useSheetKeyboard } from '@/shared-components/MobileSheet';
+import { when } from '@/shared-components/ChatLine';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
@@ -652,6 +670,199 @@ function ownsPictures(room: GroupRoom): boolean {
 /** One moderation call, with its refusal said where the caller shows it. The outcome arrives on the socket, like everyone else's. */
 type Run = (work: () => Promise<unknown>) => Promise<void>;
 
+/** A pin or an unpin from the page: the room moves at once (`setPinned`); a refusal (the cap among them) is said under the lines. */
+function togglePin(server: string, channel: string, id: string, on: boolean): void {
+  setPinned(server, channel, id, on).catch((err: unknown) => serverChat(server).showNotice(messageOf(err)));
+}
+
+/** A pinned line's mark, at its top right whatever the shape (ChatLine.tsx `mark`). */
+function PinMark() {
+  return (
+    <Tooltip content="pinned">
+      <span role="img" aria-label="pinned" data-pinned-mark className="flex text-primaryBlue">
+        <RiPushpinFill aria-hidden size={14} />
+      </span>
+    </Tooltip>
+  );
+}
+
+/** The pin and the unpin on a line's hover (ChatLine.tsx `actions`), for the channels power alone. */
+function PinAction({ server, channel, line, pinned }: { server: string; channel: string; line: ChatLine; pinned: boolean }) {
+  const word = pinned ? 'unpin' : 'pin';
+  return (
+    <Tooltip content={word}>
+      <button
+        type="button"
+        id="group-msg-pin"
+        aria-label={word}
+        aria-pressed={pinned}
+        onClick={() => togglePin(server, channel, line.id, !pinned)}
+        className="flex h-6 w-6 items-center justify-center text-textSecondary hover:text-primaryBlue focus-visible:text-primaryBlue focus-visible:outline-none max-md:h-11 max-md:w-11"
+      >
+        {pinned ? <RiUnpinLine aria-hidden size={14} /> : <RiPushpinLine aria-hidden size={14} />}
+      </button>
+    </Tooltip>
+  );
+}
+
+/**
+ * The channel's pins (docs/groups.md "pins"): a boxed pin in the chat's header with how many,
+ * and under it, while open, the pinned lines, newest pin first. A line is a click to it in the
+ * channel (`openLine`: the lines around it when it is long scrolled away); the channels power
+ * has an unpin on each. The list is asked as it opens, and again on every pin or unpin while it
+ * is (`pinsTickAtom`); the count is the room's (`room.pins`), kept by the facts. Escape, a click
+ * outside, or the × shut it.
+ */
+function ChannelPins({ server, channel, room }: { server: string; channel: string; room: GroupRoom }) {
+  const [open, setOpen] = useState(false);
+  const [list, setList] = useState<PinnedLine[] | null>(null);
+  const [error, setError] = useState('');
+  const tick = useAtomValue(pinsTickAtom);
+  const boxRef = useRef<HTMLSpanElement | null>(null);
+  const count = room.pins?.[channel]?.length ?? 0;
+  const canPin = room.perms.channels;
+  const words = count === 0 ? 'pinned messages' : `pinned messages: ${count}`;
+
+  // another channel is another list
+  useEffect(() => {
+    setOpen(false);
+    setList(null);
+  }, [server, channel]);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    api
+      .channelPins(server, channel)
+      .then((r) => {
+        if (!live) return;
+        setList(r.pins);
+        setError('');
+      })
+      .catch((err: unknown) => {
+        if (live) setError(messageOf(err));
+      });
+    return () => {
+      live = false;
+    };
+  }, [open, server, channel, tick]);
+
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: globalThis.PointerEvent) => {
+      if (e.target instanceof Node && !boxRef.current?.contains(e.target)) setOpen(false);
+    };
+    const key = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', away);
+    document.addEventListener('keydown', key);
+    return () => {
+      document.removeEventListener('pointerdown', away);
+      document.removeEventListener('keydown', key);
+    };
+  }, [open]);
+
+  return (
+    <span ref={boxRef} className="relative flex shrink-0">
+      <Tooltip content={open ? null : 'pinned messages'}>
+        <button
+          type="button"
+          id="group-pins-open"
+          aria-label={words}
+          aria-expanded={open}
+          aria-controls={open ? 'group-pins' : undefined}
+          data-count={count}
+          onClick={() => setOpen((was) => !was)}
+          className={cn(
+            'flex shrink-0 items-center gap-1 whitespace-nowrap border px-1.5 py-0.5 text-xs font-semibold tabular-nums transition-colors duration-150 max-md:min-h-11',
+            open ? 'border-primaryBlue text-primaryBlue' : 'border-primaryStroke text-textTertiary hover:border-secondaryStroke hover:text-textSecondary'
+          )}
+        >
+          <RiPushpinLine aria-hidden size={14} />
+          {count}
+        </button>
+      </Tooltip>
+      {open && (
+        <div
+          id="group-pins"
+          role="region"
+          aria-label="pinned messages"
+          className="absolute right-0 top-full z-30 mt-1 flex max-h-96 w-80 max-w-[calc(100vw-2rem)] flex-col border border-primaryStroke bg-backgroundSecondary text-sm"
+        >
+          <div className="flex items-center justify-between gap-2 border-b border-primaryStroke px-3 py-1.5">
+            <span className="font-semibold">pinned messages</span>
+            <Tooltip content="close">
+              <button
+                type="button"
+                id="group-pins-close"
+                aria-label="close"
+                onClick={() => setOpen(false)}
+                className="flex h-6 w-6 items-center justify-center text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none max-md:h-11 max-md:w-11"
+              >
+                <RiCloseLine aria-hidden size={16} />
+              </button>
+            </Tooltip>
+          </div>
+          {error ? (
+            <p id="group-pins-error" className="px-3 py-2 text-decrease">
+              {error}
+            </p>
+          ) : list === null ? (
+            <p className="px-3 py-2 text-textTertiary">loading…</p>
+          ) : list.length === 0 ? (
+            <p id="group-pins-empty" className="px-3 py-2 text-textTertiary">
+              nothing pinned yet
+            </p>
+          ) : (
+            <ul id="group-pins-list" className="flex min-h-0 flex-col overflow-y-auto overscroll-contain py-1">
+              {list.map((pin) => {
+                const pictures = pin.images?.length ?? 0;
+                return (
+                  <li
+                    key={pin.id}
+                    data-id={pin.id}
+                    className="relative flex items-start gap-2 px-3 py-1.5 transition-colors duration-150 focus-within:bg-backgroundTertiary hover:bg-backgroundTertiary"
+                  >
+                    <button
+                      type="button"
+                      data-pin-open={pin.id}
+                      title={pin.pinned_by ? `pinned by ${pin.pinned_by}` : undefined}
+                      onClick={() => {
+                        setOpen(false);
+                        void serverChat(server).openLine(pin.id, channel);
+                      }}
+                      className="min-w-0 flex-1 text-left [overflow-wrap:anywhere] after:absolute after:inset-0 after:content-[''] focus-visible:outline-none"
+                    >
+                      <span className="mr-1.5 text-xs tabular-nums text-textTertiary">{when(pin.at)}</span>
+                      <span className="font-semibold text-primaryBlue">{pin.from}</span>
+                      {pin.text && <span className="text-textSecondary">: {pin.text}</span>}
+                      {pictures > 0 && <span className="ml-1 text-textTertiary">{pictures === 1 ? '(a picture)' : `(${pictures} pictures)`}</span>}
+                    </button>
+                    {canPin && (
+                      <Tooltip content="unpin">
+                        <button
+                          type="button"
+                          data-pin-unpin={pin.id}
+                          aria-label="unpin"
+                          onClick={() => togglePin(server, channel, pin.id, false)}
+                          className="relative z-10 flex h-6 w-6 shrink-0 items-center justify-center border border-primaryStroke text-textTertiary hover:border-decrease hover:text-decrease focus-visible:border-primaryBlue focus-visible:outline-none max-md:h-11 max-md:w-11"
+                        >
+                          <RiUnpinLine aria-hidden size={14} />
+                        </button>
+                      </Tooltip>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
 /** One member's camera, muted, the width of the channel column. Click opens their stream. */
 function LiveFace({ name }: { name: string }) {
   const stream = useAtomValue(previewStreamsAtom)[name] ?? null;
@@ -1036,6 +1247,8 @@ export function ServerPage() {
   const canPicture = ownsPictures(room);
   const membersWords = room.members === 1 ? '1 member' : `${room.members} members`;
   const liveWords = live.length === 1 ? '1 streaming now' : `${live.length} streaming now`;
+  // the lines pinned in the channel on screen: a mark on each, and the pin or unpin on its hover
+  const pinnedHere = new Set(room.pins?.[channel] ?? []);
 
   // the banner with the picture over its foot, the name, the count, the about line, and join, leave and the gear: the top of the page,
   // or the head of a phone's drawer
@@ -1252,6 +1465,9 @@ export function ServerPage() {
                 name={server}
                 channel={channel}
                 onChannel={(to) => navigate(to === 'general' ? `/groups/${server}` : `/groups/${server}/${to}`)}
+                headerEnd={<ChannelPins server={server} channel={channel} room={room} />}
+                lineMark={(line) => (pinnedHere.has(line.id) ? <PinMark /> : null)}
+                lineActions={room.perms.channels ? (line) => <PinAction server={server} channel={channel} line={line} pinned={pinnedHere.has(line.id)} /> : undefined}
                 className={cn('h-full', ROOM_CHAT_MOBILE)}
               />
             </div>

@@ -15,7 +15,8 @@
 // A click on a member, or on a name in the chat, shows them over the room (the profile popup,
 // docs/follows.md), unless the chat tab's people cards turned that off for the browser.
 // The sidebar's search box finds the group by its letters, its row above the people's, and
-// the row goes to its page.
+// the row goes to its page. The channels power pins a channel's lines (50 at most), anyone
+// who sees the channel lists them, a watcher hears `pin` / `unpin`, and they go with the channel.
 // Run through ./scripts/test.sh, or: BASE_URL=https://<ip> node groups.js
 const { chromium, request } = require('playwright');
 const { execSync } = require('child_process');
@@ -883,6 +884,131 @@ const dropAll = async (ctx, names) => {
     await asMemberPage.context().close();
     await asOwnerPage.context().close();
     return 'quiet for a minute, lifted; one line in 30s with the role, the owner unslowed';
+  });
+
+  await step('pins: the channels power pins and unpins a channel\'s lines (401/403/404/400), the room counts them, a fact says so, 50 at most, a kept channel\'s stay kept, and they go with the channel', async () => {
+    const asOwnerPage = await (await browser.newContext({ ignoreHTTPSErrors: true, storageState: await maker.storageState() })).newPage();
+    const asMemberPage = await (await browser.newContext({ ignoreHTTPSErrors: true, storageState: await member.storageState() })).newPage();
+    await asOwnerPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    await asMemberPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    /** `texts` said in `channel` over one raw socket from `page`, one after another, each waiting out the chat's rate when refused: their ids, in order. */
+    const sayAll = (page, channel, texts) =>
+      page.evaluate(
+        ({ server, channel, texts }) =>
+          new Promise((resolve) => {
+            const ids = [];
+            const ws = new WebSocket(`wss://${location.host}/chat/${server}/${channel}`);
+            const next = () => (ids.length < texts.length ? ws.send(JSON.stringify({ type: 'say', text: texts[ids.length] })) : (ws.close(), resolve({ ids })));
+            ws.onopen = () => ws.send(JSON.stringify({ type: 'hello' }));
+            ws.onmessage = (e) => {
+              const msg = JSON.parse(e.data);
+              if (msg.type === 'history') next();
+              if (msg.type === 'message' && msg.text === texts[ids.length]) {
+                ids.push(msg.id);
+                next();
+              }
+              if (msg.type === 'error') {
+                if (msg.wait > 0 && msg.wait < 15000) setTimeout(next, msg.wait + 50);
+                else (ws.close(), resolve({ ids, error: msg.error }));
+              }
+            };
+            setTimeout(() => (ws.close(), resolve({ ids, timeout: true })), 150000);
+          }),
+        { server: slug, channel, texts }
+      );
+    const pins = (ctx, channel) => ctx.get(`/api/groups/${slug}/channels/${channel}/pins`);
+    const pin = (ctx, channel, id) => ctx.post(`/api/groups/${slug}/channels/${channel}/pins/${id}`);
+    const unpin = (ctx, channel, id) => ctx.delete(`/api/groups/${slug}/channels/${channel}/pins/${id}`);
+    const board = await maker.post(`/api/groups/${slug}/channels`, { data: { name: 'board' } });
+    expect(board.status() === 201, `adding board got ${board.status()}`);
+    const said = await sayAll(asOwnerPage, 'board', ['pin me ' + RUN, 'and me ' + RUN]);
+    expect(said.ids.length === 2, `the owner's lines in board: ${JSON.stringify(said)}`);
+    const [first, second] = said.ids;
+
+    // a watcher of the group hears the pins and the unpin, the line's id alone
+    await asMemberPage.evaluate(
+      (topic) =>
+        new Promise((resolve) => {
+          window.__pinFacts = [];
+          const ws = new WebSocket(`wss://${location.host}/events`);
+          ws.onopen = () => ws.send(JSON.stringify({ type: 'hello' }));
+          ws.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'me') {
+              ws.send(JSON.stringify({ type: 'watch', name: topic }));
+              setTimeout(resolve, 500);
+            }
+            if (msg.type === 'group' && (msg.what === 'pin' || msg.what === 'unpin')) window.__pinFacts.push(`${msg.what} ${msg.channel} ${msg.id}`);
+          };
+          setTimeout(resolve, 8000);
+        }),
+      `group:${slug}`
+    );
+
+    // nobody 401, the member (no channels power) 403, no such channel 404, a junk id 400, a line that is not there 404
+    const nobody = await pin(anon, 'board', first);
+    const noPower = await pin(member, 'board', first);
+    const noChannel = await pin(maker, 'nosuch', first);
+    const junk = await pin(maker, 'board', 'nope');
+    const noLine = await pin(maker, 'board', '1-0');
+    expect(
+      nobody.status() === 401 && noPower.status() === 403 && noChannel.status() === 404 && junk.status() === 400 && noLine.status() === 404,
+      `pinning: nobody ${nobody.status()}, member ${noPower.status()}, missing channel ${noChannel.status()}, junk ${junk.status()}, missing line ${noLine.status()}`
+    );
+    // the owner pins: the line back as the list has it; again is the same, not a second
+    const pinned = await pin(maker, 'board', first);
+    const pinnedBody = await body(pinned);
+    expect(pinned.status() === 200 && pinnedBody.id === first && pinnedBody.text === 'pin me ' + RUN && pinnedBody.from === MAKER && pinnedBody.pinned_by === MAKER && pinnedBody.pinned_at > 0, `the pin got ${pinned.status()} ${JSON.stringify(pinnedBody)}`);
+    expect((await pin(maker, 'board', first)).status() === 200, 'pinning it again was refused');
+    expect((await pin(maker, 'board', second)).status() === 200, 'pinning the second failed');
+    // the list: anyone who sees the channel, newest pin first; the room says the ids
+    const listed = await pins(member, 'board');
+    const list = (await body(listed)).pins;
+    expect(listed.status() === 200 && list.map((p) => p.id).join(' ') === `${second} ${first}` && list[1].text === 'pin me ' + RUN, `the member's list got ${listed.status()} ${JSON.stringify(list)}`);
+    expect((await pins(anon, 'board')).status() === 200 && (await pins(anon, 'nosuch')).status() === 404, 'nobody reads the pins of a channel they see, and 404 for none');
+    expect((await body(await member.get(`/api/groups/${slug}`))).pins.board.join(' ') === `${second} ${first}`, 'the room does not say what is pinned');
+    // unpin: the member cannot, the owner can; 204 again when it is not pinned
+    const memberUnpins = await unpin(member, 'board', second);
+    const ownerUnpins = await unpin(maker, 'board', second);
+    const again = await unpin(maker, 'board', second);
+    expect(memberUnpins.status() === 403 && ownerUnpins.status() === 204 && again.status() === 204, `unpinning: member ${memberUnpins.status()}, owner ${ownerUnpins.status()}, again ${again.status()}`);
+    expect((await body(await pins(maker, 'board'))).pins.map((p) => p.id).join(' ') === first, 'the unpinned line is still listed');
+    // one fact a change: the pin said again told nobody, and neither did the unpin of nothing
+    const want = [`pin board ${first}`, `pin board ${second}`, `unpin board ${second}`].join(', ');
+    await asMemberPage.waitForFunction((n) => window.__pinFacts.length >= n, 3, { timeout: 10000 }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 500));
+    const facts = await asMemberPage.evaluate(() => window.__pinFacts);
+    expect(facts.join(', ') === want, `the watcher heard ${JSON.stringify(facts)}`);
+
+    // a channel kept to a role the member does not hold: its pins are not theirs to read
+    expect((await maker.post(`/api/groups/${slug}/channels`, { data: { name: 'vault' } })).status() === 201, 'adding vault failed');
+    const vaulters = await body(await maker.post(`/api/groups/${slug}/roles`, { data: { name: 'vaulters', color: '#f2cc60', channels: ['vault'] } }));
+    expect(UUID.test(vaulters.id), `the vaulters role ${JSON.stringify(vaulters)}`);
+    const vault = await sayAll(asOwnerPage, 'vault', ['kept ' + RUN]);
+    expect(vault.ids.length === 1 && (await pin(maker, 'vault', vault.ids[0])).status() === 200, `pinning in vault: ${JSON.stringify(vault)}`);
+    const hiddenList = await pins(member, 'vault');
+    const hiddenPin = await pin(member, 'vault', vault.ids[0]);
+    expect(hiddenList.status() === 404 && hiddenPin.status() === 404 && !('vault' in ((await body(await member.get(`/api/groups/${slug}`))).pins || {})), `the member and vault's pins: list ${hiddenList.status()}, pin ${hiddenPin.status()}`);
+    expect((await maker.delete(`/api/groups/${slug}/roles/${vaulters.id}`)).status() === 204, 'deleting vaulters failed');
+    expect((await maker.delete(`/api/groups/${slug}/channels/vault`)).status() === 204, 'deleting vault failed');
+
+    // the cap: 50 a channel. two speakers fill it faster, each on their own bucket
+    const texts = (who, n) => Array.from({ length: n }, (_, i) => `${who} ${i} ${RUN}`);
+    const [mine, theirs] = await Promise.all([sayAll(asOwnerPage, 'board', texts('o', 25)), sayAll(asMemberPage, 'board', texts('m', 25))]);
+    const more = [...mine.ids, ...theirs.ids];
+    expect(more.length === 50, `the lines for the cap: ${mine.ids.length} and ${theirs.ids.length} ${JSON.stringify([mine.error, theirs.error])}`);
+    for (const id of more.slice(0, 49)) expect((await pin(maker, 'board', id)).status() === 200, `pin ${id} under the cap failed`);
+    const over = await pin(maker, 'board', more[49]);
+    expect(over.status() === 400, `the 51st pin got ${over.status()}`);
+    expect((await body(await pins(maker, 'board'))).pins.length === 50, 'the cap does not hold at 50');
+    expect((await unpin(maker, 'board', first)).status() === 204 && (await pin(maker, 'board', more[49])).status() === 200, 'one out did not make room for one in');
+
+    // the channel goes, and its pins with it
+    expect((await maker.delete(`/api/groups/${slug}/channels/board`)).status() === 204, 'deleting board failed');
+    expect((await pins(maker, 'board')).status() === 404 && !('board' in ((await body(await maker.get(`/api/groups/${slug}`))).pins || {})), 'board\'s pins outlived it');
+    await asOwnerPage.context().close();
+    await asMemberPage.context().close();
+    return 'pinned, listed newest first, unpinned, heard, 50 at most, kept, gone with the channel';
   });
 
   await step('the room page: the channel list, a pushed channel, a switch with no reload, refetch or socket, a line lands, a deleted channel is said', async () => {

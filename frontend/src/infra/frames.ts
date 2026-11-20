@@ -65,6 +65,9 @@ export type GroupChange =
   /** A member went live, or stopped: the room's faces. */
   | { what: 'live'; who: string }
   | { what: 'ended'; who: string }
+  /** A line was pinned in a channel, or unpinned (docs/groups.md "pins"): its id alone, the topic being everyone's. */
+  | { what: 'pin'; channel: string; id: string }
+  | { what: 'unpin'; channel: string; id: string }
   | { what: 'deleted' };
 
 export type ServerFrame =
