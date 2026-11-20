@@ -6,7 +6,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { loadMe, logout, meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { nickAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { closeAllDms, loadDms } from '@/infra/atoms/dm-atoms';
-import { forgetFollowing, friendsOpenAtom, loadFollowing, streamingFriendsAtom } from '@/infra/atoms/follow-atoms';
+import { forgetFollowing, friendsOpenAtom, loadFollowing } from '@/infra/atoms/follow-atoms';
 import { forgetMyServers, loadMyServers } from '@/infra/atoms/groups-atoms';
 import { openInspector } from '@/infra/atoms/inspector-atoms';
 import { forgetNotifications, loadNotifications, toggleNotifications, unreadNotificationsAtom } from '@/infra/atoms/notification-atoms';
@@ -198,7 +198,6 @@ export function UserPanel() {
   const presence = useAtomValue(myPresenceAtom);
   const inspectorOn = useAtomValue(inspectorEnabledAtom);
   const side = useAtomValue(panelSideAtom);
-  const streaming = useAtomValue(streamingFriendsAtom);
   const mobile = useIsMobile();
   const { pathname } = useLocation();
   const panel = useRef<HTMLElement | null>(null);
@@ -216,7 +215,7 @@ export function UserPanel() {
   }, []);
 
   // who I follow, the groups I am in, my chats and my inbox: a login's, once the login is known and whenever
-  // it changes (in, out, a rename). the watch page's follow button and the number on the corner read the
+  // it changes (in, out, a rename). the watch page's follow button and the sidebar's lists read the
   // first; the sidebar's groups list the second; the chat window the third; the bell at the top right the
   // fourth. another login's are not this one's, and a guest has none but who it follows: names kept in this
   // browser (follow-atoms.ts), asked about once the page knows nobody is logged in.
@@ -298,24 +297,14 @@ export function UserPanel() {
   const wide = friendsOpen || mobile;
   // where the picture goes: my page, once I have a name. a guest with none yet gets the profile tab, where the name box is
   const myPage = isValidName(myName) ? `/watch/${myName}` : null;
-  const youLabel = `you: ${myPage ? 'your page' : 'pick a name'}. ${PRESENCE_WORD[presence]}${streaming > 0 ? `. ${streaming} streaming` : ''}`;
+  const youLabel = `you: ${myPage ? 'your page' : 'pick a name'}. ${PRESENCE_WORD[presence]}`;
   const youTitle = `${myPage ? 'your page' : 'pick a name'} · ${PRESENCE_WORD[presence]}`;
   const face = (
     <>
       <Face name={me ?? nick} version={avatar} className={RAIL_FACE} />
-      {/* the presence square in the corner of the picture: green online, blue with a red dot
-          streaming, orange do not disturb, grey offline. the word is in the label; the ✓ keeps meaning login */}
+      {/* the presence square in the corner of the picture: green online, green and blue cut
+          corner to corner streaming, orange do not disturb, grey offline. the word is in the label; the ✓ keeps meaning login */}
       <PresenceSquare id="my-presence" status={presence} className="border-background" />
-      {/* how many of them are live, on the picture's corner: the one number the closed column shows */}
-      {streaming > 0 && (
-        <span
-          id="friends-streaming"
-          aria-hidden
-          className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background"
-        >
-          {streaming}
-        </span>
-      )}
     </>
   );
 

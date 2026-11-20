@@ -161,9 +161,7 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     expect(word === 'streaming', `star reads ${word}`);
     const first = await fanPage.$eval('#friends-list li', (el) => el.querySelector('a')?.id || '');
     expect(first === `friend-${STAR}`, `first in the list is ${first}`);
-    const corner = await fanPage.textContent('#friends-streaming');
-    expect(corner === '1', `the corner says ${corner}`);
-    return `${STAR} streaming, first; the corner says 1`;
+    return `${STAR} streaming, first`;
   });
 
   await step('the card: the pointer resting on a row shows the face with the word on it, the name and their status; nothing counted', async () => {

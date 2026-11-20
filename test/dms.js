@@ -226,18 +226,24 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     await p.mouse.move(700, 300);
     return label;
   };
+  // the sidebar opened, until ben's chat button on his friends row is named `want`: the one place outside the window the count of new lines shows
+  const chatButtonSays = async (p, want) => {
+    await p.hover('#user-panel');
+    await p.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+    await p.waitForFunction(([sel, w]) => document.querySelector(sel)?.getAttribute('aria-label') === w, [`#friend-chat-${BEN}`, want], { timeout: 10000 });
+  };
   let annPage;
 
   await step('the window: the thread loads with the count, reading clears it, a pushed line lands, a sent one is kept', async () => {
     annPage = await context.newPage();
     await login(annPage, ANN);
-    // the sidebar says 25 new before the window opens
-    await annPage.waitForFunction(() => document.querySelector('#friends-unread')?.textContent === '25', null, { timeout: 10000 });
+    // ben's chat button says 25 new before the window opens
+    await chatButtonSays(annPage, `chat with ${BEN}, 25 new`);
     await openChats(annPage);
     await annPage.waitForSelector(`#friend-chat-tab-${BEN}`, { timeout: 10000 });
     // the thread with ben is the shown one (the newest), its lines on screen, and it is read now
     await annPage.waitForFunction(() => document.querySelectorAll('#friend-chat-log p[data-id]').length === 50, null, { timeout: 10000 });
-    await annPage.waitForFunction(() => !document.querySelector('#friends-unread'), null, { timeout: 10000 });
+    await annPage.waitForFunction((n) => !document.querySelector(`#friend-chat-unread-${n}`), BEN, { timeout: 10000 });
     const list = await body(await ann.get('/api/dms'));
     expect(list[0].unread === 0, `after the window showed the thread the api says ${list[0].unread} new`);
     // ben writes: the line is pushed into the open window, and is not new (it is on screen)
@@ -379,18 +385,18 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     await annPage.waitForFunction(() => !document.querySelector('#friend-chat'), null, { timeout: 5000 });
     await ben.post(`/api/dm/${ANN}`, { data: { text: 'one more' } });
     await ben.post(`/api/dm/${ANN}`, { data: { text: 'and another' } });
-    await annPage.waitForFunction(() => document.querySelector('#friends-unread')?.textContent === '2', null, { timeout: 10000 });
+    await chatButtonSays(annPage, `chat with ${BEN}, 2 new`);
     const list = await body(await ann.get('/api/dms'));
     expect(list[0].unread === 2, `the api says ${list[0].unread} new (want 2)`);
     // a second tab of ann: the count is there too, from the api, and drops when the first tab reads
     const second = await context.newPage();
     await second.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-    await second.waitForFunction(() => document.querySelector('#friends-unread')?.textContent === '2', null, { timeout: 10000 });
+    await chatButtonSays(second, `chat with ${BEN}, 2 new`);
     const label = await openChats(annPage);
     expect(label === `chat with ${BEN}, 2 new`, `ben's chat button was named ${JSON.stringify(label)}`);
-    await annPage.waitForFunction(() => !document.querySelector('#friends-unread'), null, { timeout: 10000 });
+    await annPage.waitForFunction((n) => !document.querySelector(`#friend-chat-unread-${n}`), BEN, { timeout: 10000 });
     await annPage.waitForFunction(() => [...document.querySelectorAll('#friend-chat-log p')].some((p) => p.textContent.includes('and another')), null, { timeout: 10000 });
-    await second.waitForFunction(() => !document.querySelector('#friends-unread'), null, { timeout: 10000 });
+    await chatButtonSays(second, `chat with ${BEN}`);
     const after = await body(await ann.get('/api/dms'));
     expect(after[0].unread === 0, `after reading the api says ${after[0].unread} new`);
     await second.close();

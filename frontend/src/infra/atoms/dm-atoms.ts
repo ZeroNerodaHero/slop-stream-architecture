@@ -57,8 +57,6 @@ export const dmOpenAtom = atom(false);
 export const dmThreadsAtom = atom<Record<string, Thread>>({});
 /** What the last send or load said when it failed; '' otherwise. The window shows it under the box. */
 export const dmNoticeAtom = atom('');
-/** New lines across every thread: the number on the sidebar's friends icon. */
-export const dmUnreadAtom = atom((get) => get(dmsAtom).reduce((n, d) => n + d.unread, 0));
 
 /** A search's hits, newest first, and the thread and the words they are for. Null when the pane is closed. The window shows them where the lines are while that thread is the one on screen. */
 export const dmResultsAtom = atom<{ name: string; query: string; lines: DmLine[] } | null>(null);
