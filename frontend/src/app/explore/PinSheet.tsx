@@ -23,7 +23,7 @@ const SLIDE = 'duration-200 ease-out motion-reduce:transition-none';
 const ACTION = 'flex h-11 w-11 items-center justify-center text-textSecondary focus-visible:text-primaryBlue focus-visible:outline-none';
 
 /**
- * A phone's pin in a group's title row (between the back caret and the group's picture): a
+ * A phone's pin in a group's title row (between the back caret and the drawer's opener): a
  * 44px square, the count on its glyph's corner in the bell's blue square while there are any.
  * It opens and shuts the sheet (`PinSheet`); lit while that is down.
  */

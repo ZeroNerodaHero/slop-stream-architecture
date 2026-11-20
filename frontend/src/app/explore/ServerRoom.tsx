@@ -1419,7 +1419,7 @@ export function ServerPage() {
       {live.length > FACES && <p className="mt-2 text-xs text-textTertiary">{live.length - FACES} more live</p>}
     </section>
   );
-  // a phone's title row: the back caret (PageFrame `mobileBack`), the group's picture, then its name, small, over the channel; at the right end the pins, then the button that opens the drawer (`mobileEnd`)
+  // a phone's title row: the menu (PageFrame's, every page's), the group's picture, then its name, small, over the channel; at the right end the back caret (PageFrame's, just left of `mobileEnd`), the pins, then the button that opens the drawer
   const mobileTitle = (
     <span className="flex min-w-0 items-center gap-2.5">
       <GroupMark name={server} color={color} icon={room.icon} className="h-9 w-9 shrink-0 text-sm" />
@@ -1451,7 +1451,6 @@ export function ServerPage() {
       wide
       titleId={titleId}
       mobileTitle={noChannel ? undefined : mobileTitle}
-      mobileBack={!noChannel}
       mobileEnd={
         noChannel ? undefined : (
           <>

@@ -19,12 +19,10 @@ interface PageFrameProps {
   mobileTitle?: ReactNode;
   /** On a phone, a small line under the title, which then reads smaller so both fit the row: a stream's followers and watchers (WatchPage.tsx, LivePage.tsx). */
   mobileSub?: ReactNode;
-  /** On a phone, the right end of the row instead of the bell and go live: a group's button for its drawer (ServerRoom.tsx). */
+  /** On a phone, the right end of the row instead of the bell and go live, the back caret just left of it: a group's pins and its drawer's opener (ServerRoom.tsx). */
   mobileEnd?: ReactNode;
   /** On a phone, beside the menu at the row's left: the streamer's face, yours on go live (LivePage.tsx, WatchPage.tsx). */
   mobileStart?: ReactNode;
-  /** On a phone, the back caret at the row's left in the menu's place, `mobileStart` after it: a group's room (ServerRoom.tsx), whose right end is its drawer. */
-  mobileBack?: boolean;
   /** On a phone, the page runs to the window's edges: no side padding, no gap under the row, no foot. A group's room (ServerRoom.tsx). */
   bleed?: boolean;
   /** On a phone, the page is its parent's height: a column, the row on top and the rest the page's to share out. The go live page, which is the window (LivePage.tsx). */
@@ -62,19 +60,16 @@ export function HomeLink({ reload = false, square = false, className }: { reload
 
 /**
  * A phone's way home, where the desktop has the back caret: the house, a 44px square, beside
- * the menu (a group's row, by its drawer opener, draws it as a back caret). Named `home` and no tooltip, the caret's way (tooltips.mdc): the row is pinned to
+ * the menu (a group's row, by its pins, draws it as a back caret). Named `home` and no tooltip, the caret's way (tooltips.mdc): the row is pinned to
  * the window's top edge. The tests click `header a[href="/"]`.
  */
-function MobileHomeLink({ caret = false, className }: { caret?: boolean; className?: string }) {
+function MobileHomeLink({ caret = false }: { caret?: boolean }) {
   return (
     <Link
       id="home"
       to="/"
       aria-label="home"
-      className={cn(
-        'flex h-11 w-11 shrink-0 items-center justify-center border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none',
-        className
-      )}
+      className="flex h-11 w-11 shrink-0 items-center justify-center border border-transparent text-textSecondary focus-visible:border-primaryBlue focus-visible:outline-none"
     >
       {caret ? <RiArrowLeftSLine aria-hidden size={24} /> : <RiHome5Line aria-hidden size={22} />}
     </Link>
@@ -168,10 +163,9 @@ function useCurrentPart(on: boolean, main: RefObject<HTMLElement | null>, row: R
  * when it is long: `mobileTitle` or the title, or on home the part you have scrolled to
  * (`useCurrentPart`), whose headings then scroll with the page under the row; with `mobileSub`
  * the title is smaller and that line sits under it, in the same height. Then home (every
- * page but home) just left of go live, or just left of `mobileEnd` (a group's drawer opener);
+ * page but home) just left of go live, or just left of `mobileEnd` (a group's pins and drawer opener), as a back caret;
  * on a page with neither, and no go live of its own, home stays beside the menu (go live passes an empty
- * `mobileEnd`: its home is at the right end). `mobileBack` (a group's room) puts the back caret where the menu
- * was, and home is that. No bell: a phone's is in the sidebar's drawer, beside the gear
+ * `mobileEnd`: its home is at the right end). No bell: a phone's is in the sidebar's drawer, beside the gear
  * (UserPanel.tsx). Always measured into `--title-row`, home's too: the page starts under it.
  * `bleed` takes the page's padding away, so what is under the row reaches the window's edges.
  */
@@ -184,7 +178,6 @@ export function PageFrame({
   mobileSub,
   mobileEnd,
   mobileStart,
-  mobileBack = false,
   bleed = false,
   fill = false,
   person = false,
@@ -221,8 +214,8 @@ export function PageFrame({
     const headed = mobileTitle !== undefined || title !== undefined;
     // home just left of go live when the row has go live, else beside the menu
     const homeByGoLive = Boolean(title) && mobileEnd === undefined && !onLivePage;
-    // a mobileEnd (a group's drawer opener) gets home just left of it, on the right
-    const homeByEnd = Boolean(title) && mobileEnd !== undefined && !mobileBack;
+    // a mobileEnd (a group's pins and drawer opener) gets home just left of it, on the right
+    const homeByEnd = Boolean(title) && mobileEnd !== undefined;
     return (
       <main ref={mainRef} className={cn('mx-auto', bleed ? 'px-0' : 'px-4 pb-8', width, fill && 'flex h-full min-h-0 w-full flex-col')}>
         {/* the buttons are 44px; the notch or the status bar is over them */}
@@ -233,9 +226,9 @@ export function PageFrame({
             bleed ? 'px-4' : titled && 'mb-4'
           )}
         >
-          {mobileBack ? <MobileHomeLink caret className="-ml-2.5" /> : <DrawerOpener />}
+          <DrawerOpener />
           {mobileStart}
-          {title && !mobileBack && !homeByGoLive && !homeByEnd && <MobileHomeLink />}
+          {title && !homeByGoLive && !homeByEnd && <MobileHomeLink />}
           {mobileSub !== undefined ? (
             // a stream's row: the name over its numbers, both cut with an ellipsis, in the row's own height
             <div className="ml-1 min-w-0 flex-1">
