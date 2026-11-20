@@ -354,13 +354,15 @@ export function WatchPage() {
   // picture says it), `loading` (the grey says it) and `not live yet` (the offline chip says it). the
   // status line's own words, red for a bad one; `connected, waiting for video` is still `connecting`.
   // after a failure the retry button is under the words. the words are aria-hidden: the status line,
-  // sr-only under the player, reads them out
-  const chipWords =
-    phase === 'connecting' || phase === 'connected'
-      ? 'connecting'
-      : phase === 'watching' || phase === 'loading' || (phase === 'waiting' && message === NOT_LIVE_MESSAGE)
-        ? null
-        : message;
+  // sr-only under the player, reads them out. `connecting` ends in three dots that light up in turn:
+  // every dot stays in layout and only its opacity moves, so the chip never changes size; still and
+  // full for anyone who asked for less motion
+  const chipDots = phase === 'connecting' || phase === 'connected';
+  const chipWords = chipDots
+    ? 'connecting'
+    : phase === 'watching' || phase === 'loading' || (phase === 'waiting' && message === NOT_LIVE_MESSAGE)
+      ? null
+      : message;
   const playerChip = chipWords !== null && (
     <div className={cn('pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2', mobile && strip.overlay)}>
       <span
@@ -371,6 +373,12 @@ export function WatchPage() {
         )}
       >
         {chipWords}
+        {chipDots &&
+          ['[animation-delay:0s]', '[animation-delay:0.2s]', '[animation-delay:0.4s]'].map((delay) => (
+            <span key={delay} aria-hidden className={cn('animate-dot motion-reduce:animate-none motion-reduce:opacity-100', delay)}>
+              {' .'}
+            </span>
+          ))}
       </span>
       {canRetry && (
         <Button id="retry" size="sm" className="pointer-events-auto" onClick={retry}>
