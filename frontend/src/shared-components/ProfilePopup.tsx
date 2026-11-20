@@ -5,6 +5,7 @@ import { Link, useLocation } from 'react-router-dom';
 
 import { dummyPage } from '@/infra/about';
 import { api } from '@/infra/api';
+import { homeStreamsAtom } from '@/infra/atoms/home-atoms';
 import { showSpeaker } from '@/infra/atoms/chat-atoms';
 import { openDm } from '@/infra/atoms/dm-atoms';
 import { followingAtom, loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
@@ -17,6 +18,7 @@ import { previewStreamsAtom, setPopupPreview } from '@/infra/preview';
 import { cleanSocials } from '@/infra/socials';
 import { store } from '@/infra/store';
 import { About } from '@/shared-components/About';
+import { Badge } from '@/shared-components/Badge';
 import { buttonClassName } from '@/shared-components/Button';
 import { Calendar } from '@/shared-components/Calendar';
 import { Face } from '@/shared-components/Face';
@@ -28,6 +30,7 @@ import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { Socials } from '@/shared-components/Socials';
 import { StreamStill } from '@/shared-components/StreamStill';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { ViewerCount } from '@/shared-components/ViewerCount';
 import { cn } from '@/utils/cn';
 import { monthOf } from '@/utils/since';
 import { roveTabs } from '@/utils/tabs';
@@ -39,8 +42,10 @@ const POPUP_TABS: readonly PopupTab[] = ['about', 'calendar', 'socials'];
 const TAB = '-mb-px border-b-2 px-3 py-1.5 font-semibold leading-tight transition-colors duration-150';
 const TAB_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
 const TAB_OFF = 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary';
-/** A small action beside the buttons: words alone (buttons.mdc). */
+/** A link inside a sentence (buttons.mdc): `try again` after the words that the read failed. */
 const WORDS = 'text-sm font-semibold text-primaryBlue underline-offset-2 hover:underline';
+/** A small action in the row: boxed, the size of `go to their page` (buttons.mdc). */
+const SMALL = 'px-3 py-1.5 text-sm';
 
 /**
  * The profile popup (docs/follows.md): somebody's page over the page you are on, discord's
@@ -118,12 +123,13 @@ function LiveStream({ name, onGo }: { name: string; onGo: () => void }) {
  * clicked; a click on the backdrop closes it too, and so does the page under it changing.
  *
  * What it shows is their watch page without the chat: the head (the face, the name with its
- * marks, the word for how they are, their status), then how many follow them with the follow
- * button, and the button that goes to their page; under those, scrolling, their stream while
+ * marks, the word for how they are; under the name their group's badge, how many follow them
+ * and, streaming, how many watch; their status), then the follow button and the button that
+ * goes to their page; under those, scrolling, their stream while
  * they are live (`LiveStream`) or the offline picture and line they put up, and the page's
  * three tabs, the same three components: the page of their own, when they stream, where else
  * to find them. A friend has the way to their chat with you, and a popup opened from a chat
- * line the way to that account's lines there, which is what the click did before the popup.
+ * line the way to that account's messages there, which is what the click did before the popup.
  *
  * It asks nothing the page does not: one profile read (`loadPeek`, the hover card's, kept a
  * short while, so a popup opened off a row whose card was up is whole at once), the tabs'
@@ -152,6 +158,8 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
   const friend = useAtomValue(followingAtom)?.find((f) => f.name === name && f.mutual);
   // my own row, or my own name in a chat: the popup is about me, and the button says so
   const mine = useAtomValue(myNameAtom) === name;
+  // home's list, the count its cards show (PersonCard.tsx): null while it has not come, or did not say
+  const viewers = useAtomValue(homeStreamsAtom)?.find((s) => s.name === name)?.viewers ?? null;
 
   // A layout effect: its cleanup runs while the node is still in the document, which is when
   // close() hands focus back to the opener. (A passive cleanup would run after the removal.)
@@ -249,6 +257,16 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             <Who name={name} verified={verified} oauthVerified={oauthVerified} />
             {presence && <Word presence={presence} className="font-normal" />}
           </h2>
+          {/* under the name: their group's badge, how many follow them (not a fake stream's: nobody follows one), and while they stream how many watch */}
+          <div id="profile-popup-meta" className="mt-1 flex flex-wrap items-center gap-2 text-sm text-textSecondary">
+            {card?.badge && <Badge group={card.badge} className="min-w-0" />}
+            {typeof card?.followers === 'number' && !isDummyName(name) && (
+              <span id="profile-popup-followers">
+                {card.followers} {card.followers === 1 ? 'follower' : 'followers'}
+              </span>
+            )}
+            {live && <ViewerCount id="profile-popup-viewers" count={viewers} className="shrink-0 whitespace-nowrap text-textSecondary" />}
+          </div>
           {/* their status: the one line about them (`bio` on the wire), a few lines of it here and the whole on hover */}
           {card?.bio && (
             <p id="profile-popup-bio" title={card.bio} className="mt-1 line-clamp-3 text-textSecondary [overflow-wrap:anywhere]">
@@ -274,20 +292,15 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
         </Tooltip>
       </header>
 
-      {/* the watch page's row under the picture: how many follow them and the button to; then the small ways on (a friend's chat, a
-          speaker's lines), and at the far end the way to the page itself. not for a fake stream: nobody follows one */}
-      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-primaryStroke px-5 py-4">
+      {/* the watch page's row under the picture: the follow button (not for a fake stream: nobody follows one); then the small ways on (a
+          friend's chat, a speaker's messages), and at the far end the way to the page itself */}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-primaryStroke px-5 py-3">
         {!isDummyName(name) && <FollowButton id="profile-popup-follow" name={name} />}
-        {typeof card?.followers === 'number' && !isDummyName(name) && (
-          <span id="profile-popup-followers" className="text-textSecondary">
-            {card.followers} {card.followers === 1 ? 'follower' : 'followers'}
-          </span>
-        )}
         {friend && (
           <button
             id="profile-popup-message"
             type="button"
-            className={WORDS}
+            className={buttonClassName('secondary', SMALL)}
             onClick={() => {
               // the chat window is the page's, under this: the popup makes way for it
               openDm({ id: '', name, avatar: friend.avatar, verified: friend.verified, bio: friend.bio, presence: friend.presence });
@@ -298,17 +311,19 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
           </button>
         )}
         {target.lines && (
-          <button
-            id="profile-popup-lines"
-            type="button"
-            className={WORDS}
-            onClick={() => {
-              if (target.lines) void showSpeaker(name, target.lines);
-              close();
-            }}
-          >
-            their lines here
-          </button>
+          <Tooltip content="show only their messages in this chat">
+            <button
+              id="profile-popup-lines"
+              type="button"
+              className={buttonClassName('secondary', SMALL)}
+              onClick={() => {
+                if (target.lines) void showSpeaker(name, target.lines);
+                close();
+              }}
+            >
+              their messages
+            </button>
+          </Tooltip>
         )}
         {/* on their page already (a name in their own chat): there is nowhere to go */}
         {openedOn !== page && (
@@ -319,7 +334,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             state={live ? { live: true } : undefined}
             onClick={close}
             draggable={false}
-            className={buttonClassName('secondary', 'ml-auto gap-1.5 px-3 py-1.5 text-sm')}
+            className={buttonClassName('secondary', cn('ml-auto gap-1.5', SMALL))}
           >
             {mine ? 'go to your page' : 'go to their page'}
             <RiArrowRightLine aria-hidden size={16} />

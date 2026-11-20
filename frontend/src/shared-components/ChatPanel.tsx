@@ -166,7 +166,7 @@ function useSpeakerPress(line: ChatLine, room: ChatRoom) {
  * it, the name, their status. Where this browser turned the popup off (settings.profilePopup),
  * and in a chat that is in a window of its own (the popped out player, infra/popout.ts: the
  * popup is the page's, under that window), a login's name opens that account's lines here
- * instead, which the popup has as `their lines here`. No `title` beside it: two boxes for
+ * instead, which the popup has as `their messages`. No `title` beside it: two boxes for
  * one name is one too many. The colour says who the line is really from: the streamer green,
  * a login blue, an anonymous nick red (no card for it, so its `title` says why).
  */
