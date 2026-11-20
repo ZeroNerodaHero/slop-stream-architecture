@@ -84,6 +84,7 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
 import { Field, SECTION_TITLE, Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
+import { compactCount } from '@/utils/count';
 
 /** Cameras played in the room. The same peers home uses, muted, and not counted as viewers. */
 const FACES = 4;
@@ -1800,10 +1801,13 @@ function MembersStrip({ room, showRef, onShow }: { room: GroupRoom; showRef: Ref
           </button>
         </Tooltip>
       </div>
-      <p className="my-1 flex h-4 shrink-0 items-center justify-center text-xs font-semibold text-textTertiary">
-        {room.members}
-        <span className="sr-only">&nbsp;{room.members === 1 ? 'member' : 'members'}</span>
-      </p>
+      <Tooltip content={`${room.members} ${room.members === 1 ? 'member' : 'members'}`} at="left">
+        <p className="my-1 inline-flex h-4 shrink-0 items-center justify-center gap-1 text-xs font-semibold tabular-nums text-textTertiary">
+          <RiGroupLine aria-hidden size={14} />
+          {compactCount(room.members)}
+          <span className="sr-only">&nbsp;{room.members === 1 ? 'member' : 'members'}</span>
+        </p>
+      </Tooltip>
       {/* the faces 10px in from the strip's border, and room under the last one for its presence square, which hangs below its face */}
       <ul className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto overscroll-contain px-2.5 pb-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {members.map((member) => {
