@@ -25,6 +25,7 @@ import { record } from '@/infra/atoms/inspector-atoms';
 import { hideBotsAtom } from '@/infra/atoms/settings-atoms';
 import { relayUrl } from '@/infra/relay';
 import { store } from '@/infra/store';
+import { applyReaction, type Reaction, reacted, reactionsOf } from '@/shared-components/reaction-list';
 
 export interface ChatLine {
   id: string;
@@ -48,6 +49,8 @@ export interface ChatLine {
   channel?: string;
   /** The line this one answers, as it was when the reply was said (chat.rs `Reply`). Absent for none, and on an older chat. */
   reply?: ChatReply;
+  /** The emoji on the line and who put them there (reactions.rs), as they are now; `react` frames keep it so. Empty or absent for none (a pin's copy carries none). */
+  reactions?: Reaction[];
 }
 
 /** What a reply answers (chat.rs `Reply`): the line's id in the same room, who said it with their marks and face, the start of its words, how many pictures it had. */
@@ -144,6 +147,12 @@ const NOTICE_WORDS: Record<string, string> = {
   'channel cooldown': 'this channel has a cooldown between lines',
   'timed out': 'you are timed out here',
   'no such line': 'that line is gone, so the reply was not sent'
+};
+/** A refused reaction's words, where the chat's own would mislead (the reply's `no such line` is the line's). */
+const REACT_WORDS: Record<string, string> = {
+  'no such line': 'that line is gone',
+  'timed out': 'you are timed out here',
+  'too many reactions': 'that line has as many reactions as it holds'
 };
 /** How long a line jumped to from a reply's quote stays lit. */
 const FLASH_MS = 1600;
@@ -450,6 +459,65 @@ export class ChatRoom {
     }, FLASH_MS);
   }
 
+  /**
+   * `emoji` on `line`, or off it when it is ours already (a chip clicked, a pick in the picker): a
+   * `react` frame. Nothing changes here until the room's `react` frame comes back, the same one
+   * everyone in the room gets, so every screen agrees. A login reacts; a nick is told so.
+   */
+  react(line: ChatLine, emoji: string) {
+    const me = store.get(meAtom);
+    if (!me) {
+      this.showNotice('log in to react');
+      return;
+    }
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      this.showNotice('chat is down, try again');
+      return;
+    }
+    const on = !(line.reactions ?? []).some((r) => r.emoji === emoji && reacted(r, me));
+    const frame: Record<string, unknown> = { type: 'react', id: line.id, emoji, on };
+    // a server socket is every channel: a hit names its own, a line on screen is the shown one's
+    if (this.server) frame.channel = line.channel ?? this.channel;
+    record(`/chat/${this.key}`, 'out', frame);
+    ws.send(JSON.stringify(frame));
+  }
+
+  /**
+   * A `react` frame: `who` put `emoji` on line `id`, or took it off. The line takes it wherever it
+   * is held: on screen, the tail parked behind a jump, the shelf of a channel not shown, the hits.
+   * `channel` is a server socket's; null for a stream's.
+   */
+  private applyReact(channel: string | null, id: string, emoji: string, who: string, on: boolean) {
+    const touch = (lines: ChatLine[]) => {
+      const at = lines.findIndex((l) => l.id === id);
+      const line = lines[at];
+      if (!line) return lines;
+      const next = lines.slice();
+      next[at] = { ...line, reactions: applyReaction(line.reactions, emoji, who, on) };
+      return next;
+    };
+    if (channel !== null && channel !== this.channel) {
+      const tail = this.tails.get(channel);
+      if (tail) this.tails.set(channel, touch(tail));
+    } else {
+      const lines = store.get(this.linesAtom);
+      const next = touch(lines);
+      if (next !== lines) store.set(this.linesAtom, next);
+      if (this.savedTail) this.savedTail = touch(this.savedTail);
+    }
+    const results = store.get(this.resultsAtom);
+    // a server's hits say their channel: the same id in another channel is another line
+    if (results?.some((l) => l.id === id && (channel === null || l.channel === undefined || l.channel === channel))) {
+      store.set(
+        this.resultsAtom,
+        results.map((l) =>
+          l.id === id && (channel === null || l.channel === undefined || l.channel === channel) ? { ...l, reactions: applyReaction(l.reactions, emoji, who, on) } : l
+        )
+      );
+    }
+  }
+
   showNotice(text: string, ms = 3000) {
     store.set(this.noticeAtom, text);
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
@@ -557,6 +625,11 @@ export class ChatRoom {
         error?: string;
         wait?: number;
         channel?: string;
+        /** a `react` frame's, and a refused reaction's line */
+        emoji?: string;
+        who?: string;
+        on?: boolean;
+        react?: string;
       } & Partial<ChatLine>;
       try {
         msg = JSON.parse(String(e.data));
@@ -586,6 +659,11 @@ export class ChatRoom {
           this.counts.set(tagged, msg.count);
           if (tagged === this.channel) store.set(this.countAtom, msg.count);
         } else store.set(this.countAtom, msg.count);
+      } else if (msg.type === 'react' && typeof msg.id === 'string' && typeof msg.emoji === 'string' && typeof msg.who === 'string') {
+        this.applyReact(tagged, msg.id, msg.emoji, msg.who, msg.on === true);
+      } else if (msg.type === 'error' && msg.error && typeof msg.react === 'string') {
+        // a reaction refused: words under the box, and nothing of the box's own (its line, its wait) is touched
+        this.showNotice(REACT_WORDS[msg.error] ?? msg.error);
       } else if (msg.type === 'error' && msg.error) {
         this.onError(msg.error, msg.wait, me);
       }
@@ -1004,7 +1082,8 @@ function fromWire(line: ChatLine): ChatLine {
     avatar: typeof line.avatar === 'number' ? line.avatar : null,
     image: images[0] ?? null,
     images,
-    reply: line.reply && typeof line.reply === 'object' && typeof line.reply.id === 'string' ? line.reply : undefined
+    reply: line.reply && typeof line.reply === 'object' && typeof line.reply.id === 'string' ? line.reply : undefined,
+    reactions: reactionsOf(line.reactions)
   };
 }
 

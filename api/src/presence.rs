@@ -230,6 +230,23 @@ pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str
     publish(r, &fields).await;
 }
 
+/// A login's emoji on a direct message, or off it (docs/dms.md "reactions"), its row written. `name`
+/// is the other side, the gateway's key; it goes to the sockets of both names, as the line did.
+pub(crate) async fn publish_dm_react<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, emoji: &str, on: bool) {
+    publish(
+        r,
+        &[
+            ("type", "dm_react".into()),
+            ("name", to.into()),
+            ("from", from.into()),
+            ("id", id.to_string()),
+            ("emoji", emoji.into()),
+            ("on", if on { "1" } else { "0" }.into()),
+        ],
+    )
+    .await;
+}
+
 /// A login read a thread up to a line, on one device: its other devices drop their count.
 /// `peer_id` is the account they read, so a rename still matches the inbox row.
 pub(crate) async fn publish_dm_read<C: AsyncCommands>(r: &mut C, reader: &str, peer: &str, peer_id: &str, id: i64) {

@@ -58,6 +58,7 @@ mod pins;
 mod presence;
 mod profile;
 mod ratelimit;
+mod reactions;
 mod release;
 mod s3;
 mod socket;

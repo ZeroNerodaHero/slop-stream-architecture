@@ -64,6 +64,15 @@ CREATE TABLE dm_reads (
   read_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (reader_id, peer_id)
 );
+
+-- migration 0003-reactions: one login's one emoji on one line ("reactions" below)
+CREATE TABLE dm_reactions (
+  dm_id bigint NOT NULL REFERENCES dms(id) ON DELETE CASCADE,
+  emoji text NOT NULL,
+  user_id uuid NOT NULL REFERENCES streamers(id) ON DELETE CASCADE,
+  at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (dm_id, emoji, user_id)
+);
 ```
 
 `api/schema.sql`, applied by the api at boot to an empty database. a thread is the pair whichever way each line went, so the thread index puts the two ids in one order (`LEAST`, `GREATEST`); a page is one range on it. the two one-sided indexes are the list of threads (`from_id = me OR to_id = me`, grouped by the other side) and the count of what is new (`from_id = peer AND to_id = me AND id > last_read_id`). the pictures' bytes are in the bucket under `chat/<id>` (`chat_images.rs`), not in the row. nothing is indexed for the search: the rooms keep a `tsvector` and a `has_link` column with indexes (`chat.md`) because a room runs to hundreds of thousands of lines, while the pair bounds a thread to a few thousand at most, so a search is the thread index's range with the words (`to_tsvector('simple', text)`), the rooms' link regex (`history::LINK`) and the days read off each row.
@@ -84,11 +93,16 @@ CREATE TABLE dm_reads (
 
 a line may answer another line of its thread (`chat.md` "replies", the same thing on the room chat): `POST /api/dm/:name` takes `reply`, the id of the line answered, which must be a line of this same pair (`quote` in dms.rs), or 400 `no such line`; it is looked up after the rate, like the pictures. the row keeps the id (`reply_to`). every line the api hands out (a page, a search hit, the 201, the `dm` frame) has `reply`: null for none, else the quote joined at read time from the line answered, of the same pair, `{ id, from, text, verified, avatar, images }` (`from` the writer's name now, `text` its first 120 characters, `avatar` their picture's version, `images` how many pictures it had: the room chat's `Reply`). a line answered that is not there any more reads `{ id, gone: true }`, which the window draws as `original message was deleted`. the window has the room chat's action bar on every line, the `replying to` bar over the box (`#friend-chat-replying`, its × `#friend-chat-reply-cancel`; escape lets go of the reply before it hides the window), and the quote over a reply, which goes to the line (the pages back to it asked for, `openDmLine`) and lights it.
 
+### reactions
+
+a line wears emoji the room chat's way (`chat.md` "reactions": the same 32, the same once-per-emoji rule, 20 different at most, the same picker and chips in the window). `PUT /api/dm/:name/react` with `{ id, emoji, on }` puts the login's emoji on line `id` of the thread, or takes it off: 200 with `{ id, reactions }`, the line's reactions as they are now, which the window puts in at once (the socket may be down). 400 `not a reaction`, `no such line` (a line not of this pair), `too many reactions`; 403 in the friends' words for anyone who is not one, as a line is; 429 past 120 a minute (`rl:dmreact:name:`). a change is a `dm_react` fact to both; one that was so already (on twice, off of nothing) is none. the rows are `dm_reactions` (migration `0003-reactions`: the line, the emoji, the account, when; they go with the line and with the account), and every line the api hands out (a page, a search hit) has `reactions`, `[{ emoji, count, who }]` with the first 25 names as each is named now (`reactions::dm_reactions_sql!`, joined in `LINE_SELECT`). a new line's 201 and `dm` frame carry none; `lineOf` leaves `reactions` off such a line and `merge` keeps what the line had.
+
 ## the facts, the frames
 
 | fact on `events` | the gateway | the frame |
 |---|---|---|
 | `type dm name <to> from <from> id text at [images] [reply]` | to every socket that *is* `to` and every socket that *is* `from` (`Gateway::tell`, the own-name index, not the watchers'). `images` is the ids joined by commas, left out of the fact and the frame when the line has none; `reply` the quote of the line it answers (json in the fact, an object in the frame), left out for none | `{"type":"dm","id":12,"from":"alice","to":"billy","text":"hi","at":1729…,"images":["6b1e…"]}` |
+| `type dm_react name <to> from <from> id emoji on` | to every socket that *is* `to` and every socket that *is* `from`, as the line went. `on` is 1 or 0 | `{"type":"dm_react","id":12,"from":"alice","to":"billy","emoji":"🔥","on":true}` |
 | `type dm_read name <reader> peer <peer> id` | to every socket that is `reader` | `{"type":"dm_read","name":"billy","peer":"alice","id":12}` |
 
 the writer's own devices get the `dm` frame too: the page that sent it already has the line from the 201 and drops the frame by id; its other tabs learn it from the frame alone. a socket that is nobody (a guest) is never one of the two names and hears nothing. the inbox row a line makes (`notifications.md`, `notify::messaged`) carries the words as before; a line of pictures alone is a row with none, and the list says `a picture` for it.

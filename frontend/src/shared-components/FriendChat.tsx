@@ -36,6 +36,7 @@ import {
   openDm,
   openDmLine,
   pickDm,
+  reactDm,
   removeDm,
   searchDm,
   selectDm,
@@ -58,6 +59,7 @@ import { LinkedText } from '@/shared-components/LinkedText';
 import { SHEET_FLICK, SHEET_MS, SHEET_SNAP, useSheetBack } from '@/shared-components/MobileSheet';
 import { panelClassName } from '@/shared-components/Panel';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
+import { ReactionChips } from '@/shared-components/Reactions';
 import { Who } from '@/shared-components/PersonRow';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { ProfileLink, profilePath, useShowProfile } from '@/shared-components/ProfileLink';
@@ -1123,7 +1125,8 @@ export function FriendChat() {
                         ) : null
                       }
                       pictures={<ChatImages ids={line.images} />}
-                      actions={<LineActions onReply={() => setReply(line)} text={line.text} />}
+                      actions={<LineActions onReact={(emoji) => void reactDm(name, line, emoji)} reactions={line.reactions} me={me} onReply={() => setReply(line)} text={line.text} />}
+                      reactions={<ReactionChips reactions={line.reactions ?? []} me={me} onReact={(emoji) => void reactDm(name, line, emoji)} />}
                       quote={
                         line.reply && (
                           <ReplyQuote

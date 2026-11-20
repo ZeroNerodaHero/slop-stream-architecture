@@ -36,6 +36,7 @@ use uuid::Uuid;
 
 use crate::chat::{line_from, room_key, with_faces, ChatState, Line, Reply};
 use crate::groups::Badge;
+use crate::reactions::with_reactions;
 use crate::socket::id_parts;
 use crate::{valid_name, ApiError, Name};
 
@@ -129,7 +130,7 @@ async fn before_channel(
 ) -> Result<JsonLines, ApiError> {
     let room = room_of_channel(&s, &headers, &server, &channel).await?;
     let id = stream_id(&q.id)?;
-    Ok(json_lines(older(&s, &room, &id).await?))
+    Ok(json_lines(&s, &room, older(&s, &room, &id).await?).await)
 }
 
 /// A server's search, from the channel on screen: every channel this viewer sees, or the one
@@ -242,7 +243,7 @@ struct SearchQuery {
 
 async fn before(State(s): State<ChatState>, Name(room): Name, Query(q): Query<IdQuery>) -> Result<JsonLines, ApiError> {
     let id = stream_id(&q.id)?;
-    Ok(json_lines(older(&s, &room, &id).await?))
+    Ok(json_lines(&s, &room, older(&s, &room, &id).await?).await)
 }
 
 async fn search(State(s): State<ChatState>, Name(room): Name, Query(q): Query<SearchQuery>) -> Result<JsonLines, ApiError> {
@@ -301,7 +302,10 @@ async fn search_rooms(s: &ChatState, rooms: &[String], search: &Search, server: 
         };
     }
     let rows: Vec<LineRow> = query.bind(SEARCH_LIMIT).fetch_all(&s.db).await?;
-    Ok(json_hits(rows.into_iter().map(|row| hit_of(row, server)).collect()))
+    let rooms: Vec<String> = rows.iter().map(|row| row.10.clone()).collect();
+    let mut hits: Vec<Hit> = rows.into_iter().map(|row| hit_of(row, server)).collect();
+    with_reactions(&s.db, rooms.iter().map(String::as_str).zip(hits.iter_mut().map(|hit| &mut hit.line))).await;
+    Ok(json_hits(hits))
 }
 
 /// A search hit: the line, and for a server's search the channel it is in, so the page can
@@ -510,7 +514,7 @@ async fn lines_of(s: &ChatState, room: &str, speaker: &str) -> Result<JsonLines,
          ORDER BY l.at DESC, l.seq DESC LIMIT $3"
     );
     let rows: Vec<LineRow> = sqlx::query_as(&sql).bind(room).bind(user_id).bind(SEARCH_LIMIT).fetch_all(&s.db).await?;
-    Ok(json_lines(rows.into_iter().map(line_of).collect()))
+    Ok(json_lines(s, room, rows.into_iter().map(line_of).collect()).await)
 }
 
 async fn around(State(s): State<ChatState>, Path((room, id)): Path<(String, String)>) -> Result<JsonLines, ApiError> {
@@ -521,7 +525,7 @@ async fn around(State(s): State<ChatState>, Path((room, id)): Path<(String, Stri
 async fn window(s: &ChatState, room: &str, id: &str) -> Result<JsonLines, ApiError> {
     let id = stream_id(id)?;
     if let Some(lines) = redis_window(s, room, &id).await? {
-        return Ok(json_lines(lines));
+        return Ok(json_lines(s, room, lines).await);
     }
     if !s.persist {
         return Err(not_kept());
@@ -539,7 +543,7 @@ async fn window(s: &ChatState, room: &str, id: &str) -> Result<JsonLines, ApiErr
     let mut lines = before;
     lines.push(line_of(hit));
     lines.extend(after);
-    Ok(json_lines(lines))
+    Ok(json_lines(s, room, lines).await)
 }
 
 /// Lines strictly older than `id`, oldest first, one page.
@@ -666,13 +670,16 @@ fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, a
         image,
         images,
         reply: reply.and_then(|r| serde_json::from_value(r).ok()),
+        reactions: Vec::new(),
         at: at.timestamp_millis().max(0) as u64,
     }
 }
 
 type JsonLines = axum::Json<Value>;
 
-fn json_lines(lines: Vec<Line>) -> JsonLines {
+/// Lines of `room` as the reads answer them, with their reactions as they are now.
+async fn json_lines(s: &ChatState, room: &str, mut lines: Vec<Line>) -> JsonLines {
+    with_reactions(&s.db, lines.iter_mut().map(|l| (room, l))).await;
     axum::Json(json!({ "lines": lines }))
 }
 

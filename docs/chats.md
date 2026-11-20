@@ -63,6 +63,8 @@ badges (`groups.md`) are a stream and channel thing. a verified line wears the s
 
 replies are all three's (`chat.md` "replies", `dms.md`): every line has the same action bar (react, reply, `more`), a reply carries a quote of the line it answers and draws it over itself, and a click on the quote goes to that line. a room's quote is kept with the line (redis `r`, the row's `reply`); a direct message keeps the id (`reply_to`) and joins the quote as it is read.
 
+reactions are all three's too (`chat.md` "reactions", `dms.md`): the same 32 emoji, once per emoji per person, 20 different on a line at most, the same picker from the action bar's smiley and the same chips under the line. a room's go over its socket (`react`, fanned out through the room's `chatr:` stream) and a thread's over http (`PUT /api/dm/:name/react`, a `dm_react` frame); both are rows (`chat_reactions`, `dm_reactions`), read with the lines whenever they go out.
+
 a logout drops the direct-message window. a stream or a channel keeps going: the next hello is a nick, or the new login.
 
 ## not a chat

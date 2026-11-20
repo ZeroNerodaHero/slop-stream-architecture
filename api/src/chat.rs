@@ -47,6 +47,7 @@ use uuid::Uuid;
 use crate::auth::{client_ip, is_claimed, whoami, NICK_HAS_ACCOUNT};
 use crate::groups::{badges_of, Badge, BOT_GROUP};
 use crate::history;
+use crate::reactions::{self, Reaction};
 use crate::socket::{first_text, id_parts, send, send_within, DRAIN_LIMIT, IDLE_LIMIT, MAX_FRAME_BYTES, PING_EVERY, READ_BLOCK_MS, SEND_TIMEOUT};
 use crate::{owns_session, Name, Owner};
 
@@ -63,6 +64,9 @@ const ROOM_TTL_SECS: i64 = 7 * 24 * 3600;
 /// before it is sent; the bucket itself is here, and the chat has the last word.
 const ANON_TIER: Tier = Tier { burst: 2.0, window: Duration::from_secs(60) };
 const LOGIN_TIER: Tier = Tier { burst: 3.0, window: Duration::from_secs(10) };
+/// A reaction's bucket (docs/chat.md "reactions"), apart from the lines': ten at once, then one a
+/// second. A click on and off again is two. Only a login reacts, so there is one tier.
+const REACT_TIER: Tier = Tier { burst: 10.0, window: Duration::from_secs(10) };
 /// How often the buckets that have refilled are forgotten: a full bucket is the same as none.
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
 /// The words of a refused line. The frame carries the wait too (`slow`).
@@ -88,6 +92,8 @@ pub(crate) struct ChatState {
     rooms: Arc<Mutex<HashMap<String, Room>>>,
     /// The token buckets, one per speaker per room, shared by every socket.
     limiter: Arc<Limiter>,
+    /// The reactions' own buckets (`REACT_TIER`): a reaction does not spend a line.
+    reacts: Arc<Limiter>,
     /// Flips to true on SIGTERM. Every socket then sends a close frame and leaves.
     shutdown: watch::Receiver<bool>,
     /// Nicks starting with this are the fake streams' names: nobody's to wear.
@@ -126,6 +132,7 @@ struct Room {
 enum Event {
     Line(Arc<Line>),
     Count(usize),
+    React(Arc<React>),
 }
 
 /// Deserialize too: a pin keeps the line as this json (pins.rs), read back the same way.
@@ -163,6 +170,22 @@ pub(crate) struct Line {
     /// a line that answers nothing
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reply: Option<Reply>,
+    /// the emoji on the line and who put them there (reactions.rs), as they are now: never kept
+    /// with the line, read whenever lines go out (`reactions::with_reactions`). absent for none
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) reactions: Vec<Reaction>,
+}
+
+/// One login's emoji put on a line of the room, or taken off (docs/chat.md "reactions"): the
+/// `react` frame everyone in the room gets, each page adding `who` to the line's `emoji` or
+/// taking them off it. Through redis like a line (`react_key`), so every chat process's
+/// sockets hear it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub(crate) struct React {
+    pub(crate) id: String,
+    pub(crate) emoji: String,
+    pub(crate) who: String,
+    pub(crate) on: bool,
 }
 
 /// The words of a quote: the start of the line answered, enough for the one row the panel draws.
@@ -229,6 +252,15 @@ enum In {
     /// is sent, so the page's picture of a channel has no hole between what the api gave it and
     /// what this socket brings (`GET /api/groups/:group/messages`, then this).
     Since { since: HashMap<String, String> },
+    /// A login's `emoji` on the line `id` of the room, or off it (docs/chat.md "reactions"). On a
+    /// server socket, `channel` says which channel's line.
+    React {
+        id: String,
+        emoji: String,
+        on: bool,
+        #[serde(default)]
+        channel: Option<String>,
+    },
 }
 
 /// The first frame: a nick for a viewer, the go-live grant for the streamer. Kept for the
@@ -264,6 +296,23 @@ enum Out<'a> {
     /// so a page that does not read `wait` sees the words alone. The panel's countdown is this.
     #[serde(rename = "error")]
     Slow { error: &'a str, wait: u64 },
+    React(&'a React),
+    /// A server socket's reaction: the same `react`, with the channel its line is in.
+    #[serde(rename = "react")]
+    ChannelReact {
+        channel: &'a str,
+        #[serde(flatten)]
+        react: &'a React,
+    },
+    /// A reaction that was not taken: the `error` frame, with the line it was for, so a page that
+    /// reads `react` knows it is not a line of its that went astray. `wait` with `slow down`.
+    #[serde(rename = "error")]
+    ReactRefused {
+        error: &'a str,
+        react: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        wait: Option<u64>,
+    },
 }
 
 /// The frame for a line the bucket refused: `slow down`, and the wait rounded up to the ms.
@@ -293,6 +342,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         client,
         rooms: Arc::new(Mutex::new(HashMap::new())),
         limiter: Arc::new(Limiter::new()),
+        reacts: Arc::new(Limiter::for_reactions()),
         shutdown,
         dummy_prefix,
         persist,
@@ -672,6 +722,9 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                 Ok(Event::Count(count)) => {
                     if send(&mut socket, &Out::Count { count }).await.is_err() { break; }
                 }
+                Ok(Event::React(react)) => {
+                    if send(&mut socket, &Out::React(&react)).await.is_err() { break; }
+                }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     // this socket is slower than the room: n events went by unseen. say so
                     // rather than hide it; the next count event sets the number right again
@@ -699,7 +752,17 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                     _ => continue,
                 };
-                let Ok(In::Say { text, image, images, reply, .. }) = serde_json::from_str::<In>(&text) else { continue };
+                let (text, image, images, reply) = match serde_json::from_str::<In>(&text) {
+                    Ok(In::Say { text, image, images, reply, .. }) => (text, image, images, reply),
+                    Ok(In::React { id, emoji, on, .. }) => {
+                        let reacted = on_react(&s, &name, &name, server.as_deref(), &mut who, &mut speaker, (&headers, &hello, &ip), (&id, &emoji, on)).await;
+                        if let Err((error, wait)) = reacted {
+                            let _ = send(&mut socket, &Out::ReactRefused { error, react: &id, wait }).await;
+                        }
+                        continue;
+                    }
+                    _ => continue,
+                };
                 let (text, images) = match parse_say(text, image, images) {
                     Ok(Some(say)) => say,
                     Ok(None) => continue,
@@ -831,6 +894,8 @@ impl Speaker {
 /// once a minute (`SWEEP_EVERY`): the map is the speakers of the last minute or so.
 struct Limiter {
     inner: std::sync::Mutex<Buckets>,
+    /// The size and pace of a speaker's bucket: the lines' (`Speaker::tier`), or the reactions'.
+    tier: fn(&Speaker) -> Tier,
 }
 
 struct Buckets {
@@ -840,7 +905,12 @@ struct Buckets {
 
 impl Limiter {
     fn new() -> Self {
-        Limiter { inner: std::sync::Mutex::new(Buckets { by_speaker: HashMap::new(), swept: Instant::now() }) }
+        Limiter { inner: std::sync::Mutex::new(Buckets { by_speaker: HashMap::new(), swept: Instant::now() }), tier: Speaker::tier }
+    }
+
+    /// The reactions' buckets: `REACT_TIER` for everyone.
+    fn for_reactions() -> Self {
+        Limiter { tier: |_| REACT_TIER, ..Limiter::new() }
     }
 
     /// A token out of this speaker's bucket in this room, or how long until there is one.
@@ -849,12 +919,12 @@ impl Limiter {
     }
 
     fn take_at(&self, speaker: &Speaker, room: &str, now: Instant) -> Result<(), Duration> {
-        let tier = speaker.tier();
+        let tier = (self.tier)(speaker);
         let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Buckets { by_speaker, swept } = &mut *inner;
         if now.duration_since(*swept) >= SWEEP_EVERY {
             *swept = now;
-            by_speaker.retain(|(speaker, _), bucket| !bucket.is_full(speaker.tier(), now));
+            by_speaker.retain(|(speaker, _), bucket| !bucket.is_full((self.tier)(speaker), now));
         }
         by_speaker.entry((speaker.clone(), room.to_owned())).or_insert_with(|| Bucket::new(tier, now)).take(tier, now)
     }
@@ -1070,6 +1140,97 @@ async fn reply_to(s: &ChatState, room: &str, id: &str) -> Result<Reply, Refused>
     }
 }
 
+/// A `react` frame, whole (docs/chat.md "reactions"): the id and the emoji checked for shape first,
+/// at no cost; then a token from the reactions' bucket (`REACT_TIER`, keyed by `at`, the socket's
+/// room as a line's is) before anything is asked; a socket admitted with the database down is
+/// asked who it is now; then `react`. `Err` is the refusal's words, with the wait for `slow down`.
+#[allow(clippy::too_many_arguments)]
+async fn on_react(
+    s: &ChatState,
+    at: &str,
+    room: &str,
+    server: Option<&str>,
+    who: &mut Option<Who>,
+    speaker: &mut Speaker,
+    (headers, hello, ip): (&HeaderMap, &Hello, &str),
+    (id, emoji, on): (&str, &str, bool),
+) -> Result<(), (&'static str, Option<u64>)> {
+    if !is_stream_id(id) {
+        return Err((NO_SUCH_LINE, None));
+    }
+    if !reactions::allowed(emoji) {
+        return Err((reactions::NOT_A_REACTION, None));
+    }
+    if let Err(wait) = s.reacts.take(speaker, at) {
+        return Err((SLOW_DOWN, Some((wait.as_secs_f64() * 1000.0).ceil() as u64)));
+    }
+    if who.is_none() {
+        if let Ok(w) = identify(s, at, headers, hello).await {
+            *speaker = Speaker::of(Some(&w), hello, ip);
+            *who = Some(w);
+        }
+    }
+    let Some(w) = who.as_ref() else { return Err(("chat is busy, try again", None)) };
+    react(s, room, server, w, id, emoji, on).await.map_err(|why| (why, None))
+}
+
+/// A login's `emoji` on the line `id` of `room`, or off it. Only a login reacts (the row is an
+/// account); in a server's channel only a member who is not timed out, as only one speaks. The
+/// line must be the room's to put one on (`history::line_at`, the reply's check: redis, then the
+/// kept rows), never to take one off. A change goes into the room's reactions stream, and every
+/// reader of the room fans it out; one that was so already says nothing. `Err` is what the socket hears.
+async fn react(s: &ChatState, room: &str, server: Option<&str>, w: &Who, id: &str, emoji: &str, on: bool) -> Result<(), &'static str> {
+    let Some(user) = w.user_id.filter(|_| w.verified) else { return Err(reactions::LOG_IN) };
+    if let Some(server) = server {
+        let timed_out: Result<Option<bool>, sqlx::Error> = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM timeouts t WHERE t.group_name = $2 AND t.user_id = $1 AND t.until > now())
+             FROM memberships m WHERE m.user_id = $1 AND m.group_name = $2",
+        )
+        .bind(user)
+        .bind(server)
+        .fetch_optional(&s.db)
+        .await;
+        match timed_out {
+            Ok(Some(false)) => {}
+            Ok(Some(true)) => return Err(TIMED_OUT),
+            Ok(None) => return Err("join the server first"),
+            Err(e) => {
+                log::warn!("{room}: membership: {e}");
+                return Err("chat is busy, try again");
+            }
+        }
+    }
+    if on {
+        match history::line_at(&s.db, &mut s.redis.clone(), room, id).await {
+            Ok(Some(_)) => {}
+            Ok(None) => return Err(NO_SUCH_LINE),
+            Err(_) => return Err("chat is busy, try again"),
+        }
+    }
+    match reactions::set_line(&s.db, room, id, user, emoji, on).await {
+        Ok(reactions::Set::Changed) => {}
+        Ok(reactions::Set::Same) => return Ok(()),
+        Ok(reactions::Set::TooMany) => return Err(reactions::TOO_MANY),
+        Err(e) => {
+            log::warn!("{room}: reaction: {e}");
+            return Err("chat is busy, try again");
+        }
+    }
+    let key = react_key(room);
+    let fields = [("l", id), ("e", emoji), ("w", w.from.as_str()), ("on", if on { "1" } else { "0" })];
+    let added: Result<(Option<String>, bool), _> = redis::pipe()
+        .atomic()
+        .xadd_maxlen(&key, StreamMaxlen::Approx(KEEP_REACTS), "*", &fields)
+        .expire(&key, ROOM_TTL_SECS)
+        .query_async(&mut s.redis.clone())
+        .await;
+    // the row is in: a page that reads the line again has it, only the live frame is lost
+    if let Err(e) = added {
+        log::warn!("{room}: reaction xadd: {e}");
+    }
+    Ok(())
+}
+
 /// The inbox rows for a channel's line are written within this long, or not at all.
 const NOTIFY_LIMIT: Duration = Duration::from_secs(5);
 
@@ -1144,6 +1305,7 @@ async fn after(s: &ChatState, room: &str, id: &str) -> Vec<Line> {
         Ok(reply) => {
             let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
             with_faces(&s.db, &mut lines).await;
+            reactions::with_reactions(&s.db, lines.iter_mut().map(|l| (room, l))).await;
             lines
         }
         Err(e) => {
@@ -1228,6 +1390,9 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                 Some((channel, Ok(Event::Count(count)))) => {
                     if send(&mut socket, &Out::ChannelCount { channel: &channel, count }).await.is_err() { break; }
                 }
+                Some((channel, Ok(Event::React(react)))) => {
+                    if send(&mut socket, &Out::ChannelReact { channel: &channel, react: &react }).await.is_err() { break; }
+                }
                 Some((_, Err(n))) => {
                     let missed = format!("missed {n} lines");
                     if send(&mut socket, &Out::Error { error: &missed }).await.is_err() { break; }
@@ -1289,6 +1454,18 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                             && crate::groups::may_see(&s.db, &server, &channel, user, s.is_admin(who.as_ref())).await.unwrap_or(false);
                         if seen && !follow(&s, &server, &channel, &ip, &tx, &mut joined).await {
                             let _ = send(&mut socket, &Out::Error { error: "too many tabs" }).await;
+                        }
+                    }
+                    Ok(In::React { id, emoji, on, channel }) => {
+                        // a channel this socket follows: one it does not see is no channel to it
+                        let Some(channel) = channel.map(|c| c.trim().to_lowercase()).filter(|c| joined.iter().any(|j| j.as_ref() == c)) else {
+                            let _ = send(&mut socket, &Out::ReactRefused { error: "say which channel", react: &id, wait: None }).await;
+                            continue;
+                        };
+                        let room = format!("{server}/{channel}");
+                        let reacted = on_react(&s, &name, &room, Some(&server), &mut who, &mut speaker, (&headers, &hello, &ip), (&id, &emoji, on)).await;
+                        if let Err((error, wait)) = reacted {
+                            let _ = send(&mut socket, &Out::ReactRefused { error, react: &id, wait }).await;
                         }
                     }
                     Ok(In::Say { text, image, images, channel, reply }) => {
@@ -1381,11 +1558,14 @@ impl ChatState {
         // history this viewer loads next, so no line can fall between the two: one
         // in both arrives twice and is dropped by id. Not under the lock: a slow
         // redis must not stall every other room's join and leave.
+        // the reactions' stream the same way: one put on a line between the history and the first
+        // read arrives on the line twice, and a page adding a name it has already is no change
         let start = last_id(&mut self.redis.clone(), &room_key(name)).await;
+        let react_start = last_id(&mut self.redis.clone(), &react_key(name)).await;
         let mut rooms = self.rooms.lock().await;
         let room = rooms.entry(name.to_owned()).or_insert_with(|| {
             let (tx, _) = broadcast::channel(256);
-            tokio::spawn(reader(self.client.clone(), name.to_owned(), start, tx.clone()));
+            tokio::spawn(reader(self.client.clone(), name.to_owned(), start, react_start, tx.clone()));
             Room { tx, count: 0, per_ip: HashMap::new() }
         });
         room.subscribe(ip)
@@ -1430,11 +1610,13 @@ async fn last_id<C: AsyncCommands>(r: &mut C, key: &str) -> Option<String> {
     Some(reply.ids.first().map(|id| id.id.clone()).unwrap_or_else(|| "0-0".to_owned()))
 }
 
-/// Tails one room's stream and fans every new line out to the room's sockets.
+/// Tails one room's stream and fans every new line out to the room's sockets, and its reactions'
+/// stream (`react_key`) in the same XREAD, every reaction to them too.
 /// Own connection: XREAD BLOCK would stall the shared multiplexed one, and the
 /// default 500ms response timeout would cut every block short.
-async fn reader(client: redis::Client, name: String, start: Option<String>, tx: broadcast::Sender<Event>) {
+async fn reader(client: redis::Client, name: String, start: Option<String>, react_start: Option<String>, tx: broadcast::Sender<Event>) {
     let key = room_key(&name);
+    let rkey = react_key(&name);
     let config = crate::socket::blocking_config(READ_BLOCK_MS);
     // Keep trying while the room has viewers. Giving up on the first failure
     // would leave a room that gets history but never a live line.
@@ -1458,9 +1640,13 @@ async fn reader(client: redis::Client, name: String, start: Option<String>, tx: 
         Some(id) => id,
         None => last_id(&mut con, &key).await.unwrap_or_else(|| "0-0".to_owned()),
     };
+    let mut rlast = match react_start {
+        Some(id) => id,
+        None => last_id(&mut con, &rkey).await.unwrap_or_else(|| "0-0".to_owned()),
+    };
     let options = StreamReadOptions::default().block(READ_BLOCK_MS).count(100);
     while tx.receiver_count() > 0 {
-        let reply: Option<StreamReadReply> = match con.xread_options(&[&key], &[&last], &options).await {
+        let reply: Option<StreamReadReply> = match con.xread_options(&[&key, &rkey], &[&last, &rlast], &options).await {
             Ok(reply) => reply,
             Err(e) => {
                 log::warn!("{name}: xread: {e}");
@@ -1473,7 +1659,15 @@ async fn reader(client: redis::Client, name: String, start: Option<String>, tx: 
         };
         let Some(reply) = reply else { continue };
         for stream in reply.keys {
+            let reactions = stream.key == rkey;
             for entry in stream.ids {
+                if reactions {
+                    rlast = entry.id.clone();
+                    if let Some(react) = react_from(&entry) {
+                        let _ = tx.send(Event::React(Arc::new(react)));
+                    }
+                    continue;
+                }
                 last = entry.id.clone();
                 if let Some(line) = line_from(entry) {
                     let _ = tx.send(Event::Line(Arc::new(line)));
@@ -1491,6 +1685,7 @@ async fn history(s: &ChatState, name: &str) -> Result<Vec<Line>, redis::RedisErr
     let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
     lines.reverse();
     with_faces(&s.db, &mut lines).await;
+    reactions::with_reactions(&s.db, lines.iter_mut().map(|l| (name, l))).await;
     Ok(lines)
 }
 
@@ -1575,11 +1770,29 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         image,
         images,
         reply,
+        reactions: Vec::new(),
     })
 }
 
 pub(crate) fn room_key(name: &str) -> String {
     format!("chat:{name}")
+}
+
+/// The room's reactions as they happen (`React`): `l` the line, `e` the emoji, `w` who, `on` 1 or 0.
+/// Not the lines' stream, which is the room's last 500 lines and nothing else.
+fn react_key(name: &str) -> String {
+    format!("chatr:{name}")
+}
+
+/// Reactions a room's stream keeps: enough for a reader that fell a little behind, never history.
+const KEEP_REACTS: usize = 200;
+
+fn react_from(entry: &StreamId) -> Option<React> {
+    let id: String = entry.get("l")?;
+    let emoji: String = entry.get("e")?;
+    let who: String = entry.get("w")?;
+    let on: String = entry.get("on")?;
+    Some(React { id, emoji, who, on: on == "1" })
 }
 
 pub(crate) fn clean_nick(raw: &str) -> String {
@@ -1673,6 +1886,7 @@ mod tests {
             image: None,
             images: Vec::new(),
             reply: None,
+            reactions: Vec::new(),
         };
         let text = serde_json::to_string(&Out::ChannelMessage { channel: "general", line: &line }).unwrap();
         let frame: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -1707,6 +1921,7 @@ mod tests {
             image: Some("6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e".into()),
             images: vec!["6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e".into()],
             reply: None,
+            reactions: Vec::new(),
         };
         let quote = Reply::of(&line);
         assert_eq!(quote.text.chars().count(), REPLY_QUOTE_CHARS);
@@ -1883,6 +2098,50 @@ mod tests {
         }
     }
 
+    /// A reaction is a frame of its own both ways: in, the line, the emoji and on or off (and the
+    /// channel on a server socket); out, the same with who, and a refusal names the line it was for.
+    #[test]
+    fn reaction_frames() {
+        match serde_json::from_str::<In>(r#"{"type":"react","id":"1729000000000-0","emoji":"👍","on":true,"channel":"clips"}"#).unwrap() {
+            In::React { id, emoji, on, channel } => {
+                assert_eq!((id.as_str(), emoji.as_str(), on, channel.as_deref()), ("1729000000000-0", "👍", true, Some("clips")));
+            }
+            _ => panic!("not a react"),
+        }
+        assert!(matches!(serde_json::from_str::<In>(r#"{"type":"react","id":"1-0","emoji":"👍","on":false}"#).unwrap(), In::React { on: false, channel: None, .. }));
+        let react = React { id: "1-0".into(), emoji: "🔥".into(), who: "bob".into(), on: true };
+        assert_eq!(serde_json::to_string(&Out::React(&react)).unwrap(), r#"{"type":"react","id":"1-0","emoji":"🔥","who":"bob","on":true}"#);
+        assert_eq!(
+            serde_json::to_string(&Out::ChannelReact { channel: "general", react: &react }).unwrap(),
+            r#"{"type":"react","channel":"general","id":"1-0","emoji":"🔥","who":"bob","on":true}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Out::ReactRefused { error: SLOW_DOWN, react: "1-0", wait: Some(900) }).unwrap(),
+            r#"{"type":"error","error":"slow down","react":"1-0","wait":900}"#
+        );
+        // the room's reactions stream entry reads back as the frame
+        let mut entry = StreamId { id: "5-0".into(), ..StreamId::default() };
+        for (k, v) in [("l", "1-0"), ("e", "🔥"), ("w", "bob"), ("on", "0")] {
+            entry.map.insert(k.into(), redis::Value::BulkString(v.as_bytes().to_vec()));
+        }
+        assert_eq!(react_from(&entry), Some(React { on: false, ..react.clone() }));
+        // a reaction is not a line: its key is not a room's
+        assert_ne!(react_key("bob"), room_key("bob"));
+        assert!(!react_key("bob").starts_with("chat:"));
+    }
+
+    #[test]
+    fn a_reaction_has_its_own_bucket() {
+        let limiter = Limiter::for_reactions();
+        let me = Speaker::Account(Uuid::nil());
+        let now = Instant::now();
+        for _ in 0..10 {
+            assert!(limiter.take_at(&me, "room", now).is_ok());
+        }
+        let wait = limiter.take_at(&me, "room", now).unwrap_err();
+        assert!(about(wait, 1.0), "{wait:?}");
+    }
+
     #[test]
     fn text_is_trimmed_and_control_free() {
         assert_eq!(clean_text("  hi  "), "hi");
@@ -1982,6 +2241,7 @@ mod tests {
             image: None,
             images: Vec::new(),
             reply: None,
+            reactions: Vec::new(),
         }];
         let started = Instant::now();
         with_faces(&pool, &mut lines).await;
@@ -2020,6 +2280,7 @@ mod tests {
             image: None,
             images: Vec::new(),
             reply: None,
+            reactions: Vec::new(),
         }];
         // her own name: her picture
         with_faces(&pool, &mut lines).await;

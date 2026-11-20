@@ -23,6 +23,7 @@ import { type ChatStyle, chatStyleAtom, profilePopupEnabledAtom } from '@/infra/
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ChatLineShape, LineActions, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
+import { ReactionChips } from '@/shared-components/Reactions';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
 import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
@@ -499,9 +500,11 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
  * A room's lines in the shape this browser picked, each as the panel draws it: the panel's
  * list, and a group channel's pinned lines in a phone's sheet (PinSheet.tsx). `name` is the
  * panel's: whose lines are `mine` is said against it. Each line has the action bar (ChatLine.tsx
- * `LineActions`): react (to come), reply where `replies` (the panel's own list once it can speak,
- * not a pin's copy), the caller's own buttons (`lineActions`), and `more`. A reply wears the quote
- * of its line, a click on which goes there where `jumps` (`ChatRoom.jumpToReply`).
+ * `LineActions`): react where `reacts` (the panel's own list, not a pin's copy: a login picks an
+ * emoji, a nick is told to log in), reply where `replies` (the panel's own list once it can speak),
+ * the caller's own buttons (`lineActions`), and `more`. A reply wears the quote of its line, a
+ * click on which goes there where `jumps` (`ChatRoom.jumpToReply`); a line's reactions stand under
+ * it as chips (Reactions.tsx `ReactionChips`), a click on one putting yours on or off.
  */
 export function RoomLines({
   name,
@@ -510,6 +513,7 @@ export function RoomLines({
   lineMark,
   lineActions,
   replies = false,
+  reacts = false,
   jumps = false
 }: {
   name: string;
@@ -518,6 +522,7 @@ export function RoomLines({
   lineMark?: (line: ChatLine) => ReactNode;
   lineActions?: (line: ChatLine) => ReactNode;
   replies?: boolean;
+  reacts?: boolean;
   jumps?: boolean;
 }) {
   const shape = useAtomValue(chatStyleAtom);
@@ -561,7 +566,25 @@ export function RoomLines({
             }
             pictures={<ChatImages ids={line.images} />}
             mark={lineMark?.(line)}
-            actions={<LineActions onReply={replies ? () => room.setReply(line) : undefined} extra={lineActions?.(line)} text={line.text} />}
+            actions={
+              <LineActions
+                onReact={reacts && me ? (emoji) => room.react(line, emoji) : undefined}
+                reactions={line.reactions ?? []}
+                me={me}
+                reactOff={reacts && !me ? 'log in to react' : undefined}
+                onReply={replies ? () => room.setReply(line) : undefined}
+                extra={lineActions?.(line)}
+                text={line.text}
+              />
+            }
+            reactions={
+              <ReactionChips
+                reactions={line.reactions ?? []}
+                me={me}
+                onReact={reacts && me ? (emoji) => room.react(line, emoji) : undefined}
+                onBlocked={reacts ? () => room.showNotice('log in to react') : undefined}
+              />
+            }
             quote={
               line.reply && (
                 <ReplyQuote
@@ -819,7 +842,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
             {!waiting && lines.length === 0 && (
               <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>
             )}
-            <RoomLines name={name} room={room} lines={lines} lineMark={lineMark} lineActions={lineActions} replies={!needsNick} jumps />
+            <RoomLines name={name} room={room} lines={lines} lineMark={lineMark} lineActions={lineActions} replies={!needsNick} reacts jumps />
           </div>
         </div>
 

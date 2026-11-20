@@ -4,6 +4,7 @@ import type { ChatLine } from '@/infra/atoms/chat-atoms';
 import type { NotificationKind, Presence, PresenceChoice } from '@/infra/frames';
 import { report } from '@/infra/report';
 import type { Socials } from '@/infra/socials';
+import type { Reaction } from '@/shared-components/reaction-list';
 
 export class ApiError extends Error {
   constructor(
@@ -74,6 +75,8 @@ export interface DmLine {
   images: string[];
   /** The line of the thread this one answers (dms.rs `quote_json`): who wrote it as they are named now, the start of its words, their face, how many pictures; `gone` for one not there any more. Null or absent for none. */
   reply?: DmReply | null;
+  /** The emoji on the line and who put them there (dms.rs, reactions.rs), as they are now; `dm_react` frames keep it so. Absent from a frame, which carries a new line: none yet. */
+  reactions?: Reaction[];
 }
 
 /** What a direct message answers: the room chat's quote (`ChatReply`), by the thread's numeric id. */
@@ -758,6 +761,9 @@ export const api = {
   /** A line to a friend: the words, and the pictures on it (`uploadChatImage`'s ids, ten at most; the words may be empty then). 201 with the line as kept; it also comes back on the events socket. 400 `too long`, `nothing to say`, `no such picture`, 403 not friends, 429 `slow down`. */
   sendDm: (name: string, text: string, images: string[] = [], reply: number | null = null) =>
     request<DmLine & { to: string }>('POST', `/api/dm/${encodeURIComponent(name)}`, reply === null ? { text, images } : { text, images, reply }),
+  /** The login's `emoji` on line `id` of the thread with `name`, or off it. The line's reactions as they are now; both sides' devices hear the change on the socket (`dm_react`). 400 `not a reaction`, `no such line`, `too many reactions`, 403 not friends, 429 `slow down`. */
+  reactDm: (name: string, id: number, emoji: string, on: boolean) =>
+    request<{ id: number; reactions: unknown }>('PUT', `/api/dm/${encodeURIComponent(name)}/react`, { id, emoji, on }),
   /** The login has seen the thread with `name` up to that line. Its other devices hear it on the socket. */
   readDm: (name: string, id: number) => request<null>('PUT', `/api/dm/${encodeURIComponent(name)}/read`, { id }),
   /** The lines of the thread with `name` that match, newest first, 50 at most. The box is the room chat's (`ChatSearch.tsx`): words, a quoted phrase, and the filters among them. 400 with the words when it cannot be read. */

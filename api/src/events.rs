@@ -11,7 +11,7 @@
 //! own name without asking: `me` carries the word and the choice.
 //!
 //! Facts come from one redis stream, `events`, written by the api (`live`, `ended`, `viewers`,
-//! `status`, `renamed`, and `dm` / `dm_read` for the direct messages of docs/dms.md and
+//! `status`, `renamed`, and `dm` / `dm_react` / `dm_read` for the direct messages of docs/dms.md and
 //! `notify` / `notify_read` / `chat_read` for the inbox of docs/notifications.md, which go to
 //! the sockets that *are* a name rather than to its watchers; the chat process writes `notify`
 //! too, for a line in a channel) and by this module (`seen`).
@@ -228,6 +228,10 @@ enum Out {
         #[serde(skip_serializing_if = "Option::is_none")]
         reply: Option<Value>,
     },
+    /// `from` put `emoji` on line `id` of their thread with `to`, or took it off (`on`), docs/dms.md
+    /// "reactions". To the sockets of both names, as the line went.
+    #[serde(rename = "dm_react")]
+    DmReact { id: i64, from: String, to: String, emoji: String, on: bool },
     /// `name` read its thread with `peer` up to `id` on some device. To `name`'s sockets: the others drop their count.
     /// `peer_id` is that account. Absent when an older api wrote the fact.
     #[serde(rename = "dm_read")]
@@ -698,6 +702,12 @@ impl Gateway {
                 let images = crate::chat::split_pictures(entry.get("images"));
                 let reply: Option<Value> = entry.get::<String>("reply").and_then(|r| serde_json::from_str(&r).ok());
                 self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id, images, reply }).await;
+            }
+            // a reaction on a direct message: `name` is the other side. both names' sockets, as the line went
+            "dm_react" => {
+                let (Some(from), Some(id), Some(emoji)): (Option<String>, Option<i64>, Option<String>) = (entry.get("from"), entry.get("id"), entry.get("emoji")) else { return };
+                let on = entry.get::<String>("on").as_deref() == Some("1");
+                self.tell(&[&from, &name], Out::DmReact { id, from: from.clone(), to: name.clone(), emoji, on }).await;
             }
             // `name` read a thread somewhere: its other devices drop their count
             "dm_read" => {

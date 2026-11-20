@@ -92,6 +92,8 @@ export type ServerFrame =
       images?: string[];
       reply?: { id: number; from?: string; text?: string; avatar?: number | null; images?: number; gone?: boolean } | null;
     }
+  /** `from` put `emoji` on line `id` of their thread with `to`, or took it off (`on`), docs/dms.md "reactions": to the sockets of both names. */
+  | { type: 'dm_react'; id: number; from: string; to: string; emoji: string; on: boolean }
   /** `name` read its thread with `peer` up to `id` on some device: the others drop their count. `peer_id` is that account; an older gateway leaves it off. */
   | { type: 'dm_read'; name: string; peer: string; peer_id: string; id: number }
   /** A row of the login's inbox (docs/notifications.md), to its own sockets. `name` is who did it, `actor` their id; `at` unix ms; `text` a dm's or a channel line's words; `session` a go-live's; `room` a `chat` row's `<server>/<channel>`. An older gateway leaves `actor` and `room` off. */

@@ -14,6 +14,8 @@ import { createPortal } from 'react-dom';
 
 import type { ChatStyle } from '@/infra/atoms/settings-atoms';
 import { Face } from '@/shared-components/Face';
+import type { Reaction } from '@/shared-components/reaction-list';
+import { ReactionPicker } from '@/shared-components/Reactions';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -117,6 +119,8 @@ export interface ChatLineShapeProps extends Place {
   actions?: ReactNode;
   /** What the line answers (`ReplyQuote`), over it: the spine and the quote in `log` and `blocks`, the quote at the top of the box in `bubbles`. */
   quote?: ReactNode;
+  /** The line's reaction chips (Reactions.tsx `ReactionChips`), under the words and the pictures; under the box in `bubbles`. */
+  reactions?: ReactNode;
   /** The line was just jumped to (a reply's quote clicked): it lights up for a moment. */
   flash?: boolean;
 }
@@ -367,19 +371,45 @@ function MoreMenu({ items }: { items: LineMenuItem[] }) {
  * A line's action bar, discord's: react, reply, the caller's own buttons (`extra`: a group line's
  * pin), and `more` with the rest (reply again, `copy text`, the caller's `menu`). Up at the line's
  * top right on hover or focus, or after a long press on a phone (`ChatLineShape`'s `actions`).
- * `onReact` absent: the smiley stands, dimmed, until reactions come. `onReply` absent: no reply
- * (a pinned copy of a line, which is not where a conversation goes on).
+ * `onReact`: the smiley opens the reaction picker (Reactions.tsx) over the line's `reactions`, `me`'s
+ * lit. Absent, `reactOff` says why (a nick: `log in to react`) on a dimmed smiley, and with neither
+ * there is no smiley (a pinned copy of a line). `onReply` absent: no reply (a pinned copy of a line,
+ * which is not where a conversation goes on).
  */
-export function LineActions({ onReact, onReply, extra, text, menu = [] }: { onReact?: () => void; onReply?: () => void; extra?: ReactNode; text?: string; menu?: LineMenuItem[] }) {
+export function LineActions({
+  onReact,
+  reactions = [],
+  me,
+  reactOff,
+  onReply,
+  extra,
+  text,
+  menu = []
+}: {
+  onReact?: (emoji: string) => void;
+  reactions?: readonly Reaction[];
+  me?: string | null;
+  reactOff?: string;
+  onReply?: () => void;
+  extra?: ReactNode;
+  text?: string;
+  menu?: LineMenuItem[];
+}) {
   const items: LineMenuItem[] = [];
   if (onReply) items.push({ key: 'reply', label: 'reply', onPick: onReply });
   if (text) items.push({ key: 'copy', label: 'copy text', onPick: () => void navigator.clipboard?.writeText(text).catch(() => undefined) });
   items.push(...menu);
   return (
     <>
-      <BarButton id="react" label={onReact ? 'add reaction' : 'reactions are coming'} onClick={onReact} disabled={!onReact}>
-        <RiEmotionLine aria-hidden size={16} />
-      </BarButton>
+      {onReact ? (
+        <ReactionPicker id="react" reactions={reactions} me={me} onPick={onReact} className={BAR_BUTTON} />
+      ) : (
+        reactOff && (
+          <BarButton id="react" label={reactOff} disabled>
+            <RiEmotionLine aria-hidden size={16} />
+          </BarButton>
+        )
+      )}
       {onReply && (
         <BarButton id="reply" label="reply" onClick={onReply}>
           <RiReplyLine aria-hidden size={16} />
@@ -472,7 +502,26 @@ export function ReplyQuote({ shape, quote, onJump }: { shape: ChatStyle; quote: 
  * `text-sm` in both, the panel and the window. A reply's quote (`quote`) stands over the line;
  * the action bar (`actions`) floats at its top right.
  */
-export function ChatLineShape({ shape, mine, at, name, who, face, faced = false, crowd = false, first, bucket, words, pictures, attrs, mark, actions, quote, flash = false }: ChatLineShapeProps) {
+export function ChatLineShape({
+  shape,
+  mine,
+  at,
+  name,
+  who,
+  face,
+  faced = false,
+  crowd = false,
+  first,
+  bucket,
+  words,
+  pictures,
+  attrs,
+  mark,
+  actions,
+  quote,
+  reactions,
+  flash = false
+}: ChatLineShapeProps) {
   const title = at ? stamp(at) : undefined;
   const press = useLongPress();
   const corner = <Corner mark={mark} actions={actions} open={press.open} />;
@@ -513,6 +562,7 @@ export function ChatLineShape({ shape, mine, at, name, who, face, faced = false,
             <span className="mr-1.5">{who}</span>
             {words}
             {pictures}
+            {reactions}
           </span>
         </>
       )
@@ -537,6 +587,7 @@ export function ChatLineShape({ shape, mine, at, name, who, face, faced = false,
             )}
             {words}
             {pictures}
+            {reactions}
           </span>
         </>
       )
@@ -547,7 +598,8 @@ export function ChatLineShape({ shape, mine, at, name, who, face, faced = false,
     cn('flex gap-2 leading-snug', bucket && 'mt-2 first:mt-0'),
     <>
       {faced && first ? <span className={cn(GUTTER, 'mt-0.5')}>{face}</span> : <GutterClock at={at} shown={bucket} className="pt-2.5" />}
-      <span className={cn('flex min-w-0 flex-1', mine ? 'justify-end' : 'justify-start')}>
+      {/* the box, and its reactions under it on its own side */}
+      <span className={cn('flex min-w-0 flex-1 flex-col', mine ? 'items-end' : 'items-start')}>
         {/* the box: a stroke and a fill, no shadow (no-box-shadow.mdc). yours wears the blue. `relative`: the reader's name is `sr-only` (relative-parent.mdc) */}
         <span
           className={cn(
@@ -560,6 +612,7 @@ export function ChatLineShape({ shape, mine, at, name, who, face, faced = false,
           {words}
           {pictures}
         </span>
+        {reactions}
       </span>
     </>
   );

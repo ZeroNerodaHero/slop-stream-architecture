@@ -1249,6 +1249,13 @@ async fn messages(State(s): State<AppState>, Path(group): Path<String>, Query(q)
         .collect();
     // the faces as they are now, every channel's in the one query
     with_faces(&s.db, pages.iter_mut().flat_map(|(_, lines)| lines.iter_mut())).await;
+    // and their reactions, every channel's in the one query too
+    let rooms: Vec<String> = pages.iter().map(|(channel, _)| format!("{server}/{channel}")).collect();
+    let mut all: Vec<(&str, &mut Line)> = Vec::new();
+    for (room, (_, lines)) in rooms.iter().zip(pages.iter_mut()) {
+        all.extend(lines.iter_mut().map(|l| (room.as_str(), l)));
+    }
+    crate::reactions::with_reactions(&s.db, all).await;
     let out: serde_json::Map<String, Value> = pages.into_iter().map(|(channel, lines)| (channel, json!(lines))).collect();
     Ok(Json(Value::Object(out)))
 }
