@@ -19,6 +19,7 @@ import { followingAtom } from '@/infra/atoms/follow-atoms';
 import type { Presence } from '@/infra/atoms/presence-atoms';
 import { onEvents } from '@/infra/events';
 import { store } from '@/infra/store';
+import { applyReaction, type Reaction, reacted, reactionsOf } from '@/shared-components/reaction-list';
 
 /** Who a tab is with, as the api or the sidebar had them, and how many of their lines are new. `id` is that account; empty when the tab was opened before the list said which one. A rename does not change it. */
 export interface Dm {
@@ -243,14 +244,19 @@ function setThread(name: string, next: (prev: Thread | undefined) => Thread) {
 /** A line as the api or a frame gave it: `images` left off (an older api, a frame with no pictures) is no pictures. */
 function lineOf(line: Omit<DmLine, 'images'> & { images?: unknown }): DmLine {
   const images = Array.isArray(line.images) ? line.images.filter((id): id is string => typeof id === 'string' && id.length > 0) : [];
-  return { id: line.id, from: line.from, text: line.text, at: line.at, images };
+  const reply = line.reply && typeof line.reply === 'object' && typeof line.reply.id === 'number' ? line.reply : null;
+  // a frame's new line carries no reactions: left off, so `merge` keeps any the line already has
+  return 'reactions' in line ? { id: line.id, from: line.from, text: line.text, at: line.at, images, reply, reactions: reactionsOf(line.reactions) } : { id: line.id, from: line.from, text: line.text, at: line.at, images, reply };
 }
 
 /** Both sets of lines as one, by id, oldest first: a page over the lines already here, a frame over a page. */
 function merge(a: DmLine[], b: DmLine[]): DmLine[] {
   const byId = new Map<number, DmLine>();
   for (const line of a) byId.set(line.id, line);
-  for (const line of b) byId.set(line.id, line);
+  for (const line of b) {
+    const had = byId.get(line.id);
+    byId.set(line.id, line.reactions === undefined && had?.reactions ? { ...line, reactions: had.reactions } : line);
+  }
   return [...byId.values()].sort((x, y) => x.id - y.id);
 }
 
@@ -305,11 +311,11 @@ function append(name: string, line: DmLine) {
  * socket is dropped by id. False, with the api's words under the box, when it was not kept:
  * not friends, too long, too fast, a picture the upload never kept.
  */
-export async function sendDm(name: string, raw: string, images: string[] = []): Promise<boolean> {
+export async function sendDm(name: string, raw: string, images: string[] = [], reply: number | null = null): Promise<boolean> {
   const text = raw.trim();
   if (!text && images.length === 0) return false;
   try {
-    const line = await api.sendDm(name, text, images);
+    const line = await api.sendDm(name, text, images, reply);
     append(name, lineOf(line));
     return true;
   } catch (err) {
@@ -369,9 +375,9 @@ export function clearDmResults() {
  * from the newest back, so the pages before the oldest on screen are asked for one after
  * another (`loadOlderDm`) until the line is among them, or the thread's start is; then the
  * window centres it (`dmJumpAtom`). A line already loaded is centred at once. Nothing when the
- * line is not in the thread (gone, or another login's hits).
+ * line is not in the thread (gone, or another login's hits). True when the line is in view.
  */
-export async function openDmLine(name: string, id: number): Promise<void> {
+export async function openDmLine(name: string, id: number): Promise<boolean> {
   const lines = () => store.get(dmThreadsAtom)[name]?.lines ?? [];
   const loaded = () => lines().some((l) => l.id === id);
   while (!loaded()) {
@@ -386,7 +392,36 @@ export async function openDmLine(name: string, id: number): Promise<void> {
     }
     if (!(await loadOlderDm(name))) break;
   }
-  if (loaded()) store.set(dmJumpAtom, { name, id, n: ++jumps });
+  if (!loaded()) return false;
+  store.set(dmJumpAtom, { name, id, n: ++jumps });
+  return true;
+}
+
+/**
+ * `emoji` on line `id` of the thread with `name`, or off it when it is ours already (a chip
+ * clicked, a pick in the picker): `PUT /api/dm/<name>/react`. The api's answer is the line's
+ * reactions as they are now, and goes in at once (the socket may be down); the `dm_react` frame
+ * that follows is then no change. A refusal is the api's words under the box.
+ */
+export async function reactDm(name: string, line: DmLine, emoji: string): Promise<void> {
+  const me = store.get(meAtom);
+  const on = !(line.reactions ?? []).some((r) => r.emoji === emoji && reacted(r, me));
+  try {
+    const answer = await api.reactDm(name, line.id, emoji, on);
+    const reactions = reactionsOf(answer.reactions);
+    touchLine(name, line.id, () => reactions);
+  } catch (err) {
+    showDmNotice(messageOf(err));
+  }
+}
+
+/** Line `id` of the thread with `name`, and the same line among the hits, with its reactions made over by `next`. */
+function touchLine(name: string, id: number, next: (now: Reaction[] | undefined) => Reaction[]) {
+  const thread = store.get(dmThreadsAtom)[name];
+  if (thread?.lines.some((l) => l.id === id)) setThread(name, () => ({ ...thread, lines: thread.lines.map((l) => (l.id === id ? { ...l, reactions: next(l.reactions) } : l)) }));
+  const results = store.get(dmResultsAtom);
+  if (results?.name === name && results.lines.some((l) => l.id === id))
+    store.set(dmResultsAtom, { ...results, lines: results.lines.map((l) => (l.id === id ? { ...l, reactions: next(l.reactions) } : l)) });
 }
 
 /** Words under the box for a few seconds: the api's refusal, a page that did not come, a picture that would not go up. */
@@ -465,9 +500,18 @@ function readElsewhere(frame: { name: string; peer: string; id: number }) {
   setUnread(frame.peer, lines.filter((l) => l.from === frame.peer && l.id > frame.id).length);
 }
 
+/** A `dm_react` frame: `from` put an emoji on a line between this login and somebody, or took it off. Onto that line, wherever it is loaded. */
+function reactedOn(frame: { id: number; from: string; to: string; emoji: string; on: boolean }) {
+  const me = store.get(meAtom);
+  if (!me || (frame.from !== me && frame.to !== me)) return;
+  const peer = frame.from === me ? frame.to : frame.from;
+  touchLine(peer, frame.id, (now) => applyReaction(now, frame.emoji, frame.from, frame.on, me));
+}
+
 let linkWasOpen = false;
 onEvents((event) => {
   if (event.type === 'dm') arrived(event);
+  else if (event.type === 'dm_react') reactedOn(event);
   else if (event.type === 'dm_read') readElsewhere(event);
   else if (event.type === 'link') {
     if (event.phase !== 'open') return;

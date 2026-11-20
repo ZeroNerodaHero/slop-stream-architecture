@@ -32,10 +32,10 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{self, Account, Me};
-use crate::chat::{clean_text, picture_ids, split_pictures, MAX_TEXT_CHARS};
+use crate::chat::{clean_text, picture_ids, split_pictures, MAX_TEXT_CHARS, NO_SUCH_LINE};
 use crate::history::{self, Bind, Search};
 use crate::presence::{self, Presence};
-use crate::{chat_images, follows, notify};
+use crate::{chat_images, follows, notify, reactions};
 use crate::{ApiError, ApiResult, AppState, Name};
 
 /// Lines in one page of a thread. A shorter page is the start of the thread.
@@ -71,11 +71,56 @@ async fn peer(db: &PgPool, me: &Account, name: String) -> Result<Account, ApiErr
     Ok(Account { id, name })
 }
 
-/// id, from (the name now), text, sent at (ms), the pictures' ids joined by commas (null for none)
-type LineRow = (i64, String, String, i64, Option<String>);
+/// id, from (the name now), text, sent at (ms), the pictures' ids joined by commas (null for none),
+/// then what it answers (`reply_to`) and that line as `QuoteRow` has it (nulls for one not there),
+/// then its reactions (json, reactions.rs `Reaction`s, `[]` for none)
+type LineRow = (i64, String, String, i64, Option<String>, Option<i64>, Option<String>, Option<String>, Option<i64>, Option<String>, Value);
 
-fn line_json((id, from, text, at, image): &LineRow) -> Value {
-    json!({ "id": id, "from": from, "text": text, "at": at, "images": split_pictures(image.clone()) })
+/// A thread's line as every read of it selects it (`LineRow`), the line it answers joined: of the
+/// same pair, so a reply never shows another thread's words. Its reactions with it, by the name
+/// each reactor has now (reactions.rs).
+const LINE_SELECT: &str = concat!(
+    "SELECT d.id, f.name, d.text, (EXTRACT(EPOCH FROM d.sent_at) * 1000)::bigint, d.image,
+                d.reply_to, qf.name, left(q.text, 120), (EXTRACT(EPOCH FROM qf.avatar_at))::bigint, q.image, ",
+    reactions::dm_reactions_sql!(),
+    "
+         FROM dms d JOIN streamers f ON f.id = d.from_id
+         LEFT JOIN dms q ON q.id = d.reply_to
+             AND LEAST(q.from_id, q.to_id) = LEAST(d.from_id, d.to_id) AND GREATEST(q.from_id, q.to_id) = GREATEST(d.from_id, d.to_id)
+         LEFT JOIN streamers qf ON qf.id = q.from_id"
+);
+
+fn line_json((id, from, text, at, image, reply_to, quote_from, quote_text, quote_avatar, quote_image, reactions): &LineRow) -> Value {
+    let reply = reply_to.map(|reply_to| match quote_from {
+        Some(quote_from) => quote_json(&(reply_to, quote_from.clone(), quote_text.clone().unwrap_or_default(), *quote_avatar, quote_image.clone())),
+        // the line it answered is not there any more: the page says so
+        None => json!({ "id": reply_to, "gone": true }),
+    });
+    json!({ "id": id, "from": from, "text": text, "at": at, "images": split_pictures(image.clone()), "reply": reply, "reactions": reactions })
+}
+
+/// The line a reply answers, as a quote: id, who wrote it (the name now), the start of its words
+/// (120 characters, the room chat's `Reply`), their picture's version, its pictures' ids.
+type QuoteRow = (i64, String, String, Option<i64>, Option<String>);
+
+/// A quote as the pages read it, the room chat's `Reply` shape: `images` is how many pictures.
+fn quote_json((id, from, text, avatar, image): &QuoteRow) -> Value {
+    json!({ "id": id, "from": from, "text": text, "verified": true, "avatar": avatar, "images": split_pictures(image.clone()).len() })
+}
+
+/// The line `id` of the thread between `a` and `b`, as a quote. None for a line of another
+/// thread, or none at all: a reply answers its own thread only.
+async fn quote(db: &PgPool, a: Uuid, b: Uuid, id: i64) -> Result<Option<QuoteRow>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT q.id, f.name, left(q.text, 120), (EXTRACT(EPOCH FROM f.avatar_at))::bigint, q.image
+         FROM dms q JOIN streamers f ON f.id = q.from_id
+         WHERE q.id = $3 AND LEAST(q.from_id, q.to_id) = LEAST($1, $2) AND GREATEST(q.from_id, q.to_id) = GREATEST($1, $2)",
+    )
+    .bind(a)
+    .bind(b)
+    .bind(id)
+    .fetch_optional(db)
+    .await
 }
 
 /// Every id a line names is a picture `POST /api/chat-images` kept (the say's check, chat.rs
@@ -103,20 +148,14 @@ async fn thread(State(s): State<AppState>, Name(name): Name, Me(me): Me, q: Resu
     let me = me.ok_or_else(not_logged_in)?;
     let Query(q) = q?;
     let other = peer(&s.db, &me, name).await?;
-    let mut rows: Vec<LineRow> = sqlx::query_as(
-        "SELECT d.id, f.name, d.text, (EXTRACT(EPOCH FROM d.sent_at) * 1000)::bigint, d.image
-         FROM dms d JOIN streamers f ON f.id = d.from_id
+    let sql = format!(
+        "{LINE_SELECT}
          WHERE LEAST(d.from_id, d.to_id) = LEAST($1, $2) AND GREATEST(d.from_id, d.to_id) = GREATEST($1, $2)
            AND ($3::bigint IS NULL OR d.id < $3)
          ORDER BY d.id DESC
-         LIMIT $4",
-    )
-    .bind(me.id)
-    .bind(other.id)
-    .bind(q.before)
-    .bind(PAGE)
-    .fetch_all(&s.db)
-    .await?;
+         LIMIT $4"
+    );
+    let mut rows: Vec<LineRow> = sqlx::query_as(&sql).bind(me.id).bind(other.id).bind(q.before).bind(PAGE).fetch_all(&s.db).await?;
     rows.reverse();
     let friends = follows::friends(&s.db, me.id, other.id).await?;
     Ok(Json(json!({ "name": other.name, "friends": friends, "lines": rows.iter().map(line_json).collect::<Vec<_>>() })))
@@ -209,10 +248,10 @@ fn search_sql(search: &Search, from: Option<Uuid>) -> (String, Vec<Bind>) {
         clauses.push(format!("d.sent_at >= {at}"));
     }
     let limit = binds.len() + 3;
-    let mut sql = "SELECT d.id, f.name, d.text, (EXTRACT(EPOCH FROM d.sent_at) * 1000)::bigint, d.image
-         FROM dms d JOIN streamers f ON f.id = d.from_id
+    let mut sql = format!(
+        "{LINE_SELECT}
          WHERE LEAST(d.from_id, d.to_id) = LEAST($1, $2) AND GREATEST(d.from_id, d.to_id) = GREATEST($1, $2)"
-        .to_owned();
+    );
     for clause in &clauses {
         sql.push_str(" AND ");
         sql.push_str(clause);
@@ -231,14 +270,18 @@ struct TextBody {
     image: Option<String>,
     #[serde(default)]
     images: Vec<String>,
+    /// The id of the line of this thread the line answers (docs/dms.md "replies").
+    #[serde(default)]
+    reply: Option<i64>,
 }
 
-/// `POST /api/dm/:name` with `{ text, images? }`: a line to a friend. 201 with the line as it
-/// was kept (`id`, `from`, `text`, `at`, `images`); the same line comes back through the events
-/// socket to every device of both, which is how the writer's other tabs hear it. 400 `too long`
-/// past 500 characters, `nothing to say` for nothing once cleaned and no picture, `bad picture`,
-/// `too many pictures` (ten is the cap) and `no such picture` for ids the upload never handed
-/// out; 403 in the friends' words for anyone who is not one; 429 past 60 a minute.
+/// `POST /api/dm/:name` with `{ text, images?, reply? }`: a line to a friend. 201 with the line as
+/// it was kept (`id`, `from`, `text`, `at`, `images`, `reply`: the quote of the line it answers, or
+/// null); the same line comes back through the events socket to every device of both, which is
+/// how the writer's other tabs hear it. 400 `too long` past 500 characters, `nothing to say` for
+/// nothing once cleaned and no picture, `bad picture`, `too many pictures` (ten is the cap) and
+/// `no such picture` for ids the upload never handed out, `no such line` for a reply to a line not
+/// in this thread; 403 in the friends' words for anyone who is not one; 429 past 60 a minute.
 async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Result<Json<TextBody>, JsonRejection>) -> Result<(StatusCode, Json<Value>), ApiError> {
     let me = me.ok_or_else(not_logged_in)?;
     let Json(body) = body?;
@@ -257,15 +300,22 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     crate::auth::limit(&s, &format!("rl:dm:name:{}", me.name), RATE_WINDOW_SECS, RATE_PER_MINUTE, "slow down").await?;
     // the pictures must be ones the upload kept: a lookup each, paid for by the rate like the say's (chat.rs `accept`)
     pictures_exist(&s.db, &images).await?;
+    // the line answered must be this thread's: a lookup, paid for by the rate like the pictures'
+    let reply = match body.reply {
+        Some(id) => Some(quote(&s.db, me.id, other.id, id).await?.ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, NO_SUCH_LINE))?),
+        None => None,
+    };
+    let reply = reply.as_ref().map(quote_json);
     let image = if images.is_empty() { None } else { Some(images.join(",")) };
     let (id, at): (i64, i64) = sqlx::query_as(
-        "INSERT INTO dms (from_id, to_id, text, image) VALUES ($1, $2, $3, $4)
+        "INSERT INTO dms (from_id, to_id, text, image, reply_to) VALUES ($1, $2, $3, $4, $5)
          RETURNING id, (EXTRACT(EPOCH FROM sent_at) * 1000)::bigint",
     )
     .bind(me.id)
     .bind(other.id)
     .bind(&text)
     .bind(&image)
+    .bind(body.reply)
     .fetch_one(&s.db)
     .await?;
     // the writer has read their own thread this far: a line of yours is never "new" to you
@@ -274,9 +324,56 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     // pictures alone is a row with no words, and the list says `a picture` for it
     notify::messaged(&s, &other, &me, &text).await;
     let mut r = s.redis.clone();
-    presence::publish_dm(&mut r, &me.name, &other.name, id, &text, &images, at, &me.id.to_string()).await;
+    presence::publish_dm(&mut r, &me.name, &other.name, id, &text, &images, at, &me.id.to_string(), reply.as_ref()).await;
     log::info!("{}: dm to {} ({} chars, {} pictures)", me.name, other.name, text.chars().count(), images.len());
-    Ok((StatusCode::CREATED, Json(json!({ "id": id, "from": me.name, "to": other.name, "text": text, "at": at, "images": images }))))
+    Ok((StatusCode::CREATED, Json(json!({ "id": id, "from": me.name, "to": other.name, "text": text, "at": at, "images": images, "reply": reply }))))
+}
+
+#[derive(Deserialize)]
+struct ReactBody {
+    id: i64,
+    emoji: String,
+    on: bool,
+}
+
+/// Reactions per login per minute, apart from the lines': a click on and off again is two.
+const REACT_PER_MINUTE: i64 = 120;
+
+/// `PUT /api/dm/:name/react` with `{ id, emoji, on }`: the login's `emoji` on line `id` of the
+/// thread with `name`, or off it (docs/dms.md "reactions"). 200 with the line's `reactions` as
+/// they are now; a change also goes out as a `dm_react` frame to every device of both. Putting on
+/// one already there, or taking off one that is not, is no change and no frame. 400 `not a
+/// reaction` for an emoji off the list (reactions.rs `EMOJIS`), `no such line` for a line not in
+/// this thread, `too many reactions` for a new emoji on a line with 20; 403 in the friends' words
+/// for anyone who is not one, the way a line is; 429 past 120 a minute.
+async fn react(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Result<Json<ReactBody>, JsonRejection>) -> ApiResult {
+    let me = me.ok_or_else(not_logged_in)?;
+    let Json(body) = body?;
+    if !reactions::allowed(&body.emoji) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, reactions::NOT_A_REACTION));
+    }
+    let other = peer(&s.db, &me, name).await?;
+    if !follows::friends(&s.db, me.id, other.id).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, NOT_FRIENDS));
+    }
+    crate::auth::limit(&s, &format!("rl:dmreact:name:{}", me.name), RATE_WINDOW_SECS, REACT_PER_MINUTE, "slow down").await?;
+    // the line must be this thread's: a lookup, paid for by the rate like a reply's
+    if quote(&s.db, me.id, other.id, body.id).await?.is_none() {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, NO_SUCH_LINE));
+    }
+    match reactions::set_dm(&s.db, body.id, me.id, &body.emoji, body.on).await? {
+        reactions::Set::Changed => {
+            let mut r = s.redis.clone();
+            presence::publish_dm_react(&mut r, &me.name, &other.name, body.id, &body.emoji, body.on).await;
+        }
+        reactions::Set::Same => {}
+        reactions::Set::TooMany => return Err(ApiError::new(StatusCode::BAD_REQUEST, reactions::TOO_MANY)),
+    }
+    let now: Value = sqlx::query_scalar(concat!("SELECT ", reactions::dm_reactions_sql!(), " FROM dms d WHERE d.id = $1"))
+        .bind(body.id)
+        .fetch_one(&s.db)
+        .await?;
+    Ok(Json(json!({ "id": body.id, "reactions": now })))
 }
 
 /// The reader has seen the thread with `peer` up to `id`. Never backwards: two devices
@@ -368,6 +465,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/dms", get(list))
         .route("/api/dm/{name}", get(thread).post(send))
         .route("/api/dm/{name}/read", put(read))
+        .route("/api/dm/{name}/react", put(react))
         .route("/api/dm/{name}/search", get(search))
 }
 

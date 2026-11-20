@@ -13,7 +13,11 @@ const SCHEMA: &str = include_str!("../schema.sql");
 
 /// The migrations after the baseline, in order: `("NNNN-what", include_str!("../migrations/NNNN-what.sql"))`.
 /// Append only. A name is applied once, ever (`schema_migrations`).
-const MIGRATIONS: &[(&str, &str)] = &[("0001-channel-pins", include_str!("../migrations/0001-channel-pins.sql"))];
+const MIGRATIONS: &[(&str, &str)] = &[
+    ("0001-channel-pins", include_str!("../migrations/0001-channel-pins.sql")),
+    ("0002-replies", include_str!("../migrations/0002-replies.sql")),
+    ("0003-reactions", include_str!("../migrations/0003-reactions.sql")),
+];
 
 /// Apply `schema.sql` when the database has no tables yet. The chat process does not call this.
 pub(crate) async fn ensure(db: &PgPool) -> anyhow::Result<()> {

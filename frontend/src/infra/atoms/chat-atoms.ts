@@ -19,12 +19,13 @@
 import { atom, type Atom, type PrimitiveAtom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
-import type { GroupBadge, Owner } from '@/infra/api';
+import { api, type GroupBadge, type Owner } from '@/infra/api';
 import { forgetMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { hideBotsAtom } from '@/infra/atoms/settings-atoms';
 import { relayUrl } from '@/infra/relay';
 import { store } from '@/infra/store';
+import { applyReaction, type Reaction, reacted, reactionsOf } from '@/shared-components/reaction-list';
 
 export interface ChatLine {
   id: string;
@@ -46,6 +47,21 @@ export interface ChatLine {
   images: string[];
   /** On a search hit of a server alone: the channel the line is in, since a server's search spans every channel the viewer sees (`search`). */
   channel?: string;
+  /** The line this one answers, as it was when the reply was said (chat.rs `Reply`). Absent for none, and on an older chat. */
+  reply?: ChatReply;
+  /** The emoji on the line and who put them there (reactions.rs), as they are now; `react` frames keep it so. Empty or absent for none (a pin's copy carries none). */
+  reactions?: Reaction[];
+}
+
+/** What a reply answers (chat.rs `Reply`): the line's id in the same room, who said it with their marks and face, the start of its words, how many pictures it had. */
+export interface ChatReply {
+  id: string;
+  from: string;
+  text: string;
+  streamer?: boolean;
+  verified?: boolean;
+  avatar?: number | null;
+  images?: number;
 }
 
 /** The automatic group a socket that says `bot: true` wears. The hide switch keys on it. */
@@ -129,8 +145,17 @@ const TIERS: { anon: ChatTier; login: ChatTier } = {
 const NOTICE_WORDS: Record<string, string> = {
   cooldown: 'your role has a cooldown between lines',
   'channel cooldown': 'this channel has a cooldown between lines',
-  'timed out': 'you are timed out here'
+  'timed out': 'you are timed out here',
+  'no such line': 'that line is gone, so the reply was not sent'
 };
+/** A refused reaction's words, where the chat's own would mislead (the reply's `no such line` is the line's). */
+const REACT_WORDS: Record<string, string> = {
+  'no such line': 'that line is gone',
+  'timed out': 'you are timed out here',
+  'too many reactions': 'that line has as many reactions as it holds'
+};
+/** How long a line jumped to from a reply's quote stays lit. */
+const FLASH_MS = 1600;
 
 type ScrollPlan = 'bottom' | 'keep' | { id: string } | null;
 
@@ -215,6 +240,10 @@ export class ChatRoom {
   readonly guestAtom: PrimitiveAtom<boolean> = atom(false);
   /** The channel on screen, for a server room. '' for a stream's. */
   readonly channelAtom: PrimitiveAtom<string> = atom('');
+  /** The line the next send answers (the bar over the box says `replying to`); null for none. A server's is the channel on screen's. */
+  readonly replyAtom: PrimitiveAtom<ChatLine | null> = atom<ChatLine | null>(null);
+  /** The line a reply's quote just jumped to, lit for a moment (`FLASH_MS`); null for none. */
+  readonly flashAtom: PrimitiveAtom<string | null> = atom<string | null>(null);
 
   /** The lines on screen: every line, or without the bots' while `hideBotsAtom` is on. */
   readonly visibleLinesAtom: Atom<ChatLine[]>;
@@ -241,7 +270,10 @@ export class ChatRoom {
    * frames in order, so a drop (`slow down`, chat busy or down) is of the oldest, and goes back
    * into the box; a line that comes back through the room is off the list.
    */
-  private inFlight: { text: string; images: string[] }[] = [];
+  private inFlight: { text: string; images: string[]; reply: ChatLine | null }[] = [];
+  private flashTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A server socket has been open before: the next open is after a drop (`refreshReactions`). */
+  private wasOpen = false;
 
   // the scroll and the history window
   private scrollPlan: ScrollPlan = null;
@@ -371,6 +403,8 @@ export class ChatRoom {
     store.set(this.asStreamerAtom, false);
     store.set(this.draftAtom, '');
     store.set(this.imagesAtom, []);
+    store.set(this.replyAtom, null);
+    store.set(this.flashAtom, null);
     store.set(this.noticeAtom, '');
     store.set(this.waitAtom, 0);
     store.set(this.guestAtom, false);
@@ -378,6 +412,7 @@ export class ChatRoom {
     this.me = null;
     this.tails = new Map();
     this.counts = new Map();
+    this.wasOpen = false;
     this.channel = '';
     store.set(this.channelAtom, '');
     if (shownServer === this.key) {
@@ -406,6 +441,85 @@ export class ChatRoom {
       this.imagesAtom,
       store.get(this.imagesAtom).filter((have) => have !== id)
     );
+  }
+
+  /** The next send answers `line` (the action bar's reply), or nothing again (the bar's ×, escape, a send). */
+  setReply(line: ChatLine | null) {
+    store.set(this.replyAtom, line);
+  }
+
+  /**
+   * A reply's quote clicked: its line in view (`openLine`: scrolled to when it is loaded, the window
+   * around it asked for when not) and lit for a moment. A line the room has lost (trimmed with
+   * nothing kept, or never here) says so under the box instead.
+   */
+  async jumpToReply(id: string) {
+    if (!(await this.openLine(id, undefined, 'that line is not here any more'))) return;
+    store.set(this.flashAtom, id);
+    if (this.flashTimer) clearTimeout(this.flashTimer);
+    this.flashTimer = setTimeout(() => {
+      if (store.get(this.flashAtom) === id) store.set(this.flashAtom, null);
+    }, FLASH_MS);
+  }
+
+  /**
+   * `emoji` on `line`, or off it when it is ours already (a chip clicked, a pick in the picker): a
+   * `react` frame. Nothing changes here until the room's `react` frame comes back, the same one
+   * everyone in the room gets, so every screen agrees. A login reacts; a nick is told so.
+   */
+  react(line: ChatLine, emoji: string) {
+    const me = store.get(meAtom);
+    if (!me) {
+      this.showNotice('log in to react');
+      return;
+    }
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      this.showNotice('chat is down, try again');
+      return;
+    }
+    const on = !(line.reactions ?? []).some((r) => r.emoji === emoji && reacted(r, me));
+    const frame: Record<string, unknown> = { type: 'react', id: line.id, emoji, on };
+    // a server socket is every channel: a hit names its own, a line on screen is the shown one's
+    if (this.server) frame.channel = line.channel ?? this.channel;
+    record(`/chat/${this.key}`, 'out', frame);
+    ws.send(JSON.stringify(frame));
+  }
+
+  /**
+   * A `react` frame: `who` put `emoji` on line `id`, or took it off. The line takes it wherever it
+   * is held: on screen, the tail parked behind a jump, the shelf of a channel not shown, the hits.
+   * `channel` is a server socket's; null for a stream's.
+   */
+  private applyReact(channel: string | null, id: string, emoji: string, who: string, on: boolean) {
+    const me = store.get(meAtom);
+    const touch = (lines: ChatLine[]) => {
+      const at = lines.findIndex((l) => l.id === id);
+      const line = lines[at];
+      if (!line) return lines;
+      const next = lines.slice();
+      next[at] = { ...line, reactions: applyReaction(line.reactions, emoji, who, on, me) };
+      return next;
+    };
+    if (channel !== null && channel !== this.channel) {
+      const tail = this.tails.get(channel);
+      if (tail) this.tails.set(channel, touch(tail));
+    } else {
+      const lines = store.get(this.linesAtom);
+      const next = touch(lines);
+      if (next !== lines) store.set(this.linesAtom, next);
+      if (this.savedTail) this.savedTail = touch(this.savedTail);
+    }
+    const results = store.get(this.resultsAtom);
+    // a server's hits say their channel: the same id in another channel is another line
+    if (results?.some((l) => l.id === id && (channel === null || l.channel === undefined || l.channel === channel))) {
+      store.set(
+        this.resultsAtom,
+        results.map((l) =>
+          l.id === id && (channel === null || l.channel === undefined || l.channel === channel) ? { ...l, reactions: applyReaction(l.reactions, emoji, who, on, me) } : l
+        )
+      );
+    }
   }
 
   showNotice(text: string, ms = 3000) {
@@ -440,11 +554,15 @@ export class ChatRoom {
     const say: Record<string, unknown> = images.length ? { type: 'say', text, image: images[0], images } : { type: 'say', text };
     // a server socket is every channel: the line says which
     if (this.server) say.channel = this.channel;
+    // a reply names the line it answers; the chat finds it in this room and keeps its quote with the line
+    const reply = store.get(this.replyAtom);
+    if (reply) say.reply = reply.id;
     record(`/chat/${this.key}`, 'out', say);
     ws.send(JSON.stringify(say));
-    this.inFlight.push({ text, images });
+    this.inFlight.push({ text, images, reply });
     store.set(this.draftAtom, '');
     store.set(this.imagesAtom, []);
+    store.set(this.replyAtom, null);
     // your own line goes out: the view goes to the newest line, out of a jump too, and again when the line comes back
     this.toLatest();
   }
@@ -501,6 +619,9 @@ export class ChatRoom {
       store.set(this.asStreamerAtom, owner !== null || me === this.key);
       // a server socket sends no history: it is told what this page has, and sends what came after
       if (this.server) this.sendSince();
+      // back after a drop: the lines it already had may have been reacted to meanwhile
+      if (this.server && this.wasOpen) void this.refreshReactions();
+      this.wasOpen = true;
     };
     ws.onmessage = (e) => {
       if (this.ws !== ws) return;
@@ -511,6 +632,11 @@ export class ChatRoom {
         error?: string;
         wait?: number;
         channel?: string;
+        /** a `react` frame's, and a refused reaction's line */
+        emoji?: string;
+        who?: string;
+        on?: boolean;
+        react?: string;
       } & Partial<ChatLine>;
       try {
         msg = JSON.parse(String(e.data));
@@ -540,6 +666,11 @@ export class ChatRoom {
           this.counts.set(tagged, msg.count);
           if (tagged === this.channel) store.set(this.countAtom, msg.count);
         } else store.set(this.countAtom, msg.count);
+      } else if (msg.type === 'react' && typeof msg.id === 'string' && typeof msg.emoji === 'string' && typeof msg.who === 'string') {
+        this.applyReact(tagged, msg.id, msg.emoji, msg.who, msg.on === true);
+      } else if (msg.type === 'error' && msg.error && typeof msg.react === 'string') {
+        // a reaction refused: words under the box, and nothing of the box's own (its line, its wait) is touched
+        this.showNotice(REACT_WORDS[msg.error] ?? msg.error);
       } else if (msg.type === 'error' && msg.error) {
         this.onError(msg.error, msg.wait, me);
       }
@@ -576,10 +707,12 @@ export class ChatRoom {
     // and the button counts it down; the bucket is not the matter, so it is left alone
     if (error in NOTICE_WORDS && typeof wait === 'number' && wait > 0) this.refuse(wait);
     // the oldest line out was not taken: back into the box, unless something new is being typed
-    if (/slow down|cooldown|timed out|chat is (busy|down)/.test(error)) {
+    if (/slow down|cooldown|timed out|chat is (busy|down)|no such line/.test(error)) {
       const lost = this.inFlight.shift();
       if (lost?.text && !store.get(this.draftAtom)) store.set(this.draftAtom, lost.text);
       if (lost && lost.images.length > 0 && store.get(this.imagesAtom).length === 0) store.set(this.imagesAtom, lost.images);
+      // the line it answered, back over the box with it; not when that line is what the chat could not find
+      if (lost?.reply && error !== 'no such line' && !store.get(this.replyAtom)) store.set(this.replyAtom, lost.reply);
     }
     if (refused || gone) {
       this.hangUp();
@@ -603,6 +736,9 @@ export class ChatRoom {
     if (this.channel) this.tails.set(this.channel, this.liveTail());
     this.channel = next;
     store.set(this.channelAtom, next);
+    // a reply answers a line of the channel it was begun in
+    store.set(this.replyAtom, null);
+    store.set(this.flashAtom, null);
     this.resetHistory();
     this.scrollPlan = 'bottom';
     store.set(this.linesAtom, this.tails.get(next) ?? []);
@@ -668,6 +804,35 @@ export class ChatRoom {
   /** The live tail of the channel on screen: the one parked behind a jump, else the lines. */
   private liveTail(): ChatLine[] {
     return this.pinned && this.savedTail ? this.savedTail : store.get(this.linesAtom);
+  }
+
+  /**
+   * A server socket back after a drop: `since` brings the lines that came meanwhile, but not the
+   * reactions put on or taken off the lines this page already has. The api's last lines of every
+   * channel again, their reactions onto the same lines wherever they are held; nothing else moves.
+   */
+  private async refreshReactions() {
+    const server = this.server;
+    if (!server) return;
+    let pages: Record<string, ChatLine[]>;
+    try {
+      pages = await api.groupMessages(server);
+    } catch {
+      return;
+    }
+    if (this.server !== server || !this.ws) return;
+    for (const [channel, raw] of Object.entries(pages)) {
+      if (!Array.isArray(raw)) continue;
+      const fresh = new Map(raw.map((line) => [line.id, reactionsOf(line.reactions)]));
+      const wear = (lines: ChatLine[]) => lines.map((line) => (fresh.has(line.id) ? { ...line, reactions: fresh.get(line.id) } : line));
+      if (channel === this.channel) {
+        store.set(this.linesAtom, wear(store.get(this.linesAtom)));
+        if (this.savedTail) this.savedTail = wear(this.savedTail);
+      } else {
+        const tail = this.tails.get(channel);
+        if (tail) this.tails.set(channel, wear(tail));
+      }
+    }
   }
 
   /** A line of a channel not on screen: onto its tail on the shelf, capped like the live tail. */
@@ -829,26 +994,33 @@ export class ChatRoom {
    * the live tail parked, so "latest" comes back to it. `inChannel`, a server's hit from another
    * channel: that channel on screen first, the way the channel list would put it.
    */
-  async openLine(id: string, inChannel?: string) {
+  async openLine(id: string, inChannel?: string, missing?: string): Promise<boolean> {
     if (inChannel !== undefined && this.server && inChannel !== this.channel) this.showChannel(inChannel);
     const name = this.httpRoom();
-    if (!name) return;
+    if (!name) return false;
     if (store.get(this.linesAtom).some((l) => l.id === id)) {
       this.scrollPlan = { id };
       store.set(this.scrollAtom, store.get(this.scrollAtom) + 1);
-      return;
+      return true;
     }
     try {
       const lines = await chatGet(`/chat/${chatPath(name)}/around/${encodeURIComponent(id)}`);
-      if (this.httpRoom() !== name) return;
+      if (this.httpRoom() !== name) return false;
+      // the window came, and the line is not in it: gone (a reply's quote outlives its line)
+      if (!lines.some((l) => l.id === id)) {
+        this.showNotice(missing ?? 'could not open that line');
+        return false;
+      }
       if (!this.pinned) this.savedTail = store.get(this.linesAtom).slice();
       this.pinned = true;
       this.following = false;
       store.set(this.pinnedAtom, true);
       this.scrollPlan = { id };
       store.set(this.linesAtom, lines);
+      return true;
     } catch (err) {
-      this.showNotice(err instanceof Error ? err.message : 'could not open that line');
+      this.showNotice(missing ?? (err instanceof Error ? err.message : 'could not open that line'));
+      return false;
     }
   }
 
@@ -945,7 +1117,9 @@ function fromWire(line: ChatLine): ChatLine {
     groups: Array.isArray(line.groups) ? line.groups : [],
     avatar: typeof line.avatar === 'number' ? line.avatar : null,
     image: images[0] ?? null,
-    images
+    images,
+    reply: line.reply && typeof line.reply === 'object' && typeof line.reply.id === 'string' ? line.reply : undefined,
+    reactions: reactionsOf(line.reactions)
   };
 }
 

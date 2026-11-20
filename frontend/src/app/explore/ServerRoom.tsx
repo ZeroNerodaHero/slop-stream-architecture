@@ -94,7 +94,7 @@ import { Face } from '@/shared-components/Face';
 import { RailFace } from '@/shared-components/Friends';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack, useSheetKeyboard } from '@/shared-components/MobileSheet';
-import { when } from '@/shared-components/ChatLine';
+import { BAR_BUTTON, when } from '@/shared-components/ChatLine';
 import { ChatImages, ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { INPUT } from '@/shared-components/input';
@@ -703,7 +703,7 @@ function PinMark() {
   );
 }
 
-/** The pin and the unpin on a line's hover (ChatLine.tsx `actions`), for the channels power alone. */
+/** The pin and the unpin in a line's action bar (ChatLine.tsx `LineActions`, beside react and reply), for the channels power alone. */
 function PinAction({ server, channel, line, pinned }: { server: string; channel: string; line: ChatLine; pinned: boolean }) {
   const word = pinned ? 'unpin' : 'pin';
   return (
@@ -714,7 +714,7 @@ function PinAction({ server, channel, line, pinned }: { server: string; channel:
         aria-label={word}
         aria-pressed={pinned}
         onClick={() => togglePin(server, channel, line.id, !pinned)}
-        className="flex h-6 w-6 items-center justify-center text-textSecondary hover:text-primaryBlue focus-visible:text-primaryBlue focus-visible:outline-none max-md:h-11 max-md:w-11"
+        className={cn(BAR_BUTTON, 'hover:text-primaryBlue')}
       >
         {pinned ? <RiUnpinLine aria-hidden size={14} /> : <RiPushpinLine aria-hidden size={14} />}
       </button>
@@ -1501,7 +1501,7 @@ export function ServerPage() {
                 onChannel={(to) => navigate(to === 'general' ? `/groups/${server}` : `/groups/${server}/${to}`)}
                 headerEnd={mobile ? undefined : <ChannelPins server={server} channel={channel} room={room} />}
                 lineMark={(line) => (pinnedHere.has(line.id) ? <PinMark /> : null)}
-                lineActions={room.perms.channels && !mobile ? (line) => <PinAction server={server} channel={channel} line={line} pinned={pinnedHere.has(line.id)} /> : undefined}
+                lineActions={room.perms.channels ? (line) => <PinAction server={server} channel={channel} line={line} pinned={pinnedHere.has(line.id)} /> : undefined}
                 className={cn('h-full', ROOM_CHAT_MOBILE)}
               />
             </div>

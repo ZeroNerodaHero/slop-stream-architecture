@@ -208,8 +208,9 @@ pub(crate) async fn publish_renamed<C: AsyncCommands>(r: &mut C, old: &str, new:
 /// The text rides in the fact: the stream is the one road to every gateway, and a thousand
 /// entries deep it is gone. So do the pictures' ids (`images`, joined by commas, left out when
 /// there are none): the bytes stay in the bucket, the page fetches them by id.
+/// `reply` is the quote of the line it answers (dms.rs `quote_json`), json in the fact.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, text: &str, images: &[String], at_ms: i64, from_id: &str) {
+pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, text: &str, images: &[String], at_ms: i64, from_id: &str, reply: Option<&serde_json::Value>) {
     let mut fields = vec![
         ("type", "dm".to_owned()),
         ("name", to.to_owned()),
@@ -222,7 +223,27 @@ pub(crate) async fn publish_dm<C: AsyncCommands>(r: &mut C, from: &str, to: &str
     if !images.is_empty() {
         fields.push(("images", images.join(",")));
     }
+    if let Some(reply) = reply {
+        fields.push(("reply", reply.to_string()));
+    }
     publish(r, &fields).await;
+}
+
+/// A login's emoji on a direct message, or off it (docs/dms.md "reactions"), its row written. `name`
+/// is the other side, the gateway's key; it goes to the sockets of both names, as the line did.
+pub(crate) async fn publish_dm_react<C: AsyncCommands>(r: &mut C, from: &str, to: &str, id: i64, emoji: &str, on: bool) {
+    publish(
+        r,
+        &[
+            ("type", "dm_react".into()),
+            ("name", to.into()),
+            ("from", from.into()),
+            ("id", id.to_string()),
+            ("emoji", emoji.into()),
+            ("on", if on { "1" } else { "0" }.into()),
+        ],
+    )
+    .await;
 }
 
 /// A login read a thread up to a line, on one device: its other devices drop their count.
