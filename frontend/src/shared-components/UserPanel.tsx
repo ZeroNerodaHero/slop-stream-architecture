@@ -303,8 +303,8 @@ export function UserPanel() {
   const face = (
     <>
       <Face name={me ?? nick} version={avatar} className={RAIL_FACE} />
-      {/* the presence square in the corner of the picture: green online, blue with a red dot
-          streaming, orange do not disturb, grey offline. the word is in the label; the ✓ keeps meaning login */}
+      {/* the presence square in the corner of the picture: green online, green and blue cut
+          corner to corner streaming, orange do not disturb, grey offline. the word is in the label; the ✓ keeps meaning login */}
       <PresenceSquare id="my-presence" status={presence} className="border-background" />
       {/* how many of them are live, on the picture's corner: the one number the closed column shows */}
       {streaming > 0 && (

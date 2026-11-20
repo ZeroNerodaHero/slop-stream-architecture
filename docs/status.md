@@ -8,14 +8,14 @@ two words, on purpose: **presence** is the word next to a name, `offline` `onlin
 
 | shown | means | who decides | colour |
 |---|---|---|---|
-| `streaming` | a stream is up under the name | the api, from what it already knows: `video`'s `GET /live`, else the `live:<name>` key | the square: the accent, `primaryBlue`, with a small red (`decrease`) dot in its middle that breathes (opacity and scale on the dot alone; the square never changes size; still under `prefers-reduced-motion`); the word: the accent, `primaryBlue` |
+| `streaming` | a stream is up under the name | the api, from what it already knows: `video`'s `GET /live`, else the `live:<name>` key | the square: cut corner to corner, online's green (`increase`) on the top left and the accent, `primaryBlue`, on the bottom right (a hard-stop gradient; nothing in it moves; the square never changes size); the word: the accent, `primaryBlue` |
 | `online` | a browser is open as that name | the connection: a socket for the name is open on the gateway | `increase`, green |
 | `do not disturb` | a browser is open, and they said so | them, a choice | the square: `caution`, orange, a dark line through it the way discord's has a bar; the word: `decrease`, red |
 | `offline` | no browser open, or they chose to look that way | nobody is connected, or they picked `appear offline` | `textTertiary`, grey |
 
 `streaming` wins over everything: live and `dnd` is `streaming`, live and `invisible` is `streaming`. home lists the stream for everyone; a word that said otherwise would be a lie the home page contradicts. squares, no radius, like everything here.
 
-one component draws the square everywhere: `PresenceSquare` (`frontend/src/shared-components/PresenceSquare.tsx`, `.cursor/rules/presence.mdc`). `status` is the word (a choice goes through `presenceStatus()`, `invisible` → `offline`); `size` is `corner` (12px, ringed, on a face's bottom right corner: the sidebar, the rail, groups' roster and members strip, chat and DMs, the profile popup, the hover card, the watch page's title row, home's cards, the corner panel, the user modal), `word` (10px, before a written word) or `chip` (8px, the watch page's `offline` chip). one square for every state, no icon: only the colour (and streaming's dot) says which, so nothing beside it moves when the word changes. the ids (`#my-presence`, `#presence`, `#modal-presence`) and `data-presence` sit on the square; the streaming dot carries `data-presence-dot`.
+one component draws the square everywhere: `PresenceSquare` (`frontend/src/shared-components/PresenceSquare.tsx`, `.cursor/rules/presence.mdc`). `status` is the word (a choice goes through `presenceStatus()`, `invisible` → `offline`); `size` is `corner` (12px, ringed, on a face's bottom right corner: the sidebar, the rail, groups' roster and members strip, chat and DMs, the profile popup, the hover card, the watch page's title row, home's cards, the corner panel, the user modal), `word` (10px, before a written word) or `chip` (8px, the watch page's `offline` chip). one square for every state, no icon: only the colour (and streaming's diagonal cut) says which, so nothing beside it moves when the word changes. the ids (`#my-presence`, `#presence`, `#modal-presence`) and `data-presence` sit on the square.
 
 ## what is there today
 
@@ -267,7 +267,7 @@ flowchart LR
 
 | where | what |
 |---|---|
-| the panel, bottom left | the square becomes `#my-presence` inside `#you`: `PresenceSquare` by `myPresenceAtom` (blue with the red dot / green / orange with a bar / grey), `data-presence` the value, the word folded into `#you`'s `aria-label` and `title`, grey until the first `me`. presence for guests and logins alike |
+| the panel, bottom left | the square becomes `#my-presence` inside `#you`: `PresenceSquare` by `myPresenceAtom` (green and blue cut corner to corner / green / orange with a bar / grey), `data-presence` the value, the word folded into `#you`'s `aria-label` and `title`, grey until the first `me`. presence for guests and logins alike |
 | the user modal's rail header | the square in the picture's corner (`#modal-presence`, `data-presence`), the corner panel's way, the word in the picture's `title`; `logged in ✓` / `not logged in` under the name stays about login (`UserModal.tsx:125`) |
 | the profile tab | a `presence` fieldset between the card and `username` (`ProfileTab.tsx:74`, `:118`): three `OptionCard`s in `sm:grid-cols-3`, `name="presence"`, `#presence-online` `#presence-dnd` `#presence-invisible`, the chosen one marked, the page's square following the `me` frame. `OptionCard` has no `disabled`: the fieldset is disabled with the bio's `canEdit`/`whyNot` (`:46`, `:57`). a line under: `streaming while you are live, whatever you pick` |
 | the watch page | `#presence` beside `#who` in the title (`WatchPage.tsx:86`): the square and the word, `data-presence`. while not live the page says `not live yet. checking`; `online` beside the name is the reason to wait, `do not disturb` the reason not to; `live` arrives pushed and the page starts, no poll |
