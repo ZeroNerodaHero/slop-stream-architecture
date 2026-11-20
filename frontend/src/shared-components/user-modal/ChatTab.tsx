@@ -19,6 +19,7 @@ import {
   setPipChatPlace,
   setProfilePopupEnabled
 } from '@/infra/atoms/settings-atoms';
+import { useIsMobile } from '@/infra/mobile';
 import { GeneratedAvatar } from '@/shared-components/GeneratedAvatar';
 import { OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
@@ -264,30 +265,34 @@ export function ChatTab() {
   const chatStyle = useAtomValue(chatStyleAtom);
   const profilePopup = useAtomValue(profilePopupEnabledAtom);
   const linkWarning = useAtomValue(linkWarningAtom);
+  // a phone's watch page and go live page are the window, the chat in a tab under the player (mobile.ts): no side to pick
+  const mobile = useIsMobile();
   return (
     <div className="divide-y divide-primaryStroke">
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
-        <legend className={SECTION_TITLE}>on the watch page</legend>
-        <p className="mt-1 text-textSecondary">where the chat sits on the watch page and the go live page. each card is the page with the chat in that place.</p>
-        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {CHAT_SIDE_OPTIONS.map(({ side, label, detail }) => (
-            <OptionCard
-              key={side}
-              id={`chat-side-${side}`}
-              name="chat-side"
-              checked={side === chatSide}
-              onChange={() => setChatSide(side)}
-              picture={<StreamChatPreview side={side} />}
-              label={label}
-              detail={detail}
-            />
-          ))}
-        </div>
-        <p className="mt-4 text-sm text-textTertiary">
-          kept in this browser. the page behind follows as you pick. on a narrow screen a column sits under the video. the chat button on the video closes it and opens
-          it again.
-        </p>
-      </fieldset>
+      {!mobile && (
+        <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+          <legend className={SECTION_TITLE}>on the watch page</legend>
+          <p className="mt-1 text-textSecondary">where the chat sits on the watch page and the go live page. each card is the page with the chat in that place.</p>
+          <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            {CHAT_SIDE_OPTIONS.map(({ side, label, detail }) => (
+              <OptionCard
+                key={side}
+                id={`chat-side-${side}`}
+                name="chat-side"
+                checked={side === chatSide}
+                onChange={() => setChatSide(side)}
+                picture={<StreamChatPreview side={side} />}
+                label={label}
+                detail={detail}
+              />
+            ))}
+          </div>
+          <p className="mt-4 text-sm text-textTertiary">
+            kept in this browser. the page behind follows as you pick. on a narrow screen a column sits under the video. the chat button on the video closes it and
+            opens it again.
+          </p>
+        </fieldset>
+      )}
 
       <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
         <legend className={SECTION_TITLE}>on the corner player</legend>

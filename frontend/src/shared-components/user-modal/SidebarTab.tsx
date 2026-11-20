@@ -3,6 +3,7 @@ import { useAtomValue } from 'jotai';
 import { type KeyboardEvent, type PointerEvent, useRef, useState } from 'react';
 
 import { type PanelSide, type SidebarList, moveSidebarList, panelSideAtom, setPanelSide, setSidebarListOn, sidebarListsAtom } from '@/infra/atoms/settings-atoms';
+import { useIsMobile } from '@/infra/mobile';
 import { CHECKBOX, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -164,30 +165,34 @@ function SidebarLists() {
  */
 export function SidebarTab() {
   const panelSide = useAtomValue(panelSideAtom);
+  // a phone's column is a drawer from the left (SwipeDrawer.tsx), whichever side is picked: only its lists apply there
+  const mobile = useIsMobile();
   return (
     <div className="divide-y divide-primaryStroke">
-      <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
-        <legend className={SECTION_TITLE}>where it sits</legend>
-        <p className="mt-1 text-textSecondary">
-          which side of the page the column sits on. collapsed it is pictures and the streams stay put. hover widens it over the streams. each card is the page with the
-          column there.
-        </p>
-        <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {PANEL_SIDE_OPTIONS.map(({ side, label, detail }) => (
-            <OptionCard
-              key={side}
-              id={`panel-side-${side}`}
-              name="panel-side"
-              checked={side === panelSide}
-              onChange={() => setPanelSide(side)}
-              picture={<YouPreview side={side} />}
-              label={label}
-              detail={detail}
-            />
-          ))}
-        </div>
-        <p className="mt-4 text-sm text-textTertiary">kept in this browser. the column follows as you pick.</p>
-      </fieldset>
+      {!mobile && (
+        <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
+          <legend className={SECTION_TITLE}>where it sits</legend>
+          <p className="mt-1 text-textSecondary">
+            which side of the page the column sits on. collapsed it is pictures and the streams stay put. hover widens it over the streams. each card is the page with
+            the column there.
+          </p>
+          <div role="presentation" className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {PANEL_SIDE_OPTIONS.map(({ side, label, detail }) => (
+              <OptionCard
+                key={side}
+                id={`panel-side-${side}`}
+                name="panel-side"
+                checked={side === panelSide}
+                onChange={() => setPanelSide(side)}
+                picture={<YouPreview side={side} />}
+                label={label}
+                detail={detail}
+              />
+            ))}
+          </div>
+          <p className="mt-4 text-sm text-textTertiary">kept in this browser. the column follows as you pick.</p>
+        </fieldset>
+      )}
 
       <fieldset className="m-0 border-0 p-0 py-6 first:pt-0 last:pb-0">
         <legend className={SECTION_TITLE}>its lists</legend>

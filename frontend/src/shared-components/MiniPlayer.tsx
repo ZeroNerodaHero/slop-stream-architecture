@@ -47,6 +47,7 @@ import {
   watchViewersAtom
 } from '@/infra/atoms/watch-atoms';
 import { api } from '@/infra/api';
+import { useIsMobile } from '@/infra/mobile';
 import { cleanName } from '@/infra/names';
 import { report } from '@/infra/report';
 import { cn } from '@/utils/cn';
@@ -270,14 +271,16 @@ function LiveCorner() {
 export function MiniPlayer() {
   const side = useAtomValue(panelSideAtom);
   const sidebarOpen = useAtomValue(friendsOpenAtom);
+  const mobile = useIsMobile();
   const { pathname } = useLocation();
   return (
     <div
       id="corner-players"
       className={cn(
         'pointer-events-none fixed bottom-6 z-50 flex flex-col items-end gap-3',
-        // the sidebar can take the right edge: keep the players in the page, not on the column (UserPanel.tsx: 3.5rem closed, 300px open, and the 1.5rem)
-        side === 'right' ? (sidebarOpen ? 'right-[324px]' : 'right-20') : 'right-6'
+        // the sidebar can take the right edge: keep the players in the page, not on the column (UserPanel.tsx: 3.5rem closed, 300px open, and the 1.5rem).
+        // a phone's sidebar is a drawer over the page (SwipeDrawer.tsx), not a column, so there the corner is the corner
+        side === 'right' && !mobile ? (sidebarOpen ? 'right-[324px]' : 'right-20') : 'right-6'
       )}
     >
       <CornerCatch at={pathname}>

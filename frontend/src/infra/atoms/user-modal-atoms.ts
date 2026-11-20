@@ -17,8 +17,17 @@ export type UserTab = 'profile' | 'groups' | 'security' | 'notifications' | 'app
 /** The order down the rail. The dialog renders from this, and the arrow keys walk it. */
 export const USER_TABS: readonly UserTab[] = ['profile', 'groups', 'security', 'notifications', 'appearance', 'chat', 'sidebar', 'advanced'];
 
-/** Where the gear lands with nothing kept, or with a tab kept that is gone now. */
-const DEFAULT_TAB: UserTab = 'appearance';
+/** Where the gear lands with nothing kept, or with a tab kept that is gone now (or not on this screen, `tabsFor`). */
+export const DEFAULT_TAB: UserTab = 'appearance';
+
+/** Not on a phone (mobile.ts): everything in them does nothing there. advanced is the messages inspector, whose opener is a desktop's. */
+const DESKTOP_ONLY_TABS: readonly UserTab[] = ['advanced'];
+const PHONE_TABS = USER_TABS.filter((tab) => !DESKTOP_ONLY_TABS.includes(tab));
+
+/** The rail's tabs on this screen: USER_TABS, less the desktop's own on a phone. */
+export function tabsFor(mobile: boolean): readonly UserTab[] {
+  return mobile ? PHONE_TABS : USER_TABS;
+}
 
 /** Two atoms, not one: the Shell renders on `open` alone, a tab change re-renders only the dialog. */
 export const userModalOpenAtom = atom(false);
