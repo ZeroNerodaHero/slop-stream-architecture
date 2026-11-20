@@ -46,6 +46,8 @@ export const watchNameAtom = atom('');
 export const watchRenamedToAtom = atom<string | null>(null);
 export const watchPhaseAtom = atom<WatchPhase>('loading');
 export const watchMessageAtom = atom('loading');
+/** The line while they are simply not live: the offline chip on the box says it, so the watch page draws no chip of its own for it. */
+export const NOT_LIVE_MESSAGE = 'not live yet';
 /** Their status: the one line under the name. `bio` on the wire. */
 export const bioAtom = atom('');
 /** The name has an account, so this really is them. */
@@ -543,7 +545,7 @@ async function start(name: string): Promise<void> {
   if (grant.presence && store.get(eventsPhaseAtom) !== 'open') presenceChanged(name, grant.presence);
   if (!grant.live) {
     dropEarly();
-    waitForLive('not live yet');
+    waitForLive(NOT_LIVE_MESSAGE);
     return;
   }
 
@@ -632,7 +634,7 @@ async function start(name: string): Promise<void> {
       // the api's word ran ahead of video (a word, a key with no publisher yet): the `live`
       // pushed when video has them starts this over
       teardown();
-      waitForLive('not live yet');
+      waitForLive(NOT_LIVE_MESSAGE);
     } else fail(`failed: ${messageOf(err)}`, myPc);
     return;
   }
