@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 
 import { type Followed, groupMatches, groupWords, type Server } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { dmsAtom, dmUnreadAtom, openDm } from '@/infra/atoms/dm-atoms';
+import { dmsAtom, openDm } from '@/infra/atoms/dm-atoms';
 import { followNoteAtom, followingAtom, loadFollowing, searchQueryAtom, searchResultsAtom, setSearchQuery, unfollow } from '@/infra/atoms/follow-atoms';
 import { loadMyServers, loadServers, myServersAtom, publicServersAtom, SERVERS_FRESH_MS } from '@/infra/atoms/groups-atoms';
 import { type Presence, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
@@ -384,8 +384,6 @@ interface HeadProps {
   folded: boolean;
   /** A button at the end of the line, away from the icon. Open only, like the word. */
   action?: ReactNode;
-  /** A number on the icon's corner, closed or open: the lines new in the chats (docs/dms.md). 0 for none. */
-  mark?: number;
 }
 
 /**
@@ -395,22 +393,13 @@ interface HeadProps {
  * (settings.sidebarFolds); the caret points down at the rows, and turns to point along the line
  * when they are folded away. Closed, the icon alone, where it always is; no list, no icon.
  */
-function Head({ icon: Icon, word, count, listId, kind, open, side, below, folded, action, mark }: HeadProps) {
+function Head({ icon: Icon, word, count, listId, kind, open, side, below, folded, action }: HeadProps) {
   const mirrored = side === 'right';
-  // the icon says what the word says, and the number what the rows' chat buttons say, so readers skip them
+  // the icon says what the word says, so readers skip it
   // the column is a face wide (`Sizes.face`: the face's rems and the row's border), so the icon stands centered under the faces
   const icon = (
-    <span aria-hidden className={cn('relative flex shrink-0 justify-center', FACE_COLUMN_W)}>
+    <span aria-hidden className={cn('flex shrink-0 justify-center', FACE_COLUMN_W)}>
       <Icon size={16} />
-      {/* the number stands with the closed column too, where the rows' chat buttons have no room: the one sign something came */}
-      {mark !== undefined && mark > 0 && (
-        <span
-          id="friends-unread"
-          className="absolute -top-1.5 right-1 flex h-4 min-w-4 items-center justify-center border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background"
-        >
-          {mark > 99 ? '99+' : mark}
-        </span>
-      )}
     </span>
   );
   return (
@@ -575,7 +564,7 @@ function Divider({ value, min, max, above, below, onMove, pitch, gap, open, side
  * goes (the picture, or its letter on its colour, the size of a face), and open, the title with
  * its four digits on one line, the row's height closed (`ROW_H`); how many are in it, or live, is
  * in its label. Live members are the
- * number on the square's corner, closed or open, in the blue of the streaming count. The whole
+ * number on the square's corner, closed or open, in blue. The whole
  * row is the way to the group's page. No card: the page is a click away and says it all. The
  * same row stands in the search's hits (`Results`), under its own `id`.
  */
@@ -670,7 +659,6 @@ interface ListsProps extends ListProps {
  * the faces.
  */
 function Lists({ side, open, onPick, stack, rows, face, spacing, shares, folds }: ListsProps) {
-  const unread = useAtomValue(dmUnreadAtom);
   const { gaps } = spacing;
   const all = rows.reduce((sum, r) => sum + r, 0);
   // each list with its numbers, so a place in the stack is read once: what it holds, the rows it may show (none, folded), the rows it has
@@ -731,7 +719,6 @@ function Lists({ side, open, onPick, stack, rows, face, spacing, shares, folds }
               side={side}
               below={gaps[`head-${i}`] ?? MIN_GAP}
               folded={folded}
-              mark={block.kind === 'friends' ? unread : undefined}
             />
             {/* folded, the list has no rows (`count` is 0) and slides to no height; it stays in the document, inert, so its rows are out of the tab order and off a reader */}
             <ul id={id} aria-label={word} inert={folded ? true : undefined} className={LIST} style={{ height: count * pitch, gap }}>
