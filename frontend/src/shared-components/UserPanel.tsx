@@ -45,12 +45,19 @@ const WIDEN = 'transition-[width] duration-100 ease-out motion-reduce:transition
 
 /** The name line in both states: the same box, so logging in or out does not move anything. */
 const NAME_LINE = '-mx-1 block border border-transparent px-1 py-0.5 leading-tight';
-/** The icon-only actions under the name (the gear, the bell, the messages): a glyph with a tooltip. */
-const ACTION = 'inline-flex shrink-0 items-center gap-1 text-sm text-textSecondary hover:text-textPrimary max-md:min-h-11';
-/** The worded actions under the name (log out, sign up, log in): a small Button, a remix icon and a word, a size down so the line stays one line. */
-const BOX = 'shrink-0 gap-1 px-2 py-0.5 font-normal';
 /** An icon-only action on a phone: a finger's 44px square. */
-const ICON_TAP = 'max-md:min-w-11 max-md:justify-center';
+const ICON_TAP = 'max-md:h-11 max-md:w-11';
+/**
+ * The icon-only actions at the far end of your row (the messages, a phone's bell, the gear, log out): a 24px box,
+ * the small Button's stroke and a lifted fill, the 14px glyph centred, a tooltip of the same name (buttons.mdc).
+ */
+const ACTION = cn(
+  'relative inline-flex h-6 w-6 shrink-0 items-center justify-center border border-primaryStroke bg-backgroundTertiary text-textSecondary transition-colors duration-100',
+  'hover:border-secondaryStroke hover:text-textPrimary focus-visible:border-primaryBlue focus-visible:outline-none',
+  ICON_TAP
+);
+/** The worded actions under a guest's name (sign up, log in): a small Button, a remix icon and a word, a size down so the line stays one line. */
+const BOX = 'shrink-0 gap-1 px-2 py-0.5 font-normal';
 const ICON = 14;
 /** Your picture: one box, a blue stroke when pointed at or focused. No shadow. A flex box, so a link lays the picture out the way the button did (no line box under it). */
 const YOU =
@@ -64,11 +71,11 @@ function Dot() {
   );
 }
 
-/** The messages inspector, one click from every page while its setting is on (docs/status.md). An icon alone: the line is full. */
+/** The messages inspector, one click from every page while its setting is on (docs/status.md). An icon alone, beside the gear. */
 function InspectorOpener() {
   return (
     <Tooltip content="messages: the frames this browser gets">
-      <button id="inspector-open" type="button" aria-label="messages" onClick={openInspector} className={cn(ACTION, ICON_TAP, 'align-middle hover:no-underline')}>
+      <button id="inspector-open" type="button" aria-label="messages" onClick={openInspector} className={ACTION}>
         <RiTerminalBoxLine aria-hidden size={ICON} />
       </button>
     </Tooltip>
@@ -79,11 +86,11 @@ function InspectorOpener() {
  * The gear: the user modal (profile, groups, security, notifications; appearance, chat, sidebar,
  * advanced), opened on the tab it was last left on (appearance, the first of this browser's
  * tabs, the first time).
- * The far end of the actions line, away from the picture. The opener takes focus first, so the
+ * At the far end of your row, away from the picture. The opener takes focus first, so the
  * browser has somewhere to hand it back (safari does not focus a clicked button), and the
  * panel closes under the dialog.
  */
-function SettingsOpener({ className }: { className?: string }) {
+function SettingsOpener() {
   return (
     <Tooltip content="settings">
       <button
@@ -96,7 +103,7 @@ function SettingsOpener({ className }: { className?: string }) {
           store.set(friendsOpenAtom, false);
           openUserModal();
         }}
-        className={cn(ACTION, ICON_TAP, 'align-middle hover:no-underline', className)}
+        className={ACTION}
       >
         <RiSettings3Line aria-hidden size={ICON} />
       </button>
@@ -122,7 +129,7 @@ function NotificationsOpener() {
           store.set(friendsOpenAtom, false);
           toggleNotifications();
         }}
-        className={cn(ACTION, ICON_TAP, 'relative ml-auto align-middle hover:no-underline')}
+        className={ACTION}
       >
         <RiNotification3Line aria-hidden size={ICON} />
         {unread > 0 && (
@@ -138,15 +145,23 @@ function NotificationsOpener() {
   );
 }
 
-/** How you are, as a word, at the head of a phone's drawer: the desktop column says it in the picture's tooltip. */
+/** Log out: the last of your row's actions, after the gear (the first, on the right side's mirrored row). */
+function LogoutButton() {
+  return (
+    <Tooltip content="log out">
+      <button id="logout" type="button" aria-label="log out" onClick={() => void logout().then(() => identityChanged('login'))} className={ACTION}>
+        <RiLogoutBoxRLine aria-hidden size={ICON} />
+      </button>
+    </Tooltip>
+  );
+}
+
+/** How you are, as a word, under your name at the head of a phone's drawer: the desktop column says it in the picture's tooltip. */
 function Status({ presence }: { presence: Presence }) {
   return (
-    <>
-      <span id="my-status" className={PRESENCE_TEXT[presence]}>
-        {PRESENCE_WORD[presence]}
-      </span>
-      <Dot />
-    </>
+    <span id="my-status" className={PRESENCE_TEXT[presence]}>
+      {PRESENCE_WORD[presence]}
+    </span>
   );
 }
 
@@ -181,11 +196,12 @@ export function DrawerOpener() {
  * them (Friends.tsx), you at the bottom. Hover or focus widens it
  * over the streams (the page does not move, and neither do the pictures): the box, and beside
  * each picture the name, how they are, unfollow, chat for a friend, and your actions. Logged
- * in: your account name, a ✓, and log out under it. Not logged in: a name box (localstorage,
+ * in: your account name and a ✓. Not logged in: a name box (localstorage,
  * used in chat and as the go-live default) that reads as plain text until you point at it, with
- * sign up and log in under it. Nobody has to. The picture, and a login's name, are the way to
+ * sign up and log in under it. Nobody has to. At the far end of your row, boxed icons: the
+ * messages (while that setting is on), a phone's bell, the gear, and log out. The picture, and a login's name, are the way to
  * your own page, `/watch/<you>`: your status, your about me, your links, your calendar as everyone sees them (the about me and the links are written there too); the
- * gear at the far end of the actions line is the way to the user modal (profile, groups,
+ * gear is the way to the user modal (profile, groups,
  * security, notifications; appearance, chat, sidebar, advanced). The friend chat window opens
  * from a friend's chat button on their row (Friends.tsx). Go live is the right end of the page's title row.
  * The ids are the ones the tests key on; `data-open` says which state the panel is in.
@@ -313,6 +329,17 @@ export function UserPanel() {
   // the row closed too, invisible, so the row is one height in both states and the lists above have the same room (Friends.tsx
   // cuts them at whole rows of it). the foot of the column; a phone's drawer has it at its head, over the lists, with the
   // drawer's roomier 2.5rem face 1.25rem in
+  // the boxed icons at the far end of the row, centred on the picture, away from it on either side: on the right the row is
+  // mirrored, and so are they, log out still the farthest. invisible closed, like the names
+  const actions = (
+    <span className={cn('flex shrink-0 items-center gap-1', mirrored && 'flex-row-reverse', !wide && 'invisible')}>
+      {inspectorOn && <InspectorOpener />}
+      {mobile && <NotificationsOpener />}
+      <SettingsOpener />
+      {me && <LogoutButton />}
+    </span>
+  );
+
   const youRow = (
     <div
       className={cn(
@@ -368,24 +395,15 @@ export function UserPanel() {
                 </span>
               </Tooltip>
             </Link>
-            {/* leading-5, not tight: tight is 17.5px on text-sm, and a half pixel here puts the whole footer, and the column over it, off the pixel grid.
-                    a flex row, so the gear sits at the far end, away from the picture on either side */}
-            <span className={cn('flex items-center text-sm leading-5', mirrored && 'flex-row-reverse')}>
-              {mobile && <Status presence={presence} />}
-              <Button id="logout" size="sm" onClick={() => void logout().then(() => identityChanged('login'))} className={BOX}>
-                <RiLogoutBoxRLine aria-hidden size={ICON} />
-                log out
-              </Button>
-              {inspectorOn && (
-                <>
-                  <Dot />
-                  <InspectorOpener />
-                </>
-              )}
-              {mobile && <NotificationsOpener />}
-              <SettingsOpener className={mobile ? undefined : mirrored ? 'mr-auto' : 'ml-auto'} />
-            </span>
+            {/* a phone's line under the name: how you are. a desktop has none, and the row is the name alone, centred on the picture.
+                leading-5, not tight: tight is 17.5px on text-sm, and a half pixel here puts the whole footer, and the column over it, off the pixel grid */}
+            {mobile && (
+              <span className="flex items-center text-sm leading-5">
+                <Status presence={presence} />
+              </span>
+            )}
           </span>
+          {actions}
         </>
       ) : (
         <>
@@ -426,9 +444,14 @@ export function UserPanel() {
                 ✎
               </span>
             </span>
-            {/* the way to make the name yours, right under it; the gear at the far end */}
+            {/* the way to make the name yours, right under it (leading-5: the pixel grid, as above) */}
             <span className={cn('flex items-center text-sm leading-5 text-textSecondary', mirrored && 'flex-row-reverse')}>
-              {mobile && <Status presence={presence} />}
+              {mobile && (
+                <>
+                  <Status presence={presence} />
+                  <Dot />
+                </>
+              )}
               <Button id="signup-link" size="sm" variant="outline" onClick={() => openAuthDialog('signup')} className={BOX}>
                 <RiUserAddLine aria-hidden size={ICON} />
                 sign up
@@ -437,16 +460,9 @@ export function UserPanel() {
                 <RiLoginBoxLine aria-hidden size={ICON} />
                 log in
               </Button>
-              {inspectorOn && (
-                <>
-                  <Dot />
-                  <InspectorOpener />
-                </>
-              )}
-              {mobile && <NotificationsOpener />}
-              <SettingsOpener className={mobile ? undefined : mirrored ? 'mr-auto' : 'ml-auto'} />
             </span>
           </span>
+          {actions}
         </>
       )}
     </div>
