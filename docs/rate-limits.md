@@ -65,6 +65,7 @@ load, per action), not a measurement.
 | ✅ | `POST /roles`, `PUT/DELETE /roles/{id}`, `POST /roles/{id}/members`, `DELETE /roles/{id}/members/{name}` | Roles | none | **120** (moderate) | account | 10 min | rare (owner/mod) |
 | ✅ | `POST /owners`, `DELETE /owners/{name}`, `POST /transfer` | Ownership | none | **120** (moderate) | account | 10 min | rare (owner) |
 | ✅ | `POST /kick`, `POST /timeout`, `DELETE /timeout/{name}`, `POST /ban`, `DELETE /bans/{name}` | Moderation actions | none | **120** (moderate) | account | 10 min | low (mods, spikes during raids) |
+| ✅ | `DELETE /api/streams/{name}/chat/{id}`, `POST /bans`, `DELETE /bans/{user}`, `POST /timeouts`, `DELETE /timeouts/{user}`, `POST/DELETE /jannies`, `POST/DELETE /api/jannies` | A stream chat's jannies (`jannies.md`) | 30 a minute per login (`rl:janny:<id>`) on the deletes, bans and timeouts | **120** (moderate) | account | 10 min | low (jannies, spikes during raids) |
 | ✅ | `GET /api/dms`, `GET /api/dm/{name}` | DM list / thread | none | **600** | account | 1 min | medium |
 | ✅ | `POST /api/dm/{name}` | Send a DM | 60 / account | same (now with Retry-After) **+ 120** | account | 1 min | medium (per message) |
 | ✅ | `PUT /api/dm/{name}/read` | DM read marker | none | **120** | account | 1 min | medium |

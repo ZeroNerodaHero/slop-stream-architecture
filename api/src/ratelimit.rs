@@ -141,6 +141,13 @@ fn is_upload(method: &Method, path: &str) -> bool {
 }
 
 fn is_moderation(method: &Method, path: &str) -> bool {
+    // a stream chat's jannies (janny.rs): deleting a line, bans, timeouts, naming jannies
+    if path.starts_with("/api/jannies") {
+        return true;
+    }
+    if let Some(rest) = path.strip_prefix("/api/streams/{name}/") {
+        return rest.starts_with("chat/") || rest.starts_with("bans") || rest.starts_with("timeouts") || rest.starts_with("jannies");
+    }
     let Some(rest) = path.strip_prefix("/api/groups/{group}") else { return false };
     match rest {
         // deleting the group itself
@@ -448,6 +455,13 @@ mod tests {
         assert_eq!(api_rule(&put, "/api/groups/{group}/icon"), UPLOAD);
         assert_eq!(api_rule(&post, "/api/chat-images"), UPLOAD);
         assert_eq!(api_rule(&post, "/api/groups/{group}/ban"), MODERATE);
+        assert_eq!(api_rule(&del, "/api/streams/{name}/chat/{id}"), MODERATE);
+        assert_eq!(api_rule(&post, "/api/streams/{name}/bans"), MODERATE);
+        assert_eq!(api_rule(&del, "/api/streams/{name}/timeouts/{user}"), MODERATE);
+        assert_eq!(api_rule(&post, "/api/streams/{name}/jannies"), MODERATE);
+        assert_eq!(api_rule(&post, "/api/jannies"), MODERATE);
+        assert_eq!(api_rule(&get, "/api/streams/{name}/mod-log"), READ);
+        assert_eq!(api_rule(&post, "/api/streams/{name}/heartbeat"), STREAM);
         assert_eq!(api_rule(&del, "/api/groups/{group}/roles/{id}/members/{name}"), MODERATE);
         assert_eq!(api_rule(&put, "/api/groups/{group}/channels/{channel}/cooldown"), MODERATE);
         assert_eq!(api_rule(&del, "/api/groups/{group}"), MODERATE);

@@ -146,12 +146,14 @@ const NOTICE_WORDS: Record<string, string> = {
   cooldown: 'your role has a cooldown between lines',
   'channel cooldown': 'this channel has a cooldown between lines',
   'timed out': 'you are timed out here',
-  'no such line': 'that line is gone, so the reply was not sent'
+  'no such line': 'that line is gone, so the reply was not sent',
+  'you are banned from this chat': 'you are banned from this chat'
 };
 /** A refused reaction's words, where the chat's own would mislead (the reply's `no such line` is the line's). */
 const REACT_WORDS: Record<string, string> = {
   'no such line': 'that line is gone',
   'timed out': 'you are timed out here',
+  'you are banned from this chat': 'you are banned from this chat',
   'too many reactions': 'that line has as many reactions as it holds'
 };
 /** How long a line jumped to from a reply's quote stays lit. */
@@ -522,6 +524,20 @@ export class ChatRoom {
     }
   }
 
+  /** A janny deleted a line (docs/jannies.md): it goes from the screen, a jump's parked tail and the hits. A stream's only, so no channel. */
+  removeLine(id: string) {
+    const drop = (lines: ChatLine[]) => (lines.some((l) => l.id === id) ? lines.filter((l) => l.id !== id) : lines);
+    const lines = store.get(this.linesAtom);
+    const next = drop(lines);
+    if (next !== lines) store.set(this.linesAtom, next);
+    if (this.savedTail) this.savedTail = drop(this.savedTail);
+    const results = store.get(this.resultsAtom);
+    if (results) {
+      const kept = drop(results);
+      if (kept !== results) store.set(this.resultsAtom, kept);
+    }
+  }
+
   showNotice(text: string, ms = 3000) {
     store.set(this.noticeAtom, text);
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
@@ -668,6 +684,8 @@ export class ChatRoom {
         } else store.set(this.countAtom, msg.count);
       } else if (msg.type === 'react' && typeof msg.id === 'string' && typeof msg.emoji === 'string' && typeof msg.who === 'string') {
         this.applyReact(tagged, msg.id, msg.emoji, msg.who, msg.on === true);
+      } else if (msg.type === 'delete' && typeof msg.id === 'string') {
+        this.removeLine(msg.id);
       } else if (msg.type === 'error' && msg.error && typeof msg.react === 'string') {
         // a reaction refused: words under the box, and nothing of the box's own (its line, its wait) is touched
         this.showNotice(REACT_WORDS[msg.error] ?? msg.error);
@@ -707,7 +725,7 @@ export class ChatRoom {
     // and the button counts it down; the bucket is not the matter, so it is left alone
     if (error in NOTICE_WORDS && typeof wait === 'number' && wait > 0) this.refuse(wait);
     // the oldest line out was not taken: back into the box, unless something new is being typed
-    if (/slow down|cooldown|timed out|chat is (busy|down)|no such line/.test(error)) {
+    if (/slow down|cooldown|timed out|banned|chat is (busy|down)|no such line/.test(error)) {
       const lost = this.inFlight.shift();
       if (lost?.text && !store.get(this.draftAtom)) store.set(this.draftAtom, lost.text);
       if (lost && lost.images.length > 0 && store.get(this.imagesAtom).length === 0) store.set(this.imagesAtom, lost.images);

@@ -49,6 +49,7 @@ mod group_mod;
 mod groups;
 mod history;
 mod home;
+mod janny;
 mod schema;
 mod models;
 mod monitor;
@@ -965,10 +966,13 @@ async fn watch(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult
     // the badge beside the name in the page's header: the one their chat lines wear (the primary
     // group, else the first joined), the card's (`get_streamer`). none for a name with no account
     let badge = if p.verified { groups::badge_of(&s.db, &name).await? } else { None };
+    // may this login clean the chat (janny.rs): which buttons the page draws. every action asks again
+    let can_moderate = janny::can_moderate(&s, &name, me.0.as_ref()).await?;
     Ok(Json(json!({
         "url": WS_PATH, "name": name, "bio": p.bio, "live": live, "verified": verified, "oauth_verified": oauth_verified, "avatar": p.avatar, "presence": presence,
         "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials, "about": p.about,
         "followers": follows.followers, "following": follows.following, "joined_at": p.joined, "badge": badge,
+        "can_moderate": can_moderate,
     })))
 }
 
@@ -989,6 +993,7 @@ fn router(state: AppState) -> Router {
         .merge(presence::routes())
         .merge(debug::routes())
         .merge(voice::routes())
+        .merge(janny::routes())
         .route("/api/health", get(health))
         // `GET /api/streams`, the home list, is the home service's (`api home`, home.rs): caddy sends it there
         .route("/api/streamers/{name}", get(get_streamer).put(put_streamer))

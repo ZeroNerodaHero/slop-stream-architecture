@@ -1,7 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { type FormEvent, useState } from 'react';
 
 import { type ClientError, type Health, api, messageOf, statusOf } from '@/infra/api';
+import { Button } from '@/shared-components/Button';
+import { INPUT } from '@/shared-components/input';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { cn } from '@/utils/cn';
 
@@ -150,6 +152,78 @@ function Row({ e, now }: { e: ClientError; now: number }) {
   );
 }
 
+/**
+ * The site jannies (docs/jannies.md): they may delete lines, time out and ban in every stream's
+ * chat, below the streamer and the admins. Chat only. Add by name, remove with a click.
+ */
+function SiteJannies() {
+  const client = useQueryClient();
+  const list = useQuery({ queryKey: ['site-jannies'], queryFn: api.siteJannies, retry: false });
+  const [adding, setAdding] = useState('');
+  const [status, setStatus] = useState('');
+  const run = async (what: () => Promise<unknown>, done: string) => {
+    setStatus('');
+    try {
+      await what();
+      setStatus(done);
+    } catch (err) {
+      setStatus(messageOf(err));
+    }
+    void client.invalidateQueries({ queryKey: ['site-jannies'] });
+  };
+  const add = (e: FormEvent) => {
+    e.preventDefault();
+    const who = adding.trim().toLowerCase();
+    if (!who) return;
+    void run(() => api.addSiteJanny(who), `${who} is a site janny now`).then(() => setAdding(''));
+  };
+  return (
+    <section id="admin-jannies" className="mt-6">
+      <h2 className="mb-1 text-xl font-semibold">site jannies</h2>
+      <p className="mb-3 text-sm text-textSecondary">
+        can delete lines, time out and ban in every stream&apos;s chat. not the streamer, not admins, not each other. chat only.
+      </p>
+      <form onSubmit={add} className="mb-2 flex max-w-[420px] gap-2">
+        <input
+          id="admin-janny-name"
+          value={adding}
+          onChange={(e) => setAdding(e.target.value)}
+          placeholder="their name"
+          aria-label="add a site janny by name"
+          maxLength={32}
+          autoComplete="off"
+          spellCheck={false}
+          className={cn(INPUT, 'min-w-0 flex-1')}
+        />
+        <Button type="submit" variant="primary" size="sm" disabled={!adding.trim()}>
+          add
+        </Button>
+      </form>
+      {status && (
+        <p aria-live="polite" className="mb-2 text-sm text-textSecondary">
+          {status}
+        </p>
+      )}
+      {list.isError ? (
+        <p className="text-sm text-decrease">{messageOf(list.error)}</p>
+      ) : list.data && list.data.length === 0 ? (
+        <p className="text-sm text-textTertiary">none yet.</p>
+      ) : (
+        <ul className="max-w-[420px] border border-primaryStroke bg-backgroundSecondary px-4">
+          {(list.data ?? []).map((j) => (
+            <li key={j.name} className="flex items-center gap-3 border-b border-primaryStroke py-1.5 last:border-b-0">
+              <span className="min-w-0 flex-1 truncate font-semibold">{j.name}</span>
+              <Button size="sm" variant="outline-danger" onClick={() => void run(() => api.removeSiteJanny(j.name), `${j.name} is not a site janny any more`)}>
+                remove
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function notice(err: unknown): string {
   switch (statusOf(err)) {
     case 401:
@@ -185,6 +259,7 @@ export function AdminPage() {
   return (
     <PageFrame title="admin" wide>
       <HealthCard health={health.data} error={health.error} />
+      {!stranger && <SiteJannies />}
 
       <div className="mb-3 mt-6 flex flex-wrap items-center gap-3">
         <h2 className="text-xl font-semibold">errors from the pages</h2>

@@ -15,7 +15,7 @@ This is a lab. It is reachable by anyone who can hit the IP. That is accepted.
 Do not build these.
 
 - stream keys, permission roles, email, password reset, oauth, 2fa (accounts are a name and a password, optional: see "accounts")
-- follows, vod, recording, moderation (the text chat is in: `chat.md`)
+- follows, vod, recording (the text chat is in: `chat.md`; who may clean it, `jannies.md`)
 - transcoding, simulcast, quality ladder, cdn
 - group calls where several people publish into one room
 - a second machine, a real fanout tier, TURN, ICE-TCP
@@ -330,7 +330,7 @@ Pages, served by `frontend`:
 | go live | `/live` |
 | watch | `/watch/:name` |
 | log in, sign up | `/login`, `/signup` |
-| admin | `/admin` — this box's `/api/health` and the last error reports, for a login in `ADMIN_NAMES` |
+| admin | `/admin` — this box's `/api/health`, the last error reports and the site jannies (`jannies.md`), for a login in `ADMIN_NAMES` |
 
 Home does not poll. One `GET /api/streams` when the page arrives (the home service's snapshot, `home.rs`, first on first: the order is the service's, and so will the ranking be when there is one), then the facts over the events socket under `watch *` (`status.md`): `live` puts a card at the end with what the fact carries (bio, ✓, picture, `thumbs`; `viewers` null until video has counted), `ended` takes it out, `viewers` moves the chip. Frames that land while the snapshot is in flight are held and applied on top of it. The snapshot is asked again when the events socket opens or comes back under the page (the facts of a gap are gone; one in flight as it opened is followed by another), and after an ask that failed, 3s doubling to 60s. A 1s tick is the page's clock for the chips. Leaving keeps the list, so coming back shows it at once while it is asked again. The video websocket is only for the camera. The events websocket (`/events`, `status.md`) is open on every page, one per browser in a shared worker (a socket per tab where there is none), and carries presence and the pushes; a handshake that never opens backs off from 3s to 60s with jitter, a socket that was open and dropped is back in 3s. Three grey placeholder cards (`#loading`) until the first answer; when the api stops answering, `api is down: …` alone (the last list is not kept on screen). The cards live in `#list article` and each thumbnail is `img[data-thumb=<name>]`; the tests key on those. The first two are `#featured` (`data-featured=<name>`): they play the camera for as long as the page is open and visible, muted, over their still, which shows until the camera is playing (a hidden tab holds no previews; they start again when it shows). Every other card shows one picture for the whole visit, chosen when it first appears: one of `thumbs` when the streamer put some, otherwise one camera frame (`/thumb/<name>.jpg`). A refresh can land on a different one. A 404 (the first camera frame takes ~6s) asks again a few times and then stops; once a picture has loaded, the url does not change. Holding the pointer on a card for 300ms (or focusing it) plays that same camera over the still, muted, and leaving hangs it up. A pass across the grid and a tap do not. The camera is the 720 picture the streamer sends; there is no second encode.
 

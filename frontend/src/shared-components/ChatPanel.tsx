@@ -88,7 +88,7 @@ interface ChatPanelProps {
   onChannel?: (channel: string) => void;
   /** A group channel's own controls in the header, before the count: the pins (ServerRoom.tsx). */
   headerEnd?: ReactNode;
-  /** A mark always at a line's top right, and buttons in its action bar beside react and reply: a group line's pin (ServerRoom.tsx). Nothing on a stream's chat. */
+  /** A mark always at a line's top right, and buttons in its action bar beside react and reply: a group line's pin (ServerRoom.tsx), a janny's delete, time out and ban on a stream's (ChatMod.tsx). */
   lineMark?: (line: ChatLine) => ReactNode;
   lineActions?: (line: ChatLine) => ReactNode;
   className?: string;

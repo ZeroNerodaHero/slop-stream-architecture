@@ -513,6 +513,30 @@ export interface WatchGrant extends OAuthVerified {
   joined_at?: string | null;
   /** The group badge beside the name in the header: the one their chat lines wear (primary, else the first joined). null: no group or no account. Absent on an older api. */
   badge?: GroupBadge | null;
+  /** This login may clean the chat (docs/jannies.md): the streamer, a janny of theirs, a site janny or an admin. Which buttons to draw; every action asks again. Absent on an older api. */
+  can_moderate?: boolean;
+}
+
+/** A janny, as the mod tab and /admin list them (docs/jannies.md). */
+export interface Janny {
+  name: string;
+  added_at: string;
+}
+
+/** A stream chat's bans and running timeouts (`GET /api/streams/:name/bans`). `by` is null when whoever did it is gone. */
+export interface StreamBans {
+  bans: { name: string; by: string | null; reason: string; at: string }[];
+  timeouts: { name: string; by: string | null; until: string }[];
+}
+
+/** One thing done in a stream's chat: a deleted line (its copy in `snapshot`), a ban, a timeout, a janny named or dropped. Newest first. */
+export interface ModLogRow {
+  at: string;
+  actor: string;
+  action: 'delete' | 'ban' | 'unban' | 'timeout' | 'untimeout' | 'janny' | 'unjanny' | string;
+  target: string;
+  line_id: string | null;
+  snapshot: (Partial<ChatLine> & { reason?: string; seconds?: number }) | null;
 }
 
 /**
@@ -781,6 +805,25 @@ export const api = {
   kickMember: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/kick`, { name }),
   banMember: (group: string, name: string, reason: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/ban`, { name, reason }),
   unbanMember: (group: string, name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/bans/${encodeURIComponent(name)}`),
+  // ---- a stream chat's jannies (docs/jannies.md). the streamer, their jannies, site jannies and admins; the api has the last word on who outranks whom
+  /** A line out of the stream's chat for good; everyone in the room sees it go. Its copy goes to the mod log. */
+  deleteChatLine: (name: string, id: string) => request<null>('DELETE', `/api/streams/${encodeURIComponent(name)}/chat/${encodeURIComponent(id)}`),
+  /** No line or reaction of `who`'s in the stream's chat until lifted. An account only. */
+  banFromChat: (name: string, who: string, reason = '') => request<null>('POST', `/api/streams/${encodeURIComponent(name)}/bans`, { name: who, reason }),
+  unbanFromChat: (name: string, who: string) => request<null>('DELETE', `/api/streams/${encodeURIComponent(name)}/bans/${encodeURIComponent(who)}`),
+  /** The same for `seconds` (10 to a week). Set again, the new end stands. */
+  timeoutInChat: (name: string, who: string, seconds: number) => request<null>('POST', `/api/streams/${encodeURIComponent(name)}/timeouts`, { name: who, seconds }),
+  liftChatTimeout: (name: string, who: string) => request<null>('DELETE', `/api/streams/${encodeURIComponent(name)}/timeouts/${encodeURIComponent(who)}`),
+  chatBans: (name: string) => request<StreamBans>('GET', `/api/streams/${encodeURIComponent(name)}/bans`),
+  modLog: (name: string) => request<ModLogRow[]>('GET', `/api/streams/${encodeURIComponent(name)}/mod-log`),
+  /** The stream's jannies. The streamer or an admin. */
+  streamJannies: (name: string) => request<Janny[]>('GET', `/api/streams/${encodeURIComponent(name)}/jannies`),
+  addStreamJanny: (name: string, who: string) => request<null>('POST', `/api/streams/${encodeURIComponent(name)}/jannies`, { name: who }),
+  removeStreamJanny: (name: string, who: string) => request<null>('DELETE', `/api/streams/${encodeURIComponent(name)}/jannies/${encodeURIComponent(who)}`),
+  /** The site jannies: every stream's chat. Admins only. */
+  siteJannies: () => request<Janny[]>('GET', '/api/jannies'),
+  addSiteJanny: (who: string) => request<null>('POST', '/api/jannies', { name: who }),
+  removeSiteJanny: (who: string) => request<null>('DELETE', `/api/jannies/${encodeURIComponent(who)}`),
   streams: () => request<LiveStream[]>('GET', '/api/streams'),
   streamer: (name: string) => request<Streamer>('GET', `/api/streamers/${name}`),
   /** The name's sessions overlapping `[from, to)`, oldest first: the calendar's blocks. At most 93 days a request, 1000 rows an answer. */
