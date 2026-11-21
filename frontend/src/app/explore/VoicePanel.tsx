@@ -19,13 +19,17 @@ import { canEditChannel, type Channel, type GroupRoom, isVoice } from '@/infra/a
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import {
   joinVoice,
+  keyName,
   leaveVoice,
   setVoiceDeaf,
   setVoiceMuted,
   type VoiceCall,
   voiceCallAtom,
   voiceDeafAtom,
+  voiceModeAtom,
   voiceMutedAtom,
+  voicePttHeldAtom,
+  voicePttKeyAtom,
   voiceQuality,
   voiceSpeakingAtom,
   type VoiceStats,
@@ -78,6 +82,10 @@ export function VoicePanel({
   const muted = useAtomValue(voiceMutedAtom);
   const deaf = useAtomValue(voiceDeafAtom);
   const stats = useAtomValue(voiceStatsAtom);
+  const ptt = useAtomValue(voiceModeAtom) === 'ptt';
+  const pttKey = keyName(useAtomValue(voicePttKeyAtom));
+  // push to talk with the key down and nothing muted: the mic button goes green while it is
+  const talking = useAtomValue(voicePttHeldAtom) && ptt && !muted && !deaf;
   const channels = (room.channels ?? []).filter(isVoice);
   const here = call.phase !== 'idle' && call.server === room.name;
   const avatarOf = (name: string) => room.roster?.find((m) => m.name === name)?.avatar ?? null;
@@ -141,7 +149,13 @@ export function VoicePanel({
                 {mine && (
                   <div id="group-voice-controls" className="flex shrink-0 items-center gap-0.5 pr-0.5">
                     <Signal call={call} stats={stats} />
-                    <BarButton label={muted ? 'unmute' : 'mute'} pressed={muted} onClick={() => setVoiceMuted(!muted)}>
+                    <BarButton
+                      id="group-voice-mute"
+                      label={muted ? 'unmute' : ptt ? `mute (push to talk: hold ${pttKey})` : 'mute'}
+                      pressed={muted}
+                      talking={ptt ? talking : undefined}
+                      onClick={() => setVoiceMuted(!muted)}
+                    >
                       {muted ? <RiMicOffLine aria-hidden size={14} /> : <RiMicLine aria-hidden size={14} />}
                     </BarButton>
                     <BarButton label={deaf ? 'undeafen' : 'deafen'} pressed={deaf} onClick={() => setVoiceDeaf(!deaf)}>
@@ -181,15 +195,37 @@ export function VoicePanel({
   );
 }
 
-function BarButton({ label, pressed, danger, onClick, children }: { label: string; pressed?: boolean; danger?: boolean; onClick: () => void; children: ReactNode }) {
+/** `talking`: in push to talk, the key has the mic open (green), or not (undefined outside push to talk). */
+function BarButton({
+  id,
+  label,
+  pressed,
+  danger,
+  talking,
+  onClick,
+  children
+}: {
+  id?: string;
+  label: string;
+  pressed?: boolean;
+  danger?: boolean;
+  talking?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
   return (
-    <Tooltip content={label}>
+    <Tooltip content={talking ? 'talking' : label}>
       <button
+        id={id}
         type="button"
         aria-label={label}
         aria-pressed={pressed}
+        data-talking={talking || undefined}
         onClick={onClick}
-        className={cn(CALL_BUTTON, danger ? 'text-decrease' : pressed ? 'border-primaryBlue text-primaryBlue' : 'text-textSecondary hover:text-textPrimary')}
+        className={cn(
+          CALL_BUTTON,
+          danger ? 'text-decrease' : pressed ? 'border-primaryBlue text-primaryBlue' : talking ? 'text-increase' : 'text-textSecondary hover:text-textPrimary'
+        )}
       >
         {children}
       </button>

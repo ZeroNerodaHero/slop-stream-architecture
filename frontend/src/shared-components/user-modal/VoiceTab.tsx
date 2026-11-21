@@ -2,28 +2,49 @@ import { RiCameraOffLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 
-import { type MicLevel, openMicLevel } from '@/infra/mic-level';
 import {
-  allowMic,
   DEFAULT_DEVICE,
+  gateFraction,
+  holdVoiceMic,
+  keyName,
   openVoiceCamera,
-  openVoiceMic,
   playTestTone,
+  PTT_DELAY_MAX,
+  readVoiceMicLevel,
   refreshVoiceDevices,
+  releaseVoiceMic,
+  setVoiceAutoGain,
   setVoiceCamera,
+  setVoiceEchoCancellation,
+  setVoiceGate,
   setVoiceInput,
+  setVoiceIsolation,
+  setVoiceMode,
   setVoiceOutput,
+  setVoicePttDelay,
+  setVoicePttKey,
   SINK_SUPPORTED,
   type VoiceDevice,
+  type VoiceMode,
+  voiceAutoGainAtom,
   voiceCameraAtom,
   voiceDevicesAtom,
+  voiceEchoCancellationAtom,
+  voiceGateAtom,
   voiceInputAtom,
-  voiceOutputAtom
+  voiceIsolationAtom,
+  voiceIsolationFailedAtom,
+  voiceModeAtom,
+  voiceOutputAtom,
+  voicePttDelayAtom,
+  voicePttKeyAtom
 } from '@/infra/atoms/voice-atoms';
+import { FLOOR_DB } from '@/infra/mic-level';
 import { Button } from '@/shared-components/Button';
 import { Select } from '@/shared-components/Select';
 import { Tooltip } from '@/shared-components/Tooltip';
-import { Block, Status } from '@/shared-components/user-modal/parts';
+import { Block, CHECKBOX, Info, Status } from '@/shared-components/user-modal/parts';
+import { cn } from '@/utils/cn';
 
 /** A picker's options: the default first, then the devices by name. */
 const optionsOf = (list: readonly VoiceDevice[]) => [{ value: DEFAULT_DEVICE, label: 'default' }, ...list.map((d) => ({ value: d.id, label: d.label }))];
@@ -41,9 +62,11 @@ function refusal(err: unknown, what: string): string {
 
 /**
  * The devices a call uses: the mic it talks with, the speakers it plays through, and a camera
- * kept for video in voice, which is not here yet. Picking applies at once, to a call that is on
- * too, and keeps in this browser (voice-atoms.ts). The mic's level shows live while the tab is
- * open, and the mic is put down when it shuts.
+ * kept for video in voice, which is not here yet; then what is done to the mic (isolation, echo
+ * cancellation, auto gain) and how it opens (voice activity's gate, or push to talk). Everything
+ * applies at once, to a call that is on too, and keeps in this browser (voice-atoms.ts). The
+ * mic's level shows live while the tab is open: the tab holds the one mic a call would use (the
+ * call's own while in one), and lets go of it when it shuts.
  */
 export function VoiceTab() {
   const devices = useAtomValue(voiceDevicesAtom);
@@ -51,23 +74,46 @@ export function VoiceTab() {
   const output = useAtomValue(voiceOutputAtom);
   const camera = useAtomValue(voiceCameraAtom);
   const [note, setNote] = useState('');
+  // how many times the mic was asked for: once it was allowed on an earlier visit, on the allow click, again on the next click after a refusal
+  const [asks, setAsks] = useState(0);
+  const [held, setHeld] = useState(false);
 
-  // the lists as they are, and once the mic was allowed on an earlier visit, its names too (safari forgets them per page)
+  // the lists as they are, and once the mic was allowed on an earlier visit, the mic itself (which names them: safari forgets the names per page)
   useEffect(() => {
     void refreshVoiceDevices();
     navigator.permissions
       ?.query({ name: 'microphone' as PermissionName })
-      .then((p) => (p.state === 'granted' ? allowMic() : undefined))
+      .then((p) => p.state === 'granted' && setAsks((n) => n || 1))
       .catch(() => undefined);
   }, []);
 
-  async function allow() {
+  // the browser named the mics already (a call, or a browser that keeps names): no need to wait on the permissions api
+  const ask = asks || (devices.micNamed ? 1 : 0);
+
+  useEffect(() => {
+    if (!ask) return;
+    let gone = false;
+    let got = false;
+    holdVoiceMic().then(
+      () => {
+        if (gone) return releaseVoiceMic();
+        got = true;
+        setNote('');
+        setHeld(true);
+        void refreshVoiceDevices();
+      },
+      (err: unknown) => !gone && setNote(refusal(err, 'mic'))
+    );
+    return () => {
+      gone = true;
+      if (got) releaseVoiceMic();
+      setHeld(false);
+    };
+  }, [ask]);
+
+  function allow() {
     setNote('');
-    try {
-      await allowMic();
-    } catch (err) {
-      setNote(refusal(err, 'mic'));
-    }
+    setAsks((n) => n + 1);
   }
 
   return (
@@ -79,7 +125,7 @@ export function VoiceTab() {
             <div className="flex flex-col gap-3">
               {!devices.micNamed && (
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                  <Button id="voice-allow-mic" size="sm" variant="outline" onClick={() => void allow()}>
+                  <Button id="voice-allow-mic" size="sm" variant="outline" onClick={allow}>
                     allow mic
                   </Button>
                   <span className="text-sm text-textTertiary">the browser names the devices once the mic is allowed</span>
@@ -98,7 +144,7 @@ export function VoiceTab() {
                   className="w-full min-w-0"
                 />
               </div>
-              {devices.micNamed && <InputMeter deviceId={input} onError={setNote} />}
+              {held && <InputMeter />}
               <Status id="voice-input-note" text={note} quiet />
             </div>
           </Block>
@@ -131,6 +177,9 @@ export function VoiceTab() {
         </div>
       </div>
 
+      <InputProcessing />
+      <InputMode />
+
       <Block title="video">
         <div className="flex flex-col gap-3">
           <p className="text-sm text-textTertiary">for video calls, coming later</p>
@@ -151,51 +200,41 @@ export function VoiceTab() {
 }
 
 /**
- * How loud the picked mic is, live: a bar that rises with every word and falls more slowly
- * (mic-level.ts). Its own stream of the mic, put down on unmount or a new pick. Painted from a
- * frame loop, never through react.
+ * How loud the mic is, live: a bar that rises with every word and falls more slowly
+ * (mic-level.ts), read off the one mic the tab holds (voice-atoms.ts), so a new pick or new
+ * settings move it with no new stream here. Painted from a frame loop, never through react: a
+ * transform, so no frame lays the page out again. In voice activity the gate's threshold is a
+ * mark on it, and the bar is green while the voice is over it.
  */
-function InputMeter({ deviceId, onError }: { deviceId: string; onError: (text: string) => void }) {
+function InputMeter() {
+  const mode = useAtomValue(voiceModeAtom);
+  const gateDb = useAtomValue(voiceGateAtom);
   const root = useRef<HTMLDivElement>(null);
   const fill = useRef<HTMLDivElement>(null);
+  const gate = mode === 'activity' && gateDb > FLOOR_DB ? gateFraction(gateDb) : 0;
 
   useEffect(() => {
-    let stream: MediaStream | null = null;
-    let reader: MicLevel | null = null;
     let frame = 0;
-    let gone = false;
     let shownPct = -1;
+    let shownOpen: boolean | null = null;
     const paint = (now: number) => {
-      const level = reader?.read(now) ?? 0;
-      if (fill.current) fill.current.style.width = `${level * 100}%`;
+      const level = readVoiceMicLevel(now);
+      if (fill.current) fill.current.style.transform = `scaleX(${level})`;
       const pct = Math.round(level * 100);
       if (pct !== shownPct) {
         shownPct = pct;
         root.current?.setAttribute('aria-valuenow', String(pct));
       }
+      const open = level >= gate;
+      if (open !== shownOpen) {
+        shownOpen = open;
+        fill.current?.toggleAttribute('data-open', open && gate > 0);
+      }
       frame = requestAnimationFrame(paint);
     };
-    openVoiceMic(deviceId).then(
-      (s) => {
-        if (gone) {
-          for (const t of s.getTracks()) t.stop();
-          return;
-        }
-        stream = s;
-        const [track] = s.getAudioTracks();
-        reader = track ? openMicLevel(track) : null;
-        onError('');
-        frame = requestAnimationFrame(paint);
-      },
-      (err: unknown) => !gone && onError(refusal(err, 'mic'))
-    );
-    return () => {
-      gone = true;
-      if (frame) cancelAnimationFrame(frame);
-      reader?.close();
-      for (const t of stream?.getTracks() ?? []) t.stop();
-    };
-  }, [deviceId, onError]);
+    frame = requestAnimationFrame(paint);
+    return () => cancelAnimationFrame(frame);
+  }, [gate]);
 
   return (
     <div
@@ -206,10 +245,189 @@ function InputMeter({ deviceId, onError }: { deviceId: string; onError: (text: s
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={0}
-      className="h-2 w-full border border-primaryStroke bg-background"
+      className="relative h-2 w-full overflow-hidden border border-primaryStroke bg-background"
     >
-      <div ref={fill} className="h-full w-0 bg-primaryBlue" />
+      <div ref={fill} className="h-full w-full origin-left scale-x-0 bg-primaryBlue data-[open]:bg-increase" />
+      {gate > 0 && <div id="voice-input-gate" aria-hidden className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-textPrimary" style={{ left: `${gate * 100}%` }} />}
     </div>
+  );
+}
+
+/** One setting as a box to tick, its name, and an ⓘ for what it does. */
+function Toggle({ id, label, tip, checked, onChange }: { id: string; label: string; tip: string; checked: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-1.5">
+      <span className="flex items-center gap-2 text-sm font-semibold text-textPrimary">
+        <label htmlFor={id}>{label}</label>
+        <Info tip={tip} />
+      </span>
+      <input id={id} type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className={CHECKBOX} />
+    </div>
+  );
+}
+
+/** What is done to the mic before it leaves. Each opens the mic again with the new settings and swaps it into a call that is on (voice-atoms.ts). */
+function InputProcessing() {
+  const isolation = useAtomValue(voiceIsolationAtom);
+  const failed = useAtomValue(voiceIsolationFailedAtom);
+  const echo = useAtomValue(voiceEchoCancellationAtom);
+  const autoGain = useAtomValue(voiceAutoGainAtom);
+  return (
+    <Block id="voice-processing" title="input processing">
+      <div className="flex flex-col">
+        <Toggle
+          id="voice-isolation"
+          label="voice isolation"
+          tip="strong noise removal (rnnoise): keyboards, fans, the street. your voice only. the browser's own noise suppression is off while it is on"
+          checked={isolation}
+          onChange={setVoiceIsolation}
+        />
+        {isolation && failed && (
+          <Status id="voice-isolation-note" text="voice isolation could not start in this browser: the browser's noise suppression is used" quiet />
+        )}
+        <Toggle
+          id="voice-echo"
+          label="echo cancellation"
+          tip="takes out what your speakers play, so the others do not hear themselves"
+          checked={echo}
+          onChange={setVoiceEchoCancellation}
+        />
+        <Toggle
+          id="voice-auto-gain"
+          label="auto gain"
+          tip="evens out your volume: louder when you are quiet or far from the mic"
+          checked={autoGain}
+          onChange={setVoiceAutoGain}
+        />
+      </div>
+    </Block>
+  );
+}
+
+const MODES: { mode: VoiceMode; label: string }[] = [
+  { mode: 'activity', label: 'voice activity' },
+  { mode: 'ptt', label: 'push to talk' }
+];
+
+/** How the mic opens in a call: on your voice (over the gate's threshold), or while a key is held. Mute is over both. */
+function InputMode() {
+  const mode = useAtomValue(voiceModeAtom);
+  const gateDb = useAtomValue(voiceGateAtom);
+  const key = useAtomValue(voicePttKeyAtom);
+  const delay = useAtomValue(voicePttDelayAtom);
+  return (
+    <Block id="voice-mode" title="input mode">
+      <div className="flex flex-col gap-3">
+        <div role="radiogroup" aria-label="input mode" className="flex flex-wrap gap-2">
+          {MODES.map((m) => (
+            <Button
+              key={m.mode}
+              id={`voice-mode-${m.mode}`}
+              size="sm"
+              role="radio"
+              aria-checked={mode === m.mode}
+              onClick={() => setVoiceMode(m.mode)}
+              className={cn(mode === m.mode && 'border-primaryBlue text-primaryBlue')}
+            >
+              {m.label}
+            </Button>
+          ))}
+        </div>
+        {mode === 'activity' ? (
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="voice-gate" className="text-sm font-semibold text-textSecondary">
+                input sensitivity
+              </label>
+              <span id="voice-gate-value" className="text-sm tabular-nums text-textTertiary">
+                {gateDb <= FLOOR_DB ? 'always on' : `${gateDb} dB`}
+              </span>
+            </div>
+            <input
+              id="voice-gate"
+              type="range"
+              min={FLOOR_DB}
+              max={0}
+              step={1}
+              value={gateDb}
+              aria-describedby="voice-gate-hint"
+              onChange={(e) => setVoiceGate(e.target.valueAsNumber)}
+              className="h-1 w-full accent-primaryBlue"
+            />
+            <p id="voice-gate-hint" className="text-sm text-textTertiary">
+              the mic opens when you are louder than the mark on the meter. all the way left: always open
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
+              <span className="text-sm font-semibold text-textSecondary">key</span>
+              <KeyRecorder code={key} onPick={setVoicePttKey} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="voice-ptt-delay" className="text-sm font-semibold text-textSecondary">
+                  release delay
+                </label>
+                <span id="voice-ptt-delay-value" className="text-sm tabular-nums text-textTertiary">
+                  {delay} ms
+                </span>
+              </div>
+              <input
+                id="voice-ptt-delay"
+                type="range"
+                min={0}
+                max={PTT_DELAY_MAX}
+                step={50}
+                value={delay}
+                onChange={(e) => setVoicePttDelay(e.target.valueAsNumber)}
+                className="h-1 w-full accent-primaryBlue"
+              />
+            </div>
+            <p id="voice-ptt-note" className="text-sm text-textTertiary">
+              works only while this tab has the focus: the browser hears no key pressed in another window. typing in a box never talks
+            </p>
+          </div>
+        )}
+      </div>
+    </Block>
+  );
+}
+
+/** Push to talk's key: a click, then the next key pressed. Esc leaves it as it was. The key goes to nothing else while it listens, the modal's Esc included. */
+function KeyRecorder({ code, onPick }: { code: string; onPick: (code: string) => void }) {
+  const [listening, setListening] = useState(false);
+
+  useEffect(() => {
+    if (!listening) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (e.code === 'Escape' || !e.code) return setListening(false);
+      onPick(e.code);
+      setListening(false);
+    };
+    const stop = () => setListening(false);
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('blur', stop);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('blur', stop);
+    };
+  }, [listening, onPick]);
+
+  return (
+    <Button
+      id="voice-ptt-key"
+      size="sm"
+      aria-label={listening ? 'press a key, esc to cancel' : `push to talk key: ${keyName(code)}, change`}
+      aria-pressed={listening}
+      onClick={() => setListening((on) => !on)}
+      onBlur={() => setListening(false)}
+      className={cn('min-w-24 justify-center font-mono text-base', listening && 'border-primaryBlue font-sans text-sm text-primaryBlue')}
+    >
+      {listening ? 'press a key' : keyName(code)}
+    </Button>
   );
 }
 

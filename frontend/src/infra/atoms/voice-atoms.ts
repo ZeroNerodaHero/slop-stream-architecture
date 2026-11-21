@@ -9,15 +9,23 @@
  * is speaking in it, from each m-line's `audioLevel` (getStats). Same shape as the other atom
  * modules: atoms for what renders, module handles, action functions. The devices a call uses
  * (the mic, the speakers, a camera for later) are picked in the user modal's voice tab and kept
- * in this browser; they are at the end of this file.
+ * in this browser; they are after the call. Last is the mic itself: one stream, shared by the
+ * call and the tab's meter, through voice isolation and the noise gate, and push to talk.
  */
 
 import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
+import rnnoiseWasmUrl from '@sapphi-red/web-noise-suppressor/rnnoise.wasm?url';
+import rnnoiseSimdWasmUrl from '@sapphi-red/web-noise-suppressor/rnnoise_simd.wasm?url';
+// oxlint-disable-next-line import/default -- `?url` is vite's: the default export is the file's url
+import rnnoiseWorkletUrl from '@sapphi-red/web-noise-suppressor/rnnoiseWorklet.js?url';
+
 import { api, messageOf } from '@/infra/api';
 import { socketUrl } from '@/infra/frames';
+import { FLOOR_DB, type Level, levelAnalyser, levelOf } from '@/infra/mic-level';
 import { store } from '@/infra/store';
+import gateWorkletUrl from '@/infra/voice-gate-worklet.js?url';
 
 /** How many m-lines hear the others: a room's 16 seats less your own. */
 const HEARD_LINES = 15;
@@ -70,9 +78,6 @@ export const voiceStatsAtom = atom<VoiceStats | null>(null);
 interface Live {
   pc: RTCPeerConnection;
   ws: WebSocket | null;
-  mic: MediaStream;
-  /** The device the mic was opened on: the picked one, or the default when that was gone. */
-  micFor: string;
   audios: HTMLAudioElement[];
   timer: ReturnType<typeof setInterval> | null;
   /** The counters at the last stats read, for the deltas of the next; null before the first. */
@@ -87,14 +92,16 @@ function setCall(next: Partial<VoiceCall>): void {
   store.set(voiceCallAtom, { ...store.get(voiceCallAtom), ...next });
 }
 
-/** Puts everything down: socket, peer, mic, players, the level reader. Nothing is said to anyone: the voice server frees the seat when the socket closes. */
+/** Puts everything down: socket, peer, the call's hold on the mic, players, the level reader. Nothing is said to anyone: the voice server frees the seat when the socket closes. */
 function teardown(): void {
   const was = live;
   live = null;
   store.set(voiceSeatsAtom, []);
   store.set(voiceSpeakingAtom, new Set<string>());
   store.set(voiceStatsAtom, null);
+  syncPtt();
   if (!was) return;
+  releaseVoiceMic();
   if (was.timer) clearInterval(was.timer);
   if (was.ws) {
     was.ws.onclose = null;
@@ -104,7 +111,6 @@ function teardown(): void {
   was.pc.onconnectionstatechange = null;
   was.pc.oniceconnectionstatechange = null;
   was.pc.close();
-  for (const track of was.mic.getTracks()) track.stop();
   for (const audio of was.audios) {
     audio.pause();
     audio.srcObject = null;
@@ -125,10 +131,15 @@ export function leaveVoice(): void {
   store.set(voiceCallAtom, IDLE);
 }
 
-/** The mic on or off. Off while deafened, whatever was asked. */
+/** The mic is heard now: not muted, not deafened, and in push to talk, the key held. */
+function micOpen(): boolean {
+  if (store.get(voiceMutedAtom) || store.get(voiceDeafAtom)) return false;
+  return store.get(voiceModeAtom) !== 'ptt' || store.get(voicePttHeldAtom);
+}
+
+/** The mic on or off, as micOpen says. Only the track the call sends: the tab's meter reads before it, so it moves while muted. */
 function applyMic(): void {
-  const on = !store.get(voiceMutedAtom) && !store.get(voiceDeafAtom);
-  for (const track of live?.mic.getAudioTracks() ?? []) track.enabled = on;
+  if (mic) mic.out.enabled = micOpen();
 }
 
 export function setVoiceMuted(muted: boolean): void {
@@ -158,31 +169,29 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
   }
   if (mine !== attempt) return;
 
-  let mic: MediaStream;
-  let micFor: string;
   try {
-    ({ stream: mic, device: micFor } = await openDevice('audio', store.get(voiceInputAtom), MIC_AUDIO));
+    await holdVoiceMic();
   } catch {
     return fail(mine, 'no microphone: allow it in the browser to talk');
   }
-  if (mine !== attempt) {
-    for (const track of mic.getTracks()) track.stop();
+  if (mine !== attempt || !mic) {
+    releaseVoiceMic();
+    if (mine === attempt) fail(mine, 'no microphone: allow it in the browser to talk');
     return;
   }
 
-  const [track] = mic.getAudioTracks();
-  if (!track) {
-    for (const t of mic.getTracks()) t.stop();
-    return fail(mine, 'no microphone: allow it in the browser to talk');
-  }
+  const track = mic.out;
   const pc = new RTCPeerConnection();
   const audios: HTMLAudioElement[] = [];
-  live = { pc, ws: null, mic, micFor, audios, timer: null, sample: null };
+  // from here teardown lets go of the mic
+  live = { pc, ws: null, audios, timer: null, sample: null };
   // the mic is allowed now, so the browser names the devices: a pick that is gone shows as gone
   void refreshVoiceDevices();
   applyMic();
-  // m-line 0 is the mic; 1 to 15 are where the others are heard, in the order they were added
-  pc.addTransceiver(track, { direction: 'sendrecv', streams: [mic] });
+  syncPtt();
+  // m-line 0 is the mic; 1 to 15 are where the others are heard, in the order they were added.
+  // the mic's track can change under the call (a new device, new settings): sendMic swaps it on this sender
+  pc.addTransceiver(track, { direction: 'sendrecv', streams: [new MediaStream([track])] });
   for (let i = 0; i < HEARD_LINES; i++) {
     const t = pc.addTransceiver('audio', { direction: 'recvonly' });
     const audio = new Audio();
@@ -272,7 +281,7 @@ async function readLevels(mine: number, me: string): Promise<void> {
   call.pc.getTransceivers().forEach((t, i) => lineOfTrack.set(t.receiver.track.id, i));
   const userOfLine = new Map(store.get(voiceSeatsAtom).map((s) => [s.line, s.user]));
   const speaking = new Set<string>();
-  const micOn = !store.get(voiceMutedAtom) && !store.get(voiceDeafAtom);
+  const micOn = micOpen();
   const entries: StatsEntry[] = [];
   report.forEach((s: StatsEntry) => {
     entries.push(s);
@@ -468,7 +477,7 @@ export const voiceCameraAtom = atom((get) => inUse(get(storedCameraAtom), get(vo
 /** A call on now follows a new mic and new speakers at once. */
 export function setVoiceInput(id: string): void {
   store.set(storedInputAtom, id);
-  void switchMic();
+  void syncMic();
 }
 
 export function setVoiceOutput(id: string): void {
@@ -480,8 +489,6 @@ export function setVoiceOutput(id: string): void {
 export function setVoiceCamera(id: string): void {
   store.set(storedCameraAtom, id);
 }
-
-const MIC_AUDIO = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
 
 /** The picked device was asked for and is not there (unplugged, or an id from another day). */
 function gone(err: unknown): boolean {
@@ -499,11 +506,6 @@ async function openDevice(kind: 'audio' | 'video', deviceId: string, base: Media
     }
   }
   return { stream: await navigator.mediaDevices.getUserMedia({ [kind]: base }), device: DEFAULT_DEVICE };
-}
-
-/** The mic for a call or the tab's meter: the picked one, else the browser's. */
-export async function openVoiceMic(deviceId = store.get(voiceInputAtom)): Promise<MediaStream> {
-  return (await openDevice('audio', deviceId, MIC_AUDIO)).stream;
 }
 
 /** The camera for the tab's preview, and for video in voice when it comes. */
@@ -524,44 +526,6 @@ async function sinkTo(audio: HTMLAudioElement, deviceId: string): Promise<void> 
 /** The call's players, to the speakers in use. */
 function applySink(): void {
   for (const audio of live?.audios ?? []) void sinkTo(audio, store.get(voiceOutputAtom));
-}
-
-/** Which switch is the current one: a mic that opens after a newer pick is put down. */
-let micSwitch = 0;
-
-/**
- * The call's mic, onto the device in use now, when it is on another: the new track replaces
- * the old one on m-line 0's sender, so nothing is offered again and the seat stays.
- */
-async function switchMic(): Promise<void> {
-  const call = live;
-  const want = store.get(voiceInputAtom);
-  const [now] = call?.mic.getAudioTracks() ?? [];
-  if (!call || (call.micFor === want && now?.readyState === 'live')) return;
-  const mine = ++micSwitch;
-  let next: { stream: MediaStream; device: string };
-  try {
-    next = await openDevice('audio', want, MIC_AUDIO);
-  } catch {
-    return; // the old mic stays
-  }
-  const [track] = next.stream.getAudioTracks();
-  const sender = call.pc.getTransceivers()[0]?.sender;
-  const drop = () => {
-    for (const t of next.stream.getTracks()) t.stop();
-  };
-  if (mine !== micSwitch || live !== call || !track || !sender) return drop();
-  try {
-    await sender.replaceTrack(track);
-  } catch {
-    return drop();
-  }
-  if (live !== call) return drop();
-  const old = call.mic;
-  call.mic = next.stream;
-  call.micFor = next.device;
-  for (const t of old.getTracks()) t.stop();
-  applyMic();
 }
 
 let watching = false;
@@ -585,32 +549,29 @@ export async function refreshVoiceDevices(): Promise<void> {
       .filter((d) => d.kind === kind && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
       .map((d, i) => ({ id: d.deviceId, label: d.label || `${word} ${i + 1}` }));
   const named = (kind: MediaDeviceKind) => devices.some((d) => d.kind === kind && d.label);
-  store.set(voiceDevicesAtom, {
+  const next: VoiceDevices = {
     inputs: listOf('audioinput', 'mic'),
     outputs: listOf('audiooutput', 'speakers'),
     cameras: listOf('videoinput', 'camera'),
     micNamed: named('audioinput'),
     cameraNamed: named('videoinput')
-  });
-  void switchMic();
+  };
+  // the same list again (a devicechange that moved nothing, a second look) renders nothing and re-sinks nothing
+  if (JSON.stringify(next) === JSON.stringify(store.get(voiceDevicesAtom))) return;
+  store.set(voiceDevicesAtom, next);
+  void syncMic();
   applySink();
-}
-
-/** Asks for the mic, so the browser names the devices. Throws as getUserMedia does. */
-export async function allowMic(): Promise<void> {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  for (const t of stream.getTracks()) t.stop();
-  await refreshVoiceDevices();
 }
 
 /** The test tone: a short beep, faded in and out so it does not click. */
 const TONE_HZ = 660;
 const TONE_S = 0.5;
 
-/** A short beep through the speakers picked. */
+/** A short beep through the speakers picked. On the mic's audio context while there is one (the tab's meter has it open): a new context is a slow thing to make. */
 export async function playTestTone(): Promise<void> {
   if (typeof AudioContext === 'undefined') return;
-  const ctx = new AudioContext();
+  const shared = mic?.ctx ?? null;
+  const ctx = shared ?? new AudioContext();
   const out = ctx.createMediaStreamDestination();
   const gain = ctx.createGain();
   const osc = ctx.createOscillator();
@@ -633,6 +594,359 @@ export async function playTestTone(): Promise<void> {
   } finally {
     audio.pause();
     audio.srcObject = null;
-    await ctx.close().catch(() => undefined);
+    gain.disconnect();
+    if (!shared) await ctx.close().catch(() => undefined);
+  }
+}
+
+// ---- the mic ------------------------------------------------------------------------------
+
+/**
+ * How the mic is taken and what it does before it leaves, kept in this browser. Voice isolation
+ * is rnnoise in an AudioWorklet, its wasm fetched the first time it is on; with it on the
+ * browser's own noise suppression is off, so the voice is not cleaned twice. Echo cancellation
+ * and auto gain are the browser's, asked for when the mic is opened.
+ */
+const storedIsolationAtom = atomWithStorage<unknown>('settings.voiceIsolation', true, undefined, { getOnInit: true });
+const storedEchoAtom = atomWithStorage<unknown>('settings.voiceEchoCancellation', true, undefined, { getOnInit: true });
+const storedAutoGainAtom = atomWithStorage<unknown>('settings.voiceAutoGain', true, undefined, { getOnInit: true });
+const storedModeAtom = atomWithStorage<unknown>('settings.voiceMode', 'activity', undefined, { getOnInit: true });
+const storedGateAtom = atomWithStorage<unknown>('settings.voiceGateDb', FLOOR_DB, undefined, { getOnInit: true });
+const storedPttKeyAtom = atomWithStorage<unknown>('settings.voicePttKey', 'Backquote', undefined, { getOnInit: true });
+const storedPttDelayAtom = atomWithStorage<unknown>('settings.voicePttDelay', 200, undefined, { getOnInit: true });
+
+/** A kept number, inside [min, max]; `fallback` when it is no number. */
+const numberIn = (kept: unknown, min: number, max: number, fallback: number) =>
+  typeof kept === 'number' && Number.isFinite(kept) ? Math.min(max, Math.max(min, kept)) : fallback;
+
+export type VoiceMode = 'activity' | 'ptt';
+
+export const voiceIsolationAtom = atom((get) => get(storedIsolationAtom) !== false);
+export const voiceEchoCancellationAtom = atom((get) => get(storedEchoAtom) !== false);
+export const voiceAutoGainAtom = atom((get) => get(storedAutoGainAtom) !== false);
+/** Voice activity (the gate decides) or push to talk (a held key does). */
+export const voiceModeAtom = atom<VoiceMode>((get) => (get(storedModeAtom) === 'ptt' ? 'ptt' : 'activity'));
+/** The gate's threshold, dB, on the meter's scale: FLOOR_DB (the meter's empty end) is always open. */
+export const voiceGateAtom = atom((get) => numberIn(get(storedGateAtom), FLOOR_DB, 0, FLOOR_DB));
+/** Push to talk's key, a `KeyboardEvent.code`. */
+export const voicePttKeyAtom = atom((get) => {
+  const kept = get(storedPttKeyAtom);
+  return typeof kept === 'string' && kept ? kept : 'Backquote';
+});
+/** How long the mic stays open after the key comes up, ms: the end of the last word. */
+export const voicePttDelayAtom = atom((get) => numberIn(get(storedPttDelayAtom), 0, 1000, 200));
+export const PTT_DELAY_MAX = 1000;
+/** Push to talk's key is down (or was, within its delay), in a call. */
+export const voicePttHeldAtom = atom(false);
+/** Voice isolation is on and could not be had (no web audio, the wasm would not load): the mic goes out with the browser's own cleaning. */
+export const voiceIsolationFailedAtom = atom(false);
+
+export function setVoiceIsolation(on: boolean): void {
+  store.set(storedIsolationAtom, on);
+  void syncMic();
+}
+
+export function setVoiceEchoCancellation(on: boolean): void {
+  store.set(storedEchoAtom, on);
+  void syncMic();
+}
+
+export function setVoiceAutoGain(on: boolean): void {
+  store.set(storedAutoGainAtom, on);
+  void syncMic();
+}
+
+export function setVoiceMode(mode: VoiceMode): void {
+  store.set(storedModeAtom, mode);
+  applyGate();
+  syncPtt();
+  applyMic();
+}
+
+export function setVoiceGate(db: number): void {
+  store.set(storedGateAtom, db);
+  applyGate();
+}
+
+export function setVoicePttKey(code: string): void {
+  store.set(storedPttKeyAtom, code);
+}
+
+export function setVoicePttDelay(ms: number): void {
+  store.set(storedPttDelayAtom, ms);
+}
+
+/** A key's `code` as it is printed on the key. */
+export function keyName(code: string): string {
+  const names: Record<string, string> = {
+    Backquote: 'backtick `',
+    Minus: '-',
+    Equal: '=',
+    BracketLeft: '[',
+    BracketRight: ']',
+    Backslash: '\\',
+    Semicolon: ';',
+    Quote: "'",
+    Comma: ',',
+    Period: '.',
+    Slash: '/',
+    Space: 'space',
+    CapsLock: 'caps lock'
+  };
+  if (names[code]) return names[code];
+  const [, mod, side] = /^(Shift|Control|Alt|Meta)(Left|Right)$/.exec(code) ?? [];
+  if (mod && side) return `${side.toLowerCase()} ${mod === 'Control' ? 'ctrl' : mod === 'Meta' ? 'cmd' : mod.toLowerCase()}`;
+  return code
+    .replace(/^Key|^Digit/, '')
+    .replace(/^Numpad/, 'num ')
+    .replace(/^Arrow/, 'arrow ')
+    .toLowerCase();
+}
+
+/**
+ * The mic, opened once for everyone who wants it (a call, the tab's meter) and put down when the
+ * last lets go. raw (getUserMedia) → rnnoise when isolation is on → the gate → `out`, the track
+ * a call sends; the meter's analyser sits before the gate, so it shows the mic, not the gate.
+ * Where there is no web audio `out` is the raw track and there is no meter.
+ */
+interface Mic {
+  /** The device and settings it was opened for: another key is another mic. */
+  key: string;
+  raw: MediaStream;
+  ctx: AudioContext | null;
+  denoise: (AudioWorkletNode & { destroy(): void }) | null;
+  gate: AudioWorkletNode | null;
+  level: Level | null;
+  out: MediaStreamTrack;
+}
+
+let mic: Mic | null = null;
+/** How many hold it: a call, the tab. */
+let holders = 0;
+/** Opens and closes one at a time, in order. */
+let micQueue: Promise<unknown> = Promise.resolve();
+
+function queued<T>(step: () => Promise<T>): Promise<T> {
+  const next = micQueue.then(step);
+  micQueue = next.catch(() => undefined);
+  return next;
+}
+
+/** Opens the mic, or joins whoever has it open. Throws as getUserMedia does; then it is not held. */
+export async function holdVoiceMic(): Promise<void> {
+  holders++;
+  try {
+    await queued(() => buildMic());
+    if (!mic) throw new DOMException('no microphone', 'NotFoundError');
+  } catch (err) {
+    releaseVoiceMic();
+    throw err;
+  }
+}
+
+/** Lets go of the mic; the last to let go puts it down. */
+export function releaseVoiceMic(): void {
+  holders = Math.max(0, holders - 1);
+  void queued(async () => {
+    if (holders || !mic) return;
+    closeMic(mic);
+    mic = null;
+  });
+}
+
+/** The mic as it should be now (the device in use, the settings), when it is held and is not. */
+function syncMic(): Promise<void> {
+  return queued(() => buildMic()).catch(() => undefined); // the old mic stays
+}
+
+/** The mic's loudness for the tab's meter, 0..1 on the meter's scale; 0 with no mic or no web audio. */
+export function readVoiceMicLevel(now: number): number {
+  return mic?.level?.read(now) ?? 0;
+}
+
+/** The gate's threshold on the meter's 0..1 scale: 0 is always open. */
+export function gateFraction(db: number): number {
+  return Math.min(1, Math.max(0, 1 - db / FLOOR_DB));
+}
+
+/** Opens a new mic when the one open is not for the device and settings in use now (or its track ended), swaps it onto the call, then puts the old one down. */
+async function buildMic(): Promise<void> {
+  if (!holders) return;
+  const device = store.get(voiceInputAtom);
+  const isolation = store.get(voiceIsolationAtom);
+  const constraints = {
+    echoCancellation: store.get(voiceEchoCancellationAtom),
+    autoGainControl: store.get(voiceAutoGainAtom),
+    // rnnoise cleans the voice: the browser's own suppression on top only thins it
+    noiseSuppression: !isolation
+  };
+  const key = JSON.stringify([device, isolation, constraints]);
+  const was = mic;
+  if (was && was.key === key && was.raw.getAudioTracks()[0]?.readyState === 'live') return;
+  const { stream } = await openDevice('audio', device, constraints);
+  let next: Mic;
+  try {
+    next = await micOf(stream, key, isolation);
+  } catch (err) {
+    for (const t of stream.getTracks()) t.stop();
+    throw err;
+  }
+  if (!holders) return closeMic(next);
+  mic = next;
+  applyGate();
+  applyMic();
+  await sendMic();
+  if (was) closeMic(was);
+}
+
+/** The chain for an opened mic. Isolation that will not load leaves it out (voiceIsolationFailedAtom); web audio that will not run at all leaves the raw track. */
+async function micOf(raw: MediaStream, key: string, isolation: boolean): Promise<Mic> {
+  const [track] = raw.getAudioTracks();
+  if (!track) throw new DOMException('no microphone', 'NotFoundError');
+  // a device pulled out: the mic opens again on what is there
+  track.addEventListener('ended', () => void syncMic());
+  const bare: Mic = { key, raw, ctx: null, denoise: null, gate: null, level: null, out: track };
+  if (typeof AudioContext === 'undefined' || typeof AudioWorkletNode === 'undefined') {
+    store.set(voiceIsolationFailedAtom, isolation);
+    return bare;
+  }
+  let ctx: AudioContext | null = null;
+  try {
+    // rnnoise is made for 48kHz. firefox will not take a mic into a context of another rate: then the browser's rate, without isolation
+    let source: MediaStreamAudioSourceNode;
+    try {
+      ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+      source = ctx.createMediaStreamSource(raw);
+    } catch {
+      void ctx?.close().catch(() => undefined);
+      ctx = new AudioContext({ latencyHint: 'interactive' });
+      source = ctx.createMediaStreamSource(raw);
+    }
+    if (ctx.state === 'suspended') void ctx.resume().catch(() => undefined);
+    let head: AudioNode = source;
+    let denoise: Mic['denoise'] = null;
+    if (isolation) {
+      denoise = ctx.sampleRate === 48000 ? await denoiser(ctx).catch(() => null) : null;
+      store.set(voiceIsolationFailedAtom, !denoise);
+      if (denoise) head = head.connect(denoise);
+    } else {
+      store.set(voiceIsolationFailedAtom, false);
+    }
+    const analyser = levelAnalyser(ctx);
+    head.connect(analyser);
+    await ctx.audioWorklet.addModule(gateWorkletUrl);
+    const gate = new AudioWorkletNode(ctx, 'voice-gate', { channelCount: 1, channelCountMode: 'explicit', outputChannelCount: [1] });
+    const out = ctx.createMediaStreamDestination();
+    head.connect(gate).connect(out);
+    const [outTrack] = out.stream.getAudioTracks();
+    if (!outTrack) throw new Error('no track out of web audio');
+    return { key, raw, ctx, denoise, gate, level: levelOf(analyser), out: outTrack };
+  } catch {
+    void ctx?.close().catch(() => undefined);
+    store.set(voiceIsolationFailedAtom, isolation);
+    return bare;
+  }
+}
+
+/** rnnoise's wasm, fetched once, the first time isolation is on. */
+let rnnoiseWasm: Promise<ArrayBuffer> | null = null;
+
+async function denoiser(ctx: AudioContext): Promise<NonNullable<Mic['denoise']>> {
+  const { loadRnnoise, RnnoiseWorkletNode } = await import('@sapphi-red/web-noise-suppressor');
+  rnnoiseWasm ??= loadRnnoise({ url: rnnoiseWasmUrl, simdUrl: rnnoiseSimdWasmUrl }).catch((err: unknown) => {
+    rnnoiseWasm = null;
+    throw err;
+  });
+  const [wasmBinary] = await Promise.all([rnnoiseWasm, ctx.audioWorklet.addModule(rnnoiseWorkletUrl)]);
+  const node = new RnnoiseWorkletNode(ctx, { wasmBinary, maxChannels: 1 });
+  // one voice: a stereo mic is mixed down before it, not cleaned twice
+  node.channelCount = 1;
+  node.channelCountMode = 'explicit';
+  return node;
+}
+
+/** Everything a mic holds, let go: the device, the worklets, the context. */
+function closeMic(m: Mic): void {
+  for (const t of m.raw.getTracks()) t.stop();
+  m.out.stop();
+  m.denoise?.destroy();
+  void m.ctx?.close().catch(() => undefined);
+}
+
+/** The call's m-line 0 onto the mic's track now, when it is another: no new offer, the seat stays. */
+async function sendMic(): Promise<void> {
+  const sender = live?.pc.getTransceivers()[0]?.sender;
+  if (!sender || !mic || sender.track === mic.out) return;
+  await sender.replaceTrack(mic.out).catch(() => undefined);
+}
+
+/** The gate's threshold now: the slider's in voice activity, always open in push to talk (the key is the gate). */
+function applyGate(): void {
+  const param = mic?.gate?.parameters.get('threshold');
+  if (!param || !mic?.ctx) return;
+  const db = store.get(voiceGateAtom);
+  const open = store.get(voiceModeAtom) === 'ptt' || db <= FLOOR_DB;
+  param.setValueAtTime(open ? 0 : 10 ** (db / 20), mic.ctx.currentTime);
+}
+
+// ---- push to talk -------------------------------------------------------------------------
+
+/** Keys typed into a box are words, not push to talk. */
+const NOT_TYPED = new Set(['button', 'checkbox', 'radio', 'range', 'color', 'file', 'image', 'reset', 'submit']);
+
+function typing(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+  return target instanceof HTMLInputElement && !NOT_TYPED.has(target.type);
+}
+
+let pttListening = false;
+let pttRelease: ReturnType<typeof setTimeout> | null = null;
+
+function setHeld(held: boolean): void {
+  if (pttRelease) clearTimeout(pttRelease);
+  pttRelease = null;
+  if (store.get(voicePttHeldAtom) === held) return;
+  store.set(voicePttHeldAtom, held);
+  applyMic();
+}
+
+/** Up after the delay: the end of the last word goes out. */
+function letGo(): void {
+  if (!store.get(voicePttHeldAtom) || pttRelease) return;
+  pttRelease = setTimeout(() => setHeld(false), store.get(voicePttDelayAtom));
+}
+
+function onPttDown(e: KeyboardEvent): void {
+  if (e.code !== store.get(voicePttKeyAtom) || typing(e.target)) return;
+  e.preventDefault();
+  setHeld(true);
+}
+
+function onPttUp(e: KeyboardEvent): void {
+  if (e.code === store.get(voicePttKeyAtom)) letGo();
+}
+
+/** The page lost the keyboard (another window, another tab): the key's up never comes, so it is up now. */
+function onPttLost(): void {
+  if (document.visibilityState === 'hidden' || !document.hasFocus()) letGo();
+}
+
+/** The key is listened for while in a call in push to talk. The page's own keys only: a browser has no key it hears while another window has the focus. */
+function syncPtt(): void {
+  const want = live !== null && store.get(voiceModeAtom) === 'ptt';
+  if (want === pttListening) return;
+  pttListening = want;
+  if (want) {
+    window.addEventListener('keydown', onPttDown);
+    window.addEventListener('keyup', onPttUp);
+    window.addEventListener('blur', onPttLost);
+    document.addEventListener('visibilitychange', onPttLost);
+  } else {
+    window.removeEventListener('keydown', onPttDown);
+    window.removeEventListener('keyup', onPttUp);
+    window.removeEventListener('blur', onPttLost);
+    document.removeEventListener('visibilitychange', onPttLost);
+    setHeld(false);
   }
 }
