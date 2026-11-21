@@ -7,7 +7,7 @@
 #                                 last commit that touched what they are built from (./image-paths):
 #                                 what the github action pushed. nothing is compiled here
 #   ./scripts/deploy.sh --pull            git pull, then the images for the tree just pulled
-#   ./scripts/deploy.sh api               only the api (also: frontend, video, dummy): get its image, swap it
+#   ./scripts/deploy.sh api               only the api (also: frontend, video, dummy, voice): get its image, swap it
 #   ./scripts/deploy.sh --images TAG      a tag of your choosing, e.g. the one ./scripts/ship.sh --to printed
 #   ./scripts/deploy.sh --build           compile the images here instead (a laptop with uncommitted changes,
 #                                 a box without a registry). goes with --pull and services
@@ -61,7 +61,7 @@ DEPLOYED_FILE=".deployed"                 # the commit the last run that ended w
 HEALTH_PATH="/api/health"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"   # seconds
 TCP_PORTS="80 443"                        # keep in sync with docker-compose.yml
-UDP_PORTS="7882"
+UDP_PORTS="7882 7883"                     # video, voice
 MIN_RAM_MB=2048                           # less than this and no swap -> add a swapfile
 BIG_RAM_MB=3500                           # at least this -> let cargo use every core
 SWAP_FILE="/swapfile"
@@ -497,7 +497,7 @@ open_firewall() {
   say "firewall reminder"
   note "If this is a cloud machine, the provider firewall must ALSO allow inbound:"
   note "  tcp ${TCP_PORTS// /, }     (the site)"
-  note "  udp ${UDP_PORTS// /, }         (the video itself. without it the page loads but video stays black)"
+  note "  udp ${UDP_PORTS// /, }   (the video itself, then voice. without it the page loads but video stays black)"
   note "AWS: security group.  GCP: VPC firewall rule.  Hetzner / DigitalOcean / Vultr: the cloud firewall on the server."
 }
 
@@ -670,6 +670,8 @@ compose_up() {
   fi
   say "${DOCKER[*]} compose up -d ${UP_FLAGS[*]:-}"
   "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"}
+  # voice runs the video image under a profile, so the `up` above never touches it
+  up_voice
   # the Caddyfile is a bind mount, so compose never notices it changed. the reload is
   # graceful and free when nothing changed, so always do it.
   reload_caddy
@@ -842,17 +844,34 @@ redeploy_dummy() {
   note "dummy streams: $(env_file_value DUMMY_STREAMS)   (DUMMY_STREAMS in $ENV_FILE)"
 }
 
+# voice is the video image run as `video voice`, under the compose profile `voice` (so a plain
+# `up -d` never starts it), and on only with a VOICE_SECRET in .env. the secret is only tested
+# for being there, never printed.
+voice_on() { [ -n "$(env_file_value VOICE_SECRET)" ]; }
+
+# `up` the voice container on the video image there is now: recreated when that image (or its
+# compose config) moved, left alone otherwise. every voice call drops when it is recreated.
+up_voice() {
+  if ! voice_on; then note "voice is off (no VOICE_SECRET in $ENV_FILE), leaving it alone"; return 0; fi
+  say "bringing voice up to the video image (a swap drops every voice call; pages rejoin)"
+  "${DOCKER[@]}" compose --profile voice up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} voice
+}
+
 redeploy_targets() {
-  local t
+  local t voice=0
   for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
     case "$t" in
       frontend) redeploy_frontend ;;
       api|video) redeploy_service "$t" ;;
       dummy) redeploy_dummy ;;
+      voice) ! voice_on || build_one video ;;
       caddy) say "Caddyfile changed, reloading caddy in place"; reload_caddy ;;
       compose) say "docker-compose.yml changed, applying it"; "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} ;;
     esac
+    # voice never lags the video image (or the compose file): once, after the rest
+    case "$t" in video|voice|compose) voice=1 ;; esac
   done
+  [ "$voice" = 0 ] || up_voice
 }
 
 # the long-running containers the targets swapped (or may have), for check_swapped.
@@ -867,6 +886,8 @@ swapped_containers() {
       caddy) out="$out frontend" ;;
       compose) out="$out frontend api chat events home database redis video dummy s3" ;;
     esac
+    # up_voice follows these, and only when voice is on
+    case "$t" in video|voice|compose) ! voice_on || out="$out voice" ;; esac
   done
   printf '%s\n' $out | awk 'NF && !seen[$0]++' | tr '\n' ' '
 }
@@ -1023,12 +1044,13 @@ usage() {
     N="$(tput sgr0 2>/dev/null || printf '\033[0m')"
   fi
   cat <<EOF
-${B}usage:${N} ./scripts/deploy.sh [--pull] [--prune-deploy] [--build | --images [TAG]] [PUBLIC_IP] [frontend|api|video|dummy ...]
+${B}usage:${N} ./scripts/deploy.sh [--pull] [--prune-deploy] [--build | --images [TAG]] [PUBLIC_IP] [frontend|api|video|dummy|voice ...]
        ./scripts/deploy.sh passwd <name>
 
 ${B}what to deploy${N}
   ${B}(nothing named)${N}           full deploy: machine setup, every image, docker compose up
-  ${B}frontend api video dummy${N}  just these: get (or build) their image, swap their containers (chat, events and
+  ${B}frontend api video dummy voice${N}
+                            just these: get (or build) their image, swap their containers (chat, events and
                             home move with api), then check them: running and healthy, or exit non-zero
   ${B}PUBLIC_IP${N}                 use this ip (full deploy only). otherwise: \$PUBLIC_IP > .env > auto-detect
 
@@ -1061,6 +1083,9 @@ ${B}other${N}
 
 ${B}notes${N}
   dummy = the fake streams. set DUMMY_STREAMS and DUMMY_PASSWORD in .env first.
+  voice = the voice channels: the video image under the compose profile voice, media on udp 7883. on only
+  with VOICE_SECRET in .env (docs/voice.md); without it voice is skipped. whenever video is redeployed (a
+  full deploy, video, a changed docker-compose.yml) voice is brought to the same image, which drops every voice call.
   new knobs from .env.example are appended to .env with their defaults on every run
   (also a --pull that finds nothing to redeploy). passwd touches nothing.
   a full deploy restarts video when the images moved since the last one (a commit that
@@ -1081,7 +1106,7 @@ parse_args() {   # sets IP_ARG PULL PRUNE IMAGES_MODE BUILD_MODE TAG TARGETS PAS
     if [ "$want_tag" = 1 ]; then
       want_tag=0
       case "$a" in
-        -*|frontend|api|video|dummy|pages|chat|events|home|passwd) ;;
+        -*|frontend|api|video|dummy|voice|pages|chat|events|home|passwd) ;;
         *) if ! is_ipv4 "$a" && [[ "$a" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then TAG="$a"; continue; fi ;;
       esac
     fi
@@ -1093,12 +1118,12 @@ parse_args() {   # sets IP_ARG PULL PRUNE IMAGES_MODE BUILD_MODE TAG TARGETS PAS
       --images=*) IMAGES_MODE=1; TAG="${a#--images=}" ;;
       --build) BUILD_MODE=1 ;;
       passwd) want_name=1 ;;
-      frontend|api|video|dummy) TARGETS+=("$a") ;;
+      frontend|api|video|dummy|voice) TARGETS+=("$a") ;;
       pages) TARGETS+=("frontend") ;;
       chat|events|home) TARGETS+=("api") ;;
       *)
         if is_ipv4 "$a"; then IP_ARG="$a"
-        else die "don't know what '$a' is. services are: frontend api video dummy. see ./scripts/deploy.sh --help"
+        else die "don't know what '$a' is. services are: frontend api video dummy voice. see ./scripts/deploy.sh --help"
         fi ;;
     esac
   done

@@ -113,12 +113,12 @@ media is udp only, on one port, 7883 (`VOICE_UDP_PORT`; the websocket is 7881, `
 
 ## turning it on
 
-**needs Billy's approval first. nothing here is done on the live box until he says so.** voice is in compose under the `voice` profile, so a plain `up -d` and deploy.sh never start it.
+**needs Billy's approval first. nothing here is done on the live box until he says so.** voice is in compose under the `voice` profile, so a plain `up -d` never starts it. deploy.sh starts it only once `VOICE_SECRET` is set in `.env`: then every run that redeploys video (a full deploy, `./scripts/deploy.sh video`, a changed docker-compose.yml) brings voice to the same image, and `./scripts/deploy.sh voice` does just voice. without the secret it says voice is off and skips it.
 
 1. a secret in `.env`: `VOICE_SECRET=` set to the output of `openssl rand -hex 32`. the api and the voice container both read it ([docker-compose.yml](../docker-compose.yml)); never commit or paste it.
-2. add 7883 to `UDP_PORTS` in [scripts/deploy.sh](../scripts/deploy.sh) (it is `"7882"` now), so ufw and the firewall reminder have it.
+2. 7883 is in `UDP_PORTS` in [scripts/deploy.sh](../scripts/deploy.sh) (`"7882 7883"`), so ufw and the firewall reminder have it.
 3. open 7883/udp in the VM's firewall (the cloud provider's: security group, VPC rule, cloud firewall), as 7882 is.
-4. recreate the api so it reads the secret, and start the voice server: `docker compose --profile voice up -d voice`.
+4. recreate the api so it reads the secret, and start the voice server: `./scripts/deploy.sh api voice` (or by hand, `docker compose --profile voice up -d voice`).
 5. recreate the frontend so caddy has the `/voice` route ([frontend/Caddyfile](../frontend/Caddyfile)).
 
 to check it: the voice container's `/health` on 7881 answers `{ok, rooms, peers}` (its healthcheck), and `VOICE=1 ./scripts/test.sh voice` against a local stack started the same way.

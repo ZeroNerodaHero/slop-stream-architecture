@@ -27,7 +27,8 @@ nothing is compiled on the server. every push to `main` makes github build the f
 - `./scripts/deploy.sh --pull` — pull the repo, then the images for that commit. new settings land in `.env` with defaults
 - `./scripts/deploy.sh api` — only the api. streams stay up
 - `./scripts/deploy.sh frontend` — only the pages. streams stay up
-- `./scripts/deploy.sh video` — ends every stream. it warns first
+- `./scripts/deploy.sh video` — ends every stream. it warns first. voice follows it onto the new image when it is on
+- `./scripts/deploy.sh voice` — only voice (drops every voice call). skipped while `VOICE_SECRET` is empty
 - `./scripts/deploy.sh` — everything again
 - `./scripts/deploy.sh --prune-deploy` — the disk is full of old builds and images: drop them first, then deploy
 
