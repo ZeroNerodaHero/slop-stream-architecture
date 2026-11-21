@@ -133,6 +133,8 @@ enum Event {
     Line(Arc<Line>),
     Count(usize),
     React(Arc<React>),
+    /// A janny took the line with this id out of the room (janny.rs `delete_line`).
+    Delete(Arc<str>),
 }
 
 /// Deserialize too: a pin keeps the line as this json (pins.rs), read back the same way.
@@ -297,6 +299,8 @@ enum Out<'a> {
     #[serde(rename = "error")]
     Slow { error: &'a str, wait: u64 },
     React(&'a React),
+    /// A line a janny deleted (janny.rs): every page drops the line with this id.
+    Delete { id: &'a str },
     /// A server socket's reaction: the same `react`, with the channel its line is in.
     #[serde(rename = "react")]
     ChannelReact {
@@ -726,6 +730,9 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                 Ok(Event::React(react)) => {
                     if send(&mut socket, &Out::React(&react)).await.is_err() { break; }
                 }
+                Ok(Event::Delete(id)) => {
+                    if send(&mut socket, &Out::Delete { id: &id }).await.is_err() { break; }
+                }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     // this socket is slower than the room: n events went by unseen. say so
                     // rather than hide it; the next count event sets the number right again
@@ -1035,6 +1042,11 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
             cooldowns.push((format!("cdc:{room}:{id}"), i64::from(channel_secs) * 1000, CHANNEL_COOLDOWN));
         }
     }
+    if server.is_none() {
+        if let Some(refused) = stream_refusal(s, room, w).await {
+            return Err(refused);
+        }
+    }
     pictures_exist(&s.db, room, images).await?;
     let reply = match reply {
         Some(id) => Some(reply_to(s, room, id).await?),
@@ -1127,6 +1139,52 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
     Ok(())
 }
 
+/// The words for a login banned from a stream's chat (janny.rs). No `nick` or `account` in them:
+/// the pages read those as a dead login and hang up (auth.rs `NICK_HAS_ACCOUNT`).
+const BANNED: &str = "you are banned from this chat";
+
+/// A stream's chat bans and timeouts (janny.rs), for a login's line or reaction in `room`: None
+/// when they may speak. The streamer's socket and a nick are never asked (a ban is an account's).
+/// The database not answering is `chat is busy`, so a ban is never skipped.
+async fn stream_refusal(s: &ChatState, room: &str, w: &Who) -> Option<Refused> {
+    let user = w.user_id.filter(|_| w.verified && !w.streamer)?;
+    let standing: Result<(bool, Option<i64>), sqlx::Error> = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM stream_bans b JOIN streamers r ON r.id = b.stream_id WHERE r.name = $1 AND b.user_id = $2),
+                (SELECT (EXTRACT(EPOCH FROM (t.until - now())) * 1000)::bigint FROM stream_timeouts t JOIN streamers r ON r.id = t.stream_id
+                  WHERE r.name = $1 AND t.user_id = $2 AND t.until > now())",
+    )
+    .bind(room)
+    .bind(user)
+    .fetch_one(&s.db)
+    .await;
+    match standing {
+        Ok((true, _)) => Some(BANNED.into()),
+        Ok((false, Some(ms))) => Some(Refused::Wait(TIMED_OUT, ms.max(1) as u64)),
+        Ok((false, None)) => None,
+        Err(e) => {
+            log::warn!("{room}: bans: {e}");
+            Some("chat is busy, try again".into())
+        }
+    }
+}
+
+/// A line out of a stream's room for good (janny.rs `delete_line`): out of redis and postgres,
+/// its reactions with it (its pictures stay in the bucket), and a `del` into the room's reactions
+/// stream, which every chat process's reader turns into a `delete` frame for its sockets.
+pub(crate) async fn remove_line(db: &PgPool, r: &mut ConnectionManager, room: &str, id: &str) -> Result<(), crate::ApiError> {
+    let _: i64 = r.xdel(room_key(room), &[id]).await?;
+    sqlx::query("DELETE FROM chat_lines WHERE room = $1 AND id = $2").bind(room).bind(id).execute(db).await?;
+    sqlx::query("DELETE FROM chat_reactions WHERE room = $1 AND line_id = $2").bind(room).bind(id).execute(db).await?;
+    let key = react_key(room);
+    let _: (Option<String>, bool) = redis::pipe()
+        .atomic()
+        .xadd_maxlen(&key, StreamMaxlen::Approx(KEEP_REACTS), "*", &[("del", id)])
+        .expire(&key, ROOM_TTL_SECS)
+        .query_async(r)
+        .await?;
+    Ok(())
+}
+
 /// The line a reply answers, by its id, from this room only: redis while the stream has it, else
 /// the kept rows (history.rs `line_at`). Another room's id, a junk one, or a line long gone with
 /// nothing kept is `no such line`; a quote of a quote is the line alone, not its own quote.
@@ -1199,6 +1257,12 @@ async fn react(s: &ChatState, room: &str, server: Option<&str>, w: &Who, id: &st
                 log::warn!("{room}: membership: {e}");
                 return Err("chat is busy, try again");
             }
+        }
+    }
+    if server.is_none() {
+        match stream_refusal(s, room, w).await {
+            None => {}
+            Some(Refused::Wait(words, _) | Refused::Words(words)) => return Err(words),
         }
     }
     if on {
@@ -1395,6 +1459,8 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                 Some((channel, Ok(Event::React(react)))) => {
                     if send(&mut socket, &Out::ChannelReact { channel: &channel, react: &react }).await.is_err() { break; }
                 }
+                // a janny deletes a stream's line, never a channel's (janny.rs): nothing comes here
+                Some((_, Ok(Event::Delete(_)))) => {}
                 Some((_, Err(n))) => {
                     let missed = format!("missed {n} lines");
                     if send(&mut socket, &Out::Error { error: &missed }).await.is_err() { break; }
@@ -1665,7 +1731,9 @@ async fn reader(client: redis::Client, name: String, start: Option<String>, reac
             for entry in stream.ids {
                 if reactions {
                     rlast = entry.id.clone();
-                    if let Some(react) = react_from(&entry) {
+                    if let Some(id) = entry.get::<String>("del") {
+                        let _ = tx.send(Event::Delete(id.into()));
+                    } else if let Some(react) = react_from(&entry) {
                         let _ = tx.send(Event::React(Arc::new(react)));
                     }
                     continue;
@@ -1786,7 +1854,8 @@ pub(crate) fn room_key(name: &str) -> String {
 }
 
 /// The room's reactions as they happen (`React`): `l` the line, `e` the emoji, `w` who, `on` 1 or 0.
-/// Not the lines' stream, which is the room's last 500 lines and nothing else.
+/// Not the lines' stream, which is the room's last 500 lines and nothing else. A janny's delete
+/// rides here too, `del` the line's id (`remove_line`), so the readers tail no third stream.
 fn react_key(name: &str) -> String {
     format!("chatr:{name}")
 }
@@ -2107,6 +2176,13 @@ mod tests {
 
     /// A reaction is a frame of its own both ways: in, the line, the emoji and on or off (and the
     /// channel on a server socket); out, the same with who, and a refusal names the line it was for.
+    #[test]
+    fn a_delete_frame_names_the_line() {
+        assert_eq!(serde_json::to_string(&Out::Delete { id: "1-0" }).unwrap(), r#"{"type":"delete","id":"1-0"}"#);
+        // a ban's words must not read as a dead login to the pages (`/nick|account/`)
+        assert!(!BANNED.contains("nick") && !BANNED.contains("account"));
+    }
+
     #[test]
     fn reaction_frames() {
         match serde_json::from_str::<In>(r#"{"type":"react","id":"1729000000000-0","emoji":"👍","on":true,"channel":"clips"}"#).unwrap() {

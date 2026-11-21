@@ -7,6 +7,7 @@ import {
   avatarAtom,
   bioAtom,
   canHearAtom,
+  canModerateAtom,
   canRetryAtom,
   clearChoice,
   followersAtom,
@@ -47,6 +48,8 @@ import {
 import { dmActiveAtom, dmOpenAtom, hideDms, openDm } from '@/infra/atoms/dm-atoms';
 import { followingAtom, loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
 import { type Presence, presenceOfAtom } from '@/infra/atoms/presence-atoms';
+import { meAtom } from '@/infra/atoms/auth-atoms';
+import type { ChatLine } from '@/infra/atoms/chat-atoms';
 import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
@@ -63,8 +66,10 @@ import { Calendar } from '@/shared-components/Calendar';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
+import { ChatModActions } from '@/shared-components/ChatMod';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { Face } from '@/shared-components/Face';
+import { ModTab } from '@/shared-components/ModTab';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { SceneView } from '@/shared-components/SceneView';
@@ -88,9 +93,13 @@ const NOT_LIVE_WORDS: Partial<Record<Presence, string>> = {
   streaming: 'starting'
 };
 
-/** Under the player: their page (docs/about.md), when they stream (docs/calendar.md), and where else to find them (docs/socials.md). In this order. */
-type WatchTab = 'about' | 'calendar' | 'socials';
+/**
+ * Under the player: their page (docs/about.md), when they stream (docs/calendar.md), and where else to find them (docs/socials.md). In this order.
+ * On my own page (logged in as it), `mod` after socials: my chat's jannies, bans and log (docs/jannies.md). Nobody else's page has it.
+ */
+type WatchTab = 'about' | 'calendar' | 'socials' | 'mod';
 const WATCH_TABS: readonly WatchTab[] = ['about', 'calendar', 'socials'];
+const MY_TABS: readonly WatchTab[] = [...WATCH_TABS, 'mod'];
 
 /**
  * A phone's tabs under the player: the same three, and the chat at the row's right end. Chat is where a phone's page opens, as on go live (LivePage.tsx).
@@ -98,6 +107,7 @@ const WATCH_TABS: readonly WatchTab[] = ['about', 'calendar', 'socials'];
  */
 type PhoneTab = WatchTab | 'chat';
 const PHONE_TABS: readonly PhoneTab[] = [...WATCH_TABS, 'chat'];
+const MY_PHONE_TABS: readonly PhoneTab[] = [...MY_TABS, 'chat'];
 
 /**
  * The narrowest page body that stands the chat column beside the player: the body at the lg
@@ -223,6 +233,14 @@ export function WatchPage() {
   const badge = useAtomValue(watchBadgeAtom);
   // my own page: the socials tab edits the links in place (SocialsEditor.tsx)
   const mine = useAtomValue(myNameAtom) === name;
+  // logged in as the name, not a nick that matches it: the mod tab is the account's (docs/jannies.md)
+  const me = useAtomValue(meAtom) ?? null;
+  const myPage = me !== null && me === name;
+  const watchTabs = myPage ? MY_TABS : WATCH_TABS;
+  const phoneTabs = myPage ? MY_PHONE_TABS : PHONE_TABS;
+  // a janny's buttons on the chat's lines: the grant's word, or my own page's
+  const canModerate = useAtomValue(canModerateAtom) || myPage;
+  const modActions = canModerate && name ? (line: ChatLine) => <ChatModActions name={name} line={line} me={me} /> : undefined;
   const phase = useAtomValue(watchPhaseAtom);
   const presence = useAtomValue(presenceOfAtom(name));
   const tiles = useAtomValue(tilesAtom);
@@ -340,7 +358,7 @@ export function WatchPage() {
 
   // the desktop's tab row: the three, and while the chat is a tab, the chat at the row's right end (the phone's
   // row; a bad name has the chat alone there, as a phone's does). the open one is kept across a resize
-  const deskTabs: readonly PhoneTab[] = !name ? [] : phase === 'bad-name' ? (chatTab ? ['chat'] : []) : chatTab ? PHONE_TABS : WATCH_TABS;
+  const deskTabs: readonly PhoneTab[] = !name ? [] : phase === 'bad-name' ? (chatTab ? ['chat'] : []) : chatTab ? phoneTabs : watchTabs;
   const deskTab: PhoneTab | undefined = deskTabs.includes(tab) ? tab : deskTabs[0];
   // while the chat tab is open the chat runs down to the window's foot (ChatSlot.tsx), so the picture, still
   // the body's width, stops at a height that leaves it 260px: the page's top, the tab row and both its 1rem
@@ -597,7 +615,7 @@ export function WatchPage() {
     // the right end), and the open tab in what is left. only a tab's own content scrolls. the box
     // follows the visual viewport, so the chat's send row stays over the keyboard. the chat is the
     // panel here, not ChatSlot: a phone has no column and no window to put it in
-    const tabs: readonly PhoneTab[] = !name ? [] : phase === 'bad-name' ? ['chat'] : PHONE_TABS;
+    const tabs: readonly PhoneTab[] = !name ? [] : phase === 'bad-name' ? ['chat'] : phoneTabs;
     const shown: PhoneTab = tabs.includes(phoneTab) ? phoneTab : 'chat';
     const openTab = (t: PhoneTab) => {
       setPhoneTab(t);
@@ -605,7 +623,7 @@ export function WatchPage() {
     };
     const content = (t: PhoneTab) =>
       t === 'chat' ? (
-        <ChatPanel name={name} className={cn('h-full min-h-0 flex-1', CHAT_MOBILE)} />
+        <ChatPanel name={name} lineActions={modActions} className={cn('h-full min-h-0 flex-1', CHAT_MOBILE)} />
       ) : t === 'about' ? (
         <>
           <div className="[&>div]:mt-0">{status}</div>
@@ -614,6 +632,8 @@ export function WatchPage() {
         </>
       ) : t === 'calendar' ? (
         <Calendar name={name} />
+      ) : t === 'mod' ? (
+        <ModTab name={name} />
       ) : (
         <SocialsTab name={name} doc={socials} joined={joined} mine={mine} />
       );
@@ -757,6 +777,8 @@ export function WatchPage() {
                   </>
                 ) : deskTab === 'calendar' ? (
                   <Calendar name={name} />
+                ) : deskTab === 'mod' ? (
+                  <ModTab name={name} />
                 ) : (
                   <SocialsTab name={name} doc={socials} joined={joined} mine={mine} />
                 )}
@@ -777,7 +799,7 @@ export function WatchPage() {
             className={cn(!chatTab ? 'contents' : deskTab !== 'chat' && 'invisible h-0 overflow-hidden')}
           >
             <ChatSlot tabbed={chatTab}>
-              <ChatPanel name={name} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
+              <ChatPanel name={name} lineActions={modActions} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
             </ChatSlot>
           </div>
         )}

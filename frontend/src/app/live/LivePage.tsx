@@ -47,6 +47,7 @@ import { CHAT_MOBILE, keyboardStrip, useChatTyping, useIsMobile, useLockedDocume
 import { usePrefetchOnPointerDown } from '@/infra/prefetch';
 import { KbdDebug } from '@/shared-components/KbdDebug';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
+import { ChatModActions } from '@/shared-components/ChatMod';
 import { ChatPanel } from '@/shared-components/ChatPanel';
 import { ExternalLink } from '@/shared-components/ExternalLink';
 import { Face } from '@/shared-components/Face';
@@ -263,7 +264,13 @@ export function LivePage() {
   // the streamer's own chat, in the room of the settled name. once live, `owner` makes its lines marked
   const chat = (className: string) =>
     chatRoom ? (
-      <ChatPanel name={chatRoom} owner={owner} className={className} />
+      <ChatPanel
+        name={chatRoom}
+        owner={owner}
+        // my own chat, logged in as its name: the janny's buttons on its lines (docs/jannies.md)
+        lineActions={me && me === chatRoom ? (line) => <ChatModActions name={chatRoom} line={line} me={me} /> : undefined}
+        className={className}
+      />
     ) : (
       <aside
         id="chat"
