@@ -103,6 +103,9 @@ export interface ChatSearch {
 /** What a search box asks on submit: the room on screen, unless the caller says otherwise. */
 const askRoom = (query: string) => void searchRoom(query);
 
+/** The box, in characters: the api's (history.rs `SEARCH_CHARS`), which refuses a longer one. */
+export const SEARCH_MAX_CHARS = 200;
+
 /** The word the caret is in or right after: where it starts and ends in the box, and the part of it before the caret. None on whitespace, or at a word's very start. */
 function wordAt(query: string, caret: number): { start: number; end: number; typed: string } | null {
   let start = caret;
@@ -261,6 +264,7 @@ export function comboProps(search: ChatSearch, listId: string) {
     'aria-controls': listId,
     'aria-activedescendant': up ? `${listId}-${search.active}` : undefined,
     autoComplete: 'off' as const,
+    maxLength: SEARCH_MAX_CHARS,
     value: search.query,
     onChange: search.onChange,
     onSelect: search.onSelect

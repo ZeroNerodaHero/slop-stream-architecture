@@ -2885,8 +2885,16 @@ function BansSection({ server, room, run }: ManageProps) {
           });
         }}
       >
-        <input id="ban-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="username" aria-label="ban a name" className={INPUT} />
-        <input id="ban-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason" aria-label="ban reason" className={INPUT} />
+        <input id="ban-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="username" aria-label="ban a name" maxLength={32} className={INPUT} />
+        <input
+          id="ban-reason"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="reason"
+          aria-label="ban reason"
+          maxLength={ABOUT_CAP}
+          className={INPUT}
+        />
         <button id="ban-submit" type="submit" className="justify-self-start text-sm font-semibold text-decrease disabled:opacity-40" disabled={!name.trim()}>
           ban
         </button>

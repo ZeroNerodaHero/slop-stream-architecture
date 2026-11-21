@@ -221,6 +221,17 @@ async fn member_id(db: &sqlx::PgPool, group: &str, name: &str) -> Result<(uuid::
     row.ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "they are not in the group"))
 }
 
+/// The member a body names (a role given, an owner named, kick, timeout, ban, a transfer): the
+/// name rule, so a 400 `bad name` and not a lookup of whatever was sent.
+fn target_name(raw: &str) -> Result<String, ApiError> {
+    let name = raw.trim().to_lowercase();
+    if crate::valid_name(&name) {
+        Ok(name)
+    } else {
+        Err(ApiError::bad_name())
+    }
+}
+
 fn role_name(raw: &str) -> Result<String, ApiError> {
     let name: String = clean_text(raw).split_whitespace().collect::<Vec<_>>().join(" ");
     let n = name.chars().count();
@@ -828,7 +839,7 @@ async fn give_role(
     let Json(body) = body?;
     let group = server(&s.db, &group).await?;
     let me = shaper(&s, who.id, &group).await?;
-    let name = body.name.trim().to_lowercase();
+    let name = target_name(&body.name)?;
     let (user, owner) = member_id(&s.db, &group, &name).await?;
     not_an_owner(&me, owner)?;
     let role: Option<(String, String, i32)> =
@@ -875,7 +886,7 @@ async fn grant_owner(
     if !is_owner(&s.db, who.id, &group).await? {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "only an owner can name another owner"));
     }
-    let name = body.name.trim().to_lowercase();
+    let name = target_name(&body.name)?;
     let (user, already) = member_id(&s.db, &group, &name).await?;
     if already {
         return Ok(StatusCode::NO_CONTENT);
@@ -908,7 +919,7 @@ async fn transfer_ownership(
     if !is_owner(&s.db, who.id, &group).await? {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "only an owner hands the group on"));
     }
-    let name = body.name.trim().to_lowercase();
+    let name = target_name(&body.name)?;
     if name == who.name {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "that is you"));
     }
@@ -1029,9 +1040,19 @@ struct MembersQuery {
 }
 
 /// A page's `limit`, `after` and `q` read; none of them is the whole roster (`None`), the
-/// answer from before there were pages. `limit` is held to 1..=MEMBERS_PAGE_MAX.
+/// answer from before there were pages. `limit` is held to 1..=MEMBERS_PAGE_MAX. `q` is the
+/// room's search box (history.rs `SEARCH_CHARS`): 400 past that, or with a control character
+/// (postgres refuses a \0).
 fn page_of(limit: Option<i64>, after: Option<&str>, q: Option<&str>) -> Result<Option<Page>, ApiError> {
     let q = q.map(str::trim).filter(|w| !w.is_empty()).map(str::to_lowercase);
+    if let Some(q) = &q {
+        if q.chars().count() > crate::history::SEARCH_CHARS {
+            return Err(ApiError::new(StatusCode::BAD_REQUEST, format!("search: {} characters at most", crate::history::SEARCH_CHARS)));
+        }
+        if q.chars().any(char::is_control) {
+            return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad search"));
+        }
+    }
     if limit.is_none() && after.is_none() && q.is_none() {
         return Ok(None);
     }
@@ -1160,7 +1181,7 @@ async fn kick(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, 
     let Json(body) = body?;
     let group = server(&s.db, &group).await?;
     need(&s, who.id, &group, KICK).await?;
-    let name = body.name.trim().to_lowercase();
+    let name = target_name(&body.name)?;
     if name == who.name {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "leave, instead of kicking yourself"));
     }
@@ -1191,7 +1212,7 @@ async fn timeout(State(s): State<AppState>, Path(group): Path<String>, Me(me): M
     let Json(body) = body?;
     let group = server(&s.db, &group).await?;
     need(&s, who.id, &group, KICK).await?;
-    let name = body.name.trim().to_lowercase();
+    let name = target_name(&body.name)?;
     if name == who.name {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "you can't time yourself out"));
     }
@@ -1241,7 +1262,7 @@ async fn ban(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, b
     let Json(body) = body?;
     let group = server(&s.db, &group).await?;
     need(&s, who.id, &group, BAN).await?;
-    let name = body.name.trim().to_lowercase();
+    let name = target_name(&body.name)?;
     if name == who.name {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "you can't ban yourself"));
     }
@@ -1425,6 +1446,24 @@ mod tests {
         let q = page_of(None, None, Some(" Mod ")).unwrap().unwrap();
         assert_eq!((q.limit, q.q.as_deref()), (MEMBERS_PAGE_DEFAULT, Some("mod")));
         assert!(page_of(Some(5), Some("nope"), None).is_err());
+    }
+
+    #[test]
+    fn a_roster_search_has_the_boxs_cap_and_no_control_characters() {
+        let cap = crate::history::SEARCH_CHARS;
+        assert!(page_of(None, None, Some(&"é".repeat(cap))).is_ok());
+        let long = page_of(None, None, Some(&"x".repeat(cap + 1))).err().unwrap();
+        assert_eq!((long.0, long.1.as_str()), (StatusCode::BAD_REQUEST, "search: 200 characters at most"));
+        assert_eq!(page_of(None, None, Some("a\u{0}b")).err().unwrap().1, "bad search");
+    }
+
+    #[test]
+    fn a_member_named_in_a_body_follows_the_name_rule() {
+        assert_eq!(target_name("  Alice_1 ").unwrap(), "alice_1");
+        for bad in ["", "   ", "al ice", "alice!", "a\u{0}", &"a".repeat(33)] {
+            let e = target_name(bad).unwrap_err();
+            assert_eq!(e.0, StatusCode::BAD_REQUEST, "{bad:?}");
+        }
     }
 
     #[test]

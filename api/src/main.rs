@@ -540,6 +540,21 @@ async fn health(State(s): State<AppState>) -> Response {
     (status, Json(body)).into_response()
 }
 
+/// The status, in characters. A row saved before this was 500 keeps its longer one until the
+/// next save.
+const MAX_BIO_CHARS: usize = 200;
+
+/// The status as kept: a chat line's cleaning (no control or invisible characters, no zalgo),
+/// one line (any run of whitespace is a space). 400 past MAX_BIO_CHARS, not cut: the page's
+/// box stops there, so only a script sends more.
+fn clean_bio(raw: &str) -> Result<String, ApiError> {
+    let bio = chat::clean_text(raw).split_whitespace().collect::<Vec<_>>().join(" ");
+    if bio.chars().count() > MAX_BIO_CHARS {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, format!("status: {MAX_BIO_CHARS} characters at most")));
+    }
+    Ok(bio)
+}
+
 async fn put_streamer(
     State(s): State<AppState>,
     Name(name): Name,
@@ -550,8 +565,7 @@ async fn put_streamer(
     let Query(q) = q?;
     let Json(body) = body?;
     may_write(&s, &name, me.name(), q.password.as_deref()).await?;
-    // the status: one line beside the name (any run of whitespace is a space), 500 characters at most
-    let bio = body.bio.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(500).collect::<String>();
+    let bio = clean_bio(&body.bio)?;
     let bio: String = sqlx::query_scalar(
         "INSERT INTO streamers (name, bio) VALUES ($1, $2)
          ON CONFLICT (name) DO UPDATE SET bio = EXCLUDED.bio, updated_at = now()
@@ -1192,6 +1206,19 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_status_is_one_clean_line_and_refused_past_the_cap() {
+        assert_eq!(clean_bio("  playing\n\n  chess\t now ").unwrap(), "playing chess now");
+        // a \0 would be postgres's 500, a bell or a bidi override a lie on the card
+        assert_eq!(clean_bio("a\u{0}b\u{7}c\u{202E}d").unwrap(), "abcd");
+        assert_eq!(clean_bio("").unwrap(), "");
+        assert_eq!(clean_bio(&"é".repeat(MAX_BIO_CHARS)).unwrap().chars().count(), MAX_BIO_CHARS);
+        let long = clean_bio(&"x".repeat(MAX_BIO_CHARS + 1)).unwrap_err();
+        assert_eq!((long.0, long.1.as_str()), (StatusCode::BAD_REQUEST, "status: 200 characters at most"));
+        // counted after the cleaning: whitespace runs and invisibles do not use up the cap
+        assert!(clean_bio(&format!("{}{}", "x ".repeat(100).replace(' ', "   "), "\u{200B}".repeat(50))).is_ok());
+    }
 
     #[test]
     fn names() {

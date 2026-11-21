@@ -815,7 +815,7 @@ export const api = {
   dismissNotification: (id: number) => request<null>('DELETE', `/api/notifications/${id}`),
   /** Which kinds go in the inbox from now on, replaced whole; the answer is what was kept. */
   saveNotifySettings: (settings: NotifySettings) => request<NotifySettings>('PUT', '/api/notifications/settings', settings),
-  /** The status, one line beside the name: runs of whitespace become one space, 500 characters at most. `bio` on the wire. */
+  /** The status, one line beside the name: runs of whitespace become one space, 200 characters at most (400 past that). `bio` on the wire. */
   saveBio: (name: string, bio: string) => request<{ name: string; bio: string }>('PUT', `/api/streamers/${name}`, { bio }),
   /** The page under that: `{ blocks: [{ type, id, x, y, z, w, h, r?, font?, size?, color?, bg?, stroke?, strokeColor?, align?, html? }] }`. Text html is written to the bucket. A line, a box, and a border have no file. */
   aboutPage: (name: string) => request<{ blocks: PageWire[] }>('GET', `/api/streamers/${encodeURIComponent(name)}/about-page`),

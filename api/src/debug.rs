@@ -442,6 +442,20 @@ async fn is_admin(s: &AppState, headers: &HeaderMap) -> Result<bool, ApiError> {
     Ok(me.is_some_and(|m| s.admins.iter().any(|a| a.id == m.id)))
 }
 
+/// A `kind` or `page` filter: empty is none. Matched exactly against what `clip` kept, so one
+/// longer than MAX_FIELD_CHARS or with a control character finds nothing anyway; it is a 400
+/// rather than a query (postgres refuses a \0).
+fn list_filter(raw: Option<String>) -> Result<Option<String>, ApiError> {
+    let Some(raw) = raw.filter(|f| !f.is_empty()) else { return Ok(None) };
+    if raw.chars().count() > MAX_FIELD_CHARS {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, format!("filter: {MAX_FIELD_CHARS} characters at most")));
+    }
+    if raw.chars().any(char::is_control) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad filter"));
+    }
+    Ok(Some(raw))
+}
+
 async fn list_errors(State(s): State<AppState>, headers: HeaderMap, q: Result<Query<ListQuery>, QueryRejection>) -> ApiResult<Vec<ErrorRow>> {
     // nobody is an admin here, so for everyone the route does not exist
     if s.admins.is_empty() && s.ops_token.is_none() {
@@ -466,8 +480,8 @@ async fn list_errors(State(s): State<AppState>, headers: HeaderMap, q: Result<Qu
          LIMIT $4",
     )
     .bind(q.since)
-    .bind(q.kind.filter(|k| !k.is_empty()))
-    .bind(q.page.filter(|p| !p.is_empty()))
+    .bind(list_filter(q.kind)?)
+    .bind(list_filter(q.page)?)
     .bind(limit)
     .fetch_all(db)
     .await?;
@@ -478,4 +492,20 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/errors", post(post_error).get(list_errors))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_list_filter_is_none_when_empty_and_refused_when_it_could_match_nothing() {
+        assert_eq!(list_filter(None).unwrap(), None);
+        assert_eq!(list_filter(Some(String::new())).unwrap(), None);
+        assert_eq!(list_filter(Some("/watch/bob".into())).unwrap().as_deref(), Some("/watch/bob"));
+        assert!(list_filter(Some("é".repeat(MAX_FIELD_CHARS))).is_ok());
+        let long = list_filter(Some("x".repeat(MAX_FIELD_CHARS + 1))).unwrap_err();
+        assert_eq!((long.0, long.1.as_str()), (StatusCode::BAD_REQUEST, "filter: 300 characters at most"));
+        assert_eq!(list_filter(Some("a\u{0}".into())).unwrap_err().1, "bad filter");
+    }
 }

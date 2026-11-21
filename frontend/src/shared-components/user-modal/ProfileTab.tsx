@@ -17,7 +17,7 @@ import {
   renameMe,
   renameStatusAtom
 } from '@/infra/atoms/auth-atoms';
-import { MAX_CHAT_CHARS, chars, nickAtom, setNick } from '@/infra/atoms/chat-atoms';
+import { chars, nickAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { type PresenceChoice, presenceChoiceAtom, presenceChoiceNoteAtom, setPresenceChoice } from '@/infra/atoms/presence-atoms';
 import { loadGroups, myBadgesAtom } from '@/infra/atoms/groups-atoms';
 import {
@@ -152,8 +152,8 @@ function Rename({ me }: { me: string }) {
   );
 }
 
-/** The api caps the status here (in characters, the way `chars` counts). `bio` on the wire: the word `status` is the presence choice's (docs/status.md). */
-const MAX_BIO_CHARS = MAX_CHAT_CHARS;
+/** The api caps the status here (in characters, the way `chars` counts; main.rs `MAX_BIO_CHARS`). `bio` on the wire: the word `status` is the presence choice's (docs/status.md). */
+const MAX_BIO_CHARS = 200;
 
 /** The three choices as cards. `invisible` shows as `offline` to everyone else. */
 const PRESENCE_OPTIONS: readonly { choice: PresenceChoice; label: string; icon: ReactNode }[] = [

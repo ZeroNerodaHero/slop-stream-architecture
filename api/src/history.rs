@@ -48,7 +48,7 @@ const PAGE: i64 = 50;
 const WINDOW: usize = 40;
 const SEARCH_LIMIT: i64 = 50;
 /// A search's box, in unicode scalars: filters and words together.
-const SEARCH_CHARS: usize = 200;
+pub(crate) const SEARCH_CHARS: usize = 200;
 /// A link, for `has:link`, as the panel draws one (LinkedText.tsx): `http(s)://` or `www.` at the
 /// start of a word. The rooms keep it as a column (`has_link`, schema.sql, this same regex);
 /// a direct message thread, too small for a column of its own, reads it over the text (dms.rs).
