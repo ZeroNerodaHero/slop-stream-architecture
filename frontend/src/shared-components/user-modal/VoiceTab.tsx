@@ -1,5 +1,6 @@
+import { RiCameraOffLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 
 import { type MicLevel, openMicLevel } from '@/infra/mic-level';
 import {
@@ -38,8 +39,6 @@ function refusal(err: unknown, what: string): string {
   return `not available: the ${what} could not be opened`;
 }
 
-const PICKER = 'w-full min-w-0 sm:max-w-sm';
-
 /**
  * The devices a call uses: the mic it talks with, the speakers it plays through, and a camera
  * kept for video in voice, which is not here yet. Picking applies at once, to a call that is on
@@ -73,75 +72,78 @@ export function VoiceTab() {
 
   return (
     <div className="divide-y divide-primaryStroke">
-      <Block title="input" tip="the mic a voice call talks with">
-        <div className="flex flex-col gap-3">
-          {!devices.micNamed && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-              <Button id="voice-allow-mic" size="sm" variant="outline" onClick={() => void allow()}>
-                allow mic
-              </Button>
-              <span className="text-sm text-textTertiary">the browser names the devices once the mic is allowed</span>
+      {/* input and output side by side from sm up, a rule between; stacked on a phone */}
+      <div className="grid grid-cols-1 divide-y divide-primaryStroke py-4 first:pt-0 last:pb-0 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+        <div className="min-w-0 pb-4 sm:pb-0 sm:pr-4">
+          <Block title="input" tip="the mic a voice call talks with">
+            <div className="flex flex-col gap-3">
+              {!devices.micNamed && (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <Button id="voice-allow-mic" size="sm" variant="outline" onClick={() => void allow()}>
+                    allow mic
+                  </Button>
+                  <span className="text-sm text-textTertiary">the browser names the devices once the mic is allowed</span>
+                </div>
+              )}
+              <div className="flex flex-col gap-1">
+                <span aria-hidden className="text-sm font-semibold text-textSecondary">
+                  microphone
+                </span>
+                <Select
+                  id="voice-input"
+                  label="microphone"
+                  value={shownOf(input, devices.inputs)}
+                  options={optionsOf(devices.inputs)}
+                  onChange={setVoiceInput}
+                  className="w-full min-w-0"
+                />
+              </div>
+              {devices.micNamed && <InputMeter deviceId={input} onError={setNote} />}
+              <Status id="voice-input-note" text={note} quiet />
             </div>
-          )}
-          <div className="flex flex-col gap-1">
-            <span aria-hidden className="text-sm font-semibold text-textSecondary">
-              microphone
-            </span>
-            <Select
-              id="voice-input"
-              label="microphone"
-              value={shownOf(input, devices.inputs)}
-              options={optionsOf(devices.inputs)}
-              onChange={setVoiceInput}
-              className={PICKER}
-            />
-          </div>
-          {devices.micNamed && <InputMeter deviceId={input} onError={setNote} />}
-          <Status id="voice-input-note" text={note} quiet />
+          </Block>
         </div>
-      </Block>
 
-      <Block title="output" tip="the speakers a voice call plays through">
-        <div className="flex flex-col gap-1">
-          <span aria-hidden className="text-sm font-semibold text-textSecondary">
-            speakers
-          </span>
-          <div className="flex items-center gap-2">
-            <Tooltip content={SINK_SUPPORTED ? null : 'not supported in this browser'}>
-              <Select
-                id="voice-output"
-                label="speakers"
-                value={SINK_SUPPORTED ? shownOf(output, devices.outputs) : DEFAULT_DEVICE}
-                options={optionsOf(SINK_SUPPORTED ? devices.outputs : [])}
-                onChange={setVoiceOutput}
-                disabled={!SINK_SUPPORTED}
-                className={PICKER}
-              />
-            </Tooltip>
-            <Button id="voice-test-output" size="sm" onClick={() => void playTestTone().catch(() => undefined)}>
-              test
-            </Button>
-          </div>
+        <div className="min-w-0 pt-4 sm:pl-4 sm:pt-0">
+          <Block title="output" tip="the speakers a voice call plays through">
+            <div className="flex flex-col gap-1">
+              <span aria-hidden className="text-sm font-semibold text-textSecondary">
+                speakers
+              </span>
+              <div className="flex items-center gap-2">
+                <Tooltip content={SINK_SUPPORTED ? null : 'not supported in this browser'}>
+                  <Select
+                    id="voice-output"
+                    label="speakers"
+                    value={SINK_SUPPORTED ? shownOf(output, devices.outputs) : DEFAULT_DEVICE}
+                    options={optionsOf(SINK_SUPPORTED ? devices.outputs : [])}
+                    onChange={setVoiceOutput}
+                    disabled={!SINK_SUPPORTED}
+                    className="min-w-0 flex-1"
+                  />
+                </Tooltip>
+                <Button id="voice-test-output" size="sm" onClick={() => void playTestTone().catch(() => undefined)}>
+                  test
+                </Button>
+              </div>
+            </div>
+          </Block>
         </div>
-      </Block>
+      </div>
 
       <Block title="video">
         <div className="flex flex-col gap-3">
           <p className="text-sm text-textTertiary">for video calls, coming later</p>
-          <div className="flex flex-col gap-1">
-            <span aria-hidden className="text-sm font-semibold text-textSecondary">
-              camera
-            </span>
+          <CameraPreview deviceId={camera}>
             <Select
               id="voice-camera"
               label="camera"
               value={shownOf(camera, devices.cameras)}
               options={optionsOf(devices.cameras)}
               onChange={setVoiceCamera}
-              className={PICKER}
+              className="w-full min-w-0"
             />
-          </div>
-          <CameraPreview deviceId={camera} />
+          </CameraPreview>
         </div>
       </Block>
     </div>
@@ -204,15 +206,18 @@ function InputMeter({ deviceId, onError }: { deviceId: string; onError: (text: s
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={0}
-      className="h-2 w-full border border-primaryStroke bg-background sm:max-w-sm"
+      className="h-2 w-full border border-primaryStroke bg-background"
     >
       <div ref={fill} className="h-full w-0 bg-primaryBlue" />
     </div>
   );
 }
 
-/** The picked camera in a small picture, on a click: a camera's light coming on is the user's to ask for. Off when the tab shuts. */
-function CameraPreview({ deviceId }: { deviceId: string }) {
+/**
+ * The picked camera's picture, on a click: a camera's light coming on is the user's to ask for.
+ * The box keeps its size off and on; the picker (children) sits under it. Off when the tab shuts.
+ */
+function CameraPreview({ deviceId, children }: { deviceId: string; children: ReactNode }) {
   const video = useRef<HTMLVideoElement>(null);
   const [on, setOn] = useState(false);
   const [note, setNote] = useState('');
@@ -246,31 +251,47 @@ function CameraPreview({ deviceId }: { deviceId: string }) {
   }, [on, deviceId]);
 
   return (
-    <div className="flex flex-col gap-2">
-      <div>
-        <Button
-          id="voice-camera-preview"
-          size="sm"
-          aria-pressed={on}
-          onClick={() => {
-            setNote('');
-            setOn((o) => !o);
-          }}
-        >
-          {on ? 'stop preview' : 'preview'}
-        </Button>
+    <div className="flex flex-col gap-3">
+      <div className="relative aspect-video w-full overflow-hidden border border-primaryStroke bg-background">
+        {on ? (
+          <video
+            ref={video}
+            id="voice-camera-video"
+            autoPlay
+            muted
+            playsInline
+            aria-label="camera preview"
+            className="absolute inset-0 h-full w-full object-cover [transform:scaleX(-1)]"
+          />
+        ) : (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-textTertiary">
+            <RiCameraOffLine aria-hidden size={28} />
+            <Button
+              id="voice-camera-preview"
+              size="sm"
+              onClick={() => {
+                setNote('');
+                setOn(true);
+              }}
+            >
+              preview
+            </Button>
+          </div>
+        )}
       </div>
-      {on && (
-        <video
-          ref={video}
-          id="voice-camera-video"
-          autoPlay
-          muted
-          playsInline
-          aria-label="camera preview"
-          className="aspect-video w-48 border border-primaryStroke bg-background object-cover [transform:scaleX(-1)]"
-        />
-      )}
+      <div className="flex items-end gap-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <span aria-hidden className="text-sm font-semibold text-textSecondary">
+            camera
+          </span>
+          {children}
+        </div>
+        {on && (
+          <Button id="voice-camera-stop" size="sm" onClick={() => setOn(false)}>
+            stop preview
+          </Button>
+        )}
+      </div>
       <Status id="voice-camera-note" text={note} quiet />
     </div>
   );
