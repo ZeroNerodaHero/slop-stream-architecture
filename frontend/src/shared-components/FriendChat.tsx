@@ -55,7 +55,7 @@ import { Button } from '@/shared-components/Button';
 import { ChatLineShape, LineActions, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
 import { ChatImages, pictureSrc } from '@/shared-components/ChatPanel';
-import { comboProps, SearchFilters, SearchHit, SearchResults, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
+import { SearchField, SearchFilters, SearchHit, SearchResults, useChatSearch } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
 import { LinkedText } from '@/shared-components/LinkedText';
 import { SHEET_FLICK, SHEET_MS, SHEET_SNAP, useSheetBack } from '@/shared-components/MobileSheet';
@@ -564,7 +564,7 @@ function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; lab
  * the events socket, from either side and from your other devices. A thread keeps its
  * half-typed draft, and the pictures picked for its next line, while another tab is shown. The
  * header is the name alone, the glass and the ×: the glass opens a search box under it
- * (`#friend-chat-search`, the room chat's words and filter words, `ChatSearch.tsx`) that asks
+ * (`#friend-chat-search`, the room chat's words and filter chips, `ChatSearch.tsx`) that asks
  * the thread on screen (`searchDm`); the hits take the lines' whole place (`#friend-chat-results`,
  * `SearchResults`, the lines kept under it unseen), and one clicked puts the lines back with
  * it in view, the pages back to it loaded as needed (`openDmLine`); `close` puts them back as
@@ -652,7 +652,7 @@ export function FriendChat() {
   const replyTo = (name && replies[name]) || null;
   // the hits over the lines: a search's, while the thread it asked is the one on screen
   const hits = results?.name === name ? results : null;
-  // the box's words and the filter words, the room chat's; submitting asks the thread on screen. `from:` is one of the two, each with their face
+  // the box's words and filter chips, the room chat's; submitting asks the thread on screen. `from:` is one of the two, each with their face
   const search = useChatSearch(
     searchInput,
     (q) => {
@@ -1015,29 +1015,24 @@ export function FriendChat() {
         </header>
         {name ? (
           <>
-            {/* the search box: the words, search, and the filter words under them, the room chat's (ChatSearch.tsx). escape takes it down */}
+            {/* the search box: the filter chips and the words, search, and the filter buttons under them, the room chat's (ChatSearch.tsx). escape takes it down */}
             {searching && (
               <form id="friend-chat-search-form" onSubmit={search.submit} className="shrink-0 border-b border-primaryStroke px-2.5 py-1.5">
-                <div className="relative flex items-center gap-2">
-                  <label htmlFor="friend-chat-search" className="sr-only">
-                    search the chat with {name}
-                  </label>
-                  <input
-                    ref={searchInput}
+                <div className="flex items-center gap-2">
+                  <SearchField
                     id="friend-chat-search"
-                    {...comboProps(search, 'friend-chat-search-list')}
+                    search={search}
+                    input={searchInput}
+                    label={`search the chat with ${name}`}
                     onKeyDown={(e) => {
-                      // the list's keys first: escape takes the list down before it takes the box down
-                      if (search.onKeyDown(e)) return;
+                      // the box's keys first: escape takes the list down before it takes the box down
                       if (e.key === 'Escape') {
                         e.stopPropagation();
                         closeSearch();
                       }
                     }}
-                    placeholder="search"
-                    className={INPUT}
+                    className="min-w-0 flex-1"
                   />
-                  <SearchSuggestions id="friend-chat-search-list" search={search} />
                   <button
                     id="friend-chat-search-go"
                     type="submit"
@@ -1269,9 +1264,10 @@ export function FriendChat() {
                   send
                 </Button>
               </div>
-              {/* the api's words when a line was not kept (not friends, too long, too fast) or a picture would not go up, and the countdown once it matters */}
-              <div className="mt-1 flex items-center justify-between gap-2 text-xs">
-                <span id="friend-chat-notice" className="min-h-[1em] text-decrease" aria-live="polite">
+              {/* the api's words when a line was not kept (not friends, too long, too fast) or a picture would not go up, and the countdown once it matters.
+                  the row stays mounted so a screen reader hears a notice as it lands, but takes no room while there's nothing in it */}
+              <div className={cn('flex items-center justify-between gap-2 text-xs', (notice || left < 50) && 'mt-1')}>
+                <span id="friend-chat-notice" className={cn('text-decrease', notice && 'min-h-[1em]')} aria-live="polite">
                   {notice}
                 </span>
                 {left < 50 && (

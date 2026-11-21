@@ -4,6 +4,7 @@ import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 
 import { type ModLogRow, type SearchHit, api, messageOf } from '@/infra/api';
 import { PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
+import { loadMyProfile } from '@/infra/atoms/profile-atoms';
 import { usePeopleSearch } from '@/infra/people-search';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
@@ -11,6 +12,7 @@ import { Who } from '@/shared-components/PersonRow';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { INPUT } from '@/shared-components/input';
+import { WELCOME_TIP, WelcomeEditor } from '@/shared-components/WelcomeEditor';
 import { SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
@@ -216,11 +218,30 @@ function JannySearch({ skip, busy, onPick }: { skip: Set<string>; busy: boolean;
   );
 }
 
+/** My chat welcome, the profile tab's editor (WelcomeEditor.tsx): the same atoms, so a save in one shows in the other. */
+function WelcomeSection() {
+  // Mount only: my welcome as the api has it (the same name again keeps the draft).
+  useEffect(() => {
+    void loadMyProfile();
+  }, []);
+
+  return (
+    <section id="mod-welcome" className="flex max-w-[520px] flex-col gap-2">
+      <h3 className={SECTION_TITLE}>welcome message</h3>
+      <p className="text-sm text-textSecondary">{WELCOME_TIP}.</p>
+      <div className="min-w-0">
+        <WelcomeEditor id="mod-welcome" />
+      </div>
+    </section>
+  );
+}
+
 /**
  * The mod tab, on my own page only (docs/jannies.md): my stream's jannies (found by name and
  * added in one pick, removed from the list beside), who is banned or timed out of my chat (lift
  * either), and the log of what was done in it, filtered by kind. A janny deletes, bans and times
- * out from the chat's lines; this is where the streamer keeps the list.
+ * out from the chat's lines; this is where the streamer keeps the list. Above them, what Eques
+ * says to each viewer who opens my chat.
  */
 export function ModTab({ name }: { name: string }) {
   const client = useQueryClient();
@@ -255,6 +276,8 @@ export function ModTab({ name }: { name: string }) {
 
   return (
     <div id="mod-tab" className="flex flex-col gap-6">
+      <WelcomeSection />
+
       <section className="flex flex-col gap-2">
         <h3 className={SECTION_TITLE}>jannies</h3>
         <p className="text-sm text-textSecondary">jannies can delete lines, time out and ban. not you, not each other.</p>
