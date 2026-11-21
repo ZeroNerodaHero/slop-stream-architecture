@@ -280,27 +280,29 @@ export function ChatTab() {
         </fieldset>
       )}
 
-      <fieldset className={FIELDSET}>
-        <legend className={SECTION_TITLE}>on the corner player</legend>
-        <div role="presentation" className="mt-2 grid grid-cols-3 gap-2 sm:gap-4">
-          {PIP_CHAT_OPTIONS.map(({ place, label }) => (
-            <OptionCard
-              key={place}
-              id={`pip-chat-${place}`}
-              name="pip-chat-place"
-              checked={place === pipChat}
-              onChange={() => setPipChatPlace(place)}
-              picture={
-                <span className="contents max-md:[&>span]:[zoom:0.6]">
-                  <PipChatPreview place={place} />
-                </span>
-              }
-              compact
-              label={label}
-            />
-          ))}
-        </div>
-      </fieldset>
+      {!mobile && (
+        <fieldset className={FIELDSET}>
+          <legend className={SECTION_TITLE}>on the corner player</legend>
+          <div role="presentation" className="mt-2 grid grid-cols-3 gap-2 sm:gap-4">
+            {PIP_CHAT_OPTIONS.map(({ place, label }) => (
+              <OptionCard
+                key={place}
+                id={`pip-chat-${place}`}
+                name="pip-chat-place"
+                checked={place === pipChat}
+                onChange={() => setPipChatPlace(place)}
+                picture={
+                  <span className="contents max-md:[&>span]:[zoom:0.6]">
+                    <PipChatPreview place={place} />
+                  </span>
+                }
+                compact
+                label={label}
+              />
+            ))}
+          </div>
+        </fieldset>
+      )}
 
       <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>hide bots</legend>
