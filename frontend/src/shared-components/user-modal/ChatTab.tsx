@@ -17,7 +17,9 @@ import {
   setHideBots,
   setLinkWarning,
   setPipChatPlace,
-  setProfilePopupEnabled
+  setProfilePopupEnabled,
+  setShowEmbeds,
+  showEmbedsAtom
 } from '@/infra/atoms/settings-atoms';
 import { setShowWelcomes, showWelcomesAtom } from '@/infra/atoms/welcome-atoms';
 import { useIsMobile } from '@/infra/mobile';
@@ -248,7 +250,8 @@ function StylePreview({ style }: { style: ChatStyle }) {
  * This browser's settings for the chat: where it sits on the watch page and the go live page,
  * where it opens on the corner player, whether the bots' lines show, the shape of the lines in
  * every chat (a stream's, a group channel's, a friend's), what a click on somebody in a chat or
- * in a group's roster does, whether a link asks before it opens. The chat behind the modal
+ * in a group's roster does, whether a link asks before it opens, whether a video link gets a
+ * player. The chat behind the modal
  * follows every change at once, so the cards are their own preview.
  */
 export function ChatTab() {
@@ -259,6 +262,7 @@ export function ChatTab() {
   const profilePopup = useAtomValue(profilePopupEnabledAtom);
   const linkWarning = useAtomValue(linkWarningAtom);
   const showWelcomes = useAtomValue(showWelcomesAtom);
+  const showEmbeds = useAtomValue(showEmbedsAtom);
   // a phone's watch page and go live page are the window, the chat in a tab under the player (mobile.ts): no side to pick
   const mobile = useIsMobile();
   return (
@@ -361,6 +365,16 @@ export function ChatTab() {
           {BOT_OPTIONS.map(({ hide, id, label, icon }) => (
             <OptionCard key={id} id={id} name="bots" checked={hide === hideBots} onChange={() => setHideBots(hide)} picture={icon} label={label} compact />
           ))}
+        </div>
+      </fieldset>
+
+      {/* a video link in a line gets a player under it, loaded on a click (ChatEmbeds.tsx): this browser's, on to start */}
+      <fieldset className={FIELDSET}>
+        <legend className={SECTION_TITLE}>embeds</legend>
+        <div className="flex items-center gap-2 py-1.5 text-sm font-semibold text-textPrimary">
+          <input id="show-embeds" type="checkbox" checked={showEmbeds} onChange={(e) => setShowEmbeds(e.target.checked)} className={CHECKBOX} />
+          <label htmlFor="show-embeds">show embeds</label>
+          <Info tip="a player under a youtube, twitch, vimeo or video file link in a line. the player loads only when you press play" />
         </div>
       </fieldset>
 

@@ -27,7 +27,7 @@ const BRACKETS: readonly (readonly [open: string, close: string])[] = [
 ];
 const LINK = 'text-primaryBlue underline-offset-2 hover:underline';
 /** Who put a link in a line, for the word before it. */
-const FROM = 'this link was put in the chat by whoever said the line, not by this site.';
+export const TALK_FROM = 'this link was put in the chat by whoever said the line, not by this site.';
 
 type Part = string | { text: string; href: string };
 
@@ -106,7 +106,7 @@ function TalkLink({ text, href }: { text: string; href: string }) {
     );
   }
   return (
-    <ExternalLink href={href} from={FROM} title={siteOf(href)} data-site={siteOf(href)} className={LINK}>
+    <ExternalLink href={href} from={TALK_FROM} title={siteOf(href)} data-site={siteOf(href)} className={LINK}>
       {text}
     </ExternalLink>
   );

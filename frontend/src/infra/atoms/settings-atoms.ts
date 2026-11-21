@@ -301,6 +301,19 @@ export function setLinkWarning(on: boolean) {
 }
 
 /**
+ * A video link in a line (a stream's chat, a group channel's, a direct message) gets a player
+ * under the words (ChatEmbeds.tsx): a poster card first, the provider's player only on a click.
+ * On unless this browser turned it off in the chat tab; off, the links are links and no more.
+ */
+const storedShowEmbedsAtom = atomWithStorage<unknown>('settings.showEmbeds', true, undefined, { getOnInit: true });
+/** Read: a boolean, whatever localstorage holds. Anything but a stored `false` is on. */
+export const showEmbedsAtom = atom((get) => get(storedShowEmbedsAtom) !== false);
+
+export function setShowEmbeds(on: boolean) {
+  store.set(storedShowEmbedsAtom, on);
+}
+
+/**
  * A click on somebody, in a group's roster or on their name in a chat, shows them in a popup
  * over the page (ProfilePopup.tsx, docs/follows.md): who they are, their stream while they
  * are live, their page, and a button to go there. On unless this browser turned it off: then
