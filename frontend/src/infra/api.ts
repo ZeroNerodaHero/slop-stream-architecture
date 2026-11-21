@@ -452,6 +452,16 @@ export interface GroupBan {
   reason: string;
 }
 
+/** A timeout still running (`groupTimeouts`): until when (unix seconds), the reason given, who set it (null when they are gone), and whether they are still a member. */
+export interface GroupTimeout {
+  name: string;
+  avatar: number | null;
+  until: number;
+  reason: string;
+  by: string | null;
+  member: boolean;
+}
+
 /** The words on the square, and the four digits when the group has them. */
 export function groupWords(group: { name: string; title?: string | null; tag?: number | null }): { title: string; tag: string | null } {
   const title = group.title && group.title.length > 0 ? group.title : group.name;
@@ -814,6 +824,8 @@ export const api = {
     request<null>('POST', `/api/groups/${encodeURIComponent(group)}/timeout`, { name, seconds, reason }),
   /** The timeout lifted early. The kick power. */
   liftTimeout: (group: string, name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/timeout/${encodeURIComponent(name)}`),
+  /** Every timeout still running, the soonest to end first. The kick power. */
+  groupTimeouts: (group: string) => request<GroupTimeout[]>('GET', `/api/groups/${encodeURIComponent(group)}/timeouts`),
   /** The group is `name`'s from now on and not this login's: they are made an owner and the login stops being one, in one go. An owner, for a member who is not one; the cap on owning counts for them. */
   transferOwnership: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/transfer`, { name }),
   /** What the owner role is called from now on. An owner. 400 a bad name, 409 a custom role's name. */

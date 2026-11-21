@@ -383,6 +383,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}/kick", post(kick))
         .route("/api/groups/{group}/timeout", post(timeout))
         .route("/api/groups/{group}/timeout/{name}", axum::routing::delete(lift_timeout))
+        .route("/api/groups/{group}/timeouts", get(list_timeouts))
         .route("/api/groups/{group}/ban", post(ban))
         .route("/api/groups/{group}/bans", get(list_bans))
         .route("/api/groups/{group}/bans/{name}", axum::routing::delete(unban))
@@ -1289,6 +1290,32 @@ async fn lift_timeout(State(s): State<AppState>, Path((group, name)): Path<(Stri
         groups::tell(&s, &group, "timeout", json!({ "who": name, "until": Value::Null })).await;
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /api/groups/:group/timeouts`: every timeout still running, the soonest to end first:
+/// `[{ name, avatar, until, reason, by, member }]`. `until` is unix seconds; `by` is null when
+/// whoever set it is gone; `member` is false for one who left while timed out, since it
+/// outlives a leave. The kick power, the one that sets and lifts them, as the bans list is the
+/// ban power's.
+async fn list_timeouts(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
+    let who = me.ok_or_else(login)?;
+    let group = server(&s.db, &group).await?;
+    need(&s, who.id, &group, KICK).await?;
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(String, Option<i64>, i64, String, Option<String>, bool)> = sqlx::query_as(
+        "SELECT s.name, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, (EXTRACT(EPOCH FROM t.until))::bigint, t.reason, b.name,
+                EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = t.group_name AND m.user_id = t.user_id)
+         FROM timeouts t JOIN streamers s ON s.id = t.user_id LEFT JOIN streamers b ON b.id = t.by_id
+         WHERE t.group_name = $1 AND t.until > now()
+         ORDER BY t.until, s.name",
+    )
+    .bind(&group)
+    .fetch_all(&s.db)
+    .await?;
+    let out = rows.into_iter().map(|(name, avatar, until, reason, by, member)| {
+        json!({ "name": name, "avatar": avatar, "until": until, "reason": reason, "by": by, "member": member })
+    });
+    Ok(Json(Value::Array(out.collect())))
 }
 
 async fn ban(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<BanIn>, JsonRejection>) -> Result<StatusCode, ApiError> {
