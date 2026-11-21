@@ -1,3 +1,4 @@
+import { RiContrastDrop2Line } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   createContext,
@@ -12,9 +13,10 @@ import {
 } from 'react';
 
 import { type ChatBox as Box, keepStreamBox, keptStreamBox } from '@/infra/atoms/chat-layout-atoms';
-import { type ChatSide,chatModalOpenAtom, chatSideAtom, setChatModalOpen } from '@/infra/atoms/settings-atoms';
+import { chatClearAtom, type ChatSide, chatModalOpenAtom, chatSideAtom, setChatClear, setChatModalOpen } from '@/infra/atoms/settings-atoms';
 import { MOBILE_QUERY, useIsMobile } from '@/infra/mobile';
 import { store } from '@/infra/store';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { ChatIcon, IconButton } from '@/shared-components/VideoControls';
 import { cn } from '@/utils/cn';
 
@@ -77,11 +79,15 @@ function fitted(box: Box): Box {
   return { w, h, x: clamp(box.x, 0, Math.max(0, r.w - w)), y: clamp(box.y, 0, Math.max(0, r.h - h)) };
 }
 
-/** In a window, what the chat's own header needs to be the window's one bar: a press on it moves the window, and the close at its right end. */
+/** In a window, what the chat's own header needs to be the window's one bar: a press on it moves the window, and at its right end the see-through toggle and the close. */
 interface ChatWindowBar {
   grip: (e: ReactPointerEvent) => void;
+  clear: ReactNode;
   close: ReactNode;
 }
+
+/** The window bar's buttons: a 28px box, the glyph in the secondary text, blue on hover. */
+const BAR_BUTTON = '-my-1 flex h-7 w-7 shrink-0 items-center justify-center text-textSecondary hover:text-primaryBlue';
 
 const ChatWindowContext = createContext<ChatWindowBar | null>(null);
 
@@ -155,6 +161,8 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
   /** The first time a column is shown it is already open: there is no slide to clip for. */
   const skipOpenClip = useRef(true);
   const modal = side === 'modal';
+  /** The window is see-through (settings-atoms.ts). Only the window: a column stays solid. */
+  const clear = useAtomValue(chatClearAtom) && modal;
   /**
    * Where the window was put, kept over a refresh (chat-layout-atoms.ts). Watch and go live each
    * mount their own slot; the next one starts where the last one was left. `null` is the
@@ -363,9 +371,28 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
   const bar: ChatWindowBar | null = modal
     ? {
         grip: (e) => press(e, 'move'),
+        clear: (
+          <Tooltip content={clear ? 'see-through' : 'solid'}>
+            <button
+              id="chat-modal-clear"
+              type="button"
+              aria-label="see-through"
+              aria-pressed={clear}
+              // a press here is the button's, not the start of a drag
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setChatClear(!clear)}
+              className={cn(BAR_BUTTON, clear && 'text-primaryBlue')}
+            >
+              <RiContrastDrop2Line aria-hidden size={16} />
+            </button>
+          </Tooltip>
+        ),
         close: (
           <button
             id="chat-modal-close"
+            // the window's `show` focuses its first button, and the toggle now comes before this: keep the opening focus here,
+            // where it always was, not on a toggle whose tooltip would come up each time. the attribute, which `show` reads (react's `autoFocus` sets none)
+            ref={(el) => el?.setAttribute('autofocus', '')}
             type="button"
             aria-label="close the chat"
             // a press here is the button's, not the start of a drag
@@ -374,7 +401,7 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
               setChatModalOpen(false);
               document.getElementById('chat-open')?.focus();
             }}
-            className="-my-1 flex h-7 w-7 shrink-0 items-center justify-center text-lg leading-none text-textSecondary hover:text-primaryBlue"
+            className={cn(BAR_BUTTON, 'text-lg leading-none')}
           >
             ×
           </button>
@@ -401,6 +428,8 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
       'group fixed z-40 m-0 hidden max-h-none max-w-none flex-col overflow-hidden border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary open:flex',
               'origin-center transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none',
               shown ? 'translate-x-0 scale-100 opacity-100' : cn('pointer-events-none scale-[0.98] opacity-0', fromLeft ? '-translate-x-3' : 'translate-x-3'),
+              // see-through: the fill and the stroke come off, the words wear a shadow (globals.css)
+              clear && 'chat-clear',
               !box && 'left-auto right-6 top-20 h-[min(720px,calc(100dvh-6rem))] w-[min(420px,calc(100vw-3rem))]'
             )
           : cn(

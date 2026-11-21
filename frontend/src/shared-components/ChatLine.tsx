@@ -625,6 +625,7 @@ export function ChatLineShape({
       <span className={cn('flex min-w-0 flex-1 flex-col', mine ? 'items-end' : 'items-start')}>
         {/* the box: a stroke and a fill, no shadow (no-box-shadow.mdc). yours wears the blue. `relative`: the reader's name is `sr-only` (relative-parent.mdc) */}
         <span
+          data-bubble
           className={cn(
             'relative flex max-w-[85%] flex-col border px-2.5 py-1.5 [overflow-wrap:anywhere]',
             mine ? 'border-primaryBlue bg-primaryBlue/10' : 'border-primaryStroke bg-backgroundTertiary'

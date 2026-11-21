@@ -1,6 +1,6 @@
 /**
  * The preferences this browser keeps (localstorage, like the nick): where the chat sits on a
- * page, where it sits on the corner player, which corner the you panel sits in, which lists
+ * page, whether its window is see-through, where it sits on the corner player, which corner the you panel sits in, which lists
  * it shows in what order and which of them are folded, whether the bots' lines show, whether
  * the lines wear faces, the shape of the lines in a chat with a friend, whether a link asks
  * before it opens, whether a click on somebody shows them in a popup, the theme, and how big
@@ -61,6 +61,19 @@ export const chatModalOpenAtom = atom(true);
 
 export function setChatModalOpen(open: boolean) {
   store.set(chatModalOpenAtom, open);
+}
+
+/**
+ * The chat window (the `modal` side) is see-through: no fill behind the lines, the stream showing
+ * between them, the words in a shadow (globals.css `.chat-clear`). On unless this browser turned
+ * it off with the toggle in the window's bar (ChatSlot.tsx). The columns and a phone are solid.
+ */
+const storedChatClearAtom = atomWithStorage<unknown>('settings.chatClear', true, undefined, { getOnInit: true });
+/** Read: a boolean, whatever localstorage holds. Anything but a stored `false` is on. */
+export const chatClearAtom = atom((get) => get(storedChatClearAtom) !== false);
+
+export function setChatClear(clear: boolean) {
+  store.set(storedChatClearAtom, clear);
 }
 
 /**
