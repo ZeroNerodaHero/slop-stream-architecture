@@ -7,6 +7,7 @@ import { api, type GroupMember, type GroupRoom, type MemberLine, messageOf, type
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { type ChatLine, serverChat } from '@/infra/atoms/chat-atoms';
 import { roomAtom } from '@/infra/atoms/room-atoms';
+import { plainEmotes } from '@/infra/emotes';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
 import { type LineMenuItem, quoteWords, when } from '@/shared-components/ChatLine';
@@ -546,7 +547,7 @@ function MemberInfo({ server, name, onClose }: { server: string; name: string; o
 
 /** One of the member's lines: its channel and time, what it answered over it, then the words (or what its pictures were). */
 function LogLine({ line }: { line: MemberLine }) {
-  const words = line.text || quoteWords({ text: '', images: line.images?.length ?? 0, video: !!line.video });
+  const words = plainEmotes(line.text) || quoteWords({ text: '', images: line.images?.length ?? 0, video: !!line.video });
   return (
     <li data-id={line.id} data-channel={line.channel} className="flex flex-col gap-0.5 border-b border-primaryStroke/60 px-4 py-2 text-sm">
       <span className="flex items-center gap-2 text-xs text-textTertiary">

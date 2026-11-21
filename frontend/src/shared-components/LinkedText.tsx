@@ -2,6 +2,8 @@ import { Fragment } from 'react';
 import { Link } from 'react-router-dom';
 
 import { isSameOrigin, linkHref } from '@/infra/about';
+import { onlyEmotes, splitEmotes, useEmotes } from '@/infra/emotes';
+import { Emote } from '@/shared-components/Emote';
 import { ExternalLink, siteOf } from '@/shared-components/ExternalLink';
 
 /**
@@ -27,7 +29,7 @@ const BRACKETS: readonly (readonly [open: string, close: string])[] = [
 ];
 const LINK = 'text-primaryBlue underline-offset-2 hover:underline';
 /** Who put a link in a line, for the word before it. */
-const FROM = 'this link was put in the chat by whoever said the line, not by this site.';
+export const TALK_FROM = 'this link was put in the chat by whoever said the line, not by this site.';
 
 type Part = string | { text: string; href: string };
 
@@ -85,13 +87,27 @@ export function splitLinks(text: string): Part[] {
 }
 
 /**
- * The words of a line with its links drawn as links. Nothing else is read into the words: no
- * markdown, no mentions. A link on this origin is a router link; any other opens in a new tab
- * through `ExternalLink`, which while the links setting asks for it first says which site you
- * are leaving for. The chat's
- * lines and a direct message's are drawn through this.
+ * The words of a line with its links drawn as links and its emote tokens as their pictures
+ * (`Emote.tsx`, docs/chat.md "emotes"; bigger on a line of emotes alone). Nothing else is read
+ * into the words: no markdown, no mentions. A link on this origin is a router link; any other
+ * opens in a new tab through `ExternalLink`, which while the links setting asks for it first
+ * says which site you are leaving for. The chat's lines and a direct message's are drawn
+ * through this.
  */
 export function LinkedText({ text }: { text: string }) {
+  const parts = splitEmotes(text);
+  const emotes = useEmotes(parts.flatMap((p) => (typeof p === 'string' ? [] : [p.id])));
+  const jumbo = onlyEmotes(parts);
+  return (
+    <>
+      {parts.map((part, i) =>
+        typeof part === 'string' ? <Links key={i} text={part} /> : <Emote key={i} id={part.id} name={part.name} info={emotes.get(part.id)} jumbo={jumbo} />
+      )}
+    </>
+  );
+}
+
+function Links({ text }: { text: string }) {
   const parts = splitLinks(text);
   return <>{parts.map((part, i) => (typeof part === 'string' ? <Fragment key={i}>{part}</Fragment> : <TalkLink key={i} text={part.text} href={part.href} />))}</>;
 }
@@ -106,7 +122,7 @@ function TalkLink({ text, href }: { text: string; href: string }) {
     );
   }
   return (
-    <ExternalLink href={href} from={FROM} title={siteOf(href)} data-site={siteOf(href)} className={LINK}>
+    <ExternalLink href={href} from={TALK_FROM} title={siteOf(href)} data-site={siteOf(href)} className={LINK}>
       {text}
     </ExternalLink>
   );

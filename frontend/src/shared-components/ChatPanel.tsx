@@ -20,15 +20,18 @@ import { api, type GroupBadge, messageOf, type Owner } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { BOT_GROUP, type ChatLine, type ChatRoom, chatRoomFor, chatSpeakerAtom, isBotLine, MAX_CHAT_IMAGES, nickAtom, nickIsValidAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
+import { roleColorsAtom } from '@/infra/atoms/room-atoms';
 import { type ChatStyle, chatStyleAtom, hideBotsAtom, profilePopupEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { EQUES, showWelcomesAtom, type Welcome } from '@/infra/atoms/welcome-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingVideo, splitFiles, useVideoUpload, VideoProgress } from '@/shared-components/ChatAttach';
-import { ChatLineShape, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
+import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
+import { ChatLineShape, type ChatLineShapeProps, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ReactionChips } from '@/shared-components/Reactions';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
 import { ChatVideoPlayer } from '@/shared-components/ChatVideoPlayer';
+import { useEmoteComplete } from '@/shared-components/EmoteComplete';
 import { Face } from '@/shared-components/Face';
 import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
 import { LinkedText } from '@/shared-components/LinkedText';
@@ -150,6 +153,17 @@ function useCountdown(until: number): number {
  * A `guest` is a second panel on the page's own room, and the page's draws nothing while it is up.
  */
 
+/**
+ * The names' colours in a group's channel: each their top coloured role's, made to read on this
+ * theme (room-atoms.ts `roleColorsAtom`). None in a stream's chat, which has no roles, and none
+ * for someone holding no role: the name keeps the colour it had.
+ */
+function useRoleColors(room: ChatRoom): (name: string) => string | undefined {
+  const { server, colors } = useAtomValue(roleColorsAtom);
+  const ours = room.server !== null && room.server === server;
+  return (name) => (ours ? colors.get(name) : undefined);
+}
+
 /** What a press on a speaker (their name, their face) does, and whether it does anything: the popup, or a login's lines here (Speaker). */
 function useSpeakerPress(line: ChatLine, room: ChatRoom) {
   const popup = useAtomValue(profilePopupEnabledAtom);
@@ -193,7 +207,11 @@ function Speaker({ line, room }: { line: ChatLine; room: ChatRoom }) {
         onKeyDown: peek.keyDown
       }
     : {};
-  const color = line.streamer ? 'text-increase' : line.verified ? 'text-primaryBlue' : 'text-decrease';
+  // a login's name wears their role's colour in a group's channel; a nick is nobody's, whatever it is called
+  const roleColor = useRoleColors(room);
+  const tint = line.verified ? roleColor(line.from) : undefined;
+  const color = tint ? undefined : line.streamer ? 'text-increase' : line.verified ? 'text-primaryBlue' : 'text-decrease';
+  const style = tint ? { color: tint } : undefined;
   return (
     <>
       {pressable ? (
@@ -212,11 +230,12 @@ function Speaker({ line, room }: { line: ChatLine; room: ChatRoom }) {
             }
           }}
           className={cn('cursor-pointer font-semibold', color)}
+          style={style}
         >
           {line.from}
         </span>
       ) : (
-        <span {...watched} data-from={line.from} title={someone ? undefined : 'not logged in'} className={cn('font-semibold', color)}>
+        <span {...watched} data-from={line.from} title={someone ? undefined : 'not logged in'} className={cn('font-semibold', color)} style={style}>
           {line.from}
         </span>
       )}
@@ -470,11 +489,16 @@ const BOT_BADGE: GroupBadge = { name: BOT_GROUP, badge: 'BOT', color: '#5865f2' 
  * Its links go through `ExternalLink` (LinkedText), the leave-site word with them.
  */
 function WelcomeLine({ welcome }: { welcome: Welcome }) {
-  const shape = useAtomValue(chatStyleAtom);
   const hideBots = useAtomValue(hideBotsAtom);
   const show = useAtomValue(showWelcomesAtom);
   const [at] = useState(() => Date.now());
   if (!welcome.on || hideBots || !show) return null;
+  return <EquesLine message={welcome.message} at={at} attrs={{ id: 'chat-welcome', 'data-bot': true, 'data-welcome': '' }} />;
+}
+
+/** Eques's line itself, in the lines' shape, whatever the switches say: the chat's welcome, and its preview in the welcome editor (WelcomeEditor.tsx). */
+export function EquesLine({ message, at, attrs }: { message: string; at: number; attrs: ChatLineShapeProps['attrs'] }) {
+  const shape = useAtomValue(chatStyleAtom);
   return (
     <ChatLineShape
       shape={shape}
@@ -495,10 +519,10 @@ function WelcomeLine({ welcome }: { welcome: Welcome }) {
       face={<Face name={EQUES} version={null} className="h-8 w-8 text-sm" />}
       words={
         <span className="whitespace-pre-wrap">
-          <LinkedText text={welcome.message} />
+          <LinkedText text={message} />
         </span>
       }
-      attrs={{ id: 'chat-welcome', 'data-bot': true, 'data-welcome': '' }}
+      attrs={attrs}
       first
       bucket
     />
@@ -596,6 +620,7 @@ export function RoomLines({
   const me = useAtomValue(meAtom);
   // the name the server echoes our own lines under: the stream's when we are the streamer, else the login or nick
   const myName = asStreamer ? name : speaker;
+  const roleColor = useRoleColors(room);
   return (
     <>
       {lines.map((line, i) => {
@@ -632,6 +657,7 @@ export function RoomLines({
               <>
                 <ChatImages ids={line.images} />
                 {line.video && <ChatVideoPlayer video={line.video} />}
+                <ChatEmbeds text={line.text} />
               </>
             }
             mark={lineMark?.(line)}
@@ -660,6 +686,7 @@ export function RoomLines({
                 <ReplyQuote
                   shape={shape}
                   quote={{ from: line.reply.from, text: line.reply.text, avatar: line.reply.avatar ?? null, images: line.reply.images ?? 0, video: line.reply.video }}
+                  color={line.reply.verified ? roleColor(line.reply.from) : undefined}
                   onJump={jumps ? () => void room.jumpToReply(line.reply!.id) : undefined}
                 />
               )
@@ -726,6 +753,7 @@ export function ChatPanel({
   const video = useAtomValue(room.videoAtom);
   const videoUp = useVideoUpload();
   const replyTo = useAtomValue(room.replyAtom);
+  const replyColor = useRoleColors(room)(replyTo?.verified ? replyTo.from : '');
   const notice = useAtomValue(room.noticeAtom);
   const nick = useAtomValue(nickAtom);
   const nickOk = useAtomValue(nickIsValidAtom);
@@ -744,6 +772,8 @@ export function ChatPanel({
   const wait = useCountdown(useAtomValue(room.waitAtom));
   // a guest is drawing this room somewhere else: this panel, the one that holds the room open, stands aside
   const aside = useAtomValue(room.guestAtom) && !guest;
+  // the box's `:` list of the login's emotes, a drop-up over the box (EmoteComplete.tsx)
+  const emotes = useEmoteComplete({ value: draft, onChange: (next) => room.setDraft(next), input: textRef, id: 'chat-emotes' });
 
   // The inputs that change while mounted: the room, the owner (going live) and the login.
   // Nothing opens until /api/me has answered, so the first hello is the right one.
@@ -1040,7 +1070,10 @@ export function ChatPanel({
             {replyTo && (
               <div id="chat-replying" data-reply-to={replyTo.id} className="mb-1.5 flex items-center gap-2 border-l-2 border-primaryBlue bg-backgroundTertiary py-0.5 pl-2 text-xs">
                 <span className="min-w-0 flex-1 truncate text-textSecondary">
-                  replying to <span className="font-semibold text-textPrimary">{replyTo.from}</span>
+                  replying to{' '}
+                  <span className={cn('font-semibold', !replyColor && 'text-textPrimary')} style={replyColor ? { color: replyColor } : undefined}>
+                    {replyTo.from}
+                  </span>
                   <span className="sr-only">: {quoteWords({ text: replyTo.text, images: replyTo.images.length, video: !!replyTo.video })}</span>
                 </span>
                 <Tooltip content="cancel reply">
@@ -1080,7 +1113,9 @@ export function ChatPanel({
                 ))}
               </div>
             )}
-            <div className="flex items-center gap-2">
+            {/* `relative`: the emote list stands over this row (EmoteComplete.tsx) */}
+            <div className="relative flex items-center gap-2">
+              {emotes.list}
               <Tooltip content={images.length >= MAX_CHAT_IMAGES ? `${MAX_CHAT_IMAGES} pictures at most` : 'add a picture or a video'}>
                 <button
                   type="button"
@@ -1098,8 +1133,14 @@ export function ChatPanel({
                 ref={textRef}
                 id="chat-text"
                 value={draft}
-                onChange={(e) => room.setDraft(e.target.value)}
+                {...emotes.box}
+                onChange={(e) => {
+                  room.setDraft(e.target.value);
+                  emotes.box.onSelect(e);
+                }}
                 onKeyDown={(e) => {
+                  // the emote list's keys first, while it is up: the arrows walk it, enter and tab pick, escape shuts it
+                  if (emotes.box.onKeyDown(e)) return;
                   // escape lets go of the reply first, and goes no further (a sheet or a window over the chat stays up)
                   if (e.key === 'Escape' && replyTo) {
                     e.preventDefault();

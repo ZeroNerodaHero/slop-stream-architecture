@@ -1,4 +1,5 @@
-//! Reactions: an emoji from a short list on a line, discord's (docs/chat.md "reactions", docs/dms.md).
+//! Reactions: an emoji from a short list on a line, discord's (docs/chat.md "reactions", docs/dms.md),
+//! or a group's custom emote (emotes.rs) by its id, for a reactor in that group.
 //!
 //! The same everywhere a line is drawn: a stream's chat and a group's channel (chat.rs, a `react`
 //! frame on the room's socket) and a direct message thread (dms.rs, `PUT /api/dm/:name/react`).
@@ -58,6 +59,46 @@ pub(crate) struct Reaction {
 
 pub(crate) fn allowed(emoji: &str) -> bool {
     EMOJIS.contains(&emoji)
+}
+
+/// The words for a custom emote the reactor is not in the group of.
+pub(crate) const NOT_YOURS: &str = "you can't use that emote";
+
+/// A custom emote's id, when the reaction is one: the id as the api writes it (lowercase, with its
+/// dashes), so one emote is one reaction however it was typed.
+pub(crate) fn emote_of(emoji: &str) -> Option<Uuid> {
+    if emoji.len() != 36 {
+        return None;
+    }
+    Uuid::try_parse(emoji).ok()
+}
+
+/// A reaction as it is kept: one off the list as it is, an emote by its id written the api's
+/// way. None for anything else (`NOT_A_REACTION`). The shape alone: whether the reactor may use
+/// the emote is `may_put`'s.
+pub(crate) fn shaped(emoji: &str) -> Option<String> {
+    if allowed(emoji) {
+        return Some(emoji.to_owned());
+    }
+    emote_of(emoji).map(|id| id.to_string())
+}
+
+/// Whether `user` may put `emoji` (already `shaped`) on a line: anyone may, one off the list; a
+/// custom emote only a member of its group (emotes.rs `usable`). Taking one off asks nothing: an
+/// emote's group left, or the emote deleted, a reaction still comes off.
+pub(crate) async fn may_put(db: &PgPool, user: Uuid, emoji: &str) -> Result<bool, sqlx::Error> {
+    match emote_of(emoji) {
+        Some(id) => crate::emotes::usable(db, user, id).await,
+        None => Ok(true),
+    }
+}
+
+/// An emote deleted (emotes.rs `remove`): its reactions go with it, everywhere.
+pub(crate) async fn drop_emote(db: &PgPool, id: Uuid) -> Result<(), sqlx::Error> {
+    let id = id.to_string();
+    sqlx::query("DELETE FROM chat_reactions WHERE emoji = $1").bind(&id).execute(db).await?;
+    sqlx::query("DELETE FROM dm_reactions WHERE emoji = $1").bind(&id).execute(db).await?;
+    Ok(())
 }
 
 /// What a reaction asked for came to.
@@ -240,6 +281,17 @@ mod tests {
         assert!(allowed("👍") && allowed("❤️"));
         // the bare heart without its emoji selector is not the one on the list, nor is free text
         assert!(!allowed("❤") && !allowed("lol") && !allowed(""));
+    }
+
+    #[test]
+    fn an_emote_reacts_by_its_id() {
+        let id = "0B7C6C1E-4F0A-4C1E-9D55-6A1F5D3E2B10";
+        assert_eq!(shaped(id).as_deref(), Some("0b7c6c1e-4f0a-4c1e-9d55-6a1f5d3e2b10"));
+        assert_eq!(shaped("🔥").as_deref(), Some("🔥"));
+        assert!(shaped("lol").is_none());
+        // the simple form of a uuid is not a reaction: one emote, one way to write it
+        assert!(shaped("0b7c6c1e4f0a4c1e9d556a1f5d3e2b10").is_none());
+        assert!(emote_of("👍").is_none());
     }
 
     #[test]

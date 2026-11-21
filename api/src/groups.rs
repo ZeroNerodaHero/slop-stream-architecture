@@ -52,9 +52,13 @@ const GROUPS_PER_MEMBER: i64 = 8;
 /// Groups one login may own when `GROUPS_PER_OWNER` is not set: the ones it made plus the
 /// ones it was named owner of.
 pub(crate) const DEFAULT_GROUPS_PER_OWNER: i64 = 2;
-/// Channels on one server, `general` included, voice ones too. The pages hold the same number,
-/// so the add form goes at the cap; and it bounds what `GET .../messages` answers for one room.
-const CHANNELS_PER_SERVER: i64 = 20;
+/// Text channels on one server, `general` included; the voice ones have their own cap. The pages
+/// hold the same number, so the add form goes at the cap; and it bounds what `GET .../messages`
+/// answers for one room.
+const TEXT_CHANNELS_PER_SERVER: i64 = 20;
+/// Voice channels on one server. A group that had more before the cap keeps them, and adds none
+/// until it is under it again.
+const VOICE_CHANNELS_PER_SERVER: i64 = 4;
 /// Lines of each channel in `GET /api/groups/:group/messages`: what a room draws before its
 /// socket says more. The socket fills from the newest of these, so nothing falls between.
 const MESSAGES_PER_CHANNEL: usize = 100;
@@ -565,6 +569,7 @@ pub(crate) async fn delete_if_empty(s: &AppState, group: &str) -> Result<(), sql
     if !exists {
         return Ok(());
     }
+    crate::emotes::drop_group(s, group).await;
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/icon.jpg")).await;
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/banner.jpg")).await;
     sqlx::query("DELETE FROM groups WHERE name = $1").bind(group).execute(&s.db).await?;
@@ -591,6 +596,7 @@ async fn remove(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
     if made_by != Some(who.id) && !owner && !s.admins.iter().any(|a| a.id == who.id) {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "not your group"));
     }
+    crate::emotes::drop_group(&s, &group).await;
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/icon.jpg")).await;
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/banner.jpg")).await;
     sqlx::query("DELETE FROM groups WHERE name = $1").bind(&group).execute(&s.db).await?;
@@ -982,7 +988,8 @@ fn channel_kind(raw: Option<&str>) -> Result<&'static str, ApiError> {
 }
 
 /// `POST /api/groups/:group/channels` `{ name, about?, kind? }`: a member adds one, text unless
-/// `kind` says voice. 201. `general` already exists.
+/// `kind` says voice. 201. `general` already exists. 20 text channels at most and 4 voice ones,
+/// each kind counted on its own (`add_channel`).
 async fn create_channel(
     State(s): State<AppState>,
     Path(group): Path<String>,
@@ -1004,9 +1011,40 @@ async fn create_channel(
     if !crate::group_mod::allows(&s, who.id, &server, crate::group_mod::CHANNELS).await? {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "you can't add a channel"));
     }
-    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM channels WHERE server = $1").bind(&server).fetch_one(&s.db).await?;
-    if n >= CHANNELS_PER_SERVER {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, format!("this server has {CHANNELS_PER_SERVER} channels already")));
+    add_channel(&s.db, &server, &channel, &about, who.id, kind).await?;
+    log::info!("{}: added {kind} #{channel} to {server}", who.name);
+    tell(&s, &server, "channel", json!({ "channel": { "name": channel, "about": about, "made_by": who.name, "cooldown": 0, "kind": kind, "user_limit": 0, "home": false } })).await;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "name": channel, "about": about, "home": false, "can_delete": true, "can_edit": true, "made_by": who.name, "cooldown": 0, "kind": kind, "user_limit": 0 })),
+    ))
+}
+
+/// How many channels of `kind` a server may have.
+fn channels_cap(kind: &str) -> i64 {
+    if kind == CHANNEL_KINDS[1] {
+        VOICE_CHANNELS_PER_SERVER
+    } else {
+        TEXT_CHANNELS_PER_SERVER
+    }
+}
+
+/// Why a server holding `n` channels of `kind` cannot add another, or nothing when it can.
+fn channels_full(kind: &str, n: i64) -> Option<String> {
+    let cap = channels_cap(kind);
+    (n >= cap).then(|| format!("{kind} channels: {cap} at most"))
+}
+
+/// The channel itself, last in the order: 403 `<kind> channels: <cap> at most` when the server
+/// has its kind's cap already (`channels_full`; each kind counts only its own), 409 `name taken`.
+/// The group's row is held while it counts and adds, so two adds at once cannot both slip under
+/// the cap. Every way a channel is made after the group's first two comes through here.
+async fn add_channel(db: &PgPool, server: &str, channel: &str, about: &str, by: Uuid, kind: &str) -> Result<(), ApiError> {
+    let mut tx = db.begin().await?;
+    sqlx::query("SELECT 1 FROM groups WHERE name = $1 FOR UPDATE").bind(server).execute(&mut *tx).await?;
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM channels WHERE server = $1 AND kind = $2").bind(server).bind(kind).fetch_one(&mut *tx).await?;
+    if let Some(full) = channels_full(kind, n) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, full));
     }
     // after the last: the list is in the order it was put in, and a new channel joins its end
     let added = sqlx::query(
@@ -1014,22 +1052,18 @@ async fn create_channel(
          SELECT $1, $2, $3, $4, COALESCE(max(position), -1) + 1, $5 FROM channels WHERE server = $1
          ON CONFLICT DO NOTHING",
     )
-    .bind(&server)
-    .bind(&channel)
-    .bind(&about)
-    .bind(who.id)
+    .bind(server)
+    .bind(channel)
+    .bind(about)
+    .bind(by)
     .bind(kind)
-    .execute(&s.db)
+    .execute(&mut *tx)
     .await?;
     if added.rows_affected() == 0 {
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     }
-    log::info!("{}: added {kind} #{channel} to {server}", who.name);
-    tell(&s, &server, "channel", json!({ "channel": { "name": channel, "about": about, "made_by": who.name, "cooldown": 0, "kind": kind, "user_limit": 0, "home": false } })).await;
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({ "name": channel, "about": about, "home": false, "can_delete": true, "can_edit": true, "made_by": who.name, "cooldown": 0, "kind": kind, "user_limit": 0 })),
-    ))
+    tx.commit().await?;
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -1524,6 +1558,87 @@ mod tests {
         assert!(channel_kind(Some("video")).is_err());
         assert!(channel_kind(Some("Voice")).is_err());
         assert!(channel_kind(Some("")).is_err());
+    }
+
+    #[test]
+    fn each_kind_has_its_own_cap() {
+        assert_eq!(channels_full("voice", 3), None);
+        assert_eq!(channels_full("voice", 4).as_deref(), Some("voice channels: 4 at most"));
+        // a group that had more before the cap still adds none
+        assert_eq!(channels_full("voice", 6).as_deref(), Some("voice channels: 4 at most"));
+        assert_eq!(channels_full("text", 19), None);
+        assert_eq!(channels_full("text", 20).as_deref(), Some("text channels: 20 at most"));
+    }
+
+    /// A group of `voice` voice channels and `text` text ones, `general` the first, made the way
+    /// the rows stand, past the caps too (a group older than them).
+    async fn group_with(pool: &PgPool, who: Uuid, name: &str, text: usize, voice: usize) {
+        sqlx::query("INSERT INTO groups (name, badge, color, created_by_id) VALUES ($1, 'T', '#ffffff', $2)").bind(name).bind(who).execute(pool).await.unwrap();
+        let kinds = std::iter::repeat("text").take(text).chain(std::iter::repeat("voice").take(voice));
+        for (i, kind) in kinds.enumerate() {
+            let channel = if i == 0 { GENERAL.to_string() } else { format!("{kind}-{i}") };
+            sqlx::query("INSERT INTO channels (server, name, created_by_id, position, kind, home) VALUES ($1, $2, $3, $4, $5, $6)")
+                .bind(name)
+                .bind(&channel)
+                .bind(who)
+                .bind(i as i32)
+                .bind(kind)
+                .bind(i == 0)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    async fn count_of(pool: &PgPool, server: &str, kind: &str) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM channels WHERE server = $1 AND kind = $2").bind(server).bind(kind).fetch_one(pool).await.unwrap()
+    }
+
+    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored voice_channels_stop_at_four` against a throwaway postgres (see auth.rs's `test_db`).
+    #[tokio::test]
+    #[ignore]
+    async fn voice_channels_stop_at_four() {
+        use axum::response::IntoResponse;
+        let pool = crate::auth::tests::test_db().await;
+        let run = std::process::id();
+        let who = crate::auth::tests::row(&pool, &format!("vcap-{run}"), Some("hash")).await;
+
+        // a new group's general and voice: three more voice ones, then the fifth is refused
+        let fresh = format!("vcap-new-{run}");
+        group_with(&pool, who, &fresh, 1, 1).await;
+        for i in 2..=4 {
+            add_channel(&pool, &fresh, &format!("talk-{i}"), "", who, "voice").await.expect("under the cap");
+        }
+        let err = add_channel(&pool, &fresh, "talk-5", "", who, "voice").await.expect_err("past the cap");
+        assert_eq!(err.message(), "voice channels: 4 at most");
+        assert_eq!(err.into_response().status(), StatusCode::FORBIDDEN);
+        assert_eq!(count_of(&pool, &fresh, "voice").await, 4);
+        // the voice cap is not the text one: a text channel still goes in, last in the order
+        add_channel(&pool, &fresh, "clips", "", who, "text").await.expect("text is counted alone");
+        let last: String = sqlx::query_scalar("SELECT name FROM channels WHERE server = $1 ORDER BY position DESC LIMIT 1").bind(&fresh).fetch_one(&pool).await.unwrap();
+        assert_eq!(last, "clips");
+
+        // a group with six from before the cap keeps all six and adds none
+        let old = format!("vcap-old-{run}");
+        group_with(&pool, who, &old, 1, 6).await;
+        let err = add_channel(&pool, &old, "talk-7", "", who, "voice").await.expect_err("over the cap already");
+        assert_eq!(err.message(), "voice channels: 4 at most");
+        assert_eq!(count_of(&pool, &old, "voice").await, 6, "nothing is deleted");
+
+        // text counts text only: 19 text and 4 voice take a 20th text, not a 21st
+        let text = format!("vcap-text-{run}");
+        group_with(&pool, who, &text, 19, 4).await;
+        add_channel(&pool, &text, "twentieth", "", who, "text").await.expect("the 20th text channel");
+        let err = add_channel(&pool, &text, "one-more", "", who, "text").await.expect_err("past 20 text");
+        assert_eq!(err.message(), "text channels: 20 at most");
+        assert_eq!(count_of(&pool, &text, "text").await, 20);
+
+        // a taken name is still 409, under the cap
+        let err = add_channel(&pool, &old, GENERAL, "", who, "text").await.expect_err("taken");
+        assert_eq!(err.into_response().status(), StatusCode::CONFLICT);
+
+        sqlx::query("DELETE FROM groups WHERE name = ANY($1)").bind(vec![fresh, old, text]).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM streamers WHERE id = $1").bind(who).execute(&pool).await.unwrap();
     }
 
     #[test]

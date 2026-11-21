@@ -18,6 +18,7 @@ import { keepDmWindow, keptDmWindow } from '@/infra/atoms/chat-layout-atoms';
 import { followingAtom } from '@/infra/atoms/follow-atoms';
 import type { Presence } from '@/infra/atoms/presence-atoms';
 import { type ChatVideo, videoOf } from '@/infra/chat-video';
+import { encodeEmotes } from '@/infra/emotes';
 import { onEvents } from '@/infra/events';
 import { store } from '@/infra/store';
 import { applyReaction, type Reaction, reacted, reactionsOf } from '@/shared-components/reaction-list';
@@ -318,7 +319,8 @@ export async function sendDm(name: string, raw: string, images: string[] = [], r
   const text = raw.trim();
   if (!text && images.length === 0 && !video) return false;
   try {
-    const line = await api.sendDm(name, text, images, reply, video);
+    // each `:name:` of the login's emotes goes out as its token (emotes.ts)
+    const line = await api.sendDm(name, encodeEmotes(text), images, reply, video);
     append(name, lineOf(line));
     return true;
   } catch (err) {

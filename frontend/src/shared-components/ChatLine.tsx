@@ -13,6 +13,7 @@ import {
 import { createPortal } from 'react-dom';
 
 import type { ChatStyle } from '@/infra/atoms/settings-atoms';
+import { plainEmotes } from '@/infra/emotes';
 import { Face } from '@/shared-components/Face';
 import type { Reaction } from '@/shared-components/reaction-list';
 import { ReactionPicker } from '@/shared-components/Reactions';
@@ -412,7 +413,8 @@ export function LineActions({
 }) {
   const items: LineMenuItem[] = [];
   if (onReply) items.push({ key: 'reply', label: 'reply', onPick: onReply });
-  if (text) items.push({ key: 'copy', label: 'copy text', onPick: () => void navigator.clipboard?.writeText(text).catch(() => undefined) });
+  // an emote copies as its `:name:`, which a box of the login's turns back into the emote (emotes.ts `encodeEmotes`)
+  if (text) items.push({ key: 'copy', label: 'copy text', onPick: () => void navigator.clipboard?.writeText(plainEmotes(text)).catch(() => undefined) });
   items.push(...menu);
   return (
     <>
@@ -447,9 +449,9 @@ export interface Quoted {
   gone?: boolean;
 }
 
-/** A quote's words: the start of the line on one line, or its pictures (or its video) when it had no words. */
+/** A quote's words: the start of the line on one line (an emote as its `:name:`), or its pictures (or its video) when it had no words. */
 export function quoteWords(q: Pick<Quoted, 'text' | 'images' | 'video'>): string {
-  if (q.text) return q.text.replace(/\s+/g, ' ');
+  if (q.text) return plainEmotes(q.text).replace(/\s+/g, ' ');
   if (q.video && q.images === 0) return 'a video';
   if (q.images > 1) return `${q.images} pictures`;
   if (q.images === 1) return 'a picture';
@@ -461,16 +463,19 @@ export function quoteWords(q: Pick<Quoted, 'text' | 'images' | 'video'>): string
  * from the face's column (the time's in a log) up into the quote, then the speaker's tiny face,
  * their name in bold and one line of their words, cut to fit; in `bubbles` the same quote at the
  * top of the box, a stroke at its left. A click goes to the line (`onJump`), which lights up there
- * or says it is not to be found; a line that is gone says so and goes nowhere.
+ * or says it is not to be found; a line that is gone says so and goes nowhere. `color`: the name's,
+ * their role's in a group's channel (ChatPanel.tsx `useRoleColors`); the text's otherwise.
  */
-export function ReplyQuote({ shape, quote, onJump }: { shape: ChatStyle; quote: Quoted; onJump?: () => void }) {
+export function ReplyQuote({ shape, quote, onJump, color }: { shape: ChatStyle; quote: Quoted; onJump?: () => void; color?: string }) {
   const words = quoteWords(quote);
   const body = quote.gone ? (
     <span className="truncate italic text-textTertiary">original message was deleted</span>
   ) : (
     <>
       <Face name={quote.from} version={quote.avatar} className="h-4 w-4 shrink-0 text-[9px]" />
-      <span className="shrink-0 font-semibold text-textPrimary">{quote.from}</span>
+      <span className={cn('shrink-0 font-semibold', !color && 'text-textPrimary')} style={color ? { color } : undefined}>
+        {quote.from}
+      </span>
       <span className="min-w-0 truncate text-textSecondary">{words}</span>
     </>
   );

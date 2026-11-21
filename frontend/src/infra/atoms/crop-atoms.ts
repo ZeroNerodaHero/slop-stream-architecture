@@ -11,11 +11,29 @@ import { atom } from 'jotai';
 import type { PictureSpec } from '@/infra/picture';
 import { store } from '@/infra/store';
 
+/**
+ * A picture that goes up with a name (a group's emote): the dialog has a name box under the
+ * picture, and its `save` sends both itself. A refusal (the name taken, the group full) is said in
+ * the dialog, which stays open to fix it; a save that went closes it.
+ */
+export interface NamedCrop {
+  /** The box's first words: from the file's name, made to fit `clean`. */
+  initial: string;
+  /** The rule under the box, while typing. */
+  rule: string;
+  /** What the box holds, as typed: lowercased, the characters the rule allows. */
+  clean: (raw: string) => string;
+  /** What is wrong with the name, or null for nothing. */
+  fault: (name: string) => string | null;
+  save: (picture: Blob, name: string) => Promise<void>;
+}
+
 export interface CropRequest {
   /** Tells one request from the next: the dialog remounts per request, and a late answer to an old one is nothing. */
   id: number;
   file: File;
   spec: PictureSpec;
+  named?: NamedCrop;
   resolve: (picture: Blob | null) => void;
 }
 
@@ -29,6 +47,15 @@ let count = 0;
 export function cropPicture(file: File, spec: PictureSpec): Promise<Blob | null> {
   store.get(cropRequestAtom)?.resolve(null);
   return new Promise((resolve) => store.set(cropRequestAtom, { id: ++count, file, spec, resolve }));
+}
+
+/**
+ * The dialog over `file` with a name box (`NamedCrop`): true once `named.save` went, false for
+ * closed without.
+ */
+export function cropNamedPicture(file: File, spec: PictureSpec, named: NamedCrop): Promise<boolean> {
+  store.get(cropRequestAtom)?.resolve(null);
+  return new Promise((resolve) => store.set(cropRequestAtom, { id: ++count, file, spec, named, resolve: (picture) => resolve(picture !== null) }));
 }
 
 /**

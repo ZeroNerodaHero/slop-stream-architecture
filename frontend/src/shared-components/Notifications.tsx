@@ -22,6 +22,7 @@ import {
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import type { NotificationKind } from '@/infra/frames';
 import { useIsMobile } from '@/infra/mobile';
+import { plainEmotes } from '@/infra/emotes';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
 import { buttonClassName } from '@/shared-components/Button';
@@ -185,7 +186,7 @@ function Row({ n, fresh, now, onPick }: RowProps) {
         </span>
         {(n.kind === 'dm' || n.kind === 'chat') && (
           // a line of pictures (or a video) alone, in a channel or a direct message, has no words: say so, rather than draw an empty line
-          <span className="truncate text-sm text-textSecondary [overflow-wrap:anywhere]">{n.text || 'a picture or a video'}</span>
+          <span className="truncate text-sm text-textSecondary [overflow-wrap:anywhere]">{plainEmotes(n.text) || 'a picture or a video'}</span>
         )}
         <span className="text-xs text-textTertiary" title={when.toLocaleString()}>
           {ago(when.toISOString(), now)}

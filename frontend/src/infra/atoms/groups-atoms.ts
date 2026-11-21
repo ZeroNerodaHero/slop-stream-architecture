@@ -11,10 +11,12 @@
 
 import { atom } from 'jotai';
 
-import { api, type Group, type NewGroup, type Server, messageOf } from '@/infra/api';
+import { api, type Explore, type Group, type NewGroup, type Server, messageOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { reconnectChat } from '@/infra/atoms/chat-atoms';
+import { loadMyEmotes } from '@/infra/emotes';
 import { roomAtom } from '@/infra/atoms/room-atoms';
+import { queryClient } from '@/infra/query-client';
 import { store } from '@/infra/store';
 
 export const groupsAtom = atom<Group[]>([]);
@@ -52,6 +54,44 @@ export const groupIconsAtom = atom((get) => {
   const room = get(roomAtom);
   if (room) heard(room.name, room.icon);
   return icons;
+});
+/**
+ * Each group's colour the page has heard of, by name, the same way: what a chat line's badge
+ * reads before the colour the line carried, so a recolour reaches lines already said.
+ */
+export const groupColorsAtom = atom((get) => {
+  const colors = new Map<string, string>();
+  for (const group of get(groupsAtom)) colors.set(group.name, group.color);
+  for (const server of get(publicServersAtom) ?? []) colors.set(server.name, server.color);
+  for (const server of get(myServersAtom) ?? []) colors.set(server.name, server.color);
+  const room = get(roomAtom);
+  if (room?.color) colors.set(room.name, room.color);
+  return colors;
+});
+
+/**
+ * A group's colour changed (the room's `color` fact, room-atoms.ts): the lists the page holds
+ * take it, the sidebar's, the groups list and the explorer's answer (home's and `/groups`'
+ * squares), so they repaint without asking the api again.
+ */
+function recolor(name: string, color: string) {
+  const paint = <T extends { name: string; color: string }>(list: T[]): T[] =>
+    list.some((g) => g.name === name && g.color !== color) ? list.map((g) => (g.name === name ? { ...g, color } : g)) : list;
+  store.set(groupsAtom, paint(store.get(groupsAtom)));
+  const mine = store.get(myServersAtom);
+  if (mine) store.set(myServersAtom, paint(mine));
+  const others = store.get(publicServersAtom);
+  if (others) store.set(publicServersAtom, paint(others));
+  queryClient.setQueryData<Explore>(['explore'], (found) => found && { ...found, yours: paint(found.yours), discover: paint(found.discover) });
+}
+
+// the room on screen is the one that hears the facts: when its colour moves, so do the lists
+let roomColor: { name: string; color: string } | null = null;
+store.sub(roomAtom, () => {
+  const room = store.get(roomAtom);
+  const was = roomColor;
+  roomColor = room ? { name: room.name, color: room.color } : null;
+  if (room && was?.name === room.name && was.color !== room.color && room.color) recolor(room.name, room.color);
 });
 
 let askingServers: Promise<void> | null = null;
@@ -137,7 +177,11 @@ async function act(doing: string, call: () => Promise<unknown>, done: string, we
     await loadGroups();
     void loadMyServers();
     store.set(groupsStatusAtom, done);
-    if (wearing) reconnectChat();
+    // in or out of a group: the badge on my lines, and the emotes I may use (emotes.ts)
+    if (wearing) {
+      reconnectChat();
+      void loadMyEmotes();
+    }
     return true;
   } catch (err) {
     store.set(groupsStatusAtom, `not ${doing}: ${messageOf(err)}`);

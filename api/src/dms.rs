@@ -37,7 +37,7 @@ use crate::auth::{self, Account, Me};
 use crate::chat::{clean_text, picture_ids, split_pictures, video_id, Video, MAX_TEXT_CHARS, NO_SUCH_LINE};
 use crate::history::{self, Bind, Search};
 use crate::presence::{self, Presence};
-use crate::{chat_images, chat_videos, follows, notify, reactions};
+use crate::{chat_images, chat_videos, emotes, follows, notify, reactions};
 use crate::{ApiError, ApiResult, AppState, Name};
 
 /// Lines in one page of a thread. A shorter page is the start of the thread.
@@ -308,7 +308,8 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     if text.is_empty() && images.is_empty() && video.is_none() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "nothing to say"));
     }
-    if text.chars().count() > MAX_TEXT_CHARS {
+    // an emote counts as its `:name:`, as in a chat line (chat.rs `parse_say`)
+    if emotes::shown_chars(&text) > MAX_TEXT_CHARS || text.chars().count() > emotes::max_raw_chars(MAX_TEXT_CHARS) {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "too long"));
     }
     let other = peer(&s.db, &me, name).await?;
@@ -316,6 +317,8 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
         return Err(ApiError::new(StatusCode::FORBIDDEN, NOT_FRIENDS));
     }
     crate::auth::limit(&s, &format!("rl:dm:name:{}", me.name), RATE_WINDOW_SECS, RATE_PER_MINUTE, "slow down").await?;
+    // each emote the writer may not use (not in its group) goes back to plain `:name:` (emotes.rs)
+    let text = emotes::settle(&s.db, Some(me.id), &text).await;
     // the pictures must be ones the upload kept: a lookup each, paid for by the rate like the say's (chat.rs `accept`)
     pictures_exist(&s.db, &images).await?;
     // the video too, with its poster, which the line carries beside it
@@ -380,9 +383,10 @@ const REACT_PER_MINUTE: i64 = 120;
 async fn react(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Result<Json<ReactBody>, JsonRejection>) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let Json(body) = body?;
-    if !reactions::allowed(&body.emoji) {
+    // one off the list, or a custom emote's id written the api's way
+    let Some(emoji) = reactions::shaped(&body.emoji) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, reactions::NOT_A_REACTION));
-    }
+    };
     let other = peer(&s.db, &me, name).await?;
     if !follows::friends(&s.db, me.id, other.id).await? {
         return Err(ApiError::new(StatusCode::FORBIDDEN, NOT_FRIENDS));
@@ -392,10 +396,14 @@ async fn react(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Re
     if quote(&s.db, me.id, other.id, body.id).await?.is_none() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, NO_SUCH_LINE));
     }
-    match reactions::set_dm(&s.db, body.id, me.id, &body.emoji, body.on).await? {
+    // a custom emote is its group's members', in a thread as in a line (emotes.rs)
+    if body.on && !reactions::may_put(&s.db, me.id, &emoji).await? {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, reactions::NOT_YOURS));
+    }
+    match reactions::set_dm(&s.db, body.id, me.id, &emoji, body.on).await? {
         reactions::Set::Changed => {
             let mut r = s.redis.clone();
-            presence::publish_dm_react(&mut r, &me.name, &other.name, body.id, &body.emoji, body.on).await;
+            presence::publish_dm_react(&mut r, &me.name, &other.name, body.id, &emoji, body.on).await;
         }
         reactions::Set::Same => {}
         reactions::Set::TooMany => return Err(ApiError::new(StatusCode::BAD_REQUEST, reactions::TOO_MANY)),
