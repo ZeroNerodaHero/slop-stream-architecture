@@ -126,6 +126,11 @@ export function leaveVoice(): void {
   store.set(voiceCallAtom, IDLE);
 }
 
+/** The call's outgoing mic track, for a level to read off it; null while idle or before the mic is open. A new device swaps it. */
+export function voiceMicTrack(): MediaStreamTrack | null {
+  return live?.mic.getAudioTracks()[0] ?? null;
+}
+
 /** The mic on or off. Off while deafened, whatever was asked. */
 function applyMic(): void {
   const on = !store.get(voiceMutedAtom) && !store.get(voiceDeafAtom);

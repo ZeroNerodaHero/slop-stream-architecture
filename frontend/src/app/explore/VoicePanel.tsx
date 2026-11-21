@@ -2,6 +2,7 @@ import {
   RiAddLine,
   RiHeadphoneLine,
   RiLogoutBoxRLine,
+  RiMicFill,
   RiMicLine,
   RiMicOffLine,
   RiPencilLine,
@@ -13,7 +14,7 @@ import {
   RiVolumeUpLine
 } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type ReactNode } from 'react';
+import { type ReactNode, type Ref, useEffect, useRef } from 'react';
 
 import { canEditChannel, type Channel, type GroupRoom, isVoice } from '@/infra/api';
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
@@ -25,12 +26,14 @@ import {
   type VoiceCall,
   voiceCallAtom,
   voiceDeafAtom,
+  voiceMicTrack,
   voiceMutedAtom,
   voiceQuality,
   voiceSpeakingAtom,
   type VoiceStats,
   voiceStatsAtom
 } from '@/infra/atoms/voice-atoms';
+import { type MicLevel, openMicLevel } from '@/infra/mic-level';
 import { Face } from '@/shared-components/Face';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -80,6 +83,40 @@ export function VoicePanel({
   const channels = (room.channels ?? []).filter(isVoice);
   const here = call.phase !== 'idle' && call.server === room.name;
   const avatarOf = (name: string) => room.roster?.find((m) => m.name === name)?.avatar ?? null;
+  const micButton = useRef<HTMLButtonElement>(null);
+  const metering = here && !muted && !deaf;
+
+  // Your level in the mute button's mic, many times a second while it is open: a frame loop
+  // writes `--lvl` on the button by hand, never through react. A reader on the call's own
+  // track, so the mic is not opened again; it follows the track when the mic opens after the
+  // join or a new device swaps it. No web audio: no fill.
+  useEffect(() => {
+    const el = micButton.current;
+    if (!metering || !el) return;
+    let track: MediaStreamTrack | null = null;
+    let reader: MicLevel | null = null;
+    let frame = 0;
+    const paint = (now: number) => {
+      const next = voiceMicTrack();
+      if (next !== track) {
+        reader?.close();
+        reader = null;
+        track = next;
+        if (track) {
+          reader = openMicLevel(track);
+          if (!reader) return;
+        }
+      }
+      el.style.setProperty('--lvl', reader ? reader.read(now).toFixed(3) : '0');
+      frame = requestAnimationFrame(paint);
+    };
+    frame = requestAnimationFrame(paint);
+    return () => {
+      cancelAnimationFrame(frame);
+      reader?.close();
+      el.style.setProperty('--lvl', '0');
+    };
+  }, [metering]);
 
   const join = (channel: string) => {
     if (!me) return openAuthDialog('login');
@@ -96,8 +133,23 @@ export function VoicePanel({
         <h3 className="pl-0.5 text-xs font-semibold uppercase tracking-wider text-textTertiary">voice</h3>
         {here && (
           <div id="group-voice-controls" className="flex shrink-0 items-center gap-0.5">
-            <BarButton label={muted ? 'unmute' : 'mute'} pressed={muted} onClick={() => setVoiceMuted(!muted)}>
-              {muted ? <RiMicOffLine aria-hidden size={14} /> : <RiMicLine aria-hidden size={14} />}
+            <BarButton ref={micButton} label={muted ? 'unmute' : 'mute'} pressed={muted} onClick={() => setVoiceMuted(!muted)} className="relative">
+              {muted ? (
+                <RiMicOffLine aria-hidden size={14} />
+              ) : (
+                <>
+                  <RiMicLine aria-hidden size={14} />
+                  {/* the capsule fills from its foot with your level (--lvl, 0..1): 62% down is the foot, 8% the top */}
+                  {!deaf && (
+                    <RiMicFill
+                      aria-hidden
+                      size={14}
+                      className="absolute inset-0 m-auto text-increase"
+                      style={{ clipPath: 'inset(calc(62% - var(--lvl,0) * 54%) 0 38% 0)' }}
+                    />
+                  )}
+                </>
+              )}
             </BarButton>
             <BarButton label={deaf ? 'undeafen' : 'deafen'} pressed={deaf} onClick={() => setVoiceDeaf(!deaf)}>
               <RiHeadphoneLine aria-hidden size={14} />
@@ -188,15 +240,32 @@ export function VoicePanel({
   );
 }
 
-function BarButton({ label, pressed, danger, onClick, children }: { label: string; pressed?: boolean; danger?: boolean; onClick: () => void; children: ReactNode }) {
+function BarButton({
+  ref,
+  label,
+  pressed,
+  danger,
+  onClick,
+  className,
+  children
+}: {
+  ref?: Ref<HTMLButtonElement>;
+  label: string;
+  pressed?: boolean;
+  danger?: boolean;
+  onClick: () => void;
+  className?: string;
+  children: ReactNode;
+}) {
   return (
     <Tooltip content={label}>
       <button
+        ref={ref}
         type="button"
         aria-label={label}
         aria-pressed={pressed}
         onClick={onClick}
-        className={cn(CALL_BUTTON, danger ? 'text-decrease' : pressed ? 'border-primaryBlue text-primaryBlue' : 'text-textSecondary hover:text-textPrimary')}
+        className={cn(CALL_BUTTON, danger ? 'text-decrease' : pressed ? 'border-primaryBlue text-primaryBlue' : 'text-textSecondary hover:text-textPrimary', className)}
       >
         {children}
       </button>
