@@ -13,7 +13,7 @@ import { store } from '@/infra/store';
 
 /** Who says it. */
 export const EQUES = 'Eques';
-/** The words until the streamer changes them: the column's default (0008-chat-welcome.sql). */
+/** The words until the streamer changes them: the column's default (0009-chat-welcome.sql). */
 export const DEFAULT_WELCOME = 'welcome to the chat!';
 /** The api keeps this many characters. The box stops there too. */
 export const MAX_WELCOME_CHARS = 300;

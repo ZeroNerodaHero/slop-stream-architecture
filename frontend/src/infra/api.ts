@@ -582,7 +582,12 @@ export interface OAuthIdentities {
   has_password: boolean;
   /** Absent on an older api: then it is `identities.length > 0`. */
   oauth_verified?: boolean;
-  identities: { provider: OAuthProvider; linked_at: string }[];
+  /**
+   * `name` and `avatar` are what the provider shows (the picture only ever on its own image
+   * host); null for one linked before they were kept, until its next login, and absent on an
+   * older api. Never the email.
+   */
+  identities: { provider: OAuthProvider; linked_at: string; name?: string | null; avatar?: string | null }[];
 }
 
 /** Proof that this page is the one that went live. Heartbeat and stop carry it. */

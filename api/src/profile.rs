@@ -956,7 +956,7 @@ async fn put_about(
 
 // ---- the chat welcome (docs/chat.md) ----------------------------------------------------------
 
-/// What `Eques` says until the streamer changes it: the column's default (0008-chat-welcome.sql).
+/// What `Eques` says until the streamer changes it: the column's default (0009-chat-welcome.sql).
 const DEFAULT_WELCOME: &str = "welcome to the chat!";
 /// The welcome as kept, at most. The page's box stops here too.
 const MAX_WELCOME_CHARS: usize = 300;
