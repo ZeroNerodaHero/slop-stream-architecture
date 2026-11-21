@@ -5,6 +5,7 @@ import {
   RiCloseLine,
   RiDeleteBinLine,
   RiForbidLine,
+  RiGlobalLine,
   RiGroupLine,
   RiHashtag,
   RiInformationLine,
@@ -194,9 +195,6 @@ const ICON_BUTTON =
  * which has no pointer to rest there. Muted, the bell is the mark that says so, and stays up.
  */
 const BELL_HIDDEN = 'opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/channel:opacity-100 [@media(hover:none)]:opacity-100';
-
-/** The pencil by a channel's name on the channels tab, the same way: up with the pointer on the name (`group/name`), the focus on it, or no hover to wait for. */
-const PENCIL_HIDDEN = 'opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/name:opacity-100 [@media(hover:none)]:opacity-100';
 
 const COLORS = ['#5865f2', '#f85149', '#3fb950', '#f2cc60', '#bc8cff', '#ff9f43', '#39d2c0', '#ff6bcb'] as const;
 
@@ -583,47 +581,17 @@ function keptTo(room: GroupRoom, channel: string): GroupRole[] {
   return room.roles.filter((role) => (role.channels ?? []).includes(channel));
 }
 
-/**
- * A channel's cooldown on the channels tab: a clock and the word (`off`, `30s`), which for the
- * channels power opens the choices as a menu (HoverMenu; a pick puts it, `setChannelCooldown`),
- * and for anyone else stands as it is, and only while there is one. On the page's list the
- * clock alone, the word its tooltip (`words`).
- */
-function CooldownMark({ item, canSet, onPick, words = false }: { item: Channel; canSet: boolean; onPick?: (seconds: number) => void; words?: boolean }) {
+/** A channel's cooldown on the page's list: the clock alone, the word its tooltip, and only while there is one. */
+function CooldownMark({ item }: { item: Channel }) {
   const seconds = item.cooldown ?? 0;
-  if (words) {
-    if (seconds === 0) return null;
-    const said = `cooldown ${cooldownWords(seconds)}`;
-    return (
-      <Tooltip content={said}>
-        <span role="img" aria-label={said} data-cooldown={seconds} className="flex shrink-0 text-textTertiary">
-          <RiTimeLine aria-hidden size={14} />
-        </span>
-      </Tooltip>
-    );
-  }
-  if (!canSet) {
-    if (seconds === 0) return null;
-    return (
-      <span data-cooldown={seconds} className="flex shrink-0 items-center gap-1 text-xs text-textTertiary">
-        <RiTimeLine aria-hidden size={14} />
-        {cooldownWords(seconds)}
-      </span>
-    );
-  }
+  if (seconds === 0) return null;
+  const said = `cooldown ${cooldownWords(seconds)}`;
   return (
-    <HoverMenu
-      label={`cooldown of #${item.name}`}
-      items={(COOLDOWNS.includes(seconds) ? COOLDOWNS : [...COOLDOWNS, seconds].sort((a, b) => a - b)).map((s) => ({ key: String(s), label: cooldownWords(s) }))}
-      onPick={(key) => onPick?.(Number(key))}
-      className={cn(
-        'flex shrink-0 items-center gap-1 text-xs focus-visible:text-primaryBlue focus-visible:outline-none',
-        seconds > 0 ? 'text-textSecondary hover:text-textPrimary' : 'text-textTertiary hover:text-textPrimary'
-      )}
-    >
-      <RiTimeLine aria-hidden size={14} />
-      <span data-cooldown={seconds}>{cooldownWords(seconds)}</span>
-    </HoverMenu>
+    <Tooltip content={said}>
+      <span role="img" aria-label={said} data-cooldown={seconds} className="flex shrink-0 text-textTertiary">
+        <RiTimeLine aria-hidden size={14} />
+      </span>
+    </Tooltip>
   );
 }
 
@@ -637,107 +605,6 @@ function KeptMark({ roles }: { roles: GroupRole[] }) {
         <RiLockLine aria-hidden size={14} />
       </span>
     </Tooltip>
-  );
-}
-
-/**
- * Who sees a channel, on its row in the channels tab (docs/groups.md): two boxes, `everyone`
- * and `selected roles`, and under the second the group's roles as chips in their colours,
- * pressed for the ones the channel is kept to. Kept to roles, it is seen by their holders, the
- * owners and the channels power. Each press is one `setChannelRoles`, the whole list; the room
- * catches up on the `role` facts, and until it does the list sent stands on screen. The api
- * reads an empty list as everyone's, so `selected roles` with nothing picked is this row's
- * alone (owner-only on screen, nothing sent) until a role is, and the last role kept cannot be
- * let go of here: `everyone` is the way back. A role carrying a power this login lacks is out
- * of reach, as in the roles tab. The home channel is everyone's: the boxes stand, greyed.
- */
-function ChannelSeers({ server, name, room, run }: { server: string; name: string; room: GroupRoom; run: Run }) {
-  const kept = keptTo(room, name).map((role) => role.id);
-  const key = [...kept].sort().join(' ');
-  /** The list last sent, while the room still says what it said when it went (`from`). */
-  const [sent, setSent] = useState<{ from: string; ids: string[] } | null>(null);
-  /** `selected roles` pressed with no role picked yet: nothing told the api, since an empty list is everyone's. */
-  const [picking, setPicking] = useState(false);
-  const ids = sent && sent.from === key ? sent.ids : kept;
-  const everyones = name === homeChannel(room.channels);
-  const selected = !everyones && (ids.length > 0 || picking);
-
-  async function put(next: string[]) {
-    setSent({ from: key, ids: next });
-    let ok = false;
-    await run(async () => {
-      await api.setChannelRoles(server, name, next);
-      ok = true;
-    });
-    if (!ok) setSent(null);
-    else setPicking(false);
-  }
-
-  const box = (on: boolean) => cn(on && 'border-primaryBlue text-primaryBlue hover:border-primaryBlue');
-  return (
-    <div className="flex flex-col gap-2">
-      <Tooltip content={everyones ? `#${name} is everyone's` : null}>
-        <div role="group" aria-label={`who sees #${name}`} className="flex items-center">
-          <Button
-            id={`channel-seers-${name}-everyone`}
-            size="sm"
-            aria-pressed={!selected}
-            disabled={everyones}
-            className={box(!selected)}
-            onClick={() => {
-              setPicking(false);
-              if (ids.length > 0) void put([]);
-            }}
-          >
-            everyone
-          </Button>
-          <Button
-            id={`channel-seers-${name}-roles`}
-            size="sm"
-            aria-pressed={selected}
-            disabled={everyones}
-            className={cn('-ml-px', box(selected))}
-            onClick={() => setPicking(true)}
-          >
-            selected roles
-          </Button>
-        </div>
-      </Tooltip>
-      {selected && (
-        <div role="group" aria-label={`roles that see #${name}`} className="flex flex-wrap items-center gap-1">
-          {room.roles.map((role) => {
-            const on = ids.includes(role.id);
-            const within = reaches(room, role.perms);
-            const last = on && ids.length === 1;
-            const why = !within ? "it carries a power you don't hold" : last ? 'the last role: pick another first, or press everyone' : null;
-            return (
-              <Tooltip key={role.id} content={why}>
-                <Button
-                  id={`channel-role-${name}-${role.id}`}
-                  data-role={role.name}
-                  size="sm"
-                  aria-pressed={on}
-                  aria-disabled={why !== null || undefined}
-                  className={cn(why !== null && 'cursor-not-allowed opacity-50')}
-                  style={on ? { color: role.color, borderColor: role.color } : undefined}
-                  onClick={() => {
-                    if (why !== null) return;
-                    void put(on ? ids.filter((id) => id !== role.id) : [...ids, role.id]);
-                  }}
-                >
-                  <span style={on ? undefined : { color: role.color }}>{role.name}</span>
-                </Button>
-              </Tooltip>
-            );
-          })}
-          {ids.length === 0 && (
-            <p className="text-xs text-textTertiary">
-              only the owner until you pick a role. nothing is saved until then{room.roles.length === 0 ? ': make one in the roles tab' : ''}.
-            </p>
-          )}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -814,11 +681,14 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
   const canPin = room.perms.channels;
   const words = count === 0 ? 'pinned messages' : `pinned messages: ${count}`;
 
-  // another channel is another list
-  useEffect(() => {
+  // another channel is another list: put back in the render that brings it, not an effect after
+  const where = `${server}/${channel}`;
+  const [shownFor, setShownFor] = useState(where);
+  if (shownFor !== where) {
+    setShownFor(where);
     setOpen(false);
     setList(null);
-  }, [server, channel]);
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -1724,7 +1594,7 @@ function ChannelList({
                 </Link>
               )}
               <KeptMark roles={keptTo(room, item.name)} />
-              <CooldownMark item={item} canSet={false} words />
+              <CooldownMark item={item} />
               {canEditChannel(item) && (
                 <Tooltip content="edit">
                   <button
@@ -3054,117 +2924,80 @@ function BansSection({ server, room, run }: ManageProps) {
   );
 }
 
-/**
- * A channel's name on its row of the channels tab and, within reach, the way to change it: a
- * pencil beside the name (up while the pointer or the keyboard is on the name) opens the name
- * as a box in its own place, typed to the name rule like the add dialog's. Enter puts the new
- * name; escape leaves the old one; the box losing focus puts a name that passes and leaves one
- * that does not. Enter on a name that cannot be keeps the box, with the fault where the about
- * line was. The row keeps its shape: the box is the name's size, with a stroke under it.
- */
-function ChannelName({ item, channels, editable, onRename }: { item: Channel; channels: Channel[]; editable: boolean; onRename: (to: string) => void }) {
-  const { name, about } = item;
-  /** What the box holds while it is open. Null: the name is a word. */
-  const [draft, setDraft] = useState<string | null>(null);
-  const box = useRef<HTMLInputElement | null>(null);
-  /** The box was closed by a key: the blur that may follow its unmount puts nothing. */
-  const closed = useRef(false);
-  const editing = draft !== null;
-  const fault = editing && draft !== name ? channelNameFault(draft, channels) : '';
-  const ok = editing && draft !== name && isValidName(draft) && fault === '';
+/** A channel as it is being changed in place: the name it is known by now (`from`), and what `save` puts. */
+interface ChannelDraft {
+  from: string;
+  name: string;
+  /** The roles it is kept to, by id; none is everyone's. */
+  roles: string[];
+  /** Seconds between a member's lines; 0 none. */
+  cooldown: number;
+}
 
-  useLayoutEffect(() => {
-    if (!editing) return;
-    closed.current = false;
-    box.current?.focus();
-    box.current?.select();
-  }, [editing]);
+/** What a new channel is called: `new-channel`, or the first of `new-channel-2`, `new-channel-3`, … that no channel here has, so the add never collides. */
+function freshChannelName(channels: Channel[]): string {
+  const taken = new Set(channels.map((item) => item.name));
+  if (!taken.has('new-channel')) return 'new-channel';
+  let n = 2;
+  while (taken.has(`new-channel-${n}`)) n += 1;
+  return `new-channel-${n}`;
+}
 
-  /** The box closes; with `put`, the name in it goes to the api when it can. */
-  function finish(put: boolean) {
-    if (closed.current) return;
-    closed.current = true;
-    if (put && ok && draft) onRename(draft);
-    setDraft(null);
-  }
-
-  return (
-    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-      {editing ? (
-        <span className="flex min-w-0 items-center font-semibold">
-          <span aria-hidden>#</span>
-          <input
-            ref={box}
-            id={`channel-name-${name}`}
-            value={draft}
-            onChange={(e) =>
-              setDraft(
-                e.target.value
-                  .toLowerCase()
-                  .replace(/[^a-z0-9_-]/g, '')
-                  .slice(0, 32)
-              )
-            }
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                if (ok) finish(true);
-                else if (draft === name) finish(false);
-              } else if (e.key === 'Escape') {
-                // the manage dialog is a <dialog>: left to the browser, escape closes it, box and all
-                e.preventDefault();
-                e.stopPropagation();
-                finish(false);
-              }
-            }}
-            onBlur={() => finish(true)}
-            aria-label={`rename #${name}`}
-            aria-invalid={fault !== '' || undefined}
-            maxLength={32}
-            autoComplete="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            className={cn(
-              'min-w-0 flex-1 border-0 border-b bg-transparent p-0 font-semibold text-textPrimary outline-none',
-              fault ? 'border-decrease' : 'border-primaryBlue'
-            )}
-          />
-        </span>
-      ) : (
-        <span className="group/name flex min-w-0 items-center gap-1.5">
-          <span className="truncate border-b border-transparent font-semibold">#{name}</span>
-          {editable && (
-            <Tooltip content="rename">
-              <button
-                id={`channel-rename-${name}`}
-                type="button"
-                aria-label={`rename #${name}`}
-                onClick={() => setDraft(name)}
-                className={cn('flex shrink-0 text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none', PENCIL_HIDDEN)}
-              >
-                <RiPencilLine aria-hidden size={14} />
-              </button>
-            </Tooltip>
-          )}
-        </span>
-      )}
-      {fault ? <span className="text-xs text-decrease">{fault}</span> : about && <span className="truncate text-xs text-textTertiary">{about}</span>}
+/** A channel's name as the list says it: `#` and the name, or the speaker and the name on a voice one. */
+function ChannelWord({ item, name }: { item: Channel; name: string }) {
+  return isVoice(item) ? (
+    <span className="flex min-w-0 items-center gap-1">
+      <RiVolumeUpLine aria-label="voice" size={14} className="shrink-0" />
+      <span className="truncate">{name}</span>
     </span>
+  ) : (
+    <span className="truncate">#{name}</span>
+  );
+}
+
+/**
+ * Who sees a channel, said short: the globe and `everyone`, or the lock, the roles' dots and
+ * how many, with their names as the tooltip.
+ */
+function SeersMark({ roles }: { roles: GroupRole[] }) {
+  if (roles.length === 0)
+    return (
+      <span className="flex shrink-0 items-center gap-1 text-xs text-textTertiary">
+        <RiGlobalLine aria-hidden size={14} />
+        everyone
+      </span>
+    );
+  const words = `only ${roles.map((role) => role.name).join(', ')}`;
+  return (
+    <Tooltip content={words}>
+      <span aria-label={words} className="flex shrink-0 items-center gap-1 text-xs text-textTertiary">
+        <RiLockLine aria-hidden size={14} />
+        {roles.map((role) => (
+          <span key={role.id} aria-hidden className="h-2 w-2 shrink-0" style={{ backgroundColor: role.color }} />
+        ))}
+        <span aria-hidden>{roles.length === 1 ? '1 role' : `${roles.length} roles`}</span>
+      </span>
+    </Tooltip>
   );
 }
 
 /**
  * The channels in their order, each a row: a handle to drag it by (the arrow keys on the
- * handle do the same, a row a press), the name with its pencil (ChannelName), the line about
- * it, and `delete` (never on the home channel). A press moves the row at once and tells the api
- * (setChannelOrder, room-atoms); a drag moves it as the pointer goes and tells the api once,
- * on the drop. A rename asks the api first and lands when it says yes (renameChannel): the
- * list on the left follows under the backdrop, as does every other room open, and a page on
- * the channel moves to its new address. `add channel` opens the dialog the row under the list
- * opens. Deleting the channel on screen moves the page to the home channel first, so the room under
- * the dialog stays a room. The order and the add are the channels power's: without it this
- * login is here for a channel they made (managesChannels), the rows are read, and the pencil
- * and `delete` are on theirs.
+ * handle do the same, a row a press), the name, who sees it and its cooldown. A row within
+ * reach is the click: it opens in place, one at a time, as the roles tab's do: the name in a
+ * box, who sees it (`everyone`, or the roles picked: a role picked lets go of everyone, the
+ * last role let go of is everyone again, and everyone lets go of every role; the owners and
+ * the channels power see it whatever is picked), the cooldown (not on a voice one: it has no lines), and save, cancel and delete
+ * (never on the home channel, nor the last voice one). A save sends what changed: who sees
+ * it (setChannelRoles), the cooldown, then the name (editChannel), which lands when the api
+ * says yes, the list on the left following under the backdrop and a page on the channel
+ * moving to its new address. A drag moves the row as the pointer goes and tells the api once,
+ * on the drop (setChannelOrder, room-atoms). `add channel` makes one right away, called
+ * `new-channel` (numbered when that is taken), and opens it with the name selected. Deleting
+ * the channel on screen moves the page to the home channel first, so the room under the
+ * dialog stays a room. The order, the add, who sees it and the cooldown are the channels
+ * power's: without it this login is here for a channel they made (managesChannels), and the
+ * name and delete are what opens on theirs.
  */
 function ChannelsSection({ server, channel, room, run }: ManageProps & { channel: string }) {
   const navigate = useNavigate();
@@ -3172,11 +3005,18 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
   const names = channels.map((item) => item.name);
   const byName = new Map(channels.map((item) => [item.name, item]));
   const orders = room.perms.channels;
+  const home = homeChannel(channels);
+  const [draft, setDraft] = useState<ChannelDraft | null>(null);
   const [adding, setAdding] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [sure, setSure] = useState<string | null>(null);
+  /** The name box that has had its open-time select. A later focus of the same box edits in place; a channel opened is a new box. */
+  const selected = useRef<HTMLInputElement | null>(null);
   const full = channels.length >= CHANNEL_CAP;
   // a server keeps one voice channel: the last one has no delete (the api says so too)
   const voiceCount = channels.filter(isVoice).length;
+  // the row open in place: the draft, while the channel it is of is still there
+  const open = draft !== null && byName.has(draft.from) ? draft : null;
   // a row by its handle (Reorderable): the rows move on a draft, and the drop tells the api.
   // the room moves to the new order at once (room-atoms), so the draft can go in the same breath
   const reorder = useReorder({
@@ -3184,6 +3024,47 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
     name: (name) => `#${name}`,
     onMove: (name, to) => void run(() => setChannelOrder(server, movedTo(names, name, to)))
   });
+
+  /** The channel's draft as it stands in the room. */
+  function draftOf(item: Channel): ChannelDraft {
+    return { from: item.name, name: item.name, roles: keptTo(room, item.name).map((role) => role.id), cooldown: item.cooldown ?? 0 };
+  }
+
+  /** A channel now, so it has a name to be known by, then open with the name selected. */
+  async function add() {
+    setAdding(true);
+    try {
+      await run(async () => {
+        const made = await api.createChannel(server, freshChannelName(channels));
+        setDraft({ from: made.name, name: made.name, roles: [], cooldown: made.cooldown ?? 0 });
+      });
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    const item = open && byName.get(open.from);
+    if (!open || !item || saving) return;
+    const clean = cleanName(open.name);
+    const was = draftOf(item);
+    setSaving(true);
+    try {
+      await run(async () => {
+        // by the old name first: the rename goes last
+        if (orders && [...open.roles].sort().join(' ') !== [...was.roles].sort().join(' ')) await api.setChannelRoles(server, open.from, open.roles);
+        if (orders && !isVoice(item) && open.cooldown !== was.cooldown) await api.setChannelCooldown(server, open.from, open.cooldown);
+        if (clean !== open.from) await editChannel(server, open.from, { name: clean });
+        setDraft(null);
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const sureItem = sure === null ? undefined : byName.get(sure);
+  const sureVoice = sureItem !== undefined && isVoice(sureItem);
 
   async function remove(name: string) {
     await run(async () => {
@@ -3193,76 +3074,248 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
   }
 
   return (
-    <Section
-      title="channels"
-      description={`${channels.length} of ${CHANNEL_CAP}, top to bottom as the list shows them. ${
-        orders
-          ? `drag a row to move it. the pencil by a name changes it. under each, who sees it: everyone, or the roles you pick and the owners. #${homeChannel(channels)} stays everyone's.`
-          : 'the channels power moves and adds them; the ones you made are yours to rename and delete.'
-      }`}
-    >
+    <Section title="channels" description={`${channels.length} of ${CHANNEL_CAP}`}>
       <div className="relative">
-        <ul id="manage-channels" {...reorder.list} className="flex flex-col gap-2">
+        <ul id="manage-channels" {...reorder.list} className="flex flex-col gap-1">
           {reorder.order.map((name) => {
             const item = byName.get(name);
             if (!item) return null;
+            const handle = orders && <DragHandle id={`channel-drag-${name}`} {...reorder.handle(name)} />;
+            const isHome = name === home;
+            if (open?.from === name) {
+              const clean = cleanName(open.name);
+              const fault = clean === name ? '' : channelNameFault(clean, channels);
+              const ok = isValidName(clean) && fault === '';
+              const cooldowns = COOLDOWNS.includes(open.cooldown) ? COOLDOWNS : [...COOLDOWNS, open.cooldown].sort((a, b) => a - b);
+              const shown = room.roles.filter((role) => open.roles.includes(role.id));
+              const everyone = open.roles.length === 0;
+              const canDelete = item.can_delete && !isHome && !(isVoice(item) && voiceCount === 1);
+              return (
+                <li key={name} data-channel={name} data-open {...reorder.item(name)} className="border border-primaryBlue bg-background">
+                  <form id="channel-form" onSubmit={(e) => void save(e)}>
+                    <div className="flex items-center gap-2.5 border-b border-primaryStroke px-2.5 py-2">
+                      {handle}
+                      <span className="flex min-w-0 flex-1 text-[15px] font-semibold">
+                        <ChannelWord item={item} name={clean || name} />
+                      </span>
+                      <SeersMark roles={shown} />
+                      {canDelete && (
+                        <Button
+                          id="channel-delete"
+                          size="sm"
+                          variant="outline-danger"
+                          className="gap-1 border-decrease/40 px-2 py-1 text-xs"
+                          onClick={() => setSure(name)}
+                        >
+                          <RiDeleteBinLine aria-hidden size={14} />
+                          delete
+                        </Button>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-2.5 p-2.5">
+                      {/* the name, the `#` (a voice one's speaker) inside the box */}
+                      <div className="flex flex-col gap-1">
+                        <div className="relative">
+                          <span aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-textTertiary">
+                            {isVoice(item) ? <RiVolumeUpLine size={14} className="block" /> : '#'}
+                          </span>
+                          <input
+                            id="channel-name"
+                            value={open.name}
+                            onChange={(e) =>
+                              setDraft({
+                                ...open,
+                                name: e.target.value
+                                  .toLowerCase()
+                                  .replace(/[^a-z0-9_-]/g, '')
+                                  .slice(0, 32)
+                              })
+                            }
+                            placeholder="name"
+                            maxLength={32}
+                            aria-label="channel name"
+                            aria-invalid={fault !== '' || undefined}
+                            aria-describedby={fault ? 'channel-name-fault' : undefined}
+                            disabled={!canEditChannel(item)}
+                            autoComplete="off"
+                            autoCapitalize="off"
+                            spellCheck={false}
+                            autoFocus
+                            onFocus={(e) => {
+                              if (selected.current === e.currentTarget) return;
+                              selected.current = e.currentTarget;
+                              e.currentTarget.select();
+                            }}
+                            className={cn(INPUT, isVoice(item) ? 'pl-8' : 'pl-7')}
+                          />
+                        </div>
+                        {fault && (
+                          <p id="channel-name-fault" className="text-xs text-decrease">
+                            {fault}
+                          </p>
+                        )}
+                      </div>
+                      {/* who sees it: everyone, or the roles picked (and the owners, always). the home channel stays everyone's */}
+                      {orders && (
+                        <div className="flex flex-col gap-1">
+                          <span id="channel-seers-label" className="text-xs font-semibold text-textSecondary">
+                            who sees it
+                          </span>
+                          <div role="group" aria-labelledby="channel-seers-label" className="flex flex-wrap gap-1.5">
+                            <Tooltip content={isHome ? `${name} stays everyone's` : null}>
+                              <Button
+                                id="channel-seers-everyone"
+                                size="sm"
+                                aria-pressed={everyone}
+                                aria-disabled={isHome || undefined}
+                                className={cn('gap-1.5 font-semibold', everyone ? 'border-primaryBlue text-primaryBlue hover:border-primaryBlue' : 'text-textTertiary')}
+                                onClick={() => {
+                                  if (!isHome) setDraft({ ...open, roles: [] });
+                                }}
+                              >
+                                <RiGlobalLine aria-hidden size={14} />
+                                everyone
+                              </Button>
+                            </Tooltip>
+                            {room.roles.map((role) => {
+                              const on = open.roles.includes(role.id);
+                              // a role carrying a power this login lacks is out of reach, as in the roles tab
+                              const why = isHome ? `${name} stays everyone's` : !reaches(room, role.perms) ? "it carries a power you don't hold" : null;
+                              return (
+                                <Tooltip key={role.id} content={why}>
+                                  <Button
+                                    id={`channel-role-${role.id}`}
+                                    data-role={role.name}
+                                    size="sm"
+                                    aria-pressed={on}
+                                    aria-disabled={why !== null || undefined}
+                                    className={cn('gap-1.5 font-semibold', !on && 'text-textTertiary', why !== null && 'cursor-not-allowed opacity-50')}
+                                    style={on ? { color: roleInk(role.color), borderColor: role.color } : undefined}
+                                    onClick={() =>
+                                      why === null &&
+                                      setDraft({ ...open, roles: on ? open.roles.filter((id) => id !== role.id) : [...open.roles, role.id] })}
+                                  >
+                                    <span aria-hidden className="h-2 w-2 shrink-0" style={{ backgroundColor: role.color }} />
+                                    {role.name}
+                                  </Button>
+                                </Tooltip>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      {/* the cooldown: seconds between a member's lines, one segment each, as the roles tab's. a voice one has no lines */}
+                      {orders && !isVoice(item) && (
+                        <div className="flex flex-col gap-1">
+                          <span id="channel-cooldown-label" className="text-xs font-semibold text-textSecondary">
+                            cooldown
+                          </span>
+                          <div
+                            role="group"
+                            aria-labelledby="channel-cooldown-label"
+                            className="grid divide-x divide-primaryStroke border border-primaryStroke"
+                            style={{ gridTemplateColumns: `repeat(${cooldowns.length}, minmax(0, 1fr))` }}
+                          >
+                            {cooldowns.map((seconds) => (
+                              <button
+                                key={seconds}
+                                id={`channel-cooldown-${seconds}`}
+                                type="button"
+                                aria-pressed={open.cooldown === seconds}
+                                onClick={() => setDraft({ ...open, cooldown: seconds })}
+                                className={cn(
+                                  'py-1.5 text-sm font-semibold focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
+                                  open.cooldown === seconds ? 'bg-primaryBlue/10 text-primaryBlue' : 'text-textTertiary hover:text-textPrimary'
+                                )}
+                              >
+                                {cooldownWords(seconds)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Button id="channel-cancel" size="sm" onClick={() => setDraft(null)}>
+                          cancel
+                        </Button>
+                        <Button id="channel-save" type="submit" size="sm" variant="primary" className="text-white" disabled={!ok || saving}>
+                          save
+                        </Button>
+                      </div>
+                    </div>
+                  </form>
+                </li>
+              );
+            }
+            // a row opens for who may change something on it: the channels power, or its maker
+            const opens = orders || canEditChannel(item) || item.can_delete;
+            const seconds = item.cooldown ?? 0;
+            const body = (
+              <>
+                <span className="flex min-w-0 flex-1 font-semibold">
+                  <ChannelWord item={item} name={name} />
+                </span>
+                <SeersMark roles={keptTo(room, name)} />
+                {!isVoice(item) && (
+                  <span data-cooldown={seconds} className="flex shrink-0 items-center gap-1 text-xs text-textTertiary">
+                    <RiTimeLine aria-hidden size={14} />
+                    <span className="sr-only">cooldown</span>
+                    {cooldownWords(seconds)}
+                  </span>
+                )}
+              </>
+            );
             return (
               <li
                 key={name}
                 data-channel={name}
                 {...reorder.item(name)}
                 className={cn(
-                  'flex flex-col gap-2 border bg-background px-3 py-2 transition-[border-color] duration-150',
-                  reorder.held === name ? 'border-primaryBlue' : 'border-primaryStroke'
+                  'flex items-center gap-2.5 border bg-background pl-2.5 transition-[border-color] duration-150',
+                  reorder.held === name ? 'border-primaryBlue' : 'border-primaryStroke',
+                  opens && 'hover:bg-primaryStroke/20'
                 )}
               >
-                <div className="flex items-center gap-3">
-                  {orders && <DragHandle id={`channel-drag-${name}`} {...reorder.handle(name)} />}
-                  {/* the api's rename rule: who made it, or the channels power, the home channel too */}
-                  <ChannelName
-                    item={item}
-                    channels={channels}
-                    editable={canEditChannel(item)}
-                    onRename={(to) => void run(() => editChannel(server, name, { name: to }))}
-                  />
-                  <KeptMark roles={keptTo(room, name)} />
-                  <CooldownMark item={item} canSet={orders} onPick={(seconds) => void run(() => api.setChannelCooldown(server, name, seconds))} />
-                  {item.can_delete && !(isVoice(item) && voiceCount === 1) && (
-                    <button id={`channel-remove-${name}`} type="button" className="shrink-0 text-sm text-decrease" onClick={() => setSure(name)}>
-                      delete
-                    </button>
-                  )}
-                </div>
-                {/* who sees it: the channels power's say, from the channel's side */}
-                {orders && <ChannelSeers server={server} name={name} room={room} run={run} />}
+                {handle}
+                {opens ? (
+                  <button
+                    id={`channel-open-${name}`}
+                    type="button"
+                    aria-label={`edit ${isVoice(item) ? '' : '#'}${name}`}
+                    className="flex min-w-0 flex-1 items-center gap-2.5 py-1.5 pr-2.5 text-left focus-visible:outline-none focus-visible:[&>span:first-child]:text-primaryBlue"
+                    onClick={() => setDraft(draftOf(item))}
+                  >
+                    {body}
+                    <RiArrowRightSLine aria-hidden size={16} className="shrink-0 text-textTertiary" />
+                  </button>
+                ) : (
+                  <span className="flex min-w-0 flex-1 items-center gap-2.5 py-1.5 pr-2.5">{body}</span>
+                )}
               </li>
             );
           })}
         </ul>
         {reorder.status}
       </div>
-      {orders && full && <p className="text-textTertiary">{CHANNEL_CAP} channels is the cap. delete one to add another.</p>}
-      {orders && !full && (
-        <button
-          id="manage-channel-add"
-          type="button"
-          aria-haspopup="dialog"
-          className="self-start text-sm font-semibold text-primaryBlue"
-          onClick={() => setAdding(true)}
-        >
-          add channel
-        </button>
-      )}
-      {adding && <ChannelDialog server={server} channels={channels} onClose={() => setAdding(false)} />}
+      {orders &&
+        (full ? (
+          <p className="text-textTertiary">{CHANNEL_CAP} channels is the cap. delete one to add another.</p>
+        ) : (
+          <Button id="manage-channel-add" size="sm" className="w-full gap-1.5 py-2 text-primaryBlue" disabled={adding} onClick={() => void add()}>
+            <RiAddLine aria-hidden size={16} />
+            add channel
+          </Button>
+        ))}
       {sure && (
         <ConfirmDialog
           id={`manage-channel-delete-${sure}`}
-          title={`delete #${sure}?`}
+          title={`delete ${sureVoice ? '' : '#'}${sure}?`}
           message="the channel goes."
           yes="yes, delete"
           onYes={() => {
             const name = sure;
             setSure(null);
+            setDraft(null);
             void remove(name);
           }}
           onNo={() => setSure(null)}
@@ -3295,7 +3348,7 @@ function freshRoleName(roles: GroupRole[]): string {
  * The roles, each a row: the name in its colour, the powers it carries and the channels kept
  * to it. A row within reach is the click: it opens in place as the name, the colour, the
  * powers and the cooldown, with save, cancel and delete; one is open at a time. Who sees a
- * channel is said from the channel's side (the channels tab, `ChannelSeers`); a save here sends
+ * channel is said from the channel's side (the channels tab); a save here sends
  * the role's channels back as they stand. `add role` makes one right away, called `new role` (numbered when
  * that is taken), and opens it with the name selected, so what is typed next is its name. A
  * role is known by its id, not its name: a rename is a save like any other, and the open row
