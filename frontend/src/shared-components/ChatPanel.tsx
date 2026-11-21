@@ -38,6 +38,7 @@ import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { CHIP, CHIP_BUTTON, ControlTip } from '@/shared-components/VideoControls';
+import { keepFocus, stuckAfterScroll, useBottomPin } from '@/infra/keyboard';
 import { compressChatImage } from '@/infra/picture';
 import { cn } from '@/utils/cn';
 
@@ -730,20 +731,12 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
 
   // The list changes height under the reader (a phone's keyboard, the player easing to a strip and
   // back, mobile.ts; the `replying to` bar or the pictures' strip coming up over the box): one
-  // sitting at the newest line stays there through it
-  useEffect(() => {
-    const el = listRef.current;
-    if (!el) return;
-    const seen = new ResizeObserver(() => {
-      if (stuck.current) el.scrollTop = el.scrollHeight;
-    });
-    seen.observe(el);
-    return () => seen.disconnect();
-  }, [aside]);
+  // sitting at the newest line stays there through it (keyboard.ts)
+  useBottomPin(listRef, stuck, aside);
 
   function onScroll(e: UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= STUCK_PX;
+    const atBottom = stuckAfterScroll(el, stuck.current, STUCK_PX);
     stuck.current = atBottom;
     room.setFollowing(atBottom);
     room.noteScroll(el.scrollTop);
@@ -1034,12 +1027,12 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
                 disabled={!canSend}
                 title={wait > 0 ? `${tier.words}. the next in ${waitWords(wait)}` : undefined}
                 data-wait={wait > 0 ? wait : undefined}
-                // a touch while typing: the box keeps the focus (and is given it back after, should the
-                // browser blur it anyway), so a phone's keyboard stays up and its player stays a strip
-                // (mobile.ts, `useChatTyping`). a mouse's press is left as it was
+                // a touch while typing: the box keeps the focus (keyboard.ts, `keepFocus`; and is given it back
+                // after, should the browser blur it anyway), so a phone's keyboard stays up and its player stays
+                // a strip (mobile.ts, `keyboardStrip`). a mouse's press is left as it was
                 onPointerDown={(e) => {
                   sendKeepsFocus.current = e.pointerType !== 'mouse' && document.activeElement === textRef.current;
-                  if (sendKeepsFocus.current) e.preventDefault();
+                  keepFocus(e);
                 }}
                 onClick={() => {
                   room.send();

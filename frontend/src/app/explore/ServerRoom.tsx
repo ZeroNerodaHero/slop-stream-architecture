@@ -102,7 +102,7 @@ import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Face } from '@/shared-components/Face';
 import { RailFace } from '@/shared-components/Friends';
 import { GroupMark } from '@/shared-components/GroupMark';
-import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack, useSheetKeyboard } from '@/shared-components/MobileSheet';
+import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack } from '@/shared-components/MobileSheet';
 import { BAR_BUTTON, when } from '@/shared-components/ChatLine';
 import { ChatImages, ChatPanel } from '@/shared-components/ChatPanel';
 import { PageFrame } from '@/shared-components/PageFrame';
@@ -158,13 +158,16 @@ const roomColumns = (membersOpen: boolean) => (membersOpen ? 'lg:grid-cols-[176p
 const ROOM_CHAT_CONTAINER = '[container-type:inline-size]';
 const pinsWidth = (membersOpen: boolean) =>
   cn('w-[max(20rem,80cqw)] max-w-[calc(100vw-2rem)]', !membersOpen && 'lg:w-[max(20rem,calc(0.8*(100cqw_-_168px)))]');
-const ROOM_HEIGHT = 'h-[calc(100dvh-var(--title-row,4rem)-14px)] max-md:h-[calc(100dvh-var(--title-row,4rem))] min-h-[420px] max-md:min-h-[320px]';
+/** A phone's: what the keyboard leaves of the window under the title row (keyboard.ts, --vvh; the whole window without one), so the send row sits on the keyboard. */
+const ROOM_HEIGHT =
+  'h-[calc(100dvh-var(--title-row,4rem)-14px)] max-md:h-[calc(var(--vvh,100dvh)-var(--title-row,4rem))] min-h-[420px] max-md:min-h-[min(320px,calc(var(--vvh,100dvh)-var(--title-row,4rem)))]';
 /**
  * A phone's room is the chat alone, edge to edge under the title row (PageFrame's `bleed`): no
- * box around it, and the safe area at the foot is the send row's padding, not a gap.
+ * box around it, and the safe area at the foot is the send row's padding, not a gap, but not
+ * while the keyboard covers that edge (keyboard.ts's `data-keyboard`).
  */
 const ROOM_CHAT_MOBILE =
-  'max-md:border-0 max-md:bg-background max-md:[&>header]:px-3 max-md:[&_#chat-lines]:px-3 max-md:[&>footer]:px-3 max-md:[&>footer]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] max-md:[&>footer]:pt-2';
+  'max-md:min-h-0 max-md:border-0 max-md:bg-background max-md:[&>header]:px-3 max-md:[&_#chat-lines]:px-3 max-md:[&>footer]:px-3 max-md:[&>footer]:pb-[calc(0.5rem+env(safe-area-inset-bottom))] max-md:[html[data-keyboard]_&>footer]:pb-2 max-md:[&>footer]:pt-2';
 /**
  * A block of the stacked room (md to lg) is a snap area of its own, so the page never rests
  * halfway through the channels, and a snap to the chat shows the whole of it, the composer at the
@@ -1721,7 +1724,6 @@ function ChannelDialog({
   // every way out goes through the element: close() hands focus back, then fires `close`, which is onClose
   const close = () => dialogRef.current?.close();
   useSheetBack(close);
-  useSheetKeyboard(dialogRef);
 
   async function submit(e: FormEvent) {
     e.preventDefault();

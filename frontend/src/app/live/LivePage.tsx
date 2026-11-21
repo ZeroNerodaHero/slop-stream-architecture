@@ -43,7 +43,8 @@ import {
 } from '@/infra/atoms/publish-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
-import { CHAT_MOBILE, keyboardStrip, useChatTyping, useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
+import { usePinnedPage, useKeyboard, useTypingIn } from '@/infra/keyboard';
+import { CHAT_MOBILE, keyboardStrip, useIsMobile } from '@/infra/mobile';
 import { usePrefetchOnPointerDown } from '@/infra/prefetch';
 import { KbdDebug } from '@/shared-components/KbdDebug';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
@@ -94,11 +95,11 @@ function keepTab(tab: LiveTab) {
 export function LivePage() {
   const navigate = useNavigate();
   const mobile = useIsMobile();
-  // the visual viewport (mobile.ts): the page is what the keyboard leaves, panned with it
-  const view = useVisibleViewport(mobile, true);
-  useLockedDocument(mobile);
+  // the page is the window on a phone: the visual viewport (keyboard.ts, --vvt and --vvh) is its box, so the send row stays over the keyboard
+  usePinnedPage(mobile);
+  const keyboard = useKeyboard().keyboard;
   // a phone's preview is a strip while the chat is typed in, so the chat has the room; the controls and tabs hide
-  const typing = useChatTyping(mobile, view?.keyboard ?? false);
+  const typing = useTypingIn('chat-text') && mobile;
   const strip = keyboardStrip(typing);
   const [tab, setTab] = useState<LiveTab>(keptTab);
   const previewRef = useRef<HTMLVideoElement | null>(null);
@@ -300,9 +301,8 @@ export function LivePage() {
     return (
       <div
         id="live-mobile"
-        data-keyboard={typing || (view?.keyboard ?? false)}
-        className="group/phone fixed inset-x-0 top-0 flex h-[100dvh] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
-        style={view ? { height: view.height, transform: view.top ? `translateY(${view.top}px)` : undefined } : undefined}
+        data-keyboard={typing || keyboard}
+        className="group/phone fixed inset-x-0 top-[var(--vvt,0px)] flex h-[var(--vvh,100dvh)] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
       >
         <PageFrame
           title="go live"
