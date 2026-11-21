@@ -296,7 +296,7 @@ function PowerTile({
         aria-description={power.description}
         onClick={() => !still && onToggle?.()}
         className={cn(
-          'flex min-w-0 flex-col items-center gap-0.5 border px-1 pb-1.5 pt-2 focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue',
+          'flex min-w-0 flex-col items-center gap-1 border px-1 pb-1.5 pt-1.5 focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue',
           on ? 'border-primaryBlue' : 'border-primaryStroke',
           still ? 'cursor-default' : 'hover:bg-primaryStroke/20',
           !mine && 'opacity-40',
@@ -304,8 +304,10 @@ function PowerTile({
         )}
       >
         <power.Icon aria-hidden size={18} className={on ? 'text-primaryBlue' : 'text-textTertiary'} />
-        <span className={cn('text-[13px] font-semibold', on ? 'text-primaryBlue' : 'text-textPrimary')}>{power.label}</span>
-        <span className="max-w-full truncate whitespace-nowrap text-[10.5px] text-textTertiary">{power.short}</span>
+        <span className="flex max-w-full flex-col items-center gap-[2px]">
+          <span className={cn('text-[13px] font-semibold leading-[15px]', on ? 'text-primaryBlue' : 'text-textPrimary')}>{power.label}</span>
+          <span className="max-w-full truncate whitespace-nowrap text-[10.5px] leading-[13px] text-textTertiary">{power.short}</span>
+        </span>
       </button>
     </Tooltip>
   );
