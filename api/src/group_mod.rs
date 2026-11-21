@@ -28,7 +28,7 @@ use crate::{ApiError, ApiResult, AppState};
 pub(crate) const APPEARANCE: i32 = 1;
 /// Make, edit, delete and hand out custom roles. Not owner.
 pub(crate) const ROLES: i32 = 2;
-/// Add a channel, and delete one that is not `general`.
+/// Add a channel, rename one, and delete one that is not the home channel (`general`).
 pub(crate) const CHANNELS: i32 = 4;
 /// Remove a member who is not an owner.
 pub(crate) const KICK: i32 = 8;
@@ -568,14 +568,14 @@ async fn roles_of(db: &sqlx::PgPool, group: &str) -> Result<Vec<Value>, sqlx::Er
 
 /// The channels a role's body names, cleaned, as the shaper may put them: each a channel of the
 /// group the shaper sees (`groups::may_see`; a hidden one and a missing one are both `no such
-/// channel`, so the roles power cannot unlock for itself what it cannot see), never `general`
-/// (everyone's), each once. Sorted, as `roles_of` lists them.
+/// channel`, so the roles power cannot unlock for itself what it cannot see), never the home
+/// channel (`general` until renamed: everyone's), each once. Sorted, as `roles_of` lists them.
 async fn kept_channels(s: &AppState, group: &str, me: &Shaper, who: uuid::Uuid, raw: &[String]) -> Result<Vec<String>, ApiError> {
     let mut channels: Vec<String> = Vec::with_capacity(raw.len());
     for name in raw {
         let name = name.trim().to_lowercase();
-        if name == groups::GENERAL {
-            return Err(ApiError::new(StatusCode::BAD_REQUEST, "general is everyone's"));
+        if groups::is_home(&s.db, group, &name).await? {
+            return Err(ApiError::new(StatusCode::BAD_REQUEST, format!("#{name} is everyone's")));
         }
         if channels.contains(&name) {
             continue;
@@ -752,7 +752,7 @@ fn changed_roles(was: &[uuid::Uuid], now: &[uuid::Uuid]) -> Vec<uuid::Uuid> {
 /// and a member. Each role kept or let go must be within the caller's reach, as with a role's
 /// own save: nobody hands a channel to, or takes one from, a role carrying a power they do not
 /// hold. → `{ channel, roles }`, and a `role` fact for each role whose channels changed, so an
-/// open room asks again who sees what. 400 for `general` (everyone's), 404 for no such channel
+/// open room asks again who sees what. 400 for the home channel (everyone's), 404 for no such channel
 /// or a role not of this group, 403 without the power or out of reach.
 async fn set_channel_roles(
     State(s): State<AppState>,
@@ -764,8 +764,8 @@ async fn set_channel_roles(
     let Json(body) = body?;
     let (group, channel) = groups::channel_names(&group, &channel)?;
     let group = server(&s.db, &group).await?;
-    if channel == groups::GENERAL {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "general is everyone's"));
+    if groups::is_home(&s.db, &group, &channel).await? {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, format!("#{channel} is everyone's")));
     }
     if !groups::member(&s.db, who.id, &group).await? {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "join the server first"));

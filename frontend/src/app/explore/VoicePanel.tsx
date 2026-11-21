@@ -1,14 +1,17 @@
-import { RiAddLine, RiHeadphoneLine, RiLogoutBoxRLine, RiMicLine, RiMicOffLine, RiVolumeUpLine } from '@remixicon/react';
+import { RiAddLine, RiHeadphoneLine, RiLogoutBoxRLine, RiMicLine, RiMicOffLine, RiPencilLine, RiVolumeUpLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type ReactNode } from 'react';
 
-import { type GroupRoom, isVoice } from '@/infra/api';
+import { canEditChannel, type Channel, type GroupRoom, isVoice } from '@/infra/api';
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { joinVoice, leaveVoice, setVoiceDeaf, setVoiceMuted, voiceCallAtom, voiceDeafAtom, voiceMutedAtom, voiceSpeakingAtom } from '@/infra/atoms/voice-atoms';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
+
+/** The pencil on a voice channel's row: up with the pointer on the row (`group/voice`), the focus on it, or no hover to wait for. */
+const PENCIL_HIDDEN = 'opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/voice:opacity-100 [@media(hover:none)]:opacity-100';
 
 const BAR_BUTTON =
   'flex h-7 w-7 max-md:h-11 max-md:w-11 shrink-0 items-center justify-center border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
@@ -19,11 +22,25 @@ const BAR_BUTTON =
  * where is the room's `voice`, kept by the `voice` and `voice_left` facts; a ring on a face is
  * that person speaking, for the channel you are in. Always there: every group has a voice
  * channel (made with it, migration 0005 for the older ones). `onAdd`, given to the channels
- * power under the cap, puts `add voice channel` in the header; ServerRoom has the dialog. The
- * call is the page's, not this panel's: a phone's drawer shutting keeps it, and leaving the
+ * power under the cap, puts `add voice channel` in the header; ServerRoom has the dialog. With
+ * `onEdit`, a channel this login may change (`can_edit`: who made it, or the channels power)
+ * has a pencil at the right of its row, up with the pointer on the row, that opens its edit
+ * (the name and the line about it; ServerRoom's dialog again). The call is the page's, not this panel's: a phone's drawer shutting keeps it, and leaving the
  * page (ServerRoom's room effect) ends it.
  */
-export function VoicePanel({ room, flat = false, onAdd, className }: { room: GroupRoom; flat?: boolean; onAdd?: () => void; className?: string }) {
+export function VoicePanel({
+  room,
+  flat = false,
+  onAdd,
+  onEdit,
+  className
+}: {
+  room: GroupRoom;
+  flat?: boolean;
+  onAdd?: () => void;
+  onEdit?: (channel: Channel) => void;
+  className?: string;
+}) {
   const me = useAtomValue(meAtom) ?? null;
   const call = useAtomValue(voiceCallAtom);
   const speaking = useAtomValue(voiceSpeakingAtom);
@@ -60,20 +77,37 @@ export function VoicePanel({ room, flat = false, onAdd, className }: { room: Gro
           const mine = here && call.channel === item.name;
           return (
             <li key={item.name}>
-              <button
-                id={`group-voice-${item.name}`}
-                type="button"
-                aria-current={mine || undefined}
-                onClick={() => join(item.name)}
-                className={cn(
-                  'flex w-full items-center gap-1.5 px-1 py-1 text-left max-md:min-h-11',
-                  mine ? 'bg-primaryStroke/40 font-semibold text-textPrimary' : 'text-textSecondary hover:bg-primaryStroke/20 hover:text-textPrimary'
+              {/* the row is the box: the join fills it and the pencil sits in it at the right, up with the pointer anywhere on the row */}
+              <div className={cn('group/voice flex items-center', mine ? 'bg-primaryStroke/40' : 'hover:bg-primaryStroke/20')}>
+                <button
+                  id={`group-voice-${item.name}`}
+                  type="button"
+                  aria-current={mine || undefined}
+                  onClick={() => join(item.name)}
+                  className={cn(
+                    'flex min-w-0 flex-1 items-center gap-1.5 px-1 py-1 text-left max-md:min-h-11',
+                    mine ? 'font-semibold text-textPrimary' : 'text-textSecondary group-hover/voice:text-textPrimary'
+                  )}
+                >
+                  <RiVolumeUpLine aria-hidden size={14} className="shrink-0 text-textTertiary" />
+                  <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                  {mine && call.phase === 'joining' && <span className="text-xs font-normal text-textTertiary">joining…</span>}
+                </button>
+                {onEdit && canEditChannel(item) && (
+                  <Tooltip content="edit">
+                    <button
+                      id={`group-voice-edit-${item.name}`}
+                      type="button"
+                      aria-haspopup="dialog"
+                      aria-label={`edit ${item.name}`}
+                      onClick={() => onEdit(item)}
+                      className={cn(BAR_BUTTON, PENCIL_HIDDEN, 'text-textTertiary hover:text-textPrimary')}
+                    >
+                      <RiPencilLine aria-hidden size={14} />
+                    </button>
+                  </Tooltip>
                 )}
-              >
-                <RiVolumeUpLine aria-hidden size={14} className="shrink-0 text-textTertiary" />
-                <span className="min-w-0 flex-1 truncate">{item.name}</span>
-                {mine && call.phase === 'joining' && <span className="text-xs font-normal text-textTertiary">joining…</span>}
-              </button>
+              </div>
               {people.length > 0 && (
                 <ul aria-label={`in ${item.name}`} className="flex flex-col gap-0.5 py-0.5 pl-6">
                   {people.map((p) => {

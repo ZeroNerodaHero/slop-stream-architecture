@@ -492,8 +492,8 @@ const dropAll = async (ctx, names) => {
     const mine = explored.yours.find((g) => g.name === slug);
     expect(mine && textNames(mine.channels) === 'clips general', `explore lists ${JSON.stringify(mine && mine.channels.map((c) => c.name))}`);
     // the name changes: the member mutes clips and says a line in it first, so both can be seen to follow the name.
-    // a member without the power cannot rename, nobody cannot, general stays, a history word and a name the server
-    // has are refused; then clips is highlights (typed any way), its place kept, and everyone hears channel_renamed
+    // a member without the power cannot rename, nobody cannot, a history word and a name the server has are
+    // refused; then clips is highlights (typed any way), its place kept, and everyone hears channel_renamed
     const muted = await member.put(`/api/groups/${slug}/channels/clips/mute`);
     expect(muted.status() === 204, `muting clips got ${muted.status()}`);
     const said = await p.evaluate(
@@ -517,12 +517,11 @@ const dropAll = async (ctx, names) => {
     expect(said.ok, `a line in clips: ${JSON.stringify(said)}`);
     const memberRenames = await member.put(`/api/groups/${slug}/channels/clips`, { data: { name: 'highlights' } });
     const nobodyRenames = await anon.put(`/api/groups/${slug}/channels/clips`, { data: { name: 'highlights' } });
-    const generalStays = await maker.put(`/api/groups/${slug}/channels/general`, { data: { name: 'lobby' } });
     const reserved = await maker.put(`/api/groups/${slug}/channels/clips`, { data: { name: 'search' } });
     const taken = await maker.put(`/api/groups/${slug}/channels/clips`, { data: { name: 'general' } });
     expect(
-      memberRenames.status() === 403 && nobodyRenames.status() === 401 && generalStays.status() === 403 && reserved.status() === 400 && taken.status() === 409,
-      `renaming: member ${memberRenames.status()}, nobody ${nobodyRenames.status()}, general ${generalStays.status()}, reserved ${reserved.status()}, taken ${taken.status()}`
+      memberRenames.status() === 403 && nobodyRenames.status() === 401 && reserved.status() === 400 && taken.status() === 409,
+      `renaming: member ${memberRenames.status()}, nobody ${nobodyRenames.status()}, reserved ${reserved.status()}, taken ${taken.status()}`
     );
     const renamed = await maker.put(`/api/groups/${slug}/channels/clips`, { data: { name: ' Highlights ' } });
     const highlights = await body(renamed);
@@ -533,6 +532,16 @@ const dropAll = async (ctx, names) => {
     const asMember = await body(await member.get(`/api/groups/${slug}`));
     expect(textNames(asMember.channels) === 'highlights general', `after the rename the room lists ${textNames(asMember.channels)}`);
     expect(asMember.muted.join(' ') === 'highlights', `the mute followed the name: ${JSON.stringify(asMember.muted)}`);
+    // the home channel renames too, and keeps being home: its line with it (channel_about), not deleted, then back
+    const lobby = await maker.put(`/api/groups/${slug}/channels/general`, { data: { name: 'lobby', about: 'say hi' } });
+    const lobbyView = await body(lobby);
+    expect(lobby.status() === 200 && lobbyView.name === 'lobby' && lobbyView.home === true && lobbyView.about === 'say hi' && lobbyView.can_delete === false, `the home rename got ${lobby.status()} ${JSON.stringify(lobbyView)}`);
+    await w.waitForFunction(() => window.__groupFrames.some((f) => f.what === 'channel_about' && f.channel === 'lobby'), null, { timeout: 10000 });
+    const homeStays = await maker.delete(`/api/groups/${slug}/channels/lobby`);
+    const memberAbout = await member.put(`/api/groups/${slug}/channels/lobby`, { data: { about: 'mine now' } });
+    expect(homeStays.status() === 403 && memberAbout.status() === 403, `the home channel: delete ${homeStays.status()}, a member's about ${memberAbout.status()}`);
+    const back = await maker.put(`/api/groups/${slug}/channels/lobby`, { data: { name: 'general', about: '' } });
+    expect(back.status() === 200 && (await body(back)).name === 'general', `the home channel back to general got ${back.status()}`);
     const movedLines = await body(await anon.get(`/api/groups/${slug}/messages`));
     expect(
       !movedLines.clips && Array.isArray(movedLines.highlights) && movedLines.highlights.some((l) => l.text === 'first clip ' + RUN),
@@ -1402,7 +1411,7 @@ const dropAll = async (ctx, names) => {
     // the tab lists the voice ones too: the group's own `voice` sits between, made with it
     expect(rowsBefore.join(' ') === 'general voice clips', `the tab's rows read ${rowsBefore.join(' ')}`);
     expect(!(await q.$('#channel-remove-voice')), 'the last voice channel has a delete');
-    expect(!(await q.$('#channel-remove-general')) && !(await q.$('#channel-rename-general')), 'general has a delete or a pencil');
+    expect(!(await q.$('#channel-remove-general')) && (await q.$('#channel-rename-general')), 'general (the home channel) has a delete, or no pencil');
     expect(!(await q.$('#channel-up-clips')) && !(await q.$('#channel-down-clips')), 'the row still has up and down');
     const put = q.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === `/api/groups/${madeName}/channels`, { timeout: 10000 });
     // the handle's keys: space picks the row up, the arrow moves it, space drops it and the api is told

@@ -80,6 +80,26 @@ t.beat = tonumber(ARGV[2])
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(t))
 return 1";
 
+/// Seats everyone in channel ARGV[1] of hash KEYS[1] in channel ARGV[2] instead (a rename), in
+/// one go so a beat cannot land between the read and the write and undo it. → their user ids.
+const MOVE_SEATS: &str = r"
+local moved = {}
+local all = redis.call('HGETALL', KEYS[1])
+for i = 1, #all, 2 do
+  local ok, t = pcall(cjson.decode, all[i + 1])
+  if ok and type(t) == 'table' and t.channel == ARGV[1] then
+    t.channel = ARGV[2]
+    redis.call('HSET', KEYS[1], all[i], cjson.encode(t))
+    moved[#moved + 1] = all[i]
+  end
+end
+return moved";
+
+/// Sets KEYS[1] to ARGV[2] only while it still holds ARGV[1].
+const SET_IF: &str = r"
+if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('SET', KEYS[1], ARGV[2]) end
+return false";
+
 /// Deletes KEYS[1] only while it still holds ARGV[1].
 const DEL_IF: &str = r"
 if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end
@@ -327,6 +347,27 @@ async fn leave(s: &AppState, server: &str, user: Uuid, older_than: Option<i64>) 
         .await?;
     tell(s, server, "voice_left", json!({ "who": name, "uid": user, "channel": channel })).await;
     Ok(true)
+}
+
+/// The voice channel `from` of `server` is called `to` now (groups.rs, `edit_channel`): whoever
+/// sits in it keeps their seat under the new name, in `voice:<server>` and in their `voiceof`.
+/// The voice server knows a seat by user and server only, so it carries on as it was; the room
+/// follows the `channel_renamed` fact.
+pub(crate) async fn follow_rename(s: &AppState, server: &str, from: &str, to: &str) -> Result<(), ApiError> {
+    let mut redis = s.redis.clone();
+    let moved: Vec<String> = redis::cmd("EVAL").arg(MOVE_SEATS).arg(1).arg(voice_key(server)).arg(from).arg(to).query_async(&mut redis).await?;
+    for uid in moved {
+        let Ok(user) = Uuid::parse_str(&uid) else { continue };
+        let _: Option<String> = redis::cmd("EVAL")
+            .arg(SET_IF)
+            .arg(1)
+            .arg(voiceof_key(user))
+            .arg(format!("{server}/{from}"))
+            .arg(format!("{server}/{to}"))
+            .query_async(&mut redis)
+            .await?;
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]

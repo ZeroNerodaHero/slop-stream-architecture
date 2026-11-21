@@ -47,6 +47,7 @@ import { PinSheet, PinSheetButton } from '@/app/explore/PinSheet';
 import { VoicePanel } from '@/app/explore/VoicePanel';
 import {
   api,
+  canEditChannel,
   type Channel,
   CHANNEL_CAP,
   type ChannelKind,
@@ -54,6 +55,7 @@ import {
   type GroupMember,
   type GroupRole,
   groupWords,
+  homeChannel,
   isVoice,
   messageOf,
   type GroupRoom,
@@ -74,7 +76,7 @@ import {
   pinsTickAtom,
   reloadLines,
   reloadRoom,
-  renameChannel,
+  editChannel,
   roomAtom,
   roomErrorAtom,
   roomGoneAtom,
@@ -591,7 +593,7 @@ function KeptMark({ roles }: { roles: GroupRole[] }) {
  * reads an empty list as everyone's, so `selected roles` with nothing picked is this row's
  * alone (owner-only on screen, nothing sent) until a role is, and the last role kept cannot be
  * let go of here: `everyone` is the way back. A role carrying a power this login lacks is out
- * of reach, as in the roles tab. `general` is everyone's: the boxes stand, greyed.
+ * of reach, as in the roles tab. The home channel is everyone's: the boxes stand, greyed.
  */
 function ChannelSeers({ server, name, room, run }: { server: string; name: string; room: GroupRoom; run: Run }) {
   const kept = keptTo(room, name).map((role) => role.id);
@@ -601,8 +603,8 @@ function ChannelSeers({ server, name, room, run }: { server: string; name: strin
   /** `selected roles` pressed with no role picked yet: nothing told the api, since an empty list is everyone's. */
   const [picking, setPicking] = useState(false);
   const ids = sent && sent.from === key ? sent.ids : kept;
-  const general = name === 'general';
-  const selected = !general && (ids.length > 0 || picking);
+  const everyones = name === homeChannel(room.channels);
+  const selected = !everyones && (ids.length > 0 || picking);
 
   async function put(next: string[]) {
     setSent({ from: key, ids: next });
@@ -618,13 +620,13 @@ function ChannelSeers({ server, name, room, run }: { server: string; name: strin
   const box = (on: boolean) => cn(on && 'border-primaryBlue text-primaryBlue hover:border-primaryBlue');
   return (
     <div className="flex flex-col gap-2">
-      <Tooltip content={general ? "general is everyone's" : null}>
+      <Tooltip content={everyones ? `#${name} is everyone's` : null}>
         <div role="group" aria-label={`who sees #${name}`} className="flex items-center">
           <Button
             id={`channel-seers-${name}-everyone`}
             size="sm"
             aria-pressed={!selected}
-            disabled={general}
+            disabled={everyones}
             className={box(!selected)}
             onClick={() => {
               setPicking(false);
@@ -637,7 +639,7 @@ function ChannelSeers({ server, name, room, run }: { server: string; name: strin
             id={`channel-seers-${name}-roles`}
             size="sm"
             aria-pressed={selected}
-            disabled={general}
+            disabled={everyones}
             className={cn('-ml-px', box(selected))}
             onClick={() => setPicking(true)}
           >
@@ -1103,12 +1105,14 @@ function RoomSkeleton({ gridRef }: { gridRef: RefObject<HTMLDivElement | null> }
 export function ServerPage() {
   const params = useParams<{ server: string; channel?: string }>();
   const server = cleanName(params.server);
-  const channel = params.channel === undefined ? 'general' : cleanName(params.channel);
-  const channelOk = isValidName(channel) && !RESERVED.has(channel);
-  const ok = isValidName(server) && server !== 'bot' && channelOk;
-  const titleId = channel === 'general' ? 'group-title' : 'channel-title';
   const me = useAtomValue(meAtom);
   const room = useAtomValue(roomAtom);
+  // no channel in the address is the home one: `general` until it is renamed, and until the room says
+  const home = homeChannel(room?.name === server ? room.channels : undefined);
+  const channel = params.channel === undefined ? home : cleanName(params.channel);
+  const channelOk = isValidName(channel) && !RESERVED.has(channel);
+  const ok = isValidName(server) && server !== 'bot' && channelOk;
+  const titleId = channel === home ? 'group-title' : 'channel-title';
   const error = useAtomValue(roomErrorAtom);
   const gone = useAtomValue(roomGoneAtom);
   const renamed = useAtomValue(channelRenamedAtom);
@@ -1119,6 +1123,8 @@ export function ServerPage() {
   const [managing, setManaging] = useState(false);
   /** The voice panel's `add voice channel` dialog is open. */
   const [addingVoice, setAddingVoice] = useState(false);
+  /** The voice channel whose edit (the voice panel's pencil) is open. */
+  const [editingVoice, setEditingVoice] = useState<Channel | null>(null);
   // a phone: the group's drawer from the right (its picture and name, the channels, who is in), the room the chat alone
   const mobile = useIsMobile();
   const [drawer, setDrawer] = useState(false);
@@ -1134,7 +1140,7 @@ export function ServerPage() {
   // the channel just renamed is still found under its old name until the layout effect below
   // has moved the page: otherwise the room, its dialog and its chat would be taken down for
   // "no such channel" and put back empty under the new address
-  const found = channel === 'general' || channels.some((item) => item.name === channel) || renamed?.from === channel;
+  const found = channel === home || channels.some((item) => item.name === channel) || renamed?.from === channel;
   /** The room's grid, or the skeleton's while the room is asked for: where the page lands. */
   const roomRef = useRef<HTMLDivElement | null>(null);
   /** Whether the page has landed on this server's own room. Until then every commit with a room's shape scrolls to it. */
@@ -1158,7 +1164,9 @@ export function ServerPage() {
   // leave one render with the old name in the url and no channel of that name in the room
   useLayoutEffect(() => {
     if (!renamed) return;
-    if (renamed.from === channel) navigate(`/groups/${server}/${renamed.to}`, { replace: true });
+    // the home channel's page has no name in the address: it is the new name already
+    if (renamed.from === channel && params.channel !== undefined)
+      navigate(renamed.to === home ? `/groups/${server}` : `/groups/${server}/${renamed.to}`, { replace: true });
     else store.set(channelRenamedAtom, null);
   }, [renamed, channel]);
 
@@ -1488,7 +1496,7 @@ export function ServerPage() {
         <span className="flex min-w-0 items-center gap-3">
           <GroupMark name={server} color={color} icon={room.icon} className="h-8 w-8 shrink-0 text-sm" />
           <span className="truncate">
-            {channel === 'general' ? (
+            {channel === home ? (
               <GroupName words={words} />
             ) : (
               <>
@@ -1507,7 +1515,7 @@ export function ServerPage() {
         <p className="text-textSecondary">
           no such channel.{' '}
           <Link to={`/groups/${server}`} className="text-primaryBlue hover:underline">
-            back to #general
+            back to #{home}
           </Link>
         </p>
       ) : (
@@ -1526,7 +1534,7 @@ export function ServerPage() {
               <ChatPanel
                 name={server}
                 channel={channel}
-                onChannel={(to) => navigate(to === 'general' ? `/groups/${server}` : `/groups/${server}/${to}`)}
+                onChannel={(to) => navigate(to === home ? `/groups/${server}` : `/groups/${server}/${to}`)}
                 headerEnd={mobile ? undefined : <ChannelPins server={server} channel={channel} room={room} />}
                 lineMark={(line) => (pinnedHere.has(line.id) ? <PinMark /> : null)}
                 lineActions={room.perms.channels ? (line) => <PinAction server={server} channel={channel} line={line} pinned={pinnedHere.has(line.id)} /> : undefined}
@@ -1536,7 +1544,7 @@ export function ServerPage() {
             {!mobile && (
               // the voice channels over the roster, the column the chat's height between them
               <div className={cn('flex min-w-0 flex-col gap-2', ROSTER_HEIGHT, STACKED_SNAP)}>
-                <VoicePanel room={room} onAdd={onAddVoice} className={cn(!membersOpen && 'lg:hidden')} />
+                <VoicePanel room={room} onAdd={onAddVoice} onEdit={setEditingVoice} className={cn(!membersOpen && 'lg:hidden')} />
                 <Roster room={room} fill />
               </div>
             )}
@@ -1564,7 +1572,7 @@ export function ServerPage() {
                       {channelList}
                       {liveList}
                     </div>
-                    <VoicePanel room={room} onAdd={onAddVoice} flat />
+                    <VoicePanel room={room} onAdd={onAddVoice} onEdit={setEditingVoice} flat />
                     <Roster room={room} flat />
                   </div>
                 </>
@@ -1572,7 +1580,8 @@ export function ServerPage() {
             </SwipeDrawer>
           )}
           {managing && <ManageDialog server={server} channel={channel} room={room} me={me ?? null} onClose={() => setManaging(false)} />}
-          {addingVoice && <AddChannelDialog server={server} channels={room.channels ?? []} kind="voice" onClose={() => setAddingVoice(false)} />}
+          {addingVoice && <ChannelDialog server={server} channels={room.channels ?? []} kind="voice" onClose={() => setAddingVoice(false)} />}
+          {editingVoice && <ChannelDialog server={server} channels={room.channels ?? []} editing={editingVoice} onClose={() => setEditingVoice(null)} />}
         </>
       )}
     </PageFrame>
@@ -1580,15 +1589,17 @@ export function ServerPage() {
 }
 
 /**
- * The channels, in the order the manage dialog put them (`general` first until it is moved).
+ * The channels, in the order the manage dialog put them (the home one, `general` until renamed, first until it is moved).
  * Adding one takes the channels power: `add channel`, a row under the last channel, asks the
- * name and a line about it in a dialog (AddChannelDialog), and goes at the cap (CHANNEL_CAP,
+ * name and a line about it in a dialog (ChannelDialog), and goes at the cap (CHANNEL_CAP,
  * the api's). Nothing here deletes: that is the manage dialog's channels tab. A channel
  * added, deleted or moved anywhere arrives on the socket and the list follows. A member mutes
  * a channel here (docs/notifications.md): a bell at the right of its row, up while the pointer
  * is on the row, with the word as a tooltip. A click mutes it, so its lines stop reaching
  * their bell, and the bell on the row is the crossed one from then on, and stays up as the
- * mark that says so, until they click it again.
+ * mark that says so, until they click it again. Who may change a channel (`can_edit`: who made
+ * it, or the channels power; the home channel too) has a pencil beside the bell, up the same
+ * way, that opens its edit (ChannelDialog with `editing`): the name and the line about it.
  */
 function ChannelList({
   server,
@@ -1607,6 +1618,8 @@ function ChannelList({
   onError: (error: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
+  /** The channel whose edit is open. */
+  const [editing, setEditing] = useState<Channel | null>(null);
   // the cap and the names are every channel's; the list is the text ones (the voice ones are the voice panel's)
   const channels = room.channels ?? [];
   const textChannels = channels.filter((item) => !isVoice(item));
@@ -1648,7 +1661,7 @@ function ChannelList({
               ) : (
                 <Link
                   id={`group-channel-${item.name}`}
-                  to={item.name === 'general' ? `/groups/${server}` : `/groups/${server}/${item.name}`}
+                  to={item.home ? `/groups/${server}` : `/groups/${server}/${item.name}`}
                   className={cn('min-w-0 flex-1 truncate px-2 text-textSecondary group-hover/channel:text-textPrimary max-md:py-2.5', row)}
                 >
                   #{item.name}
@@ -1656,6 +1669,20 @@ function ChannelList({
               )}
               <KeptMark roles={keptTo(room, item.name)} />
               <CooldownMark item={item} canSet={false} words />
+              {canEditChannel(item) && (
+                <Tooltip content="edit">
+                  <button
+                    id={`channel-edit-${item.name}`}
+                    type="button"
+                    aria-haspopup="dialog"
+                    aria-label={`edit #${item.name}`}
+                    className={cn(ICON_BUTTON, 'text-textTertiary hover:text-textPrimary', BELL_HIDDEN, !canMute && 'mr-0.5')}
+                    onClick={() => setEditing(item)}
+                  >
+                    <RiPencilLine aria-hidden size={16} />
+                  </button>
+                </Tooltip>
+              )}
               {canMute && (
                 <Tooltip content={isMuted ? 'unmute' : 'mute'}>
                   <button
@@ -1695,7 +1722,8 @@ function ChannelList({
           add channel
         </button>
       )}
-      {adding && <AddChannelDialog server={server} channels={channels} onClose={() => setAdding(false)} />}
+      {adding && <ChannelDialog server={server} channels={channels} onClose={() => setAdding(false)} />}
+      {editing && <ChannelDialog server={server} channels={channels} editing={editing} onClose={() => setEditing(null)} />}
     </nav>
   );
 }
@@ -1719,20 +1747,40 @@ function channelNameFault(clean: string, channels: Channel[]): string {
  * the panel. It is put on the page's body, not inside whatever opened it, the way the
  * confirm dialog is (a modal inside a modal closes the outer one with it), and the manage
  * dialog lets a close that is not its own pass. A refusal from the api is said in here.
+ *
+ * With `editing` it is that channel's edit instead (the pencil on a row of the channel list or
+ * the voice panel): the name and the line start as they are, `save` sends what changed
+ * (editChannel), and the room follows at once, as every other room open does on the facts. A
+ * rename of the channel on screen moves the page to its new address (channelRenamedAtom).
  */
-function AddChannelDialog({ server, channels, kind = 'text', onClose }: { server: string; channels: Channel[]; kind?: ChannelKind; onClose: () => void }) {
+function ChannelDialog({
+  server,
+  channels,
+  kind = 'text',
+  editing,
+  onClose
+}: {
+  server: string;
+  channels: Channel[];
+  kind?: ChannelKind;
+  editing?: Channel;
+  onClose: () => void;
+}) {
   const navigate = useNavigate();
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const pressedBackdrop = useRef(false);
-  const [name, setName] = useState('');
-  const [about, setAbout] = useState('');
+  const [name, setName] = useState(editing?.name ?? '');
+  const [about, setAbout] = useState(editing?.about ?? '');
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState('');
   const clean = cleanName(name);
-  const fault = channelNameFault(clean, channels);
-  const ok = isValidName(clean) && fault === '';
-  const voice = kind === 'voice';
-  const id = voice ? 'voice-make' : 'channel-make';
+  // its own name is not a clash
+  const fault = channelNameFault(clean, editing ? channels.filter((item) => item.name !== editing.name) : channels);
+  const renamed = editing !== undefined && clean !== editing.name;
+  const reworded = editing !== undefined && about.trim() !== editing.about;
+  const ok = isValidName(clean) && fault === '' && (!editing || renamed || reworded);
+  const voice = editing ? isVoice(editing) : kind === 'voice';
+  const id = editing ? 'channel-edit' : voice ? 'voice-make' : 'channel-make';
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
@@ -1755,6 +1803,11 @@ function AddChannelDialog({ server, channels, kind = 'text', onClose }: { server
     setSending(true);
     setStatus('');
     try {
+      if (editing) {
+        await editChannel(server, editing.name, { ...(renamed && { name: clean }), ...(reworded && { about: about.trim() }) });
+        close();
+        return;
+      }
       const made = await api.createChannel(server, clean, about.trim(), kind);
       close();
       // a voice channel has no page: it is in the voice panel, a click away
@@ -1794,12 +1847,14 @@ function AddChannelDialog({ server, channels, kind = 'text', onClose }: { server
       <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
         <div>
           <h2 id={`${id}-title`} className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
-            {voice ? 'add a voice channel' : 'add a channel'}
+            {editing ? `edit ${voice ? '' : '#'}${editing.name}` : voice ? 'add a voice channel' : 'add a channel'}
           </h2>
           <p className="mt-2 text-sm text-textSecondary">
-            {voice
-              ? 'a name, and a line about it if you like. it shows in the voice panel, and a click there joins it.'
-              : 'a name, and a line about it if you like. it goes under the last channel; manage moves it.'}
+            {editing
+              ? 'a new name, a new line about it, or both. everyone in the server sees the change at once.'
+              : voice
+                ? 'a name, and a line about it if you like. it shows in the voice panel, and a click there joins it.'
+                : 'a name, and a line about it if you like. it goes under the last channel; manage moves it.'}
           </p>
         </div>
         <Field id={`${id}-name`} label="name" hint={fault || 'letters, digits, _ and -. up to 32.'}>
@@ -1849,7 +1904,7 @@ function AddChannelDialog({ server, channels, kind = 'text', onClose }: { server
             cancel
           </button>
           <Button id={`${id}-submit`} type="submit" variant="primary" className="px-4 py-2" disabled={!ok || sending}>
-            {sending ? 'adding…' : 'add it'}
+            {editing ? (sending ? 'saving…' : 'save') : sending ? 'adding…' : 'add it'}
           </Button>
         </div>
       </form>
@@ -2402,7 +2457,7 @@ const RAIL_STEP: Record<string, number | undefined> = {
  * browser keeps focus in it, closes it on escape and hands focus back to the button that
  * opened it; a click on the backdrop closes it too. A refusal is said in the pane, since the
  * page is under the backdrop. `channel` is the one on screen: deleting it from here moves the
- * page to `general` first, so the room under the dialog does not turn into `no such channel`.
+ * page to the home channel first, so the room under the dialog does not turn into `no such channel`.
  */
 function ManageDialog({ server, channel, room, me, onClose }: { server: string; channel: string; room: GroupRoom; me: string | null; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
@@ -3015,12 +3070,12 @@ function ChannelName({ item, channels, editable, onRename }: { item: Channel; ch
 /**
  * The channels in their order, each a row: a handle to drag it by (the arrow keys on the
  * handle do the same, a row a press), the name with its pencil (ChannelName), the line about
- * it, and `delete` (never on `general`). A press moves the row at once and tells the api
+ * it, and `delete` (never on the home channel). A press moves the row at once and tells the api
  * (setChannelOrder, room-atoms); a drag moves it as the pointer goes and tells the api once,
  * on the drop. A rename asks the api first and lands when it says yes (renameChannel): the
  * list on the left follows under the backdrop, as does every other room open, and a page on
  * the channel moves to its new address. `add channel` opens the dialog the row under the list
- * opens. Deleting the channel on screen moves the page to `general` first, so the room under
+ * opens. Deleting the channel on screen moves the page to the home channel first, so the room under
  * the dialog stays a room. The order and the add are the channels power's: without it this
  * login is here for a channel they made (managesChannels), the rows are read, and the pencil
  * and `delete` are on theirs.
@@ -3056,7 +3111,7 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
       title="channels"
       description={`${channels.length} of ${CHANNEL_CAP}, top to bottom as the list shows them. ${
         orders
-          ? "drag a row to move it. the pencil by a name changes it. under each, who sees it: everyone, or the roles you pick and the owners. general stays everyone's."
+          ? `drag a row to move it. the pencil by a name changes it. under each, who sees it: everyone, or the roles you pick and the owners. #${homeChannel(channels)} stays everyone's.`
           : 'the channels power moves and adds them; the ones you made are yours to rename and delete.'
       }`}
     >
@@ -3077,8 +3132,13 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
               >
                 <div className="flex items-center gap-3">
                   {orders && <DragHandle id={`channel-drag-${name}`} {...reorder.handle(name)} />}
-                  {/* the api's rename rule is delete's: who made it, or the channels power, and never general */}
-                  <ChannelName item={item} channels={channels} editable={item.can_delete} onRename={(to) => void run(() => renameChannel(server, name, to))} />
+                  {/* the api's rename rule: who made it, or the channels power, the home channel too */}
+                  <ChannelName
+                    item={item}
+                    channels={channels}
+                    editable={canEditChannel(item)}
+                    onRename={(to) => void run(() => editChannel(server, name, { name: to }))}
+                  />
                   <KeptMark roles={keptTo(room, name)} />
                   <CooldownMark item={item} canSet={orders} onPick={(seconds) => void run(() => api.setChannelCooldown(server, name, seconds))} />
                   {item.can_delete && !(isVoice(item) && voiceCount === 1) && (
@@ -3107,7 +3167,7 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
           add channel
         </button>
       )}
-      {adding && <AddChannelDialog server={server} channels={channels} onClose={() => setAdding(false)} />}
+      {adding && <ChannelDialog server={server} channels={channels} onClose={() => setAdding(false)} />}
       {sure && (
         <ConfirmDialog
           id={`manage-channel-delete-${sure}`}
