@@ -3,6 +3,7 @@ import { useAtomValue } from 'jotai';
 import {
   type FocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type SyntheticEvent,
   type UIEvent,
@@ -177,7 +178,7 @@ function Speaker({ line, room }: { line: ChatLine; room: ChatRoom }) {
   const someone = line.verified || line.streamer;
   const watched = someone
     ? {
-        onPointerEnter: (e: SyntheticEvent<HTMLElement>) => peek.show(e.currentTarget, e.currentTarget.closest('#chat')),
+        onPointerEnter: (e: ReactPointerEvent<HTMLElement>) => peek.show(e, e.currentTarget.closest('#chat')),
         onPointerLeave: (e: SyntheticEvent<HTMLElement>) => peek.leave(e.currentTarget),
         onFocus: (e: FocusEvent<HTMLElement>) => peek.focus(e, e.currentTarget.closest('#chat')),
         onBlur: peek.blur

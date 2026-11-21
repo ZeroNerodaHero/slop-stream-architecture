@@ -277,9 +277,9 @@ function Row({ id, person, side, open, folded = false, onPick, children }: RowPr
     <li
       className={cn('flex snap-start items-center gap-1', mirrored && 'flex-row-reverse', INSET[side])}
       data-presence={person.presence}
-      onPointerEnter={(e) => peek.show(e.currentTarget, e.currentTarget.closest('#friends'))}
+      onPointerEnter={(e) => peek.show(e, e.currentTarget.closest('#friends'))}
       onPointerLeave={(e) => peek.leave(e.currentTarget)}
-      onFocus={(e) => peek.show(e.currentTarget, e.currentTarget.closest('#friends'))}
+      onFocus={(e) => peek.show(e, e.currentTarget.closest('#friends'))}
       onBlur={peek.blur}
     >
       <Link

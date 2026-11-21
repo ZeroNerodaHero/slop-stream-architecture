@@ -165,9 +165,9 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
   return (
     <span
       className="group/tab relative shrink-0"
-      onPointerEnter={(e) => peek.show(e.currentTarget, e.currentTarget.closest('#friend-chat-rail'))}
+      onPointerEnter={(e) => peek.show(e, e.currentTarget.closest('#friend-chat-rail'))}
       onPointerLeave={(e) => peek.leave(e.currentTarget)}
-      onFocus={(e) => peek.show(e.currentTarget, e.currentTarget.closest('#friend-chat-rail'))}
+      onFocus={(e) => peek.show(e, e.currentTarget.closest('#friend-chat-rail'))}
       onBlur={peek.blur}
     >
       <button
