@@ -105,6 +105,7 @@ import { type ChatSearch, comboProps, SearchFilters, SearchSuggestions, useChatS
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Face } from '@/shared-components/Face';
 import { RailFace } from '@/shared-components/Friends';
+import { GROUP_SWATCHES, GroupColorPick } from '@/shared-components/GroupColorPick';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { GroupModHost, lineModItems, useCardMod } from '@/shared-components/GroupMod';
 import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack } from '@/shared-components/MobileSheet';
@@ -2654,6 +2655,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
             {tab === 'about' && (
               <div className="divide-y divide-primaryStroke">
                 {ownsPictures(room) && <PicturesSection server={server} room={room} run={run} />}
+                <ColorSection server={server} room={room} run={run} />
                 <AboutSection server={server} room={room} run={run} />
                 <ListingSection server={server} room={room} run={run} />
               </div>
@@ -2733,6 +2735,39 @@ function PicturesSection({ server, room, run }: ManageProps) {
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * The group's colour (appearance): the create dialog's swatches and picker, the mark and the
+ * badge drawn in the colour picked as it is picked, and `save`, as the about line saves. The
+ * colour changing under it (saved here, or by another owner, the `color` fact) starts the pick
+ * over from the new one.
+ */
+function ColorSection({ server, room, run }: ManageProps) {
+  const saved = room.color || GROUP_SWATCHES[0].hex;
+  const [draft, setDraft] = useState({ base: saved, color: saved });
+  const color = draft.base === saved ? draft.color : saved;
+  const changed = color.toLowerCase() !== saved.toLowerCase();
+  return (
+    <Section id="manage-color" title="color" description="the group's square, banner and badge, wherever they show.">
+      <div className="flex items-center gap-3">
+        <GroupMark id="manage-color-mark" name={server} color={color} icon={room.icon} className="h-12 w-12 shrink-0 border border-primaryStroke text-lg" />
+        <Badge group={{ name: server, badge: room.badge, color }} preview size="md" />
+      </div>
+      <form
+        className="flex flex-wrap items-center gap-1.5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (changed) void run(() => api.saveGroupColor(server, color));
+        }}
+      >
+        <GroupColorPick id="group-color" value={color} onChange={(hex) => setDraft({ base: saved, color: hex })} />
+        <Button id="group-color-save" size="sm" variant="outline" type="submit" disabled={!changed} className="ml-auto">
+          save
+        </Button>
+      </form>
+    </Section>
   );
 }
 

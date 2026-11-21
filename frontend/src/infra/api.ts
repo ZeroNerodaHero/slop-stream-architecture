@@ -795,6 +795,8 @@ export const api = {
   /** The login has the channel on screen: its inbox rows for it are read. Its other devices hear it on the socket. */
   readChannel: (server: string, channel: string) => request<null>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/read`),
   saveGroupAbout: (name: string, about: string) => request<{ about: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/about`, { about }),
+  /** Appearance, from the manage dialog: `#rrggbb`. The `color` fact repaints the room and the lists. */
+  saveGroupColor: (name: string, color: string) => request<{ color: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/color`, { color }),
   /** Appearance, from the manage dialog. A private group stays off the lists. */
   setGroupPublic: (name: string, isPublic: boolean) => request<{ public: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/access`, { public: isPublic }),
   /** Appearance. Owners stay first; this is the order after them. */

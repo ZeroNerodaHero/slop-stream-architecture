@@ -24,7 +24,7 @@ use crate::groups::{self, BOT_GROUP};
 use crate::s3;
 use crate::{ApiError, ApiResult, AppState};
 
-/// Edit the about line, public or private, and the member order. Not the pictures: those are the owner's.
+/// Edit the about line, the colour, public or private, and the member order. Not the pictures: those are the owner's.
 pub(crate) const APPEARANCE: i32 = 1;
 /// Make, edit, delete and hand out custom roles. Not owner.
 pub(crate) const ROLES: i32 = 2;
@@ -338,6 +338,11 @@ struct AboutIn {
 }
 
 #[derive(Deserialize)]
+struct ColorIn {
+    color: String,
+}
+
+#[derive(Deserialize)]
 struct AccessIn {
     public: bool,
 }
@@ -365,6 +370,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(MAX_BANNER));
     Router::new()
         .route("/api/groups/{group}/about", axum::routing::put(put_about))
+        .route("/api/groups/{group}/color", axum::routing::put(put_color))
         .route("/api/groups/{group}/access", axum::routing::put(set_access))
         .route("/api/groups/{group}/order", axum::routing::put(set_order))
         .route("/api/groups/{group}/roles", get(list_roles).post(create_role))
@@ -565,6 +571,20 @@ async fn put_about(State(s): State<AppState>, Path(group): Path<String>, Me(me):
     sqlx::query("UPDATE groups SET about = $2 WHERE name = $1").bind(&group).bind(&about).execute(&s.db).await?;
     groups::tell(&s, &group, "about", json!({ "about": about })).await;
     Ok(Json(json!({ "about": about })))
+}
+
+/// `PUT /api/groups/:group/color` `{color}`: the group's colour, `#rrggbb` as the create form
+/// takes it (`groups::clean_color`). Appearance, like the about line. The `color` fact repaints
+/// the room, and the lists the page has, at once.
+async fn put_color(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<ColorIn>, JsonRejection>) -> ApiResult {
+    let who = me.ok_or_else(login)?;
+    let Json(body) = body?;
+    let group = server(&s.db, &group).await?;
+    need(&s, who.id, &group, APPEARANCE).await?;
+    let color = groups::clean_color(&body.color)?;
+    sqlx::query("UPDATE groups SET color = $2 WHERE name = $1").bind(&group).bind(&color).execute(&s.db).await?;
+    groups::tell(&s, &group, "color", json!({ "color": color })).await;
+    Ok(Json(json!({ "color": color })))
 }
 
 /// One role as the room, the list and the `role` fact say it. `channels` is the ones kept to it,
