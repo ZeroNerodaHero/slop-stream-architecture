@@ -1,10 +1,11 @@
-import { RiHeadphoneLine, RiLogoutBoxRLine, RiMicLine, RiMicOffLine, RiVolumeUpLine } from '@remixicon/react';
+import { RiAddLine, RiHeadphoneLine, RiLogoutBoxRLine, RiMicLine, RiMicOffLine, RiVolumeUpLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type ReactNode } from 'react';
 
 import { type GroupRoom, isVoice } from '@/infra/api';
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { joinVoice, leaveVoice, setVoiceDeaf, setVoiceMuted, voiceCallAtom, voiceDeafAtom, voiceMutedAtom, voiceSpeakingAtom } from '@/infra/atoms/voice-atoms';
+import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -16,11 +17,13 @@ const BAR_BUTTON =
  * The group's voice channels and who is in each (docs/voice.md), over the roster. A click on a
  * channel joins it; while in one, a bar under the list has mute, deafen and leave. Who is in
  * where is the room's `voice`, kept by the `voice` and `voice_left` facts; a ring on a face is
- * that person speaking, for the channel you are in. Nothing at all for a group with no voice
- * channel. The call is the page's, not this panel's: a phone's drawer shutting keeps it, and
- * leaving the page (ServerRoom's room effect) ends it.
+ * that person speaking, for the channel you are in. Always there: every group has a voice
+ * channel (made with it, migration 0005 for the older ones). `onAdd`, given to the channels
+ * power under the cap, puts `add voice channel` in the header; ServerRoom has the dialog. The
+ * call is the page's, not this panel's: a phone's drawer shutting keeps it, and leaving the
+ * page (ServerRoom's room effect) ends it.
  */
-export function VoicePanel({ room, flat = false, className }: { room: GroupRoom; flat?: boolean; className?: string }) {
+export function VoicePanel({ room, flat = false, onAdd, className }: { room: GroupRoom; flat?: boolean; onAdd?: () => void; className?: string }) {
   const me = useAtomValue(meAtom) ?? null;
   const call = useAtomValue(voiceCallAtom);
   const speaking = useAtomValue(voiceSpeakingAtom);
@@ -29,8 +32,6 @@ export function VoicePanel({ room, flat = false, className }: { room: GroupRoom;
   const channels = (room.channels ?? []).filter(isVoice);
   const here = call.phase !== 'idle' && call.server === room.name;
   const avatarOf = (name: string) => room.roster?.find((m) => m.name === name)?.avatar ?? null;
-
-  if (channels.length === 0) return null;
 
   const join = (channel: string) => {
     if (!me) return openAuthDialog('login');
@@ -43,7 +44,16 @@ export function VoicePanel({ room, flat = false, className }: { room: GroupRoom;
       aria-label="voice"
       className={cn('flex shrink-0 flex-col gap-1 border border-primaryStroke bg-backgroundSecondary text-sm', flat ? 'mx-3 p-4' : 'p-2', className)}
     >
-      <h3 className="flex h-6 items-center pl-0.5 text-xs font-semibold uppercase tracking-wider text-textTertiary">voice</h3>
+      <div className="flex min-h-6 items-center justify-between gap-2">
+        <h3 className="pl-0.5 text-xs font-semibold uppercase tracking-wider text-textTertiary">voice</h3>
+        {onAdd && (
+          <Button id="group-voice-add" size="sm" aria-haspopup="dialog" className="gap-1 px-2 py-0.5 text-xs" onClick={onAdd}>
+            <RiAddLine aria-hidden size={14} />
+            add voice channel
+          </Button>
+        )}
+      </div>
+      {channels.length === 0 && <p className="px-1 text-xs text-textTertiary">no voice channel yet.</p>}
       <ul id="group-voice-channels" className="flex flex-col gap-0.5">
         {channels.map((item) => {
           const people = room.voice?.[item.name] ?? [];
@@ -90,7 +100,9 @@ export function VoicePanel({ room, flat = false, className }: { room: GroupRoom;
       )}
       {here && call.phase === 'connected' && (
         <div id="group-voice-bar" className="mt-1 flex items-center gap-1 border-t border-primaryStroke pt-2">
-          <span className="min-w-0 flex-1 truncate px-1 text-xs text-increase">in {call.channel}</span>
+          <span className={cn('min-w-0 flex-1 truncate px-1 text-xs', call.linked ? 'text-increase' : 'text-textTertiary')}>
+            {call.linked ? `in ${call.channel}` : `connecting to ${call.channel}…`}
+          </span>
           <BarButton label={muted ? 'unmute' : 'mute'} pressed={muted} onClick={() => setVoiceMuted(!muted)}>
             {muted ? <RiMicOffLine aria-hidden size={16} /> : <RiMicLine aria-hidden size={16} />}
           </BarButton>

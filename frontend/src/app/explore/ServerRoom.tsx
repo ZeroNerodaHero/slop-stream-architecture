@@ -23,7 +23,8 @@ import {
   RiTimeLine,
   RiUnpinLine,
   RiUserUnfollowLine,
-  RiVipCrownLine
+  RiVipCrownLine,
+  RiVolumeUpLine
 } from '@remixicon/react';
 import { useAtom, useAtomValue } from 'jotai';
 import {
@@ -1116,6 +1117,8 @@ export function ServerPage() {
   const [actionError, setActionError] = useState('');
   const [leaving, setLeaving] = useState(false);
   const [managing, setManaging] = useState(false);
+  /** The voice panel's `add voice channel` dialog is open. */
+  const [addingVoice, setAddingVoice] = useState(false);
   // a phone: the group's drawer from the right (its picture and name, the channels, who is in), the room the chat alone
   const mobile = useIsMobile();
   const [drawer, setDrawer] = useState(false);
@@ -1295,6 +1298,8 @@ export function ServerPage() {
   const canManage = power || managesChannels(room);
   const lastMember = mine && room.members <= 1;
   const canPicture = ownsPictures(room);
+  // the voice panel's `add voice channel`: the channels power, as the list's `add channel`, and not at the cap
+  const onAddVoice = room.perms.channels && mine && (room.channels ?? []).length < CHANNEL_CAP ? () => setAddingVoice(true) : undefined;
   const membersWords = room.members === 1 ? '1 member' : `${room.members} members`;
   const liveWords = live.length === 1 ? '1 streaming now' : `${live.length} streaming now`;
   // the lines pinned in the channel on screen: a mark on each, and the pin or unpin on its hover
@@ -1531,7 +1536,7 @@ export function ServerPage() {
             {!mobile && (
               // the voice channels over the roster, the column the chat's height between them
               <div className={cn('flex min-w-0 flex-col gap-2', ROSTER_HEIGHT, STACKED_SNAP)}>
-                <VoicePanel room={room} className={cn(!membersOpen && 'lg:hidden')} />
+                <VoicePanel room={room} onAdd={onAddVoice} className={cn(!membersOpen && 'lg:hidden')} />
                 <Roster room={room} fill />
               </div>
             )}
@@ -1559,7 +1564,7 @@ export function ServerPage() {
                       {channelList}
                       {liveList}
                     </div>
-                    <VoicePanel room={room} flat />
+                    <VoicePanel room={room} onAdd={onAddVoice} flat />
                     <Roster room={room} flat />
                   </div>
                 </>
@@ -1567,6 +1572,7 @@ export function ServerPage() {
             </SwipeDrawer>
           )}
           {managing && <ManageDialog server={server} channel={channel} room={room} me={me ?? null} onClose={() => setManaging(false)} />}
+          {addingVoice && <AddChannelDialog server={server} channels={room.channels ?? []} kind="voice" onClose={() => setAddingVoice(false)} />}
         </>
       )}
     </PageFrame>
@@ -1707,30 +1713,32 @@ function channelNameFault(clean: string, channels: Channel[]): string {
 
 /**
  * The dialog that adds a channel (docs/groups.md): its name, and a line about it if wanted.
- * `add it` posts the channel, which goes under the last one, and the page is the new channel.
- * Opened by the row under the channel list, and by `add channel` on the manage dialog's
- * channels tab: it is put on the page's body, not inside whatever opened it, the way the
+ * `add it` posts the channel, which goes under the last one. A text one (the row under the
+ * channel list, and `add channel` on the manage dialog's channels tab) and the page is the new
+ * channel; a voice one (`add voice channel` on the voice panel) has no page and shows up in
+ * the panel. It is put on the page's body, not inside whatever opened it, the way the
  * confirm dialog is (a modal inside a modal closes the outer one with it), and the manage
  * dialog lets a close that is not its own pass. A refusal from the api is said in here.
  */
-function AddChannelDialog({ server, channels, onClose }: { server: string; channels: Channel[]; onClose: () => void }) {
+function AddChannelDialog({ server, channels, kind = 'text', onClose }: { server: string; channels: Channel[]; kind?: ChannelKind; onClose: () => void }) {
   const navigate = useNavigate();
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const pressedBackdrop = useRef(false);
   const [name, setName] = useState('');
   const [about, setAbout] = useState('');
-  const [kind, setKind] = useState<ChannelKind>('text');
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState('');
   const clean = cleanName(name);
   const fault = channelNameFault(clean, channels);
   const ok = isValidName(clean) && fault === '';
+  const voice = kind === 'voice';
+  const id = voice ? 'voice-make' : 'channel-make';
 
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
     dialog.showModal();
-    focusOnOpen(dialog, '#channel-make-name');
+    focusOnOpen(dialog, `#${id}-name`);
     return () => {
       if (dialog.open) dialog.close();
     };
@@ -1767,9 +1775,9 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
   return createPortal(
     <dialog
       ref={dialogRef}
-      id="channel-make"
+      id={id}
       data-sheet=""
-      aria-labelledby="channel-make-title"
+      aria-labelledby={`${id}-title`}
       onPointerDown={onPointerDown}
       onClick={onClick}
       onClose={(event) => {
@@ -1785,18 +1793,22 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
       <SheetGrab onDismiss={close} />
       <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3">
         <div>
-          <h2 id="channel-make-title" className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
-            add a channel
+          <h2 id={`${id}-title`} className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
+            {voice ? 'add a voice channel' : 'add a channel'}
           </h2>
-          <p className="mt-2 text-sm text-textSecondary">a name, and a line about it if you like. it goes under the last channel; manage moves it.</p>
+          <p className="mt-2 text-sm text-textSecondary">
+            {voice
+              ? 'a name, and a line about it if you like. it shows in the voice panel, and a click there joins it.'
+              : 'a name, and a line about it if you like. it goes under the last channel; manage moves it.'}
+          </p>
         </div>
-        <Field id="channel-make-name" label="name" hint={fault || 'letters, digits, _ and -. up to 32.'}>
+        <Field id={`${id}-name`} label="name" hint={fault || 'letters, digits, _ and -. up to 32.'}>
           <div className="relative">
             <span aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-textTertiary">
-              #
+              {voice ? <RiVolumeUpLine size={14} className="block" /> : '#'}
             </span>
             <input
-              id="channel-make-name"
+              id={`${id}-name`}
               value={name}
               onChange={(e) =>
                 setName(
@@ -1810,42 +1822,25 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
               autoComplete="off"
               autoCapitalize="off"
               spellCheck={false}
-              aria-describedby="channel-make-name-hint"
+              aria-describedby={`${id}-name-hint`}
               aria-invalid={fault !== '' || undefined}
-              className={cn(INPUT, 'pl-7')}
+              className={cn(INPUT, voice ? 'pl-8' : 'pl-7')}
             />
           </div>
         </Field>
-        <div role="group" aria-labelledby="channel-make-kind-label" className="flex items-center gap-2">
-          <span id="channel-make-kind-label" className="text-sm text-textSecondary">
-            kind
-          </span>
-          {(['text', 'voice'] as const).map((k) => (
-            <Button
-              key={k}
-              id={`channel-make-kind-${k}`}
-              size="sm"
-              aria-pressed={kind === k}
-              className={cn(kind === k && 'border-primaryBlue text-primaryBlue')}
-              onClick={() => setKind(k)}
-            >
-              {k}
-            </Button>
-          ))}
-        </div>
-        <Field id="channel-make-about" label="about" hint={`optional. up to ${ABOUT_CAP} characters.`}>
+        <Field id={`${id}-about`} label="about" hint={`optional. up to ${ABOUT_CAP} characters.`}>
           <input
-            id="channel-make-about"
+            id={`${id}-about`}
             value={about}
             onChange={(e) => setAbout(e.target.value)}
             maxLength={ABOUT_CAP}
             autoComplete="off"
-            aria-describedby="channel-make-about-hint"
+            aria-describedby={`${id}-about-hint`}
             className={INPUT}
           />
         </Field>
         {status && (
-          <p id="channel-make-status" className="text-sm text-decrease">
+          <p id={`${id}-status`} className="text-sm text-decrease">
             {status}
           </p>
         )}
@@ -1853,7 +1848,7 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
           <button type="button" className="text-sm text-textTertiary" onClick={close}>
             cancel
           </button>
-          <Button id="channel-make-submit" type="submit" variant="primary" className="px-4 py-2" disabled={!ok || sending}>
+          <Button id={`${id}-submit`} type="submit" variant="primary" className="px-4 py-2" disabled={!ok || sending}>
             {sending ? 'adding…' : 'add it'}
           </Button>
         </div>
@@ -3031,6 +3026,8 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
   const [adding, setAdding] = useState(false);
   const [sure, setSure] = useState<string | null>(null);
   const full = channels.length >= CHANNEL_CAP;
+  // a server keeps one voice channel: the last one has no delete (the api says so too)
+  const voiceCount = channels.filter(isVoice).length;
   // a row by its handle (Reorderable): the rows move on a draft, and the drop tells the api.
   // the room moves to the new order at once (room-atoms), so the draft can go in the same breath
   const reorder = useReorder({
@@ -3076,7 +3073,7 @@ function ChannelsSection({ server, channel, room, run }: ManageProps & { channel
                   <ChannelName item={item} channels={channels} editable={item.can_delete} onRename={(to) => void run(() => renameChannel(server, name, to))} />
                   <KeptMark roles={keptTo(room, name)} />
                   <CooldownMark item={item} canSet={orders} onPick={(seconds) => void run(() => api.setChannelCooldown(server, name, seconds))} />
-                  {item.can_delete && (
+                  {item.can_delete && !(isVoice(item) && voiceCount === 1) && (
                     <button id={`channel-remove-${name}`} type="button" className="shrink-0 text-sm text-decrease" onClick={() => setSure(name)}>
                       delete
                     </button>

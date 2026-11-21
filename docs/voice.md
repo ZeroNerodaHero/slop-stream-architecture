@@ -1,6 +1,6 @@
 # voice
 
-voice: built, off on the live box. a server (a group) can have voice channels next to its text ones, and people in one talk to each other. the group page's right sidebar lists the voice channels and who is in each, and a click joins ([frontend/src/app/explore/VoicePanel.tsx](../frontend/src/app/explore/VoicePanel.tsx)).
+voice: built, off on the live box. a server (a group) can have voice channels next to its text ones, and people in one talk to each other. the group page's right sidebar lists the voice channels and who is in each, and a click joins ([frontend/src/app/explore/VoicePanel.tsx](../frontend/src/app/explore/VoicePanel.tsx)). the panel is always there: every group has a voice channel.
 
 the code: [api/src/voice.rs](../api/src/voice.rs) (the join, the grant, who is in voice, the sweep), [video/src/voice.rs](../video/src/voice.rs) (the voice server, `video voice`), [api/migrations/0004-voice-channels.sql](../api/migrations/0004-voice-channels.sql), the room's `voice` in [api/src/group_mod.rs](../api/src/group_mod.rs), and the test [test/voice.js](../test/voice.js).
 
@@ -25,7 +25,9 @@ sequenceDiagram
 
 ## channels
 
-a channel is `kind` text or voice (migration 0004; every older channel is text, and `general` always is). `POST /api/groups/{group}/channels` with `kind: "voice"` makes one; no kind is text, any other is 400 `kind is text or voice`. voice channels count toward the 20 channels a server may have. the room and the `channel` group fact carry `kind` and `user_limit`.
+a channel is `kind` text or voice (migration 0004; every older channel is text, and `general` always is). `POST /api/groups/{group}/channels` with `kind: "voice"` makes one; no kind is text, any other is 400 `kind is text or voice`.
+
+every group has a voice channel. a new one is made with `general` and a voice channel called `voice`; migration 0005 gave each older group with none a `voice` (`voice-1`, `voice-2`... when a text channel had the name), and leaves a group that has one alone. the last voice channel of a server cannot be deleted: 403 `the last voice channel stays` (renaming it is fine). on the page, the left list's `add channel` makes text ones only, and the voice panel's header has `add voice channel` for the channels power, the same dialog with `kind: "voice"`. voice channels count toward the 20 channels a server may have. the room and the `channel` group fact carry `kind` and `user_limit`.
 
 a voice channel has no lines: chat, history, pins, search and notifications answer it `no such channel`, and the server's chat socket does not list it. the room still does.
 
@@ -50,7 +52,7 @@ two steps, so the voice server never sees a cookie.
    then it makes a grant, 32 random bytes as hex (64 characters), keeps `voicegrant:<hex>` = `{user_id, name, server, channel}` for 30s, and answers `{url: "/voice", grant, ttl: 30}`.
 2. the page opens the websocket at `/voice` (caddy sends it to `voice:7881/ws`) and its first frame, within 10s, is `{"role":"voice","grant":"<64 hex>","sdp":"<offer>"}`. the voice server redeems the grant with the api once (`POST /api/voice/redeem`), and the room and the name come from that reply, never from the page. the api takes the grant out (GETDEL) and asks the same questions as join again, since the grant may be half a minute old. a used grant, one past its 30s, or one no longer the person's to use is `bad grant`; an api that does not answer within 1.5s is `api unreachable`.
 
-the voice server's other refusals: `voice is not open` (no VOICE_SECRET), `bad offer`, `too many voice peers from this address`, `room full` (all 16 seats taken). the offer is audio only: m-line 0 is the mic and the rest (15 at most) are where the others are heard. [video/src/voice.rs](../video/src/voice.rs) has the frames, the seats and the m-lines.
+the voice server's other refusals: `voice is not open` (no VOICE_SECRET), `bad offer`, `too many voice peers from this address`, `room full` (all 16 seats taken). after the answer, a peer that fails is said as an error frame before the socket closes: one that never connected is `no audio path: nothing reached the voice server over udp 7883, a firewall is closing it` (its ice gives up 20s in: 5s disconnected and 15s failed), one that did is `voice lost its connection`. the offer is audio only: m-line 0 is the mic and the rest (15 at most) are where the others are heard. [video/src/voice.rs](../video/src/voice.rs) has the frames, the seats and the m-lines.
 
 with the voice server started with `VOICE_DEV_OPEN=1` it also takes the old `{"role":"voice","room":"<server>/<channel>","user":"<name>","sdp":"<offer>"}` from anyone, for [test/voice-spike.js](../test/voice-spike.js). those joins are never told to the api. never on the live box.
 
@@ -59,6 +61,8 @@ with the voice server started with `VOICE_DEV_OPEN=1` it also takes the old `{"r
 a room is one voice channel, `<server>/<channel>`, with 16 seats. each person takes the lowest free one. joins and leaves only swap the track behind each m-line (`replace_track`), so nobody renegotiates. the voice server sends `{"event":"seats","seats":[{"seat","user","line"}]}` right after the answer and on every join and leave; `line` is the m-line that seat is heard on.
 
 closing the socket, or the peer going failed or closed (the ice timeout), frees the seat.
+
+the page ([voice-atoms.ts](../frontend/src/infra/atoms/voice-atoms.ts)) says `connecting to <channel>…` in the bar from the answer until its peer connects, then `in <channel>`. a call that ends shows its reason under the list: the voice server's error word when it sent one, else from what the page saw (`no audio path...` when the audio never connected, `voice dropped: ...` when it had, `voice is unreachable` before an answer).
 
 ## who is in voice
 
@@ -119,7 +123,9 @@ media is udp only, on one port, 7883 (`VOICE_UDP_PORT`; the websocket is 7881, `
 2. 7883 is in `UDP_PORTS` in [scripts/deploy.sh](../scripts/deploy.sh) (`"7882 7883"`), so ufw and the firewall reminder have it.
 3. open 7883/udp in the VM's firewall (the cloud provider's: security group, VPC rule, cloud firewall), as 7882 is.
 4. recreate the api so it reads the secret, and start the voice server: `./scripts/deploy.sh api voice` (or by hand, `docker compose --profile voice up -d voice`).
-5. recreate the frontend so caddy has the `/voice` route ([frontend/Caddyfile](../frontend/Caddyfile)).
+5. recreate the frontend so caddy has the `/voice` route ([frontend/Caddyfile](../frontend/Caddyfile)). `npm run dev` proxies `/voice` to the backend too ([vite.config.mts](../frontend/vite.config.mts)).
+
+a join that gets its answer and then ends with `no audio path` (before this word: a bare `voice dropped` about 20s in) is udp 7883 not getting from the browser to the voice container: step 3, the provider firewall, is the usual one. video on 7882 working says nothing about 7883.
 
 to check it: the voice container's `/health` on 7881 answers `{ok, rooms, peers}` (its healthcheck), and `VOICE=1 ./scripts/test.sh voice` against a local stack started the same way.
 

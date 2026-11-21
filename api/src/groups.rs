@@ -6,7 +6,8 @@
 //! Nobody joins it; a chat socket whose hello says `bot: true` wears it (chat.rs), so the
 //! pretend chatters of the fake streams can be told apart, and hidden, in the panel.
 //!
-//! Every other group is also a server. It starts with a channel called `general`. The
+//! Every other group is also a server. It starts with a channel called `general` and a voice
+//! channel called `voice` (`VOICE_CHANNEL`), and always keeps a voice channel. The
 //! maker is its owner and can do everything, including name another owner. A custom role
 //! (group_mod.rs) is a name, a colour and some of those powers, never owner itself.
 //! The explorer lists them; the room is `/chat/<server>/<channel>`.
@@ -59,6 +60,9 @@ const MESSAGES_PER_CHANNEL: usize = 100;
 /// The channel a group starts with. It is not deleted, not renamed, never kept to a role, and
 /// always text.
 pub(crate) const GENERAL: &str = "general";
+/// The voice channel a group starts with (migration 0005 gave every older group one). Unlike
+/// `general` it may be renamed or deleted, only not while it is the server's last voice channel.
+const VOICE_CHANNEL: &str = "voice";
 /// A channel is one of these (migration 0004): text for lines, voice for talking. Text unless asked.
 const CHANNEL_KINDS: [&str; 2] = ["text", "voice"];
 /// Words the chat history routes already use, so a channel cannot be one of them.
@@ -377,8 +381,8 @@ async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGrou
     if member_of(&s.db, maker.id).await? >= GROUPS_PER_MEMBER {
         return Err(too_many_groups());
     }
-    // the group, its first member, and its first channel in one statement: no server
-    // without `general`, and no group without its maker in it.
+    // the group, its first member, and its first channels in one statement: no server
+    // without `general` and a voice channel, and no group without its maker in it.
     // the id is the key; the name columns are written while they exist (docs/ids.md).
     // a taken address (the digits collided) inserts nothing, and we draw again.
     let mut slug = String::new();
@@ -396,6 +400,10 @@ async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGrou
              c AS (
                 INSERT INTO channels (server, name, about, created_by_id)
                 SELECT name, 'general', '', $6 FROM g RETURNING server
+             ),
+             v AS (
+                INSERT INTO channels (server, name, about, created_by_id, position, kind)
+                SELECT name, $10, '', $6, 1, 'voice' FROM g
              )
              INSERT INTO memberships (name, group_name, user_id, owner)
              SELECT $5, g.name, $6, true FROM g JOIN c ON c.server = g.name RETURNING group_name",
@@ -409,6 +417,7 @@ async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGrou
         .bind(body.public)
         .bind(&title)
         .bind(tag)
+        .bind(VOICE_CHANNEL)
         .fetch_optional(&s.db)
         .await?;
         if made.is_some() {
@@ -1176,7 +1185,7 @@ async fn rename_channel(
 }
 
 /// `DELETE /api/groups/:group/channels/:channel`: who made the channel, who made the server,
-/// or an admin. `general` stays.
+/// or an admin. `general` stays, and so does the server's last voice channel.
 async fn delete_channel(State(s): State<AppState>, Path((group, channel)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let who = me.ok_or_else(not_logged_in)?;
     let (server, channel) = channel_names(&group, &channel)?;
@@ -1198,7 +1207,18 @@ async fn delete_channel(State(s): State<AppState>, Path((group, channel)): Path<
     if made_channel != Some(who.id) && !crate::group_mod::allows(&s, who.id, &server, crate::group_mod::CHANNELS).await? {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "not your channel"));
     }
-    sqlx::query("DELETE FROM channels WHERE server = $1 AND name = $2").bind(&server).bind(&channel).execute(&s.db).await?;
+    // a server always keeps a voice channel: not the last one
+    let deleted = sqlx::query(
+        "DELETE FROM channels c WHERE c.server = $1 AND c.name = $2
+         AND (c.kind <> 'voice' OR EXISTS (SELECT 1 FROM channels o WHERE o.server = $1 AND o.name <> $2 AND o.kind = 'voice'))",
+    )
+    .bind(&server)
+    .bind(&channel)
+    .execute(&s.db)
+    .await?;
+    if deleted.rows_affected() == 0 {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "the last voice channel stays"));
+    }
     log::info!("{}: removed #{channel} from {server}", who.name);
     tell(&s, &server, "unchannel", json!({ "channel": channel })).await;
     Ok(StatusCode::NO_CONTENT)
