@@ -1,5 +1,7 @@
 import {
   RiAddLine,
+  RiCloseLine,
+  RiErrorWarningLine,
   RiHeadphoneLine,
   RiLogoutBoxRLine,
   RiMicFill,
@@ -14,8 +16,9 @@ import {
   RiVolumeUpLine
 } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type ReactNode, type Ref, useEffect, useRef } from 'react';
+import { type ReactNode, type Ref, useEffect, useRef, useState } from 'react';
 
+import { VoiceFailDialog, voiceFailWords } from '@/app/explore/VoiceFailDialog';
 import { canEditChannel, type Channel, type GroupRoom, isVoice, type VoiceMember } from '@/infra/api';
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { presenceOfAtom } from '@/infra/atoms/presence-atoms';
@@ -99,12 +102,21 @@ export function VoicePanel({
   const talking = useAtomValue(voicePttHeldAtom) && ptt && !muted && !deaf;
   const channels = (room.channels ?? []).filter(isVoice);
   const here = call.phase !== 'idle' && call.server === room.name;
+  // the last try failed: the greyed seat stays, and only dismiss in the header
+  const failed = here && call.phase === 'failed';
+  // a try failed and another is on its way: only cancel in the header
+  const retrying = here && call.phase === 'joining' && call.retry > 0;
+  // mute, deafen and the mic's fill: joining (the first try) or connected
+  const inCall = here && !failed && !retrying;
   // a moderator muted my mic here (voice.rs `server_mute`): the voice server carries nothing of it, and only a moderator lifts it
-  const serverMuted = here && !!me && Object.values(room.voice ?? {}).some((people) => people.some((p) => p.name === me && p.muted));
+  const serverMuted = inCall && !!me && Object.values(room.voice ?? {}).some((people) => people.some((p) => p.name === me && p.muted));
   const avatarOf = (name: string) => room.roster?.find((m) => m.name === name)?.avatar ?? null;
   const micButton = useRef<HTMLButtonElement>(null);
   // the fill shows while the mic goes out: in push to talk, only with the key down
-  const metering = here && !muted && !deaf && !serverMuted && (!ptt || talking);
+  const metering = inCall && !muted && !deaf && !serverMuted && (!ptt || talking);
+  // the failure whose dialog was closed: a new failure is a new call object, so its dialog opens on its own
+  const [closedFail, setClosedFail] = useState<VoiceCall | null>(null);
+  const failOpen = failed && closedFail !== call;
 
   // Your level in the mute button's mic, many times a second while it is open: a frame loop
   // writes `--lvl` on the button by hand, never through react. The call's shared mic's own
@@ -138,7 +150,14 @@ export function VoicePanel({
     >
       <div className="flex min-h-6 items-center justify-between gap-2">
         <h3 className="pl-0.5 text-xs font-semibold uppercase tracking-wider text-textTertiary">voice</h3>
-        {here && (
+        {(failed || retrying) && (
+          <div id="group-voice-controls" className="flex shrink-0 items-center gap-0.5">
+            <BarButton id="group-voice-leave" label={failed ? 'dismiss' : 'cancel'} onClick={leaveVoice}>
+              <RiCloseLine aria-hidden size={14} />
+            </BarButton>
+          </div>
+        )}
+        {inCall && (
           <div id="group-voice-controls" className="flex shrink-0 items-center gap-0.5">
             {serverMuted ? (
               <BarButton id="group-voice-mute" label="server muted" danger disabled>
@@ -175,7 +194,7 @@ export function VoicePanel({
             <BarButton label={deaf ? 'undeafen' : 'deafen'} pressed={deaf} onClick={() => setVoiceDeaf(!deaf)}>
               <RiHeadphoneLine aria-hidden size={14} />
             </BarButton>
-            <BarButton label="leave voice" danger onClick={leaveVoice}>
+            <BarButton id="group-voice-leave" label="leave voice" danger onClick={leaveVoice}>
               <RiLogoutBoxRLine aria-hidden size={14} />
             </BarButton>
           </div>
@@ -186,6 +205,8 @@ export function VoicePanel({
         {channels.map((item) => {
           const people = room.voice?.[item.name] ?? [];
           const mine = here && call.channel === item.name;
+          // your own seat before the server has you in it: greyed while joining, fainter once failed. the roster's entry takes over when it comes
+          const pending = mine && !!me && (call.phase === 'joining' || failed) && !people.some((p) => p.name === me);
           return (
             <li key={item.name}>
               {/* the row is the box: the join fills it, then the pencil (up with the pointer anywhere on the row), then the signal on the row you are in */}
@@ -217,10 +238,13 @@ export function VoicePanel({
                     </button>
                   </Tooltip>
                 )}
-                {mine && <Signal call={call} stats={stats} />}
+                {mine && !failed && <Signal call={call} stats={stats} />}
               </div>
-              {people.length > 0 && (
+              {(people.length > 0 || pending) && (
                 <ul aria-label={`in ${item.name}`} className="flex flex-col gap-0.5 py-0.5 pl-6">
+                  {pending && me && (
+                    <PendingSeat name={me} avatar={avatarOf(me)} failed={failed} retrying={retrying} error={call.error} onWhy={() => setClosedFail(null)} />
+                  )}
                   {people.map((p) => (
                     <VoicePerson key={p.uid} person={p} avatar={avatarOf(p.name)} talking={mine && speaking.has(p.name)} />
                   ))}
@@ -244,12 +268,56 @@ export function VoicePanel({
           </li>
         )}
       </ul>
-      {call.error && !here && (
-        <p id="group-voice-error" role="status" className="px-1 text-xs text-textTertiary">
-          {call.error}
-        </p>
-      )}
+      {failOpen && <VoiceFailDialog error={call.error} onClose={() => setClosedFail(call)} onRetry={() => join(call.channel)} />}
     </section>
+  );
+}
+
+/**
+ * Your own seat in the channel you are joining, before the server's roster has you: your face
+ * and name greyed, `retrying…` after the name while a retry is on its way. Once the last try
+ * failed, fainter, with a warning at the end that says why and opens the dialog again.
+ */
+function PendingSeat({
+  name,
+  avatar,
+  failed,
+  retrying,
+  error,
+  onWhy
+}: {
+  name: string;
+  avatar: number | null;
+  failed: boolean;
+  retrying: boolean;
+  error: string;
+  onWhy: () => void;
+}) {
+  const words = voiceFailWords(error);
+  return (
+    <li id="group-voice-pending" data-voice-member={name} data-pending={failed ? 'failed' : 'joining'} className="flex text-textTertiary">
+      <span className="flex min-w-0 flex-1 items-center gap-2 border border-transparent p-px max-md:min-h-11">
+        <span className="flex shrink-0 outline outline-2 outline-offset-1 outline-transparent">
+          <Face name={name} version={avatar} className={cn('h-5 w-5 text-[10px] grayscale', failed ? 'opacity-35' : 'opacity-60')} />
+        </span>
+        <span className="min-w-0 truncate">{name}</span>
+        {retrying && <span className="shrink-0 text-xs">retrying…</span>}
+        {failed && (
+          <Tooltip content={words}>
+            <button
+              id="group-voice-why"
+              type="button"
+              aria-haspopup="dialog"
+              aria-label={`failed to join: ${words}`}
+              onClick={onWhy}
+              className={cn(CALL_BUTTON, 'ml-auto text-decrease')}
+            >
+              <RiErrorWarningLine aria-hidden size={12} />
+            </button>
+          </Tooltip>
+        )}
+      </span>
+    </li>
   );
 }
 
