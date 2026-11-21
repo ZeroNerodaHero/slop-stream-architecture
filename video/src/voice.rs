@@ -6,10 +6,10 @@
 //! websocket on :7881/ws (VOICE_WS_PORT), media on one udp port, 7883 (VOICE_UDP_PORT).
 //! `GET /health` on the same port says {ok, rooms, peers}. the first frame, within 10s:
 //!   {"role":"voice","grant":"<64 hex>","sdp":"<offer>"}
-//! the offer is audio only: m-line 0 is your mic and must send, the rest (15 at most)
-//! are recvonly and are where you hear the others. we answer {"sdp":"<answer>"} or
-//! {"error":"..."}, then send
-//!   {"event":"seats","seats":[{"seat":0,"user":"a","line":1},...]}
+//! the offer's audio: m-line 0 is your mic and must send, the other audio ones (15 at most)
+//! are recvonly and are where you hear the others. it may have video m-lines too (see video,
+//! below). we answer {"sdp":"<answer>"} or {"error":"..."}, then send
+//!   {"event":"seats","seats":[{"seat":0,"user":"a","line":1,"mute":false,"deaf":false,"video":[]},...]}
 //! right after the answer and on every join and leave. a grant the api turns down (used,
 //! older than 30s, no longer yours to use) is "bad grant"; an api that does not answer within
 //! 1.5s is "api unreachable".
@@ -27,6 +27,23 @@
 //! renegotiates. an empty seat's m-line gets an idle track nobody writes to: webrtc-rs
 //! cannot put a track back on a sender once it was replaced with none.
 //!
+//! video: a seat shows at most a camera and a screen, two tracks of its own (`camera<id>` and
+//! `screen<id>`, stream `seat<id>`), VP8 only. the page is always the one that offers, so
+//! there is no glare: after the answer it may send a new offer at any time,
+//!   {"sdp":"<offer>","video":{"<mid>":"camera","<mid>":"screen"}}
+//! (the join frame may carry `video` too), and gets {"sdp":"<answer>"} back. `video` names the
+//! page's own sending video m-lines; a sending one it does not name is "bad offer", and the audio
+//! m-lines must stay as they were. what sends is what shows: a camera line that goes inactive is
+//! the camera off. the page's recvonly video m-lines are where it sees the others, at most 30:
+//! each seat's `video` in the seats frame lists what it shows, `[{"kind":"camera","mid":"17"}]`,
+//! the mid that carries it, or null while the page has no free video m-line for it (it adds
+//! one and offers again). like the audio, a line only swaps tracks; a line given a new picture
+//! asks its sender for a keyframe (a PLI), and a viewer's own PLI or FIR is passed on the same
+//! way, at most one per KEYFRAME_GAP per track. the page also says
+//!   {"state":{"mute":true,"deaf":false}}
+//! for the others' tiles, the seats frame's `mute` and `deaf`. those are the page's own word:
+//! they carry nothing about what is sent.
+//!
 //! closing the socket, or the peer going failed/closed (the ice timeout), frees the seat. a
 //! peer that fails is said first, as an error frame: one that never connected is "no audio
 //! path" (nothing came over udp: the port is shut somewhere between, 7883 not open in the
@@ -42,7 +59,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -66,19 +83,27 @@ use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
+use webrtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
 use webrtc::rtp_transceiver::rtp_codec::RTPCodecType;
 use webrtc::rtp_transceiver::rtp_sender::RTCRtpSender;
 use webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection;
 use webrtc::rtp_transceiver::RTCRtpTransceiverInit;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
+use webrtc::track::track_remote::TrackRemote;
 
-use crate::media::{opus_voice_capability, voice_media_setup};
+use crate::media::{opus_voice_capability, voice_media_setup, vp8_capability};
 use crate::{env_port, forwarded_ip, limits, media_socket, valid_name};
 
 const MAX_SEATS: usize = 16;
-const MAX_SDP_BYTES: usize = 48 * 1024;
+/// sixteen audio and 32 video m-lines, VP8 alone on the video ones
+const MAX_SDP_BYTES: usize = 128 * 1024;
 const MAX_MEDIA_LINES: usize = 16;
+/// a camera and a screen sending, and the others' 15 of each to see
+const MAX_VIDEO_LINES: usize = 2 + 2 * (MAX_SEATS - 1);
+/// keyframe requests to one track's sender, at most one per this
+const KEYFRAME_GAP: Duration = Duration::from_millis(300);
 const MAX_PEERS_PER_IP: usize = 4;
 const MAX_USER_CHARS: usize = 32;
 const JOIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -205,6 +230,56 @@ struct Sitter {
     /// tells two people in the same seat apart, one after the other
     id: u64,
     mic: Arc<TrackLocalStaticRTP>,
+    /// their camera and screen, and what their page says of itself
+    show: Show,
+}
+
+/// a camera or a screen
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Kind {
+    Camera,
+    Screen,
+}
+
+impl Kind {
+    const ALL: [Kind; 2] = [Kind::Camera, Kind::Screen];
+
+    fn word(self) -> &'static str {
+        match self {
+            Kind::Camera => "camera",
+            Kind::Screen => "screen",
+        }
+    }
+
+    fn of(word: &str) -> Option<Kind> {
+        Kind::ALL.into_iter().find(|k| k.word() == word)
+    }
+}
+
+/// what a seat shows. the tracks and their keyframe bells are the seat's for its whole stay;
+/// `on` says which of them its page is sending now
+#[derive(Clone)]
+struct Show {
+    /// by `Kind as usize`: the camera's, then the screen's
+    tracks: [Arc<TrackLocalStaticRTP>; 2],
+    /// rung when a viewer needs a keyframe of that track: its sender gets a PLI
+    keys: [Arc<Notify>; 2],
+    on: [bool; 2],
+    mute: bool,
+    deaf: bool,
+}
+
+impl Show {
+    fn new(id: u64) -> Self {
+        let track = |kind: Kind| Arc::new(TrackLocalStaticRTP::new(vp8_capability(), format!("{}{id}", kind.word()), format!("seat{id}")));
+        Show {
+            tracks: [track(Kind::Camera), track(Kind::Screen)],
+            keys: [Arc::new(Notify::new()), Arc::new(Notify::new())],
+            on: [false; 2],
+            mute: false,
+            deaf: false,
+        }
+    }
 }
 
 /// the seats of a room. each comer takes the lowest free one.
@@ -287,11 +362,62 @@ fn valid_grant(grant: &str) -> bool {
     grant.len() == 64 && grant.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// the `video` the join frame and every later offer may carry: the page's sending video m-lines
+/// by mid, each `camera` or `screen`
+fn read_labels(text: &str) -> HashMap<String, String> {
+    #[derive(Deserialize)]
+    struct Labels {
+        #[serde(default)]
+        video: HashMap<String, String>,
+    }
+    serde_json::from_str::<Labels>(text).map(|l| l.video).unwrap_or_default()
+}
+
+/// which kind each sending video section is, from the page's labels: every one named, each
+/// kind at most once. None is a bad offer.
+fn sending_kinds(offer: &[Section], labels: &HashMap<String, String>) -> Option<HashMap<String, Kind>> {
+    let mut kinds = HashMap::new();
+    for s in offer.iter().filter(|s| s.kind == Media::Video && s.sends) {
+        let mid = s.mid.clone()?;
+        let kind = Kind::of(labels.get(&mid)?)?;
+        if kinds.values().any(|&k| k == kind) {
+            return None;
+        }
+        kinds.insert(mid, kind);
+    }
+    Some(kinds)
+}
+
+/// what the page says after the join: a new offer, or its own mute and deafen
+#[derive(Deserialize)]
+struct Said {
+    sdp: Option<String>,
+    state: Option<SelfState>,
+}
+
+#[derive(Deserialize)]
+struct SelfState {
+    #[serde(default)]
+    mute: bool,
+    #[serde(default)]
+    deaf: bool,
+}
+
 #[derive(Serialize)]
 struct SeatInfo<'a> {
     seat: usize,
     user: &'a str,
     line: usize,
+    mute: bool,
+    deaf: bool,
+    video: Vec<Shown>,
+}
+
+/// one picture a seat shows, and the mid that carries it to this page (None: no line free yet)
+#[derive(Serialize, Debug, PartialEq)]
+struct Shown {
+    kind: &'static str,
+    mid: Option<String>,
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -445,7 +571,7 @@ impl Voice {
             tx: watch::Sender::new(Arc::new(Vec::new())),
         });
         let mic = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("mic{id}"), "voice".to_owned()));
-        let sitter = Sitter { user: user.to_owned(), uid: uid.map(str::to_owned), id, mic: mic.clone() };
+        let sitter = Sitter { user: user.to_owned(), uid: uid.map(str::to_owned), id, mic: mic.clone(), show: Show::new(id) };
         let Some(seat) = room.seats.take(sitter) else {
             if room.seats.taken() == 0 {
                 state.rooms.remove(name);
@@ -456,6 +582,20 @@ impl Voice {
         let snapshot = Arc::new(room.seats.snapshot());
         room.tx.send_replace(snapshot);
         Some((seat, mic, room.tx.subscribe()))
+    }
+
+    /// `change` on what the sitter `id` in `seat` of `name` shows, told to the room when it
+    /// changed anything. nothing when they are gone.
+    fn show(&self, name: &str, seat: usize, id: u64, change: impl FnOnce(&mut Show)) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(room) = state.rooms.get_mut(name) else { return };
+        let Some(Some(sitter)) = room.seats.0.get_mut(seat).filter(|s| s.as_ref().is_some_and(|s| s.id == id)) else { return };
+        let was = (sitter.show.on, sitter.show.mute, sitter.show.deaf);
+        change(&mut sitter.show);
+        if was != (sitter.show.on, sitter.show.mute, sitter.show.deaf) {
+            let snapshot = Arc::new(room.seats.snapshot());
+            room.tx.send_replace(snapshot);
+        }
     }
 
     /// everyone granted we have seated, as `beat` names them: `[{user_id, server}]`
@@ -500,10 +640,18 @@ fn valid_user(user: &str) -> bool {
     !user.trim().is_empty() && user.chars().count() <= MAX_USER_CHARS && !user.chars().any(char::is_control)
 }
 
+/// what an m= section carries
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Media {
+    Audio,
+    Video,
+    Other,
+}
+
 /// one m= section of an offer, as far as voice cares
 #[derive(Debug)]
 struct Section {
-    audio: bool,
+    kind: Media,
     mid: Option<String>,
     sends: bool,
     receives: bool,
@@ -514,8 +662,12 @@ fn sections(sdp: &str) -> Vec<Section> {
     for line in sdp.lines() {
         let line = line.trim_end();
         if let Some(rest) = line.strip_prefix("m=") {
-            let audio = rest.split(' ').next() == Some("audio");
-            sections.push(Section { audio, mid: None, sends: true, receives: true });
+            let kind = match rest.split(' ').next() {
+                Some("audio") => Media::Audio,
+                Some("video") => Media::Video,
+                _ => Media::Other,
+            };
+            sections.push(Section { kind, mid: None, sends: true, receives: true });
         } else if let Some(section) = sections.last_mut() {
             if let Some(mid) = line.strip_prefix("a=mid:") {
                 section.mid = Some(mid.trim().to_owned());
@@ -532,18 +684,28 @@ fn sections(sdp: &str) -> Vec<Section> {
     sections
 }
 
-/// the offer's sections if voice can take it: at most 48 KB, 1 to 16 m-lines, all
-/// audio and all with a mid, the first one sending
+/// the offer's sections if voice can take it: at most 128 KB, every section with a mid, the
+/// first one a sending audio one, 1 to 16 audio and at most 32 video, two of those sending at
+/// most, and nothing else (no data channel)
 fn check_offer(sdp: &str) -> Option<Vec<Section>> {
     if sdp.len() > MAX_SDP_BYTES {
         return None;
     }
     let sections = sections(sdp);
-    let ok = !sections.is_empty()
-        && sections.len() <= MAX_MEDIA_LINES
-        && sections.iter().all(|s| s.audio && s.mid.is_some())
-        && sections[0].sends;
+    let count = |kind: Media| sections.iter().filter(|s| s.kind == kind).count();
+    let ok = sections.first().is_some_and(|s| s.kind == Media::Audio && s.sends)
+        && count(Media::Audio) <= MAX_MEDIA_LINES
+        && count(Media::Video) <= MAX_VIDEO_LINES
+        && count(Media::Other) == 0
+        && sections.iter().filter(|s| s.kind == Media::Video && s.sends).count() <= 2
+        && sections.iter().all(|s| s.mid.is_some());
     ok.then_some(sections)
+}
+
+/// whether a later offer keeps the audio m-lines of the first, mid for mid
+fn same_audio(first: &[Section], next: &[Section]) -> bool {
+    let mids = |offer: &[Section]| offer.iter().filter(|s| s.kind == Media::Audio).map(|s| s.mid.clone()).collect::<Vec<_>>();
+    mids(first) == mids(next) && next[0].sends
 }
 
 async fn handle(voice: Voice, mut socket: WebSocket, ip: IpAddr) {
@@ -584,7 +746,8 @@ async fn handle(voice: Voice, mut socket: WebSocket, ip: IpAddr) {
     let tag = format!("voice {room} seat {seat}");
     log::info!("{tag}: {user} joined");
     let mut attached = None;
-    talk(&voice, &mut socket, &tag, sdp, &offer, seat, mic, &mut seats, presence.clone(), &mut attached).await;
+    let joined = Joined { room: &room, labels: read_labels(&text) };
+    talk(&voice, &mut socket, &tag, sdp, &offer, seat, mic, &mut seats, presence.clone(), &mut attached, joined).await;
     log::info!("{tag}: {user} left");
     drop(held);
     // the seat is free: `left`, once `attached` is through so the two cannot cross
@@ -604,6 +767,12 @@ struct Line {
     bound: Option<u64>,
 }
 
+/// the room a join sat in, and the `video` of its frame
+struct Joined<'a> {
+    room: &'a str,
+    labels: HashMap<String, String>,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn talk(
     voice: &Voice,
@@ -616,11 +785,19 @@ async fn talk(
     seats: &mut watch::Receiver<Snapshot>,
     presence: Option<Arc<Presence>>,
     attached: &mut Option<tokio::task::JoinHandle<()>>,
+    joined: Joined<'_>,
 ) {
+    // who sits here: the id, and the tracks this page's camera and screen go out on
+    let Some(me) = seats.borrow().get(seat).cloned().flatten() else {
+        return refuse(socket, "server error").await;
+    };
+    let Some(kinds) = sending_kinds(offer, &joined.labels) else {
+        return refuse(socket, "bad offer").await;
+    };
     let dead = Arc::new(Notify::new());
     let linked = Arc::new(AtomicBool::new(false));
     let peer = match voice_peer(voice, tag, dead.clone(), linked.clone()).await {
-        Ok(peer) => peer,
+        Ok(peer) => Arc::new(peer),
         Err(e) => {
             log::error!("{tag}: peer setup: {e}");
             return refuse(socket, "server error").await;
@@ -630,13 +807,15 @@ async fn talk(
     // added before the offer is applied, webrtc-rs pairs them with its sections in order:
     // the mic's sending section takes the recvonly one, each recvonly section a sendonly one
     let mut idles = Vec::new();
+    let mut video = Video::default();
     let setup = async {
         peer.add_transceiver_from_kind(
             RTPCodecType::Audio,
             Some(RTCRtpTransceiverInit { direction: RTCRtpTransceiverDirection::Recvonly, send_encodings: vec![] }),
         )
         .await?;
-        for i in 1..offer.iter().filter(|s| s.receives && !s.sends).count() + 1 {
+        let heard = offer.iter().filter(|s| s.kind == Media::Audio && s.receives && !s.sends).count();
+        for i in 1..heard + 1 {
             let idle = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("line{i}"), "voice".to_owned()));
             peer.add_transceiver_from_track(
                 idle.clone() as Arc<dyn TrackLocal + Send + Sync>,
@@ -645,24 +824,30 @@ async fn talk(
             .await?;
             idles.push(idle);
         }
-        anyhow::Ok(())
+        anyhow::Ok(video.add_lines(&peer, offer).await?)
     };
-    if let Err(e) = setup.await {
-        log::error!("{tag}: transceivers: {e}");
-        let _ = peer.close().await;
-        return refuse(socket, "server error").await;
-    }
+    let video_idles = match setup.await {
+        Ok(video_idles) => video_idles,
+        Err(e) => {
+            log::error!("{tag}: transceivers: {e}");
+            let _ = peer.close().await;
+            return refuse(socket, "server error").await;
+        }
+    };
 
     // packets from the mic's section go to the mic track, which other peers' seats carry.
     // header extensions carry ids from this peer's session, so drop them
     let mic_mid = offer[0].mid.clone();
     let writer = mic.clone();
+    let shown = Shower { kinds: Arc::new(Mutex::new(kinds.clone())), show: me.show.clone(), peer: Arc::downgrade(&peer) };
+    let showing = shown.clone();
     peer.on_track(Box::new(move |track, _, transceiver| {
         let mic = writer.clone();
         let mic_mid = mic_mid.clone();
+        let showing = showing.clone();
         tokio::spawn(async move {
             if transceiver.mid().map(|m| m.to_string()) != mic_mid {
-                return;
+                return showing.forward(track, transceiver.mid().map(|m| m.to_string())).await;
             }
             while let Ok((mut packet, _)) = track.read_rtp().await {
                 packet.header.extension = false;
@@ -687,7 +872,7 @@ async fn talk(
     for t in peer.get_transceivers().await {
         let Some(mid) = t.mid() else { continue };
         let Some(i) = offer.iter().position(|s| s.mid.as_deref() == Some(mid.as_str())) else { continue };
-        if i == 0 || t.direction() != RTCRtpTransceiverDirection::Sendonly {
+        if i == 0 || offer[i].kind != Media::Audio || t.direction() != RTCRtpTransceiverDirection::Sendonly {
             continue;
         }
         let sender = t.sender().await;
@@ -696,6 +881,8 @@ async fn talk(
         let Some(idle) = idles.iter().find(|idle| idle.id() == id) else { continue };
         lines[i] = Some(Line { sender, idle: idle.clone(), bound: None });
     }
+    video.collect(&peer, offer, &video_idles).await;
+    voice.show(joined.room, seat, me.id, |s| s.on = on_of(&kinds));
 
     if send(socket, &serde_json::json!({ "sdp": answer })).await.is_ok() {
         // spawned, so the first seats frame does not wait on the api
@@ -703,13 +890,32 @@ async fn talk(
         let mut current = seats.borrow_and_update().clone();
         loop {
             rebind(tag, &mut lines, &current, seat).await;
-            if send(socket, &seats_event(&current, seat)).await.is_err() {
+            let mids = video.rebind(tag, &current, seat).await;
+            if send(socket, &seats_event(&current, seat, &mids)).await.is_err() {
                 break;
             }
             tokio::select! {
                 msg = socket.recv() => match msg {
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                    // nothing is said after the join yet
+                    Some(Ok(Message::Text(text))) => {
+                        let Ok(said) = serde_json::from_str::<Said>(&text) else { continue };
+                        if let Some(state) = said.state {
+                            voice.show(joined.room, seat, me.id, |s| (s.mute, s.deaf) = (state.mute, state.deaf));
+                        }
+                        let Some(sdp) = said.sdp else { continue };
+                        match renegotiate(tag, &peer, offer, &text, sdp, &shown, &mut video).await {
+                            Ok((answer, kinds)) => {
+                                voice.show(joined.room, seat, me.id, |s| s.on = on_of(&kinds));
+                                if send(socket, &serde_json::json!({ "sdp": answer })).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(why) => {
+                                refuse(socket, why).await;
+                                break;
+                            }
+                        }
+                    }
                     _ => continue,
                 },
                 _ = dead.notified() => {
@@ -729,6 +935,190 @@ async fn talk(
         }
     }
     let _ = peer.close().await;
+}
+
+/// which of the camera and the screen a page sends, from its sending video mids
+fn on_of(kinds: &HashMap<String, Kind>) -> [bool; 2] {
+    Kind::ALL.map(|k| kinds.values().any(|&v| v == k))
+}
+
+/// a later offer from the page: checked against the first, its new video lines readied, and
+/// answered. → the answer and the page's sending video mids; Err is the word for the page
+async fn renegotiate(
+    tag: &str,
+    peer: &RTCPeerConnection,
+    first: &[Section],
+    text: &str,
+    sdp: String,
+    shown: &Shower,
+    video: &mut Video,
+) -> Result<(String, HashMap<String, Kind>), &'static str> {
+    let offer = check_offer(&sdp).filter(|next| same_audio(first, next)).ok_or("bad offer")?;
+    let kinds = sending_kinds(&offer, &read_labels(text)).ok_or("bad offer")?;
+    // before the offer is applied: a track that comes from it finds its kind
+    *shown.kinds.lock().unwrap_or_else(|e| e.into_inner()) = kinds.clone();
+    let idles = video.add_lines(peer, &offer).await.map_err(|e| {
+        log::error!("{tag}: video transceivers: {e}");
+        "server error"
+    })?;
+    let answer = negotiate(peer, sdp).await.map_err(|e| {
+        log::warn!("{tag}: renegotiate: {e}");
+        "could not negotiate"
+    })?;
+    video.collect(peer, &offer, &idles).await;
+    Ok((answer, kinds))
+}
+
+/// a page's camera and screen coming in, onto the seat's own tracks of those kinds
+#[derive(Clone)]
+struct Shower {
+    /// the page's sending video mids, as its last offer named them
+    kinds: Arc<Mutex<HashMap<String, Kind>>>,
+    show: Show,
+    peer: Weak<RTCPeerConnection>,
+}
+
+impl Shower {
+    /// one incoming video track: its packets onto the seat's track of its kind (header
+    /// extensions dropped, as the mic's), and a PLI back to the page each time a viewer rings
+    /// that track's bell, at most one per KEYFRAME_GAP. until the track ends.
+    async fn forward(self, track: Arc<TrackRemote>, mid: Option<String>) {
+        let kind = mid.and_then(|mid| self.kinds.lock().unwrap_or_else(|e| e.into_inner()).get(&mid).copied());
+        let Some(kind) = kind.filter(|_| track.kind() == RTPCodecType::Video) else { return };
+        let out = self.show.tracks[kind as usize].clone();
+        let key = self.show.keys[kind as usize].clone();
+        let (peer, ssrc) = (self.peer.clone(), track.ssrc());
+        let asking = tokio::spawn(async move {
+            loop {
+                key.notified().await;
+                let Some(peer) = peer.upgrade() else { break };
+                let pli = PictureLossIndication { sender_ssrc: 0, media_ssrc: ssrc };
+                let _ = peer.write_rtcp(&[Box::new(pli)]).await;
+                drop(peer);
+                tokio::time::sleep(KEYFRAME_GAP).await;
+            }
+        });
+        while let Ok((mut packet, _)) = track.read_rtp().await {
+            packet.header.extension = false;
+            packet.header.extensions.clear();
+            let _ = out.write_rtp(&packet).await;
+        }
+        asking.abort();
+    }
+}
+
+/// one m-line that shows this page a camera or a screen
+struct Screen {
+    mid: String,
+    sender: Arc<RTCRtpSender>,
+    idle: Arc<TrackLocalStaticRTP>,
+    /// the sitter and which of theirs it carries, None for idle
+    bound: Option<(u64, Kind)>,
+    /// the bell of what it carries, for this page's own keyframe requests
+    key: Arc<Mutex<Option<Arc<Notify>>>>,
+}
+
+/// the m-lines a page sees the others' video on
+#[derive(Default)]
+struct Video {
+    lines: Vec<Screen>,
+    /// idle tracks made, for their names
+    made: usize,
+}
+
+impl Video {
+    /// before an offer is applied: a sendonly transceiver with an idle track for each recvonly
+    /// video section there is no line for yet, which webrtc-rs pairs with it. → those tracks
+    async fn add_lines(&mut self, peer: &RTCPeerConnection, offer: &[Section]) -> anyhow::Result<Vec<Arc<TrackLocalStaticRTP>>> {
+        let new = offer
+            .iter()
+            .filter(|s| s.kind == Media::Video && s.receives && !s.sends)
+            .filter(|s| !self.lines.iter().any(|l| s.mid.as_deref() == Some(l.mid.as_str())))
+            .count();
+        let mut idles = Vec::new();
+        for _ in 0..new {
+            self.made += 1;
+            let idle = Arc::new(TrackLocalStaticRTP::new(vp8_capability(), format!("video{}", self.made), "voice".to_owned()));
+            peer.add_transceiver_from_track(
+                idle.clone() as Arc<dyn TrackLocal + Send + Sync>,
+                Some(RTCRtpTransceiverInit { direction: RTCRtpTransceiverDirection::Sendonly, send_encodings: vec![] }),
+            )
+            .await?;
+            idles.push(idle);
+        }
+        Ok(idles)
+    }
+
+    /// after the answer: the transceivers `idles` went to, as lines by their mid, each with a
+    /// task that passes this page's PLIs and FIRs on to whatever the line carries
+    async fn collect(&mut self, peer: &RTCPeerConnection, offer: &[Section], idles: &[Arc<TrackLocalStaticRTP>]) {
+        for t in peer.get_transceivers().await {
+            let Some(mid) = t.mid().map(|m| m.to_string()) else { continue };
+            if self.lines.iter().any(|l| l.mid == mid) || !offer.iter().any(|s| s.kind == Media::Video && s.mid.as_deref() == Some(mid.as_str())) {
+                continue;
+            }
+            let sender = t.sender().await;
+            let Some(id) = sender.track().await.map(|t| t.id().to_owned()) else { continue };
+            let Some(idle) = idles.iter().find(|idle| idle.id() == id) else { continue };
+            let key: Arc<Mutex<Option<Arc<Notify>>>> = Arc::default();
+            let (reader, bell) = (sender.clone(), key.clone());
+            tokio::spawn(async move {
+                while let Ok((packets, _)) = reader.read_rtcp().await {
+                    let wants = packets.iter().any(|p| {
+                        let any = p.as_any();
+                        any.downcast_ref::<PictureLossIndication>().is_some() || any.downcast_ref::<FullIntraRequest>().is_some()
+                    });
+                    if let Some(bell) = wants.then(|| bell.lock().unwrap_or_else(|e| e.into_inner()).clone()).flatten() {
+                        bell.notify_one();
+                    }
+                }
+            });
+            self.lines.push(Screen { mid, sender, idle: idle.clone(), bound: None, key });
+        }
+    }
+
+    /// every line onto a picture someone else shows now, or back to idle: a picture that stays
+    /// keeps its line, one that went frees it, a new one takes the first free line and rings
+    /// its bell (a keyframe, so the page has a picture at once). → the mid of each picture shown
+    async fn rebind(&mut self, tag: &str, seats: &[Option<Sitter>], own: usize) -> HashMap<(u64, Kind), String> {
+        let wanted: Vec<(u64, Kind, &Show)> = seats
+            .iter()
+            .enumerate()
+            .filter(|&(seat, _)| seat != own)
+            .filter_map(|(_, s)| s.as_ref())
+            .flat_map(|s| Kind::ALL.into_iter().filter(|&k| s.show.on[k as usize]).map(move |k| (s.id, k, &s.show)))
+            .collect();
+        for line in &mut self.lines {
+            let Some(bound) = line.bound else { continue };
+            if wanted.iter().any(|&(id, kind, _)| (id, kind) == bound) {
+                continue;
+            }
+            match line.sender.replace_track(Some(line.idle.clone() as Arc<dyn TrackLocal + Send + Sync>)).await {
+                Ok(()) => {
+                    line.bound = None;
+                    *line.key.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                }
+                Err(e) => log::warn!("{tag}: video {}: replace track: {e}", line.mid),
+            }
+        }
+        for &(id, kind, show) in &wanted {
+            if self.lines.iter().any(|l| l.bound == Some((id, kind))) {
+                continue;
+            }
+            let Some(line) = self.lines.iter_mut().find(|l| l.bound.is_none()) else { break };
+            let track = show.tracks[kind as usize].clone();
+            match line.sender.replace_track(Some(track as Arc<dyn TrackLocal + Send + Sync>)).await {
+                Ok(()) => {
+                    line.bound = Some((id, kind));
+                    let key = show.keys[kind as usize].clone();
+                    key.notify_one();
+                    *line.key.lock().unwrap_or_else(|e| e.into_inner()) = Some(key);
+                }
+                Err(e) => log::warn!("{tag}: video {}: replace track: {e}", line.mid),
+            }
+        }
+        self.lines.iter().filter_map(|l| Some((l.bound?, l.mid.clone()))).collect()
+    }
 }
 
 /// point every m-line at the mic of whoever sits in its seat now, or at its idle track
@@ -753,12 +1143,21 @@ async fn rebind(tag: &str, lines: &mut [Option<Line>], seats: &[Option<Sitter>],
     }
 }
 
-fn seats_event(seats: &[Option<Sitter>], own: usize) -> serde_json::Value {
+/// the seats frame for the page in `own`: everyone else, with what each shows and on which mid
+fn seats_event(seats: &[Option<Sitter>], own: usize, mids: &HashMap<(u64, Kind), String>) -> serde_json::Value {
     let list: Vec<SeatInfo> = seats
         .iter()
         .enumerate()
         .filter(|&(seat, _)| seat != own)
-        .filter_map(|(seat, s)| s.as_ref().map(|s| SeatInfo { seat, user: &s.user, line: line_of(seat, own) }))
+        .filter_map(|(seat, s)| {
+            let s = s.as_ref()?;
+            let video = Kind::ALL
+                .into_iter()
+                .filter(|&k| s.show.on[k as usize])
+                .map(|k| Shown { kind: k.word(), mid: mids.get(&(s.id, k)).cloned() })
+                .collect();
+            Some(SeatInfo { seat, user: &s.user, line: line_of(seat, own), mute: s.show.mute, deaf: s.show.deaf, video })
+        })
         .collect();
     serde_json::json!({ "event": "seats", "seats": list })
 }
@@ -901,13 +1300,82 @@ mod tests {
     }
 
     #[test]
+    fn video_offers() {
+        // a camera and a screen sending, and the others' 30 to see: 48 m-lines in all
+        let mut lines = vec![("audio", "sendrecv")];
+        lines.extend(std::iter::repeat_n(("audio", "recvonly"), 15));
+        lines.extend([("video", "sendonly"), ("video", "sendonly")]);
+        lines.extend(std::iter::repeat_n(("video", "recvonly"), 30));
+        let sections = check_offer(&offer(&lines)).expect("a full video offer");
+        assert_eq!(sections.iter().filter(|s| s.kind == Media::Video).count(), 32);
+        // a camera off is an inactive line, which counts for nothing
+        assert!(check_offer(&offer(&[("audio", "sendrecv"), ("video", "inactive"), ("video", "sendonly"), ("video", "sendonly")])).is_some());
+    }
+
+    #[test]
+    fn what_a_page_sends_is_named() {
+        let sections = check_offer(&offer(&[("audio", "sendrecv"), ("video", "sendonly"), ("video", "sendonly"), ("video", "recvonly")])).unwrap();
+        let labels = |v: serde_json::Value| read_labels(&serde_json::json!({ "sdp": "x", "video": v }).to_string());
+        let kinds = sending_kinds(&sections, &labels(serde_json::json!({ "1": "camera", "2": "screen", "3": "camera" }))).unwrap();
+        assert_eq!(kinds, HashMap::from([("1".to_owned(), Kind::Camera), ("2".to_owned(), Kind::Screen)]));
+        assert_eq!(on_of(&kinds), [true, true]);
+        // a sending line not named, a word that is no kind, one kind twice
+        assert!(sending_kinds(&sections, &labels(serde_json::json!({ "1": "camera" }))).is_none());
+        assert!(sending_kinds(&sections, &labels(serde_json::json!({ "1": "camera", "2": "face" }))).is_none());
+        assert!(sending_kinds(&sections, &labels(serde_json::json!({ "1": "camera", "2": "camera" }))).is_none());
+        // nothing sending, nothing named: the audio-only page
+        let audio = check_offer(&voice_offer(15)).unwrap();
+        assert_eq!(sending_kinds(&audio, &read_labels(r#"{"role":"voice","sdp":"x"}"#)), Some(HashMap::new()));
+        assert_eq!(on_of(&HashMap::new()), [false, false]);
+    }
+
+    #[test]
+    fn a_later_offer_keeps_the_audio() {
+        let first = check_offer(&voice_offer(3)).unwrap();
+        let mut lines = vec![("audio", "sendrecv"), ("audio", "recvonly"), ("audio", "recvonly"), ("audio", "recvonly"), ("video", "sendonly")];
+        assert!(same_audio(&first, &check_offer(&offer(&lines)).unwrap()));
+        // an audio line more, or one fewer
+        lines.push(("audio", "recvonly"));
+        assert!(!same_audio(&first, &check_offer(&offer(&lines)).unwrap()));
+        assert!(!same_audio(&first, &check_offer(&voice_offer(2)).unwrap()));
+    }
+
+    fn seated(user: &str, id: u64, on: [bool; 2]) -> Sitter {
+        let mic = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("mic{id}"), "voice".to_owned()));
+        let mut show = Show::new(id);
+        show.on = on;
+        Sitter { user: user.to_owned(), uid: None, id, mic, show }
+    }
+
+    #[test]
+    fn the_seats_frame_says_what_each_shows() {
+        let seats = vec![Some(seated("a", 1, [true, false])), Some(seated("b", 2, [true, true])), None, Some(seated("c", 3, [false, false]))];
+        let mids = HashMap::from([((2, Kind::Camera), "20".to_owned())]);
+        let frame = seats_event(&seats, 0, &mids);
+        assert_eq!(
+            frame,
+            serde_json::json!({ "event": "seats", "seats": [
+                { "seat": 1, "user": "b", "line": 1, "mute": false, "deaf": false, "video": [{ "kind": "camera", "mid": "20" }, { "kind": "screen", "mid": null }] },
+                { "seat": 3, "user": "c", "line": 3, "mute": false, "deaf": false, "video": [] },
+            ] })
+        );
+    }
+
+    #[test]
     fn bad_offers() {
-        // 17 m-lines
+        // 17 audio m-lines
         assert!(check_offer(&voice_offer(16)).is_none());
-        // any video, or a data channel
-        assert!(check_offer(&offer(&[("audio", "sendrecv"), ("video", "recvonly")])).is_none());
+        // video first, or a data channel
         assert!(check_offer(&offer(&[("video", "sendrecv")])).is_none());
+        assert!(check_offer(&offer(&[("video", "sendonly"), ("audio", "sendrecv")])).is_none());
         assert!(check_offer(&offer(&[("audio", "sendrecv"), ("application", "sendrecv")])).is_none());
+        // three sending video lines, or 33 video lines
+        let mut lines = vec![("audio", "sendrecv")];
+        lines.extend(std::iter::repeat_n(("video", "sendonly"), 3));
+        assert!(check_offer(&offer(&lines)).is_none());
+        let mut lines = vec![("audio", "sendrecv")];
+        lines.extend(std::iter::repeat_n(("video", "recvonly"), 33));
+        assert!(check_offer(&offer(&lines)).is_none());
         // m-line 0 must send
         assert!(check_offer(&offer(&[("audio", "recvonly"), ("audio", "recvonly")])).is_none());
         assert!(check_offer(&offer(&[("audio", "inactive")])).is_none());
