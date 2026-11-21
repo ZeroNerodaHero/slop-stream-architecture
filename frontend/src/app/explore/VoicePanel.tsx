@@ -19,7 +19,7 @@ import { useAtomValue } from 'jotai';
 import { type ReactNode, type Ref, useEffect, useRef, useState } from 'react';
 
 import { VoiceFailDialog, voiceFailWords } from '@/app/explore/VoiceFailDialog';
-import { canEditChannel, type Channel, type GroupRoom, isVoice, type VoiceMember } from '@/infra/api';
+import { canEditChannel, type Channel, type GroupRoom, isVoice, VOICE_CHANNEL_CAP, type VoiceMember } from '@/infra/api';
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { presenceOfAtom } from '@/infra/atoms/presence-atoms';
 import {
@@ -69,7 +69,9 @@ const CALL_BUTTON =
  * where is the room's `voice`, kept by the `voice` and `voice_left` facts; a ring on a face is
  * that person speaking, for the channel you are in. Always there: every group has a voice
  * channel (made with it, migration 0005 for the older ones). `onAdd`, given to the channels
- * power under the cap, puts an `add channel` row after the last channel; ServerRoom has the dialog. With
+ * power, puts an `add channel` row after the last channel; ServerRoom has the dialog. With
+ * `addFull` (the server has its 4 voice channels, VOICE_CHANNEL_CAP) the row stays, greyed,
+ * and says the cap on hover and focus. With
  * `onEdit`, a channel this login may change (`can_edit`: who made it, or the channels power)
  * has a pencil at the right of its row, up with the pointer on the row, that opens its edit
  * (the name and the line about it; ServerRoom's dialog again). The call is the page's, not this panel's: a phone's drawer shutting keeps it, and leaving the
@@ -79,6 +81,7 @@ export function VoicePanel({
   room,
   flat = false,
   onAdd,
+  addFull = false,
   onEdit,
   onOpen,
   className
@@ -86,6 +89,8 @@ export function VoicePanel({
   room: GroupRoom;
   flat?: boolean;
   onAdd?: () => void;
+  /** The server is at the voice cap: the add row is greyed and adds nothing. */
+  addFull?: boolean;
   onEdit?: (channel: Channel) => void;
   /** A click on a channel shows its call (VoiceRoom.tsx) instead of joining it. */
   onOpen?: (channel: string) => void;
@@ -256,16 +261,25 @@ export function VoicePanel({
         })}
         {onAdd && (
           <li>
-            <button
-              id="group-voice-add"
-              type="button"
-              aria-haspopup="dialog"
-              onClick={onAdd}
-              className="flex w-full items-center gap-1.5 px-1 py-1 text-left max-md:min-h-11 text-textTertiary hover:bg-primaryStroke/20 hover:text-textPrimary"
-            >
-              <RiAddLine aria-hidden size={14} className="shrink-0" />
-              <span className="min-w-0 flex-1 truncate">add channel</span>
-            </button>
+            {/* at the cap the row stays, greyed, and says why (a disabled button would take no hover) */}
+            <Tooltip content={addFull ? `${VOICE_CHANNEL_CAP} voice channels at most` : null}>
+              <button
+                id="group-voice-add"
+                type="button"
+                aria-haspopup={addFull ? undefined : 'dialog'}
+                aria-disabled={addFull || undefined}
+                onClick={() => {
+                  if (!addFull) onAdd();
+                }}
+                className={cn(
+                  'flex w-full items-center gap-1.5 px-1 py-1 text-left max-md:min-h-11 text-textTertiary',
+                  addFull ? 'cursor-not-allowed opacity-50' : 'hover:bg-primaryStroke/20 hover:text-textPrimary'
+                )}
+              >
+                <RiAddLine aria-hidden size={14} className="shrink-0" />
+                <span className="min-w-0 flex-1 truncate">add voice channel</span>
+              </button>
+            </Tooltip>
           </li>
         )}
       </ul>

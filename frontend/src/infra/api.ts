@@ -324,8 +324,11 @@ export interface VoiceGrant {
   ttl: number;
 }
 
-/** Channels on one server, `general` included. Matches `CHANNELS_PER_SERVER` in the api. */
+/** Text channels on one server, `general` included; the voice ones are counted apart. Matches `TEXT_CHANNELS_PER_SERVER` in the api. */
 export const CHANNEL_CAP = 20;
+
+/** Voice channels on one server. Matches `VOICE_CHANNELS_PER_SERVER` in the api: a group with more from before keeps them and adds none. */
+export const VOICE_CHANNEL_CAP = 4;
 
 /** A group as a server: the explorer splits these into yours and the rest. */
 export interface Server {

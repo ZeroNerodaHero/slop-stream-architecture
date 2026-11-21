@@ -1408,8 +1408,10 @@ const dropAll = async (ctx, names) => {
     await q.click('#manage-tab-channels');
     await q.waitForSelector('#manage-panel-channels #manage-channels li[data-channel="clips"]', { timeout: 5000 });
     const rowsBefore = await q.$$eval('#manage-channels li', (rows) => rows.map((row) => row.dataset.channel));
-    // the tab lists the voice ones too: the group's own `voice` sits between, made with it
-    expect(rowsBefore.join(' ') === 'general voice clips', `the tab's rows read ${rowsBefore.join(' ')}`);
+    // the text channels are a list of their own; the group's own `voice` is in the voice list under it, made with it
+    expect(rowsBefore.join(' ') === 'general clips', `the tab's rows read ${rowsBefore.join(' ')}`);
+    const voiceRows = await q.$$eval('#manage-voice-channels li', (rows) => rows.map((row) => row.dataset.channel));
+    expect(voiceRows.join(' ') === 'voice', `the voice list reads ${voiceRows.join(' ')}`);
     expect(!(await q.$('#channel-remove-voice')), 'the last voice channel has a delete');
     expect(!(await q.$('#channel-remove-general')) && (await q.$('#channel-rename-general')), 'general (the home channel) has a delete, or no pencil');
     expect(!(await q.$('#channel-up-clips')) && !(await q.$('#channel-down-clips')), 'the row still has up and down');
