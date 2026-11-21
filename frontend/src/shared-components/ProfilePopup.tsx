@@ -24,7 +24,7 @@ import { buttonClassName } from '@/shared-components/Button';
 import { Calendar } from '@/shared-components/Calendar';
 import { Face } from '@/shared-components/Face';
 import { FollowButton } from '@/shared-components/FollowButton';
-import { SHEET_CLOSE, SHEET_DIALOG, SheetGrab, useSheetBack, useSheetKeyboard } from '@/shared-components/MobileSheet';
+import { SHEET_CLOSE, SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { OfflinePicture } from '@/shared-components/OfflinePicture';
 import { Who, Word } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
@@ -208,7 +208,6 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
   const close = () => dialogRef.current?.close();
   // a phone's is a sheet up from the foot (MobileSheet.tsx): the back button shuts it, and the page under it stays
   useSheetBack(close);
-  useSheetKeyboard(dialogRef);
   const mobile = useIsMobile();
 
   const presence = (trusted ? heard : undefined) ?? card?.presence;
