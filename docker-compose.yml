@@ -153,6 +153,8 @@ services:
       GROUPS_PER_OWNER: ${GROUPS_PER_OWNER:-}
       # signs voice grants and lets the voice container in. empty: voice is off (joins are a 503)
       VOICE_SECRET: ${VOICE_SECRET:-}
+      # where a moderator's mute or disconnect is sent (voice.rs `tell_voice`): the voice container, inside
+      VOICE_URL: http://voice:7881
       # off (the default): the s3 container below. a url: that bucket, with the key and secret.
       # the container's own login is not these two; it is the literals on the s3 service.
       S3_ENDPOINT: ${S3_ENDPOINT:-off}

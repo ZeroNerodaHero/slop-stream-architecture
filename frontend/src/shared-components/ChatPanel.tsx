@@ -23,7 +23,7 @@ import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
 import { type ChatStyle, chatStyleAtom, profilePopupEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
-import { ChatLineShape, LineActions, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
+import { ChatLineShape, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ReactionChips } from '@/shared-components/Reactions';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
@@ -92,6 +92,8 @@ interface ChatPanelProps {
   /** A mark always at a line's top right, and buttons in its action bar beside react and reply: a group line's pin (ServerRoom.tsx), a janny's delete, time out and ban on a stream's (ChatMod.tsx). */
   lineMark?: (line: ChatLine) => ReactNode;
   lineActions?: (line: ChatLine) => ReactNode;
+  /** Rows of a line's `more` menu after its own: a group moderator's delete, kick, timeout and ban (GroupMod.tsx `lineModItems`). */
+  lineMenu?: (line: ChatLine) => LineMenuItem[];
   className?: string;
 }
 
@@ -515,6 +517,7 @@ export function RoomLines({
   lines,
   lineMark,
   lineActions,
+  lineMenu,
   lineSide,
   replies = false,
   reacts = false,
@@ -525,6 +528,7 @@ export function RoomLines({
   lines: readonly ChatLine[];
   lineMark?: (line: ChatLine) => ReactNode;
   lineActions?: (line: ChatLine) => ReactNode;
+  lineMenu?: (line: ChatLine) => LineMenuItem[];
   /** Buttons in a column of their own at each line's right (ChatLine.tsx `side`). */
   lineSide?: (line: ChatLine) => ReactNode;
   replies?: boolean;
@@ -581,6 +585,7 @@ export function RoomLines({
                 onReply={replies ? () => room.setReply(line) : undefined}
                 extra={lineActions?.(line)}
                 text={line.text}
+                menu={lineMenu?.(line)}
               />
             }
             reactions={
@@ -619,7 +624,19 @@ export function RoomLines({
   );
 }
 
-export function ChatPanel({ name, owner = null, embedded = false, guest = false, channel, onChannel, headerEnd, lineMark, lineActions, className }: ChatPanelProps) {
+export function ChatPanel({
+  name,
+  owner = null,
+  embedded = false,
+  guest = false,
+  channel,
+  onChannel,
+  headerEnd,
+  lineMark,
+  lineActions,
+  lineMenu,
+  className
+}: ChatPanelProps) {
   const server = channel !== undefined;
   // in the chat window (ChatSlot.tsx) this header is the window's bar: drag it to move, the close at its right
   const bar = useChatWindowBar();
@@ -869,7 +886,7 @@ export function ChatPanel({ name, owner = null, embedded = false, guest = false,
             {!waiting && lines.length === 0 && (
               <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>
             )}
-            <RoomLines name={name} room={room} lines={lines} lineMark={lineMark} lineActions={lineActions} replies={!needsNick} reacts jumps />
+            <RoomLines name={name} room={room} lines={lines} lineMark={lineMark} lineActions={lineActions} lineMenu={lineMenu} replies={!needsNick} reacts jumps />
           </div>
         </div>
 

@@ -133,7 +133,8 @@ enum Event {
     Line(Arc<Line>),
     Count(usize),
     React(Arc<React>),
-    /// A janny took the line with this id out of the room (janny.rs `delete_line`).
+    /// A line with this id went out of the room: a janny's (janny.rs `delete_line`), or a
+    /// channel's by its author or a moderator (group_mod.rs `delete_message`).
     Delete(Arc<str>),
 }
 
@@ -301,6 +302,9 @@ enum Out<'a> {
     React(&'a React),
     /// A line a janny deleted (janny.rs): every page drops the line with this id.
     Delete { id: &'a str },
+    /// A server socket's deleted line (group_mod.rs `delete_message`): the same `delete`, with its channel.
+    #[serde(rename = "delete")]
+    ChannelDelete { channel: &'a str, id: &'a str },
     /// A server socket's reaction: the same `react`, with the channel its line is in.
     #[serde(rename = "react")]
     ChannelReact {
@@ -1168,7 +1172,8 @@ async fn stream_refusal(s: &ChatState, room: &str, w: &Who) -> Option<Refused> {
     }
 }
 
-/// A line out of a stream's room for good (janny.rs `delete_line`): out of redis and postgres,
+/// A line out of a room for good (a stream's: janny.rs `delete_line`; a channel's: group_mod.rs
+/// `delete_message`): out of redis and postgres,
 /// its reactions with it (its pictures stay in the bucket), and a `del` into the room's reactions
 /// stream, which every chat process's reader turns into a `delete` frame for its sockets.
 pub(crate) async fn remove_line(db: &PgPool, r: &mut ConnectionManager, room: &str, id: &str) -> Result<(), crate::ApiError> {
@@ -1459,8 +1464,10 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                 Some((channel, Ok(Event::React(react)))) => {
                     if send(&mut socket, &Out::ChannelReact { channel: &channel, react: &react }).await.is_err() { break; }
                 }
-                // a janny deletes a stream's line, never a channel's (janny.rs): nothing comes here
-                Some((_, Ok(Event::Delete(_)))) => {}
+                // its author or a moderator deleted a channel's line (group_mod.rs `delete_message`)
+                Some((channel, Ok(Event::Delete(id)))) => {
+                    if send(&mut socket, &Out::ChannelDelete { channel: &channel, id: &id }).await.is_err() { break; }
+                }
                 Some((_, Err(n))) => {
                     let missed = format!("missed {n} lines");
                     if send(&mut socket, &Out::Error { error: &missed }).await.is_err() { break; }
@@ -2179,6 +2186,10 @@ mod tests {
     #[test]
     fn a_delete_frame_names_the_line() {
         assert_eq!(serde_json::to_string(&Out::Delete { id: "1-0" }).unwrap(), r#"{"type":"delete","id":"1-0"}"#);
+        assert_eq!(
+            serde_json::to_string(&Out::ChannelDelete { channel: "general", id: "1-0" }).unwrap(),
+            r#"{"type":"delete","channel":"general","id":"1-0"}"#
+        );
         // a ban's words must not read as a dead login to the pages (`/nick|account/`)
         assert!(!BANNED.contains("nick") && !BANNED.contains("account"));
     }

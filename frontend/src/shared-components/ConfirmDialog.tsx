@@ -1,4 +1,4 @@
-import { type MouseEvent, type PointerEvent, useLayoutEffect, useRef, useState } from 'react';
+import { type MouseEvent, type PointerEvent, type ReactNode, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { Button } from '@/shared-components/Button';
@@ -10,8 +10,10 @@ interface ConfirmDialogProps {
   id: string;
   /** The question, as the heading. */
   title: string;
-  /** What a yes does, spelled out. */
-  message: string;
+  /** What a yes does, spelled out. Absent: the title says it all. */
+  message?: string;
+  /** What the yes takes with it, under the message (a moderator's timeout picks how long, and the reason). */
+  children?: ReactNode;
   /** The yes button's word ("yes, stop"). The other one says "no". */
   yes: string;
   onYes: () => void;
@@ -45,7 +47,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   );
 }
 
-function ConfirmBox({ id, title, message, yes, onYes, onNo }: ConfirmDialogProps) {
+function ConfirmBox({ id, title, message, children, yes, onYes, onNo }: ConfirmDialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   /** Yes was pressed: the `close` that follows is a yes. Anything else is a no. */
   const saidYes = useRef(false);
@@ -82,7 +84,7 @@ function ConfirmBox({ id, title, message, yes, onYes, onNo }: ConfirmDialogProps
       id={id}
       data-sheet=""
       aria-labelledby={`${id}-title`}
-      aria-describedby={`${id}-message`}
+      aria-describedby={message ? `${id}-message` : undefined}
       onPointerDown={onPointerDown}
       onClick={onClick}
       onClose={(event) => {
@@ -98,9 +100,12 @@ function ConfirmBox({ id, title, message, yes, onYes, onNo }: ConfirmDialogProps
       <h2 id={`${id}-title`} className="border-l-4 border-primaryBlue pl-3 text-xl font-semibold leading-tight">
         {title}
       </h2>
-      <p id={`${id}-message`} className="mt-4 text-textSecondary">
-        {message}
-      </p>
+      {message && (
+        <p id={`${id}-message`} className="mt-4 text-textSecondary">
+          {message}
+        </p>
+      )}
+      {children && <div className="mt-4 flex flex-col gap-3">{children}</div>}
       <div className="mt-6 flex items-center justify-end gap-3">
         <button id={`${id}-no`} type="button" className="text-base font-semibold text-textTertiary" onClick={close}>
           no

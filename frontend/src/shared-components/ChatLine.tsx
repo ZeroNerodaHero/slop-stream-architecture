@@ -261,6 +261,8 @@ export interface LineMenuItem {
   label: string;
   onPick: () => void;
   danger?: boolean;
+  /** A rule over it: the start of another kind of thing (a moderator's kick, timeout and ban after the line's own). */
+  divider?: boolean;
 }
 
 /**
@@ -355,7 +357,7 @@ function MoreMenu({ items }: { items: LineMenuItem[] }) {
             className="fixed left-0 top-0 z-[60] flex min-w-32 flex-col border border-primaryStroke bg-backgroundSecondary py-1 text-sm"
           >
             {items.map((item) => (
-              <li key={item.key} role="none">
+              <li key={item.key} role="none" className={item.divider ? 'mt-1 border-t border-primaryStroke pt-1' : undefined}>
                 <button
                   role="menuitem"
                   type="button"

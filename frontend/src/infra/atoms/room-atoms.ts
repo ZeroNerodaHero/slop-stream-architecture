@@ -577,7 +577,7 @@ function apply(change: GroupChange): void {
     case 'voice': {
       // one channel at a time: a move is a voice in the new one, so they leave any other
       const voice = withoutVoice(room.voice ?? {}, (p) => p.uid === change.uid);
-      const came: VoiceMember = { name: change.who, uid: change.uid, since: Date.now() };
+      const came: VoiceMember = { name: change.who, uid: change.uid, since: Date.now(), muted: change.muted };
       const kept = (room.voice?.[change.channel] ?? []).find((p) => p.uid === change.uid);
       // a channel this login does not see keeps its people out of this room, as the api's room does
       if ((room.channels ?? []).some((c) => c.name === change.channel)) voice[change.channel] = [...(voice[change.channel] ?? []), kept ?? came];
@@ -587,6 +587,14 @@ function apply(change: GroupChange): void {
     case 'voice_left':
       if (room.voice) store.set(roomAtom, { ...room, voice: withoutVoice(room.voice, (p) => p.uid === change.uid) });
       return;
+    case 'voice_mute': {
+      // the seat's mark; the voice server itself carries nothing of a muted mic, whatever the page knows
+      if (!room.voice) return;
+      const voice: Record<string, VoiceMember[]> = {};
+      for (const [channel, people] of Object.entries(room.voice)) voice[channel] = people.map((p) => (p.uid === change.uid ? { ...p, muted: change.muted } : p));
+      store.set(roomAtom, { ...room, voice });
+      return;
+    }
     case 'deleted':
       store.set(roomGoneAtom, true);
       return;
