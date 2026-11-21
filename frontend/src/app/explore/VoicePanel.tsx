@@ -46,6 +46,7 @@ import { useCardMod } from '@/shared-components/GroupMod';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { ProfileLink } from '@/shared-components/ProfileLink';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { HeardMutedMark, useHeardUid, VoiceLevel } from '@/shared-components/VoiceLevel';
 import { cn } from '@/utils/cn';
 
 /** The pencil on a voice channel's row: up with the pointer on the row (`group/voice`), the focus on it, or no hover to wait for. */
@@ -323,14 +324,17 @@ function PendingSeat({
 
 /**
  * One person in a voice channel: their face (a ring while they speak, for the channel you are in),
- * their name, and a red mic when a moderator muted them. The roster's row's way (ServerRoom.tsx
- * `Member`): one link to them that opens the profile popup, and the pointer resting on it puts
- * their card (PersonCard.tsx) beside the column, a moderator's buttons at its left.
+ * their name, a red mic when a moderator muted them, and a muted speaker when you muted them for
+ * yourself. The roster's row's way (ServerRoom.tsx `Member`): one link to them that opens the
+ * profile popup, and the pointer resting on it puts their card (PersonCard.tsx) beside the
+ * column, a moderator's buttons at its left and, while you are in their channel, your own level
+ * for them at its foot (VoiceLevel.tsx).
  */
 function VoicePerson({ person, avatar, talking }: { person: VoiceMember; avatar: number | null; talking: boolean }) {
   const presence = useAtomValue(presenceOfAtom(person.name));
   const peek = usePeek(PEEK_MS);
   const actions = useCardMod(person.name, peek.close);
+  const heard = useHeardUid(person.name);
   const column = (el: Element) => el.closest('#group-voice');
   return (
     <li
@@ -339,9 +343,10 @@ function VoicePerson({ person, avatar, talking }: { person: VoiceMember; avatar:
       data-muted={person.muted || undefined}
       className="flex text-textSecondary"
       onPointerEnter={(e) => peek.show(e, column(e.currentTarget))}
-      onPointerLeave={(e) => peek.leave(e.currentTarget, !!actions)}
+      onPointerLeave={(e) => peek.leave(e.currentTarget)}
       onFocus={(e) => peek.focus(e, column(e.currentTarget))}
       onBlur={peek.blur}
+      onKeyDown={peek.keyDown}
     >
       <ProfileLink
         // only a login takes a seat, so the ✓ is theirs
@@ -360,9 +365,17 @@ function VoicePerson({ person, avatar, talking }: { person: VoiceMember; avatar:
             </span>
           </Tooltip>
         )}
+        <HeardMutedMark uid={person.uid} />
       </ProfileLink>
       {peek.at && (
-        <PersonCard id={`voice-peek-${person.name}`} person={{ name: person.name, verified: true, avatar, presence }} at={peek.at} actions={actions} hold={peek.hold} />
+        <PersonCard
+          id={`voice-peek-${person.name}`}
+          person={{ name: person.name, verified: true, avatar, presence }}
+          at={peek.at}
+          actions={actions}
+          below={heard && <VoiceLevel id={`voice-peek-${person.name}-level`} name={person.name} uid={heard} pin={peek.hold.pin} />}
+          hold={peek.hold}
+        />
       )}
     </li>
   );

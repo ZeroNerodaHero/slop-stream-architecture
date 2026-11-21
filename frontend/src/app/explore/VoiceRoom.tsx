@@ -36,6 +36,7 @@ import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { useHeardLevel } from '@/shared-components/VoiceLevel';
 import { cn } from '@/utils/cn';
 
 /** A member in voice, with the moderator's mute when the room says it (the group mod tools). */
@@ -143,6 +144,8 @@ interface TileOf {
   deaf: boolean;
   /** A moderator muted their mic. */
   serverMuted: boolean;
+  /** Their user id, for a person tile of somebody else: you may have muted them for yourself (VoiceLevel.tsx). */
+  uid?: string;
 }
 
 /** Columns for `n` tiles: a phone one or two, a wide screen up to four. */
@@ -177,7 +180,17 @@ function Call({ room, channel, className }: { room: GroupRoom; channel: string; 
     const camera = pictures.find((p) => p.seat === s.seat && p.kind === 'camera');
     const screen = pictures.find((p) => p.seat === s.seat && p.kind === 'screen');
     const mute = !!s.mute || !!s.deaf;
-    tiles.push({ key: `${s.seat}`, name: s.user, kind: 'person', stream: camera?.stream ?? null, self: false, mute, deaf: !!s.deaf, serverMuted: serverMuted(s.user) });
+    tiles.push({
+      key: `${s.seat}`,
+      name: s.user,
+      kind: 'person',
+      stream: camera?.stream ?? null,
+      self: false,
+      mute,
+      deaf: !!s.deaf,
+      serverMuted: serverMuted(s.user),
+      uid: people.find((p) => p.name === s.user)?.uid
+    });
     if (screen) tiles.push({ key: `${s.seat}:screen`, name: s.user, kind: 'screen', stream: screen.stream, self: false, mute: false, deaf: false, serverMuted: false });
   }
   // a focused tile that went (its screen stopped, its person left) is the grid again
@@ -290,6 +303,7 @@ function Tile({
         {tile.serverMuted && <Mark label="server muted" className="text-decrease" icon={<RiMicOffFill aria-hidden size={12} />} />}
         {!tile.serverMuted && tile.mute && <Mark label="muted" icon={<RiMicOffLine aria-hidden size={12} />} />}
         {tile.deaf && <Mark label="deafened" icon={<RiVolumeMuteLine aria-hidden size={12} />} />}
+        {tile.uid && <HeardMutedOnTile uid={tile.uid} />}
         <span className="min-w-0 truncate">{tile.kind === 'screen' ? `${tile.name}'s screen` : tile.name}</span>
       </span>
     </div>
@@ -305,6 +319,12 @@ function Mark({ label, icon, className }: { label: string; icon: ReactNode; clas
       </span>
     </Tooltip>
   );
+}
+
+/** On a tile, someone you muted for yourself: nobody else hears a difference. */
+function HeardMutedOnTile({ uid }: { uid: string }) {
+  if (!useHeardLevel(uid).muted) return null;
+  return <Mark label="muted for you" icon={<RiVolumeMuteLine aria-hidden data-heard-muted size={12} />} />;
 }
 
 /** A camera or a screen, playing. No sound: a call's sound is voice-atoms.ts's players. */

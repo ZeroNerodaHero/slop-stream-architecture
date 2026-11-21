@@ -117,6 +117,7 @@ import { DragHandle, movedTo, useReorder } from '@/shared-components/Reorderable
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { useHeardUid, VoiceLevel } from '@/shared-components/VoiceLevel';
 import { TypeToConfirm } from '@/shared-components/TypeToConfirm';
 import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
 import { Field, SECTION_TITLE, Section } from '@/shared-components/user-modal/parts';
@@ -1888,6 +1889,8 @@ function Member({ member, live, ownerRole, flat }: { member: GroupMember; live: 
   const peek = usePeek(PEEK_MS);
   // a moderator's buttons on the card (GroupMod.tsx): the card waits for the pointer to cross to them
   const actions = useCardMod(member.name, peek.close);
+  // in your voice channel: your own level for them at the card's foot
+  const heard = useHeardUid(member.name);
   return (
     <li
       data-member={member.name}
@@ -1895,9 +1898,10 @@ function Member({ member, live, ownerRole, flat }: { member: GroupMember; live: 
       data-presence={presence}
       className="flex"
       onPointerEnter={(e) => peek.show(e, e.currentTarget.closest('#group-roster'))}
-      onPointerLeave={(e) => peek.leave(e.currentTarget, !!actions)}
+      onPointerLeave={(e) => peek.leave(e.currentTarget)}
       onFocus={(e) => peek.focus(e, e.currentTarget.closest('#group-roster'))}
       onBlur={peek.blur}
+      onKeyDown={peek.keyDown}
     >
       <ProfileLink
         // every member is a login, so the ✓ is theirs
@@ -1944,6 +1948,7 @@ function Member({ member, live, ownerRole, flat }: { member: GroupMember; live: 
           person={{ name: member.name, verified: true, avatar: member.avatar ?? null, presence }}
           at={peek.at}
           actions={actions}
+          below={heard && <VoiceLevel id={`roster-peek-${member.name}-level`} name={member.name} uid={heard} pin={peek.hold.pin} />}
           hold={peek.hold}
         />
       )}

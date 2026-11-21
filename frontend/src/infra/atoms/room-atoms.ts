@@ -17,7 +17,7 @@ import { atom } from 'jotai';
 import { api, type Channel, type GroupMember, type GroupRoom, isVoice, messageOf, statusOf, type VoiceMember } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { type ChatLine, findServerChat, serverChat } from '@/infra/atoms/chat-atoms';
-import { voiceCallAtom } from '@/infra/atoms/voice-atoms';
+import { voiceCallAtom, voiceUidsAtom } from '@/infra/atoms/voice-atoms';
 import { holdPresence, onEvents, releasePresence, unwatchPresence, watchPresence } from '@/infra/events';
 import { type GroupChange, groupTopic } from '@/infra/frames';
 import { onPrefetch, prefetch, takePrefetched } from '@/infra/prefetch';
@@ -616,6 +616,14 @@ store.sub(roomAtom, () => {
   for (const name of heldMembers) if (!names.has(name)) releasePresence(name);
   for (const name of names) if (!heldMembers.has(name)) holdPresence(name);
   heldMembers = names;
+});
+
+/** Who is in voice in the room, name to user id, for voice-atoms: the call's seats say names, and your level for each person is kept by id. Set only when it changes. */
+store.sub(roomAtom, () => {
+  const people = Object.values(store.get(roomAtom)?.voice ?? {}).flat();
+  const was = store.get(voiceUidsAtom);
+  if (people.length === was.size && people.every((p) => was.get(p.name) === p.uid)) return;
+  store.set(voiceUidsAtom, new Map(people.map((p) => [p.name, p.uid])));
 });
 
 // the feed, while a room is up: its group's changes onto the room; the socket opening under

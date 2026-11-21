@@ -170,6 +170,7 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
       onPointerLeave={(e) => peek.leave(e.currentTarget)}
       onFocus={(e) => peek.show(e, e.currentTarget.closest('#friend-chat-rail'))}
       onBlur={peek.blur}
+      onKeyDown={peek.keyDown}
     >
       <button
         id={tabId(dm.name)}
@@ -223,7 +224,7 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
           <RiCloseLine aria-hidden size={10} />
         </button>
       </Tooltip>
-      {peek.at && <PersonCard id={`friend-chat-peek-${dm.name}`} person={dm} at={peek.at} side={side} />}
+      {peek.at && <PersonCard id={`friend-chat-peek-${dm.name}`} person={dm} at={peek.at} side={side} hold={peek.hold} />}
     </span>
   );
 }

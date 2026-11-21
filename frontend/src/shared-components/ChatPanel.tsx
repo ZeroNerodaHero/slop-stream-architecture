@@ -187,7 +187,8 @@ function Speaker({ line, room }: { line: ChatLine; room: ChatRoom }) {
         onPointerEnter: (e: ReactPointerEvent<HTMLElement>) => peek.show(e, e.currentTarget.closest('#chat')),
         onPointerLeave: (e: SyntheticEvent<HTMLElement>) => peek.leave(e.currentTarget),
         onFocus: (e: FocusEvent<HTMLElement>) => peek.focus(e, e.currentTarget.closest('#chat')),
-        onBlur: peek.blur
+        onBlur: peek.blur,
+        onKeyDown: peek.keyDown
       }
     : {};
   const color = line.streamer ? 'text-increase' : line.verified ? 'text-primaryBlue' : 'text-decrease';
@@ -202,6 +203,7 @@ function Speaker({ line, room }: { line: ChatLine; room: ChatRoom }) {
           data-from={line.from}
           onClick={(e) => press(e.currentTarget)}
           onKeyDown={(e) => {
+            peek.keyDown(e);
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
               press(e.currentTarget);
@@ -223,6 +225,7 @@ function Speaker({ line, room }: { line: ChatLine; room: ChatRoom }) {
           id={`chat-peek-${line.from}`}
           person={{ name: line.from, verified: line.verified, oauth_verified: line.oauth_verified, avatar: line.avatar, groups: line.groups }}
           at={peek.at}
+          hold={peek.hold}
         />
       )}
     </>
