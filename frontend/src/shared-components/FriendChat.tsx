@@ -1263,9 +1263,10 @@ export function FriendChat() {
                   send
                 </Button>
               </div>
-              {/* the api's words when a line was not kept (not friends, too long, too fast) or a picture would not go up, and the countdown once it matters */}
-              <div className="mt-1 flex items-center justify-between gap-2 text-xs">
-                <span id="friend-chat-notice" className="min-h-[1em] text-decrease" aria-live="polite">
+              {/* the api's words when a line was not kept (not friends, too long, too fast) or a picture would not go up, and the countdown once it matters.
+                  the row stays mounted so a screen reader hears a notice as it lands, but takes no room while there's nothing in it */}
+              <div className={cn('flex items-center justify-between gap-2 text-xs', (notice || left < 50) && 'mt-1')}>
+                <span id="friend-chat-notice" className={cn('text-decrease', notice && 'min-h-[1em]')} aria-live="polite">
                   {notice}
                 </span>
                 {left < 50 && (

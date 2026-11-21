@@ -3,7 +3,7 @@ import { useAtomValue } from 'jotai';
 
 import { type GroupBadge, groupImage } from '@/infra/api';
 import { BOT_GROUP } from '@/infra/atoms/chat-atoms';
-import { groupIconsAtom } from '@/infra/atoms/groups-atoms';
+import { groupColorsAtom, groupIconsAtom } from '@/infra/atoms/groups-atoms';
 import { fromHex, isDark } from '@/infra/theme';
 import { cn } from '@/utils/cn';
 import { compactCount } from '@/utils/count';
@@ -16,6 +16,8 @@ interface BadgeProps {
   src?: string | null;
   /** The pointer or the keyboard focus on it shows the group's card (GroupCard): a chat line's badges. Otherwise a plain `title`. */
   card?: boolean;
+  /** The colour given, never the one the page heard for the name: a preview of a colour not saved yet. */
+  preview?: boolean;
   /** `md` is 24px tall instead of 16: the create dialog's preview, beside its colour swatches. */
   size?: 'sm' | 'md';
   /** On the badge's own box: the one beside the name in the watch page's header is #watch-badge. */
@@ -27,15 +29,19 @@ interface BadgeProps {
  * A group's badge, the way discord tags a bot: the group's picture, tiny and square, then a
  * small solid box in the group's colour with the word in capitals, next to a name. One unit,
  * the height of the word's line (16px), so nothing it sits in grows. The picture's version is
- * the freshest the page has heard (`groupIconsAtom`), else the one the line carried; no
+ * the freshest the page has heard (`groupIconsAtom`), else the one the line carried, and the
+ * colour likewise (`groupColorsAtom`); no
  * picture is its first letter on its colour, as `GroupMark` draws everywhere. The word is
  * white or black by the colour's own lightness, not the theme's, so it reads on any theme and
  * with any colour a group picked. With `card` it is a tab stop, and hovering or focusing it
  * shows the group's card instead of the browser's title.
  */
-export function Badge({ group, src, card, size = 'sm', id, className }: BadgeProps) {
+export function Badge({ group: carried, src, card, preview, size = 'sm', id, className }: BadgeProps) {
   const icons = useAtomValue(groupIconsAtom);
-  const icon = icons.has(group.name) ? icons.get(group.name) : group.icon;
+  const icon = icons.has(carried.name) ? icons.get(carried.name) : carried.icon;
+  // the colour the page heard last, over the one the line carried: a recolour reaches old lines
+  const heard = useAtomValue(groupColorsAtom).get(carried.name);
+  const group = !preview && heard && heard !== carried.color ? { ...carried, color: heard } : carried;
   const pill = (
     <span
       id={id}

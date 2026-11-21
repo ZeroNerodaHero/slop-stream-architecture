@@ -24,7 +24,7 @@ use crate::groups::{self, BOT_GROUP};
 use crate::s3;
 use crate::{ApiError, ApiResult, AppState};
 
-/// Edit the about line, public or private, and the member order. Not the pictures: those are the owner's.
+/// Edit the about line, the colour, public or private, and the member order. Not the pictures: those are the owner's.
 pub(crate) const APPEARANCE: i32 = 1;
 /// Make, edit, delete and hand out custom roles. Not owner.
 pub(crate) const ROLES: i32 = 2;
@@ -338,6 +338,11 @@ struct AboutIn {
 }
 
 #[derive(Deserialize)]
+struct ColorIn {
+    color: String,
+}
+
+#[derive(Deserialize)]
 struct AccessIn {
     public: bool,
 }
@@ -365,6 +370,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(MAX_BANNER));
     Router::new()
         .route("/api/groups/{group}/about", axum::routing::put(put_about))
+        .route("/api/groups/{group}/color", axum::routing::put(put_color))
         .route("/api/groups/{group}/access", axum::routing::put(set_access))
         .route("/api/groups/{group}/order", axum::routing::put(set_order))
         .route("/api/groups/{group}/roles", get(list_roles).post(create_role))
@@ -383,6 +389,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}/kick", post(kick))
         .route("/api/groups/{group}/timeout", post(timeout))
         .route("/api/groups/{group}/timeout/{name}", axum::routing::delete(lift_timeout))
+        .route("/api/groups/{group}/timeouts", get(list_timeouts))
         .route("/api/groups/{group}/ban", post(ban))
         .route("/api/groups/{group}/bans", get(list_bans))
         .route("/api/groups/{group}/bans/{name}", axum::routing::delete(unban))
@@ -566,6 +573,20 @@ async fn put_about(State(s): State<AppState>, Path(group): Path<String>, Me(me):
     sqlx::query("UPDATE groups SET about = $2 WHERE name = $1").bind(&group).bind(&about).execute(&s.db).await?;
     groups::tell(&s, &group, "about", json!({ "about": about })).await;
     Ok(Json(json!({ "about": about })))
+}
+
+/// `PUT /api/groups/:group/color` `{color}`: the group's colour, `#rrggbb` as the create form
+/// takes it (`groups::clean_color`). Appearance, like the about line. The `color` fact repaints
+/// the room, and the lists the page has, at once.
+async fn put_color(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<ColorIn>, JsonRejection>) -> ApiResult {
+    let who = me.ok_or_else(login)?;
+    let Json(body) = body?;
+    let group = server(&s.db, &group).await?;
+    need(&s, who.id, &group, APPEARANCE).await?;
+    let color = groups::clean_color(&body.color)?;
+    sqlx::query("UPDATE groups SET color = $2 WHERE name = $1").bind(&group).bind(&color).execute(&s.db).await?;
+    groups::tell(&s, &group, "color", json!({ "color": color })).await;
+    Ok(Json(json!({ "color": color })))
 }
 
 /// One role as the room, the list and the `role` fact say it. `channels` is the ones kept to it,
@@ -1311,6 +1332,32 @@ async fn lift_timeout(State(s): State<AppState>, Path((group, name)): Path<(Stri
         groups::tell(&s, &group, "timeout", json!({ "who": name, "until": Value::Null })).await;
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /api/groups/:group/timeouts`: every timeout still running, the soonest to end first:
+/// `[{ name, avatar, until, reason, by, member }]`. `until` is unix seconds; `by` is null when
+/// whoever set it is gone; `member` is false for one who left while timed out, since it
+/// outlives a leave. The kick power, the one that sets and lifts them, as the bans list is the
+/// ban power's.
+async fn list_timeouts(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
+    let who = me.ok_or_else(login)?;
+    let group = server(&s.db, &group).await?;
+    need(&s, who.id, &group, KICK).await?;
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(String, Option<i64>, i64, String, Option<String>, bool)> = sqlx::query_as(
+        "SELECT s.name, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, (EXTRACT(EPOCH FROM t.until))::bigint, t.reason, b.name,
+                EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = t.group_name AND m.user_id = t.user_id)
+         FROM timeouts t JOIN streamers s ON s.id = t.user_id LEFT JOIN streamers b ON b.id = t.by_id
+         WHERE t.group_name = $1 AND t.until > now()
+         ORDER BY t.until, s.name",
+    )
+    .bind(&group)
+    .fetch_all(&s.db)
+    .await?;
+    let out = rows.into_iter().map(|(name, avatar, until, reason, by, member)| {
+        json!({ "name": name, "avatar": avatar, "until": until, "reason": reason, "by": by, "member": member })
+    });
+    Ok(Json(Value::Array(out.collect())))
 }
 
 async fn ban(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<BanIn>, JsonRejection>) -> Result<StatusCode, ApiError> {

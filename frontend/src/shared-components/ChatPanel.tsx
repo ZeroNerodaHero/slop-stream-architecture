@@ -25,7 +25,7 @@ import { type ChatStyle, chatStyleAtom, hideBotsAtom, profilePopupEnabledAtom } 
 import { EQUES, showWelcomesAtom, type Welcome } from '@/infra/atoms/welcome-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
-import { ChatLineShape, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
+import { ChatLineShape, type ChatLineShapeProps, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ReactionChips } from '@/shared-components/Reactions';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
@@ -485,11 +485,16 @@ const BOT_BADGE: GroupBadge = { name: BOT_GROUP, badge: 'BOT', color: '#5865f2' 
  * Its links go through `ExternalLink` (LinkedText), the leave-site word with them.
  */
 function WelcomeLine({ welcome }: { welcome: Welcome }) {
-  const shape = useAtomValue(chatStyleAtom);
   const hideBots = useAtomValue(hideBotsAtom);
   const show = useAtomValue(showWelcomesAtom);
   const [at] = useState(() => Date.now());
   if (!welcome.on || hideBots || !show) return null;
+  return <EquesLine message={welcome.message} at={at} attrs={{ id: 'chat-welcome', 'data-bot': true, 'data-welcome': '' }} />;
+}
+
+/** Eques's line itself, in the lines' shape, whatever the switches say: the chat's welcome, and its preview in the welcome editor (WelcomeEditor.tsx). */
+export function EquesLine({ message, at, attrs }: { message: string; at: number; attrs: ChatLineShapeProps['attrs'] }) {
+  const shape = useAtomValue(chatStyleAtom);
   return (
     <ChatLineShape
       shape={shape}
@@ -510,10 +515,10 @@ function WelcomeLine({ welcome }: { welcome: Welcome }) {
       face={<Face name={EQUES} version={null} className="h-8 w-8 text-sm" />}
       words={
         <span className="whitespace-pre-wrap">
-          <LinkedText text={welcome.message} />
+          <LinkedText text={message} />
         </span>
       }
-      attrs={{ id: 'chat-welcome', 'data-bot': true, 'data-welcome': '' }}
+      attrs={attrs}
       first
       bucket
     />
