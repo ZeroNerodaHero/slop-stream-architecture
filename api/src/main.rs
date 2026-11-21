@@ -62,6 +62,7 @@ mod reactions;
 mod release;
 mod s3;
 mod socket;
+mod voice;
 
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -973,6 +974,7 @@ fn router(state: AppState) -> Router {
         .merge(notify::routes())
         .merge(presence::routes())
         .merge(debug::routes())
+        .merge(voice::routes())
         .route("/api/health", get(health))
         // `GET /api/streams`, the home list, is the home service's (`api home`, home.rs): caddy sends it there
         .route("/api/streamers/{name}", get(get_streamer).put(put_streamer))

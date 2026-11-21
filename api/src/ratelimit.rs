@@ -148,6 +148,8 @@ fn is_moderation(method: &Method, path: &str) -> bool {
         // a member's own: join, leave, a channel's read marker and mute
         "/join" | "/leave" => false,
         r if r.ends_with("/read") || r.ends_with("/mute") => false,
+        // joining a voice channel is a member's own too (voice.rs)
+        r if r.starts_with("/voice/") => false,
         _ => true,
     }
 }
@@ -288,15 +290,13 @@ pub(crate) async fn api(State(s): State<AppState>, mut req: Request, next: Next)
 
     // the login, once: handed on to `Me` so the handler does not ask postgres again
     let mut account = None;
-    if matches!(rule.key, Key::Who) || may_make_name(&method, &path) {
-        if auth::cookie_token(req.headers()).is_some() {
-            match auth::whoami(&s.db, req.headers()).await {
-                Ok(me) => {
-                    account = me.as_ref().map(|a| a.id);
-                    req.extensions_mut().insert(auth::Seen(me));
-                }
-                Err(e) => log::warn!("rate limit: whoami: {e}. counting by address"),
+    if (matches!(rule.key, Key::Who) || may_make_name(&method, &path)) && auth::cookie_token(req.headers()).is_some() {
+        match auth::whoami(&s.db, req.headers()).await {
+            Ok(me) => {
+                account = me.as_ref().map(|a| a.id);
+                req.extensions_mut().insert(auth::Seen(me));
             }
+            Err(e) => log::warn!("rate limit: whoami: {e}. counting by address"),
         }
     }
     let who = match account {
@@ -459,6 +459,8 @@ mod tests {
         assert_eq!(api_rule(&put, "/api/groups/{group}/channels/{channel}/mute"), WRITE);
         assert_eq!(api_rule(&post, "/api/dm/{name}"), WRITE);
         assert_eq!(api_rule(&put, "/api/streamers/{name}"), WRITE);
+        assert_eq!(api_rule(&post, "/api/groups/{group}/voice/{channel}/join"), WRITE);
+        assert_eq!(api_rule(&post, "/api/voice/redeem"), WRITE);
     }
 
     #[test]
