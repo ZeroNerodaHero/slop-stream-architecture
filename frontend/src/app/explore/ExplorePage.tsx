@@ -72,6 +72,7 @@ export function ExplorePage() {
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="search"
+          maxLength={100}
           autoComplete="off"
           className={cn(INPUT, 'min-w-0 flex-1')}
         />

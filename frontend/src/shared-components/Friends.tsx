@@ -979,6 +979,7 @@ export function Friends({ open, side, onPick }: FriendsProps) {
               value={query}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="search"
+              maxLength={32}
               autoComplete="off"
               autoCapitalize="off"
               spellCheck={false}
