@@ -114,6 +114,7 @@ import { DragHandle, movedTo, useReorder } from '@/shared-components/Reorderable
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
 import { Tooltip } from '@/shared-components/Tooltip';
+import { TypeToConfirm } from '@/shared-components/TypeToConfirm';
 import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
 import { Field, SECTION_TITLE, Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
@@ -2424,14 +2425,15 @@ interface ManageProps {
   run: Run;
 }
 
-type ManageTab = 'about' | 'channels' | 'roles' | 'members' | 'bans' | 'delete';
+type ManageTab = 'about' | 'channels' | 'roles' | 'members' | 'bans';
 
 /**
  * The rail of the manage dialog, in order and in groups, each tab with the power that shows
  * it. `about` is the about line and the listing (appearance), and for an owner the pictures
  * too; `channels` is their order, and add and delete (channels; and for a channel's maker
  * without the power, the delete of their own); `members` is for anyone who manages at all,
- * since every power does something to a member.
+ * since every power does something to a member. An owner's delete is not a tab: it sits at
+ * the foot of the rail and asks in its own dialog.
  */
 const MANAGE_TABS: {
   id: ManageTab;
@@ -2443,44 +2445,37 @@ const MANAGE_TABS: {
   {
     id: 'about',
     label: 'about',
-    group: 'the group',
+    group: 'group',
     icon: <RiInformationLine aria-hidden size={18} />,
     shown: (room) => room.perms.appearance
   },
   {
     id: 'channels',
     label: 'channels',
-    group: 'the group',
+    group: 'group',
     icon: <RiHashtag aria-hidden size={18} />,
     shown: managesChannels
   },
   {
     id: 'roles',
     label: 'roles',
-    group: 'the group',
+    group: 'group',
     icon: <RiShieldStarLine aria-hidden size={18} />,
     shown: (room) => room.perms.roles
   },
   {
     id: 'members',
     label: 'members',
-    group: 'people',
+    group: 'members',
     icon: <RiGroupLine aria-hidden size={18} />,
     shown: (room) => manages(room)
   },
   {
     id: 'bans',
     label: 'bans',
-    group: 'people',
+    group: 'members',
     icon: <RiForbidLine aria-hidden size={18} />,
     shown: (room) => room.perms.ban
-  },
-  {
-    id: 'delete',
-    label: 'delete',
-    group: 'owner',
-    icon: <RiDeleteBinLine aria-hidden size={18} />,
-    shown: (room) => room.owner
   }
 ];
 
@@ -2502,9 +2497,10 @@ const RAIL_STEP: Record<string, number | undefined> = {
 
 /**
  * What a power does, in a dialog over the room (`manage`, the gear in the header), laid out
- * like the user modal: a rail of tabs down the left, in groups (the group: about and the
- * listing, channels, roles; people: members, bans; owner: delete), and the open tab's pane on
- * the right. A tab shows for the power behind it, and the first one this login may see opens.
+ * like the user modal: a rail of tabs down the left, in groups (group: about and the listing,
+ * channels, roles; members: members, bans), for an owner `delete group` at the foot of the
+ * rail, and the open tab's pane on the right. A tab shows for the power behind it, and the
+ * first one this login may see opens.
  * The pictures are an owner's: the top of `about` here, and the pictures themselves at the
  * top of the page; the channels are put in order here, and the list on the left follows.
  * Every call lands through the socket, for this page and every other one with the room open,
@@ -2520,6 +2516,9 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
   const pressedBackdrop = useRef(false);
   const [error, setError] = useState('');
   const [picked, setPicked] = useState<ManageTab | null>(null);
+  /** The owner's delete is asking, in its own dialog over this one. */
+  const [deleting, setDeleting] = useState(false);
+  const navigate = useNavigate();
   const words = groupWords(room);
   const tabs = MANAGE_TABS.filter((item) => item.shown(room));
   // the tab picked while it is still one this login may see, else the first that is: a power lost while this was open moves the pane
@@ -2619,42 +2618,59 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
             <span className="block text-xs text-textTertiary">{words.tag ? `#${words.tag}` : 'manage'}</span>
           </span>
         </div>
-        <div
-          id="manage-tabs"
-          role="tablist"
-          aria-orientation="vertical"
-          aria-label="sections"
-          onKeyDown={rove}
-          className="flex flex-row gap-1 overflow-x-auto p-2 sm:flex-col sm:gap-0 sm:overflow-visible"
-        >
-          {tabs.map((item, i) => {
-            const on = item.id === tab;
-            const before = tabs[i - 1];
-            const newGroup = before === undefined || before.group !== item.group;
-            return (
-              <Fragment key={item.id}>
-                {/* a tablist may hold only tabs, so the group words are decoration; the tab names carry the meaning */}
-                {newGroup && (
-                  <span aria-hidden className={RAIL_GROUP}>
-                    {item.group}
-                  </span>
-                )}
-                <button
-                  id={`manage-tab-${item.id}`}
-                  type="button"
-                  role="tab"
-                  aria-selected={on}
-                  aria-controls={on ? `manage-panel-${item.id}` : undefined}
-                  tabIndex={on ? 0 : -1}
-                  onClick={() => pick(item.id)}
-                  className={cn(RAIL_TAB, on ? RAIL_TAB_ON : RAIL_TAB_OFF)}
-                >
-                  {item.icon}
-                  {item.label}
-                </button>
-              </Fragment>
-            );
-          })}
+        {/* the tabs, then an owner's delete pinned to the foot: one strip that scrolls on a phone, the delete its last item */}
+        <div className="flex min-h-0 flex-row overflow-x-auto sm:flex-1 sm:flex-col sm:overflow-y-auto sm:overflow-x-hidden">
+          <div
+            id="manage-tabs"
+            role="tablist"
+            aria-orientation="vertical"
+            aria-label="sections"
+            onKeyDown={rove}
+            className="flex flex-row gap-1 p-2 sm:flex-col sm:gap-0"
+          >
+            {tabs.map((item, i) => {
+              const on = item.id === tab;
+              const before = tabs[i - 1];
+              const newGroup = before === undefined || before.group !== item.group;
+              return (
+                <Fragment key={item.id}>
+                  {/* a tablist may hold only tabs, so the group words are decoration; the tab names carry the meaning */}
+                  {newGroup && (
+                    <span aria-hidden className={RAIL_GROUP}>
+                      {item.group}
+                    </span>
+                  )}
+                  <button
+                    id={`manage-tab-${item.id}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    aria-controls={on ? `manage-panel-${item.id}` : undefined}
+                    tabIndex={on ? 0 : -1}
+                    onClick={() => pick(item.id)}
+                    className={cn(RAIL_TAB, on ? RAIL_TAB_ON : RAIL_TAB_OFF)}
+                  >
+                    {item.icon}
+                    {item.label}
+                  </button>
+                </Fragment>
+              );
+            })}
+          </div>
+          {room.owner && (
+            // not a tab: no pane of its own, a click asks right away. a divider over it, at the very foot of the rail
+            <div className="flex shrink-0 items-center border-l border-primaryStroke p-2 sm:mt-auto sm:border-l-0 sm:border-t">
+              <button
+                id="room-delete-ask"
+                type="button"
+                onClick={() => setDeleting(true)}
+                className={cn(RAIL_TAB, 'border-transparent text-decrease hover:bg-decrease/10')}
+              >
+                <RiDeleteBinLine aria-hidden size={18} />
+                delete group
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -2706,10 +2722,25 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
             {tab === 'roles' && <RolesSection server={server} room={room} run={run} />}
             {tab === 'members' && <MembersSection server={server} room={room} me={me} run={run} />}
             {tab === 'bans' && <BansSection server={server} room={room} run={run} />}
-            {tab === 'delete' && <DeleteSection server={server} run={run} />}
           </div>
         </div>
       </div>
+      {room.owner && deleting && (
+        <TypeToConfirm
+          id="room-delete"
+          title="delete this group?"
+          message="the group goes, and everyone in it is out."
+          yes="delete"
+          onYes={() => {
+            setDeleting(false);
+            void run(async () => {
+              await api.deleteGroup(server);
+              navigate('/groups');
+            });
+          }}
+          onNo={() => setDeleting(false)}
+        />
+      )}
     </dialog>
   );
 }
@@ -3636,32 +3667,3 @@ const SWATCH = 'h-[30px] w-[30px] shrink-0 border-2';
 const SWATCH_ON = 'border-textPrimary outline outline-2 -outline-offset-4 outline-background';
 
 const ALL_PERMS: RolePerms = { appearance: true, roles: true, channels: true, kick: true, ban: true };
-
-/** An owner's delete. It asks first, in its own dialog over this one; a yes goes to /groups. */
-function DeleteSection({ server, run }: { server: string; run: Run }) {
-  const navigate = useNavigate();
-  const [sure, setSure] = useState(false);
-  return (
-    <Section title="delete" description="the group goes, and everyone in it is out.">
-      <button id="room-delete-ask" type="button" className="self-start text-sm font-semibold text-decrease" onClick={() => setSure(true)}>
-        delete group
-      </button>
-      {sure && (
-        <ConfirmDialog
-          id="room-delete"
-          title="delete this group?"
-          message="the group goes, and everyone in it is out."
-          yes="yes, delete"
-          onYes={() => {
-            setSure(false);
-            void run(async () => {
-              await api.deleteGroup(server);
-              navigate('/groups');
-            });
-          }}
-          onNo={() => setSure(false)}
-        />
-      )}
-    </Section>
-  );
-}
