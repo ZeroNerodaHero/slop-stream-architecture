@@ -58,6 +58,8 @@ load, per action), not a measurement.
 | ✅ | `GET /api/groups/{group}/channels/{channel}/pins` | A channel's pinned lines | none | **600** (read tier) | account / IP | 1 min | low (per open of the pins list, and per pin while it is open) |
 | ✅ | `PUT/DELETE /api/groups/{group}/channels/{channel}/mute` | Mute a channel | none | **120** | account | 1 min | low |
 | ✅ | `PUT /api/groups/{group}/channels/{channel}/read` | Read marker | none | **120** | account | 1 min | high (as messages are read) |
+| ✅ | `POST /api/groups/{group}/voice/{channel}/join` | A grant to join a voice channel (`voice.md`) | none (new) | **120** (write tier) | account | 1 min | low (per voice channel joined; a grant lasts 30 s) |
+| ✅ | `POST /api/voice/redeem`, `/attached`, `/left`, `/beat` | The voice server's calls: redeem a grant, who is in voice | none (new) | **120** (write tier) by the table, but never counted: inside only (anything through Caddy is a 404) | n/a | 1 min | medium (per join and leave, a beat every 15 s), internal only |
 | ✅ | `PUT /api/groups/{group}/icon`, `/banner` | Upload group pictures | none | **60** (upload) | account | 1 h | rare (owner) |
 | ✅ | `PUT /api/groups/{group}/about`, `/access`, `/order`, `/owner-role` | Group settings | none | **120** (moderate) | account | 10 min | rare (owner/mod) |
 | ✅ | `POST /roles`, `PUT/DELETE /roles/{id}`, `POST /roles/{id}/members`, `DELETE /roles/{id}/members/{name}` | Roles | none | **120** (moderate) | account | 10 min | rare (owner/mod) |
@@ -83,5 +85,6 @@ load, per action), not a measurement.
 | ✅ | events socket `watch` / `unwatch` frames | Subscribe to names/topics | none | **1000 watched at once / socket**, **2000 frames / socket** | socket | 1 min | high on page load (sidebar follows) |
 | ✅ | `GET /`, `/health`, `/api/monitor` (monitor box) | Uptime dashboard | none | **120 / IP** (in memory) | IP | 1 min | low (ops only) |
 | ✅ | `GET /ws` (video SFU signaling WebSocket) | Publish / watch handshake | peers: 4 / IP / room, 16 / IP, 12 previews / IP | same **+ 60 opens / IP** | IP | 1 min | medium (per watch page, reconnects) |
+| ✅ | `GET /voice` (voice SFU WebSocket, the voice server's `/ws`) | Voice channel handshake (`voice.md`) | none (new) | **60 opens / IP** (`limits.rs`) + 4 voice peers / IP | IP | 1 min | low (per voice join, reconnects) |
 | ✅ | `GET /thumb/{file}` (video) | Live stream still | none | **3000 / IP** | IP | 1 min | very high (every home card every 5 s) |
 | ✅ | `GET /live`, `/viewers`, `/health` (video), `/online` (events), `/health` (chat/events/home) | Internal probes | none | **600 / IP** when reached through Caddy; internal calls not counted | IP | 1 min | high but internal only |
