@@ -2,6 +2,7 @@ import {
   RiAddLine,
   RiHeadphoneLine,
   RiLogoutBoxRLine,
+  RiMicFill,
   RiMicLine,
   RiMicOffLine,
   RiPencilLine,
@@ -13,7 +14,7 @@ import {
   RiVolumeUpLine
 } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type ReactNode } from 'react';
+import { type ReactNode, type Ref, useEffect, useRef } from 'react';
 
 import { canEditChannel, type Channel, type GroupRoom, isVoice, type VoiceMember } from '@/infra/api';
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
@@ -22,6 +23,7 @@ import {
   joinVoice,
   keyName,
   leaveVoice,
+  readVoiceMicLevel,
   setVoiceDeaf,
   setVoiceMuted,
   type VoiceCall,
@@ -97,6 +99,28 @@ export function VoicePanel({
   // a moderator muted my mic here (voice.rs `server_mute`): the voice server carries nothing of it, and only a moderator lifts it
   const serverMuted = here && !!me && Object.values(room.voice ?? {}).some((people) => people.some((p) => p.name === me && p.muted));
   const avatarOf = (name: string) => room.roster?.find((m) => m.name === name)?.avatar ?? null;
+  const micButton = useRef<HTMLButtonElement>(null);
+  // the fill shows while the mic goes out: in push to talk, only with the key down
+  const metering = here && !muted && !deaf && !serverMuted && (!ptt || talking);
+
+  // Your level in the mute button's mic, many times a second while it is open: a frame loop
+  // writes `--lvl` on the button by hand, never through react. The call's shared mic's own
+  // reader (voice-atoms.ts `readVoiceMicLevel`), so the mic is not opened again and a new
+  // device is followed. No web audio: no reader, no fill.
+  useEffect(() => {
+    const el = micButton.current;
+    if (!metering || !el) return;
+    let frame = 0;
+    const paint = (now: number) => {
+      el.style.setProperty('--lvl', readVoiceMicLevel(now).toFixed(3));
+      frame = requestAnimationFrame(paint);
+    };
+    frame = requestAnimationFrame(paint);
+    return () => {
+      cancelAnimationFrame(frame);
+      el.style.setProperty('--lvl', '0');
+    };
+  }, [metering]);
 
   const join = (channel: string) => {
     if (!me) return openAuthDialog('login');
@@ -119,13 +143,30 @@ export function VoicePanel({
               </BarButton>
             ) : (
               <BarButton
+                ref={micButton}
                 id="group-voice-mute"
                 label={muted ? 'unmute' : ptt ? `mute (push to talk: hold ${pttKey})` : 'mute'}
                 pressed={muted}
                 talking={ptt ? talking : undefined}
                 onClick={() => setVoiceMuted(!muted)}
+                className="relative"
               >
-                {muted ? <RiMicOffLine aria-hidden size={14} /> : <RiMicLine aria-hidden size={14} />}
+                {muted ? (
+                  <RiMicOffLine aria-hidden size={14} />
+                ) : (
+                  <>
+                    <RiMicLine aria-hidden size={14} />
+                    {/* the capsule fills from its foot with your level (--lvl, 0..1): 62% down is the foot, 8% the top */}
+                    {metering && (
+                      <RiMicFill
+                        aria-hidden
+                        size={14}
+                        className="absolute inset-0 m-auto text-increase"
+                        style={{ clipPath: 'inset(calc(62% - var(--lvl,0) * 54%) 0 38% 0)' }}
+                      />
+                    )}
+                  </>
+                )}
               </BarButton>
             )}
             <BarButton label={deaf ? 'undeafen' : 'deafen'} pressed={deaf} onClick={() => setVoiceDeaf(!deaf)}>
@@ -258,6 +299,7 @@ function VoicePerson({ person, avatar, talking }: { person: VoiceMember; avatar:
 
 /** `talking`: in push to talk, the key has the mic open (green), or not (undefined outside push to talk). */
 function BarButton({
+  ref,
   id,
   label,
   pressed,
@@ -265,8 +307,10 @@ function BarButton({
   disabled,
   talking,
   onClick,
+  className,
   children
 }: {
+  ref?: Ref<HTMLButtonElement>;
   id?: string;
   label: string;
   pressed?: boolean;
@@ -274,11 +318,13 @@ function BarButton({
   disabled?: boolean;
   talking?: boolean;
   onClick?: () => void;
+  className?: string;
   children: ReactNode;
 }) {
   return (
     <Tooltip content={talking ? 'talking' : label}>
       <button
+        ref={ref}
         id={id}
         type="button"
         aria-label={label}
@@ -288,7 +334,8 @@ function BarButton({
         onClick={onClick}
         className={cn(
           CALL_BUTTON,
-          danger ? 'text-decrease' : pressed ? 'border-primaryBlue text-primaryBlue' : talking ? 'text-increase' : 'text-textSecondary hover:text-textPrimary'
+          danger ? 'text-decrease' : pressed ? 'border-primaryBlue text-primaryBlue' : talking ? 'text-increase' : 'text-textSecondary hover:text-textPrimary',
+          className
         )}
       >
         {children}
