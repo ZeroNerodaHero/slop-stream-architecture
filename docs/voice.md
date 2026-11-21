@@ -1,6 +1,6 @@
 # voice
 
-voice phase 1: built on the server side, off on the live box. a server (a group) can have voice channels next to its text ones, and people in one talk to each other. no page uses it yet: the join route, the voice server and who is in voice are there, the buttons are not.
+voice: built, off on the live box. a server (a group) can have voice channels next to its text ones, and people in one talk to each other. the group page's right sidebar lists the voice channels and who is in each, and a click joins ([frontend/src/app/explore/VoicePanel.tsx](../frontend/src/app/explore/VoicePanel.tsx)).
 
 the code: [api/src/voice.rs](../api/src/voice.rs) (the join, the grant, who is in voice, the sweep), [video/src/voice.rs](../video/src/voice.rs) (the voice server, `video voice`), [api/migrations/0004-voice-channels.sql](../api/migrations/0004-voice-channels.sql), the room's `voice` in [api/src/group_mod.rs](../api/src/group_mod.rs), and the test [test/voice.js](../test/voice.js).
 
@@ -44,6 +44,8 @@ two steps, so the voice server never sees a cookie.
    - a text channel: 400 `not a voice channel`
    - already in voice in another channel (`voiceof:<uid>`): 409 `already in voice`. in this same channel is fine.
    - full (the others in it, from `voice:<server>`, at its `user_limit`, 16 when 0): 409 `channel full`. an owner, the channels power and a site admin are never kept out by this.
+
+   - voice off (VOICE_SECRET unset or empty): 503 `voice is off`, since no voice server could redeem a grant.
 
    then it makes a grant, 32 random bytes as hex (64 characters), keeps `voicegrant:<hex>` = `{user_id, name, server, channel}` for 30s, and answers `{url: "/voice", grant, ttl: 30}`.
 2. the page opens the websocket at `/voice` (caddy sends it to `voice:7881/ws`) and its first frame, within 10s, is `{"role":"voice","grant":"<64 hex>","sdp":"<offer>"}`. the voice server redeems the grant with the api once (`POST /api/voice/redeem`), and the room and the name come from that reply, never from the page. the api takes the grant out (GETDEL) and asks the same questions as join again, since the grant may be half a minute old. a used grant, one past its 30s, or one no longer the person's to use is `bad grant`; an api that does not answer within 1.5s is `api unreachable`.
@@ -93,7 +95,7 @@ one row per stay: `id`, `server`, `channel`, `user_id`, `joined_at`, `left_at` (
 
 neither the secret nor a grant is ever logged.
 
-note: join itself does not look at VOICE_SECRET. with voice off it still hands out grants, the voice server is not running (`/voice` is a 502), and a grant brought to a voice server with no secret is `voice is not open`.
+join looks at VOICE_SECRET too, last: with voice off it hands out no grants and answers 503 `voice is off`, which the page shows as a quiet line. a grant brought to a voice server with no secret is still `voice is not open`.
 
 ## limits
 

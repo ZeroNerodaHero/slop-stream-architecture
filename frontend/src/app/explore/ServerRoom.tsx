@@ -43,14 +43,17 @@ import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { PinSheet, PinSheetButton } from '@/app/explore/PinSheet';
+import { VoicePanel } from '@/app/explore/VoicePanel';
 import {
   api,
   type Channel,
   CHANNEL_CAP,
+  type ChannelKind,
   groupImage,
   type GroupMember,
   type GroupRole,
   groupWords,
+  isVoice,
   messageOf,
   type GroupRoom,
   type PinnedLine,
@@ -80,6 +83,7 @@ import {
   setPinned
 } from '@/infra/atoms/room-atoms';
 import { roomMembersOpenAtom } from '@/infra/atoms/settings-atoms';
+import { leaveVoice } from '@/infra/atoms/voice-atoms';
 import { useIsMobile } from '@/infra/mobile';
 import { cleanName, isValidName } from '@/infra/names';
 import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
@@ -1122,7 +1126,8 @@ export function ServerPage() {
   const live = room?.live ?? [];
   const shown = live.slice(0, FACES);
   const previewKey = shown.join(',');
-  const channels = room?.channels ?? [];
+  // the chat's channels: a voice one has no lines, and is the voice panel's
+  const channels = (room?.channels ?? []).filter((item) => !isVoice(item));
   // the channel just renamed is still found under its old name until the layout effect below
   // has moved the page: otherwise the room, its dialog and its chat would be taken down for
   // "no such channel" and put back empty under the new address
@@ -1137,7 +1142,11 @@ export function ServerPage() {
   useEffect(() => {
     if (!ok || me === undefined) return;
     enterRoom(server);
-    return leaveRoom;
+    // a voice call is the page's: off the page (or another login) it ends
+    return () => {
+      leaveRoom();
+      leaveVoice();
+    };
   }, [ok, server, me]);
 
   // a channel was renamed (the channels tab here, or the fact from elsewhere): the page on it is
@@ -1519,7 +1528,13 @@ export function ServerPage() {
                 className={cn('h-full', ROOM_CHAT_MOBILE)}
               />
             </div>
-            {!mobile && <Roster room={room} />}
+            {!mobile && (
+              // the voice channels over the roster, the column the chat's height between them
+              <div className={cn('flex min-w-0 flex-col gap-2', ROSTER_HEIGHT, STACKED_SNAP)}>
+                <VoicePanel room={room} className={cn(!membersOpen && 'lg:hidden')} />
+                <Roster room={room} fill />
+              </div>
+            )}
           </div>
           {mobile && (
             <PinSheet
@@ -1544,6 +1559,7 @@ export function ServerPage() {
                       {channelList}
                       {liveList}
                     </div>
+                    <VoicePanel room={room} flat />
                     <Roster room={room} flat />
                   </div>
                 </>
@@ -1585,7 +1601,9 @@ function ChannelList({
   onError: (error: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
+  // the cap and the names are every channel's; the list is the text ones (the voice ones are the voice panel's)
   const channels = room.channels ?? [];
+  const textChannels = channels.filter((item) => !isVoice(item));
   const muted = room.muted ?? [];
   const canAdd = room.perms.channels && room.mine;
   // the mute is a member's: a stranger gets no row to mute
@@ -1607,7 +1625,7 @@ function ChannelList({
     <nav aria-label="channels" className={cn(boxed && 'border border-primaryStroke bg-backgroundSecondary p-1')}>
       <h3 className={cn('text-xs font-semibold uppercase tracking-wider text-textTertiary', boxed ? 'flex h-6 items-center px-2' : 'sr-only')}>channels</h3>
       <ul id="group-channels" className={cn('flex flex-col', !boxed && 'gap-0.5')}>
-        {channels.map((item) => {
+        {textChannels.map((item) => {
           const here = item.name === channel;
           const isMuted = muted.includes(item.name);
           return (
@@ -1701,6 +1719,7 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
   const pressedBackdrop = useRef(false);
   const [name, setName] = useState('');
   const [about, setAbout] = useState('');
+  const [kind, setKind] = useState<ChannelKind>('text');
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState('');
   const clean = cleanName(name);
@@ -1728,9 +1747,10 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
     setSending(true);
     setStatus('');
     try {
-      const made = await api.createChannel(server, clean, about.trim());
+      const made = await api.createChannel(server, clean, about.trim(), kind);
       close();
-      navigate(`/groups/${server}/${made.name}`);
+      // a voice channel has no page: it is in the voice panel, a click away
+      if (!isVoice(made)) navigate(`/groups/${server}/${made.name}`);
     } catch (err) {
       setStatus(messageOf(err));
       setSending(false);
@@ -1796,6 +1816,23 @@ function AddChannelDialog({ server, channels, onClose }: { server: string; chann
             />
           </div>
         </Field>
+        <div role="group" aria-labelledby="channel-make-kind-label" className="flex items-center gap-2">
+          <span id="channel-make-kind-label" className="text-sm text-textSecondary">
+            kind
+          </span>
+          {(['text', 'voice'] as const).map((k) => (
+            <Button
+              key={k}
+              id={`channel-make-kind-${k}`}
+              size="sm"
+              aria-pressed={kind === k}
+              className={cn(kind === k && 'border-primaryBlue text-primaryBlue')}
+              onClick={() => setKind(k)}
+            >
+              {k}
+            </Button>
+          ))}
+        </div>
         <Field id="channel-make-about" label="about" hint={`optional. up to ${ABOUT_CAP} characters.`}>
           <input
             id="channel-make-about"
@@ -2058,7 +2095,10 @@ function MoreRow({
  * the strip, hidden, so its search and scroll are where they were when it opens again; the
  * focus goes to the strip's arrow on the fold and back to this one on the unfold.
  */
-function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
+/** Its column's rest instead of the chat's height: the voice panel is over it (ServerRoom's right column). */
+const ROSTER_FILL = 'max-h-none min-h-0 flex-1 lg:h-auto lg:min-h-0';
+
+function Roster({ room, flat = false, fill = false }: { room: GroupRoom; flat?: boolean; fill?: boolean }) {
   const members = room.roster ?? [];
   const live = room.live ?? [];
   const presences = useAtomValue(presencesAtom);
@@ -2123,7 +2163,7 @@ function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
         aria-label="members"
         className={cn(
           'flex flex-col border border-primaryStroke bg-backgroundSecondary text-sm',
-          flat ? 'mx-3 gap-3 p-4' : cn('gap-2 p-2', ROSTER_HEIGHT, STACKED_SNAP),
+          flat ? 'mx-3 gap-3 p-4' : cn('gap-2 p-2', ROSTER_HEIGHT, STACKED_SNAP, fill && ROSTER_FILL),
           folded && 'lg:hidden'
         )}
       >
@@ -2196,7 +2236,7 @@ function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
           </ul>
         )}
       </aside>
-      {folded && <MembersStrip room={room} showRef={showRef} onShow={() => setOpen(true, hideRef)} />}
+      {folded && <MembersStrip room={room} showRef={showRef} onShow={() => setOpen(true, hideRef)} fill={fill} />}
     </>
   );
 }
@@ -2208,13 +2248,17 @@ function Roster({ room, flat = false }: { room: GroupRoom; flat?: boolean }) {
  * like a roster row, the name its tooltip; the strip scrolls with no bar. A private group's
  * guest gets the arrow and the count alone.
  */
-function MembersStrip({ room, showRef, onShow }: { room: GroupRoom; showRef: RefObject<HTMLButtonElement | null>; onShow: () => void }) {
+function MembersStrip({ room, showRef, onShow, fill = false }: { room: GroupRoom; showRef: RefObject<HTMLButtonElement | null>; onShow: () => void; fill?: boolean }) {
   const presences = useAtomValue(presencesAtom);
   const members = room.roster ?? [];
   const more = useAtomValue(rosterMoreAtom);
   const listRef = useRef<HTMLUListElement | null>(null);
   return (
-    <aside id="group-members-strip" aria-label="members" className={cn('hidden w-14 flex-col border border-primaryStroke bg-backgroundSecondary lg:flex', ROSTER_HEIGHT)}>
+    <aside
+      id="group-members-strip"
+      aria-label="members"
+      className={cn('hidden w-14 flex-col border border-primaryStroke bg-backgroundSecondary lg:flex', ROSTER_HEIGHT, fill && ROSTER_FILL)}
+    >
       <div className="flex shrink-0 justify-center pt-1.5">
         <Tooltip content="show members" at="left">
           <button

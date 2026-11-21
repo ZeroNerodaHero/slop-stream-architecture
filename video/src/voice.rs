@@ -30,7 +30,7 @@
 //! closing the socket, or the peer going failed/closed (the ice timeout), frees the seat.
 //! at most 4 voice peers per address, and /ws is rate limited per address like the stream's.
 //!
-//! who is in voice lives in the api (docs/groups.md "voice"), and we keep it current: `attached`
+//! who is in voice lives in the api (docs/voice.md), and we keep it current: `attached`
 //! once a granted person has their answer, `left` when their seat frees, and every 15s one
 //! `beat` naming everyone granted we have seated. a box that dies says nothing, and the api's
 //! sweep drops its people within a minute. a call that fails is a warning in the log; nobody is

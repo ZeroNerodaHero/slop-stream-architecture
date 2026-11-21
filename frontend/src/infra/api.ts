@@ -284,6 +284,29 @@ export interface Channel {
   made_by?: string | null;
   /** Seconds a member waits between their lines here (docs/groups.md). 0 or absent: none. The owners and the channels power wait for nobody. */
   cooldown?: number;
+  /** `voice`: no lines, people talk in it (docs/voice.md). Absent on an older api: text. */
+  kind?: ChannelKind;
+  /** How many may be in a voice channel at once; 0 or absent is 16. */
+  user_limit?: number;
+}
+
+export type ChannelKind = 'text' | 'voice';
+
+/** Whether a channel is a voice one: not listed with the chat's channels, joined from the voice panel. */
+export const isVoice = (channel: { kind?: string }): boolean => channel.kind === 'voice';
+
+/** One person in a voice channel, as the room says: `since` unix ms. */
+export interface VoiceMember {
+  name: string;
+  uid: string;
+  since: number;
+}
+
+/** `POST .../voice/:channel/join`: the grant to bring to the voice server at `url`, good once and for `ttl` seconds. */
+export interface VoiceGrant {
+  url: string;
+  grant: string;
+  ttl: number;
 }
 
 /** Channels on one server, `general` included. Matches `CHANNELS_PER_SERVER` in the api. */
@@ -381,6 +404,8 @@ export interface GroupRoom {
   pins?: Record<string, string[]>;
   /** Members streaming right now. Absent on an older api. */
   live?: string[];
+  /** Who is in each voice channel this login sees, first in first (docs/voice.md). A channel nobody is in is absent; absent on an older api. */
+  voice?: Record<string, VoiceMember[]>;
   /** The roster: anyone's on a public group, a member's or a site admin's on a private one. Null for anyone else; absent on an older api. */
   roster?: GroupMember[] | null;
   /** Asked for a page of it (`group(name, roster)`): where the next page starts (`groupMembersPage`'s `after`). Null once the roster is whole; absent on an older api. */
@@ -676,7 +701,11 @@ export const api = {
   /** Servers you are in, then the ones you can find. `bot` is not a server. See docs/groups.md. */
   explore: () => request<Explore>('GET', '/api/explore'),
   /** Someone who may add a channel. 403 until they have joined, or without the power. The new channel goes after the last. */
-  createChannel: (server: string, name: string, about = '') => request<Channel>('POST', `/api/groups/${encodeURIComponent(server)}/channels`, { name, about }),
+  createChannel: (server: string, name: string, about = '', kind: ChannelKind = 'text') =>
+    request<Channel>('POST', `/api/groups/${encodeURIComponent(server)}/channels`, { name, about, kind }),
+  /** A grant for the voice server (docs/voice.md). 409 `already in voice` / `channel full`; 503 `voice is off` while the box has no voice. Not reported: a 503 here is a setting, not a fault. */
+  joinVoice: (server: string, channel: string) =>
+    request<VoiceGrant>('POST', `/api/groups/${encodeURIComponent(server)}/voice/${encodeURIComponent(channel)}/join`, undefined, { report: false }),
   /** The channels in this order, from the top. The channels power. A channel not named keeps its place after these. → the whole order as it now stands. */
   setChannelOrder: (server: string, order: string[]) => request<{ order: string[] }>('PUT', `/api/groups/${encodeURIComponent(server)}/channels`, { order }),
   /** The channel is called `name` from now on, its lines, mutes and inbox rows with it. Who made it, or the channels power. `general` stays. → the channel as the room lists it. */

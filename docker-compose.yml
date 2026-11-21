@@ -429,7 +429,7 @@ services:
     # (video/src/voice.rs). a page brings a grant from the api, we redeem it with VOICE_SECRET
     # (the api's own) for the person and the room, and tell the api who is in. off by default:
     # the profile keeps a plain `up -d` and deploy.sh from creating it. turn it on with a
-    # VOICE_SECRET in .env, udp 7883 open in the firewall (docs/groups.md "voice"), then
+    # VOICE_SECRET in .env, udp 7883 open in the firewall (docs/voice.md), then
     #   docker compose --profile voice up -d voice
     # until then /voice is a 502 and the api answers voice joins with a 503.
     image: ${IMAGES:-}stream-video:${TAG:-latest}
