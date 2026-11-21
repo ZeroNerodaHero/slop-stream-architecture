@@ -256,10 +256,31 @@ function PasswordHint({ problem }: { problem: string | null }) {
 }
 
 /**
+ * The provider account's picture, 24px square, or the provider's icon when there is none or it
+ * will not load. The api only keeps pictures on the provider's own image host; no referrer goes
+ * with the request.
+ */
+function LinkedPicture({ provider, src }: { provider: string; src?: string | null }) {
+  // the picture that would not load: a new one gets its own try
+  const [broken, setBroken] = useState<string | null>(null);
+  const box = 'flex size-6 shrink-0 items-center justify-center border border-primaryStroke';
+  if (!src || broken === src) {
+    return (
+      <span className={box}>
+        <ProviderIcon provider={provider} size={14} />
+      </span>
+    );
+  }
+  return <img src={src} alt="" referrerPolicy="no-referrer" onError={() => setBroken(src)} className={`${box} object-cover`} />;
+}
+
+/**
  * Google and Discord (whatever the api turned on) on this account: link one (a trip to the
  * provider and back to this tab), or unlink it. Any one linked makes the account verified: the
  * blue mark beside the name everywhere (OAuthMark.tsx). The api refuses to unlink the last way
- * in (no password and nothing else linked), and the row says so before you try.
+ * in (no password and nothing else linked), and the row says so before you try. A linked row
+ * shows who it is on the provider's side: their picture and name (the api keeps them from each
+ * login); one linked before they were kept shows the provider's icon and "linked".
  */
 function LinkedLogins() {
   const providers = useAtomValue(oauthProvidersAtom);
@@ -311,39 +332,52 @@ function LinkedLogins() {
           {shown.map((p) => {
             const on = linked?.identities.find((i) => i.provider === p);
             return (
-              <li key={p} id={`sec-provider-${p}`} data-linked={on ? 'true' : 'false'} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 py-1.5">
-                <span className="flex items-center gap-2 text-sm font-semibold">
+              <li
+                key={p}
+                id={`sec-provider-${p}`}
+                data-linked={on ? 'true' : 'false'}
+                className={`flex items-center justify-between gap-x-4 gap-y-1.5 py-1.5 ${on ? '' : 'flex-wrap'}`}
+              >
+                <span className="flex shrink-0 items-center gap-2 text-sm font-semibold">
                   <ProviderIcon provider={p} />
                   {providerLabel(p)}
                 </span>
-                <span className="flex flex-wrap items-center gap-1.5">
+                <span className={on ? 'flex min-w-0 items-center gap-2 border border-primaryStroke p-1' : 'flex flex-wrap items-center gap-1.5'}>
                   {on ? (
                     <>
+                      <LinkedPicture provider={p} src={on.avatar} />
                       <Tooltip content={`since ${new Date(on.linked_at).toLocaleDateString()}`}>
-                        <span tabIndex={0} className="text-xs text-increase">
-                          linked
+                        <span id={`sec-linked-name-${p}`} tabIndex={0} className="min-w-0 max-w-[180px] truncate text-sm font-semibold">
+                          {on.name || 'linked'}
                         </span>
                       </Tooltip>
                       {lastWayIn ? (
                         <Tooltip content="your only login">
                           {/* a disabled button takes no hover: the span around it does */}
-                          <span id={`sec-unlink-${p}-why`} tabIndex={0} aria-label="unlink: your only login" className="inline-flex">
-                            <Button size="sm" variant="outline-danger" disabled className="pointer-events-none">
+                          <span id={`sec-unlink-${p}-why`} tabIndex={0} aria-label="unlink: your only login" className="inline-flex shrink-0">
+                            <Button size="sm" variant="outline-danger" disabled className="pointer-events-none shrink-0">
                               unlink
                             </Button>
                           </span>
                         </Tooltip>
                       ) : sure === p ? (
                         <>
-                          <Button id={`sec-unlink-${p}`} size="sm" variant="outline-danger" disabled={busy} onClick={() => void unlink(p)}>
+                          <Button
+                            id={`sec-unlink-${p}`}
+                            size="sm"
+                            variant="outline-danger"
+                            disabled={busy}
+                            className="shrink-0 whitespace-nowrap"
+                            onClick={() => void unlink(p)}
+                          >
                             sure? unlink
                           </Button>
-                          <Button size="sm" onClick={() => setSure(null)}>
+                          <Button size="sm" className="shrink-0" onClick={() => setSure(null)}>
                             keep
                           </Button>
                         </>
                       ) : (
-                        <Button id={`sec-unlink-${p}`} size="sm" variant="outline-danger" onClick={() => setSure(p)}>
+                        <Button id={`sec-unlink-${p}`} size="sm" variant="outline-danger" className="shrink-0" onClick={() => setSure(p)}>
                           unlink
                         </Button>
                       )}
