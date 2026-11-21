@@ -133,10 +133,13 @@ pub(crate) struct Profile {
     pub(crate) socials: Socials,
     /// About me: the words first on the about tab. Empty for none.
     pub(crate) about: String,
+    /// The chat welcome: whether `Eques` says it when a viewer opens the chat, and the words.
+    pub(crate) welcome_on: bool,
+    pub(crate) welcome: String,
 }
 
-/// bio, picture, account, offline picture, offline note, joined, socials, about, oauth verified
-type ProfileRow = (String, Option<i64>, bool, Option<i64>, String, Option<DateTime<Utc>>, Value, String, bool);
+/// bio, picture, account, offline picture, offline note, joined, socials, about, oauth verified, welcome on, welcome
+type ProfileRow = (String, Option<i64>, bool, Option<i64>, String, Option<DateTime<Utc>>, Value, String, bool, bool, String);
 
 /// Bio, picture versions, account flag, oauth-verified flag, the offline line, when the account was made, the links and the about me, in one query. A name nobody saved anything for is all defaults.
 pub(crate) async fn load_profile(db: &PgPool, name: &str) -> Result<Profile, sqlx::Error> {
@@ -145,17 +148,19 @@ pub(crate) async fn load_profile(db: &PgPool, name: &str) -> Result<Profile, sql
                 (EXTRACT(EPOCH FROM offline_at))::bigint, offline_note,
                 CASE WHEN password_hash IS NOT NULL THEN created_at END, socials, about, ",
         crate::oauth::linked_sql!("streamers"),
-        " FROM streamers WHERE name = $1",
+        ", welcome_on, welcome FROM streamers WHERE name = $1",
     ))
     .bind(name)
     .fetch_optional(db)
     .await?;
-    let (bio, avatar, verified, offline, offline_note, joined, socials, about, oauth_verified) = row.unwrap_or_default();
+    // a name with no row has the columns' defaults, the welcome on with its default words
+    let row = row.unwrap_or_else(|| (String::new(), None, false, None, String::new(), None, Value::Null, String::new(), false, true, DEFAULT_WELCOME.to_owned()));
+    let (bio, avatar, verified, offline, offline_note, joined, socials, about, oauth_verified, welcome_on, welcome) = row;
     // the row's json as the document, and the empty one for a row that has none (or one from before the column)
     let socials = serde_json::from_value(socials).unwrap_or_default();
     // only an account can have a login linked; said twice so a free name never wears it
     let oauth_verified = oauth_verified && verified;
-    Ok(Profile { name: name.to_owned(), bio, avatar, verified, oauth_verified, offline, offline_note, joined, socials, about })
+    Ok(Profile { name: name.to_owned(), bio, avatar, verified, oauth_verified, offline, offline_note, joined, socials, about, welcome_on, welcome })
 }
 
 // ---- the row behind a name ---------------------------------------------------------------
@@ -949,6 +954,52 @@ async fn put_about(
     Ok(Json(json!({ "name": name, "about": about })))
 }
 
+// ---- the chat welcome (docs/chat.md) ----------------------------------------------------------
+
+/// What `Eques` says until the streamer changes it: the column's default (0008-chat-welcome.sql).
+const DEFAULT_WELCOME: &str = "welcome to the chat!";
+/// The welcome as kept, at most. The page's box stops here too.
+const MAX_WELCOME_CHARS: usize = 300;
+
+#[derive(Deserialize)]
+struct WelcomeBody {
+    on: bool,
+    message: String,
+}
+
+/// The words as kept: a chat line's cleaning, trimmed, MAX_WELCOME_CHARS at most. Empty is the default.
+fn clean_welcome(raw: &str) -> String {
+    let text: String = clean_text(raw).chars().take(MAX_WELCOME_CHARS).collect();
+    let text = text.trim_end();
+    if text.is_empty() { DEFAULT_WELCOME.to_owned() } else { text.to_owned() }
+}
+
+/// `{ on, message }`: whether `Eques` welcomes a viewer to the chat, and with what. Never a chat
+/// line: the page draws it for the one viewer (ChatPanel.tsx). The bio's gate and upsert.
+/// → `{ name, welcome_on, welcome }` as kept.
+async fn put_welcome(
+    State(s): State<AppState>,
+    Name(name): Name,
+    me: Me,
+    q: Result<Query<PasswordQuery>, QueryRejection>,
+    body: Result<Json<WelcomeBody>, JsonRejection>,
+) -> ApiResult {
+    let Query(q) = q?;
+    let Json(body) = body?;
+    may_write(&s, &name, me.name(), q.password.as_deref()).await?;
+    let (on, welcome): (bool, String) = sqlx::query_as(
+        "INSERT INTO streamers (name, welcome_on, welcome) VALUES ($1, $2, $3)
+         ON CONFLICT (name) DO UPDATE SET welcome_on = EXCLUDED.welcome_on, welcome = EXCLUDED.welcome, updated_at = now()
+         RETURNING welcome_on, welcome",
+    )
+    .bind(&name)
+    .bind(body.on)
+    .bind(clean_welcome(&body.message))
+    .fetch_one(&s.db)
+    .await?;
+    Ok(Json(json!({ "name": name, "welcome_on": on, "welcome": welcome })))
+}
+
 // ---- where else to find them (docs/socials.md) ------------------------------------------------
 
 /// How many links one name may put under its player.
@@ -1430,6 +1481,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/streamers/{name}/assets/{id}", get(get_asset).delete(delete_asset))
         .route("/api/streamers/{name}/offline-note", put(put_offline_note))
         .route("/api/streamers/{name}/about", put(put_about))
+        .route("/api/streamers/{name}/welcome", put(put_welcome))
         // the links are words, not a picture: a body past this is not a document anyone wrote
         .route("/api/streamers/{name}/socials", put(put_socials).layer(DefaultBodyLimit::max(MAX_SOCIALS_BYTES)))
         .route("/watch/", get(watch_nobody))
@@ -1483,7 +1535,7 @@ mod tests {
     }
 
     fn profile(bio: &str, avatar: Option<i64>, verified: bool) -> Profile {
-        Profile { name: "bob".into(), bio: bio.into(), avatar, verified, oauth_verified: false, offline: None, offline_note: String::new(), joined: None, socials: Socials::default(), about: String::new() }
+        Profile { name: "bob".into(), bio: bio.into(), avatar, verified, oauth_verified: false, offline: None, offline_note: String::new(), joined: None, socials: Socials::default(), about: String::new(), welcome_on: true, welcome: DEFAULT_WELCOME.into() }
     }
 
     #[test]
@@ -1547,6 +1599,16 @@ mod tests {
         assert_eq!(clean_about("  hi\n\nthere\n\n\n\nall\u{200b}  "), "hi\n\nthere\n\nall");
         assert_eq!(clean_about("").len(), 0);
         assert_eq!(clean_about(&"x".repeat(3000)).chars().count(), MAX_ABOUT_CHARS);
+    }
+
+    #[test]
+    fn a_welcome_is_cleaned_capped_and_never_empty() {
+        assert_eq!(clean_welcome("  hi\u{200b} all  "), "hi all");
+        assert_eq!(clean_welcome(""), DEFAULT_WELCOME);
+        assert_eq!(clean_welcome(" \n\u{200b} "), DEFAULT_WELCOME);
+        assert_eq!(clean_welcome(&"x".repeat(400)).chars().count(), MAX_WELCOME_CHARS);
+        // cut at the cap and then trimmed: no trailing space left from the cut
+        assert_eq!(clean_welcome(&format!("{} y", "x".repeat(MAX_WELCOME_CHARS - 1))), "x".repeat(MAX_WELCOME_CHARS - 1));
     }
 
     #[test]
