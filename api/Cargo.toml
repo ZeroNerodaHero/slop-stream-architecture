@@ -6,10 +6,12 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 argon2 = "0.5"
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["ws", "multipart"] }
 chrono = { version = "0.4", features = ["serde"] }
 env_logger = "0.11"
 hmac = "0.12"
+# a group emote is decoded and drawn again as a 128x128 webp here (emotes.rs): no metadata, no non-picture
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 log = "0.4"
 rand = "0.8"
 redis = { version = "1.7", default-features = false, features = ["tokio-comp", "connection-manager", "streams"] }

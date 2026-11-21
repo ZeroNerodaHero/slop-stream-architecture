@@ -1,6 +1,7 @@
 /** The json api behind /api. Same origin, so the dev server and caddy both forward it. */
 
 import type { ChatLine } from '@/infra/atoms/chat-atoms';
+import type { Emote, GroupEmote } from '@/infra/emotes';
 import type { NotificationKind, Presence, PresenceChoice } from '@/infra/frames';
 import { report } from '@/infra/report';
 import type { Socials } from '@/infra/socials';
@@ -360,6 +361,8 @@ export interface RolePerms {
   channels: boolean;
   kick: boolean;
   ban: boolean;
+  /** Upload, rename and delete the group's custom emotes (emotes.rs). Absent on an older api: no. */
+  emotes?: boolean;
 }
 
 /** A custom role. `id` is a uuid the api made: what the role is known by, so a rename is a save like any other. */
@@ -792,6 +795,25 @@ export const api = {
   /** An owner (or a site admin), 403 for anyone else. The crop dialog made the jpeg. There is no remove: a group with a picture keeps one. */
   saveGroupIcon: (name: string, jpeg: Blob) => request<{ icon: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/icon`, jpeg),
   saveGroupBanner: (name: string, jpeg: Blob) => request<{ banner: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/banner`, jpeg),
+  /** A group's custom emotes, oldest first, for a member (docs/chat.md "emotes"): the cap, and whether this login manages them (an owner, the emotes power). 403 for anyone else. */
+  groupEmotes: (group: string) => request<{ emotes: GroupEmote[]; max: number; manage: boolean }>('GET', `/api/groups/${encodeURIComponent(group)}/emotes`),
+  /** A manager's new emote: the crop dialog's square picture and its name. The api draws it again as a 128px webp. 400 the name's rule or not a picture, 409 the name taken or the group full, 413 past 512 kb. */
+  uploadEmote: (group: string, picture: Blob, name: string) => {
+    const form = new FormData();
+    form.set('name', name);
+    form.set('image', picture, 'emote');
+    const path = `/api/groups/${encodeURIComponent(group)}/emotes`;
+    return answerOf<GroupEmote>('POST', path, fetch(path, { method: 'POST', body: form }));
+  },
+  /** A manager's rename. The lines already sent draw under the new name. 409 the name taken. */
+  renameEmote: (group: string, id: string, name: string) =>
+    request<GroupEmote>('PATCH', `/api/groups/${encodeURIComponent(group)}/emotes/${encodeURIComponent(id)}`, { name }),
+  /** A manager's delete. Its tokens draw as plain `:name:` from now on, and its reactions go. */
+  deleteEmote: (group: string, id: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/emotes/${encodeURIComponent(id)}`),
+  /** Every emote of every group the login is in, by group then name: the composer's `:` list and the reaction picker. Empty for nobody. */
+  myEmotes: () => request<{ emotes: Emote[] }>('GET', '/api/emotes/mine'),
+  /** What these emote ids are (100 at most): name and group for each one still there; one missing is gone. Anyone's. */
+  emotes: (ids: readonly string[]) => request<{ emotes: Emote[] }>('GET', `/api/emotes?ids=${ids.map(encodeURIComponent).join(',')}`),
   groupMembers: (name: string) => request<GroupMember[]>('GET', `/api/groups/${encodeURIComponent(name)}/members`),
   /** One page of the roster in its order: `limit` (100 at most), after the page whose `next` is `after`, and with `q` only the names, or held roles, with the words in them. `next` null at the end. */
   groupMembersPage: (name: string, page: { limit: number; after?: string | null; q?: string }) => {

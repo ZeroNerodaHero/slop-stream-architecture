@@ -19,6 +19,7 @@ import {
   scaledRect
 } from '@/infra/picture';
 import { Button } from '@/shared-components/Button';
+import { INPUT } from '@/shared-components/input';
 import { SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { cn } from '@/utils/cn';
 
@@ -73,7 +74,9 @@ export function CropDialog() {
  * smaller part. Every way out goes through the element's `close`, which hands over the answer.
  */
 function CropBox({ request }: { request: CropRequest }) {
-  const { id, file, spec } = request;
+  const { id, file, spec, named } = request;
+  /** The name box's words, for a picture that goes up with a name (an emote). */
+  const [name, setName] = useState(named?.initial ?? '');
   const aspect = aspectOf(spec);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -217,7 +220,14 @@ function CropBox({ request }: { request: CropRequest }) {
     setBusy(true);
     setError('');
     try {
-      answer.current = await pictureFor(spec, file, loaded.picture, rect);
+      const picture = await pictureFor(spec, file, loaded.picture, rect);
+      if (named) {
+        // the name's rule first, here; then the save, whose refusal (the name taken, the group full) keeps the dialog up
+        const fault = named.fault(name);
+        if (fault) throw new Error(fault);
+        await named.save(picture, name);
+      }
+      answer.current = picture;
       close();
     } catch (err) {
       setError(messageOf(err));
@@ -242,7 +252,7 @@ function CropBox({ request }: { request: CropRequest }) {
     const whole = !spec.size && isWhole(rect, width, height) && file.size <= spec.max;
     // a file the browser gave no type goes up as whatever its first bytes say: no word for it here
     goes = spec.size
-      ? `goes up as a ${out.width}×${out.height} jpeg`
+      ? `goes up as a ${out.width}×${out.height} ${formatWord(spec.type ?? 'image/jpeg')}`
       : whole
         ? `goes up as it is: ${out.width}×${out.height}${file.type ? ` ${formatWord(file.type)}` : ''}`
         : `goes up cut to ${out.width}×${out.height} ${formatWord(assetType(file))}`;
@@ -347,6 +357,38 @@ function CropBox({ request }: { request: CropRequest }) {
         {goes}
       </p>
 
+      {named && (
+        // the name it goes up under: `:name:` in the chat. enter is `save`
+        <div className="mt-3 flex flex-col gap-1">
+          <label htmlFor="crop-name" className="text-sm font-semibold">
+            name
+          </label>
+          <div className="flex items-center gap-1 text-textTertiary">
+            <span aria-hidden>:</span>
+            <input
+              id="crop-name"
+              value={name}
+              onChange={(e) => setName(named.clean(e.target.value))}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+                e.preventDefault();
+                void use();
+              }}
+              placeholder="name"
+              maxLength={32}
+              autoComplete="off"
+              spellCheck={false}
+              aria-describedby="crop-name-hint"
+              className={cn(INPUT, 'w-auto min-w-0 flex-1')}
+            />
+            <span aria-hidden>:</span>
+          </div>
+          <p id="crop-name-hint" className="text-xs text-textTertiary">
+            {named.rule}
+          </p>
+        </div>
+      )}
+
       {/* left: another picture (the same request again over the new file, so it starts fresh; a picker shut with
           nothing keeps this one) and what went wrong. right: cancel and use it */}
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
@@ -381,7 +423,7 @@ function CropBox({ request }: { request: CropRequest }) {
             cancel
           </button>
           <Button id="crop-use" variant="primary" className="px-4 py-2" disabled={!loaded || !rect || busy} onClick={() => void use()}>
-            {busy ? 'cutting…' : 'use it'}
+            {named ? (busy ? 'saving…' : 'save') : busy ? 'cutting…' : 'use it'}
           </Button>
         </div>
       </div>

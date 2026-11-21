@@ -27,6 +27,7 @@ import { Button } from '@/shared-components/Button';
 import { ChatLineShape, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ReactionChips } from '@/shared-components/Reactions';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
+import { useEmoteComplete } from '@/shared-components/EmoteComplete';
 import { Face } from '@/shared-components/Face';
 import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
 import { LinkedText } from '@/shared-components/LinkedText';
@@ -735,6 +736,8 @@ export function ChatPanel({
   const wait = useCountdown(useAtomValue(room.waitAtom));
   // a guest is drawing this room somewhere else: this panel, the one that holds the room open, stands aside
   const aside = useAtomValue(room.guestAtom) && !guest;
+  // the box's `:` list of the login's emotes, a drop-up over the box (EmoteComplete.tsx)
+  const emotes = useEmoteComplete({ value: draft, onChange: (next) => room.setDraft(next), input: textRef, id: 'chat-emotes' });
 
   // The inputs that change while mounted: the room, the owner (going live) and the login.
   // Nothing opens until /api/me has answered, so the first hello is the right one.
@@ -1051,7 +1054,9 @@ export function ChatPanel({
                 ))}
               </div>
             )}
-            <div className="flex items-center gap-2">
+            {/* `relative`: the emote list stands over this row (EmoteComplete.tsx) */}
+            <div className="relative flex items-center gap-2">
+              {emotes.list}
               <Tooltip content={images.length >= MAX_CHAT_IMAGES ? `${MAX_CHAT_IMAGES} pictures at most` : 'add a picture'}>
                 <button
                   type="button"
@@ -1069,8 +1074,14 @@ export function ChatPanel({
                 ref={textRef}
                 id="chat-text"
                 value={draft}
-                onChange={(e) => room.setDraft(e.target.value)}
+                {...emotes.box}
+                onChange={(e) => {
+                  room.setDraft(e.target.value);
+                  emotes.box.onSelect(e);
+                }}
                 onKeyDown={(e) => {
+                  // the emote list's keys first, while it is up: the arrows walk it, enter and tab pick, escape shuts it
+                  if (emotes.box.onKeyDown(e)) return;
                   // escape lets go of the reply first, and goes no further (a sheet or a window over the chat stays up)
                   if (e.key === 'Escape' && replyTo) {
                     e.preventDefault();

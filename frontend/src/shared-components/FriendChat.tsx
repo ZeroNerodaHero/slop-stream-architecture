@@ -50,12 +50,14 @@ import { keepFocus, stuckAfterScroll, useBottomPin, useKeyboard } from '@/infra/
 import { useIsMobile } from '@/infra/mobile';
 import { compressChatImage } from '@/infra/picture';
 import { usePrefetchOnPointerDown } from '@/infra/prefetch';
+import { plainEmotes } from '@/infra/emotes';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
 import { ChatLineShape, LineActions, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ChatImages, pictureSrc } from '@/shared-components/ChatPanel';
 import { comboProps, SearchFilters, SearchHit, SearchResults, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
+import { useEmoteComplete } from '@/shared-components/EmoteComplete';
 import { LinkedText } from '@/shared-components/LinkedText';
 import { SHEET_FLICK, SHEET_MS, SHEET_SNAP, useSheetBack } from '@/shared-components/MobileSheet';
 import { panelClassName } from '@/shared-components/Panel';
@@ -316,7 +318,7 @@ function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
             {friends.map((f) => {
               const tab = dms.find((d) => d.name === f.name);
               const last = threads[f.name]?.lines.at(-1) ?? tab?.last;
-              const said = last && (last.text || (last.images.length > 0 ? 'a picture' : ''));
+              const said = last && (plainEmotes(last.text) || (last.images.length > 0 ? 'a picture' : ''));
               return (
                 <li key={f.name} className="border-b border-primaryStroke">
                   <button
@@ -649,6 +651,8 @@ export function FriendChat() {
   const draft = (name && drafts[name]) || '';
   const pictures = (name && pending[name]) || [];
   const replyTo = (name && replies[name]) || null;
+  // the box's `:` list of the login's emotes, a drop-up over the box (EmoteComplete.tsx)
+  const emotes = useEmoteComplete({ value: draft, onChange: (next) => setDraft(next), input, id: 'friend-chat-emotes' });
   // the hits over the lines: a search's, while the thread it asked is the one on screen
   const hits = results?.name === name ? results : null;
   // the box's words and the filter words, the room chat's; submitting asks the thread on screen. `from:` is one of the two, each with their face
@@ -1229,12 +1233,19 @@ export function FriendChat() {
                   className="hidden"
                   onChange={(e) => void pickPictures(e.target.files)}
                 />
+                {emotes.list}
                 <input
                   ref={input}
                   id="friend-chat-text"
                   value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
+                  {...emotes.box}
+                  onChange={(e) => {
+                    setDraft(e.target.value);
+                    emotes.box.onSelect(e);
+                  }}
                   onKeyDown={(e) => {
+                    // the emote list's keys first, while it is up: enter and tab pick there, and do not send
+                    if (emotes.box.onKeyDown(e)) return;
                     if (e.key === 'Escape') {
                       e.stopPropagation();
                       // a reply is let go of first; the window goes on the next

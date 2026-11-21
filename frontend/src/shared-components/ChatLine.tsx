@@ -13,6 +13,7 @@ import {
 import { createPortal } from 'react-dom';
 
 import type { ChatStyle } from '@/infra/atoms/settings-atoms';
+import { plainEmotes } from '@/infra/emotes';
 import { Face } from '@/shared-components/Face';
 import type { Reaction } from '@/shared-components/reaction-list';
 import { ReactionPicker } from '@/shared-components/Reactions';
@@ -412,7 +413,8 @@ export function LineActions({
 }) {
   const items: LineMenuItem[] = [];
   if (onReply) items.push({ key: 'reply', label: 'reply', onPick: onReply });
-  if (text) items.push({ key: 'copy', label: 'copy text', onPick: () => void navigator.clipboard?.writeText(text).catch(() => undefined) });
+  // an emote copies as its `:name:`, which a box of the login's turns back into the emote (emotes.ts `encodeEmotes`)
+  if (text) items.push({ key: 'copy', label: 'copy text', onPick: () => void navigator.clipboard?.writeText(plainEmotes(text)).catch(() => undefined) });
   items.push(...menu);
   return (
     <>
@@ -445,9 +447,9 @@ export interface Quoted {
   gone?: boolean;
 }
 
-/** A quote's words: the start of the line on one line, or its pictures when it had no words. */
+/** A quote's words: the start of the line on one line (an emote as its `:name:`), or its pictures when it had no words. */
 export function quoteWords(q: Pick<Quoted, 'text' | 'images'>): string {
-  if (q.text) return q.text.replace(/\s+/g, ' ');
+  if (q.text) return plainEmotes(q.text).replace(/\s+/g, ' ');
   if (q.images > 1) return `${q.images} pictures`;
   if (q.images === 1) return 'a picture';
   return '';

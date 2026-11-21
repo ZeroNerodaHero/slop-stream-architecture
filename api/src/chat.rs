@@ -948,11 +948,12 @@ impl Limiter {
 fn parse_say(text: String, image: Option<String>, images: Vec<String>) -> Result<Option<(String, Vec<String>)>, &'static str> {
     let text = clean_text(&text);
     let images = picture_ids(image, images)?;
-    let chars = text.chars().count();
+    // an emote's token counts as its `:name:`, the words the reader sees (emotes.rs); written out it is longer, to a ceiling a frame holds
+    let chars = crate::emotes::shown_chars(&text);
     if chars == 0 && images.is_empty() {
         return Ok(None);
     }
-    if chars > MAX_TEXT_CHARS {
+    if chars > MAX_TEXT_CHARS || text.chars().count() > crate::emotes::max_raw_chars(MAX_TEXT_CHARS) {
         return Err("too long");
     }
     Ok(Some((text, images)))
@@ -1052,6 +1053,9 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
         }
     }
     pictures_exist(&s.db, room, images).await?;
+    // the emotes: each token the speaker may not use (not in its group, a nick) goes back to plain `:name:` (emotes.rs)
+    let settled = crate::emotes::settle(&s.db, w.user_id.filter(|_| w.verified), text).await;
+    let text = settled.as_str();
     let reply = match reply {
         Some(id) => Some(reply_to(s, room, id).await?),
         None => None,
@@ -1222,9 +1226,10 @@ async fn on_react(
     if !is_stream_id(id) {
         return Err((NO_SUCH_LINE, None));
     }
-    if !reactions::allowed(emoji) {
+    // one off the list, or a custom emote's id written the api's way (whether this login may use it is `react`'s)
+    let Some(emoji) = reactions::shaped(emoji) else {
         return Err((reactions::NOT_A_REACTION, None));
-    }
+    };
     if let Err(wait) = s.reacts.take(speaker, at) {
         return Err((SLOW_DOWN, Some((wait.as_secs_f64() * 1000.0).ceil() as u64)));
     }
@@ -1235,7 +1240,7 @@ async fn on_react(
         }
     }
     let Some(w) = who.as_ref() else { return Err(("chat is busy, try again", None)) };
-    react(s, room, server, w, id, emoji, on).await.map_err(|why| (why, None))
+    react(s, room, server, w, id, &emoji, on).await.map_err(|why| (why, None))
 }
 
 /// A login's `emoji` on the line `id` of `room`, or off it. Only a login reacts (the row is an
@@ -1268,6 +1273,17 @@ async fn react(s: &ChatState, room: &str, server: Option<&str>, w: &Who, id: &st
         match stream_refusal(s, room, w).await {
             None => {}
             Some(Refused::Wait(words, _) | Refused::Words(words)) => return Err(words),
+        }
+    }
+    // a custom emote is its group's members' (emotes.rs), here as in a line
+    if on {
+        match reactions::may_put(&s.db, user, emoji).await {
+            Ok(true) => {}
+            Ok(false) => return Err(reactions::NOT_YOURS),
+            Err(e) => {
+                log::warn!("{room}: reaction emote: {e}");
+                return Err("chat is busy, try again");
+            }
         }
     }
     if on {

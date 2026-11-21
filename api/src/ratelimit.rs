@@ -79,7 +79,7 @@ pub(crate) const OAUTH: Rule = rule("oauth", 30, 60, Key::Ip);
 /// A group's moderation and setup: kick, timeout, ban, roles, owners, channels, access.
 pub(crate) const MODERATE: Rule = rule("moderate", 120, 600, Key::Who);
 /// Anything that puts a file in the bucket: avatar, card pictures, offline picture,
-/// scene assets, about page and its files, a group's icon and banner, a chat image.
+/// scene assets, about page and its files, a group's icon and banner, a chat image, a group's emote.
 pub(crate) const UPLOAD: Rule = rule("upload", 60, 3600, Key::Who);
 /// Going live: a video probe and a session row each.
 pub(crate) const GO_LIVE: Rule = rule("go-live", 10, 600, Key::Who);
@@ -137,7 +137,8 @@ fn is_upload(method: &Method, path: &str) -> bool {
                 | "/api/groups/{group}/icon"
                 | "/api/groups/{group}/banner"
         );
-    put_file || (method == Method::POST && path == "/api/chat-images")
+    let post_file = method == Method::POST && matches!(path, "/api/chat-images" | "/api/groups/{group}/emotes");
+    put_file || post_file
 }
 
 fn is_moderation(method: &Method, path: &str) -> bool {
@@ -454,6 +455,13 @@ mod tests {
         assert_eq!(api_rule(&put, "/api/streamers/{name}/about-file"), UPLOAD);
         assert_eq!(api_rule(&put, "/api/groups/{group}/icon"), UPLOAD);
         assert_eq!(api_rule(&post, "/api/chat-images"), UPLOAD);
+        // a group's emote: the upload is a file; a rename and a delete are the group's setup; the lists are reads
+        assert_eq!(api_rule(&post, "/api/groups/{group}/emotes"), UPLOAD);
+        assert_eq!(api_rule(&Method::PATCH, "/api/groups/{group}/emotes/{id}"), MODERATE);
+        assert_eq!(api_rule(&del, "/api/groups/{group}/emotes/{id}"), MODERATE);
+        assert_eq!(api_rule(&get, "/api/groups/{group}/emotes"), READ);
+        assert_eq!(api_rule(&get, "/api/emotes/mine"), READ);
+        assert_eq!(api_rule(&get, "/api/emotes/{id}"), READ);
         assert_eq!(api_rule(&post, "/api/groups/{group}/ban"), MODERATE);
         // a channel's line deleted, a voice mute and a disconnect are moderation; a member's log is a read
         assert_eq!(api_rule(&del, "/api/groups/{group}/channels/{channel}/messages/{id}"), MODERATE);
