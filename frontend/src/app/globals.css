@@ -212,3 +212,72 @@ body {
   color: rgb(var(--text-primary));
   text-shadow: none;
 }
+
+/* a boxy slider (VoiceTab.tsx's sensitivity and release delay): a square thumb on a 12px stroked track, filled
+   to the thumb in a faint blue. the fill is a hard-edged gradient up to --pct, set inline from the value; the
+   thumb's centre is never more than half its width off that edge, so the thumb always covers it. firefox draws
+   the fill itself (::-moz-range-progress) */
+@layer components {
+  .range-box {
+    appearance: none;
+    height: 16px;
+    background: transparent;
+    cursor: grab;
+  }
+  .range-box:active {
+    cursor: grabbing;
+  }
+  .range-box:focus-visible {
+    outline: 2px solid rgb(var(--primary-color));
+    outline-offset: 2px;
+  }
+  .range-box:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .range-box::-webkit-slider-runnable-track {
+    box-sizing: border-box;
+    height: 12px;
+    border: 1px solid rgb(var(--primary-stroke));
+    border-radius: 0;
+    background:
+      linear-gradient(to right, rgb(var(--primary-color) / 0.25) var(--pct, 0%), transparent var(--pct, 0%)),
+      rgb(var(--background-secondary));
+  }
+  .range-box::-moz-range-track {
+    box-sizing: border-box;
+    height: 12px;
+    border: 1px solid rgb(var(--primary-stroke));
+    border-radius: 0;
+    background: rgb(var(--background-secondary));
+  }
+  .range-box::-moz-range-progress {
+    height: 10px;
+    border-radius: 0;
+    background: rgb(var(--primary-color) / 0.25);
+  }
+  /* 16px square on a 12px track: (10px inside the border - 16px) / 2 */
+  .range-box::-webkit-slider-thumb {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    margin-top: -3px;
+    border: 0;
+    border-radius: 0;
+    background: rgb(var(--primary-color));
+  }
+  .range-box::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border: 0;
+    border-radius: 0;
+    background: rgb(var(--primary-color));
+  }
+  /* the hover colour Button.tsx's primary wears */
+  .range-box:enabled:hover::-webkit-slider-thumb {
+    background: rgb(var(--primary-color-hover));
+  }
+  .range-box:enabled:hover::-moz-range-thumb {
+    background: rgb(var(--primary-color-hover));
+  }
+}
