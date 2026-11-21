@@ -6,8 +6,9 @@
 //! Nobody joins it; a chat socket whose hello says `bot: true` wears it (chat.rs), so the
 //! pretend chatters of the fake streams can be told apart, and hidden, in the panel.
 //!
-//! Every other group is also a server. It starts with a channel called `general` and a voice
-//! channel called `voice` (`VOICE_CHANNEL`), and always keeps a voice channel. The
+//! Every other group is also a server. It starts with its home channel, a text one called
+//! `general` (renamable; `channels.home` marks it), and a voice channel called `voice`
+//! (`VOICE_CHANNEL`), and always keeps both kinds. The
 //! maker is its owner and can do everything, including name another owner. A custom role
 //! (group_mod.rs) is a name, a colour and some of those powers, never owner itself.
 //! The explorer lists them; the room is `/chat/<server>/<channel>`.
@@ -57,8 +58,9 @@ const CHANNELS_PER_SERVER: i64 = 20;
 /// Lines of each channel in `GET /api/groups/:group/messages`: what a room draws before its
 /// socket says more. The socket fills from the newest of these, so nothing falls between.
 const MESSAGES_PER_CHANNEL: usize = 100;
-/// The channel a group starts with. It is not deleted, not renamed, never kept to a role, and
-/// always text.
+/// The name of the channel a group starts with, its home channel (`channels.home`, migration
+/// 0006). The home channel is not deleted, never kept to a role, and always text; it may be
+/// renamed, and keeps all that under its new name.
 pub(crate) const GENERAL: &str = "general";
 /// The voice channel a group starts with (migration 0005 gave every older group one). Unlike
 /// `general` it may be renamed or deleted, only not while it is the server's last voice channel.
@@ -398,8 +400,8 @@ async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGrou
                 ON CONFLICT (name) DO NOTHING RETURNING name
              ),
              c AS (
-                INSERT INTO channels (server, name, about, created_by_id)
-                SELECT name, 'general', '', $6 FROM g RETURNING server
+                INSERT INTO channels (server, name, about, created_by_id, home)
+                SELECT name, $11, '', $6, true FROM g RETURNING server
              ),
              v AS (
                 INSERT INTO channels (server, name, about, created_by_id, position, kind)
@@ -418,6 +420,7 @@ async fn create(State(s): State<AppState>, Me(me): Me, body: Result<Json<NewGrou
         .bind(&title)
         .bind(tag)
         .bind(VOICE_CHANNEL)
+        .bind(GENERAL)
         .fetch_optional(&s.db)
         .await?;
         if made.is_some() {
@@ -666,6 +669,12 @@ pub(crate) async fn may_see(db: &PgPool, server: &str, channel: &str, user: Opti
     sqlx::query_scalar(&sql).bind(server).bind(user).bind(admin).bind(channel).fetch_one(db).await
 }
 
+/// Whether `channel` is the home channel of `server` (`channels.home`): `general` until it is
+/// renamed. False for a channel that is not there.
+pub(crate) async fn is_home(db: &PgPool, server: &str, channel: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM channels WHERE server = $1 AND name = $2 AND home)").bind(server).bind(channel).fetch_one(db).await
+}
+
 /// `visible_channels`, text channels only: what has lines to read and say. A voice channel
 /// is in the room's list but has no chat, so the messages, the server's chat socket, search
 /// and pins pass it by.
@@ -691,10 +700,16 @@ pub(crate) async fn may_see_text(db: &PgPool, server: &str, channel: &str, user:
 pub(crate) struct ChannelView {
     name: String,
     about: String,
-    /// The login may delete it: they made it, or they hold the channels power. Never `general`.
+    /// The group's home channel (`general` until renamed): the room's page when no channel is
+    /// asked for. Never deleted, never kept to a role.
+    home: bool,
+    /// The login may delete it: they made it, or they hold the channels power. Never the home channel.
     can_delete: bool,
-    /// Who made it, by the name they have now. Null for `general` (made with the group) and
-    /// for a maker whose account is gone. A room keeps `can_delete` right as the facts come.
+    /// The login may rename it and change its about line (`PUT .../channels/:channel`): who made
+    /// it, or the channels power. The home channel too.
+    can_edit: bool,
+    /// Who made it, by the name they have now. Null for the home channel (made with the group)
+    /// and for a maker whose account is gone. A room keeps `can_delete` right as the facts come.
     made_by: Option<String>,
     /// Seconds a member waits between their lines here (docs/groups.md). 0: none.
     cooldown: i32,
@@ -704,8 +719,8 @@ pub(crate) struct ChannelView {
     user_limit: i32,
 }
 
-/// name, about, maker's id, maker's name, cooldown, kind, user_limit
-type ChannelRow = (String, String, Option<Uuid>, Option<String>, i32, String, i32);
+/// name, about, maker's id, maker's name, cooldown, kind, user_limit, home
+type ChannelRow = (String, String, Option<Uuid>, Option<String>, i32, String, i32, bool);
 
 /// The channels of one server in their order (`position`, as the channels power last put them;
 /// oldest first until then, `general` first because it was made with the group), as the room
@@ -718,7 +733,7 @@ pub(crate) async fn channels_of(s: &AppState, server: &str, user: Option<Uuid>, 
         None => false,
     };
     let sql = format!(
-        "SELECT c.name, c.about, c.created_by_id, maker.name, c.cooldown, c.kind, c.user_limit FROM channels c
+        "SELECT c.name, c.about, c.created_by_id, maker.name, c.cooldown, c.kind, c.user_limit, c.home FROM channels c
          LEFT JOIN streamers maker ON maker.id = c.created_by_id
          WHERE c.server = $1 AND {} ORDER BY c.position, c.created_at, c.name",
         sees_sql("$2", "$3")
@@ -726,11 +741,12 @@ pub(crate) async fn channels_of(s: &AppState, server: &str, user: Option<Uuid>, 
     let rows: Vec<ChannelRow> = sqlx::query_as(&sql).bind(server).bind(user).bind(admin).fetch_all(&s.db).await?;
     Ok(rows
         .into_iter()
-        .map(|(name, about, made_by_id, made_by, cooldown, kind, user_limit)| {
+        .map(|(name, about, made_by_id, made_by, cooldown, kind, user_limit, home)| {
             let mine = user.is_some() && made_by_id == user;
-            let can_delete = name != GENERAL && (mine || may_manage || admin);
-            // `general` was made with the group: nobody's channel in particular
-            ChannelView { can_delete, made_by: made_by.filter(|_| name != GENERAL), name, about, cooldown, kind, user_limit }
+            let can_edit = mine || may_manage || admin;
+            let can_delete = !home && can_edit;
+            // the home channel was made with the group: nobody's channel in particular
+            ChannelView { home, can_delete, can_edit, made_by: made_by.filter(|_| !home), name, about, cooldown, kind, user_limit }
         })
         .collect())
 }
@@ -812,7 +828,8 @@ struct ExploreRow {
     can_channels: bool,
     channel: Option<String>,
     channel_about: Option<String>,
-    can_delete: bool,
+    can_edit: bool,
+    home: Option<bool>,
     made_by: Option<String>,
     cooldown: Option<i32>,
     kind: Option<String>,
@@ -837,7 +854,8 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for ExploreRow {
             can_channels: row.try_get("can_channels")?,
             channel: row.try_get("channel")?,
             channel_about: row.try_get("channel_about")?,
-            can_delete: row.try_get("can_delete")?,
+            can_edit: row.try_get("can_edit")?,
+            home: row.try_get("home")?,
             made_by: row.try_get("made_by")?,
             cooldown: row.try_get("cooldown")?,
             kind: row.try_get("kind")?,
@@ -881,15 +899,15 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
                     )
                 ) AS can_channels,
                 c.name AS channel, c.about AS channel_about,
-                COALESCE(c.name IS NOT NULL AND c.name <> 'general' AND (
+                COALESCE(c.name IS NOT NULL AND (
                     c.created_by_id = $1 OR $2
                     OR EXISTS (SELECT 1 FROM memberships om WHERE om.group_name = g.name AND om.user_id = $1 AND om.owner)
                     OR EXISTS (
                         SELECT 1 FROM role_members rm JOIN roles r ON r.id = rm.role_id
                         WHERE r.group_name = g.name AND rm.user_id = $1 AND (r.perms & 4) <> 0
                     )
-                ), false) AS can_delete,
-                cm.name AS made_by, c.cooldown, c.kind, c.user_limit
+                ), false) AS can_edit,
+                c.home, cm.name AS made_by, c.cooldown, c.kind, c.user_limit
          FROM groups g
          LEFT JOIN channels c ON c.server = g.name AND {}
          LEFT JOIN streamers cm ON cm.id = c.created_by_id
@@ -923,11 +941,14 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
             });
         }
         if let Some(name) = row.channel {
-            let made_by = row.made_by.filter(|_| name != GENERAL);
+            let home = row.home.unwrap_or(false);
+            let made_by = row.made_by.filter(|_| !home);
             servers.last_mut().unwrap().channels.push(ChannelView {
                 name,
                 about: row.channel_about.unwrap_or_default(),
-                can_delete: row.can_delete,
+                home,
+                can_delete: !home && row.can_edit,
+                can_edit: row.can_edit,
                 made_by,
                 cooldown: row.cooldown.unwrap_or(0),
                 kind: row.kind.unwrap_or_else(|| "text".into()),
@@ -1004,8 +1025,11 @@ async fn create_channel(
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     }
     log::info!("{}: added {kind} #{channel} to {server}", who.name);
-    tell(&s, &server, "channel", json!({ "channel": { "name": channel, "about": about, "made_by": who.name, "cooldown": 0, "kind": kind, "user_limit": 0 } })).await;
-    Ok((StatusCode::CREATED, Json(json!({ "name": channel, "about": about, "can_delete": channel != GENERAL, "made_by": who.name, "cooldown": 0, "kind": kind, "user_limit": 0 }))))
+    tell(&s, &server, "channel", json!({ "channel": { "name": channel, "about": about, "made_by": who.name, "cooldown": 0, "kind": kind, "user_limit": 0, "home": false } })).await;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "name": channel, "about": about, "home": false, "can_delete": true, "can_edit": true, "made_by": who.name, "cooldown": 0, "kind": kind, "user_limit": 0 })),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -1104,34 +1128,45 @@ async fn reorder_channels(State(s): State<AppState>, Path(group): Path<String>, 
 }
 
 #[derive(Deserialize)]
-struct ChannelName {
-    name: String,
+struct ChannelEdit {
+    /// The new name; absent keeps it.
+    #[serde(default)]
+    name: Option<String>,
+    /// The new line about it (`clean_about`, '' for none); absent keeps it.
+    #[serde(default)]
+    about: Option<String>,
 }
 
-/// `PUT /api/groups/:group/channels/:channel` `{ name }`: the channel is called `name` from now
-/// on. Who made the channel, or the channels power; `general` stays. The name goes through the
-/// door a new channel's does (the name rule, the history words, 409 for one the server has).
-/// Everything that knows the channel by its name follows it in one transaction: the row, the
-/// mutes on it (the foreign key cascades, schema.sql), the inbox rows for its lines
-/// (`notifications.room`) and the lines kept for search (`chat_lines.room`); then the chat's
-/// stream in redis is renamed, so the history reads on. → the channel as the room lists it, and
-/// a `channel_renamed` fact (`channel` the old name, `name` the new) to every room open; a page
-/// on the channel moves to the new address. The same name again is 200 and nothing.
-async fn rename_channel(
+/// `PUT /api/groups/:group/channels/:channel` `{ name?, about? }`: the channel is called `name`
+/// from now on, and its line about it is `about`; either may be left out, not both. Who made the
+/// channel, or the channels power; text or voice, the home channel too (it stays the home channel
+/// under its new name). The name goes through the door a new channel's does (the name rule, the
+/// history words, 409 for one the server has). Everything that knows the channel by its name
+/// follows it in one transaction: the row, the mutes, pins and voice stays on it (the foreign
+/// keys cascade), the inbox rows for its lines (`notifications.room`) and the lines kept for
+/// search (`chat_lines.room`); then the chat's stream in redis is renamed, so the history reads
+/// on, and whoever sits in a voice one is seated under the new name. → the channel as the room
+/// lists it; a `channel_renamed` fact (`channel` the old name, `name` the new) when the name
+/// changed, then a `channel_about` fact (`channel`, `about`) when the line did, to every room
+/// open. A page on the channel moves to the new address. Nothing changed is 200 and nothing.
+async fn edit_channel(
     State(s): State<AppState>,
     Path((group, channel)): Path<(String, String)>,
     Me(me): Me,
-    body: Result<Json<ChannelName>, JsonRejection>,
+    body: Result<Json<ChannelEdit>, JsonRejection>,
 ) -> ApiResult {
     let who = me.ok_or_else(not_logged_in)?;
     let Json(body) = body?;
     let (server, channel) = channel_names(&group, &channel)?;
-    if channel == GENERAL {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "general stays"));
+    if body.name.is_none() && body.about.is_none() {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "a name or an about"));
     }
-    let (_, name) = channel_names(&server, &body.name)?;
-    let row: Option<(Option<Uuid>, String, Option<String>)> = sqlx::query_as(
-        "SELECT c.created_by_id, c.about, maker.name FROM channels c
+    let name = match &body.name {
+        Some(raw) => channel_names(&server, raw)?.1,
+        None => channel.clone(),
+    };
+    let row: Option<ChannelRow> = sqlx::query_as(
+        "SELECT c.name, c.about, c.created_by_id, maker.name, c.cooldown, c.kind, c.user_limit, c.home FROM channels c
          LEFT JOIN streamers maker ON maker.id = c.created_by_id
          WHERE c.server = $1 AND c.name = $2",
     )
@@ -1139,70 +1174,96 @@ async fn rename_channel(
     .bind(&channel)
     .fetch_optional(&s.db)
     .await?;
-    let Some((made_by_id, about, made_by)) = row else {
+    let Some((_, was_about, made_by_id, made_by, cooldown, kind, user_limit, home)) = row else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel"));
     };
     // who made the channel, or anyone with the channels bit: an owner, that role, a site admin
     if made_by_id != Some(who.id) && !crate::group_mod::allows(&s, who.id, &server, crate::group_mod::CHANNELS).await? {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "not your channel"));
     }
-    let view = json!({ "name": name, "about": about, "can_delete": true, "made_by": made_by });
-    if name == channel {
+    let about = body.about.as_deref().map_or(was_about.clone(), clean_about);
+    let view = json!(ChannelView {
+        name: name.clone(),
+        about: about.clone(),
+        home,
+        can_delete: !home,
+        can_edit: true,
+        made_by: made_by.filter(|_| !home),
+        cooldown,
+        kind: kind.clone(),
+        user_limit,
+    });
+    let renaming = name != channel;
+    if !renaming && about == was_about {
         return Ok(Json(view));
     }
     let old_room = format!("{server}/{channel}");
     let new_room = format!("{server}/{name}");
     let mut tx = s.db.begin().await?;
-    let renamed = sqlx::query("UPDATE channels SET name = $3 WHERE server = $1 AND name = $2")
+    let done = sqlx::query("UPDATE channels SET name = $3, about = $4 WHERE server = $1 AND name = $2")
         .bind(&server)
         .bind(&channel)
         .bind(&name)
+        .bind(&about)
         .execute(&mut *tx)
         .await;
-    match renamed {
+    match done {
         // the channel went between the look and this
         Ok(done) if done.rows_affected() == 0 => return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel")),
         Ok(_) => {}
         Err(e) if crate::unique_violation(&e) => return Err(ApiError::new(StatusCode::CONFLICT, "name taken")),
         Err(e) => return Err(e.into()),
     }
-    sqlx::query("UPDATE notifications SET room = $2 WHERE kind = 'chat' AND room = $1").bind(&old_room).bind(&new_room).execute(&mut *tx).await?;
-    sqlx::query("UPDATE chat_lines SET room = $2 WHERE room = $1").bind(&old_room).bind(&new_room).execute(&mut *tx).await?;
-    tx.commit().await?;
-    // the lines in redis: the room's stream under the new key. a channel nobody has spoken in has
-    // no key, and `no such key` is that; anything else is a history that will read empty until it fills again
-    let moved: Result<(), redis::RedisError> = redis::cmd("RENAME").arg(room_key(&old_room)).arg(room_key(&new_room)).query_async(&mut s.redis.clone()).await;
-    if let Err(e) = moved {
-        if e.to_string().contains("no such key") {
-            log::debug!("{old_room}: no lines to move");
-        } else {
-            log::warn!("{old_room}: the stream was not moved to {new_room}: {e}");
-        }
+    if renaming {
+        sqlx::query("UPDATE notifications SET room = $2 WHERE kind = 'chat' AND room = $1").bind(&old_room).bind(&new_room).execute(&mut *tx).await?;
+        sqlx::query("UPDATE chat_lines SET room = $2 WHERE room = $1").bind(&old_room).bind(&new_room).execute(&mut *tx).await?;
     }
-    log::info!("{}: renamed #{channel} in {server} to #{name}", who.name);
-    tell(&s, &server, "channel_renamed", json!({ "channel": channel, "name": name })).await;
+    tx.commit().await?;
+    if renaming {
+        if kind == CHANNEL_KINDS[1] {
+            // a voice channel has no lines: who sits in it is what follows the name
+            if let Err(e) = crate::voice::follow_rename(&s, &server, &channel, &name).await {
+                log::warn!("{old_room}: the seats were not moved to {new_room}: {}", e.message());
+            }
+        } else {
+            // the lines in redis: the room's stream under the new key. a channel nobody has spoken in has
+            // no key, and `no such key` is that; anything else is a history that will read empty until it fills again
+            let moved: Result<(), redis::RedisError> = redis::cmd("RENAME").arg(room_key(&old_room)).arg(room_key(&new_room)).query_async(&mut s.redis.clone()).await;
+            if let Err(e) = moved {
+                if e.to_string().contains("no such key") {
+                    log::debug!("{old_room}: no lines to move");
+                } else {
+                    log::warn!("{old_room}: the stream was not moved to {new_room}: {e}");
+                }
+            }
+        }
+        log::info!("{}: renamed #{channel} in {server} to #{name}", who.name);
+        tell(&s, &server, "channel_renamed", json!({ "channel": channel, "name": name })).await;
+    }
+    if about != was_about {
+        log::info!("{}: changed the about of #{name} in {server}", who.name);
+        tell(&s, &server, "channel_about", json!({ "channel": name, "about": about })).await;
+    }
     Ok(Json(view))
 }
 
 /// `DELETE /api/groups/:group/channels/:channel`: who made the channel, who made the server,
-/// or an admin. `general` stays, and so does the server's last voice channel.
+/// or an admin. The home channel (`general`, under whatever name it has now) stays, and so does
+/// the server's last voice channel.
 async fn delete_channel(State(s): State<AppState>, Path((group, channel)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let who = me.ok_or_else(not_logged_in)?;
     let (server, channel) = channel_names(&group, &channel)?;
-    if channel == GENERAL {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "general stays"));
-    }
-    let row: Option<(Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
-        "SELECT c.created_by_id, g.created_by_id FROM channels c
-         JOIN groups g ON g.name = c.server WHERE c.server = $1 AND c.name = $2",
-    )
-    .bind(&server)
-    .bind(&channel)
-    .fetch_optional(&s.db)
-    .await?;
-    let Some((made_channel, _)) = row else {
+    let row: Option<(Option<Uuid>, bool)> = sqlx::query_as("SELECT created_by_id, home FROM channels WHERE server = $1 AND name = $2")
+        .bind(&server)
+        .bind(&channel)
+        .fetch_optional(&s.db)
+        .await?;
+    let Some((made_channel, home)) = row else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel"));
     };
+    if home {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "the home channel stays"));
+    }
     // who made the channel, or anyone with the channels bit: an owner, that role, a site admin
     if made_channel != Some(who.id) && !crate::group_mod::allows(&s, who.id, &server, crate::group_mod::CHANNELS).await? {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "not your channel"));
@@ -1369,7 +1430,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}/leave", post(leave))
         .route("/api/groups/{group}/primary", put(set_primary).delete(clear_primary))
         .route("/api/groups/{group}/channels", post(create_channel).put(reorder_channels))
-        .route("/api/groups/{group}/channels/{channel}", put(rename_channel).delete(delete_channel))
+        .route("/api/groups/{group}/channels/{channel}", put(edit_channel).delete(delete_channel))
         .route("/api/groups/{group}/channels/{channel}/cooldown", put(set_channel_cooldown))
         .route("/api/groups/{group}/channels/{channel}/mute", put(mute_channel).delete(unmute_channel))
         .route("/api/groups/{group}/channels/{channel}/read", put(read_channel))

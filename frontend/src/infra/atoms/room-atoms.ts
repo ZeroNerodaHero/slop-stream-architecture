@@ -17,6 +17,7 @@ import { atom } from 'jotai';
 import { api, type Channel, type GroupMember, type GroupRoom, isVoice, messageOf, statusOf, type VoiceMember } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { type ChatLine, findServerChat, serverChat } from '@/infra/atoms/chat-atoms';
+import { voiceCallAtom } from '@/infra/atoms/voice-atoms';
 import { holdPresence, onEvents, releasePresence, unwatchPresence, watchPresence } from '@/infra/events';
 import { type GroupChange, groupTopic } from '@/infra/frames';
 import { onPrefetch, prefetch, takePrefetched } from '@/infra/prefetch';
@@ -200,15 +201,25 @@ export async function setChannelOrder(server: string, order: string[]): Promise<
 }
 
 /**
- * The channel `from` is called `to` (the channels tab's pencil): the api is asked first, since
- * the name is checked at its door (taken, reserved) and the lines, mutes and inbox rows move
- * with it there; on its yes the room follows at once, as it would on the fact, which then finds
- * nothing left to do. A refusal throws, for the dialog to say why.
+ * The channel `from` is called `edit.name` and its line is `edit.about` (the channels tab's
+ * pencil, the edit dialog of the channel list and the voice panel); either may be left out.
+ * The api is asked first, since the name is checked at its door (taken, reserved) and the lines,
+ * mutes and inbox rows move with it there; on its yes the room follows at once, as it would on
+ * the facts, which then find nothing left to do. A refusal throws, for the dialog to say why.
  */
-export async function renameChannel(server: string, from: string, to: string): Promise<void> {
-  await api.renameChannel(server, from, to);
+export async function editChannel(server: string, from: string, edit: { name?: string; about?: string }): Promise<void> {
+  const done = await api.editChannel(server, from, edit);
   const room = store.get(roomAtom);
-  if (room && room.name === server) applyRename(room, from, to);
+  if (!room || room.name !== server) return;
+  applyRename(room, from, done.name);
+  applyAbout(store.get(roomAtom) ?? room, done.name, done.about);
+}
+
+/** The channel's line about it is `about` now. */
+function applyAbout(room: GroupRoom, channel: string, about: string): void {
+  const channels = room.channels ?? [];
+  if (!channels.some((c) => c.name === channel && c.about !== about)) return;
+  store.set(roomAtom, { ...room, channels: channels.map((c) => (c.name === channel ? { ...c, about } : c)) });
 }
 
 /**
@@ -231,8 +242,10 @@ function applyRename(room: GroupRoom, from: string, to: string): void {
   });
   const chat = findServerChat(room.name);
   chat?.moveChannelLines(from, to);
-  // a voice channel has no lines for the chat to follow
+  // a voice channel has no lines for the chat to follow; a call in it carries on under the new name
   if (!channels.some((c) => c.name === from && isVoice(c))) chat?.followChannel(to);
+  const call = store.get(voiceCallAtom);
+  if (call.server === room.name && call.channel === from) store.set(voiceCallAtom, { ...call, channel: to });
   store.set(channelRenamedAtom, { from, to });
 }
 
@@ -437,8 +450,8 @@ function apply(change: GroupChange): void {
       const channels = room.channels ?? [];
       if (channels.some((c) => c.name === change.channel.name)) return;
       const mine = about(change.channel.made_by ?? '');
-      const can_delete = change.channel.name !== 'general' && (mine || room.perms.channels);
-      store.set(roomAtom, { ...room, channels: [...channels, { ...change.channel, can_delete }] });
+      const can_edit = mine || room.perms.channels;
+      store.set(roomAtom, { ...room, channels: [...channels, { ...change.channel, can_delete: !change.channel.home && can_edit, can_edit }] });
       if (!isVoice(change.channel)) findServerChat(room.name)?.followChannel(change.channel.name);
       return;
     }
@@ -463,6 +476,9 @@ function apply(change: GroupChange): void {
       return;
     case 'channel_renamed':
       applyRename(room, change.channel, change.name);
+      return;
+    case 'channel_about':
+      applyAbout(room, change.channel, change.about);
       return;
     case 'channel_cooldown':
       store.set(roomAtom, { ...room, channels: (room.channels ?? []).map((c) => (c.name === change.channel ? { ...c, cooldown: change.cooldown } : c)) });

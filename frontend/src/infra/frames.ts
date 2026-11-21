@@ -38,12 +38,17 @@ export type GroupChange =
   | { what: 'left'; who: string; by: 'leave' | 'kick'; members: number }
   | { what: 'banned'; who: string; reason: string; members: number }
   | { what: 'unbanned'; who: string }
-  | { what: 'channel'; channel: { name: string; about: string; made_by: string | null; cooldown?: number; kind?: 'text' | 'voice'; user_limit?: number } }
+  | {
+      what: 'channel';
+      channel: { name: string; about: string; made_by: string | null; cooldown?: number; kind?: 'text' | 'voice'; user_limit?: number; home?: boolean };
+    }
   | { what: 'unchannel'; channel: string }
   /** The channel's cooldown is `cooldown` seconds now (0: none). */
   | { what: 'channel_cooldown'; channel: string; cooldown: number }
   /** The channel `channel` is called `name` now; its place in the order, its lines and its mutes went with it. */
   | { what: 'channel_renamed'; channel: string; name: string }
+  /** The channel's line about it is `about` now ('' for none). After a `channel_renamed` of the same edit, by the new name. */
+  | { what: 'channel_about'; channel: string; about: string }
   /** The channels put in this order, every one of them, from the top. */
   | { what: 'channel_order'; order: string[] }
   | { what: 'about'; about: string }

@@ -274,13 +274,17 @@ export interface NewGroup {
   public?: boolean;
 }
 
-/** One room inside a server. `general` is the one a group starts with. */
+/** One room inside a server. The home one (`general` until renamed) is the one a group starts with. */
 export interface Channel {
   name: string;
   about: string;
-  /** The login can delete it: they made it, or they may manage channels. Never `general`. */
+  /** The group's home channel: `/groups/:server` with no channel is it. Never deleted, never kept to a role. Absent on an older api: the one called `general`. */
+  home?: boolean;
+  /** The login can delete it: they made it, or they may manage channels. Never the home channel. */
   can_delete: boolean;
-  /** Who made it, as they are now. Null for `general`, and absent on an older api. A room keeps `can_delete` right as channels come and go. */
+  /** The login can rename it and change its about line: they made it, or they may manage channels. The home channel too. Absent on an older api: `can_delete`. */
+  can_edit?: boolean;
+  /** Who made it, as they are now. Null for the home channel, and absent on an older api. A room keeps `can_delete` right as channels come and go. */
   made_by?: string | null;
   /** Seconds a member waits between their lines here (docs/groups.md). 0 or absent: none. The owners and the channels power wait for nobody. */
   cooldown?: number;
@@ -294,6 +298,12 @@ export type ChannelKind = 'text' | 'voice';
 
 /** Whether a channel is a voice one: not listed with the chat's channels, joined from the voice panel. */
 export const isVoice = (channel: { kind?: string }): boolean => channel.kind === 'voice';
+
+/** The name of a room's home channel (`home`, or `general` from an older api): the room's page when no channel is asked for. */
+export const homeChannel = (channels: Channel[] | undefined): string => (channels ?? []).find((c) => c.home)?.name ?? 'general';
+
+/** Whether the login may rename a channel and change its about line. */
+export const canEditChannel = (channel: Channel): boolean => channel.can_edit ?? channel.can_delete;
 
 /** One person in a voice channel, as the room says: `since` unix ms. */
 export interface VoiceMember {
@@ -708,15 +718,15 @@ export const api = {
     request<VoiceGrant>('POST', `/api/groups/${encodeURIComponent(server)}/voice/${encodeURIComponent(channel)}/join`, undefined, { report: false }),
   /** The channels in this order, from the top. The channels power. A channel not named keeps its place after these. → the whole order as it now stands. */
   setChannelOrder: (server: string, order: string[]) => request<{ order: string[] }>('PUT', `/api/groups/${encodeURIComponent(server)}/channels`, { order }),
-  /** The channel is called `name` from now on, its lines, mutes and inbox rows with it. Who made it, or the channels power. `general` stays. → the channel as the room lists it. */
-  renameChannel: (server: string, channel: string, name: string) =>
-    request<Channel>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`, { name }),
-  /** Who made the channel, or someone who may manage channels. `general` stays. */
+  /** The channel is called `name` from now on (its lines, mutes, pins and inbox rows with it), and `about` is its line; either may be left out. Who made it, or the channels power; text or voice, the home channel too. → the channel as the room lists it. */
+  editChannel: (server: string, channel: string, edit: { name?: string; about?: string }) =>
+    request<Channel>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`, edit),
+  /** Who made the channel, or someone who may manage channels. The home channel stays. */
   deleteChannel: (server: string, channel: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}`),
   /** A member waits `seconds` (0 to 3600; 0 none) between their lines in the channel. The channels power. */
   setChannelCooldown: (server: string, channel: string, seconds: number) =>
     request<{ cooldown: number }>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/cooldown`, { seconds }),
-  /** Who sees the channel (docs/groups.md): kept to exactly these roles, by id, in one go; `[]` is everyone. The channels power; a role carrying a power the login lacks is out of reach. `general` stays everyone's. */
+  /** Who sees the channel (docs/groups.md): kept to exactly these roles, by id, in one go; `[]` is everyone. The channels power; a role carrying a power the login lacks is out of reach. the home channel stays everyone's. */
   setChannelRoles: (server: string, channel: string, roles: string[]) =>
     request<{ channel: string; roles: string[] }>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/roles`, { roles }),
   /** No inbox row for this channel's lines from now on, for this login (docs/notifications.md). 204, also when already muted. */
