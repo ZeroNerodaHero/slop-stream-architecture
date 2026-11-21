@@ -85,6 +85,17 @@ a click on a voice channel in the panel puts `?voice=<channel>` on the page, and
 - **in it:** a tile per person, their camera or their face, a ring while their mic's level says they talk, their mute and deafen (and a server mute, red, once the room says it). a shared screen is a tile of its own. a click on a tile puts it big with the rest in a strip under it; a click on it again puts the grid back.
 - **the bar:** mic, deafen, camera, screen (where the browser can share one), the voice tab, leave. a phone's is pinned to the foot over the safe area, with the tiles in one or two columns.
 
+## the mic
+
+the page opens the mic once ([voice-atoms.ts](../frontend/src/infra/atoms/voice-atoms.ts), "the mic"), for the call and for the user modal's voice tab together: whoever holds it shares the one getUserMedia stream and the one AudioContext, and the last to let go stops the tracks and closes the context. raw mic → rnnoise (voice isolation) → the noise gate ([voice-gate-worklet.js](../frontend/src/infra/voice-gate-worklet.js)) → the track m-line 0 sends. the tab's meter reads an analyser before the gate. a new device or a new setting opens a new mic and swaps it onto the call's sender (`replaceTrack`): no new offer, the seat stays.
+
+the voice tab's settings, kept in this browser (`settings.voice*` in localStorage):
+
+- **voice isolation** (on by default): rnnoise in an AudioWorklet (`@sapphi-red/web-noise-suppressor`), its wasm fetched the first time it is on. the browser's `noiseSuppression` is off while it is on, so the voice is not cleaned twice. needs a 48kHz context; where it cannot run (no web audio, firefox at another rate) the tab says so and the browser's suppression is used.
+- **echo cancellation** and **auto gain**: getUserMedia constraints, on by default.
+- **input mode**: voice activity, where the gate opens over the input sensitivity (dB on the meter's scale, a mark on the meter; all the way left is always open), or push to talk.
+- **push to talk**: a key (`KeyboardEvent.code`, default backtick) and a release delay (default 200ms). while in a call the mic's track is enabled only while the key is down, not while typing in a box. the page's own keys only: it does nothing while another window or tab has the focus, and losing the focus lets the key go. mute and deafen are over both modes. the voice panel's mic button goes green while the key has the mic open.
+
 ## who is in voice
 
 the voice server tells the api, and the api keeps it in redis:
@@ -105,6 +116,7 @@ the facts go to `group:<server>` on `/events`, both `{who, uid, channel}`: `voic
 | `voice:<server>` | hash, user id to `{name, channel, seat, since, beat, session}` (`since` and `beat` unix ms, `session` the row's id) | while anyone is in voice there |
 | `voiceof:<uid>` | `<server>/<channel>` this person is in | until they leave or are swept |
 | `voice:servers` | set of servers that have had anyone in voice, for the sweep | a server goes when its hash is empty |
+| `voicemuted:<server>` | set of user ids a moderator muted in this server's voice | until a moderator unmutes them |
 
 ### voice_sessions
 
@@ -121,6 +133,16 @@ one row per stay: `id`, `server`, `channel`, `user_id`, `joined_at`, `left_at` (
 neither the secret nor a grant is ever logged.
 
 join looks at VOICE_SECRET too, last: with voice off it hands out no grants and answers 503 `voice is off`, which the page shows as a quiet line. a grant brought to a voice server with no secret is still `voice is not open`.
+
+## moderating voice
+
+a moderator (the kick power, or the voice power; an owner, a site admin) can mute someone's mic or take them out of voice, from the voice row's card or the member's info (`GroupMod.tsx`). never themselves, an owner only by an owner.
+
+- `POST /api/groups/:group/voice-mute {name, muted}` puts their id in `voicemuted:<server>` (or takes it out), tells the voice server, and sends a `voice_mute {who, uid, muted}` fact. the room's `voice` marks the seat `muted: true`, as does the `voice` fact when they come back. the voice server drops every packet from a muted mic, so the page cannot lift it; a redeem says `muted` for someone muted before they came.
+- `POST /api/groups/:group/voice-disconnect {name}` ends their socket with `{"error":"disconnected"}` and takes their seat out of the room at once. they may join again.
+- a kick, a ban and a timeout drop them out of voice the same way. `may_talk` refuses a timed out member (403 `timed out`) until it ends, and a kicked or banned one is no member.
+
+the api tells the voice server on `POST /internal/voice {action: mute|unmute|disconnect, user_id, server}` at VOICE_URL (`http://voice:7881`), with `X-Voice-Secret`: the guard of the internal routes above, on its side. caddy sends `/voice` alone there, so `/internal/voice` is not reachable from outside. a voice server that does not answer is a warning: the mute stands in redis for the next join, and a disconnect still takes the seat out of the room.
 
 ## limits
 

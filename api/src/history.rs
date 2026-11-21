@@ -621,6 +621,29 @@ pub(crate) async fn line_at(db: &PgPool, redis: &mut redis::aio::ConnectionManag
     Ok(row.map(line_of))
 }
 
+/// One account's verified lines in any of `rooms`, newest first, `limit` at most, from the kept
+/// rows: strictly before `before` (`(ms, seq, room)`, the order they come in) when given. → each
+/// with its room. A group's member log (group_mod.rs `member_messages`) adds what redis has.
+pub(crate) async fn by_account(db: &PgPool, rooms: &[String], user: Uuid, before: Option<(i64, i64, &str)>, limit: i64) -> Result<Vec<(String, Line)>, sqlx::Error> {
+    let sql = format!(
+        "SELECT {LINE_COLUMNS} FROM {LINE_TABLES}
+         WHERE l.room = ANY($1) AND l.user_id = $2 AND l.verified
+           AND (NOT $3 OR ((EXTRACT(EPOCH FROM l.at) * 1000)::bigint, l.seq, l.room) < ($4, $5, $6))
+         ORDER BY l.at DESC, l.seq DESC, l.room DESC LIMIT $7"
+    );
+    let rows: Vec<LineRow> = sqlx::query_as(&sql)
+        .bind(rooms)
+        .bind(user)
+        .bind(before.is_some())
+        .bind(before.map_or(0, |b| b.0))
+        .bind(before.map_or(0, |b| b.1))
+        .bind(before.map_or("", |b| b.2))
+        .bind(limit)
+        .fetch_all(db)
+        .await?;
+    Ok(rows.into_iter().map(|row| (row.10.clone(), line_of(row))).collect())
+}
+
 async fn pg_older(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, limit: i64) -> Result<Vec<Line>, sqlx::Error> {
     let sql = format!(
         "SELECT {LINE_COLUMNS} FROM {LINE_TABLES}
@@ -954,6 +977,47 @@ mod tests {
         let stranger = row(&pool, &alice_name, Some("stranger-hash")).await;
         sqlx::query("UPDATE streamers SET avatar_at = to_timestamp(1700000000) WHERE id = $1").bind(stranger).execute(&pool).await.unwrap();
         assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, None, "a stranger on the freed name is nobody's picture on the account's words");
+    }
+
+    /// A group member's log (group_mod.rs `member_messages`): only their verified lines, only in
+    /// the rooms asked, newest first by (ms, seq, room), and a cursor goes on strictly after it.
+    /// `TEST_DATABASE_URL=… cargo test -p api -- --ignored a_members_kept_lines` against a throwaway postgres.
+    #[tokio::test]
+    #[ignore]
+    async fn a_members_kept_lines_come_newest_first_from_the_rooms_asked() {
+        use crate::auth::tests::{row, test_db};
+
+        let pool = test_db().await;
+        let run = std::process::id();
+        let g = format!("modlog{run}");
+        let (general, clips, hidden) = (format!("{g}/general"), format!("{g}/clips"), format!("{g}/hidden"));
+        let al_name = format!("al{run}");
+        let al = row(&pool, &al_name, Some("h")).await;
+        let bo = row(&pool, &format!("bo{run}"), Some("h")).await;
+        let quote = Reply { id: "1729000000000-0".into(), from: "bo".into(), text: "hi al".into(), streamer: false, verified: true, avatar: None, images: 0 };
+        store(&pool, &general, "1729000000000-0", "bo", Some(bo), "hi al", None, false, true, &[], None).await.unwrap();
+        store(&pool, &general, "1729000000001-0", &al_name, Some(al), "one", None, false, true, &[], Some(&quote)).await.unwrap();
+        store(&pool, &clips, "1729000000002-0", &al_name, Some(al), "two", None, false, true, &[], None).await.unwrap();
+        store(&pool, &general, "1729000000002-0", &al_name, Some(al), "three", None, false, true, &[], None).await.unwrap();
+        // a nick wearing the name: not theirs
+        store(&pool, &general, "1729000000003-0", &al_name, None, "nick", None, false, false, &[], None).await.unwrap();
+        // a channel the moderator does not see
+        store(&pool, &hidden, "1729000000004-0", &al_name, Some(al), "secret", None, false, true, &[], None).await.unwrap();
+
+        let rooms = vec![general.clone(), clips.clone()];
+        let all = by_account(&pool, &rooms, al, None, 50).await.unwrap();
+        let got: Vec<(&str, &str)> = all.iter().map(|(room, l)| (room.as_str(), l.text.as_str())).collect();
+        assert_eq!(got, vec![(general.as_str(), "three"), (clips.as_str(), "two"), (general.as_str(), "one")]);
+        let reply = all[2].1.reply.as_ref().expect("the reply's quote rides along");
+        assert_eq!((reply.from.as_str(), reply.text.as_str()), ("bo", "hi al"));
+
+        // a page of one, then on from its last line
+        let first = by_account(&pool, &rooms, al, None, 1).await.unwrap();
+        assert_eq!(first[0].1.text, "three");
+        let rest = by_account(&pool, &rooms, al, Some((1729000000002, 0, general.as_str())), 50).await.unwrap();
+        assert_eq!(rest.iter().map(|(_, l)| l.text.as_str()).collect::<Vec<_>>(), vec!["two", "one"]);
+        let last = by_account(&pool, &rooms, al, Some((1729000000001, 0, general.as_str())), 50).await.unwrap();
+        assert!(last.is_empty());
     }
 
     /// The ids a search of `room` finds, through the query `search_room` runs, newest first.

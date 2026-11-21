@@ -114,7 +114,7 @@ pub(crate) struct AppState {
     /// The pages' error reports. None when DEBUG_DATABASE_URL is empty. See debug.rs.
     pub(crate) debug: Option<PgPool>,
     pub(crate) redis: ConnectionManager,
-    http: reqwest::Client,
+    pub(crate) http: reqwest::Client,
     video_url: String,
     /// Names starting with this are the fake streams of `video dummy`.
     pub(crate) dummy_prefix: String,
@@ -606,6 +606,7 @@ async fn get_streamer(State(s): State<AppState>, Name(name): Name, me: Me) -> Ap
     Ok(Json(json!({
         "name": p.name, "bio": p.bio, "avatar": p.avatar, "verified": p.verified, "oauth_verified": p.oauth_verified, "presence": presence, "thumbs": thumbs,
         "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials, "about": p.about,
+        "welcome_on": p.welcome_on, "welcome": p.welcome,
         "followers": follows.followers, "following": follows.following, "follows_you": follows.follows_you,
         "last_live": last_live, "joined_at": p.joined, "badge": badge,
     })))
@@ -971,6 +972,7 @@ async fn watch(State(s): State<AppState>, Name(name): Name, me: Me) -> ApiResult
     Ok(Json(json!({
         "url": WS_PATH, "name": name, "bio": p.bio, "live": live, "verified": verified, "oauth_verified": oauth_verified, "avatar": p.avatar, "presence": presence,
         "offline": p.offline, "offline_note": p.offline_note, "socials": p.socials, "about": p.about,
+        "welcome_on": p.welcome_on, "welcome": p.welcome,
         "followers": follows.followers, "following": follows.following, "joined_at": p.joined, "badge": badge,
         "can_moderate": can_moderate,
     })))

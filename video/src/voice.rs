@@ -50,6 +50,14 @@
 //! cloud firewall), one that did is "voice lost its connection".
 //! at most 4 voice peers per address, and /ws is rate limited per address like the stream's.
 //!
+//! a moderator's word comes from the api, inside the compose network only: `POST /internal/voice`
+//!   {"action":"mute"|"unmute"|"disconnect","user_id":"<uuid>","server":"<name>"}
+//! with X-Voice-Secret, never through caddy (which sends `/voice` alone here, and always sets
+//! X-Forwarded-For: such a request is a 404). mute stops carrying that person's mic to anyone
+//! (their packets are dropped here, so they cannot lift it from the page), unmute carries it
+//! again, disconnect ends their socket with {"error":"disconnected"}. a redeem says `muted` for
+//! someone muted before they came. → {"seats": n}, how many seats it touched.
+//!
 //! who is in voice lives in the api (docs/voice.md), and we keep it current: `attached`
 //! once a granted person has their answer, `left` when their seat frees, and every 15s one
 //! `beat` naming everyone granted we have seated. a box that dies says nothing, and the api's
@@ -66,7 +74,8 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::http::StatusCode;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{watch, Notify};
@@ -139,6 +148,9 @@ struct Redeemed {
     name: String,
     server: String,
     channel: String,
+    /// a moderator muted them before they came (the api's `voicemuted:<server>`)
+    #[serde(default)]
+    muted: bool,
 }
 
 impl Api {
@@ -230,6 +242,10 @@ struct Sitter {
     /// tells two people in the same seat apart, one after the other
     id: u64,
     mic: Arc<TrackLocalStaticRTP>,
+    /// a moderator's mute: their mic's packets go nowhere while it is set
+    muted: Arc<AtomicBool>,
+    /// a moderator's disconnect: their socket ends when this is told
+    kick: Arc<Notify>,
     /// their camera and screen, and what their page says of itself
     show: Show,
 }
@@ -280,6 +296,64 @@ impl Show {
             deaf: false,
         }
     }
+}
+
+/// what a moderator asks of a seat (`POST /internal/voice`)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Action {
+    Mute,
+    Unmute,
+    Disconnect,
+}
+
+#[derive(Deserialize)]
+struct Order {
+    action: Action,
+    user_id: String,
+    server: String,
+}
+
+impl Rooms {
+    /// `action` on every seat `uid` holds in `server`'s rooms (a second tab is a second seat). → how many
+    fn moderate(&self, uid: &str, server: &str, action: Action) -> usize {
+        let mut n = 0;
+        for (name, room) in &self.rooms {
+            if name.split_once('/').is_none_or(|(s, _)| s != server) {
+                continue;
+            }
+            for sitter in room.seats.0.iter().flatten().filter(|s| s.uid.as_deref() == Some(uid)) {
+                match action {
+                    Action::Mute => sitter.muted.store(true, Ordering::SeqCst),
+                    Action::Unmute => sitter.muted.store(false, Ordering::SeqCst),
+                    // a permit if the socket is not waiting yet: it ends at its next look
+                    Action::Disconnect => sitter.kick.notify_one(),
+                }
+                n += 1;
+            }
+        }
+        n
+    }
+}
+
+/// whether two strings are the same, in a time that says nothing about where they differ (the
+/// length aside): every byte is looked at, with no early way out
+fn same(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// the gate on `/internal/voice`, the api's voice.rs `inside`: 404 for anything caddy passed (it
+/// always sets X-Forwarded-For), 503 with no secret, 403 for a wrong or missing X-Voice-Secret
+fn inside(headers: &HeaderMap, secret: Option<&str>) -> Result<(), StatusCode> {
+    if headers.contains_key("x-forwarded-for") {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let secret = secret.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let given = headers.get("x-voice-secret").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if given.is_empty() || !same(given, secret) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(())
 }
 
 /// the seats of a room. each comer takes the lowest free one.
@@ -468,6 +542,8 @@ pub async fn run() -> anyhow::Result<()> {
         .route("/ws", get(ws))
         // per address, per minute, the stream's counts (limits.rs)
         .route_layer(axum::middleware::from_fn_with_state(limits::Limits::default(), limits::layer))
+        // the api's, inside only and behind the secret: not counted with the pages' requests
+        .route("/internal/voice", post(moderate))
         .with_state(voice);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], ws_port));
@@ -486,6 +562,16 @@ pub async fn run() -> anyhow::Result<()> {
         })
         .await?;
     Ok(())
+}
+
+/// `POST /internal/voice {action, user_id, server}`: a moderator's word, from the api (the
+/// module's head). → {"seats": n}; 400 for a body that does not read.
+async fn moderate(State(voice): State<Voice>, headers: HeaderMap, body: Result<Json<Order>, axum::extract::rejection::JsonRejection>) -> Result<Json<serde_json::Value>, StatusCode> {
+    inside(&headers, voice.api.secret.as_deref())?;
+    let Json(order) = body.map_err(|_| StatusCode::BAD_REQUEST)?;
+    let n = voice.state.lock().unwrap_or_else(|e| e.into_inner()).moderate(&order.user_id, &order.server, order.action);
+    log::info!("voice: {:?} on {n} seat(s) in {}", order.action, order.server);
+    Ok(Json(serde_json::json!({ "seats": n })))
 }
 
 async fn health(State(voice): State<Voice>) -> Json<serde_json::Value> {
@@ -519,6 +605,16 @@ async fn ws(
         .max_message_size(2 * MAX_SDP_BYTES)
         .max_frame_size(2 * MAX_SDP_BYTES)
         .on_upgrade(move |socket| handle(voice, socket, ip))
+}
+
+/// a seat just taken: its number, the mic the others hear it by, the room's seats to follow, and
+/// the moderator's two handles on it
+struct Sat {
+    seat: usize,
+    mic: Arc<TrackLocalStaticRTP>,
+    seats: watch::Receiver<Snapshot>,
+    muted: Arc<AtomicBool>,
+    kick: Arc<Notify>,
 }
 
 /// a seat and an address slot, given back on drop however the socket ends
@@ -563,7 +659,7 @@ impl Voice {
     }
 
     /// the lowest free seat in `name` with a new mic track, and the room's seats to follow
-    fn sit(&self, held: &mut Held, name: &str, user: &str, uid: Option<&str>) -> Option<(usize, Arc<TrackLocalStaticRTP>, watch::Receiver<Snapshot>)> {
+    fn sit(&self, held: &mut Held, name: &str, user: &str, uid: Option<&str>, muted: bool) -> Option<Sat> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let room = state.rooms.entry(name.to_owned()).or_insert_with(|| Room {
@@ -571,7 +667,16 @@ impl Voice {
             tx: watch::Sender::new(Arc::new(Vec::new())),
         });
         let mic = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("mic{id}"), "voice".to_owned()));
-        let sitter = Sitter { user: user.to_owned(), uid: uid.map(str::to_owned), id, mic: mic.clone(), show: Show::new(id) };
+        let (muted, kick) = (Arc::new(AtomicBool::new(muted)), Arc::new(Notify::new()));
+        let sitter = Sitter {
+            user: user.to_owned(),
+            uid: uid.map(str::to_owned),
+            id,
+            mic: mic.clone(),
+            muted: muted.clone(),
+            kick: kick.clone(),
+            show: Show::new(id),
+        };
         let Some(seat) = room.seats.take(sitter) else {
             if room.seats.taken() == 0 {
                 state.rooms.remove(name);
@@ -581,7 +686,7 @@ impl Voice {
         held.seat = Some((name.to_owned(), seat));
         let snapshot = Arc::new(room.seats.snapshot());
         room.tx.send_replace(snapshot);
-        Some((seat, mic, room.tx.subscribe()))
+        Some(Sat { seat, mic, seats: room.tx.subscribe(), muted, kick })
     }
 
     /// `change` on what the sitter `id` in `seat` of `name` shows, told to the room when it
@@ -728,26 +833,26 @@ async fn handle(voice: Voice, mut socket: WebSocket, ip: IpAddr) {
     let Some(mut held) = voice.hold_ip(ip) else {
         return refuse(&mut socket, "too many voice peers from this address").await;
     };
-    let (room, user, presence) = match claim {
-        Claim::Open { room, user } => (room, user, None),
+    let (room, user, presence, muted) = match claim {
+        Claim::Open { room, user } => (room, user, None, false),
         Claim::Grant(grant) => match voice.api.redeem(&grant).await {
             Ok(who) => {
                 let room = format!("{}/{}", who.server, who.channel);
                 let presence = Presence { api: voice.api.clone(), user_id: who.user_id, server: who.server, channel: who.channel };
-                (room, who.name, Some(Arc::new(presence)))
+                (room, who.name, Some(Arc::new(presence)), who.muted)
             }
             Err(e) => return refuse(&mut socket, e).await,
         },
     };
     let uid = presence.as_ref().map(|p| p.user_id.as_str());
-    let Some((seat, mic, mut seats)) = voice.sit(&mut held, &room, &user, uid) else {
+    let Some(mut sat) = voice.sit(&mut held, &room, &user, uid, muted) else {
         return refuse(&mut socket, "room full").await;
     };
-    let tag = format!("voice {room} seat {seat}");
+    let tag = format!("voice {room} seat {}", sat.seat);
     log::info!("{tag}: {user} joined");
     let mut attached = None;
     let joined = Joined { room: &room, labels: read_labels(&text) };
-    talk(&voice, &mut socket, &tag, sdp, &offer, seat, mic, &mut seats, presence.clone(), &mut attached, joined).await;
+    talk(&voice, &mut socket, &tag, sdp, &offer, &mut sat, presence.clone(), &mut attached, joined).await;
     log::info!("{tag}: {user} left");
     drop(held);
     // the seat is free: `left`, once `attached` is through so the two cannot cross
@@ -780,13 +885,12 @@ async fn talk(
     tag: &str,
     sdp: String,
     offer: &[Section],
-    seat: usize,
-    mic: Arc<TrackLocalStaticRTP>,
-    seats: &mut watch::Receiver<Snapshot>,
+    sat: &mut Sat,
     presence: Option<Arc<Presence>>,
     attached: &mut Option<tokio::task::JoinHandle<()>>,
     joined: Joined<'_>,
 ) {
+    let (seat, seats) = (sat.seat, &mut sat.seats);
     // who sits here: the id, and the tracks this page's camera and screen go out on
     let Some(me) = seats.borrow().get(seat).cloned().flatten() else {
         return refuse(socket, "server error").await;
@@ -837,19 +941,25 @@ async fn talk(
 
     // packets from the mic's section go to the mic track, which other peers' seats carry.
     // header extensions carry ids from this peer's session, so drop them
+    // a moderator's mute drops them here, read packet by packet so it bites at once
     let mic_mid = offer[0].mid.clone();
-    let writer = mic.clone();
+    let writer = sat.mic.clone();
+    let muted = sat.muted.clone();
     let shown = Shower { kinds: Arc::new(Mutex::new(kinds.clone())), show: me.show.clone(), peer: Arc::downgrade(&peer) };
     let showing = shown.clone();
     peer.on_track(Box::new(move |track, _, transceiver| {
         let mic = writer.clone();
         let mic_mid = mic_mid.clone();
+        let muted = muted.clone();
         let showing = showing.clone();
         tokio::spawn(async move {
             if transceiver.mid().map(|m| m.to_string()) != mic_mid {
                 return showing.forward(track, transceiver.mid().map(|m| m.to_string())).await;
             }
             while let Ok((mut packet, _)) = track.read_rtp().await {
+                if muted.load(Ordering::SeqCst) {
+                    continue;
+                }
                 packet.header.extension = false;
                 packet.header.extensions.clear();
                 let _ = mic.write_rtp(&packet).await;
@@ -918,6 +1028,11 @@ async fn talk(
                     }
                     _ => continue,
                 },
+                _ = sat.kick.notified() => {
+                    log::info!("{tag}: disconnected by a moderator");
+                    refuse(socket, "disconnected").await;
+                    break;
+                }
                 _ = dead.notified() => {
                     // the page hears why, rather than a socket that just closes
                     let why = gone_word(linked.load(Ordering::SeqCst), voice.udp_port);
@@ -1253,6 +1368,77 @@ mod tests {
         offer(&lines)
     }
 
+    fn sitter(user: &str, uid: Option<&str>) -> Sitter {
+        let mic = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("mic-{user}"), "voice".to_owned()));
+        Sitter { user: user.to_owned(), uid: uid.map(str::to_owned), id: 0, mic, muted: Arc::default(), kick: Arc::new(Notify::new()), show: Show::new(0) }
+    }
+
+    fn room_of(sitters: Vec<Sitter>) -> Room {
+        let mut seats = Seats::new();
+        for s in sitters {
+            seats.take(s);
+        }
+        Room { seats, tx: watch::Sender::new(Arc::new(Vec::new())) }
+    }
+
+    #[test]
+    fn a_mute_reaches_every_seat_of_theirs_in_that_server_and_no_other() {
+        let mut rooms = Rooms::default();
+        rooms.rooms.insert("g/lounge".into(), room_of(vec![sitter("al", Some("u1")), sitter("bo", Some("u2"))]));
+        // a second tab of theirs in another of the server's channels
+        rooms.rooms.insert("g/afk".into(), room_of(vec![sitter("al", Some("u1"))]));
+        // the same account in another server: not this server's mute
+        rooms.rooms.insert("h/lounge".into(), room_of(vec![sitter("al", Some("u1"))]));
+        // a dev-open join has no account
+        rooms.rooms.insert("g/dev".into(), room_of(vec![sitter("u1", None)]));
+        let muted = |rooms: &Rooms, room: &str, seat: usize| rooms.rooms[room].seats.0[seat].as_ref().unwrap().muted.load(Ordering::SeqCst);
+
+        assert_eq!(rooms.moderate("u1", "g", Action::Mute), 2);
+        assert!(muted(&rooms, "g/lounge", 0) && muted(&rooms, "g/afk", 0));
+        assert!(!muted(&rooms, "g/lounge", 1), "not bo");
+        assert!(!muted(&rooms, "h/lounge", 0), "not another server");
+        assert!(!muted(&rooms, "g/dev", 0), "not a name alone");
+        assert_eq!(rooms.moderate("u1", "g", Action::Unmute), 2);
+        assert!(!muted(&rooms, "g/lounge", 0));
+        assert_eq!(rooms.moderate("nobody", "g", Action::Mute), 0);
+    }
+
+    #[tokio::test]
+    async fn a_disconnect_is_heard_even_before_the_socket_waits_for_it() {
+        let mut rooms = Rooms::default();
+        rooms.rooms.insert("g/lounge".into(), room_of(vec![sitter("al", Some("u1"))]));
+        let kick = rooms.rooms["g/lounge"].seats.0[0].as_ref().unwrap().kick.clone();
+        assert_eq!(rooms.moderate("u1", "g", Action::Disconnect), 1);
+        // told first, waited on after: the permit is kept
+        tokio::time::timeout(Duration::from_millis(100), kick.notified()).await.expect("the disconnect was kept for the socket");
+    }
+
+    #[test]
+    fn an_order_reads() {
+        let o: Order = serde_json::from_str(r#"{"action":"disconnect","user_id":"u1","server":"g"}"#).unwrap();
+        assert_eq!((o.action, o.user_id.as_str(), o.server.as_str()), (Action::Disconnect, "u1", "g"));
+        assert!(serde_json::from_str::<Order>(r#"{"action":"ban","user_id":"u1","server":"g"}"#).is_err());
+        let r: Redeemed = serde_json::from_str(r#"{"user_id":"u","name":"al","server":"g","channel":"lounge"}"#).unwrap();
+        assert!(!r.muted, "an older api says nothing: not muted");
+        let r: Redeemed = serde_json::from_str(r#"{"user_id":"u","name":"al","server":"g","channel":"lounge","muted":true}"#).unwrap();
+        assert!(r.muted);
+    }
+
+    #[test]
+    fn the_internal_gate() {
+        let mut h = HeaderMap::new();
+        assert_eq!(inside(&h, Some("s3cret")), Err(StatusCode::FORBIDDEN));
+        h.insert("x-voice-secret", "nope".parse().unwrap());
+        assert_eq!(inside(&h, Some("s3cret")), Err(StatusCode::FORBIDDEN));
+        h.insert("x-voice-secret", "s3cret".parse().unwrap());
+        assert_eq!(inside(&h, Some("s3cret")), Ok(()));
+        assert_eq!(inside(&h, None), Err(StatusCode::SERVICE_UNAVAILABLE));
+        // through caddy: as if there were no such route, secret or not
+        h.insert("x-forwarded-for", "1.2.3.4".parse().unwrap());
+        assert_eq!(inside(&h, Some("s3cret")), Err(StatusCode::NOT_FOUND));
+        assert!(same("abc", "abc") && !same("abc", "abd") && !same("abc", "abcd") && !same("", "a"));
+    }
+
     #[test]
     fn seats_go_lowest_free_first() {
         let mut seats = Seats::new();
@@ -1344,7 +1530,7 @@ mod tests {
         let mic = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("mic{id}"), "voice".to_owned()));
         let mut show = Show::new(id);
         show.on = on;
-        Sitter { user: user.to_owned(), uid: None, id, mic, show }
+        Sitter { user: user.to_owned(), uid: None, id, mic, muted: Arc::default(), kick: Arc::new(Notify::new()), show }
     }
 
     #[test]

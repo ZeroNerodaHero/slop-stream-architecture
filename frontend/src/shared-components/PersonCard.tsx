@@ -1,5 +1,5 @@
 import { useAtomValue } from 'jotai';
-import { type CSSProperties, type FocusEvent, type PointerEvent, useEffect, useRef, useState } from 'react';
+import { type CSSProperties, type FocusEvent, type PointerEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { api, type GroupBadge } from '@/infra/api';
@@ -14,11 +14,32 @@ import { Face } from '@/shared-components/Face';
 import { Who } from '@/shared-components/PersonRow';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { StreamStill } from '@/shared-components/StreamStill';
+import { Tooltip } from '@/shared-components/Tooltip';
 import { ViewerCount } from '@/shared-components/ViewerCount';
+import { cn } from '@/utils/cn';
 
 /** The card's width, and how far it stands off the column and off the window's edge. */
 const CARD_W = 260;
 const GAP = 4;
+/** The moderator's box at the card's left (`actions`): one icon button wide, its stroke shared with the card's. */
+const ACTIONS_W = 30;
+/** How long a card with buttons waits after the pointer leaves its row, or itself, before it goes: time to cross the gap between them. */
+const LINGER_MS = 250;
+
+/** A button in the moderator's box on the card (GroupMod.tsx `useCardMod`): an icon, its name the tooltip, red when it removes someone. */
+export interface CardAction {
+  key: string;
+  label: string;
+  icon: ReactNode;
+  danger?: boolean;
+  onPick: () => void;
+}
+
+/** The pointer on a card that can be pressed: while it is there the card stays (`usePeek`'s `hold`). */
+export interface PeekHold {
+  enter: () => void;
+  leave: () => void;
+}
 
 /**
  * Enough of somebody for the card. The sidebar's rows and the chat window's tabs hold all of
@@ -83,11 +104,27 @@ function peeking(e: PointerEvent<Element> | FocusEvent<Element>) {
 export function usePeek(delay: number) {
   const [at, setAt] = useState<CardSpot | null>(null);
   const timer = useRef<number | null>(null);
+  /** A card with buttons, going once the pointer has been away from the row and the card `LINGER_MS`. */
+  const closing = useRef<number | null>(null);
+  const stay = () => {
+    if (closing.current !== null) {
+      window.clearTimeout(closing.current);
+      closing.current = null;
+    }
+  };
   const clear = () => {
+    stay();
     if (timer.current !== null) {
       window.clearTimeout(timer.current);
       timer.current = null;
     }
+  };
+  const goSoon = () => {
+    stay();
+    closing.current = window.setTimeout(() => {
+      closing.current = null;
+      setAt(null);
+    }, LINGER_MS);
   };
   // a row that goes while its timer runs: nothing shows
   useEffect(() => clear, []);
@@ -122,16 +159,29 @@ export function usePeek(delay: number) {
       if (e.relatedTarget instanceof Element && e.relatedTarget.closest('#profile-popup')) return;
       show(e, column);
     },
-    /** The pointer left `row`. The card stays while the focus is still in it. */
-    leave(row: Element) {
+    /**
+     * The pointer left `row`. The card stays while the focus is still in it. `linger`: the card has
+     * buttons (`actions`), so it waits a moment for the pointer to reach it, and stays while it is
+     * on it (`hold`).
+     */
+    leave(row: Element, linger = false) {
       if (row.contains(document.activeElement)) return;
       clear();
-      setAt(null);
+      if (linger) goSoon();
+      else setAt(null);
     },
-    /** The focus left `row`, and not for something in it. The card stays while the pointer is still on it. */
+    /** The focus left `row`, and not for something in it or for the card's buttons. The card stays while the pointer is still on it. */
     blur(e: FocusEvent<HTMLElement>) {
       const row = e.currentTarget;
       if (row.contains(e.relatedTarget as Node | null) || row.matches(':hover')) return;
+      if (e.relatedTarget instanceof Element && e.relatedTarget.closest('[data-peek-hold]')) return;
+      clear();
+      setAt(null);
+    },
+    /** The pointer on the card itself (one with buttons): it stays there, and goes a moment after it leaves. */
+    hold: { enter: stay, leave: goSoon } satisfies PeekHold,
+    /** The card goes now: one of its buttons was pressed, and what it opened covers the page. */
+    close() {
       clear();
       setAt(null);
     }
@@ -144,6 +194,10 @@ interface PersonCardProps {
   at: CardSpot;
   /** Which side of the page the column is on: the card goes out the other way. Not given (the chat, which can be anywhere): the side the column is nearer. */
   side?: PanelSide;
+  /** A moderator's buttons (GroupMod.tsx `useCardMod`), in a box at the card's left: the card can be pointed at then, and stays while it is (`hold`). None or empty: the card is not for pressing. */
+  actions?: CardAction[] | null;
+  /** `usePeek`'s `hold`, with `actions`. */
+  hold?: PeekHold;
 }
 
 /**
@@ -168,7 +222,7 @@ interface PersonCardProps {
  * from the edge, kept on screen, and hangs down from the row in the top half of the screen and
  * up from it in the bottom half.
  */
-export function PersonCard({ id, person, at, side }: PersonCardProps) {
+export function PersonCard({ id, person, at, side, actions, hold }: PersonCardProps) {
   const peek = useAtomValue(peeksAtom)[person.name]?.card;
   // the profile popup is up (a click on this row opened it, like as not): the page under it is not being pointed at, and a card left there would show through, dimmed
   const covered = useAtomValue(profilePopupAtom) !== null;
@@ -191,63 +245,105 @@ export function PersonCard({ id, person, at, side }: PersonCardProps) {
   const h = root.clientHeight;
   const edge = side ?? (at.column.left + at.column.width / 2 > w / 2 ? 'right' : 'left');
   const x = edge === 'right' ? at.column.left - GAP - CARD_W : at.column.right + GAP;
+  const pressable = !!actions && actions.length > 0;
+  // the box at its left stays in the window too
+  const least = GAP + (pressable ? ACTIONS_W : 0);
   const style: CSSProperties = {
     width: CARD_W,
-    left: Math.max(GAP, Math.min(x, w - CARD_W - GAP)),
+    left: Math.max(least, Math.min(x, w - CARD_W - GAP)),
     ...(at.row.top < h / 2 ? { top: at.row.top } : { bottom: h - at.row.bottom })
   };
   return createPortal(
     <div
-      id={id}
-      role="tooltip"
       style={style}
-      data-presence={presence}
-      className="pointer-events-none fixed z-[60] flex flex-col gap-2.5 border border-primaryStroke bg-backgroundSecondary p-3 text-sm text-textPrimary"
+      data-peek-hold={pressable || undefined}
+      onPointerEnter={pressable ? hold?.enter : undefined}
+      onPointerLeave={pressable ? hold?.leave : undefined}
+      className={cn('fixed z-[60]', pressable ? 'pointer-events-auto' : 'pointer-events-none')}
     >
-      {/* beside the face and as tall as it: the name along its top (leading-4, so its cap sits level with the face's top), the badge and the count along its bottom */}
-      <span className="flex items-center gap-2.5">
-        <span className="relative shrink-0">
-          <Face name={person.name} version={person.avatar} className="h-10 w-10 text-base" />
-          {presence && (
-            <>
-              <PresenceSquare status={presence} className="border-backgroundSecondary" />
-              {/* the square says it in colour; the word, for a reader */}
-              <span className="sr-only">{PRESENCE_WORD[presence]}</span>
-            </>
-          )}
-        </span>
-        <span className="flex h-10 min-w-0 flex-1 flex-col items-start justify-between">
-          <Who name={person.name} verified={person.verified} oauthVerified={person.oauth_verified ?? known?.oauth_verified} className="max-w-full text-sm font-semibold leading-4" />
-          <span className="flex min-w-0 max-w-full items-center gap-2 text-xs leading-4">
-            {badge && <Badge group={badge} className="min-w-0" />}
-            {presence === 'streaming' && <ViewerCount count={viewers} className="shrink-0 whitespace-nowrap text-textSecondary" />}
+      {pressable && (
+        // a column of icon buttons against the card's left side, its top level with the card's: one stroke between them
+        <div
+          id={id ? `${id}-mod` : undefined}
+          role="toolbar"
+          aria-orientation="vertical"
+          aria-label={`moderate ${person.name}`}
+          className="absolute right-full top-0 -mr-px flex flex-col border border-primaryStroke bg-backgroundSecondary"
+        >
+          {actions.map((a) => (
+            <Tooltip key={a.key} content={a.label} at="left">
+              <button
+                type="button"
+                aria-label={a.label}
+                data-card-action={a.key}
+                onClick={a.onPick}
+                className={cn(
+                  'flex h-7 w-7 items-center justify-center border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none',
+                  a.danger ? 'text-decrease' : 'text-textSecondary hover:text-textPrimary'
+                )}
+              >
+                {a.icon}
+              </button>
+            </Tooltip>
+          ))}
+        </div>
+      )}
+      <div
+        id={id}
+        role="tooltip"
+        data-presence={presence}
+        className="flex flex-col gap-2.5 border border-primaryStroke bg-backgroundSecondary p-3 text-sm text-textPrimary"
+      >
+        {/* beside the face and as tall as it: the name along its top (leading-4, so its cap sits level with the face's top), the badge and the count along its bottom */}
+        <span className="flex items-center gap-2.5">
+          <span className="relative shrink-0">
+            <Face name={person.name} version={person.avatar} className="h-10 w-10 text-base" />
+            {presence && (
+              <>
+                <PresenceSquare status={presence} className="border-backgroundSecondary" />
+                {/* the square says it in colour; the word, for a reader */}
+                <span className="sr-only">{PRESENCE_WORD[presence]}</span>
+              </>
+            )}
+          </span>
+          <span className="flex h-10 min-w-0 flex-1 flex-col items-start justify-between">
+            <Who
+              name={person.name}
+              verified={person.verified}
+              oauthVerified={person.oauth_verified ?? known?.oauth_verified}
+              className="max-w-full text-sm font-semibold leading-4"
+            />
+            <span className="flex min-w-0 max-w-full items-center gap-2 text-xs leading-4">
+              {badge && <Badge group={badge} className="min-w-0" />}
+              {presence === 'streaming' && <ViewerCount count={viewers} className="shrink-0 whitespace-nowrap text-textSecondary" />}
+            </span>
           </span>
         </span>
-      </span>
-      {presence === 'streaming' ? (
-        <StreamStill name={person.name} className="w-full" />
-      ) : (
-        // not streaming: their first home-card thumbnail at the still's size, or, when they have none, their face blown up and
-        // blurred behind the word offline (the blur kept inside by overflow-hidden)
-        <span
-          id={id ? `${id}-thumb` : undefined}
-          className="relative flex aspect-video w-full shrink-0 items-center justify-center overflow-hidden border border-primaryStroke bg-backgroundTertiary"
-        >
-          {known?.thumbs?.[0] !== undefined ? (
-            <img src={api.streamThumbUrl(person.name, known.thumbs[0])} alt="" draggable={false} className="absolute inset-0 h-full w-full object-cover" />
-          ) : (
-            <>
-              <span aria-hidden className="absolute inset-0">
-                <Face name={person.name} version={person.avatar} className="absolute inset-0 h-full w-full scale-125 object-cover text-6xl blur-xl" />
-              </span>
-              <span aria-hidden className="absolute inset-0 bg-black/40" />
-              <span className="relative text-sm font-semibold uppercase tracking-wider text-white">offline</span>
-            </>
-          )}
-        </span>
-      )}
-      {/* the status, the width of the card: whole words, four lines at most */}
-      {bio && <span className="line-clamp-4 break-words text-sm leading-snug">{bio}</span>}
+        {presence === 'streaming' ? (
+          <StreamStill name={person.name} className="w-full" />
+        ) : (
+          // not streaming: their first home-card thumbnail at the still's size, or, when they have none, their face blown up and
+          // blurred behind the word offline (the blur kept inside by overflow-hidden)
+          <span
+            id={id ? `${id}-thumb` : undefined}
+            className="relative flex aspect-video w-full shrink-0 items-center justify-center overflow-hidden border border-primaryStroke bg-backgroundTertiary"
+          >
+            {known?.thumbs?.[0] !== undefined ? (
+              <img src={api.streamThumbUrl(person.name, known.thumbs[0])} alt="" draggable={false} className="absolute inset-0 h-full w-full object-cover" />
+            ) : (
+              <>
+                <span aria-hidden className="absolute inset-0">
+                  <Face name={person.name} version={person.avatar} className="absolute inset-0 h-full w-full scale-125 object-cover text-6xl blur-xl" />
+                </span>
+                <span aria-hidden className="absolute inset-0 bg-black/40" />
+                <span className="relative text-sm font-semibold uppercase tracking-wider text-white">offline</span>
+              </>
+            )}
+          </span>
+        )}
+        {/* the status, the width of the card: whole words, four lines at most */}
+        {bio && <span className="line-clamp-4 break-words text-sm leading-snug">{bio}</span>}
+      </div>
     </div>,
     at.host
   );

@@ -48,6 +48,15 @@ flowchart LR
 | DELETE | `/api/groups/:group/primary` | 204, also when it was not the primary: back to the first joined group's badge (a line wears one group badge only, never several). 401 nobody |
 | DELETE | `/api/groups/:group`       | 204 for an owner, the maker, or an admin. 401 nobody, 403 `not your group` and for `bot`, 404                                                                                                                                                                            |
 
+moderating a member (group_mod.rs, the page's `GroupMod.tsx`): never yourself, an owner only by an owner; no custom role ranks above another.
+
+|        | route | does |
+| ------ | ----- | ---- |
+| GET    | `/api/groups/:group/members/:name` | one member as the roster has them (`name, owner, avatar, joined, roles, timeout`), the roster's rule. 404 `they are not in the group` |
+| GET    | `/api/groups/:group/members/:name/messages?before=&limit=` | `{ lines, next }`: that account's lines in the text channels the caller sees, newest first, each with its `channel` and its `reply` quote. kept rows and the redis tail together. `limit` 1..=50, `next` the cursor (`<id>.<channel>`), null at the end. the kick or ban power. 400 `bad cursor` |
+| DELETE | `/api/groups/:group/channels/:channel/messages/:id` | 204: the line out of redis and postgres with its reactions, and off the pins (an `unpin` fact). its author may; anyone else's takes the kick power, an owner's line an owner. every room open drops it on the chat socket's `delete {channel, id}` |
+| POST   | `/api/groups/:group/timeout` | now also takes `reason` (kept on `timeouts.reason`, migration 0010), and drops them out of voice until it ends (voice.md) |
+
 chat (`chat.md`): the `hello` takes `"bot": true`; every `history` and `message` line carries `groups`, an array, empty for most lines.
 
 each badge on a line (groups.rs `Badge`, read by `badges_of` in one query at the hello, the count a subquery on `memberships_group_idx`) is `{ name, badge, color, icon?, about?, members?, banner? }`:

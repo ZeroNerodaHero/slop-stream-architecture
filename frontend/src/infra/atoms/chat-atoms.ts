@@ -524,17 +524,29 @@ export class ChatRoom {
     }
   }
 
-  /** A janny deleted a line (docs/jannies.md): it goes from the screen, a jump's parked tail and the hits. A stream's only, so no channel. */
-  removeLine(id: string) {
+  /**
+   * A line was deleted: a janny's on a stream (docs/jannies.md), or a channel's by its author or a
+   * moderator (`channel`, a server socket's). It goes from wherever it is held: the screen, a jump's
+   * parked tail, the shelf of a channel not shown, the hits.
+   */
+  removeLine(id: string, channel: string | null = null) {
     const drop = (lines: ChatLine[]) => (lines.some((l) => l.id === id) ? lines.filter((l) => l.id !== id) : lines);
-    const lines = store.get(this.linesAtom);
-    const next = drop(lines);
-    if (next !== lines) store.set(this.linesAtom, next);
-    if (this.savedTail) this.savedTail = drop(this.savedTail);
+    if (channel !== null && channel !== this.channel) {
+      const tail = this.tails.get(channel);
+      if (tail) this.tails.set(channel, drop(tail));
+    } else {
+      const lines = store.get(this.linesAtom);
+      const next = drop(lines);
+      if (next !== lines) store.set(this.linesAtom, next);
+      if (this.savedTail) this.savedTail = drop(this.savedTail);
+    }
     const results = store.get(this.resultsAtom);
-    if (results) {
-      const kept = drop(results);
-      if (kept !== results) store.set(this.resultsAtom, kept);
+    // a server's hits say their channel: the same id in another channel is another line
+    if (results?.some((l) => l.id === id && (channel === null || l.channel === undefined || l.channel === channel))) {
+      store.set(
+        this.resultsAtom,
+        results.filter((l) => !(l.id === id && (channel === null || l.channel === undefined || l.channel === channel)))
+      );
     }
   }
 
@@ -685,7 +697,7 @@ export class ChatRoom {
       } else if (msg.type === 'react' && typeof msg.id === 'string' && typeof msg.emoji === 'string' && typeof msg.who === 'string') {
         this.applyReact(tagged, msg.id, msg.emoji, msg.who, msg.on === true);
       } else if (msg.type === 'delete' && typeof msg.id === 'string') {
-        this.removeLine(msg.id);
+        this.removeLine(msg.id, tagged);
       } else if (msg.type === 'error' && msg.error && typeof msg.react === 'string') {
         // a reaction refused: words under the box, and nothing of the box's own (its line, its wait) is touched
         this.showNotice(REACT_WORDS[msg.error] ?? msg.error);
