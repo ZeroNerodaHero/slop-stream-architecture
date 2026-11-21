@@ -373,7 +373,7 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 /// `GET /api/groups/:group`: the whole room in one answer. The group, its roles, what the
-/// login may do, its channels, who in it is live, the roster (anyone's on a public group; a
+/// login may do, its channels, who in it is live, who is in which voice channel, the roster (anyone's on a public group; a
 /// member's or a site admin's on a private one), and (for the ban power) the bans. `roster`
 /// and `bans` are null for someone who may not see them. `?roster=<n>` cuts the roster to its
 /// first page, `roster_next` the cursor for `GET .../members?after=`. The page loads this once and then
@@ -413,6 +413,8 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
     // the lines pinned in each channel this login sees, by id (pins.rs): the header's count and the lines' marks
     let seen = groups::visible_channels(&s.db, &group, user, admin).await?;
     let pins = crate::pins::pinned_ids(&s.db, &group, &seen).await?;
+    // who is in voice, in the channels this login sees (voice.rs). An extra and not the room: redis down reads as nobody
+    let voice = voice_in(&s, &group, &seen).await;
     // the roster is anyone's on a public group (the lines say who talks there anyway), and a member's or a
     // site admin's on a private one, whose people chose not to be listed; the bans are the ban power's. null otherwise
     // `?roster=` asks for its first page alone (`limit`, as `GET .../members` reads it), and
@@ -447,10 +449,48 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
         "muted": muted,
         "pins": pins,
         "live": live,
+        "voice": voice,
         "roster": roster,
         "roster_next": roster_next,
         "bans": bans,
     })))
+}
+
+/// Who is in voice: `{"<channel>": [{name, uid, since}]}` from `voice:<server>` (voice.rs),
+/// each channel in order of who came first. Only the channels in `seen`, so a hidden channel's
+/// people stay hidden with it. `{}` when redis cannot be asked: the room still opens, and the
+/// `voice` and `voice_left` facts fill it in from there.
+async fn voice_in(s: &AppState, group: &str, seen: &[String]) -> Value {
+    let fields: Result<std::collections::HashMap<String, String>, redis::RedisError> =
+        redis::cmd("HGETALL").arg(format!("voice:{group}")).query_async(&mut s.redis.clone()).await;
+    match fields {
+        Ok(fields) => seated_by_channel(&fields, seen),
+        Err(e) => {
+            log::warn!("voice in {group}: {e}");
+            json!({})
+        }
+    }
+}
+
+/// The fields of `voice:<server>` (user id to `{name, channel, since, ...}`) as the room's
+/// `voice`. A field that does not read, or sits in a channel not in `seen`, is left out.
+fn seated_by_channel(fields: &std::collections::HashMap<String, String>, seen: &[String]) -> Value {
+    let mut by: std::collections::BTreeMap<&str, Vec<(i64, &str, String)>> = std::collections::BTreeMap::new();
+    for (uid, raw) in fields {
+        let Ok(v) = serde_json::from_str::<Value>(raw) else { continue };
+        let (Some(channel), Some(name), Some(since)) = (v["channel"].as_str(), v["name"].as_str(), v["since"].as_i64()) else {
+            continue;
+        };
+        let Some(channel) = seen.iter().find(|c| *c == channel) else { continue };
+        by.entry(channel).or_default().push((since, uid, name.to_string()));
+    }
+    let mut out = serde_json::Map::new();
+    for (channel, mut people) in by {
+        people.sort();
+        let list = people.into_iter().map(|(since, uid, name)| json!({ "name": name, "uid": uid, "since": since })).collect();
+        out.insert(channel.to_string(), Value::Array(list));
+    }
+    Value::Object(out)
 }
 
 async fn need(s: &AppState, who: uuid::Uuid, group: &str, bit: i32) -> Result<(), ApiError> {
@@ -1417,6 +1457,24 @@ mod tests {
         // an older client that never heard of voice gives none
         let old: PermsIn = serde_json::from_value(json!({ "kick": true })).unwrap();
         assert_eq!(old.bits(), KICK);
+    }
+
+    #[test]
+    fn voice_shows_only_the_seen_channels() {
+        let mut fields = std::collections::HashMap::new();
+        let seat = |name: &str, channel: &str, since: i64| {
+            json!({ "name": name, "channel": channel, "seat": 0, "since": since, "beat": since, "session": 1 }).to_string()
+        };
+        fields.insert("u1".to_string(), seat("bo", "lounge", 20));
+        fields.insert("u2".to_string(), seat("al", "lounge", 10));
+        fields.insert("u3".to_string(), seat("cy", "secret", 5));
+        fields.insert("u4".to_string(), "not json".to_string());
+        let seen = vec!["general".to_string(), "lounge".to_string()];
+        assert_eq!(
+            seated_by_channel(&fields, &seen),
+            json!({ "lounge": [{ "name": "al", "uid": "u2", "since": 10 }, { "name": "bo", "uid": "u1", "since": 20 }] })
+        );
+        assert_eq!(seated_by_channel(&fields, &[]), json!({}));
     }
 
     #[test]
