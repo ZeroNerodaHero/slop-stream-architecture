@@ -181,19 +181,16 @@ export function VoiceTab() {
       <InputMode />
 
       <Block title="video" tip="the camera a voice call shows when you turn it on">
-
-        <div className="flex flex-col gap-3">
-          <CameraPreview deviceId={camera}>
-            <Select
-              id="voice-camera"
-              label="camera"
-              value={shownOf(camera, devices.cameras)}
-              options={optionsOf(devices.cameras)}
-              onChange={setVoiceCamera}
-              className="w-full min-w-0"
-            />
-          </CameraPreview>
-        </div>
+        <CameraPreview deviceId={camera}>
+          <Select
+            id="voice-camera"
+            label="camera"
+            value={shownOf(camera, devices.cameras)}
+            options={optionsOf(devices.cameras)}
+            onChange={setVoiceCamera}
+            className="w-full min-w-0"
+          />
+        </CameraPreview>
       </Block>
     </div>
   );
@@ -433,7 +430,8 @@ function KeyRecorder({ code, onPick }: { code: string; onPick: (code: string) =>
 
 /**
  * The picked camera's picture, on a click: a camera's light coming on is the user's to ask for.
- * The box keeps its size off and on; the picker (children) sits under it. Off when the tab shuts.
+ * The box keeps its size off and on; the picker (children) and the button sit beside it from sm up,
+ * under it on a phone. Off when the tab shuts.
  */
 function CameraPreview({ deviceId, children }: { deviceId: string; children: ReactNode }) {
   const video = useRef<HTMLVideoElement>(null);
@@ -469,8 +467,8 @@ function CameraPreview({ deviceId, children }: { deviceId: string; children: Rea
   }, [on, deviceId]);
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="relative aspect-video w-full overflow-hidden border border-primaryStroke bg-background">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+      <div className="relative aspect-video w-full max-w-xs shrink-0 overflow-hidden border border-primaryStroke bg-background sm:w-64 sm:max-w-none">
         {on ? (
           <video
             ref={video}
@@ -482,35 +480,38 @@ function CameraPreview({ deviceId, children }: { deviceId: string; children: Rea
             className="absolute inset-0 h-full w-full object-cover [transform:scaleX(-1)]"
           />
         ) : (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-textTertiary">
+          <div className="absolute inset-0 flex items-center justify-center text-textTertiary">
             <RiCameraOffLine aria-hidden size={28} />
-            <Button
-              id="voice-camera-preview"
-              size="sm"
-              onClick={() => {
-                setNote('');
-                setOn(true);
-              }}
-            >
-              preview
-            </Button>
           </div>
         )}
       </div>
-      <div className="flex items-end gap-2">
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
+      <div className="flex min-w-0 flex-1 flex-col gap-3">
+        <div className="flex flex-col gap-1">
           <span aria-hidden className="text-sm font-semibold text-textSecondary">
             camera
           </span>
           {children}
         </div>
-        {on && (
-          <Button id="voice-camera-stop" size="sm" onClick={() => setOn(false)}>
+        {on ? (
+          <Button id="voice-camera-stop" size="sm" onClick={() => setOn(false)} className="self-start">
             stop preview
           </Button>
+        ) : (
+          <Button
+            id="voice-camera-preview"
+            size="sm"
+            onClick={() => {
+              setNote('');
+              setOn(true);
+            }}
+            className="self-start"
+          >
+            preview
+          </Button>
         )}
+        <Status id="voice-camera-note" text={note} quiet />
+        <p className="text-sm text-textTertiary">for video calls, coming later</p>
       </div>
-      <Status id="voice-camera-note" text={note} quiet />
     </div>
   );
 }
