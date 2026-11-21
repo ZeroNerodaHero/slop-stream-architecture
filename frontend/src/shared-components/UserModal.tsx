@@ -11,12 +11,13 @@ import {
   RiUserLine
 } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { Fragment, type KeyboardEvent, type ReactNode, useLayoutEffect, useRef } from 'react';
+import { Fragment, type KeyboardEvent, type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef } from 'react';
 
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { myPresenceAtom, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { myAvatarVersionAtom, myNameAtom } from '@/infra/atoms/profile-atoms';
 import { DEFAULT_TAB, type UserTab, closeUserModal, pickTab, tabsFor, userModalOpenAtom, userTabAtom } from '@/infra/atoms/user-modal-atoms';
+import { useKeyboard } from '@/infra/keyboard';
 import { useIsMobile } from '@/infra/mobile';
 import { Face } from '@/shared-components/Face';
 import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
@@ -70,7 +71,8 @@ function roveTabs(e: KeyboardEvent<HTMLDivElement>, order: readonly UserTab[]) {
   if (next < 0 || !target || !button) return;
   e.preventDefault();
   pickTab(target);
-  button.focus(); // works on tabIndex -1; the attribute flips on the next render
+  // works on tabIndex -1; the attribute flips on the next render. no scroll: the strip brings the open tab into sight itself (`useStripPlace`)
+  button.focus({ preventScroll: true });
 }
 
 /**
@@ -94,7 +96,8 @@ function UserDialog() {
   const pressedBackdrop = useRef(false);
   const kept = useAtomValue(userTabAtom);
   // read as it renders (useIsMobile), so a phone never draws a desktop tab for a frame
-  const tabs = tabsFor(useIsMobile());
+  const phone = useIsMobile();
+  const tabs = tabsFor(phone);
   // a tab kept on a desktop that a phone has not: the default there, and the kept one is not forgotten
   const tab = tabs.includes(kept) ? kept : DEFAULT_TAB;
 
@@ -105,7 +108,7 @@ function UserDialog() {
     if (!dialog || dialog.open) return;
     dialog.showModal();
     // the tab that is open, not the first focusable: the gear lands you where you left off
-    dialog.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
+    dialog.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true });
     return () => {
       if (dialog.open) dialog.close();
     };
@@ -144,13 +147,91 @@ function UserDialog() {
         'backdrop:bg-black/60 md:backdrop:backdrop-blur-sm'
       )}
     >
-      <Rail tab={tab} tabs={tabs} />
+      <Rail tab={tab} tabs={tabs} phone={phone} />
       <Pane tab={tab} onClose={close} />
     </dialog>
   );
 }
 
-function Rail({ tab, tabs }: { tab: UserTab; tabs: readonly UserTab[] }) {
+/** A finger's or a wheel's scroll of the strip counts this long after it lets go (the glide after a flick). */
+const HAND_MS = 400;
+
+/**
+ * A phone's strip of tabs (below `sm`) moves sideways under a finger or a wheel and nothing else: the
+ * keyboard coming and going, the visual viewport resizing, iOS bringing a focused thing into sight, all
+ * put it back where it was. The open tab is the one in the state (`aria-selected`), never the one the
+ * strip happens to show, and it is brought into sight by scrolling the strip alone (never
+ * `scrollIntoView`, which scrolls every pane up to the window). A tab that kept the focus after another
+ * was opened (a click does not move it) hands it to the open one, so no outline marks the wrong tab.
+ */
+function useStripPlace(ref: RefObject<HTMLDivElement | null>, tab: UserTab, on: boolean) {
+  const kept = useRef(0);
+  const { height, keyboard } = useKeyboard();
+
+  useEffect(() => {
+    const strip = ref.current;
+    if (!on || !strip) return;
+    const open = strip.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    if (!open) return;
+    const at = document.activeElement;
+    if (at instanceof HTMLElement && at !== open && strip.contains(at)) open.focus({ preventScroll: true });
+    // with the strip's own padding kept beside it, so the first tab goes all the way back to the start
+    const pad = parseFloat(getComputedStyle(strip).paddingLeft) || 0;
+    const s = strip.getBoundingClientRect();
+    const t = open.getBoundingClientRect();
+    if (t.left < s.left + pad) strip.scrollLeft -= s.left + pad - t.left;
+    else if (t.right > s.right - pad) strip.scrollLeft += t.right - (s.right - pad);
+    kept.current = strip.scrollLeft;
+  }, [ref, tab, on]);
+
+  useEffect(() => {
+    const strip = ref.current;
+    if (!on || !strip) return;
+    let touching = false;
+    let at = 0;
+    const down = () => {
+      touching = true;
+    };
+    const up = () => {
+      touching = false;
+      at = performance.now();
+    };
+    const wheel = () => {
+      at = performance.now();
+    };
+    const scrolled = () => {
+      const now = performance.now();
+      if (touching || now - at < HAND_MS) {
+        if (!touching) at = now; // the glide goes on, and so does the hand's say
+        kept.current = strip.scrollLeft;
+      } else if (strip.scrollLeft !== kept.current) {
+        strip.scrollLeft = kept.current;
+      }
+    };
+    strip.addEventListener('touchstart', down, { passive: true });
+    strip.addEventListener('touchend', up, { passive: true });
+    strip.addEventListener('touchcancel', up, { passive: true });
+    strip.addEventListener('wheel', wheel, { passive: true });
+    strip.addEventListener('scroll', scrolled, { passive: true });
+    return () => {
+      strip.removeEventListener('touchstart', down);
+      strip.removeEventListener('touchend', up);
+      strip.removeEventListener('touchcancel', up);
+      strip.removeEventListener('wheel', wheel);
+      strip.removeEventListener('scroll', scrolled);
+    };
+  }, [ref, on]);
+
+  // the keyboard up or down, the visual viewport resized: where the hand left it
+  useLayoutEffect(() => {
+    const strip = ref.current;
+    if (on && strip && strip.scrollLeft !== kept.current) strip.scrollLeft = kept.current;
+  }, [ref, on, height, keyboard]);
+}
+
+function Rail({ tab, tabs, phone }: { tab: UserTab; tabs: readonly UserTab[]; phone: boolean }) {
+  const strip = useRef<HTMLDivElement | null>(null);
+  useStripPlace(strip, tab, phone);
   const me = useAtomValue(meAtom);
   const name = useAtomValue(myNameAtom);
   const avatar = useAtomValue(myAvatarVersionAtom);
@@ -172,12 +253,14 @@ function Rail({ tab, tabs }: { tab: UserTab; tabs: readonly UserTab[] }) {
       </div>
 
       <div
+        ref={strip}
         id="user-tabs"
         role="tablist"
         aria-orientation="vertical"
         aria-label="sections"
         onKeyDown={(e) => roveTabs(e, tabs)}
-        className="flex flex-row gap-1 overflow-x-auto p-2 sm:flex-col sm:gap-0 sm:overflow-visible"
+        // on a phone the strip stops short of the × at its end (Pane), so no tab sits under it
+        className="flex flex-row gap-1 overflow-x-auto p-2 max-sm:mr-12 sm:flex-col sm:gap-0 sm:overflow-visible"
       >
         {tabs.map((t, i) => {
           const { label, group, icon } = TABS[t];
@@ -219,9 +302,11 @@ function Rail({ tab, tabs }: { tab: UserTab; tabs: readonly UserTab[] }) {
 
 function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
   return (
-    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      {/* pinned over the pane, discord's esc: the pane scrolls under it */}
-      <div className="absolute right-4 top-4 z-10 flex flex-col items-center gap-1">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col sm:relative">
+      {/* pinned over the pane, discord's esc: the pane scrolls under it. on a phone it is in the head row instead, at the
+          end of the tab strip (the dialog is what it hangs from there, the strip stops short of it), so nothing in the
+          pane ever sits under it */}
+      <div className="absolute right-4 top-4 z-10 flex flex-col items-center gap-1 max-sm:right-1 max-sm:top-px">
         <Tooltip content="close" at="left">
           <button
             id="user-modal-close"
