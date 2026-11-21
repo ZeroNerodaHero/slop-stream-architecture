@@ -27,6 +27,8 @@ const GATHER_MS = 3000;
 const LEVEL_MS = 150;
 /** An `audioLevel` (0 to 1) at or over this is speaking. */
 const SPEAKING = 0.03;
+/** How often the call's quality (ping, loss, bitrate) is read: off the same getStats as the levels, every so many of them. */
+const STATS_MS = 2000;
 
 export interface VoiceSeat {
   seat: number;
@@ -61,6 +63,8 @@ export const voiceSpeakingAtom = atom<ReadonlySet<string>>(new Set<string>());
 export const voiceMutedAtom = atom(false);
 /** You hear nobody, and your mic is off with it. */
 export const voiceDeafAtom = atom(false);
+/** How the call is getting through, every STATS_MS while connected; null before the first read and while idle. */
+export const voiceStatsAtom = atom<VoiceStats | null>(null);
 
 /** The live call's handles, null while idle. */
 interface Live {
@@ -71,6 +75,8 @@ interface Live {
   micFor: string;
   audios: HTMLAudioElement[];
   timer: ReturnType<typeof setInterval> | null;
+  /** The counters at the last stats read, for the deltas of the next; null before the first. */
+  sample: StatsSample | null;
 }
 
 let live: Live | null = null;
@@ -87,6 +93,7 @@ function teardown(): void {
   live = null;
   store.set(voiceSeatsAtom, []);
   store.set(voiceSpeakingAtom, new Set<string>());
+  store.set(voiceStatsAtom, null);
   if (!was) return;
   if (was.timer) clearInterval(was.timer);
   if (was.ws) {
@@ -170,7 +177,7 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
   }
   const pc = new RTCPeerConnection();
   const audios: HTMLAudioElement[] = [];
-  live = { pc, ws: null, mic, micFor, audios, timer: null };
+  live = { pc, ws: null, mic, micFor, audios, timer: null, sample: null };
   // the mic is allowed now, so the browser names the devices: a pick that is gone shows as gone
   void refreshVoiceDevices();
   applyMic();
@@ -246,7 +253,11 @@ function closedWord(call: VoiceCall, code: number): string {
   return code === 1006 ? 'voice dropped: the connection to the voice server broke' : `voice dropped: the voice server closed the call (${code})`;
 }
 
-/** Who is speaking: each heard m-line's `audioLevel` by its seat's name, and the mic's as `me`. Set only when the set changes. */
+/**
+ * Who is speaking: each heard m-line's `audioLevel` by its seat's name, and the mic's as `me`.
+ * Set only when the set changes. Every STATS_MS once connected, the same report is the call's
+ * quality too (voiceStatsAtom).
+ */
 async function readLevels(mine: number, me: string): Promise<void> {
   const call = live;
   if (!call || mine !== attempt) return;
@@ -262,7 +273,9 @@ async function readLevels(mine: number, me: string): Promise<void> {
   const userOfLine = new Map(store.get(voiceSeatsAtom).map((s) => [s.line, s.user]));
   const speaking = new Set<string>();
   const micOn = !store.get(voiceMutedAtom) && !store.get(voiceDeafAtom);
-  report.forEach((s: { type: string; kind?: string; audioLevel?: number; trackIdentifier?: string }) => {
+  const entries: StatsEntry[] = [];
+  report.forEach((s: StatsEntry) => {
+    entries.push(s);
     if (s.kind !== 'audio' || (s.audioLevel ?? 0) < SPEAKING) return;
     if (s.type === 'media-source') {
       if (micOn) speaking.add(me);
@@ -273,6 +286,138 @@ async function readLevels(mine: number, me: string): Promise<void> {
   });
   const was = store.get(voiceSpeakingAtom);
   if (was.size !== speaking.size || [...speaking].some((n) => !was.has(n))) store.set(voiceSpeakingAtom, speaking);
+
+  const now = performance.now();
+  if (store.get(voiceCallAtom).phase !== 'connected' || (call.sample && now - call.sample.at < STATS_MS)) return;
+  const read = readStats(entries, call.sample, now);
+  call.sample = read.sample;
+  // `disconnected` is ice's own word for a path that stopped answering, before it gives up as `failed`
+  store.set(voiceStatsAtom, { ...read.stats, dropped: call.pc.connectionState === 'disconnected' });
+}
+
+// ---- quality ------------------------------------------------------------------------------
+
+/** The fields of a getStats report this file reads: every report is one of these, most of them absent. */
+export interface StatsEntry {
+  id: string;
+  type: string;
+  kind?: string;
+  audioLevel?: number;
+  trackIdentifier?: string;
+  selectedCandidatePairId?: string;
+  nominated?: boolean;
+  selected?: boolean;
+  state?: string;
+  currentRoundTripTime?: number;
+  bytesSent?: number;
+  bytesReceived?: number;
+  localCandidateId?: string;
+  remoteCandidateId?: string;
+  candidateType?: string;
+  jitter?: number;
+  packetsLost?: number;
+  packetsReceived?: number;
+  codecId?: string;
+  mimeType?: string;
+  clockRate?: number;
+}
+
+/** How the call is getting through. A number is null when the browser did not say or there is no window yet (the first read). */
+export interface VoiceStats {
+  /** Round trip on the path in use, ms. */
+  rtt: number | null;
+  /** The worst of the heard lines' jitter, ms. */
+  jitter: number | null;
+  /** Of the packets due on the heard lines over the window, how many were lost, %. Null with nobody to hear. */
+  loss: number | null;
+  /** Kbps out and in on the path in use, over the window. */
+  up: number | null;
+  down: number | null;
+  /** Like `opus 48k`; '' when not said. */
+  codec: string;
+  /** `relay` when either end of the path in use is a turn relay, else `direct`; '' when not said. */
+  route: 'direct' | 'relay' | '';
+  /** Ice lost the path for now (`disconnected`): it may come back or fail. */
+  dropped: boolean;
+}
+
+/** The running counters a delta is taken against. */
+export interface StatsSample {
+  at: number;
+  sent: number | null;
+  received: number | null;
+  lost: number;
+  got: number;
+}
+
+export type VoiceQuality = 'good' | 'ok' | 'poor';
+
+/** Good under 100ms and 1% lost, ok under 250ms and 5%, else poor. Null when neither is known. An unknown one counts as fine. */
+export function voiceQuality(stats: Pick<VoiceStats, 'rtt' | 'loss'>): VoiceQuality | null {
+  if (stats.rtt === null && stats.loss === null) return null;
+  const rtt = stats.rtt ?? 0;
+  const loss = stats.loss ?? 0;
+  if (rtt < 100 && loss < 1) return 'good';
+  if (rtt < 250 && loss < 5) return 'ok';
+  return 'poor';
+}
+
+/** `now - was` per ms, as kbps from bytes; null without both, or when the counter went back (a new path). */
+export function kbps(was: number | null, now: number | null, ms: number): number | null {
+  if (was === null || now === null || now < was || ms <= 0) return null;
+  return ((now - was) * 8) / ms;
+}
+
+/** The share of packets lost over a window, %, from the running lost and received counters; null when no packet was due. */
+export function lossPercent(was: Pick<StatsSample, 'lost' | 'got'>, now: Pick<StatsSample, 'lost' | 'got'>): number | null {
+  // packetsLost can go down (a late packet counted after all): a negative window is none lost
+  const lost = Math.max(0, now.lost - was.lost);
+  const got = Math.max(0, now.got - was.got);
+  return lost + got > 0 ? (lost / (lost + got)) * 100 : null;
+}
+
+/**
+ * One getStats report read as the call's quality, with the deltas against `was` (the last
+ * read's counters). The path is the transport's selected candidate pair (chrome, safari), else
+ * the pair marked `selected` or nominated and succeeded (firefox).
+ */
+export function readStats(entries: readonly StatsEntry[], was: StatsSample | null, at: number): { stats: Omit<VoiceStats, 'dropped'>; sample: StatsSample } {
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const transport = entries.find((e) => e.type === 'transport' && e.selectedCandidatePairId);
+  const pair =
+    (transport?.selectedCandidatePairId ? byId.get(transport.selectedCandidatePairId) : undefined) ??
+    entries.find((e) => e.type === 'candidate-pair' && (e.selected || (e.nominated && e.state === 'succeeded')));
+  const types = [pair?.localCandidateId, pair?.remoteCandidateId].map((id) => (id ? byId.get(id)?.candidateType : undefined));
+  const route = types.includes('relay') ? 'relay' : types.some(Boolean) ? 'direct' : '';
+
+  const inbound = entries.filter((e) => e.type === 'inbound-rtp' && e.kind === 'audio');
+  const heard = inbound.filter((e) => (e.packetsReceived ?? 0) > 0 && e.jitter !== undefined);
+  const outbound = entries.find((e) => e.type === 'outbound-rtp' && e.kind === 'audio' && e.codecId);
+  const codecReport = byId.get(outbound?.codecId ?? heard.find((e) => e.codecId)?.codecId ?? '');
+  const codec = codecReport?.mimeType
+    ? `${codecReport.mimeType.replace(/^audio\//i, '').toLowerCase()}${codecReport.clockRate ? ` ${Math.round(codecReport.clockRate / 1000)}k` : ''}`
+    : '';
+
+  const sample: StatsSample = {
+    at,
+    sent: pair?.bytesSent ?? null,
+    received: pair?.bytesReceived ?? null,
+    lost: inbound.reduce((n, e) => n + (e.packetsLost ?? 0), 0),
+    got: inbound.reduce((n, e) => n + (e.packetsReceived ?? 0), 0)
+  };
+  const ms = was ? at - was.at : 0;
+  return {
+    sample,
+    stats: {
+      rtt: pair?.currentRoundTripTime !== undefined ? pair.currentRoundTripTime * 1000 : null,
+      jitter: heard.length ? Math.max(...heard.map((e) => (e.jitter ?? 0) * 1000)) : null,
+      loss: was ? lossPercent(was, sample) : null,
+      up: was ? kbps(was.sent, sample.sent, ms) : null,
+      down: was ? kbps(was.received, sample.received, ms) : null,
+      codec,
+      route
+    }
+  };
 }
 
 // ---- devices ------------------------------------------------------------------------------
