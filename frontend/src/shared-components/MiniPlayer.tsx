@@ -127,7 +127,9 @@ function WatchCorner() {
   const layers = useAtomValue(watchLayersAtom);
   const primary = useAtomValue(primarySlotAtom);
   const avatar = useAtomValue(avatarAtom);
-  const pipChat = useAtomValue(pipChatPlaceAtom);
+  const storedPipChat = useAtomValue(pipChatPlaceAtom);
+  // a phone's corner player always keeps its chat under the video: no side fits
+  const pipChat = useIsMobile() ? 'bottom' : storedPipChat;
   const cornerChat = useAtomValue(cornerChatAtom);
   const { pathname } = useLocation();
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -207,7 +209,9 @@ function LiveCorner() {
   const previewSlot = useAtomValue(previewSlotAtom);
   const mixerOpen = useAtomValue(mixerOpenAtom);
   const myAvatar = useAtomValue(myAvatarVersionAtom);
-  const pipChat = useAtomValue(pipChatPlaceAtom);
+  const storedPipChat = useAtomValue(pipChatPlaceAtom);
+  // a phone's corner player always keeps its chat under the video: no side fits
+  const pipChat = useIsMobile() ? 'bottom' : storedPipChat;
   const cornerChat = useAtomValue(cornerChatAtom);
   const { pathname } = useLocation();
   const videoRef = useRef<HTMLVideoElement | null>(null);
