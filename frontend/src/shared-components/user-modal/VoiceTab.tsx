@@ -40,9 +40,8 @@ function refusal(err: unknown, what: string): string {
 }
 
 /**
- * The devices a call uses: the mic it talks with, the speakers it plays through, and a camera
- * kept for video in voice, which is not here yet. Picking applies at once, to a call that is on
- * too, and keeps in this browser (voice-atoms.ts). The mic's level shows live while the tab is
+ * The devices a call uses: the mic it talks with, the speakers it plays through, and the camera
+ * it shows (voice-video.ts). Picking applies at once, to a call that is on too, and keeps in this browser (voice-atoms.ts). The mic's level shows live while the tab is
  * open, and the mic is put down when it shuts.
  */
 export function VoiceTab() {
@@ -131,9 +130,8 @@ export function VoiceTab() {
         </div>
       </div>
 
-      <Block title="video">
+      <Block title="video" tip="the camera a voice call shows when you turn it on">
         <div className="flex flex-col gap-3">
-          <p className="text-sm text-textTertiary">for video calls, coming later</p>
           <CameraPreview deviceId={camera}>
             <Select
               id="voice-camera"
