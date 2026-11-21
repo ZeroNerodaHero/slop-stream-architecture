@@ -52,6 +52,8 @@ export type GroupChange =
   /** The channels put in this order, every one of them, from the top. */
   | { what: 'channel_order'; order: string[] }
   | { what: 'about'; about: string }
+  /** The group's colour is `color` now (`#rrggbb`). */
+  | { what: 'color'; color: string }
   | { what: 'access'; public: boolean }
   | { what: 'order'; order: string }
   | { what: 'icon'; icon: number }

@@ -10,28 +10,17 @@ import { cleanName, isValidName } from '@/infra/names';
 import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
+import { GROUP_SWATCHES, GroupColorPick } from '@/shared-components/GroupColorPick';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { INPUT } from '@/shared-components/input';
 import { SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack } from '@/shared-components/MobileSheet';
 import { PicturePick } from '@/shared-components/PicturePick';
-import { Tooltip } from '@/shared-components/Tooltip';
 import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
 import { cn } from '@/utils/cn';
 
 /** The api's caps, as the boxes know them. */
 const MAX_BADGE_CHARS = 12;
 const MAX_ABOUT_CHARS = 200;
-/** The colours a new group starts from, by name (the tooltip says the colour, not its hex): discord's blurple, then the fake streams' box colours. The colour box takes any other. */
-const SWATCHES = [
-  { hex: '#5865f2', name: 'blurple' },
-  { hex: '#f85149', name: 'red' },
-  { hex: '#3fb950', name: 'green' },
-  { hex: '#f2cc60', name: 'yellow' },
-  { hex: '#bc8cff', name: 'purple' },
-  { hex: '#ff9f43', name: 'orange' },
-  { hex: '#39d2c0', name: 'teal' },
-  { hex: '#ff6bcb', name: 'pink' }
-] as const;
 
 /** A picture chosen before the group exists: the bytes the crop dialog made, and a url that shows them here. */
 interface Picked {
@@ -55,7 +44,7 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
   const pressedBackdrop = useRef(false);
   const [name, setName] = useState('');
   const [badge, setBadge] = useState('');
-  const [color, setColor] = useState<string>(SWATCHES[0].hex);
+  const [color, setColor] = useState<string>(GROUP_SWATCHES[0].hex);
   const [about, setAbout] = useState('');
   const [isPublic, setPublic] = useState(true);
   const [icon, setIcon] = useState<Picked | null>(null);
@@ -214,33 +203,8 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
         />
         {/* the swatches and the square for any other colour on the left, the badge as it will read pushed to the right: one 24px line */}
         <div className="flex flex-wrap items-center gap-1.5">
-          {SWATCHES.map(({ hex, name }) => (
-            <Tooltip key={hex} content={name}>
-              <button
-                type="button"
-                aria-label={name}
-                aria-pressed={hex === color}
-                onClick={() => setColor(hex)}
-                style={{ backgroundColor: hex }}
-                // the chosen one's ring is an outline: no box-shadow on this site
-                className={cn('h-6 w-6 shrink-0 focus-visible:outline-primaryBlue', hex === color && 'outline outline-2 outline-offset-1 outline-textPrimary')}
-              />
-            </Tooltip>
-          ))}
-          <Tooltip content="more colors">
-            {/* the native picker, unseen over a square of the colour; it opens on the click */}
-            <label className="relative h-6 w-6 shrink-0 cursor-pointer border border-primaryStroke focus-within:border-primaryBlue" style={{ backgroundColor: color }}>
-              <input
-                id="groups-make-color"
-                type="color"
-                value={color}
-                onChange={(e) => setColor(e.target.value)}
-                aria-label="more colors"
-                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-              />
-            </label>
-          </Tooltip>
-          <Badge group={{ name: clean || 'new', badge: badge.trim() || 'badge', color }} src={icon?.url} size="md" className="ml-auto" />
+          <GroupColorPick id="groups-make-color" value={color} onChange={setColor} />
+          <Badge group={{ name: clean || 'new', badge: badge.trim() || 'badge', color }} src={icon?.url} preview size="md" className="ml-auto" />
         </div>
         {/* public or private on the left, the two answers on the right */}
         <div className="flex items-center justify-between gap-3">
