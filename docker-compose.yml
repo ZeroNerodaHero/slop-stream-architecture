@@ -10,6 +10,8 @@
 #   s3         a seaweedfs bucket on this machine. S3_ENDPOINT=off (the default) uses it; a url uses that bucket instead
 #   video      rust. one upload in, copies it out. media on udp 7882
 #   dummy      fake streams for styling: gifs bouncing around. DUMMY_STREAMS in .env says how many
+#   voice      rust, video's image as `video voice`. voice channels, media on udp 7883. off until
+#              `--profile voice` (see the service below)
 #
 # start:  ./scripts/deploy.sh                 everything, first time or any time
 #         ./scripts/deploy.sh api             only the api (also: frontend, video, dummy)
@@ -149,6 +151,8 @@ services:
       DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
       # how many groups one login may own. empty: 2. see docs/groups.md
       GROUPS_PER_OWNER: ${GROUPS_PER_OWNER:-}
+      # signs voice grants and lets the voice container in. empty: voice is off (joins are a 503)
+      VOICE_SECRET: ${VOICE_SECRET:-}
       # off (the default): the s3 container below. a url: that bucket, with the key and secret.
       # the container's own login is not these two; it is the literals on the s3 service.
       S3_ENDPOINT: ${S3_ENDPOINT:-off}
@@ -419,6 +423,45 @@ services:
         condition: service_started
       chat:
         condition: service_started
+
+  voice:
+    # the voice sfu for the servers' voice channels: same image as video, run as `video voice`
+    # (video/src/voice.rs). a page brings a grant from the api, we redeem it with VOICE_SECRET
+    # (the api's own) for the person and the room, and tell the api who is in. off by default:
+    # the profile keeps a plain `up -d` and deploy.sh from creating it. turn it on with a
+    # VOICE_SECRET in .env, udp 7883 open in the firewall (docs/groups.md "voice"), then
+    #   docker compose --profile voice up -d voice
+    # until then /voice is a 502 and the api answers voice joins with a 503.
+    image: ${IMAGES:-}stream-video:${TAG:-latest}
+    container_name: voice
+    profiles: ["voice"]
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["voice"]
+    # no ffmpeg here, only webrtc. the same cap as video
+    pids_limit: 256
+    environment:
+      # off turns the per-route request limits off (docs/rate-limits.md). unset: on
+      RATE_LIMITS: ${RATE_LIMITS:-}
+      PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
+      VOICE_WS_PORT: "7881"
+      VOICE_UDP_PORT: "7883"
+      API_URL: http://api:4000
+      # empty: no grant can be redeemed, and every join is "voice is not open"
+      VOICE_SECRET: ${VOICE_SECRET:-}
+      # webrtc_ice at error: at warn it logs one line per stray udp packet
+      RUST_LOG: "warn,video=info,webrtc_ice=error"
+    # the image's own check looks at video's port; this one looks at ours
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7881 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q ' 200 ' <&3"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    ports:
+      # all the voice packets, one port. host port must equal container port.
+      - "7883:7883/udp"
+    # 7881 (the voice websocket) stays inside. browsers reach it through the frontend, at /voice
 
 volumes:
   database-data:

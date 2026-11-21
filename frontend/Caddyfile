@@ -33,6 +33,13 @@ http:// {
 		reverse_proxy video:7880
 	}
 
+	# voice channel websocket, the voice container (video/src/voice.rs), which listens at /ws.
+	# an exact path, like /ws. a 502 until the voice profile is up (docker-compose.yml)
+	handle /voice {
+		rewrite * /ws
+		reverse_proxy voice:7881
+	}
+
 	# text chat websocket, one per viewer
 	handle /chat/* {
 		reverse_proxy chat:4100
