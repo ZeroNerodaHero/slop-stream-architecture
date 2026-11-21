@@ -24,6 +24,7 @@ import { type ChatStyle, chatStyleAtom, hideBotsAtom, profilePopupEnabledAtom } 
 import { EQUES, showWelcomesAtom, type Welcome } from '@/infra/atoms/welcome-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
+import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
 import { ChatLineShape, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ReactionChips } from '@/shared-components/Reactions';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
@@ -626,7 +627,12 @@ export function RoomLines({
                 </span>
               ) : null
             }
-            pictures={<ChatImages ids={line.images} />}
+            pictures={
+              <>
+                <ChatImages ids={line.images} />
+                <ChatEmbeds text={line.text} />
+              </>
+            }
             mark={lineMark?.(line)}
             actions={
               <LineActions

@@ -53,6 +53,7 @@ import { usePrefetchOnPointerDown } from '@/infra/prefetch';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
 import { ChatLineShape, LineActions, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
+import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
 import { ChatImages, pictureSrc } from '@/shared-components/ChatPanel';
 import { comboProps, SearchFilters, SearchHit, SearchResults, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
@@ -1099,7 +1100,12 @@ export function FriendChat() {
                           </span>
                         ) : null
                       }
-                      pictures={<ChatImages ids={line.images} />}
+                      pictures={
+                        <>
+                          <ChatImages ids={line.images} />
+                          <ChatEmbeds text={line.text} />
+                        </>
+                      }
                       actions={<LineActions onReact={(emoji) => void reactDm(name, line, emoji)} reactions={line.reactions} me={me} onReply={() => setReply(line)} text={line.text} />}
                       reactions={<ReactionChips reactions={line.reactions ?? []} me={me} onReact={(emoji) => void reactDm(name, line, emoji)} />}
                       quote={
