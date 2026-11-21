@@ -35,7 +35,6 @@ import {
   type VoiceStats,
   voiceStatsAtom
 } from '@/infra/atoms/voice-atoms';
-import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
@@ -46,18 +45,18 @@ const PENCIL_HIDDEN = 'opacity-0 transition-opacity duration-150 focus-visible:o
 const BAR_BUTTON =
   'flex h-7 w-7 max-md:h-11 max-md:w-11 shrink-0 items-center justify-center border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 
-/** Mute, deafen and leave, in the row of the channel you are in: smaller than the pencil, the row's height. */
+/** Mute, deafen and leave in the header, and the signal on your channel's row: smaller than the pencil, the row's height. */
 const CALL_BUTTON =
   'flex h-6 w-6 max-md:h-9 max-md:w-9 shrink-0 items-center justify-center border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 
 /**
  * The group's voice channels and who is in each (docs/voice.md), over the roster. A click on a
- * channel joins it; while in one, its row has the signal (how the call is getting through, the
- * numbers on hover), mute, deafen and leave at the right. Who is in
+ * channel joins it; while in one, the header has mute, deafen and leave at the right, and its row
+ * has the signal (how the call is getting through, the numbers on hover) at the very right. Who is in
  * where is the room's `voice`, kept by the `voice` and `voice_left` facts; a ring on a face is
  * that person speaking, for the channel you are in. Always there: every group has a voice
  * channel (made with it, migration 0005 for the older ones). `onAdd`, given to the channels
- * power under the cap, puts `add voice channel` in the header; ServerRoom has the dialog. With
+ * power under the cap, puts an `add channel` row after the last channel; ServerRoom has the dialog. With
  * `onEdit`, a channel this login may change (`can_edit`: who made it, or the channels power)
  * has a pencil at the right of its row, up with the pointer on the row, that opens its edit
  * (the name and the line about it; ServerRoom's dialog again). The call is the page's, not this panel's: a phone's drawer shutting keeps it, and leaving the
@@ -103,21 +102,34 @@ export function VoicePanel({
     >
       <div className="flex min-h-6 items-center justify-between gap-2">
         <h3 className="pl-0.5 text-xs font-semibold uppercase tracking-wider text-textTertiary">voice</h3>
-        {onAdd && (
-          <Button id="group-voice-add" size="sm" aria-haspopup="dialog" className="gap-1 px-2 py-0.5 text-xs" onClick={onAdd}>
-            <RiAddLine aria-hidden size={14} />
-            add voice channel
-          </Button>
+        {here && (
+          <div id="group-voice-controls" className="flex shrink-0 items-center gap-0.5">
+            <BarButton
+              id="group-voice-mute"
+              label={muted ? 'unmute' : ptt ? `mute (push to talk: hold ${pttKey})` : 'mute'}
+              pressed={muted}
+              talking={ptt ? talking : undefined}
+              onClick={() => setVoiceMuted(!muted)}
+            >
+              {muted ? <RiMicOffLine aria-hidden size={14} /> : <RiMicLine aria-hidden size={14} />}
+            </BarButton>
+            <BarButton label={deaf ? 'undeafen' : 'deafen'} pressed={deaf} onClick={() => setVoiceDeaf(!deaf)}>
+              <RiHeadphoneLine aria-hidden size={14} />
+            </BarButton>
+            <BarButton label="leave voice" danger onClick={leaveVoice}>
+              <RiLogoutBoxRLine aria-hidden size={14} />
+            </BarButton>
+          </div>
         )}
       </div>
-      {channels.length === 0 && <p className="px-1 text-xs text-textTertiary">no voice channel yet.</p>}
+      {channels.length === 0 && !onAdd && <p className="px-1 text-xs text-textTertiary">no voice channel yet.</p>}
       <ul id="group-voice-channels" className="flex flex-col gap-0.5">
         {channels.map((item) => {
           const people = room.voice?.[item.name] ?? [];
           const mine = here && call.channel === item.name;
           return (
             <li key={item.name}>
-              {/* the row is the box: the join fills it, then the pencil (up with the pointer anywhere on the row), then the call's controls on the row you are in */}
+              {/* the row is the box: the join fills it, then the pencil (up with the pointer anywhere on the row), then the signal on the row you are in */}
               <div className={cn('group/voice flex items-center', mine ? 'bg-primaryStroke/40' : 'hover:bg-primaryStroke/20')}>
                 <button
                   id={`group-voice-${item.name}`}
@@ -146,26 +158,7 @@ export function VoicePanel({
                     </button>
                   </Tooltip>
                 )}
-                {mine && (
-                  <div id="group-voice-controls" className="flex shrink-0 items-center gap-0.5 pr-0.5">
-                    <Signal call={call} stats={stats} />
-                    <BarButton
-                      id="group-voice-mute"
-                      label={muted ? 'unmute' : ptt ? `mute (push to talk: hold ${pttKey})` : 'mute'}
-                      pressed={muted}
-                      talking={ptt ? talking : undefined}
-                      onClick={() => setVoiceMuted(!muted)}
-                    >
-                      {muted ? <RiMicOffLine aria-hidden size={14} /> : <RiMicLine aria-hidden size={14} />}
-                    </BarButton>
-                    <BarButton label={deaf ? 'undeafen' : 'deafen'} pressed={deaf} onClick={() => setVoiceDeaf(!deaf)}>
-                      <RiHeadphoneLine aria-hidden size={14} />
-                    </BarButton>
-                    <BarButton label="leave voice" danger onClick={leaveVoice}>
-                      <RiLogoutBoxRLine aria-hidden size={14} />
-                    </BarButton>
-                  </div>
-                )}
+                {mine && <Signal call={call} stats={stats} />}
               </div>
               {people.length > 0 && (
                 <ul aria-label={`in ${item.name}`} className="flex flex-col gap-0.5 py-0.5 pl-6">
@@ -185,6 +178,20 @@ export function VoicePanel({
             </li>
           );
         })}
+        {onAdd && (
+          <li>
+            <button
+              id="group-voice-add"
+              type="button"
+              aria-haspopup="dialog"
+              onClick={onAdd}
+              className="flex w-full items-center gap-1.5 px-1 py-1 text-left max-md:min-h-11 text-textTertiary hover:bg-primaryStroke/20 hover:text-textPrimary"
+            >
+              <RiAddLine aria-hidden size={14} className="shrink-0" />
+              <span className="min-w-0 flex-1 truncate">add channel</span>
+            </button>
+          </li>
+        )}
       </ul>
       {call.error && !here && (
         <p id="group-voice-error" role="status" className="px-1 text-xs text-textTertiary">
@@ -295,7 +302,7 @@ function Signal({ call, stats }: { call: VoiceCall; stats: VoiceStats | null }) 
         tabIndex={0}
         aria-label={kind === 'connecting' ? word : `signal ${word}`}
         data-signal={kind}
-        className={cn(CALL_BUTTON, 'hover:border-transparent', className)}
+        className={cn(CALL_BUTTON, 'pr-0.5 hover:border-transparent', className)}
       >
         <Icon aria-hidden size={14} />
       </span>
