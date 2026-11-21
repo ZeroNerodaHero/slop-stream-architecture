@@ -1,8 +1,8 @@
 # voice
 
-voice: built, off on the live box. a server (a group) can have voice channels next to its text ones, and people in one talk to each other. the group page's right sidebar lists the voice channels and who is in each, and a click joins ([frontend/src/app/explore/VoicePanel.tsx](../frontend/src/app/explore/VoicePanel.tsx)). the panel is always there: every group has a voice channel.
+voice: built, off on the live box. a server (a group) can have voice channels next to its text ones, and people in one talk to each other and show their cameras and screens. the group page's right sidebar lists the voice channels and who is in each ([frontend/src/app/explore/VoicePanel.tsx](../frontend/src/app/explore/VoicePanel.tsx)), and a click puts that channel's call where the chat is ([VoiceRoom.tsx](../frontend/src/app/explore/VoiceRoom.tsx), see [the call view](#the-call-view)). the panel is always there: every group has a voice channel.
 
-the code: [api/src/voice.rs](../api/src/voice.rs) (the join, the grant, who is in voice, the sweep), [video/src/voice.rs](../video/src/voice.rs) (the voice server, `video voice`), [api/migrations/0004-voice-channels.sql](../api/migrations/0004-voice-channels.sql), the room's `voice` in [api/src/group_mod.rs](../api/src/group_mod.rs), and the test [test/voice.js](../test/voice.js).
+the code: [api/src/voice.rs](../api/src/voice.rs) (the join, the grant, who is in voice, the sweep), [video/src/voice.rs](../video/src/voice.rs) (the voice server, `video voice`), [api/migrations/0004-voice-channels.sql](../api/migrations/0004-voice-channels.sql), the room's `voice` in [api/src/group_mod.rs](../api/src/group_mod.rs), the page's call in [voice-atoms.ts](../frontend/src/infra/atoms/voice-atoms.ts) and [voice-video.ts](../frontend/src/infra/atoms/voice-video.ts), and the tests [test/voice.js](../test/voice.js) and [test/voice-video.js](../test/voice-video.js).
 
 ```mermaid
 sequenceDiagram
@@ -52,7 +52,7 @@ two steps, so the voice server never sees a cookie.
    then it makes a grant, 32 random bytes as hex (64 characters), keeps `voicegrant:<hex>` = `{user_id, name, server, channel}` for 30s, and answers `{url: "/voice", grant, ttl: 30}`.
 2. the page opens the websocket at `/voice` (caddy sends it to `voice:7881/ws`) and its first frame, within 10s, is `{"role":"voice","grant":"<64 hex>","sdp":"<offer>"}`. the voice server redeems the grant with the api once (`POST /api/voice/redeem`), and the room and the name come from that reply, never from the page. the api takes the grant out (GETDEL) and asks the same questions as join again, since the grant may be half a minute old. a used grant, one past its 30s, or one no longer the person's to use is `bad grant`; an api that does not answer within 1.5s is `api unreachable`.
 
-the voice server's other refusals: `voice is not open` (no VOICE_SECRET), `bad offer`, `too many voice peers from this address`, `room full` (all 16 seats taken). after the answer, a peer that fails is said as an error frame before the socket closes: one that never connected is `no audio path: nothing reached the voice server over udp 7883, a firewall is closing it` (its ice gives up 20s in: 5s disconnected and 15s failed), one that did is `voice lost its connection`. the offer is audio only: m-line 0 is the mic and the rest (15 at most) are where the others are heard. [video/src/voice.rs](../video/src/voice.rs) has the frames, the seats and the m-lines.
+the voice server's other refusals: `voice is not open` (no VOICE_SECRET), `bad offer`, `too many voice peers from this address`, `room full` (all 16 seats taken). after the answer, a peer that fails is said as an error frame before the socket closes: one that never connected is `no audio path: nothing reached the voice server over udp 7883, a firewall is closing it` (its ice gives up 20s in: 5s disconnected and 15s failed), one that did is `voice lost its connection`. the offer's audio: m-line 0 is the mic and the other audio ones (15 at most) are where the others are heard; video m-lines come after ([video](#video)). [video/src/voice.rs](../video/src/voice.rs) has the frames, the seats and the m-lines.
 
 with the voice server started with `VOICE_DEV_OPEN=1` it also takes the old `{"role":"voice","room":"<server>/<channel>","user":"<name>","sdp":"<offer>"}` from anyone, for [test/voice-spike.js](../test/voice-spike.js). those joins are never told to the api. never on the live box.
 
@@ -63,6 +63,27 @@ a room is one voice channel, `<server>/<channel>`, with 16 seats. each person ta
 closing the socket, or the peer going failed or closed (the ice timeout), frees the seat.
 
 the page ([voice-atoms.ts](../frontend/src/infra/atoms/voice-atoms.ts)) says `connecting to <channel>…` in the bar from the answer until its peer connects, then `in <channel>`. a call that ends shows its reason under the list: the voice server's error word when it sent one, else from what the page saw (`no audio path...` when its own peer failed before connecting, `voice dropped before the audio connected` when only the socket closed before then, `voice dropped: ...` when it had connected, `voice is unreachable` before an answer). both sides log what ice did: the voice server its ice states and the pair that won (`ice pair (local) ... <-> (remote) ...`), the page `voice: ice ...` and `voice: peer ...` in the console.
+
+## video
+
+a seat shows at most two pictures, its camera and its screen, VP8 only (the voice server has no other video codec, and the page puts VP8 alone on its video lines so the offer stays small). the voice server keeps two tracks per seat for them, `camera<id>` and `screen<id>`.
+
+- **the page always offers.** after the join's answer it may offer again at any time, `{"sdp":"<offer>","video":{"<mid>":"camera","<mid>":"screen"}}`, and gets `{"sdp":"<answer>"}`; one offer at a time, so the two sides never cross. `video` names the page's own sending video m-lines; a sending one not named, a kind twice, more than two sending, more than 32 video m-lines, or audio m-lines not the first offer's are `bad offer`, and end the call.
+- **on and off.** a camera turned on is a sendonly line, made the first time and reused after; off is the same line inactive. what sends is what shows.
+- **seeing the others.** each seat in the seats frame has `video: [{"kind","mid"}]`: what it shows, and the mid of the page's recvonly video line that carries it, null while the page has no free one. the page adds recvonly video lines when a frame lists more pictures than it has lines, and offers. a line only swaps tracks (`replace_track`), like the audio ones.
+- **keyframes.** a line given a new picture asks that picture's sender for a keyframe (an RTCP PLI), so a new viewer has a picture at once (about 100-250ms locally); a viewer's own PLI or FIR is passed on the same way. at most one per 300ms per track.
+- **caps, on the sender.** a camera 640x360 at 24fps and 600 kbps, a screen up to 1920x1080 at 15fps and 1.5 Mbps (`sendEncodings` and the capture constraints, voice-video.ts). the voice server asks for TWCC, so the browser adapts under those.
+- **mute and deafen for the tiles.** the page says `{"state":{"mute":bool,"deaf":bool}}` on every change, and each seat in the seats frame has `mute` and `deaf`. they are only the page's word: what is sent is the page's own doing. a moderator's server mute is the voice server dropping the mic's packets, and a disconnect ends the socket, so it ends that seat's pictures too.
+
+the camera is the one picked in the user modal's voice tab (`settings.voiceCamera`); a new pick moves a camera that is on with `replaceTrack`, nothing offered. [test/voice-video.js](../test/voice-video.js) runs three chromes with fake devices against a `video voice` started with VOICE_DEV_OPEN=1: everyone's audio and cameras decode at everyone else, a screen shared mid-call decodes next to the camera, a camera off and on again, mute and deafen in the seats frame, a leave.
+
+## the call view
+
+a click on a voice channel in the panel puts `?voice=<channel>` on the page, and the call takes the chat's place ([VoiceRoom.tsx](../frontend/src/app/explore/VoiceRoom.tsx)); a click on a text channel (or back) gives the chat back, and the call goes on. the panel's row controls (signal, mute, deafen, leave) still work from either.
+
+- **not in it:** a card with the channel's name and about line, who is in it (faces with their presence square), and `join voice`. in another channel already, it says joining moves you.
+- **in it:** a tile per person, their camera or their face, a ring while their mic's level says they talk, their mute and deafen (and a server mute, red, once the room says it). a shared screen is a tile of its own. a click on a tile puts it big with the rest in a strip under it; a click on it again puts the grid back.
+- **the bar:** mic, deafen, camera, screen (where the browser can share one), the voice tab, leave. a phone's is pinned to the foot over the safe area, with the tiles in one or two columns.
 
 ## who is in voice
 
