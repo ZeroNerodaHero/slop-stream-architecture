@@ -64,12 +64,15 @@ export function VoicePanel({
   flat = false,
   onAdd,
   onEdit,
+  onOpen,
   className
 }: {
   room: GroupRoom;
   flat?: boolean;
   onAdd?: () => void;
   onEdit?: (channel: Channel) => void;
+  /** A click on a channel shows its call (VoiceRoom.tsx) instead of joining it. */
+  onOpen?: (channel: string) => void;
   className?: string;
 }) {
   const me = useAtomValue(meAtom) ?? null;
@@ -115,7 +118,7 @@ export function VoicePanel({
                   id={`group-voice-${item.name}`}
                   type="button"
                   aria-current={mine || undefined}
-                  onClick={() => join(item.name)}
+                  onClick={() => (onOpen ? onOpen(item.name) : join(item.name))}
                   className={cn(
                     'flex min-w-0 flex-1 items-center gap-1.5 px-1 py-1 text-left max-md:min-h-11',
                     mine ? 'font-semibold text-textPrimary' : 'text-textSecondary group-hover/voice:text-textPrimary'

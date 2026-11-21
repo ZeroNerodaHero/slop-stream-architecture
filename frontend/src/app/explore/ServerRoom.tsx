@@ -48,6 +48,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { PinSheet, PinSheetButton } from '@/app/explore/PinSheet';
 import { VoicePanel } from '@/app/explore/VoicePanel';
+import { useVoiceView, VoiceRoom } from '@/app/explore/VoiceRoom';
 import {
   api,
   canEditChannel,
@@ -1057,6 +1058,12 @@ export function ServerPage() {
   // a phone: the group's drawer from the right (its picture and name, the channels, who is in), the room the chat alone
   const mobile = useIsMobile();
   const [drawer, setDrawer] = useState(false);
+  // a voice channel clicked: its call where the chat is (VoiceRoom.tsx), the drawer shut
+  const voiceView = useVoiceView(room);
+  const openVoice = (name: string) => {
+    voiceView.open(name);
+    setDrawer(false);
+  };
   // a phone's pins: a sheet from under the title row, its pin in the row (PinSheet.tsx); a desktop's are the chat header's (ChannelPins)
   const [pinSheet, setPinSheet] = useState(false);
   // the roster beside the chat, or folded to its strip of faces (a wide screen's: the phone's drawer and a narrow screen's column always have it whole)
@@ -1386,7 +1393,14 @@ export function ServerPage() {
       <GroupMark name={server} color={color} icon={room.icon} className="h-9 w-9 shrink-0 text-sm" />
       <span className="flex min-w-0 flex-col">
         <span className="truncate text-sm font-normal text-textSecondary">{words.title}</span>
-        <span className="truncate text-lg">#&nbsp;{channel}</span>
+        {voiceView.view ? (
+          <span className="flex min-w-0 items-center gap-1.5 text-lg">
+            <RiVolumeUpLine aria-label="voice" size={16} className="shrink-0" />
+            <span className="truncate">{voiceView.view}</span>
+          </span>
+        ) : (
+          <span className="truncate text-lg">#&nbsp;{channel}</span>
+        )}
       </span>
     </span>
   );
@@ -1460,20 +1474,24 @@ export function ServerPage() {
             )}
             <div className={cn('min-w-0', ROOM_CHAT_CONTAINER, ROOM_HEIGHT, STACKED_SNAP)}>
               {/* the search box is the roster's (RoomSearch), for a member and a guest alike; the hits land in the panel. a search is every channel's: a hit opened in another one moves the page there */}
-              <ChatPanel
-                name={server}
-                channel={channel}
-                onChannel={(to) => navigate(to === home ? `/groups/${server}` : `/groups/${server}/${to}`)}
-                headerEnd={mobile ? undefined : <ChannelPins server={server} channel={channel} room={room} />}
-                lineMark={(line) => (pinnedHere.has(line.id) ? <PinMark /> : null)}
-                lineActions={room.perms.channels ? (line) => <PinAction server={server} channel={channel} line={line} pinned={pinnedHere.has(line.id)} /> : undefined}
-                className={cn('h-full', ROOM_CHAT_MOBILE)}
-              />
+              {voiceView.view ? (
+                <VoiceRoom room={room} channel={voiceView.view} className="h-full" />
+              ) : (
+                <ChatPanel
+                  name={server}
+                  channel={channel}
+                  onChannel={(to) => navigate(to === home ? `/groups/${server}` : `/groups/${server}/${to}`)}
+                  headerEnd={mobile ? undefined : <ChannelPins server={server} channel={channel} room={room} />}
+                  lineMark={(line) => (pinnedHere.has(line.id) ? <PinMark /> : null)}
+                  lineActions={room.perms.channels ? (line) => <PinAction server={server} channel={channel} line={line} pinned={pinnedHere.has(line.id)} /> : undefined}
+                  className={cn('h-full', ROOM_CHAT_MOBILE)}
+                />
+              )}
             </div>
             {!mobile && (
               // the voice channels over the roster, the column the chat's height between them
               <div className={cn('flex min-w-0 flex-col gap-2', ROSTER_HEIGHT, STACKED_SNAP)}>
-                <VoicePanel room={room} onAdd={onAddVoice} onEdit={setEditingVoice} className={cn(!membersOpen && 'lg:hidden')} />
+                <VoicePanel room={room} onAdd={onAddVoice} onEdit={setEditingVoice} onOpen={openVoice} className={cn(!membersOpen && 'lg:hidden')} />
                 <Roster room={room} fill />
               </div>
             )}
@@ -1501,7 +1519,7 @@ export function ServerPage() {
                       {channelList}
                       {liveList}
                     </div>
-                    <VoicePanel room={room} onAdd={onAddVoice} onEdit={setEditingVoice} flat />
+                    <VoicePanel room={room} onAdd={onAddVoice} onEdit={setEditingVoice} onOpen={openVoice} flat />
                     <Roster room={room} flat />
                   </div>
                 </>
@@ -1552,6 +1570,7 @@ function ChannelList({
   // the cap and the names are every channel's; the list is the text ones (the voice ones are the voice panel's)
   const channels = room.channels ?? [];
   const textChannels = channels.filter((item) => !isVoice(item));
+  const voiceView = useVoiceView(room).view;
   const muted = room.muted ?? [];
   const canAdd = room.perms.channels && room.mine;
   // the mute is a member's: a stranger gets no row to mute
@@ -1574,7 +1593,8 @@ function ChannelList({
       <h3 className={cn('text-xs font-semibold uppercase tracking-wider text-textTertiary', boxed ? 'flex h-6 items-center px-2' : 'sr-only')}>channels</h3>
       <ul id="group-channels" className={cn('flex flex-col', !boxed && 'gap-0.5')}>
         {textChannels.map((item) => {
-          const here = item.name === channel;
+          // with a voice channel's call on screen (VoiceRoom.tsx) no text channel is: each is a link back to its chat
+          const here = item.name === channel && !voiceView;
           const isMuted = muted.includes(item.name);
           return (
             // the row is the box, the name fills it and the bell sits in it at the right: the pointer anywhere on the row brings the bell up
