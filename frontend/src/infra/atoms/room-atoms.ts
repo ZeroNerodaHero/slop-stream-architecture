@@ -16,12 +16,14 @@ import { atom } from 'jotai';
 
 import { api, type Channel, type GroupMember, type GroupRoom, isVoice, messageOf, statusOf, type VoiceMember } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
+import { paletteAtom } from '@/infra/atoms/settings-atoms';
 import { type ChatLine, findServerChat, serverChat } from '@/infra/atoms/chat-atoms';
 import { voiceCallAtom, voiceUidsAtom } from '@/infra/atoms/voice-atoms';
 import { holdPresence, onEvents, releasePresence, unwatchPresence, watchPresence } from '@/infra/events';
 import { type GroupChange, groupTopic } from '@/infra/frames';
 import { onPrefetch, prefetch, takePrefetched } from '@/infra/prefetch';
 import { store } from '@/infra/store';
+import { ensureContrast, fromHex, hex, isHex } from '@/infra/theme';
 
 /** The room on screen, as loaded and then patched. `null` before the first answer, and off the page. */
 export const roomAtom = atom<GroupRoom | null>(null);
@@ -31,6 +33,31 @@ export const roomErrorAtom = atom('');
 export const roomGoneAtom = atom(false);
 /** A channel was renamed while the room was on screen: the page on `from` moves to `to`, and clears this. */
 export const channelRenamedAtom = atom<{ from: string; to: string } | null>(null);
+
+/**
+ * Each member's name colour in the group's chat (ChatPanel.tsx), by name, discord's: the colour
+ * of the first role they hold in the room's order (the roles tab's, top first), pushed toward
+ * the text until it reads at 4.5:1 on the theme's tertiary surface (a bubble's, the reply bar's:
+ * the one nearest the text, as theme.ts checks the text against), so a dark red still reads on
+ * the dark theme and a yellow on the light. Who holds what is `holders`, the whole group's; on an
+ * older api, the roster's pages loaded so far. Someone holding no role is absent. `server` says
+ * whose room it is, so a panel on another server's chat colours nobody.
+ */
+export const roleColorsAtom = atom((get) => {
+  const room = get(roomAtom);
+  const colors = new Map<string, string>();
+  if (!room) return { server: null, colors };
+  const page = get(paletteAtom).backgroundTertiary;
+  for (const role of room.roles) {
+    if (!isHex(role.color)) continue;
+    const names = room.holders ? (room.holders[role.id] ?? []) : (room.roster ?? []).filter((m) => m.roles.some((r) => r.id === role.id)).map((m) => m.name);
+    const fresh = names.filter((name) => !colors.has(name));
+    if (!fresh.length) continue;
+    const color = hex(ensureContrast(fromHex(role.color), page, 4.5));
+    for (const name of fresh) colors.set(name, color);
+  }
+  return { server: room.name, colors };
+});
 
 /** Where the next page of the roster stands: being asked for, or refused the last time (a scroll back to the end asks again). */
 export const rosterMoreAtom = atom<'idle' | 'busy' | 'failed'>('idle');
@@ -141,6 +168,9 @@ function withPin(pins: Record<string, string[]> | undefined, channel: string, id
 
 /** Bumped on every pin or unpin of the room on screen: an open pins panel asks its list again. */
 export const pinsTickAtom = atom(0);
+
+/** Bumped on every `timeout` fact of the room on screen: an open timeouts tab asks its list again. */
+export const timeoutsTickAtom = atom(0);
 
 /**
  * The channels power pins a line of `channel`, or unpins it (docs/groups.md "pins"). The mark
@@ -416,6 +446,22 @@ function withoutVoice(voice: Record<string, VoiceMember[]>, out: (p: VoiceMember
 }
 
 /**
+ * `holders` with `who` kept in the roles `keeps` says yes to and out of the rest, and put in
+ * `add` (a role they were just given). A role left with nobody goes. Absent or null stays so:
+ * this login may not see who holds what.
+ */
+function withHolder(holders: GroupRoom['holders'], who: string, keeps: (id: string) => boolean, add?: string): GroupRoom['holders'] {
+  if (!holders) return holders;
+  const next: Record<string, string[]> = {};
+  for (const [id, names] of Object.entries(holders)) {
+    const kept = names.filter((name) => name !== who || keeps(id));
+    if (kept.length) next[id] = kept;
+  }
+  if (add !== undefined && !next[add]?.includes(who)) next[add] = [...(next[add] ?? []), who];
+  return next;
+}
+
+/**
  * One change onto the room. A change about me is asked of the api instead: the roster, the
  * bans and my powers are mine to see or not, and the frame says the same thing to everyone.
  */
@@ -440,7 +486,8 @@ function apply(change: GroupChange): void {
       const roster = room.roster ? room.roster.filter((m) => m.name !== change.who) : room.roster;
       let bans = room.bans;
       if (change.what === 'banned' && bans) bans = [{ name: change.who, reason: change.reason }, ...bans.filter((b) => b.name !== change.who)];
-      store.set(roomAtom, { ...room, members: change.members, roster, bans });
+      // their roles went with them
+      store.set(roomAtom, { ...room, members: change.members, roster, bans, holders: withHolder(room.holders, change.who, () => false) });
       return;
     }
     case 'unbanned':
@@ -489,6 +536,10 @@ function apply(change: GroupChange): void {
     case 'about':
       store.set(roomAtom, { ...room, about: change.about });
       return;
+    case 'color':
+      // the lists the page holds follow the room (groups-atoms.ts)
+      store.set(roomAtom, { ...room, color: change.color });
+      return;
     case 'access':
       store.set(roomAtom, { ...room, public: change.public });
       return;
@@ -524,7 +575,8 @@ function apply(change: GroupChange): void {
       store.set(roomAtom, {
         ...room,
         roles: room.roles.filter((r) => r.id !== change.id),
-        roster: room.roster?.map((m) => ({ ...m, roles: m.roles.filter((r) => r.id !== change.id) })) ?? room.roster
+        roster: room.roster?.map((m) => ({ ...m, roles: m.roles.filter((r) => r.id !== change.id) })) ?? room.roster,
+        holders: room.holders ? Object.fromEntries(Object.entries(room.holders).filter(([id]) => id !== change.id)) : room.holders
       });
       // a role that kept channels is gone: they are everyone's now, or still another role's
       if (held || (was?.channels?.length ?? 0) > 0) void loadRoom();
@@ -536,14 +588,16 @@ function apply(change: GroupChange): void {
         ...room,
         roster:
           room.roster?.map((m) => (m.name === change.who && !m.roles.some((r) => r.id === change.role.id) ? { ...m, roles: [...m.roles, change.role] } : m)) ??
-          room.roster
+          room.roster,
+        holders: withHolder(room.holders, change.who, (id) => id === change.role.id, change.role.id)
       });
       return;
     case 'unheld':
       if (about(change.who)) return void loadRoom();
       store.set(roomAtom, {
         ...room,
-        roster: room.roster?.map((m) => (m.name === change.who ? { ...m, roles: m.roles.filter((r) => r.id !== change.id) } : m)) ?? room.roster
+        roster: room.roster?.map((m) => (m.name === change.who ? { ...m, roles: m.roles.filter((r) => r.id !== change.id) } : m)) ?? room.roster,
+        holders: withHolder(room.holders, change.who, (id) => id !== change.id)
       });
       return;
     case 'owner': {
@@ -565,6 +619,7 @@ function apply(change: GroupChange): void {
     case 'timeout':
       // the roster's mark; the chat itself refuses a timed-out login's lines, whatever the page knows
       store.set(roomAtom, { ...room, roster: room.roster?.map((m) => (m.name === change.who ? { ...m, timeout: change.until } : m)) ?? room.roster });
+      store.set(timeoutsTickAtom, store.get(timeoutsTickAtom) + 1);
       return;
     case 'live': {
       const live = room.live ?? [];

@@ -325,8 +325,11 @@ export interface VoiceGrant {
   ttl: number;
 }
 
-/** Channels on one server, `general` included. Matches `CHANNELS_PER_SERVER` in the api. */
+/** Text channels on one server, `general` included; the voice ones are counted apart. Matches `TEXT_CHANNELS_PER_SERVER` in the api. */
 export const CHANNEL_CAP = 20;
+
+/** Voice channels on one server. Matches `VOICE_CHANNELS_PER_SERVER` in the api: a group with more from before keeps them and adds none. */
+export const VOICE_CHANNEL_CAP = 4;
 
 /** A group as a server: the explorer splits these into yours and the rest. */
 export interface Server {
@@ -428,6 +431,8 @@ export interface GroupRoom {
   roster?: GroupMember[] | null;
   /** Asked for a page of it (`group(name, roster)`): where the next page starts (`groupMembersPage`'s `after`). Null once the roster is whole; absent on an older api. */
   roster_next?: string | null;
+  /** Who holds each role, by role id: the names, the whole group's and not a page's, so a chat line's speaker wears their role's colour (ChatPanel.tsx). A role nobody holds is absent. The roster's rule: null when it is; absent on an older api. */
+  holders?: Record<string, string[]> | null;
   /** Who is banned, for the ban power. Null for anyone else; absent on an older api. */
   bans?: GroupBan[] | null;
 }
@@ -453,6 +458,16 @@ export type MemberLine = ChatLine & { channel: string };
 export interface GroupBan {
   name: string;
   reason: string;
+}
+
+/** A timeout still running (`groupTimeouts`): until when (unix seconds), the reason given, who set it (null when they are gone), and whether they are still a member. */
+export interface GroupTimeout {
+  name: string;
+  avatar: number | null;
+  until: number;
+  reason: string;
+  by: string | null;
+  member: boolean;
 }
 
 /** The words on the square, and the four digits when the group has them. */
@@ -788,6 +803,8 @@ export const api = {
   /** The login has the channel on screen: its inbox rows for it are read. Its other devices hear it on the socket. */
   readChannel: (server: string, channel: string) => request<null>('PUT', `/api/groups/${encodeURIComponent(server)}/channels/${encodeURIComponent(channel)}/read`),
   saveGroupAbout: (name: string, about: string) => request<{ about: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/about`, { about }),
+  /** Appearance, from the manage dialog: `#rrggbb`. The `color` fact repaints the room and the lists. */
+  saveGroupColor: (name: string, color: string) => request<{ color: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/color`, { color }),
   /** Appearance, from the manage dialog. A private group stays off the lists. */
   setGroupPublic: (name: string, isPublic: boolean) => request<{ public: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/access`, { public: isPublic }),
   /** Appearance. Owners stay first; this is the order after them. */
@@ -836,6 +853,8 @@ export const api = {
     request<null>('POST', `/api/groups/${encodeURIComponent(group)}/timeout`, { name, seconds, reason }),
   /** The timeout lifted early. The kick power. */
   liftTimeout: (group: string, name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/timeout/${encodeURIComponent(name)}`),
+  /** Every timeout still running, the soonest to end first. The kick power. */
+  groupTimeouts: (group: string) => request<GroupTimeout[]>('GET', `/api/groups/${encodeURIComponent(group)}/timeouts`),
   /** The group is `name`'s from now on and not this login's: they are made an owner and the login stops being one, in one go. An owner, for a member who is not one; the cap on owning counts for them. */
   transferOwnership: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/transfer`, { name }),
   /** What the owner role is called from now on. An owner. 400 a bad name, 409 a custom role's name. */

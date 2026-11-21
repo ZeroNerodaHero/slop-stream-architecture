@@ -1,6 +1,6 @@
 import { RiCameraOffLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 'react';
 
 import {
   DEFAULT_DEVICE,
@@ -349,7 +349,8 @@ function InputMode() {
               value={gateDb}
               aria-describedby="voice-gate-hint"
               onChange={(e) => setVoiceGate(e.target.valueAsNumber)}
-              className="h-1 w-full accent-primaryBlue"
+              className="range-box w-full"
+              style={{ '--pct': `${((gateDb - FLOOR_DB) / (0 - FLOOR_DB)) * 100}%` } as CSSProperties}
             />
             <p id="voice-gate-hint" className="text-sm text-textTertiary">
               the mic opens when you are louder than the mark on the meter. all the way left: always open
@@ -378,7 +379,8 @@ function InputMode() {
                 step={50}
                 value={delay}
                 onChange={(e) => setVoicePttDelay(e.target.valueAsNumber)}
-                className="h-1 w-full accent-primaryBlue"
+                className="range-box w-full"
+                style={{ '--pct': `${(delay / PTT_DELAY_MAX) * 100}%` } as CSSProperties}
               />
             </div>
             <p id="voice-ptt-note" className="text-sm text-textTertiary">

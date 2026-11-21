@@ -60,8 +60,10 @@ pub(crate) const LINK: &str = r"(^|[^[:alnum:]])(https?://|www\.)[^[:space:]]";
 /// the panel leaves out of a link (`LinkedText.tsx`) is allowed before a space or the end, so
 /// `clip.mp4.` and `(…/clip.mp4)` are videos and `x.movie` and `clip.mp4.example.com/a` are not.
 /// The chat keeps no videos of its own, so this is the hosts people paste, and the file types a
-/// browser plays. Not the schema's: a host is added here.
-pub(crate) const VIDEO_LINK: &str = r"(^|[^[:alnum:]])(https?://|www\.)[^[:space:]]*(youtube\.com/(watch|shorts|live|embed)|youtu\.be/|twitch\.tv/videos/|clips\.twitch\.tv/|twitch\.tv/[^/[:space:]]+/clip/|vimeo\.com/[0-9]|streamable\.com/|kick\.com/[^[:space:]]*/clips?/|tiktok\.com/|\.(mp4|webm|mov|m3u8)([?#]|[[:punct:]]*([[:space:]]|$)))";
+/// browser plays. Not the schema's: a host is added here. The same providers the panel draws a player for
+/// (`ChatEmbeds.tsx`: youtube, vimeo, a twitch channel, vod or clip, streamable, dailymotion,
+/// tiktok, a file), and kick's clips and `.m3u8`, which it draws none for.
+pub(crate) const VIDEO_LINK: &str = r"(^|[^[:alnum:]])(https?://|www\.)[^[:space:]]*(youtube\.com/(watch|shorts|live|embed)|youtu\.be/|youtube-nocookie\.com/embed/|twitch\.tv/[[:alnum:]_]|vimeo\.com/([^[:space:]]*/)?[0-9]|streamable\.com/|dailymotion\.com/(video|embed)/|dai\.ly/|kick\.com/[^[:space:]]*/clips?/|tiktok\.com/|\.(mp4|webm|mov|m3u8)([?#]|[[:punct:]]*([[:space:]]|$)))";
 
 /// A line's columns, with its speaker's picture as it is now (`LineRow`), and its room last (a
 /// server's search spans channels, and says which one a hit is in). The row keeps no picture:
@@ -1080,14 +1082,18 @@ mod tests {
         store(&pool, &room, &line(oct30, 9), "cy", None, "the youtube.com/watch page is slow, see https://example.com/help", None, false, false, &[], None).await.unwrap();
         // the extension inside a host is not a video file
         store(&pool, &room, &line(oct30, 10), "cy", None, "see https://clip.mp4.example.com/a", None, false, false, &[], None).await.unwrap();
+        // the hosts the panel draws a player for: a twitch channel, dailymotion, vimeo's player
+        store(&pool, &room, &line(oct30, 11), "cy", None, "live now https://www.twitch.tv/somebody", None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 12), "cy", None, "https://dai.ly/x8abc12 and https://www.dailymotion.com/video/x8abc12", None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 13), "cy", None, "https://player.vimeo.com/video/76979871", None, false, false, &[], None).await.unwrap();
 
         assert_eq!(found(&pool, &room, "everyone").await, vec![line(oct29, 0)], "the words alone, as before");
         assert_eq!(found(&pool, &room, "has:image").await, vec![line(oct30, 0)]);
-        let linked = vec![line(oct30, 10), line(oct30, 9), line(oct30, 8), line(oct30, 7), line(oct30, 6), line(oct30, 5), line(oct30, 4), line(oct30, 2), line(oct30, 1), line(oct29, 1)];
+        let linked = vec![line(oct30, 13), line(oct30, 12), line(oct30, 11), line(oct30, 10), line(oct30, 9), line(oct30, 8), line(oct30, 7), line(oct30, 6), line(oct30, 5), line(oct30, 4), line(oct30, 2), line(oct30, 1), line(oct29, 1)];
         assert_eq!(found(&pool, &room, "has:link").await, linked, "newest first, and a bare domain is not a link");
         assert_eq!(
             found(&pool, &room, "has:video").await,
-            vec![line(oct30, 6), line(oct30, 5), line(oct30, 4), line(oct30, 2), line(oct30, 1)],
+            vec![line(oct30, 13), line(oct30, 12), line(oct30, 11), line(oct30, 6), line(oct30, 5), line(oct30, 4), line(oct30, 2), line(oct30, 1)],
             "a file link may end a sentence; a video-looking word beside another link is not a video"
         );
         assert_eq!(found(&pool, &room, "has:video later").await, vec![line(oct30, 2)], "a filter and the words together");
@@ -1095,7 +1101,7 @@ mod tests {
         assert_eq!(found(&pool, &room, &format!("from:{ann_name}")).await, vec![line(oct30, 0), line(oct29, 0)], "an account's lines");
         assert_eq!(found(&pool, &room, "from:bob has:link").await, vec![line(oct29, 1)]);
         assert_eq!(found(&pool, &room, "before:2026-10-30").await, vec![line(oct29, 1), line(oct29, 0)]);
-        assert_eq!(found(&pool, &room, "after:2026-10-29").await.len(), 11, "after a day is from the next day on");
+        assert_eq!(found(&pool, &room, "after:2026-10-29").await.len(), 14, "after a day is from the next day on");
         assert_eq!(found(&pool, &room, "after:2026-10-29 before:2026-10-30").await, Vec::<String>::new());
 
         // the account's lines follow a rename: ann is now dee, and `from:dee` finds what ann said

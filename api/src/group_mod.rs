@@ -24,7 +24,7 @@ use crate::groups::{self, BOT_GROUP};
 use crate::s3;
 use crate::{ApiError, ApiResult, AppState};
 
-/// Edit the about line, public or private, and the member order. Not the pictures: those are the owner's.
+/// Edit the about line, the colour, public or private, and the member order. Not the pictures: those are the owner's.
 pub(crate) const APPEARANCE: i32 = 1;
 /// Make, edit, delete and hand out custom roles. Not owner.
 pub(crate) const ROLES: i32 = 2;
@@ -346,6 +346,11 @@ struct AboutIn {
 }
 
 #[derive(Deserialize)]
+struct ColorIn {
+    color: String,
+}
+
+#[derive(Deserialize)]
 struct AccessIn {
     public: bool,
 }
@@ -373,6 +378,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(MAX_BANNER));
     Router::new()
         .route("/api/groups/{group}/about", axum::routing::put(put_about))
+        .route("/api/groups/{group}/color", axum::routing::put(put_color))
         .route("/api/groups/{group}/access", axum::routing::put(set_access))
         .route("/api/groups/{group}/order", axum::routing::put(set_order))
         .route("/api/groups/{group}/roles", get(list_roles).post(create_role))
@@ -391,6 +397,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}/kick", post(kick))
         .route("/api/groups/{group}/timeout", post(timeout))
         .route("/api/groups/{group}/timeout/{name}", axum::routing::delete(lift_timeout))
+        .route("/api/groups/{group}/timeouts", get(list_timeouts))
         .route("/api/groups/{group}/ban", post(ban))
         .route("/api/groups/{group}/bans", get(list_bans))
         .route("/api/groups/{group}/bans/{name}", axum::routing::delete(unban))
@@ -399,8 +406,8 @@ pub(crate) fn routes() -> Router<AppState> {
 
 /// `GET /api/groups/:group`: the whole room in one answer. The group, its roles, what the
 /// login may do, its channels, who in it is live, who is in which voice channel, the roster (anyone's on a public group; a
-/// member's or a site admin's on a private one), and (for the ban power) the bans. `roster`
-/// and `bans` are null for someone who may not see them. `?roster=<n>` cuts the roster to its
+/// member's or a site admin's on a private one), and (for the ban power) the bans. `roster`,
+/// `holders` (who holds each role) and `bans` are null for someone who may not see them. `?roster=<n>` cuts the roster to its
 /// first page, `roster_next` the cursor for `GET .../members?after=`. The page loads this once and then
 /// follows the `group` facts on the events socket (docs/groups.md); nothing here is asked
 /// again on a channel change.
@@ -445,11 +452,12 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
     // `?roster=` asks for its first page alone (`limit`, as `GET .../members` reads it), and
     // `roster_next` is where the next one starts: null when the roster came whole
     let first = page_of(q.roster, None, None)?;
-    let (roster, roster_next) = if public || mine || admin {
+    // `holders` is the roster's too: who holds which role, the whole group's
+    let (roster, roster_next, holders) = if public || mine || admin {
         let (list, next) = members_of(&s.db, &group, &member_order, first.as_ref()).await?;
-        (Some(list), next)
+        (Some(list), next, Some(holders_of(&s.db, &group).await?))
     } else {
-        (None, None)
+        (None, None, None)
     };
     let bans = if powers & BAN != 0 { Some(bans_of(&s.db, &group).await?) } else { None };
     Ok(Json(json!({
@@ -477,6 +485,7 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
         "voice": voice,
         "roster": roster,
         "roster_next": roster_next,
+        "holders": holders,
         "bans": bans,
     })))
 }
@@ -574,6 +583,20 @@ async fn put_about(State(s): State<AppState>, Path(group): Path<String>, Me(me):
     Ok(Json(json!({ "about": about })))
 }
 
+/// `PUT /api/groups/:group/color` `{color}`: the group's colour, `#rrggbb` as the create form
+/// takes it (`groups::clean_color`). Appearance, like the about line. The `color` fact repaints
+/// the room, and the lists the page has, at once.
+async fn put_color(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<ColorIn>, JsonRejection>) -> ApiResult {
+    let who = me.ok_or_else(login)?;
+    let Json(body) = body?;
+    let group = server(&s.db, &group).await?;
+    need(&s, who.id, &group, APPEARANCE).await?;
+    let color = groups::clean_color(&body.color)?;
+    sqlx::query("UPDATE groups SET color = $2 WHERE name = $1").bind(&group).bind(&color).execute(&s.db).await?;
+    groups::tell(&s, &group, "color", json!({ "color": color })).await;
+    Ok(Json(json!({ "color": color })))
+}
+
 /// One role as the room, the list and the `role` fact say it. `channels` is the ones kept to it,
 /// `cooldown` the seconds its holders wait between lines (0: none).
 fn role_json(id: uuid::Uuid, name: &str, color: &str, perms: i32, channels: &[String], cooldown: i32) -> Value {
@@ -593,6 +616,26 @@ async fn roles_of(db: &sqlx::PgPool, group: &str) -> Result<Vec<Value>, sqlx::Er
     .fetch_all(db)
     .await?;
     Ok(roles.into_iter().map(|(id, name, color, perms, channels, cooldown)| role_json(id, &name, &color, perms, &channels, cooldown)).collect())
+}
+
+/// Who holds each role, by the name they have now: `{"<role id>": [name, …]}`, a role nobody
+/// holds left out. The whole group's, not a roster page's, so a line's speaker past the pages
+/// loaded so far still wears their role's colour in the chat (docs/groups.md).
+async fn holders_of(db: &sqlx::PgPool, group: &str) -> Result<Value, sqlx::Error> {
+    let rows: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT rm.role_id, s.name FROM role_members rm
+         JOIN roles r ON r.id = rm.role_id
+         JOIN streamers s ON s.id = rm.user_id
+         WHERE r.group_name = $1 ORDER BY s.name",
+    )
+    .bind(group)
+    .fetch_all(db)
+    .await?;
+    let mut holders: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    for (id, name) in rows {
+        holders.entry(id.to_string()).or_default().push(name);
+    }
+    Ok(json!(holders))
 }
 
 /// The channels a role's body names, cleaned, as the shaper may put them: each a channel of the
@@ -1297,6 +1340,32 @@ async fn lift_timeout(State(s): State<AppState>, Path((group, name)): Path<(Stri
         groups::tell(&s, &group, "timeout", json!({ "who": name, "until": Value::Null })).await;
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /api/groups/:group/timeouts`: every timeout still running, the soonest to end first:
+/// `[{ name, avatar, until, reason, by, member }]`. `until` is unix seconds; `by` is null when
+/// whoever set it is gone; `member` is false for one who left while timed out, since it
+/// outlives a leave. The kick power, the one that sets and lifts them, as the bans list is the
+/// ban power's.
+async fn list_timeouts(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
+    let who = me.ok_or_else(login)?;
+    let group = server(&s.db, &group).await?;
+    need(&s, who.id, &group, KICK).await?;
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(String, Option<i64>, i64, String, Option<String>, bool)> = sqlx::query_as(
+        "SELECT s.name, (EXTRACT(EPOCH FROM s.avatar_at))::bigint, (EXTRACT(EPOCH FROM t.until))::bigint, t.reason, b.name,
+                EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = t.group_name AND m.user_id = t.user_id)
+         FROM timeouts t JOIN streamers s ON s.id = t.user_id LEFT JOIN streamers b ON b.id = t.by_id
+         WHERE t.group_name = $1 AND t.until > now()
+         ORDER BY t.until, s.name",
+    )
+    .bind(&group)
+    .fetch_all(&s.db)
+    .await?;
+    let out = rows.into_iter().map(|(name, avatar, until, reason, by, member)| {
+        json!({ "name": name, "avatar": avatar, "until": until, "reason": reason, "by": by, "member": member })
+    });
+    Ok(Json(Value::Array(out.collect())))
 }
 
 async fn ban(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<BanIn>, JsonRejection>) -> Result<StatusCode, ApiError> {
