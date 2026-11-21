@@ -74,8 +74,6 @@ pub fn media_setup(twcc: bool) -> anyhow::Result<(MediaEngine, Registry)> {
 
 /// Opus for voice only: mono speech at a low bitrate, with DTX so silence costs
 /// almost nothing. Never use it for the stream; music must not get DTX.
-// not called yet; the voice rooms wire it up
-#[allow(dead_code)]
 pub fn opus_voice_capability() -> RTCRtpCodecCapability {
     RTCRtpCodecCapability {
         mime_type: MIME_TYPE_OPUS.to_owned(),
@@ -87,8 +85,8 @@ pub fn opus_voice_capability() -> RTCRtpCodecCapability {
     }
 }
 
-/// Like `media_setup`, but for voice: only the voice Opus, no VP8 and no TWCC.
-#[allow(dead_code)]
+/// Like `media_setup`, but for voice: the voice Opus for the mics, and VP8 for the cameras and
+/// screens shown in a voice channel, with TWCC so a browser sending one adapts its bitrate.
 pub fn voice_media_setup() -> anyhow::Result<(MediaEngine, Registry)> {
     let mut media = MediaEngine::default();
     media.register_codec(
@@ -99,11 +97,20 @@ pub fn voice_media_setup() -> anyhow::Result<(MediaEngine, Registry)> {
         },
         RTPCodecType::Audio,
     )?;
+    media.register_codec(
+        RTCRtpCodecParameters {
+            capability: vp8_capability(),
+            payload_type: 96,
+            ..Default::default()
+        },
+        RTPCodecType::Video,
+    )?;
 
     let mut registry = Registry::new();
     registry.add(Box::new(Responder::builder().with_log2_size(9)));
     registry.add(Box::new(Generator::builder()));
     registry = configure_rtcp_reports(registry);
+    registry = configure_twcc_receiver_only(registry, &mut media)?;
     Ok((media, registry))
 }
 

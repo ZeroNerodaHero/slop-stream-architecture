@@ -61,12 +61,12 @@ function refusal(err: unknown, what: string): string {
 }
 
 /**
- * The devices a call uses: the mic it talks with, the speakers it plays through, and a camera
- * kept for video in voice, which is not here yet; then what is done to the mic (isolation, echo
- * cancellation, auto gain) and how it opens (voice activity's gate, or push to talk). Everything
- * applies at once, to a call that is on too, and keeps in this browser (voice-atoms.ts). The
- * mic's level shows live while the tab is open: the tab holds the one mic a call would use (the
- * call's own while in one), and lets go of it when it shuts.
+ * The devices a call uses: the mic it talks with, the speakers it plays through, and the camera
+ * it shows (voice-video.ts); then what is done to the mic (isolation, echo cancellation, auto
+ * gain) and how it opens (voice activity's gate, or push to talk). Everything applies at once,
+ * to a call that is on too, and keeps in this browser (voice-atoms.ts). The mic's level shows
+ * live while the tab is open: the tab holds the one mic a call would use (the call's own while
+ * in one), and lets go of it when it shuts.
  */
 export function VoiceTab() {
   const devices = useAtomValue(voiceDevicesAtom);
@@ -180,7 +180,7 @@ export function VoiceTab() {
       <InputProcessing />
       <InputMode />
 
-      <Block title="video">
+      <Block title="video" tip="the camera a voice call shows when you turn it on">
         <CameraPreview deviceId={camera}>
           <Select
             id="voice-camera"

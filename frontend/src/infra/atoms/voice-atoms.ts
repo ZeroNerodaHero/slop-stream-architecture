@@ -7,10 +7,11 @@
  * that person is heard on. Who is in which channel is the room's (`voice` in room-atoms.ts,
  * kept by the `voice` and `voice_left` facts); this module is only this tab's own call, and who
  * is speaking in it, from each m-line's `audioLevel` (getStats). Same shape as the other atom
- * modules: atoms for what renders, module handles, action functions. The devices a call uses
- * (the mic, the speakers, a camera for later) are picked in the user modal's voice tab and kept
- * in this browser; they are after the call. Last is the mic itself: one stream, shared by the
- * call and the tab's meter, through voice isolation and the noise gate, and push to talk.
+ * modules: atoms for what renders, module handles, action functions. Cameras and screens in the
+ * call are voice-video.ts's, on this call's peer. The devices a call uses (the mic, the
+ * speakers, the camera) are picked in the user modal's voice tab and kept in this browser; they
+ * are after the call. Last is the mic itself: one stream, shared by the call and the tab's
+ * meter, through voice isolation and the noise gate, and push to talk.
  */
 
 import { atom } from 'jotai';
@@ -28,6 +29,8 @@ import { store } from '@/infra/store';
 import gateWorkletUrl from '@/infra/voice-gate-worklet.js?url';
 import { trimOffer } from '@/infra/voice-offer';
 
+import { sayVoiceState, startVideo, stopVideo, switchVoiceCamera, takeVideoAnswer, type VideoKind, videoSeats } from './voice-video';
+
 /** How many m-lines hear the others: a room's 16 seats less your own. */
 const HEARD_LINES = 15;
 /** How long the offer waits for its candidates: there is no trickle, the join frame carries them. */
@@ -43,6 +46,11 @@ export interface VoiceSeat {
   seat: number;
   user: string;
   line: number;
+  /** Their own mute and deafen, as their page says them. */
+  mute?: boolean;
+  deaf?: boolean;
+  /** Their camera and screen while on, and the mid each comes to this page on (null: no line for it yet). voice-video.ts. */
+  video?: { kind: VideoKind; mid: string | null }[];
 }
 
 /**
@@ -100,6 +108,7 @@ function teardown(): void {
   store.set(voiceSeatsAtom, []);
   store.set(voiceSpeakingAtom, new Set<string>());
   store.set(voiceStatsAtom, null);
+  stopVideo();
   syncPtt();
   if (!was) return;
   releaseVoiceMic();
@@ -146,12 +155,14 @@ function applyMic(): void {
 export function setVoiceMuted(muted: boolean): void {
   store.set(voiceMutedAtom, muted);
   applyMic();
+  sayVoiceState(muted, store.get(voiceDeafAtom));
 }
 
 export function setVoiceDeaf(deaf: boolean): void {
   store.set(voiceDeafAtom, deaf);
   for (const audio of live?.audios ?? []) audio.muted = deaf;
   applyMic();
+  sayVoiceState(store.get(voiceMutedAtom), deaf);
 }
 
 /** Into `channel` of `server`. Already in it: nothing. In another: out of that one first. */
@@ -224,7 +235,7 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
 
   const ws = new WebSocket(socketUrl(grant.url, location.href));
   live.ws = ws;
-  // trimmed: a phone's full offer is over the voice server's 48 KB (voice-offer.ts)
+  // trimmed: a phone's full offer can be over the voice server's 128 KB (voice-offer.ts)
   ws.onopen = () => ws.send(JSON.stringify({ role: 'voice', grant: grant.grant, sdp: trimOffer(pc.localDescription?.sdp ?? '') }));
   // the voice server says why in an error frame when it knows (that one wins: fail tears this
   // handler down); a socket that only closes is said from what this side saw
@@ -237,17 +248,27 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
       return;
     }
     if (msg.error) return fail(mine, msg.error);
+    // a later offer's answer is the video's (voice-video.ts): the page offers again for a camera, a screen, or more to see
+    if (msg.sdp && takeVideoAnswer(msg.sdp)) return;
     if (msg.sdp) {
       pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp }).then(
         () => {
           if (mine !== attempt) return;
           setCall({ phase: 'connected' });
+          startVideo(
+            pc,
+            (frame) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(frame)),
+            (error) => fail(mine, error)
+          );
+          sayVoiceState(store.get(voiceMutedAtom), store.get(voiceDeafAtom));
+          videoSeats(store.get(voiceSeatsAtom));
           for (const audio of audios) void audio.play().catch(() => {});
         },
         () => fail(mine, 'bad answer')
       );
     } else if (msg.event === 'seats' && Array.isArray(msg.seats)) {
       store.set(voiceSeatsAtom, msg.seats);
+      videoSeats(msg.seats);
     }
   };
   live.timer = setInterval(() => void readLevels(mine, me), LEVEL_MS);
@@ -487,9 +508,10 @@ export function setVoiceOutput(id: string): void {
   applySink();
 }
 
-/** Kept for video in voice, which is not here yet: nothing uses it but the tab's preview. */
+/** A call's camera, when on, moves to the new one at once. */
 export function setVoiceCamera(id: string): void {
   store.set(storedCameraAtom, id);
+  void switchVoiceCamera();
 }
 
 /** The picked device was asked for and is not there (unplugged, or an id from another day). */
@@ -510,9 +532,9 @@ async function openDevice(kind: 'audio' | 'video', deviceId: string, base: Media
   return { stream: await navigator.mediaDevices.getUserMedia({ [kind]: base }), device: DEFAULT_DEVICE };
 }
 
-/** The camera for the tab's preview, and for video in voice when it comes. */
-export async function openVoiceCamera(deviceId = store.get(voiceCameraAtom)): Promise<MediaStream> {
-  return (await openDevice('video', deviceId, {})).stream;
+/** The camera for the tab's preview and for a call (voice-video.ts, with its size and rate). */
+export async function openVoiceCamera(deviceId = store.get(voiceCameraAtom), base: MediaTrackConstraints = {}): Promise<MediaStream> {
+  return (await openDevice('video', deviceId, base)).stream;
 }
 
 /** Sends `audio` to `deviceId`, or to the default when it cannot be had. Nothing where the browser cannot. */
