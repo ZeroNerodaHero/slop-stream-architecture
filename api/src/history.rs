@@ -19,8 +19,8 @@
 //!
 //! A server channel is the same four reads with the room `server/channel`:
 //! `/chat/<server>/<channel>/before`, `search`, `by/<account>`, `around/<id>`. Its search is
-//! the server's: every channel the caller sees at once (groups.rs `visible_channels`), each hit
-//! saying which channel it is in, unless `channel:<name>` among the words names one.
+//! the server's: every text channel the caller sees at once (groups.rs `visible_text_channels`),
+//! each hit saying which channel it is in, unless `channel:<name>` among the words names one.
 
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -104,13 +104,13 @@ async fn viewer(s: &ChatState, headers: &HeaderMap) -> Result<(Option<Uuid>, boo
 }
 
 /// The room key of a server's channel, once it is there and this viewer sees it (groups.rs
-/// `may_see`: a channel kept to roles they do not hold reads `no such channel`, like one that
-/// is not there). `server` and `channel` as the url has them; the clean server name comes back
-/// with the room.
+/// `may_see_text`: a voice channel, or one kept to roles they do not hold, reads `no such
+/// channel`, like one that is not there). `server` and `channel` as the url has them; the
+/// clean server name comes back with the room.
 async fn seen_room(s: &ChatState, viewer: (Option<Uuid>, bool), server: &str, channel: &str) -> Result<(String, String), ApiError> {
     let (server, room) = crate::groups::channel_room(&s.db, server, channel).await?;
     let channel = room.strip_prefix(server.as_str()).and_then(|rest| rest.strip_prefix('/')).unwrap_or("");
-    if !crate::groups::may_see(&s.db, &server, channel, viewer.0, viewer.1).await? {
+    if !crate::groups::may_see_text(&s.db, &server, channel, viewer.0, viewer.1).await? {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such channel"));
     }
     Ok((server, room))
@@ -157,7 +157,7 @@ async fn search_channel(
     let (server, _) = seen_room(&s, who, &server, &channel).await?;
     let rooms: Vec<String> = match &search.channel {
         Some(name) => vec![seen_room(&s, who, &server, name).await?.1],
-        None => crate::groups::visible_channels(&s.db, &server, who.0, who.1)
+        None => crate::groups::visible_text_channels(&s.db, &server, who.0, who.1)
             .await?
             .into_iter()
             .map(|name| format!("{server}/{name}"))

@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::auth::Me;
 use crate::chat::{with_faces, Line};
 use crate::group_mod::{allows, CHANNELS};
-use crate::groups::{channel_room, may_see, tell};
+use crate::groups::{channel_room, may_see_text, tell};
 use crate::{history, ApiError, ApiResult, AppState};
 
 /// How many lines one channel keeps pinned. One more is a 400 until one is unpinned.
@@ -42,11 +42,12 @@ fn is_admin(s: &AppState, user: Option<Uuid>) -> bool {
 }
 
 /// The server, the channel and its room key, once the channel is there and this viewer sees it
-/// (`groups::may_see`): a channel kept to roles they do not hold reads `no such channel`.
+/// (`groups::may_see_text`): a voice channel, or one kept to roles they do not hold, reads
+/// `no such channel`.
 async fn seen(s: &AppState, group: &str, channel: &str, user: Option<Uuid>) -> Result<(String, String, String), ApiError> {
     let (server, room) = channel_room(&s.db, group, channel).await?;
     let channel = room[server.len() + 1..].to_owned();
-    if !may_see(&s.db, &server, &channel, user, is_admin(s, user)).await? {
+    if !may_see_text(&s.db, &server, &channel, user, is_admin(s, user)).await? {
         return Err(no_such_channel());
     }
     Ok((server, channel, room))
@@ -129,7 +130,7 @@ async fn pin(State(s): State<AppState>, Path((group, channel, message)): Path<(S
     let kept = serde_json::to_value(&line).map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let mut tx = s.db.begin().await?;
     // one pin at a time per channel, so two at the cap cannot both get in
-    let there: Option<i32> = sqlx::query_scalar("SELECT 1 FROM channels WHERE server = $1 AND name = $2 FOR UPDATE")
+    let there: Option<i32> = sqlx::query_scalar("SELECT 1 FROM channels WHERE server = $1 AND name = $2 AND kind = 'text' FOR UPDATE")
         .bind(&server)
         .bind(&channel)
         .fetch_optional(&mut *tx)

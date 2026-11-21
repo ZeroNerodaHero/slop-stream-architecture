@@ -352,7 +352,7 @@ async fn chat_rows(db: &PgPool, redis: &ConnectionManager, server: &str, channel
     // channel is never two unread rows in one inbox (the dm writer locks the recipient the same
     // way). One row to lock, however many members: the channel's, not each reader's.
     let mut tx = db.begin().await?;
-    let held: Option<i32> = sqlx::query_scalar("SELECT 1 FROM channels WHERE server = $1 AND name = $2 FOR UPDATE").bind(server).bind(channel).fetch_optional(&mut *tx).await?;
+    let held: Option<i32> = sqlx::query_scalar("SELECT 1 FROM channels WHERE server = $1 AND name = $2 AND kind = 'text' FOR UPDATE").bind(server).bind(channel).fetch_optional(&mut *tx).await?;
     if held.is_none() {
         // the channel went between the line and this: nobody's inbox to write
         return Ok(());
@@ -365,7 +365,7 @@ async fn chat_rows(db: &PgPool, redis: &ConnectionManager, server: &str, channel
             WHERE m.group_name = $1 AND m.user_id <> $3 AND u.password_hash IS NOT NULL
               AND COALESCE((u.notify->>'chat')::boolean, true)
               AND NOT EXISTS (SELECT 1 FROM channel_mutes cm WHERE cm.user_id = m.user_id AND cm.server = $1 AND cm.channel = $2)
-              AND EXISTS (SELECT 1 FROM channels c WHERE c.server = $1 AND c.name = $2 AND {sees})
+              AND EXISTS (SELECT 1 FROM channels c WHERE c.server = $1 AND c.name = $2 AND c.kind = 'text' AND {sees})
          ),
          gone AS (
             DELETE FROM notifications n USING recipients r
