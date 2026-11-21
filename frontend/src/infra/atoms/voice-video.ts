@@ -17,6 +17,7 @@
 import { atom } from 'jotai';
 
 import { store } from '@/infra/store';
+import { trimOffer } from '@/infra/voice-offer';
 
 import { openVoiceCamera, voiceCameraAtom, type VoiceSeat } from './voice-atoms';
 
@@ -138,7 +139,8 @@ function offer(): Promise<void> {
         waiting = done;
         setTimeout(() => fail(new Error('no answer')), ANSWER_MS);
       });
-      w.send({ sdp: w.pc.localDescription?.sdp ?? '', video: labels() });
+      // trimmed like the join's: a new line's own candidates are never used (voice-offer.ts)
+      w.send({ sdp: trimOffer(w.pc.localDescription?.sdp ?? ''), video: labels() });
       const sdp = await answered;
       if (wire !== w) return;
       await w.pc.setRemoteDescription({ type: 'answer', sdp });

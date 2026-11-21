@@ -1386,6 +1386,39 @@ mod tests {
         assert!(check_offer(&big).is_none());
     }
 
+    /// a browser's real offer before BUNDLE is agreed: every m-line carries its own candidates.
+    /// a phone with many networks (wifi, cellular, vpns, v4 and v6, udp and tcp) goes past
+    /// MAX_SDP_BYTES in a full call (16 audio and 32 video m-lines; an iPhone's audio-only join
+    /// frame measured 72 KB); the page sends m-line 0's udp candidates only
+    /// (frontend/src/infra/voice-offer.ts), which fits
+    fn browser_offer(candidates: impl Fn(usize) -> usize) -> String {
+        // a webkit m-line's own lines come to ~1.1 KB: codecs, extensions, fingerprint, ice
+        let audio = "a=rtpmap:111 opus/48000/2\r\na=rtcp-fb:111 transport-cc\r\na=fmtp:111 minptime=10;useinbandfec=1\r\n".repeat(10);
+        let video = "a=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 nack pli\r\na=rtcp-fb:96 transport-cc\r\na=rtcp-fb:96 ccm fir\r\n".repeat(10);
+        let lines = MAX_MEDIA_LINES + MAX_VIDEO_LINES;
+        let mids = (0..lines).map(|i| i.to_string()).collect::<Vec<_>>().join(" ");
+        let mut sdp = format!("v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE {mids}\r\n");
+        for i in 0..lines {
+            let (kind, pt, body) = if i < MAX_MEDIA_LINES { ("audio", 111, &audio) } else { ("video", 96, &video) };
+            let dir = if i == 0 { "sendrecv" } else { "recvonly" };
+            sdp += &format!("m={kind} 9 UDP/TLS/RTP/SAVPF {pt}\r\nc=IN IP4 0.0.0.0\r\na=mid:{i}\r\na={dir}\r\n{body}");
+            for c in 0..candidates(i) {
+                sdp += &format!("a=candidate:4034045772 1 udp 2122197247 2001:db8:4b2c:1d00:58f1:{c:x}:9c2e:1a07 {} typ host generation 0 network-id 2 network-cost 10\r\n", 50000 + c);
+            }
+        }
+        sdp
+    }
+
+    #[test]
+    fn a_phones_offer_fits_once_trimmed() {
+        let phone = browser_offer(|_| 24);
+        assert!(phone.len() > MAX_SDP_BYTES, "{}", phone.len());
+        assert!(check_offer(&phone).is_none());
+        let trimmed = browser_offer(|i| if i == 0 { 24 } else { 0 });
+        assert!(trimmed.len() < MAX_SDP_BYTES / 2, "{}", trimmed.len());
+        assert_eq!(check_offer(&trimmed).map(|s| s.len()), Some(MAX_MEDIA_LINES + MAX_VIDEO_LINES));
+    }
+
     const GRANT: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     fn frame(v: serde_json::Value) -> String {

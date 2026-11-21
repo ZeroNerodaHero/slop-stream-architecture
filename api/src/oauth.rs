@@ -304,6 +304,11 @@ struct Newcomer {
     provider_user_id: String,
     email: Option<String>,
     suggested: String,
+    /// What the provider shows (`Profile`), for the identity row. Absent in one saved before.
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    avatar: Option<String>,
 }
 
 fn state_key(state: &str) -> String {
@@ -366,6 +371,11 @@ struct Profile {
     email: Option<String>,
     /// The provider's handle, made into a name we allow, for the pick-a-name box.
     suggested: String,
+    /// The name the provider shows, cleaned (`shown_name`). Only for the account's own
+    /// security tab: never who it is, never a reason to link.
+    name: Option<String>,
+    /// The provider's picture, only on its own image host (`shown_avatar`).
+    avatar: Option<String>,
 }
 
 fn str_of(v: &Value, k: &str) -> Option<String> {
@@ -381,15 +391,62 @@ fn parse_google(v: &Value) -> Option<Profile> {
         id: str_of(v, "sub")?,
         email: str_of(v, "email").filter(|_| bool_of(v, "email_verified")),
         suggested: suggest_name(&str_of(v, "given_name").or_else(|| str_of(v, "name")).unwrap_or_default()),
+        name: shown_name(str_of(v, "name").as_deref()).or_else(|| shown_name(str_of(v, "given_name").as_deref())),
+        avatar: str_of(v, "picture").and_then(|u| shown_avatar(&u)),
     })
 }
 
 fn parse_discord(v: &Value) -> Option<Profile> {
+    let id = str_of(v, "id")?;
     Some(Profile {
-        id: str_of(v, "id")?,
         email: str_of(v, "email").filter(|_| bool_of(v, "verified")),
         suggested: suggest_name(&str_of(v, "username").unwrap_or_default()),
+        name: shown_name(str_of(v, "global_name").as_deref()).or_else(|| shown_name(str_of(v, "username").as_deref())),
+        avatar: discord_avatar(&id, str_of(v, "avatar").as_deref()),
+        id,
     })
+}
+
+/// Discord's picture for the account: its own when it set one, else the default one its id
+/// picks (discord's newer rule, `(id >> 22) % 6`).
+fn discord_avatar(id: &str, hash: Option<&str>) -> Option<String> {
+    let n: u64 = id.parse().ok()?;
+    let url = match hash {
+        Some(h) if h.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => {
+            format!("https://cdn.discordapp.com/avatars/{n}/{h}.png?size=64")
+        }
+        _ => format!("https://cdn.discordapp.com/embed/avatars/{}.png", (n >> 22) % 6),
+    };
+    shown_avatar(&url)
+}
+
+/// The longest provider name kept, in characters.
+const SHOWN_NAME_MAX: usize = 64;
+
+/// A provider's display name as kept: no control characters, trimmed, at most
+/// `SHOWN_NAME_MAX` characters. None when nothing is left.
+fn shown_name(raw: Option<&str>) -> Option<String> {
+    let clean: String = raw?.chars().filter(|c| !c.is_control()).collect();
+    let capped: String = clean.trim().chars().take(SHOWN_NAME_MAX).collect();
+    Some(capped.trim_end().to_owned()).filter(|n| !n.is_empty())
+}
+
+/// The only hosts a provider picture is kept from.
+const AVATAR_HOSTS: [&str; 2] = ["lh3.googleusercontent.com", "cdn.discordapp.com"];
+
+/// A provider picture as kept: https, exactly one of `AVATAR_HOSTS`, no port, no login part,
+/// 512 characters at most. Anything else is None, and the tab draws the provider's icon.
+fn shown_avatar(raw: &str) -> Option<String> {
+    if raw.len() > 512 {
+        return None;
+    }
+    let u = url::Url::parse(raw).ok()?;
+    let ok = u.scheme() == "https"
+        && u.host_str().is_some_and(|h| AVATAR_HOSTS.contains(&h))
+        && u.port().is_none()
+        && u.username().is_empty()
+        && u.password().is_none();
+    ok.then(|| u.to_string())
 }
 
 /// The provider's user answer, read. None when it has no stable id.
@@ -496,22 +553,52 @@ pub(crate) async fn is_verified(db: &sqlx::PgPool, user: Uuid) -> Result<bool, s
         .map(|v| v.unwrap_or(false))
 }
 
+/// What a link keeps beside the provider's id: the verified email, and the name and picture
+/// the provider shows. Each None when the provider gave none.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct Shown<'a> {
+    pub(crate) email: Option<&'a str>,
+    pub(crate) name: Option<&'a str>,
+    pub(crate) avatar: Option<&'a str>,
+}
+
+impl<'a> Shown<'a> {
+    fn of(profile: &'a Profile) -> Self {
+        Shown { email: profile.email.as_deref(), name: profile.name.as_deref(), avatar: profile.avatar.as_deref() }
+    }
+}
+
+/// The provider's latest for a linked identity, on every login and link with it: a new verified
+/// email (an unverified or missing one keeps the old), and the name and picture as they are now.
+/// Best effort: a failure here never stops the login.
+async fn refresh(db: &sqlx::PgPool, p: Provider, profile: &Profile) {
+    let _ = sqlx::query(
+        "UPDATE oauth_identities SET email = COALESCE($3, email), display_name = $4, avatar_url = $5
+         WHERE provider = $1 AND provider_user_id = $2
+           AND (email IS DISTINCT FROM COALESCE($3, email) OR display_name IS DISTINCT FROM $4 OR avatar_url IS DISTINCT FROM $5)",
+    )
+    .bind(p.slug())
+    .bind(&profile.id)
+    .bind(&profile.email)
+    .bind(&profile.name)
+    .bind(&profile.avatar)
+    .execute(db)
+    .await;
+}
+
 /// Attach. `Ok(false)`: that provider account is somebody's already, or this account has that
 /// provider already (the two unique keys); nothing changed.
-pub(crate) async fn link(
-    conn: &mut sqlx::PgConnection,
-    user: Uuid,
-    p: Provider,
-    provider_user_id: &str,
-    email: Option<&str>,
-) -> Result<bool, sqlx::Error> {
-    let done = sqlx::query("INSERT INTO oauth_identities (user_id, provider, provider_user_id, email) VALUES ($1, $2, $3, $4)")
-        .bind(user)
-        .bind(p.slug())
-        .bind(provider_user_id)
-        .bind(email)
-        .execute(&mut *conn)
-        .await;
+pub(crate) async fn link(conn: &mut sqlx::PgConnection, user: Uuid, p: Provider, provider_user_id: &str, shown: &Shown<'_>) -> Result<bool, sqlx::Error> {
+    let done =
+        sqlx::query("INSERT INTO oauth_identities (user_id, provider, provider_user_id, email, display_name, avatar_url) VALUES ($1, $2, $3, $4, $5, $6)")
+            .bind(user)
+            .bind(p.slug())
+            .bind(provider_user_id)
+            .bind(shown.email)
+            .bind(shown.name)
+            .bind(shown.avatar)
+            .execute(&mut *conn)
+            .await;
     match done {
         Ok(_) => Ok(true),
         Err(e) if unique_violation(&e) => Ok(false),
@@ -560,7 +647,7 @@ pub(crate) async fn unlink(db: &sqlx::PgPool, user: Uuid, p: Provider) -> Result
 /// one transaction. A free row under the name (somebody used it without an account) is claimed
 /// the way a password signup claims it. `name taken` when it is somebody's; a 409 with other
 /// words when the provider account got linked meanwhile (two tabs).
-pub(crate) async fn create_account(db: &sqlx::PgPool, name: &str, p: Provider, provider_user_id: &str, email: Option<&str>) -> Result<Uuid, ApiError> {
+pub(crate) async fn create_account(db: &sqlx::PgPool, name: &str, p: Provider, provider_user_id: &str, shown: &Shown<'_>) -> Result<Uuid, ApiError> {
     let mut tx = db.begin().await?;
     let id: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO streamers (name, password_hash) VALUES ($1, $2)
@@ -573,7 +660,7 @@ pub(crate) async fn create_account(db: &sqlx::PgPool, name: &str, p: Provider, p
     .fetch_optional(&mut *tx)
     .await?;
     let Some(id) = id else { return Err(ApiError::new(StatusCode::CONFLICT, "name taken")) };
-    if !link(&mut tx, id, p, provider_user_id, email).await? {
+    if !link(&mut tx, id, p, provider_user_id, shown).await? {
         return Err(ApiError::new(StatusCode::CONFLICT, "that account is linked already. log in with it"));
     }
     tx.commit().await?;
@@ -665,11 +752,14 @@ async fn callback(State(s): State<AppState>, Path(slug): Path<String>, Query(q):
             return Ok(fail("log in again, then link"));
         }
         return Ok(match linked {
-            Some(owner) if owner.id == want => redirect_with(&page_url("linked", p.slug()), &[gone_cookie(STATE_COOKIE)]),
+            Some(owner) if owner.id == want => {
+                refresh(&s.db, p, &profile).await;
+                redirect_with(&page_url("linked", p.slug()), &[gone_cookie(STATE_COOKIE)])
+            }
             Some(_) => fail(&format!("that {} account is linked to another account here", p.label())),
             None => {
                 let mut conn = s.db.acquire().await?;
-                if link(&mut conn, want, p, &profile.id, profile.email.as_deref()).await? {
+                if link(&mut conn, want, p, &profile.id, &Shown::of(&profile)).await? {
                     log::info!("{}: linked {}", me.map(|m| m.name).unwrap_or_default(), p.slug());
                     redirect_with(&page_url("linked", p.slug()), &[gone_cookie(STATE_COOKIE)])
                 } else {
@@ -681,14 +771,7 @@ async fn callback(State(s): State<AppState>, Path(slug): Path<String>, Query(q):
 
     // known: logged in, the same login a password makes
     if let Some(account) = linked {
-        if profile.email.is_some() {
-            let _ = sqlx::query("UPDATE oauth_identities SET email = $3 WHERE provider = $1 AND provider_user_id = $2 AND email IS DISTINCT FROM $3")
-                .bind(p.slug())
-                .bind(&profile.id)
-                .bind(&profile.email)
-                .execute(&s.db)
-                .await;
-        }
+        refresh(&s.db, p, &profile).await;
         let token = auth::open_login(&s.db, &account).await?;
         log::info!("{}: logged in with {}", account.name, p.slug());
         return Ok(redirect_with(&page_url("done", p.slug()), &[gone_cookie(STATE_COOKIE), auth::set_cookie(&token)]));
@@ -696,7 +779,14 @@ async fn callback(State(s): State<AppState>, Path(slug): Path<String>, Query(q):
 
     // new here: pick a name first
     let token = random_hex();
-    let newcomer = Newcomer { provider: p.slug().to_owned(), provider_user_id: profile.id, email: profile.email, suggested: profile.suggested };
+    let newcomer = Newcomer {
+        provider: p.slug().to_owned(),
+        provider_user_id: profile.id,
+        email: profile.email,
+        suggested: profile.suggested,
+        name: profile.name,
+        avatar: profile.avatar,
+    };
     let _: () = redis::cmd("SET")
         .arg(signup_key(&token))
         .arg(serde_json::to_string(&newcomer).map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not save"))?)
@@ -745,7 +835,8 @@ async fn signup_finish(State(s): State<AppState>, headers: HeaderMap, body: Resu
     if auth::is_held(&s.db, &name, None).await? {
         return Err(ApiError::new(StatusCode::CONFLICT, "name taken"));
     }
-    let id = create_account(&s.db, &name, p, &n.provider_user_id, n.email.as_deref()).await?;
+    let shown = Shown { email: n.email.as_deref(), name: n.name.as_deref(), avatar: n.avatar.as_deref() };
+    let id = create_account(&s.db, &name, p, &n.provider_user_id, &shown).await?;
     let _: () = redis::cmd("DEL").arg(signup_key(&token)).query_async(&mut s.redis.clone()).await?;
     let me = Account { id, name };
     let login = auth::open_login(&s.db, &me).await?;
@@ -764,19 +855,26 @@ async fn providers(State(s): State<AppState>) -> Json<Value> {
     Json(json!({ "providers": s.oauth.enabled().into_iter().map(Provider::slug).collect::<Vec<_>>() }))
 }
 
+/// An identity as the tab reads it: provider, linked at, and the name and picture it shows.
+type IdentityRow = (String, DateTime<Utc>, Option<String>, Option<String>);
+
 /// `GET /api/oauth/identities`: this login's linked providers, whether it has a password, and
-/// whether it is oauth verified.
-/// The provider emails stay in the database.
+/// whether it is oauth verified. Each identity has the name and picture its provider shows
+/// (null for one linked before they were kept, until its next login). The provider emails stay
+/// in the database.
 async fn identities(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let me = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
-    let rows: Vec<(String, DateTime<Utc>)> = sqlx::query_as("SELECT provider, created_at FROM oauth_identities WHERE user_id = $1 ORDER BY created_at")
+    let rows: Vec<IdentityRow> = sqlx::query_as("SELECT provider, created_at, display_name, avatar_url FROM oauth_identities WHERE user_id = $1 ORDER BY created_at")
         .bind(me.id)
         .fetch_all(&s.db)
         .await?;
     let has_password = auth::has_password(&s.db, me.id).await?;
     // oauth verified is exactly "anything linked" (`linked_sql!`), said here so the tab need not work it out
     let verified = !rows.is_empty();
-    let list: Vec<Value> = rows.into_iter().map(|(provider, at)| json!({ "provider": provider, "linked_at": at })).collect();
+    let list: Vec<Value> = rows
+        .into_iter()
+        .map(|(provider, at, name, avatar)| json!({ "provider": provider, "linked_at": at, "name": name, "avatar": avatar }))
+        .collect();
     Ok(Json(json!({ "has_password": has_password, "oauth_verified": verified, "identities": list })))
 }
 
@@ -885,15 +983,87 @@ mod tests {
     #[test]
     fn profiles_key_on_the_providers_stable_id() {
         let g = parse_profile(Provider::GOOGLE, &json!({ "sub": "1234", "email": "a@b.c", "email_verified": true, "given_name": "Billy Bob" })).unwrap();
-        assert_eq!(g, Profile { id: "1234".into(), email: Some("a@b.c".into()), suggested: "billy_bob".into() });
+        assert_eq!(
+            g,
+            Profile { id: "1234".into(), email: Some("a@b.c".into()), suggested: "billy_bob".into(), name: Some("Billy Bob".into()), avatar: None }
+        );
         let unverified = parse_profile(Provider::GOOGLE, &json!({ "sub": "1", "email": "a@b.c", "email_verified": false })).unwrap();
         assert_eq!(unverified.email, None, "an unverified email is not kept");
         assert!(parse_profile(Provider::GOOGLE, &json!({ "email": "a@b.c", "email_verified": true })).is_none(), "no sub: nobody");
         let d = parse_profile(Provider::DISCORD, &json!({ "id": "42", "username": "Café.Kid", "email": "d@x.y", "verified": true })).unwrap();
-        assert_eq!(d, Profile { id: "42".into(), email: Some("d@x.y".into()), suggested: "caf_kid".into() });
+        let default_pic = Some("https://cdn.discordapp.com/embed/avatars/0.png".to_owned());
+        assert_eq!(
+            d,
+            Profile { id: "42".into(), email: Some("d@x.y".into()), suggested: "caf_kid".into(), name: Some("Café.Kid".into()), avatar: default_pic }
+        );
         let unverified = parse_profile(Provider::DISCORD, &json!({ "id": "42", "username": "x", "email": "d@x.y", "verified": false })).unwrap();
         assert_eq!(unverified.email, None);
         assert!(parse_profile(Provider::DISCORD, &json!({ "username": "x" })).is_none(), "no id: nobody");
+    }
+
+    #[test]
+    fn a_profile_keeps_the_providers_name_and_picture() {
+        let pic = "https://lh3.googleusercontent.com/a/ACg8ocK=s96-c";
+        let g = parse_profile(Provider::GOOGLE, &json!({ "sub": "1", "name": "Billy Bob", "given_name": "Billy", "picture": pic })).unwrap();
+        assert_eq!((g.name.as_deref(), g.avatar.as_deref()), (Some("Billy Bob"), Some(pic)), "name over given_name");
+        let g = parse_profile(Provider::GOOGLE, &json!({ "sub": "1", "name": " \u{7}\t ", "given_name": "Billy" })).unwrap();
+        assert_eq!(g.name.as_deref(), Some("Billy"), "a name of only blanks falls back to given_name");
+        let g = parse_profile(Provider::GOOGLE, &json!({ "sub": "1" })).unwrap();
+        assert_eq!((g.name, g.avatar), (None, None));
+
+        let d = parse_profile(
+            Provider::DISCORD,
+            &json!({ "id": "80351110224678912", "username": "nelly", "global_name": "Nelly", "avatar": "8342729096ea3675442027381ff50dfe" }),
+        )
+        .unwrap();
+        assert_eq!(d.name.as_deref(), Some("Nelly"), "global_name over username");
+        assert_eq!(d.avatar.as_deref(), Some("https://cdn.discordapp.com/avatars/80351110224678912/8342729096ea3675442027381ff50dfe.png?size=64"));
+        let d = parse_profile(Provider::DISCORD, &json!({ "id": "80351110224678912", "username": "nelly", "global_name": null, "avatar": null })).unwrap();
+        assert_eq!(d.name.as_deref(), Some("nelly"), "no global_name: the username");
+        // (80351110224678912 >> 22) % 6 == 19156530 % 6 == 0; this one is 1
+        let d = parse_profile(Provider::DISCORD, &json!({ "id": "4194304", "username": "x" })).unwrap();
+        assert_eq!(d.avatar.as_deref(), Some("https://cdn.discordapp.com/embed/avatars/1.png"), "no avatar: the default the id picks");
+        let d = parse_profile(Provider::DISCORD, &json!({ "id": "42", "username": "x", "avatar": "../../evil?x=" })).unwrap();
+        assert_eq!(d.avatar.as_deref(), Some("https://cdn.discordapp.com/embed/avatars/0.png"), "a hash that is not a hash: the default");
+        let d = parse_profile(Provider::DISCORD, &json!({ "id": "not-a-number", "username": "x" })).unwrap();
+        assert_eq!(d.avatar, None, "no snowflake: no default to pick");
+    }
+
+    #[test]
+    fn a_picture_is_kept_only_from_the_providers_image_host() {
+        for ok in ["https://lh3.googleusercontent.com/a/x=s96-c", "https://cdn.discordapp.com/embed/avatars/3.png"] {
+            assert_eq!(shown_avatar(ok).as_deref(), Some(ok));
+        }
+        for bad in [
+            "http://lh3.googleusercontent.com/a/x",
+            "https://lh4.googleusercontent.com/a/x",
+            "https://evil.lh3.googleusercontent.com/a/x",
+            "https://lh3.googleusercontent.com.evil.com/a/x",
+            "https://cdn.discordapp.com:8443/x.png",
+            "https://me@cdn.discordapp.com/x.png",
+            "https://media.discordapp.net/x.png",
+            "javascript:alert(1)",
+            "//cdn.discordapp.com/x.png",
+            "not a url",
+        ] {
+            assert_eq!(shown_avatar(bad), None, "{bad}");
+        }
+        assert_eq!(shown_avatar(&format!("https://cdn.discordapp.com/{}", "a".repeat(600))), None, "too long");
+        let g = parse_profile(Provider::GOOGLE, &json!({ "sub": "1", "picture": "https://evil.example/p.png" })).unwrap();
+        assert_eq!(g.avatar, None, "a google picture off its host is dropped");
+    }
+
+    #[test]
+    fn a_shown_name_is_capped_and_has_no_control_characters() {
+        assert_eq!(shown_name(Some("  Billy\u{0}\n Bob\u{1b}  ")).as_deref(), Some("Billy Bob"));
+        assert_eq!(shown_name(Some("\u{7}\r\n")), None);
+        assert_eq!(shown_name(Some("")), None);
+        assert_eq!(shown_name(None), None);
+        let long = "é".repeat(100);
+        assert_eq!(shown_name(Some(&long)).unwrap().chars().count(), SHOWN_NAME_MAX, "64 characters, not bytes");
+        assert_eq!(shown_name(Some(&format!("{} b", "a".repeat(63)))).as_deref(), Some("a".repeat(63).as_str()), "no blank left at the cut");
+        let d = parse_profile(Provider::DISCORD, &json!({ "id": "1", "username": "u", "global_name": "x".repeat(200) })).unwrap();
+        assert_eq!(d.name.unwrap().len(), SHOWN_NAME_MAX);
     }
 
     #[test]
@@ -949,18 +1119,18 @@ mod tests {
         let pool = auth::tests::test_db().await;
         let run = std::process::id();
         let name = format!("oa-new-{run}");
-        let id = create_account(&pool, &name, Provider::GOOGLE, &format!("g-{run}"), Some("x@y.z")).await.expect("made");
+        let id = create_account(&pool, &name, Provider::GOOGLE, &format!("g-{run}"), &Shown { email: Some("x@y.z"), ..Shown::default() }).await.expect("made");
         let found = linked_account(&pool, Provider::GOOGLE, &format!("g-{run}")).await.unwrap();
         assert_eq!(found, Some(Account { id, name: name.clone() }));
         assert!(!auth::has_password(&pool, id).await.unwrap(), "no password");
         assert!(auth::is_claimed(&pool, &name).await.unwrap(), "but the name is claimed");
         // the same provider account again (a second tab): refused, and no second account
-        let again = create_account(&pool, &format!("oa-new2-{run}"), Provider::GOOGLE, &format!("g-{run}"), None).await;
+        let again = create_account(&pool, &format!("oa-new2-{run}"), Provider::GOOGLE, &format!("g-{run}"), &Shown::default()).await;
         assert_eq!(again.expect_err("linked already").into_response().status(), StatusCode::CONFLICT);
         let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM streamers WHERE name = $1)").bind(format!("oa-new2-{run}")).fetch_one(&pool).await.unwrap();
         assert!(!exists, "the rolled back account is not left behind");
         // a name with an account is taken
-        let taken = create_account(&pool, &name, Provider::DISCORD, &format!("d-{run}"), None).await;
+        let taken = create_account(&pool, &name, Provider::DISCORD, &format!("d-{run}"), &Shown::default()).await;
         assert_eq!(taken.expect_err("taken").into_response().status(), StatusCode::CONFLICT);
     }
 
@@ -972,12 +1142,12 @@ mod tests {
         let with_pw = auth::tests::row(&pool, &format!("oa-pw-{run}"), Some("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA")).await;
         let mut conn = pool.acquire().await.unwrap();
         assert!(!is_verified(&pool, with_pw).await.unwrap(), "a password alone is not oauth verified");
-        assert!(link(&mut conn, with_pw, Provider::GOOGLE, &format!("lg-{run}"), None).await.unwrap());
+        assert!(link(&mut conn, with_pw, Provider::GOOGLE, &format!("lg-{run}"), &Shown::default()).await.unwrap());
         assert!(is_verified(&pool, with_pw).await.unwrap(), "linked: verified");
-        assert!(!link(&mut conn, with_pw, Provider::GOOGLE, &format!("lg2-{run}"), None).await.unwrap(), "one google per account");
-        let other = create_account(&pool, &format!("oa-only-{run}"), Provider::DISCORD, &format!("ld-{run}"), None).await.unwrap();
+        assert!(!link(&mut conn, with_pw, Provider::GOOGLE, &format!("lg2-{run}"), &Shown::default()).await.unwrap(), "one google per account");
+        let other = create_account(&pool, &format!("oa-only-{run}"), Provider::DISCORD, &format!("ld-{run}"), &Shown::default()).await.unwrap();
         assert!(is_verified(&pool, other).await.unwrap(), "made with a provider: verified");
-        assert!(!link(&mut conn, other, Provider::GOOGLE, &format!("lg-{run}"), None).await.unwrap(), "somebody else's google");
+        assert!(!link(&mut conn, other, Provider::GOOGLE, &format!("lg-{run}"), &Shown::default()).await.unwrap(), "somebody else's google");
         drop(conn);
         assert_eq!(unlink(&pool, other, Provider::DISCORD).await.unwrap(), Unlink::LastWayIn);
         assert!(is_verified(&pool, other).await.unwrap(), "the refused unlink left it linked");
@@ -986,7 +1156,7 @@ mod tests {
         assert_eq!(unlink(&pool, with_pw, Provider::GOOGLE).await.unwrap(), Unlink::NotLinked);
         // a no-password account with two providers may let go of one, never the second
         let mut conn = pool.acquire().await.unwrap();
-        assert!(link(&mut conn, other, Provider::GOOGLE, &format!("lg3-{run}"), None).await.unwrap());
+        assert!(link(&mut conn, other, Provider::GOOGLE, &format!("lg3-{run}"), &Shown::default()).await.unwrap());
         drop(conn);
         assert_eq!(unlink(&pool, other, Provider::DISCORD).await.unwrap(), Unlink::Yes);
         assert_eq!(unlink(&pool, other, Provider::GOOGLE).await.unwrap(), Unlink::LastWayIn);
@@ -995,5 +1165,31 @@ mod tests {
         assert!(crate::profile::load_profile(&pool, &name).await.unwrap().oauth_verified);
         assert!(!crate::profile::load_profile(&pool, &format!("oa-pw-{run}")).await.unwrap().oauth_verified);
         assert!(!crate::profile::load_profile(&pool, &format!("oa-nobody-{run}")).await.unwrap().oauth_verified, "no row: no mark");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn oauth_a_link_keeps_and_refreshes_the_providers_name_and_picture() {
+        let pool = auth::tests::test_db().await;
+        let run = std::process::id();
+        let pid = format!("sn-{run}");
+        async fn shown_of(pool: &sqlx::PgPool, pid: &str) -> (Option<String>, Option<String>, Option<String>) {
+            sqlx::query_as("SELECT email, display_name, avatar_url FROM oauth_identities WHERE provider = 'google' AND provider_user_id = $1")
+                .bind(pid)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        }
+        let pic = "https://lh3.googleusercontent.com/a/one";
+        let shown = Shown { email: Some("a@b.c"), name: Some("Billy"), avatar: Some(pic) };
+        create_account(&pool, &format!("oa-shown-{run}"), Provider::GOOGLE, &pid, &shown).await.unwrap();
+        assert_eq!(shown_of(&pool, &pid).await, (Some("a@b.c".into()), Some("Billy".into()), Some(pic.into())), "kept on insert");
+        // the next login: a new name, no picture, no verified email (the old email stays)
+        let next = Profile { id: pid.clone(), email: None, suggested: String::new(), name: Some("Billy B".into()), avatar: None };
+        refresh(&pool, Provider::GOOGLE, &next).await;
+        assert_eq!(shown_of(&pool, &pid).await, (Some("a@b.c".into()), Some("Billy B".into()), None));
+        let next = Profile { email: Some("new@b.c".into()), avatar: Some(pic.into()), ..next };
+        refresh(&pool, Provider::GOOGLE, &next).await;
+        assert_eq!(shown_of(&pool, &pid).await, (Some("new@b.c".into()), Some("Billy B".into()), Some(pic.into())));
     }
 }
