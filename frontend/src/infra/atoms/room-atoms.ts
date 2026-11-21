@@ -489,6 +489,10 @@ function apply(change: GroupChange): void {
     case 'about':
       store.set(roomAtom, { ...room, about: change.about });
       return;
+    case 'color':
+      // the lists the page holds follow the room (groups-atoms.ts)
+      store.set(roomAtom, { ...room, color: change.color });
+      return;
     case 'access':
       store.set(roomAtom, { ...room, public: change.public });
       return;
