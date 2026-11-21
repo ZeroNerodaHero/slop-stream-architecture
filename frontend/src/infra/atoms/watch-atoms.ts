@@ -7,6 +7,7 @@ import { atom } from 'jotai';
 
 import { api, type GroupBadge, messageOf, type WatchGrant } from '@/infra/api';
 import { presenceChanged, presencesAtom } from '@/infra/atoms/presence-atoms';
+import { type Welcome, welcomeOf } from '@/infra/atoms/welcome-atoms';
 import { eventsPhaseAtom, onEvents, unwatchPresence, watchPresence } from '@/infra/events';
 import { isValidName } from '@/infra/names';
 import { onPrefetch, prefetch, PREFETCH_TTL_MS, takePrefetched } from '@/infra/prefetch';
@@ -60,6 +61,8 @@ export const avatarAtom = atom<number | null>(null);
 export const offlineAtom = atom<number | null>(null);
 /** The line they wrote for under the word while not live. '' for none. */
 export const offlineNoteAtom = atom('');
+/** The chat welcome the streamer keeps (welcome-atoms.ts), for the page's chat. null: none, or not known yet. */
+export const watchWelcomeAtom = atom<Welcome | null>(null);
 /** How many follow them (docs/follows.md). `null` until the grant says, or on an older api. */
 export const followersAtom = atom<number | null>(null);
 /** Where else to find them (docs/socials.md), as the grant said, cleaned. The empty document until it has, and on an older api. */
@@ -537,6 +540,7 @@ async function start(name: string): Promise<void> {
   store.set(avatarAtom, grant.avatar ?? null);
   store.set(offlineAtom, grant.offline ?? null);
   store.set(offlineNoteAtom, grant.offline_note ?? '');
+  store.set(watchWelcomeAtom, welcomeOf(grant));
   store.set(followersAtom, typeof grant.followers === 'number' ? grant.followers : null);
   store.set(socialsAtom, cleanSocials(grant.socials));
   // a date the browser can read, or nothing: a row written by hand must not put `joined undefined NaN` on a page
@@ -815,6 +819,7 @@ export function endWatch() {
   store.set(avatarAtom, null);
   store.set(offlineAtom, null);
   store.set(offlineNoteAtom, '');
+  store.set(watchWelcomeAtom, null);
   store.set(followersAtom, null);
   store.set(socialsAtom, EMPTY_SOCIALS);
   store.set(joinedAtom, null);

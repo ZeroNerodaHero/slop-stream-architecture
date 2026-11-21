@@ -41,7 +41,7 @@ import {
   watchUrlAtom,
   liveViewersAtom
 } from '@/infra/atoms/publish-atoms';
-import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
+import { myAvatarVersionAtom, profileForAtom, profileWelcomeAtom } from '@/infra/atoms/profile-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
 import { usePinnedPage, useKeyboard, useTypingIn } from '@/infra/keyboard';
 import { CHAT_MOBILE, keyboardStrip, useIsMobile } from '@/infra/mobile';
@@ -114,6 +114,10 @@ export function LivePage() {
   const thumbs = useAtomValue(streamThumbsAtom);
   const thumbStatus = useAtomValue(thumbStatusAtom);
   const owner = useAtomValue(ownerAtom);
+  // my chat welcome, for my own chat: the profile's, while it is loaded for the name the chat is under
+  const profileFor = useAtomValue(profileForAtom);
+  const profileWelcome = useAtomValue(profileWelcomeAtom);
+  const welcome = profileFor === chatRoom ? profileWelcome : null;
   const viewers = useAtomValue(liveViewersAtom);
   const chatSide = useChatSide();
   const chatOpen = useAtomValue(chatModalOpenAtom);
@@ -268,6 +272,7 @@ export function LivePage() {
       <ChatPanel
         name={chatRoom}
         owner={owner}
+        welcome={welcome}
         // my own chat, logged in as its name: the janny's buttons on its lines (docs/jannies.md)
         lineActions={me && me === chatRoom ? (line) => <ChatModActions name={chatRoom} line={line} me={me} /> : undefined}
         className={className}
