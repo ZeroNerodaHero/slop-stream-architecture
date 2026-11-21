@@ -102,7 +102,7 @@ import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
 import { Button, buttonClassName } from '@/shared-components/Button';
-import { type ChatSearch, comboProps, SearchFilters, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
+import { type ChatSearch, SearchField, SearchFilters, useChatSearch } from '@/shared-components/ChatSearch';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Face } from '@/shared-components/Face';
 import { RailFace } from '@/shared-components/Friends';
@@ -909,51 +909,46 @@ function LiveFace({ name }: { name: string }) {
  * The room's search box, the roster's first row, for everyone in the room, member or guest:
  * one box for a member and for a line. The words narrow the roster under it as they are typed
  * (`Roster`, which holds them); enter, or the glass, asks the group for them, every channel
- * this login sees unless `channel:<name>` names one, and the filter words stand under the box
- * while it has the focus (ChatSearch.tsx). What a filter's word could be (`from:` a member,
+ * this login sees unless a `channel` chip names one, and the filter buttons stand under the box
+ * while it has the focus (ChatSearch.tsx). The filters are chips in the box; what one could be (`from:` a member,
  * with their face, `channel:` a channel, `has:` its kinds) is offered under the box as it is
- * typed, over the filter words while there is something to offer. The hits are the chat
+ * typed (a day picker for the days), over the filter buttons while there is something to offer. The hits are the chat
  * panel's, a pane where its lines were (`SearchResults`); the panel has no box of its own.
  * Escape takes the list down, then empties the box, and the roster is whole again.
  */
 function RoomSearch({ search, input, flat, className }: { search: ChatSearch; input: RefObject<HTMLInputElement | null>; flat: boolean; className?: string }) {
   return (
     <form id="group-search-form" onSubmit={search.submit} className={cn('group/search relative shrink-0', className)}>
-      <label htmlFor="group-search" className="sr-only">
-        search members and every channel
-      </label>
-      <input
-        ref={input}
+      <SearchField
         id="group-search"
-        {...comboProps(search, 'group-search-list')}
+        search={search}
+        input={input}
+        label="search members and every channel"
+        leading={
+          <Tooltip content="search">
+            <button
+              id="group-search-go"
+              type="submit"
+              aria-label="search"
+              className={cn(
+                'flex h-6 shrink-0 items-center justify-center text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none',
+                flat ? 'w-6' : 'w-5'
+              )}
+            >
+              <RiSearchLine aria-hidden size={14} />
+            </button>
+          </Tooltip>
+        }
         onKeyDown={(e) => {
-          if (search.onKeyDown(e)) return;
           if (e.key === 'Escape') search.setQuery('');
         }}
-        placeholder="search"
-        autoCapitalize="off"
-        spellCheck={false}
-        className={cn('h-8 w-full border border-primaryStroke bg-background pr-2 text-sm text-textPrimary placeholder:text-textTertiary', flat ? 'pl-8' : 'pl-7')}
+        inputClassName="text-sm"
       />
-      <Tooltip content="search">
-        <button
-          id="group-search-go"
-          type="submit"
-          aria-label="search"
-          className={cn(
-            'absolute left-0 top-0 flex h-8 items-center justify-center text-textTertiary hover:text-textPrimary focus-visible:text-primaryBlue focus-visible:outline-none',
-            flat ? 'w-8' : 'w-7'
-          )}
-        >
-          <RiSearchLine aria-hidden size={14} />
-        </button>
-      </Tooltip>
       <SearchFilters
         id="group-search-filters"
         search={search}
         className="absolute left-0 right-0 top-full z-10 mt-1 hidden border border-primaryStroke bg-backgroundSecondary px-2 py-1 group-focus-within/search:flex"
       />
-      <SearchSuggestions id="group-search-list" search={search} />
     </form>
   );
 }
