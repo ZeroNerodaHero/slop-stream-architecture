@@ -657,6 +657,27 @@ pub(crate) async fn may_see(db: &PgPool, server: &str, channel: &str, user: Opti
     sqlx::query_scalar(&sql).bind(server).bind(user).bind(admin).bind(channel).fetch_one(db).await
 }
 
+/// `visible_channels`, text channels only: what has lines to read and say. A voice channel
+/// is in the room's list but has no chat, so the messages, the server's chat socket, search
+/// and pins pass it by.
+pub(crate) async fn visible_text_channels(db: &PgPool, server: &str, user: Option<Uuid>, admin: bool) -> Result<Vec<String>, sqlx::Error> {
+    let sql = format!(
+        "SELECT c.name FROM channels c WHERE c.server = $1 AND c.kind = 'text' AND {} ORDER BY c.position, c.created_at, c.name",
+        sees_sql("$2", "$3")
+    );
+    sqlx::query_scalar(&sql).bind(server).bind(user).bind(admin).fetch_all(db).await
+}
+
+/// `may_see`, for a text channel only: a voice channel has no lines, so asked for its chat it
+/// reads `no such channel`, like a hidden one and a missing one.
+pub(crate) async fn may_see_text(db: &PgPool, server: &str, channel: &str, user: Option<Uuid>, admin: bool) -> Result<bool, sqlx::Error> {
+    let sql = format!(
+        "SELECT EXISTS (SELECT 1 FROM channels c WHERE c.server = $1 AND c.name = $4 AND c.kind = 'text' AND {})",
+        sees_sql("$2", "$3")
+    );
+    sqlx::query_scalar(&sql).bind(server).bind(user).bind(admin).bind(channel).fetch_one(db).await
+}
+
 #[derive(Serialize)]
 pub(crate) struct ChannelView {
     name: String,
@@ -1245,11 +1266,11 @@ async fn read_channel(State(s): State<AppState>, Path((group, channel)): Path<(S
 }
 
 /// `GET /api/groups/:group/messages`: the last MESSAGES_PER_CHANNEL lines of every channel
-/// this login sees (`sees_sql`: a channel kept to roles they do not hold is not here), oldest
-/// first, keyed by channel: `{ "general": [line, …], "clips": [...] }`. One answer for the
-/// whole server, so a room draws every channel at once and switching between them asks
-/// nothing. Redis only, like the socket's history: the room's stream holds the last 500 of
-/// each. Anyone may read a server (chat.md). 404 for `bot` and for no such group.
+/// this login sees (`visible_text_channels`: a voice channel, or one kept to roles they do not
+/// hold, is not here), oldest first, keyed by channel: `{ "general": [line, …], "clips": [...] }`.
+/// One answer for the whole server, so a room draws every channel at once and switching
+/// between them asks nothing. Redis only, like the socket's history: the room's stream holds
+/// the last 500 of each. Anyone may read a server (chat.md). 404 for `bot` and for no such group.
 ///
 /// `?limit=` (1..=MESSAGES_PER_CHANNEL) is lines per channel: a room asks for what fills its
 /// screen twice, and scrolls up for the rest. `?channel=<name>&before=<id>` is that channel's
@@ -1271,7 +1292,7 @@ async fn messages(State(s): State<AppState>, Path(group): Path<String>, Query(q)
     let user = me.as_ref().map(|a| a.id);
     let admin = me.as_ref().is_some_and(|a| s.admins.iter().any(|admin| admin.id == a.id));
     // general is never kept to a role, so a group that is there always answers with at least it
-    let mut channels = visible_channels(&s.db, &server, user, admin).await?;
+    let mut channels = visible_text_channels(&s.db, &server, user, admin).await?;
     if channels.is_empty() {
         // a group without `general` is no group: it was deleted (or never was)
         return Err(no_such_group());

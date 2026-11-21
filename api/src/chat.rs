@@ -664,12 +664,13 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
         }
         Err(Unknown::Busy) => None,
     };
-    // a server's channel kept to roles this login does not hold is no channel to them (groups.rs
-    // `may_see`): the same words as one that is not there, so the panel does not reconnect
+    // a server's channel kept to roles this login does not hold, or a voice channel, is no chat
+    // to them (groups.rs `may_see_text`): the same words as one that is not there, so the panel
+    // does not reconnect
     if let Some(server) = &server {
         let channel = name.strip_prefix(server.as_str()).and_then(|rest| rest.strip_prefix('/')).unwrap_or("");
         let user = who.as_ref().and_then(|w| w.user_id);
-        match crate::groups::may_see(&s.db, server, channel, user, s.is_admin(who.as_ref())).await {
+        match crate::groups::may_see_text(&s.db, server, channel, user, s.is_admin(who.as_ref())).await {
             Ok(true) => {}
             Ok(false) => {
                 let _ = send(&mut socket, &Out::Error { error: "no such channel" }).await;
@@ -1006,7 +1007,7 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
                       WHERE t.group_name = $2 AND t.user_id = $1 AND t.until > now()),
                     (SELECT COALESCE(max(r.cooldown), 0) FROM role_members rm JOIN roles r ON r.id = rm.role_id
                       WHERE rm.user_id = $1 AND r.group_name = $2),
-                    COALESCE((SELECT c.cooldown FROM channels c WHERE c.server = $2 AND c.name = $3), 0)
+                    COALESCE((SELECT c.cooldown FROM channels c WHERE c.server = $2 AND c.name = $3 AND c.kind = 'text'), 0)
              FROM memberships m WHERE m.user_id = $1 AND m.group_name = $2",
         )
         .bind(id)
@@ -1343,11 +1344,12 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
         None => "somebody (database down, reading only)".to_owned(),
     };
 
-    // 2. every channel of the server this login sees (groups.rs `visible_channels`: one kept to
-    //    roles they do not hold is not followed, and a say in it is `say which channel`), joined.
+    // 2. every text channel of the server this login sees (groups.rs `visible_text_channels`: a
+    //    voice one, or one kept to roles they do not hold, is not followed, and a say in it is
+    //    `say which channel`), joined.
     //    no history: the page has the api's. what they see is read now: a role given or taken
     //    while the socket is up reaches it on the next connect, and the page reconnects on its own
-    let channels: Vec<String> = match crate::groups::visible_channels(&s.db, &server, who.as_ref().and_then(|w| w.user_id), s.is_admin(who.as_ref())).await {
+    let channels: Vec<String> = match crate::groups::visible_text_channels(&s.db, &server, who.as_ref().and_then(|w| w.user_id), s.is_admin(who.as_ref())).await {
         Ok(channels) => channels,
         Err(e) => {
             // a server with no channels to follow is no use: the panel is back in 3s
@@ -1451,7 +1453,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                         }
                         let user = who.as_ref().and_then(|w| w.user_id);
                         let seen = crate::groups::channel_names(&server, &channel).is_ok()
-                            && crate::groups::may_see(&s.db, &server, &channel, user, s.is_admin(who.as_ref())).await.unwrap_or(false);
+                            && crate::groups::may_see_text(&s.db, &server, &channel, user, s.is_admin(who.as_ref())).await.unwrap_or(false);
                         if seen && !follow(&s, &server, &channel, &ip, &tx, &mut joined).await {
                             let _ = send(&mut socket, &Out::Error { error: "too many tabs" }).await;
                         }
