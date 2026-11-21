@@ -5,6 +5,8 @@
 #   ./scripts/test.sh                      the stack on this machine (starts it if it is down)
 #   ./scripts/test.sh https://1.2.3.4      a server somewhere else, from this laptop
 #   ./scripts/test.sh --all                also the redeploy test (runs ./scripts/deploy.sh api/frontend/video)
+#   ./scripts/test.sh voice groups         only those suites (any test/<name>.js), with or without a url
+#   VOICE=1 ./scripts/test.sh voice        voice's voice server part too: the stack up with --profile voice and a VOICE_SECRET
 #   HEADED=1 ./scripts/test.sh             watch the browsers
 #
 # Needs node and Google Chrome on the machine running the tests. With a url, that is any
@@ -88,6 +90,11 @@
 #              layout and the size, nothing fetched from elsewhere, the owner editing them on that tab (the editor under the strip: the
 #              cards, a row from its square, the arrows, ×; the strip follows the draft, done shows the saved document); the corner
 #              panel's picture is your page and the gear is in it
+#   voice      a voice channel (kind voice; no chat: its socket and search say no such channel), the voice power reached like any other,
+#              the join route's answers (401, 403, 404 for none or hidden, 400 for text, a 64-hex grant for /voice) and the internal routes
+#              404 from outside; locally, presence written to redis for already in voice, channel full and the room's voice (hidden channels
+#              hidden). with VOICE=1 the voice server too: two logins join by grants and hear each other, /events hears voice, the room
+#              shows them, a used grant is bad grant, a closed page is voice_left within 20s
 #   prefetch   a press on a link to a stream's page, home or a group asks for that page's data on pointerdown, once: the page takes it
 #              (one grant, one /api/streams, one room and one lines), and a press that goes nowhere asks once and nothing more
 #   regress    token-gated stop, auto-recovery, trailing slash, fast restart, races, bad offers
@@ -106,11 +113,13 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 ALL=0
 BASE=""
+ONLY=""
 for a in "$@"; do
   case "$a" in
     -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;   # the header above, up to the first code line
     --all) ALL=1 ;;
     http://*|https://*) BASE="${a%/}" ;;
+    [a-z]*) [ -f "test/$a.js" ] || die "no suite '$a' (test/$a.js). see ./scripts/test.sh --help"; ONLY="$ONLY $a " ;;
     *) die "don't know what '$a' is. see ./scripts/test.sh --help" ;;
   esac
 done
@@ -165,6 +174,8 @@ fi
 
 failed=0
 run() {
+  # named suites only, when any were named
+  case "$ONLY" in ""|*" $1 "*) ;; *) return 0 ;; esac
   say "$1"
   if BASE_URL="$BASE" LOCAL="$LOCAL" OPS_TOKEN="${OPS_TOKEN:-}" MONITOR_IMAGE="${MONITOR_IMAGE:-}" node "test/$1.js"; then :; else failed=$((failed + 1)); fi
 }
@@ -188,6 +199,7 @@ run calendar
 run about
 run socials
 run prefetch
+run voice
 if [ "$LOCAL" = 1 ]; then
   run regress
   run monitor
@@ -200,7 +212,7 @@ if [ "$LOCAL" = 1 ]; then
       say "dummy: skipped (DUMMY_STREAMS is 0 in .env)"
     fi
   fi
-else
+elif [ -z "$ONLY" ]; then
   say "regress, monitor and redeploy touch docker here, so they only run against the local stack"
 fi
 
