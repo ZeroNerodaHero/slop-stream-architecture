@@ -17,6 +17,7 @@ import { meAtom } from '@/infra/atoms/auth-atoms';
 import { keepDmWindow, keptDmWindow } from '@/infra/atoms/chat-layout-atoms';
 import { followingAtom } from '@/infra/atoms/follow-atoms';
 import type { Presence } from '@/infra/atoms/presence-atoms';
+import { type ChatVideo, videoOf } from '@/infra/chat-video';
 import { onEvents } from '@/infra/events';
 import { store } from '@/infra/store';
 import { applyReaction, type Reaction, reacted, reactionsOf } from '@/shared-components/reaction-list';
@@ -241,12 +242,14 @@ function setThread(name: string, next: (prev: Thread | undefined) => Thread) {
   store.set(dmThreadsAtom, { ...threads, [name]: next(threads[name]) });
 }
 
-/** A line as the api or a frame gave it: `images` left off (an older api, a frame with no pictures) is no pictures. */
+/** A line as the api or a frame gave it: `images` left off (an older api, a frame with no pictures) is no pictures; `video` left off is none. */
 function lineOf(line: Omit<DmLine, 'images'> & { images?: unknown }): DmLine {
   const images = Array.isArray(line.images) ? line.images.filter((id): id is string => typeof id === 'string' && id.length > 0) : [];
   const reply = line.reply && typeof line.reply === 'object' && typeof line.reply.id === 'number' ? line.reply : null;
+  const video = videoOf(line.video);
+  const base = { id: line.id, from: line.from, text: line.text, at: line.at, images, reply, ...(video ? { video } : {}) };
   // a frame's new line carries no reactions: left off, so `merge` keeps any the line already has
-  return 'reactions' in line ? { id: line.id, from: line.from, text: line.text, at: line.at, images, reply, reactions: reactionsOf(line.reactions) } : { id: line.id, from: line.from, text: line.text, at: line.at, images, reply };
+  return 'reactions' in line ? { ...base, reactions: reactionsOf(line.reactions) } : base;
 }
 
 /** Both sets of lines as one, by id, oldest first: a page over the lines already here, a frame over a page. */
@@ -306,16 +309,16 @@ function append(name: string, line: DmLine) {
 
 /**
  * A line to `name`: `POST /api/dm/<name>`, the words and the pictures on it (`images`, the ids
- * `api.uploadChatImage` returned; the words may be empty then). The api's answer goes in at
+ * `api.uploadChatImage` returned; the words may be empty then), and a video (`api.uploadChatVideo`'s id). The api's answer goes in at
  * once (the socket may be down; the box must still work), and the same line coming back on the
  * socket is dropped by id. False, with the api's words under the box, when it was not kept:
  * not friends, too long, too fast, a picture the upload never kept.
  */
-export async function sendDm(name: string, raw: string, images: string[] = [], reply: number | null = null): Promise<boolean> {
+export async function sendDm(name: string, raw: string, images: string[] = [], reply: number | null = null, video: string | null = null): Promise<boolean> {
   const text = raw.trim();
-  if (!text && images.length === 0) return false;
+  if (!text && images.length === 0 && !video) return false;
   try {
-    const line = await api.sendDm(name, text, images, reply);
+    const line = await api.sendDm(name, text, images, reply, video);
     append(name, lineOf(line));
     return true;
   } catch (err) {
@@ -474,7 +477,7 @@ function retarget(fromId: string, peer: string) {
  * screen follow the new name before the read is decided. A frame with no `from_id` matches
  * the name, as before.
  */
-function arrived(frame: { id: number; from: string; to: string; text: string; at: number; from_id?: string; images?: string[] }) {
+function arrived(frame: { id: number; from: string; to: string; text: string; at: number; from_id?: string; images?: string[]; video?: ChatVideo }) {
   const me = store.get(meAtom);
   if (!me || (frame.from !== me && frame.to !== me)) return;
   const peer = frame.from === me ? frame.to : frame.from;

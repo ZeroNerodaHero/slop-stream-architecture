@@ -239,6 +239,31 @@ pub(crate) async fn get(store: &Store, key: &str) -> Result<Option<Vec<u8>>, Str
     ))
 }
 
+/// Bytes `start..=end` of a key (`Range: bytes=start-end`), for a chat video's seek
+/// (chat_videos.rs). `Ok(None)` is a missing key. A bucket that ignores the range and sends
+/// the whole object is cut here, so the caller always gets the part it asked for.
+pub(crate) async fn get_range(store: &Store, key: &str, start: u64, end: u64) -> Result<Option<Vec<u8>>, String> {
+    check_key(key)?;
+    let res = send_with(store, "GET", Some(key), b"", None, Some(format!("bytes={start}-{end}"))).await?;
+    let status = res.status().as_u16();
+    if status == 404 {
+        return Ok(None);
+    }
+    if status == 206 || status == 200 {
+        let bytes = res.bytes().await.map_err(|e| e.to_string())?;
+        if status == 206 {
+            return Ok(Some(bytes.to_vec()));
+        }
+        let from = (start as usize).min(bytes.len());
+        let to = ((end as usize).saturating_add(1)).min(bytes.len());
+        return Ok(Some(bytes[from..to].to_vec()));
+    }
+    Err(format!(
+        "s3 get {key} {start}-{end}: {status} {}",
+        clip(&res.text().await.unwrap_or_default())
+    ))
+}
+
 /// A missing key is fine.
 pub(crate) async fn delete(store: &Store, key: &str) -> Result<(), String> {
     check_key(key)?;
@@ -278,6 +303,19 @@ async fn send(
     body: &[u8],
     content_type: Option<&str>,
 ) -> Result<reqwest::Response, String> {
+    send_with(store, method, key, body, content_type, None).await
+}
+
+/// `send`, with a `Range` header. Not one of the signed headers: sigv4 signs what it lists, and
+/// a header it does not list rides along unsigned.
+async fn send_with(
+    store: &Store,
+    method: &str,
+    key: Option<&str>,
+    body: &[u8],
+    content_type: Option<&str>,
+    range: Option<String>,
+) -> Result<reqwest::Response, String> {
     let target = store.target(key)?;
     let amz_date = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let payload_hash = sha256_hex(body);
@@ -309,6 +347,9 @@ async fn send(
         .header("authorization", authorization);
     if let Some(ct) = content_type {
         req = req.header("content-type", ct);
+    }
+    if let Some(range) = range {
+        req = req.header("range", range);
     }
     if method == "PUT" || method == "POST" {
         req = req.body(body.to_vec());

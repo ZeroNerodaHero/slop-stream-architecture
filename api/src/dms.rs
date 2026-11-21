@@ -13,7 +13,9 @@
 //! A line may carry pictures, the room chat's way (chat_images.rs): the page shrinks each and
 //! `POST /api/chat-images` keeps it, the line names the ids (`images`, ten at most), and the
 //! row keeps them joined by commas in `image`, as a chat line does. The words may be empty
-//! when there is a picture.
+//! when there is a picture. A video goes the same way (chat_videos.rs): `video` names the id
+//! `POST /api/chat-videos` handed back, and the row keeps it with its poster in `video`
+//! (`<video>,<poster>`, chat.rs `Video`), the line answering `video: { id, poster }`.
 //!
 //! A thread is searched the room chat's way too (`GET /api/dm/:name/search?q=`, history.rs
 //! `read_search`: the words, a quoted phrase, and the filters among them), over its own rows
@@ -32,10 +34,10 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{self, Account, Me};
-use crate::chat::{clean_text, picture_ids, split_pictures, MAX_TEXT_CHARS, NO_SUCH_LINE};
+use crate::chat::{clean_text, picture_ids, split_pictures, video_id, Video, MAX_TEXT_CHARS, NO_SUCH_LINE};
 use crate::history::{self, Bind, Search};
 use crate::presence::{self, Presence};
-use crate::{chat_images, follows, notify, reactions};
+use crate::{chat_images, chat_videos, follows, notify, reactions};
 use crate::{ApiError, ApiResult, AppState, Name};
 
 /// Lines in one page of a thread. A shorter page is the start of the thread.
@@ -73,8 +75,9 @@ async fn peer(db: &PgPool, me: &Account, name: String) -> Result<Account, ApiErr
 
 /// id, from (the name now), text, sent at (ms), the pictures' ids joined by commas (null for none),
 /// then what it answers (`reply_to`) and that line as `QuoteRow` has it (nulls for one not there),
-/// then its reactions (json, reactions.rs `Reaction`s, `[]` for none)
-type LineRow = (i64, String, String, i64, Option<String>, Option<i64>, Option<String>, Option<String>, Option<i64>, Option<String>, Value);
+/// then its reactions (json, reactions.rs `Reaction`s, `[]` for none), then its video and the quoted
+/// line's (`<video>,<poster>`, null for none)
+type LineRow = (i64, String, String, i64, Option<String>, Option<i64>, Option<String>, Option<String>, Option<i64>, Option<String>, Value, Option<String>, Option<String>);
 
 /// A thread's line as every read of it selects it (`LineRow`), the line it answers joined: of the
 /// same pair, so a reply never shows another thread's words. Its reactions with it, by the name
@@ -83,36 +86,45 @@ const LINE_SELECT: &str = concat!(
     "SELECT d.id, f.name, d.text, (EXTRACT(EPOCH FROM d.sent_at) * 1000)::bigint, d.image,
                 d.reply_to, qf.name, left(q.text, 120), (EXTRACT(EPOCH FROM qf.avatar_at))::bigint, q.image, ",
     reactions::dm_reactions_sql!(),
-    "
+    ", d.video, q.video
          FROM dms d JOIN streamers f ON f.id = d.from_id
          LEFT JOIN dms q ON q.id = d.reply_to
              AND LEAST(q.from_id, q.to_id) = LEAST(d.from_id, d.to_id) AND GREATEST(q.from_id, q.to_id) = GREATEST(d.from_id, d.to_id)
          LEFT JOIN streamers qf ON qf.id = q.from_id"
 );
 
-fn line_json((id, from, text, at, image, reply_to, quote_from, quote_text, quote_avatar, quote_image, reactions): &LineRow) -> Value {
+fn line_json((id, from, text, at, image, reply_to, quote_from, quote_text, quote_avatar, quote_image, reactions, video, quote_video): &LineRow) -> Value {
     let reply = reply_to.map(|reply_to| match quote_from {
-        Some(quote_from) => quote_json(&(reply_to, quote_from.clone(), quote_text.clone().unwrap_or_default(), *quote_avatar, quote_image.clone())),
+        Some(quote_from) => quote_json(&(reply_to, quote_from.clone(), quote_text.clone().unwrap_or_default(), *quote_avatar, quote_image.clone(), quote_video.clone())),
         // the line it answered is not there any more: the page says so
         None => json!({ "id": reply_to, "gone": true }),
     });
-    json!({ "id": id, "from": from, "text": text, "at": at, "images": split_pictures(image.clone()), "reply": reply, "reactions": reactions })
+    let mut line = json!({ "id": id, "from": from, "text": text, "at": at, "images": split_pictures(image.clone()), "reply": reply, "reactions": reactions });
+    if let Some(video) = Video::parse(video.as_deref()) {
+        line["video"] = json!(video);
+    }
+    line
 }
 
 /// The line a reply answers, as a quote: id, who wrote it (the name now), the start of its words
-/// (120 characters, the room chat's `Reply`), their picture's version, its pictures' ids.
-type QuoteRow = (i64, String, String, Option<i64>, Option<String>);
+/// (120 characters, the room chat's `Reply`), their picture's version, its pictures' ids, its video.
+type QuoteRow = (i64, String, String, Option<i64>, Option<String>, Option<String>);
 
-/// A quote as the pages read it, the room chat's `Reply` shape: `images` is how many pictures.
-fn quote_json((id, from, text, avatar, image): &QuoteRow) -> Value {
-    json!({ "id": id, "from": from, "text": text, "verified": true, "avatar": avatar, "images": split_pictures(image.clone()).len() })
+/// A quote as the pages read it, the room chat's `Reply` shape: `images` is how many pictures,
+/// `video` there when it had one.
+fn quote_json((id, from, text, avatar, image, video): &QuoteRow) -> Value {
+    let mut quote = json!({ "id": id, "from": from, "text": text, "verified": true, "avatar": avatar, "images": split_pictures(image.clone()).len() });
+    if video.is_some() {
+        quote["video"] = json!(true);
+    }
+    quote
 }
 
 /// The line `id` of the thread between `a` and `b`, as a quote. None for a line of another
 /// thread, or none at all: a reply answers its own thread only.
 async fn quote(db: &PgPool, a: Uuid, b: Uuid, id: i64) -> Result<Option<QuoteRow>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT q.id, f.name, left(q.text, 120), (EXTRACT(EPOCH FROM f.avatar_at))::bigint, q.image
+        "SELECT q.id, f.name, left(q.text, 120), (EXTRACT(EPOCH FROM f.avatar_at))::bigint, q.image, q.video
          FROM dms q JOIN streamers f ON f.id = q.from_id
          WHERE q.id = $3 AND LEAST(q.from_id, q.to_id) = LEAST($1, $2) AND GREATEST(q.from_id, q.to_id) = GREATEST($1, $2)",
     )
@@ -231,13 +243,15 @@ fn search_sql(search: &Search, from: Option<Uuid>) -> (String, Vec<Bind>) {
     if search.image {
         clauses.push("d.image IS NOT NULL".to_owned());
     }
-    if search.link || search.video {
+    if search.link {
         let link = placeholder(Bind::Text(history::LINK.to_owned()));
         clauses.push(format!("d.text ~* {link}"));
     }
     if search.video {
+        // a video of the line's own, or a pasted link to one: a link first, then a video link
+        let link = placeholder(Bind::Text(history::LINK.to_owned()));
         let hosts = placeholder(Bind::Text(history::VIDEO_LINK.to_owned()));
-        clauses.push(format!("d.text ~* {hosts}"));
+        clauses.push(format!("(d.video IS NOT NULL OR (d.text ~* {link} AND d.text ~* {hosts}))"));
     }
     if let Some(at) = search.before {
         let at = placeholder(Bind::At(at));
@@ -270,6 +284,9 @@ struct TextBody {
     image: Option<String>,
     #[serde(default)]
     images: Vec<String>,
+    /// The video on the line, the id `POST /api/chat-videos` handed back. One at most.
+    #[serde(default)]
+    video: Option<String>,
     /// The id of the line of this thread the line answers (docs/dms.md "replies").
     #[serde(default)]
     reply: Option<i64>,
@@ -287,7 +304,8 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     let Json(body) = body?;
     let text = clean_text(&body.text);
     let images = picture_ids(body.image, body.images).map_err(|why| ApiError::new(StatusCode::BAD_REQUEST, why))?;
-    if text.is_empty() && images.is_empty() {
+    let video = video_id(body.video).map_err(|why| ApiError::new(StatusCode::BAD_REQUEST, why))?;
+    if text.is_empty() && images.is_empty() && video.is_none() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "nothing to say"));
     }
     if text.chars().count() > MAX_TEXT_CHARS {
@@ -300,6 +318,14 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     crate::auth::limit(&s, &format!("rl:dm:name:{}", me.name), RATE_WINDOW_SECS, RATE_PER_MINUTE, "slow down").await?;
     // the pictures must be ones the upload kept: a lookup each, paid for by the rate like the say's (chat.rs `accept`)
     pictures_exist(&s.db, &images).await?;
+    // the video too, with its poster, which the line carries beside it
+    let video = match video {
+        Some(id) => match chat_videos::poster_of(&s.db, &id).await? {
+            Some(poster) => Some(Video { id, poster: poster.to_string() }),
+            None => return Err(ApiError::new(StatusCode::BAD_REQUEST, "no such video")),
+        },
+        None => None,
+    };
     // the line answered must be this thread's: a lookup, paid for by the rate like the pictures'
     let reply = match body.reply {
         Some(id) => Some(quote(&s.db, me.id, other.id, id).await?.ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, NO_SUCH_LINE))?),
@@ -308,7 +334,7 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     let reply = reply.as_ref().map(quote_json);
     let image = if images.is_empty() { None } else { Some(images.join(",")) };
     let (id, at): (i64, i64) = sqlx::query_as(
-        "INSERT INTO dms (from_id, to_id, text, image, reply_to) VALUES ($1, $2, $3, $4, $5)
+        "INSERT INTO dms (from_id, to_id, text, image, reply_to, video) VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id, (EXTRACT(EPOCH FROM sent_at) * 1000)::bigint",
     )
     .bind(me.id)
@@ -316,6 +342,7 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     .bind(&text)
     .bind(&image)
     .bind(body.reply)
+    .bind(video.as_ref().map(Video::stored))
     .fetch_one(&s.db)
     .await?;
     // the writer has read their own thread this far: a line of yours is never "new" to you
@@ -324,9 +351,13 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     // pictures alone is a row with no words, and the list says `a picture` for it
     notify::messaged(&s, &other, &me, &text).await;
     let mut r = s.redis.clone();
-    presence::publish_dm(&mut r, &me.name, &other.name, id, &text, &images, at, &me.id.to_string(), reply.as_ref()).await;
-    log::info!("{}: dm to {} ({} chars, {} pictures)", me.name, other.name, text.chars().count(), images.len());
-    Ok((StatusCode::CREATED, Json(json!({ "id": id, "from": me.name, "to": other.name, "text": text, "at": at, "images": images, "reply": reply }))))
+    presence::publish_dm(&mut r, &me.name, &other.name, id, &text, &images, video.as_ref(), at, &me.id.to_string(), reply.as_ref()).await;
+    log::info!("{}: dm to {} ({} chars, {} pictures{})", me.name, other.name, text.chars().count(), images.len(), if video.is_some() { ", a video" } else { "" });
+    let mut line = json!({ "id": id, "from": me.name, "to": other.name, "text": text, "at": at, "images": images, "reply": reply });
+    if let Some(video) = &video {
+        line["video"] = json!(video);
+    }
+    Ok((StatusCode::CREATED, Json(line)))
 }
 
 #[derive(Deserialize)]
@@ -415,8 +446,8 @@ async fn read(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// peer id, name, verified, avatar, bio, status, last id, last from, last text, last at (ms), unread, last pictures (joined by commas)
-type ThreadRow = (Uuid, String, bool, Option<i64>, String, String, i64, String, String, i64, i64, Option<String>);
+/// peer id, name, verified, avatar, bio, status, last id, last from, last text, last at (ms), unread, last pictures (joined by commas), last video
+type ThreadRow = (Uuid, String, bool, Option<i64>, String, String, i64, String, String, i64, i64, Option<String>, Option<String>);
 
 /// `GET /api/dms`: every thread the login is in, the one with the newest line first, with the
 /// other side as the sidebar lists people (face, ✓, bio, how they are), their account `id`,
@@ -435,7 +466,7 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
                 (SELECT count(*) FROM dms u
                   WHERE u.from_id = m.peer_id AND u.to_id = $1
                     AND u.id > COALESCE((SELECT r.last_read_id FROM dm_reads r WHERE r.reader_id = $1 AND r.peer_id = m.peer_id), 0)),
-                d.image
+                d.image, d.video
          FROM mine m
          JOIN streamers s ON s.id = m.peer_id
          JOIN dms d ON d.id = m.last_id
@@ -449,12 +480,12 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     .await?;
     let people: Vec<_> = rows.iter().map(|r| follows::choice(&r.1, &r.5)).collect();
     let words = follows::words(&s, &people).await?;
-    let out = rows.iter().map(|(peer, name, verified, avatar, bio, _, id, from, text, at, unread, image)| {
+    let out = rows.iter().map(|(peer, name, verified, avatar, bio, _, id, from, text, at, unread, image, video)| {
         let (live, word) = words.get(name).copied().unwrap_or((false, Presence::Offline));
         json!({
             "id": peer.to_string(),
             "name": name, "verified": verified, "avatar": avatar, "bio": bio, "live": live, "presence": word,
-            "last": { "id": id, "from": from, "text": text, "at": at, "images": split_pictures(image.clone()) }, "unread": unread,
+            "last": { "id": id, "from": from, "text": text, "at": at, "images": split_pictures(image.clone()), "video": Video::parse(video.as_deref()) }, "unread": unread,
         })
     });
     Ok(Json(Value::Array(out.collect())))
@@ -486,7 +517,7 @@ mod tests {
         assert!(sql.contains("LEAST(d.from_id, d.to_id) = LEAST($1, $2) AND GREATEST(d.from_id, d.to_id) = GREATEST($1, $2)"));
         assert!(sql.contains("to_tsvector('simple', d.text) @@ websearch_to_tsquery('simple', $3)"));
         assert!(sql.contains("d.from_id = $4"));
-        assert!(sql.contains("d.text ~* $5") && sql.contains("d.text ~* $6"), "a video is a link first, then a video link: {sql}");
+        assert!(sql.contains("(d.video IS NOT NULL OR (d.text ~* $5 AND d.text ~* $6))"), "an uploaded video, or a link first, then a video link: {sql}");
         assert!(sql.contains("d.sent_at < $7"));
         assert!(sql.ends_with("ORDER BY d.id DESC LIMIT $8"));
         assert_eq!(binds.len(), 5);

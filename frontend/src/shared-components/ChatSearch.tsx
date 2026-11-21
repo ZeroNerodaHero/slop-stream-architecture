@@ -1,4 +1,4 @@
-import { RiImageLine } from '@remixicon/react';
+import { RiFilmLine, RiImageLine } from '@remixicon/react';
 import {
   type ChangeEvent,
   type FormEvent,
@@ -405,6 +405,8 @@ interface SearchHitProps {
   text: string;
   /** How many pictures are on the line: the picture mark, and the count past one. */
   images: number;
+  /** The line has a video of its own: the film mark. */
+  video?: boolean;
   onClick: () => void;
   /** The button's own attributes besides `data-id`: `data-channel` on a group's hit. */
   attrs?: HTMLAttributes<HTMLButtonElement> & Record<`data-${string}`, string | number | boolean | undefined>;
@@ -415,7 +417,7 @@ interface SearchHitProps {
  * the picture mark with a count for pictures. The whole row is the click (the button's `after`
  * covers the row, the clock with it), and a pointer or the focus on it tints the row.
  */
-export function SearchHit({ id, at, before, who, text, images, onClick, attrs }: SearchHitProps) {
+export function SearchHit({ id, at, before, who, text, images, video = false, onClick, attrs }: SearchHitProps) {
   const pictures = images === 1 ? 'a picture' : `${images} pictures`;
   return (
     <li className="relative flex items-baseline gap-2 px-3 py-1 transition-colors duration-150 focus-within:bg-backgroundTertiary hover:bg-backgroundTertiary">
@@ -437,6 +439,13 @@ export function SearchHit({ id, at, before, who, text, images, onClick, attrs }:
             <span role="img" aria-label={pictures} className="relative z-10 ml-1 inline-flex items-center gap-0.5 align-middle text-textTertiary">
               <RiImageLine aria-hidden size={12} />
               {images > 1 && <span className="text-xs tabular-nums">{images}</span>}
+            </span>
+          </Tooltip>
+        )}
+        {video && (
+          <Tooltip content="a video">
+            <span role="img" aria-label="a video" className="relative z-10 ml-1 inline-flex items-center align-middle text-textTertiary">
+              <RiFilmLine aria-hidden size={12} />
             </span>
           </Tooltip>
         )}

@@ -19,6 +19,7 @@ import { useLocation } from 'react-router-dom';
 import { api, type DmLine, messageOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { MAX_CHAT_IMAGES } from '@/infra/atoms/chat-atoms';
+import type { ChatVideo } from '@/infra/chat-video';
 import { type ChatBox as Box, keepDmBox, keptDmBox } from '@/infra/atoms/chat-layout-atoms';
 import {
   clearDmResults,
@@ -52,7 +53,9 @@ import { compressChatImage } from '@/infra/picture';
 import { usePrefetchOnPointerDown } from '@/infra/prefetch';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
+import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingVideo, splitFiles, useVideoUpload, VideoProgress } from '@/shared-components/ChatAttach';
 import { ChatLineShape, LineActions, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
+import { ChatVideoPlayer } from '@/shared-components/ChatVideoPlayer';
 import { ChatImages, pictureSrc } from '@/shared-components/ChatPanel';
 import { comboProps, SearchFilters, SearchHit, SearchResults, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
@@ -316,7 +319,7 @@ function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
             {friends.map((f) => {
               const tab = dms.find((d) => d.name === f.name);
               const last = threads[f.name]?.lines.at(-1) ?? tab?.last;
-              const said = last && (last.text || (last.images.length > 0 ? 'a picture' : ''));
+              const said = last && (last.text || (last.images.length > 0 ? 'a picture' : last.video ? 'a video' : ''));
               return (
                 <li key={f.name} className="border-b border-primaryStroke">
                   <button
@@ -603,6 +606,9 @@ export function FriendChat() {
   const [searching, setSearching] = useState(false);
   /** Each thread's pictures waiting to go with its next line: the ids `POST /api/chat-images` handed back, kept like the draft while another tab is shown. */
   const [pending, setPending] = useState<Record<string, string[]>>({});
+  /** Each thread's video waiting to go with its next line (`POST /api/chat-videos`), kept like the pictures. One at most. */
+  const [pendingVideo, setPendingVideo] = useState<Record<string, ChatVideo | null>>({});
+  const videoUp = useVideoUpload();
   /** Each thread's line the next send answers (the action bar's reply), kept like the draft while another tab is shown. */
   const [replies, setReplies] = useState<Record<string, DmLine | null>>({});
   /** The line a reply's quote just jumped to, lit for a moment. */
@@ -648,6 +654,7 @@ export function FriendChat() {
   const lines = thread?.lines ?? [];
   const draft = (name && drafts[name]) || '';
   const pictures = (name && pending[name]) || [];
+  const video = (name && pendingVideo[name]) || null;
   const replyTo = (name && replies[name]) || null;
   // the hits over the lines: a search's, while the thread it asked is the one on screen
   const hits = results?.name === name ? results : null;
@@ -833,8 +840,22 @@ export function FriendChat() {
    * `POST /api/chat-images`) and its id kept for the next line; past the cap the rest are left,
    * with a word under the box. The room chat's `pickPictures` (ChatPanel.tsx).
    */
-  async function pickPictures(list: FileList | null) {
-    const files = list ? [...list] : [];
+  function pickFiles(list: FileList | File[] | null) {
+    const { pictures: still, videos } = splitFiles(list ? [...list] : []);
+    if (fileRef.current) fileRef.current.value = '';
+    const [first] = videos;
+    if (name && first) {
+      const forThread = name;
+      if (video || videos.length > 1 || videoUp.progress !== null) showDmNotice('one video at a time');
+      if (!video && videoUp.progress === null) {
+        // into the thread the pick was for, even if another tab is shown by the time the upload lands
+        void videoUp.upload(first, (v) => setPendingVideo((prev) => ({ ...prev, [forThread]: v })), showDmNotice);
+      }
+    }
+    void pickPictures(still);
+  }
+
+  async function pickPictures(files: File[]) {
     if (!name || files.length === 0 || uploading) return;
     const forThread = name;
     const room = MAX_CHAT_IMAGES - pictures.length;
@@ -863,16 +884,17 @@ export function FriendChat() {
 
   async function send(e?: FormEvent) {
     e?.preventDefault();
-    if (!name || (!draft.trim() && pictures.length === 0) || sending || uploading) return;
+    if (!name || (!draft.trim() && pictures.length === 0 && !video) || sending || uploading || videoUp.progress !== null) return;
     setSending(true);
     // the thread's lines are one run from the newest back (dm-atoms.ts), so the newest is always loaded: the line just goes on the bottom, and the view with it
     sentJump.current = name;
-    const sent = await sendDm(name, draft, pictures, replyTo?.id ?? null);
+    const sent = await sendDm(name, draft, pictures, replyTo?.id ?? null, video?.id ?? null);
     setSending(false);
     if (!sent) sentJump.current = null;
     if (sent) {
       setDraft('');
       setPictures([]);
+      setPendingVideo((prev) => ({ ...prev, [name]: null }));
       setReply(null);
     }
     input.current?.focus();
@@ -1099,7 +1121,12 @@ export function FriendChat() {
                           </span>
                         ) : null
                       }
-                      pictures={<ChatImages ids={line.images} />}
+                      pictures={
+                        <>
+                          <ChatImages ids={line.images} />
+                          {line.video && <ChatVideoPlayer video={line.video} />}
+                        </>
+                      }
                       actions={<LineActions onReact={(emoji) => void reactDm(name, line, emoji)} reactions={line.reactions} me={me} onReply={() => setReply(line)} text={line.text} />}
                       reactions={<ReactionChips reactions={line.reactions ?? []} me={me} onReact={(emoji) => void reactDm(name, line, emoji)} />}
                       quote={
@@ -1111,6 +1138,7 @@ export function FriendChat() {
                               text: line.reply.text ?? '',
                               avatar: line.reply.avatar ?? null,
                               images: line.reply.images ?? 0,
+                              video: line.reply.video,
                               gone: line.reply.gone
                             }}
                             onJump={() => void jumpTo(line.reply!.id)}
@@ -1144,6 +1172,7 @@ export function FriendChat() {
                       who={<span className={cn('font-semibold', line.from === me && 'text-primaryBlue')}>{line.from}</span>}
                       text={line.text}
                       images={line.images.length}
+                      video={!!line.video}
                       onClick={() => {
                         clearDmResults();
                         void openDmLine(name, line.id);
@@ -1156,6 +1185,10 @@ export function FriendChat() {
             {/* a phone's foot: room for the home bar under the box, unless the keyboard is up and has taken that place */}
             <form
               onSubmit={(e) => void send(e)}
+              // a picture or a video dropped on the box, or pasted into it, goes where the picker's would
+              onDragOver={dragFiles}
+              onDrop={(e) => dropFiles(e, pickFiles)}
+              onPaste={(e) => pasteFiles(e, pickFiles)}
               className={cn('border-t border-primaryStroke p-2', mobile && 'shrink-0', mobile && !sheet.raised && 'pb-[calc(0.5rem+env(safe-area-inset-bottom))]')}
             >
               {/* the line the next send answers, the room chat's bar over the box (ChatPanel.tsx `#chat-replying`): who, and the × (escape in the box too) */}
@@ -1163,7 +1196,7 @@ export function FriendChat() {
                 <div id="friend-chat-replying" data-reply-to={replyTo.id} className="mb-1.5 flex items-center gap-2 border-l-2 border-primaryBlue bg-backgroundTertiary py-0.5 pl-2 text-xs">
                   <span className="min-w-0 flex-1 truncate text-textSecondary">
                     replying to <span className="font-semibold text-textPrimary">{replyTo.from === me ? 'yourself' : replyTo.from}</span>
-                    <span className="sr-only">: {quoteWords({ text: replyTo.text, images: replyTo.images.length })}</span>
+                    <span className="sr-only">: {quoteWords({ text: replyTo.text, images: replyTo.images.length, video: !!replyTo.video })}</span>
                   </span>
                   <Tooltip content="cancel reply">
                     <button
@@ -1182,8 +1215,10 @@ export function FriendChat() {
                 </div>
               )}
               {/* the pictures going with the next line, each with its × (the room chat's strip, ChatPanel.tsx) */}
-              {pictures.length > 0 && (
+              {videoUp.progress !== null && <VideoProgress progress={videoUp.progress} idPrefix="friend-chat" />}
+              {(pictures.length > 0 || video) && (
                 <div id="friend-chat-picture-preview" className="mb-2 flex flex-wrap gap-2">
+                  {video && <PendingVideo video={video} idPrefix="friend-chat" onRemove={() => setPendingVideo((prev) => ({ ...prev, [name]: null }))} />}
                   {pictures.map((id) => (
                     <span key={id} className="relative">
                       <img src={pictureSrc(id)} alt="" className="h-16 w-16 object-cover" />
@@ -1205,11 +1240,11 @@ export function FriendChat() {
                 <label htmlFor="friend-chat-text" className="sr-only">
                   message {name}
                 </label>
-                <Tooltip content={pictures.length >= MAX_CHAT_IMAGES ? `${MAX_CHAT_IMAGES} pictures at most` : 'add a picture'}>
+                <Tooltip content={pictures.length >= MAX_CHAT_IMAGES ? `${MAX_CHAT_IMAGES} pictures at most` : 'add a picture or a video'}>
                   <button
                     type="button"
                     id="friend-chat-picture"
-                    aria-label="picture"
+                    aria-label="picture or video"
                     className={cn(
                       'flex h-8 w-8 shrink-0 items-center justify-center text-textTertiary hover:text-textPrimary disabled:opacity-40',
                       mobile && 'h-11 w-11'
@@ -1224,10 +1259,10 @@ export function FriendChat() {
                   ref={fileRef}
                   id="friend-chat-picture-file"
                   type="file"
-                  accept="image/*"
+                  accept={ATTACH_ACCEPT}
                   multiple
                   className="hidden"
-                  onChange={(e) => void pickPictures(e.target.files)}
+                  onChange={(e) => pickFiles(e.target.files)}
                 />
                 <input
                   ref={input}
@@ -1258,7 +1293,7 @@ export function FriendChat() {
                   onPointerDown={keepFocus}
                   variant="primary"
                   className={cn(INPUT_BUTTON, mobile ? 'h-11 min-w-[44px] shrink-0 py-0' : 'h-[1.875rem] text-sm')}
-                  disabled={(!draft.trim() && pictures.length === 0) || left < 0 || sending || uploading}
+                  disabled={(!draft.trim() && pictures.length === 0 && !video) || left < 0 || sending || uploading || videoUp.progress !== null}
                 >
                   send
                 </Button>

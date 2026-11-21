@@ -291,6 +291,7 @@ mod tests {
             at: 1729000000000,
             image: None,
             images: Vec::new(),
+            video: None,
             reply: None,
             reactions: Vec::new(),
         }];

@@ -184,8 +184,8 @@ function Row({ n, fresh, now, onPick }: RowProps) {
           {n.kind !== 'dm' && n.kind !== 'chat' && <span className="text-textSecondary">{KIND_WORDS[n.kind]}</span>}
         </span>
         {(n.kind === 'dm' || n.kind === 'chat') && (
-          // a line of pictures alone, in a channel or a direct message, has no words: say so, rather than draw an empty line
-          <span className="truncate text-sm text-textSecondary [overflow-wrap:anywhere]">{n.text || 'a picture'}</span>
+          // a line of pictures (or a video) alone, in a channel or a direct message, has no words: say so, rather than draw an empty line
+          <span className="truncate text-sm text-textSecondary [overflow-wrap:anywhere]">{n.text || 'a picture or a video'}</span>
         )}
         <span className="text-xs text-textTertiary" title={when.toLocaleString()}>
           {ago(when.toISOString(), now)}

@@ -59,8 +59,9 @@ pub(crate) const LINK: &str = r"(^|[^[:alnum:]])(https?://|www\.)[^[:space:]]";
 /// (`a.mov … https://example.com`) is not one. A file link may end a sentence: the punctuation
 /// the panel leaves out of a link (`LinkedText.tsx`) is allowed before a space or the end, so
 /// `clip.mp4.` and `(…/clip.mp4)` are videos and `x.movie` and `clip.mp4.example.com/a` are not.
-/// The chat keeps no videos of its own, so this is the hosts people paste, and the file types a
-/// browser plays. Not the schema's: a host is added here.
+/// This is the pasted kind: the hosts people paste, and the file types a browser plays. A video
+/// uploaded to the chat (`video` on the row) matches `has:video` too, apart from this. Not the
+/// schema's: a host is added here.
 pub(crate) const VIDEO_LINK: &str = r"(^|[^[:alnum:]])(https?://|www\.)[^[:space:]]*(youtube\.com/(watch|shorts|live|embed)|youtu\.be/|twitch\.tv/videos/|clips\.twitch\.tv/|twitch\.tv/[^/[:space:]]+/clip/|vimeo\.com/[0-9]|streamable\.com/|kick\.com/[^[:space:]]*/clips?/|tiktok\.com/|\.(mp4|webm|mov|m3u8)([?#]|[[:punct:]]*([[:space:]]|$)))";
 
 /// A line's columns, with its speaker's picture as it is now (`LineRow`), and its room last (a
@@ -76,7 +77,7 @@ const LINE_COLUMNS: &str = concat!(
     crate::oauth::linked_sql!("u"),
     " OR ",
     crate::oauth::linked_sql!("r"),
-    "), l.reply"
+    "), l.reply, l.video"
 );
 const LINE_TABLES: &str = "chat_lines l
                            LEFT JOIN streamers u ON l.verified AND u.id = l.user_id
@@ -202,6 +203,7 @@ pub(crate) async fn store(
     user_id: Option<Uuid>,
     text: &str,
     image: Option<&str>,
+    video: Option<&str>,
     streamer: bool,
     verified: bool,
     groups: &[Badge],
@@ -217,8 +219,8 @@ pub(crate) async fn store(
     let badges = serde_json::to_value(groups).unwrap_or_else(|_| json!([]));
     let reply = reply.and_then(|r| serde_json::to_value(r).ok());
     sqlx::query(
-        "INSERT INTO chat_lines (room, id, at, seq, speaker, user_id, \"text\", streamer, verified, badges, image, reply)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        "INSERT INTO chat_lines (room, id, at, seq, speaker, user_id, \"text\", streamer, verified, badges, image, reply, video)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          ON CONFLICT (room, id) DO NOTHING",
     )
     .bind(room)
@@ -233,6 +235,7 @@ pub(crate) async fn store(
     .bind(badges)
     .bind(image)
     .bind(reply)
+    .bind(video)
     .execute(db)
     .await?;
     Ok(())
@@ -352,7 +355,8 @@ pub(crate) struct Search {
     pub(crate) image: bool,
     /// `has:link` (or `url`): a line with a link in its words.
     pub(crate) link: bool,
-    /// `has:video` (or `clip`): a line with a link to a video (`VIDEO_LINK`).
+    /// `has:video` (or `clip`): a line with a video of its own (`POST /api/chat-videos`), or a
+    /// link to one (`VIDEO_LINK`).
     pub(crate) video: bool,
     /// `before:<day>`: said before that day began (utc).
     pub(crate) before: Option<DateTime<Utc>>,
@@ -474,12 +478,13 @@ fn search_sql(search: &Search, account: Option<Uuid>) -> (String, Vec<Bind>) {
     if search.image {
         clauses.push("l.image IS NOT NULL".to_owned());
     }
-    if search.link || search.video {
+    if search.link {
         clauses.push("l.has_link".to_owned());
     }
     if search.video {
+        // an uploaded one (the partial index on `video`), or a pasted link to one
         let hosts = placeholder(&mut binds, Bind::Text(VIDEO_LINK.to_owned()));
-        clauses.push(format!("l.\"text\" ~* {hosts}"));
+        clauses.push(format!("(l.video IS NOT NULL OR (l.has_link AND l.\"text\" ~* {hosts}))"));
     }
     if let Some(at) = search.before {
         let at = placeholder(&mut binds, Bind::At(at));
@@ -681,10 +686,11 @@ async fn pg_side(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, side: Sid
 /// `LINE_COLUMNS`, in order: `image` is the picture ids on the line (one, or several joined by
 /// commas), then the speaker's face the join found, the room, and the oauth mark of the row the
 /// join found (false when it found none: `u.id` and `r.id` are null, and so is no EXISTS), and
-/// what the line answers (`chat::Reply` as json, null for nothing).
-type LineRow = (String, DateTime<Utc>, String, Option<Uuid>, String, bool, bool, Value, Option<String>, Option<i64>, String, bool, Option<Value>);
+/// what the line answers (`chat::Reply` as json, null for nothing), and its video (`<video>,<poster>`,
+/// `chat::Video`, null for none).
+type LineRow = (String, DateTime<Utc>, String, Option<Uuid>, String, bool, bool, Value, Option<String>, Option<i64>, String, bool, Option<Value>, Option<String>);
 
-fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, avatar, _room, oauth_verified, reply): LineRow) -> Line {
+fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, avatar, _room, oauth_verified, reply, video): LineRow) -> Line {
     let groups = serde_json::from_value::<Vec<Badge>>(badges).unwrap_or_default();
     let images = crate::chat::split_pictures(image);
     let image = images.first().cloned();
@@ -700,6 +706,7 @@ fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, a
         user_id,
         image,
         images,
+        video: crate::chat::Video::parse(video.as_deref()),
         reply: reply.and_then(|r| serde_json::from_value(r).ok()),
         reactions: Vec::new(),
         at: at.timestamp_millis().max(0) as u64,
@@ -815,7 +822,7 @@ mod tests {
     #[test]
     fn a_hit_says_its_channel_for_a_servers_search_alone() {
         let row = |room: &str| -> LineRow {
-            ("1729000000000-0".to_owned(), DateTime::from_timestamp_millis(1729000000000).unwrap(), "bob".to_owned(), None, "hi".to_owned(), false, false, json!([]), None, None, room.to_owned(), false, None)
+            ("1729000000000-0".to_owned(), DateTime::from_timestamp_millis(1729000000000).unwrap(), "bob".to_owned(), None, "hi".to_owned(), false, false, json!([]), None, None, room.to_owned(), false, None, None)
         };
         assert_eq!(hit_of(row("vip/clips"), Some("vip")).channel.as_deref(), Some("clips"));
         assert_eq!(hit_of(row("alice"), None).channel, None, "a stream's room has no channel");
@@ -887,7 +894,7 @@ mod tests {
         assert!(sql.starts_with(&format!("SELECT {LINE_COLUMNS} FROM {LINE_TABLES} WHERE l.room = ANY($1)")), "the rooms are one array, a stream's one or a server's channels");
         assert!(sql.contains("l.search @@ websearch_to_tsquery('simple', $2)"));
         assert!(sql.contains("(lower(l.speaker) = $3 OR l.user_id = $4)"));
-        assert!(sql.contains("l.has_link") && sql.contains("l.\"text\" ~* $5"));
+        assert!(sql.contains("(l.video IS NOT NULL OR (l.has_link AND l.\"text\" ~* $5))"), "an uploaded video, or a link to one");
         assert!(sql.contains("l.at < $6"));
         assert!(sql.ends_with("ORDER BY l.at DESC, l.seq DESC LIMIT $7"));
         assert_eq!(binds.len(), 5);
@@ -942,7 +949,7 @@ mod tests {
         let alice_name = format!("alice6-{run}");
         let alice = row(&pool, &alice_name, Some("alice-hash")).await;
         sqlx::query("UPDATE streamers SET avatar_at = to_timestamp(1690000000) WHERE id = $1").bind(alice).execute(&pool).await.unwrap();
-        store(&pool, &room, "1729000000000-0", &alice_name, Some(alice), "hi", None, false, true, &[], None).await.unwrap();
+        store(&pool, &room, "1729000000000-0", &alice_name, Some(alice), "hi", None, None, false, true, &[], None).await.unwrap();
         // her own name: her picture
         assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, Some(1690000000));
         let mark = |pool: PgPool, room: String| async move {
@@ -994,15 +1001,15 @@ mod tests {
         let al_name = format!("al{run}");
         let al = row(&pool, &al_name, Some("h")).await;
         let bo = row(&pool, &format!("bo{run}"), Some("h")).await;
-        let quote = Reply { id: "1729000000000-0".into(), from: "bo".into(), text: "hi al".into(), streamer: false, verified: true, avatar: None, images: 0 };
-        store(&pool, &general, "1729000000000-0", "bo", Some(bo), "hi al", None, false, true, &[], None).await.unwrap();
-        store(&pool, &general, "1729000000001-0", &al_name, Some(al), "one", None, false, true, &[], Some(&quote)).await.unwrap();
-        store(&pool, &clips, "1729000000002-0", &al_name, Some(al), "two", None, false, true, &[], None).await.unwrap();
-        store(&pool, &general, "1729000000002-0", &al_name, Some(al), "three", None, false, true, &[], None).await.unwrap();
+        let quote = Reply { id: "1729000000000-0".into(), from: "bo".into(), text: "hi al".into(), streamer: false, verified: true, avatar: None, images: 0, video: false };
+        store(&pool, &general, "1729000000000-0", "bo", Some(bo), "hi al", None, None, false, true, &[], None).await.unwrap();
+        store(&pool, &general, "1729000000001-0", &al_name, Some(al), "one", None, None, false, true, &[], Some(&quote)).await.unwrap();
+        store(&pool, &clips, "1729000000002-0", &al_name, Some(al), "two", None, None, false, true, &[], None).await.unwrap();
+        store(&pool, &general, "1729000000002-0", &al_name, Some(al), "three", None, None, false, true, &[], None).await.unwrap();
         // a nick wearing the name: not theirs
-        store(&pool, &general, "1729000000003-0", &al_name, None, "nick", None, false, false, &[], None).await.unwrap();
+        store(&pool, &general, "1729000000003-0", &al_name, None, "nick", None, None, false, false, &[], None).await.unwrap();
         // a channel the moderator does not see
-        store(&pool, &hidden, "1729000000004-0", &al_name, Some(al), "secret", None, false, true, &[], None).await.unwrap();
+        store(&pool, &hidden, "1729000000004-0", &al_name, Some(al), "secret", None, None, false, true, &[], None).await.unwrap();
 
         let rooms = vec![general.clone(), clips.clone()];
         let all = by_account(&pool, &rooms, al, None, 50).await.unwrap();
@@ -1058,28 +1065,30 @@ mod tests {
         let oct30 = 1_793_318_400_000u64;
         let line = |ms: u64, seq: u64| format!("{ms}-{seq}");
         // ann, logged in: plain words
-        store(&pool, &room, &line(oct29, 0), &ann_name, Some(ann), "morning everyone", None, false, true, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct29, 0), &ann_name, Some(ann), "morning everyone", None, None, false, true, &[], None).await.unwrap();
         // a nick, Bob as typed, with a link
-        store(&pool, &room, &line(oct29, 1), "Bob", None, "look https://example.com/page.", None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct29, 1), "Bob", None, "look https://example.com/page.", None, None, false, false, &[], None).await.unwrap();
         // ann with a picture and no words
-        store(&pool, &room, &line(oct30, 0), &ann_name, Some(ann), "", Some("11111111-1111-1111-1111-111111111111"), false, true, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 0), &ann_name, Some(ann), "", Some("11111111-1111-1111-1111-111111111111"), None, false, true, &[], None).await.unwrap();
         // a nick with a video link, scheme-less
-        store(&pool, &room, &line(oct30, 1), "cy", None, "this one www.youtube.com/watch?v=abc", None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 1), "cy", None, "this one www.youtube.com/watch?v=abc", None, None, false, false, &[], None).await.unwrap();
         // a nick with a link to a video file
-        store(&pool, &room, &line(oct30, 2), "cy", None, "or http://files.test/clip.mp4?x=1 later", None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 2), "cy", None, "or http://files.test/clip.mp4?x=1 later", None, None, false, false, &[], None).await.unwrap();
         // "example.com" in words is not a link
-        store(&pool, &room, &line(oct30, 3), "Bob", None, "example.com is a domain not a link", None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 3), "Bob", None, "example.com is a domain not a link", None, None, false, false, &[], None).await.unwrap();
         // a video file link that ends a sentence: the period, the bracket and the exclamation are
         // the sentence's, not the link's, as the panel draws it (LinkedText.tsx)
-        store(&pool, &room, &line(oct30, 4), "cy", None, "watch this https://files.test/clip.mp4.", None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 5), "cy", None, "clip (https://files.test/clip.mp4)", None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 6), "cy", None, "lol https://x.test/a.webm!", None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 4), "cy", None, "watch this https://files.test/clip.mp4.", None, None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 5), "cy", None, "clip (https://files.test/clip.mp4)", None, None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 6), "cy", None, "lol https://x.test/a.webm!", None, None, false, false, &[], None).await.unwrap();
         // a video-looking word beside a link that is not one: linked, not a video
-        store(&pool, &room, &line(oct30, 7), "cy", None, "I saw a.mov yesterday https://example.com", None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 8), "cy", None, "x.movie https://example.com", None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 9), "cy", None, "the youtube.com/watch page is slow, see https://example.com/help", None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 7), "cy", None, "I saw a.mov yesterday https://example.com", None, None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 8), "cy", None, "x.movie https://example.com", None, None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 9), "cy", None, "the youtube.com/watch page is slow, see https://example.com/help", None, None, false, false, &[], None).await.unwrap();
         // the extension inside a host is not a video file
-        store(&pool, &room, &line(oct30, 10), "cy", None, "see https://clip.mp4.example.com/a", None, false, false, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct30, 10), "cy", None, "see https://clip.mp4.example.com/a", None, None, false, false, &[], None).await.unwrap();
+        // ann's own uploaded video, no words: a video with no link at all
+        store(&pool, &room, &line(oct30, 11), &ann_name, Some(ann), "", None, Some("22222222-2222-2222-2222-222222222222,33333333-3333-3333-3333-333333333333"), false, true, &[], None).await.unwrap();
 
         assert_eq!(found(&pool, &room, "everyone").await, vec![line(oct29, 0)], "the words alone, as before");
         assert_eq!(found(&pool, &room, "has:image").await, vec![line(oct30, 0)]);
@@ -1087,20 +1096,21 @@ mod tests {
         assert_eq!(found(&pool, &room, "has:link").await, linked, "newest first, and a bare domain is not a link");
         assert_eq!(
             found(&pool, &room, "has:video").await,
-            vec![line(oct30, 6), line(oct30, 5), line(oct30, 4), line(oct30, 2), line(oct30, 1)],
-            "a file link may end a sentence; a video-looking word beside another link is not a video"
+            vec![line(oct30, 11), line(oct30, 6), line(oct30, 5), line(oct30, 4), line(oct30, 2), line(oct30, 1)],
+            "an uploaded video; a file link may end a sentence; a video-looking word beside another link is not a video"
         );
         assert_eq!(found(&pool, &room, "has:video later").await, vec![line(oct30, 2)], "a filter and the words together");
         assert_eq!(found(&pool, &room, "from:bob").await, vec![line(oct30, 3), line(oct29, 1)], "a nick as typed, asked for in lower case");
-        assert_eq!(found(&pool, &room, &format!("from:{ann_name}")).await, vec![line(oct30, 0), line(oct29, 0)], "an account's lines");
+        assert_eq!(found(&pool, &room, &format!("from:{ann_name}")).await, vec![line(oct30, 11), line(oct30, 0), line(oct29, 0)], "an account's lines");
+        assert_eq!(found(&pool, &room, &format!("from:{ann_name} has:video")).await, vec![line(oct30, 11)]);
         assert_eq!(found(&pool, &room, "from:bob has:link").await, vec![line(oct29, 1)]);
         assert_eq!(found(&pool, &room, "before:2026-10-30").await, vec![line(oct29, 1), line(oct29, 0)]);
-        assert_eq!(found(&pool, &room, "after:2026-10-29").await.len(), 11, "after a day is from the next day on");
+        assert_eq!(found(&pool, &room, "after:2026-10-29").await.len(), 12, "after a day is from the next day on");
         assert_eq!(found(&pool, &room, "after:2026-10-29 before:2026-10-30").await, Vec::<String>::new());
 
         // the account's lines follow a rename: ann is now dee, and `from:dee` finds what ann said
         let dee_name = format!("dee7-{run}");
         sqlx::query("UPDATE streamers SET name = $2, renamed_at = now() WHERE id = $1").bind(ann).bind(&dee_name).execute(&pool).await.unwrap();
-        assert_eq!(found(&pool, &room, &format!("from:{dee_name}")).await, vec![line(oct30, 0), line(oct29, 0)]);
+        assert_eq!(found(&pool, &room, &format!("from:{dee_name}")).await, vec![line(oct30, 11), line(oct30, 0), line(oct29, 0)]);
     }
 }

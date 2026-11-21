@@ -103,7 +103,9 @@ export type ServerFrame =
       at: number;
       from_id?: string;
       images?: string[];
-      reply?: { id: number; from?: string; text?: string; avatar?: number | null; images?: number; gone?: boolean } | null;
+      /** The video on the line and its poster (chat_videos.rs). Absent for none. */
+      video?: { id: string; poster: string };
+      reply?: { id: number; from?: string; text?: string; avatar?: number | null; images?: number; video?: boolean; gone?: boolean } | null;
     }
   /** `from` put `emoji` on line `id` of their thread with `to`, or took it off (`on`), docs/dms.md "reactions": to the sockets of both names. */
   | { type: 'dm_react'; id: number; from: string; to: string; emoji: string; on: boolean }
