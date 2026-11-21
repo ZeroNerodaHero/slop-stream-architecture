@@ -1,5 +1,5 @@
 import { useAtomValue } from 'jotai';
-import { type CSSProperties, type FocusEvent, useEffect, useRef, useState } from 'react';
+import { type CSSProperties, type FocusEvent, type PointerEvent, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { api, type GroupBadge } from '@/infra/api';
@@ -48,10 +48,37 @@ export interface CardSpot {
 }
 
 /**
+ * What last went down: a pointer's type (`mouse`, `touch`, `pen`), or `keyboard` after a key. A
+ * tap leaves the focus on the row it pressed, and that is not somebody arriving to look.
+ */
+let lastInput = 'mouse';
+let tracking = false;
+function trackInput() {
+  if (tracking) return;
+  tracking = true;
+  // capture, on the window: before the focus the press moves, and whatever the row under it stops
+  const pressed = (e: globalThis.PointerEvent) => {
+    lastInput = e.pointerType;
+  };
+  const typed = () => {
+    lastInput = 'keyboard';
+  };
+  window.addEventListener('pointerdown', pressed, true);
+  window.addEventListener('keydown', typed, true);
+}
+
+/** A mouse's hover, or a focus that no finger or pen left: a phone's tap goes straight to the profile sheet, no card flashing up first. */
+function peeking(e: PointerEvent<Element> | FocusEvent<Element>) {
+  if ('pointerType' in e) return e.pointerType === 'mouse';
+  return lastInput !== 'touch' && lastInput !== 'pen';
+}
+
+/**
  * The hover and focus bookkeeping for the card over one row. `show` measures and shows after
  * `delay` (a panel that widens on hover has settled by then, and a pointer crossing rows does
  * not flash a card per row); the card goes when both the pointer and the focus have left the
- * row. `at` is where to put it, or null.
+ * row. `at` is where to put it, or null. Only a mouse's hover or a focus that no tap left shows
+ * it (`peeking`).
  */
 export function usePeek(delay: number) {
   const [at, setAt] = useState<CardSpot | null>(null);
@@ -64,8 +91,10 @@ export function usePeek(delay: number) {
   };
   // a row that goes while its timer runs: nothing shows
   useEffect(() => clear, []);
-  const show = (row: Element, column: Element | null) => {
-    if (!column) return;
+  useEffect(trackInput, []);
+  const show = (e: PointerEvent<Element> | FocusEvent<Element>, column: Element | null) => {
+    if (!column || !peeking(e)) return;
+    const row = e.currentTarget;
     clear();
     timer.current = window.setTimeout(() => {
       timer.current = null;
@@ -79,7 +108,7 @@ export function usePeek(delay: number) {
   };
   return {
     at,
-    /** The pointer or the focus arrived on `row`, which sits in `column`. */
+    /** The pointer or the focus arrived on the row (`e.currentTarget`), which sits in `column`. */
     show,
     /**
      * The keyboard's focus arrived in `row`, for a row whose click opens the profile popup (a
@@ -91,7 +120,7 @@ export function usePeek(delay: number) {
       if (!e.target.matches(':focus-visible')) return;
       // from inside the popup, not from any dialog: a watch page's chat is in one of its own (ChatSlot.tsx), and the focus moving from name to name there is an arrival
       if (e.relatedTarget instanceof Element && e.relatedTarget.closest('#profile-popup')) return;
-      show(e.currentTarget, column);
+      show(e, column);
     },
     /** The pointer left `row`. The card stays while the focus is still in it. */
     leave(row: Element) {

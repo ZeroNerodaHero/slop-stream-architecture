@@ -1995,7 +1995,7 @@ function Member({ member, live, ownerRole, flat }: { member: GroupMember; live: 
       data-owner={member.owner || undefined}
       data-presence={presence}
       className="flex"
-      onPointerEnter={(e) => peek.show(e.currentTarget, e.currentTarget.closest('#group-roster'))}
+      onPointerEnter={(e) => peek.show(e, e.currentTarget.closest('#group-roster'))}
       onPointerLeave={(e) => peek.leave(e.currentTarget)}
       onFocus={(e) => peek.focus(e, e.currentTarget.closest('#group-roster'))}
       onBlur={peek.blur}

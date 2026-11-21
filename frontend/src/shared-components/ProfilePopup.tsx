@@ -13,6 +13,7 @@ import { presencesAtom } from '@/infra/atoms/presence-atoms';
 import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { closeProfilePopup, profilePopupAtom, type ProfilePopupTarget } from '@/infra/atoms/profile-popup-atoms';
 import { holdPresence, onEvents, releasePresence, wantsPresence } from '@/infra/events';
+import { useIsMobile } from '@/infra/mobile';
 import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setPopupPreview } from '@/infra/preview';
 import { cleanSocials } from '@/infra/socials';
@@ -23,7 +24,7 @@ import { buttonClassName } from '@/shared-components/Button';
 import { Calendar } from '@/shared-components/Calendar';
 import { Face } from '@/shared-components/Face';
 import { FollowButton } from '@/shared-components/FollowButton';
-import { SHEET_CLOSE, useSheetBack } from '@/shared-components/MobileSheet';
+import { SHEET_CLOSE, SHEET_DIALOG, SheetGrab, useSheetBack, useSheetKeyboard } from '@/shared-components/MobileSheet';
 import { OfflinePicture } from '@/shared-components/OfflinePicture';
 import { Who, Word } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
@@ -44,8 +45,8 @@ const TAB_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
 const TAB_OFF = 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary';
 /** A link inside a sentence (buttons.mdc): `try again` after the words that the read failed. */
 const WORDS = 'text-sm font-semibold text-primaryBlue underline-offset-2 hover:underline';
-/** A small action in the row: boxed, the size of `go to their page` (buttons.mdc). */
-const SMALL = 'px-3 py-1.5 text-sm';
+/** A small action in the row: boxed, the size of `go to their page` (buttons.mdc), and a thumb's 44px on a phone. */
+const SMALL = 'px-3 py-1.5 text-sm max-md:min-h-11';
 
 /**
  * The profile popup (docs/follows.md): somebody's page over the page you are on, discord's
@@ -205,8 +206,10 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
 
   // every way out goes through the element: close() restores focus, then fires `close`
   const close = () => dialogRef.current?.close();
-  // a phone's is a page over the page (MobileSheet.tsx): the back button shuts it, and the page under it stays
+  // a phone's is a sheet up from the foot (MobileSheet.tsx): the back button shuts it, and the page under it stays
   useSheetBack(close);
+  useSheetKeyboard(dialogRef);
+  const mobile = useIsMobile();
 
   const presence = (trusted ? heard : undefined) ?? card?.presence;
   const live = presence === 'streaming';
@@ -225,6 +228,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
       id="profile-popup"
       data-name={name}
       data-presence={presence}
+      data-sheet={mobile ? '' : undefined}
       aria-labelledby="profile-popup-title"
       onPointerDown={(e) => {
         pressedBackdrop.current = e.target === e.currentTarget;
@@ -241,16 +245,17 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
         // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
         'overflow-hidden bg-backgroundSecondary p-0 text-base text-textPrimary',
         'open:flex flex-col',
-        // full bleed on a phone: the browser's margins and size caps of a modal dialog go
-        'm-0 h-dvh max-h-none w-full max-w-none border-0',
+        // a sheet up from the foot on a phone (MobileSheet.tsx): the browser's margins and size caps of a modal dialog go
+        'm-0 max-h-none w-full max-w-none border border-primaryStroke',
+        SHEET_DIALOG,
         // past a phone (mobile.ts), as tall as what is in it, between a floor and the window: hung from a fixed top, so a tab with more in it grows the box downward and the head stays put.
         // `h-fit`, not `h-auto`: a modal dialog is pinned top and bottom, and an auto height would stretch between the two
         'md:mx-auto md:mb-auto md:mt-[8dvh] md:h-fit md:max-h-[calc(92dvh-1.5rem)] md:min-h-[min(22rem,calc(92dvh-1.5rem))] md:w-[min(720px,calc(100vw-3rem))]',
-        'md:border md:border-primaryStroke',
         'backdrop:bg-black/60 md:backdrop:backdrop-blur-sm'
       )}
     >
-      <header className="flex shrink-0 items-start gap-4 px-5 pt-5">
+      <SheetGrab onDismiss={close} />
+      <header className="flex shrink-0 items-start gap-4 px-5 pt-5 max-md:pt-0">
         <Face name={name} version={avatar} className="h-14 w-14 text-2xl" />
         <div className="min-w-0 flex-1">
           <h2 id="profile-popup-title" className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xl leading-tight">
@@ -293,9 +298,9 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
       </header>
 
       {/* the watch page's row under the picture: the follow button (not for a fake stream: nobody follows one); then the small ways on (a
-          friend's chat, a speaker's messages), and at the far end the way to the page itself */}
-      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-primaryStroke px-5 py-3">
-        {!isDummyName(name) && <FollowButton id="profile-popup-follow" name={name} />}
+          friend's chat, a speaker's messages), and at the far end the way to the page itself. a phone's are one row of equal columns, the sheet's width */}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-primaryStroke px-5 py-3 max-md:grid max-md:auto-cols-fr max-md:grid-flow-col max-md:items-stretch max-md:gap-x-2">
+        {!isDummyName(name) && <FollowButton id="profile-popup-follow" name={name} className="max-md:min-h-11" />}
         {friend && (
           <button
             id="profile-popup-message"
@@ -310,7 +315,8 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             message
           </button>
         )}
-        {target.lines && (
+        {/* a desktop's only: a phone's row keeps to follow, message and the page */}
+        {target.lines && !mobile && (
           <Tooltip content="show only their messages in this chat">
             <button
               id="profile-popup-lines"
@@ -334,7 +340,7 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
             state={live ? { live: true } : undefined}
             onClick={close}
             draggable={false}
-            className={buttonClassName('secondary', cn('ml-auto gap-1.5', SMALL))}
+            className={buttonClassName('secondary', cn('ml-auto gap-1.5 max-md:ml-0 max-md:px-2 max-md:leading-tight', SMALL))}
           >
             {mine ? 'go to your page' : 'go to their page'}
             <RiArrowRightLine aria-hidden size={16} />
