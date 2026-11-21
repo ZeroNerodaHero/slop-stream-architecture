@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { createRoot } from 'react-dom/client';
 import { RouterProvider } from 'react-router-dom';
 
@@ -6,14 +6,11 @@ import { applyStoredTextSize, applyStoredTheme } from '@/infra/atoms/settings-at
 import { startEvents } from '@/infra/events';
 import { installMobileKeyboard } from '@/infra/keyboard';
 import { installPrefetch } from '@/infra/prefetch';
+import { queryClient } from '@/infra/query-client';
 import { installReporting, report } from '@/infra/report';
 import { router } from '@/router';
 
 import '@/app/globals.css';
-
-// one retry, not the default three with backoff (~7s of a dead api reading as "loading"). the
-// pages that poll ask again on their own anyway, and admin turns retries off for itself.
-const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1 } } });
 
 const root = document.getElementById('root');
 if (!root) throw new Error('index.html has no #root');

@@ -34,19 +34,14 @@ import {
   profileOfflineNoteAtom,
   profileOfflineNoteStatusAtom,
   profileOfflineStatusAtom,
-  profileWelcomeAtom,
-  profileWelcomeDraftAtom,
-  profileWelcomeStatusAtom,
   removeMyAvatar,
   removeMyOffline,
   saveMyAvatar,
   saveMyBio,
   saveMyOffline,
   saveMyOfflineNote,
-  saveMyWelcome,
   whyNotEditAtom
 } from '@/infra/atoms/profile-atoms';
-import { DEFAULT_WELCOME, MAX_WELCOME_CHARS } from '@/infra/atoms/welcome-atoms';
 import { closeUserModal, pickTab } from '@/infra/atoms/user-modal-atoms';
 import { api, groupWords } from '@/infra/api';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
@@ -57,7 +52,8 @@ import { Face } from '@/shared-components/Face';
 import { OAuthMark } from '@/shared-components/OAuthMark';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { INPUT } from '@/shared-components/input';
-import { Block, CHECKBOX, OptionCard, PasswordInput, Status } from '@/shared-components/user-modal/parts';
+import { WELCOME_TIP, WelcomeEditor } from '@/shared-components/WelcomeEditor';
+import { Block, OptionCard, PasswordInput, Status } from '@/shared-components/user-modal/parts';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -210,9 +206,6 @@ export function ProfileTab() {
   const offlineStatus = useAtomValue(profileOfflineStatusAtom);
   const offlineNote = useAtomValue(profileOfflineNoteAtom);
   const offlineNoteStatus = useAtomValue(profileOfflineNoteStatusAtom);
-  const welcome = useAtomValue(profileWelcomeAtom);
-  const welcomeDraft = useAtomValue(profileWelcomeDraftAtom);
-  const welcomeStatus = useAtomValue(profileWelcomeStatusAtom);
   // the nick as it was when its box got focus: leaving the box tells the chat only on a real change
   const nickAtFocus = useRef('');
 
@@ -225,8 +218,6 @@ export function ProfileTab() {
 
   const left = MAX_BIO_CHARS - chars(bio.trim());
   const noteLeft = MAX_OFFLINE_NOTE_CHARS - chars(offlineNote.trim());
-  const welcomeLeft = MAX_WELCOME_CHARS - chars(welcomeDraft.trim());
-  const welcomeOn = welcome?.on ?? true;
   const named = isValidName(name) && !isDummyName(name);
 
   function commitNick() {
@@ -470,44 +461,9 @@ export function ProfileTab() {
         <Status id="profile-offline-note-status" text={offlineNoteStatus} quiet />
       </Block>
 
-      {/* the chat welcome (welcome-atoms.ts): the bot Eques says it at the top of my chat to whoever opens it, on
-          their screen alone. the switch saves at once, with the words as saved; the words save with the button */}
-      <Block id="profile-welcome-block" title="welcome message" tip="Eques says it in your chat to each viewer who opens it. only they see it, and it is never sent">
-        <label htmlFor="profile-welcome-on" className="flex items-center gap-2 py-1.5 text-sm font-semibold text-textPrimary">
-          <input
-            id="profile-welcome-on"
-            type="checkbox"
-            checked={welcomeOn}
-            disabled={!canEdit}
-            onChange={(e) => void saveMyWelcome(e.target.checked, welcome?.message ?? DEFAULT_WELCOME)}
-            className={CHECKBOX}
-          />
-          eques welcome
-        </label>
-        <textarea
-          id="profile-welcome"
-          value={welcomeDraft}
-          onChange={(e) => {
-            store.set(profileWelcomeDraftAtom, e.target.value);
-            if (store.get(profileWelcomeStatusAtom)) store.set(profileWelcomeStatusAtom, '');
-          }}
-          aria-label="welcome message"
-          placeholder="welcome"
-          rows={3}
-          maxLength={MAX_WELCOME_CHARS}
-          disabled={!canEdit || !welcomeOn}
-          aria-describedby="profile-welcome-count"
-          className={cn(INPUT, 'block resize-y py-1.5')}
-        />
-        <div className="mt-1.5 flex items-center justify-end gap-1.5">
-          <span id="profile-welcome-count" className={cn('text-xs tabular-nums text-textTertiary', welcomeLeft < 20 && 'text-decrease')}>
-            {welcomeLeft}
-          </span>
-          <Button id="profile-save-welcome" size="sm" variant="outline" disabled={!canEdit || !welcomeOn} onClick={() => void saveMyWelcome(welcomeOn, welcomeDraft)}>
-            save
-          </Button>
-        </div>
-        <Status id="profile-welcome-status" text={welcomeStatus || (canEdit ? '' : whyNot)} quiet />
+      {/* the chat welcome (WelcomeEditor.tsx), the same editor as my page's mod tab */}
+      <Block id="profile-welcome-block" title="welcome message" tip={WELCOME_TIP}>
+        <WelcomeEditor id="profile-welcome" />
       </Block>
     </div>
   );
