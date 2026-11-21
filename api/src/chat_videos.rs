@@ -1,20 +1,34 @@
 //! A short video on a chat line, the pictures' way (chat_images.rs): the page posts the file
-//! here as it is, the say names the id, and the panel plays it back from the bucket. See
-//! docs/chat.md "videos". A test version: no transcoding, nothing deleted on its own.
+//! here, the say names the id, and the panel plays it back from the bucket. See docs/chat.md
+//! "videos".
 //!
 //! An mp4 of H.264 (with AAC, or no sound) or a webm of VP8 or VP9 (with Opus, or no sound),
 //! 10 mb and 30 seconds at most. The magic bytes say which container, and a walk of its header
-//! says the codecs and, when it is written there, how long: the mp4's `mvhd`, the webm's
-//! `Info/Duration`. A webm straight out of a browser's recorder has no duration in its header;
-//! then the page's own reading (`?duration=`, from the `<video>` it measured) is taken.
+//! (`probe`) refuses the wrong codecs before anything is run. Then ffprobe reads the file itself
+//! (`prepare`): its streams' codecs again, and how long it really is, the container's word or its
+//! packets' last timestamp, whichever is longer. One it cannot tell the length of is refused, as
+//! is one over 30 seconds; the page's own reading is not asked for.
 //!
-//! Every video has a poster: a frame the page drew onto a canvas and kept through
-//! `POST /api/chat-images`, the pictures' one road in, so it passed the pictures' checks. The
-//! upload names it (`?poster=`), it must be the uploader's own, and the line carries both ids.
+//! What the bucket keeps is ffmpeg's copy, not the upload: the first video and sound stream
+//! remuxed as they are (`-c copy`), every other stream, the metadata and the chapters left out,
+//! an mp4's index at the front (`+faststart`). Only when that copy fails is it encoded again, an
+//! H.264/AAC mp4 at modest settings. The poster is a frame ffmpeg draws from that copy (a second
+//! in, or the first), kept as a chat picture of the uploader's. ffmpeg and ffprobe run on a
+//! blocking thread, two jobs at most at once, each with a timeout and, on linux, limits on its
+//! memory, cpu time and file size, reading only local files (`-protocol_whitelist file`) with the
+//! demuxer named, never guessed.
+//!
+//! Who is served one is media.rs's: a stream's are public, a group channel's and a direct
+//! message's are for those who may read them. A site admin may take one down (`take_down`).
+
+use std::io::Read as _;
+use std::path::{Path as FsPath, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
-use axum::extract::rejection::{BytesRejection, FailedToBufferBody, QueryRejection};
-use axum::extract::{DefaultBodyLimit, Path, Query, State};
+use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -22,10 +36,12 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::auth::Me;
-use crate::s3;
+use crate::media::{self, Kind};
+use crate::{chat_images, s3};
 use crate::{ApiError, ApiResult, AppState};
 
 /// A phone's half minute at a sensible bitrate. The bucket is on the box, and its disk is small.
@@ -37,36 +53,30 @@ const SLACK_MS: u64 = 500;
 /// pictures' 30: each is up to forty times the bytes.
 const RATE_PER_WINDOW: i64 = 5;
 const RATE_WINDOW_SECS: i64 = 600;
-const CACHE: &str = "public, max-age=86400";
+/// ffmpeg jobs at once, across every upload: the box has few cores and a stream to serve.
+static JOBS: Semaphore = Semaphore::const_new(2);
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         // the 10 mb is this route's alone: every other body keeps axum's 2 mb
         .route("/api/chat-videos", post(upload).layer(DefaultBodyLimit::max(MAX_BYTES)))
-        .route("/api/chat-videos/{id}", get(show))
+        .route("/api/chat-videos/{id}", get(show).delete(take_down))
 }
 
-/// The poster of the video `id`, when the api kept one by that id. The say checks this before it
-/// keeps a line that names a video, and puts both ids on the line.
+/// The poster of the video `id`, when the api kept one by that id and it still has its poster.
+/// The say checks this before it keeps a line that names a video, and puts both ids on the line.
 pub(crate) async fn poster_of(db: &PgPool, id: &str) -> Result<Option<Uuid>, sqlx::Error> {
     let Ok(id) = Uuid::parse_str(id) else { return Ok(None) };
-    sqlx::query_scalar("SELECT poster FROM chat_videos WHERE id = $1").bind(id).fetch_optional(db).await
+    let poster: Option<Option<Uuid>> = sqlx::query_scalar("SELECT poster FROM chat_videos WHERE id = $1").bind(id).fetch_optional(db).await?;
+    Ok(poster.flatten())
 }
 
-#[derive(Deserialize)]
-struct UploadQuery {
-    /// The frame the page grabbed, kept through `POST /api/chat-images`.
-    poster: Option<String>,
-    /// How long the page measured it, in ms. Read only when the header does not say.
-    duration: Option<u64>,
-}
-
-/// `POST /api/chat-videos?poster=<picture id>&duration=<ms>`, the file as the body: 200 `{ id, poster,
-/// duration_ms }`. 401 for nobody; 413 `video too big`; 400 `not an mp4 or webm`, the codecs' words,
-/// `video too long`, `no poster` or `no such poster` (not a picture of yours); 429 past five in ten minutes.
-async fn upload(State(s): State<AppState>, Me(me): Me, q: Result<Query<UploadQuery>, QueryRejection>, body: Result<Bytes, BytesRejection>) -> ApiResult {
+/// `POST /api/chat-videos`, the file as the body: 200 `{ id, poster, duration_ms }`, the poster
+/// a chat picture the api drew. 401 for nobody; 413 `video too big`; 400 `not an mp4 or webm`,
+/// the codecs' words, `video too long` or `could not tell how long that video is`; 429 past five
+/// in ten minutes. A query (an older page's `?poster=` and `?duration=`) is not read.
+async fn upload(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, body: Result<Bytes, BytesRejection>) -> ApiResult {
     let me = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "log in to send a video"))?;
-    let q = q.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "bad query"))?.0;
     let body = match body {
         Ok(body) => body,
         Err(BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_))) => return Err(too_big()),
@@ -78,52 +88,71 @@ async fn upload(State(s): State<AppState>, Me(me): Me, q: Result<Query<UploadQue
     if body.len() > MAX_BYTES {
         return Err(too_big());
     }
+    // the header's word on the container and codecs, before anything is run
     let probe = probe(&body).map_err(|why| ApiError::new(StatusCode::BAD_REQUEST, why))?;
-    // the header's length when it has one; a recorder's webm has none, and the page measured it
-    let duration_ms = match probe.duration_ms.filter(|ms| *ms > 0) {
-        Some(ms) => ms,
-        None => q.duration.filter(|ms| *ms > 0).ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "say how long the video is"))?,
-    };
-    if duration_ms > MAX_MS + SLACK_MS {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "video too long. 30 seconds at most"));
-    }
-    let poster = q.poster.as_deref().map(str::trim).filter(|p| !p.is_empty()).ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "no poster"))?;
-    let poster = Uuid::parse_str(poster).map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "no such poster"))?;
-    // the poster came in the pictures' way, so it passed their checks; and it is this login's own
-    let mine: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM chat_images WHERE id = $1 AND created_by = $2)")
-        .bind(poster)
-        .bind(me.id)
-        .fetch_one(&s.db)
-        .await?;
-    if !mine {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "no such poster"));
+    if probe.duration_ms.is_some_and(|ms| ms > MAX_MS + SLACK_MS) {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, TOO_LONG));
     }
     crate::auth::limit(&s, &format!("rl:chatvid:{}", me.id), RATE_WINDOW_SECS, RATE_PER_WINDOW, "slow down").await?;
-    // the row first, as the pictures do; a failed save deletes it
+    let ready = {
+        let _job = JOBS.acquire().await.map_err(|_| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "try again"))?;
+        let mime = probe.mime;
+        match tokio::task::spawn_blocking(move || prepare(&body, mime)).await {
+            Ok(ready) => ready,
+            Err(e) => Err(Failed::Broken(format!("the ffmpeg thread: {e}"))),
+        }
+    };
+    let ready = match ready {
+        Ok(ready) => ready,
+        Err(Failed::Refused(why)) => return Err(ApiError::new(StatusCode::BAD_REQUEST, why)),
+        Err(Failed::Broken(why)) => {
+            log::warn!("{}: chat video: {why}", me.name);
+            return Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not read that video"));
+        }
+    };
+    if ready.video.len() > MAX_BYTES {
+        return Err(too_big());
+    }
+    let ip = crate::ratelimit::forwarded_ip(&headers);
+    let poster = chat_images::store(&s, &me, "image/jpeg", &ready.poster, ip.as_deref()).await?;
+    // the row first, as the pictures do; a failed save deletes it, and the poster with it
     let id: Uuid = match sqlx::query_scalar(
-        "INSERT INTO chat_videos (id, mime, bytes, duration_ms, poster, created_by) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5) RETURNING id",
+        "INSERT INTO chat_videos (id, mime, bytes, duration_ms, poster, created_by, sha256, uploader_ip)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7) RETURNING id",
     )
-    .bind(probe.mime)
-    .bind(body.len() as i32)
-    .bind(duration_ms as i32)
+    .bind(ready.mime)
+    .bind(ready.video.len() as i32)
+    .bind(ready.duration_ms as i32)
     .bind(poster)
     .bind(me.id)
+    .bind(media::sha256_hex(&ready.video))
+    .bind(ip.as_deref())
     .fetch_one(&s.db)
     .await
     {
         Ok(id) => id,
         Err(e) => {
+            chat_images::discard(&s, poster, "image/jpeg").await;
             log::warn!("{}: chat video row: {e}", me.name);
             return Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not save the video"));
         }
     };
-    if let Err(e) = s3::put(&s.s3, &key_of(id, probe.mime), &body, probe.mime).await {
+    if let Err(e) = s3::put(&s.s3, &key_of(id, ready.mime), &ready.video, ready.mime).await {
         let _ = sqlx::query("DELETE FROM chat_videos WHERE id = $1").bind(id).execute(&s.db).await;
+        chat_images::discard(&s, poster, "image/jpeg").await;
         log::warn!("{}: chat video: {e}", me.name);
         return Err(ApiError::new(StatusCode::BAD_GATEWAY, "could not save the video"));
     }
-    log::info!("{}: chat video {id} ({} bytes, {duration_ms} ms, {})", me.name, body.len(), probe.mime);
-    Ok(Json(json!({ "id": id, "poster": poster, "duration_ms": duration_ms })))
+    log::info!(
+        "{}: chat video {id} ({} bytes in, {} kept, {} ms, {}{})",
+        me.name,
+        ready.bytes_in,
+        ready.video.len(),
+        ready.duration_ms,
+        ready.mime,
+        if ready.encoded { ", encoded again" } else { "" }
+    );
+    Ok(Json(json!({ "id": id, "poster": poster, "duration_ms": ready.duration_ms })))
 }
 
 fn too_big() -> ApiError {
@@ -132,21 +161,28 @@ fn too_big() -> ApiError {
 
 /// `GET /api/chat-videos/:id`: the file, or the part of it a `Range` asks for (206, one range;
 /// several are answered with the whole, which the spec allows), so a player can seek, and
-/// Safari, which will not play a video it cannot ask for in parts, plays it at all.
-async fn show(State(s): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Result<Response, ApiError> {
+/// Safari, which will not play a video it cannot ask for in parts, plays it at all. To whoever
+/// may see it (media.rs `access`): 401/403 for anyone else, 410 `removed` after a takedown.
+async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, headers: HeaderMap) -> Result<Response, ApiError> {
     let Ok(id) = Uuid::parse_str(id.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad video"));
     };
+    let Some(access) = media::access(&s.db, Kind::Video, id, me.map(|m| m.id)).await? else {
+        return Err(media::missing(&s.db, Kind::Video, id).await);
+    };
+    if let Some(no) = media::refused(&access) {
+        return Err(no);
+    }
     let row: Option<(String, i32)> = sqlx::query_as("SELECT mime, bytes FROM chat_videos WHERE id = $1").bind(id).fetch_optional(&s.db).await?;
     let Some((mime, len)) = row else {
-        return Err(ApiError::new(StatusCode::NOT_FOUND, "no such video"));
+        return Err(media::missing(&s.db, Kind::Video, id).await);
     };
     let len = len.max(0) as u64;
     let key = key_of(id, &mime);
     let mut out = HeaderMap::new();
     out.insert(header::CONTENT_TYPE, HeaderValue::from_str(&mime).unwrap_or(HeaderValue::from_static("application/octet-stream")));
     out.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-    out.insert(header::CACHE_CONTROL, HeaderValue::from_static(CACHE));
+    media::headers(&mut out, access == media::Access::Public);
     let asked = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
     let range = match range_of(asked, len) {
         Ok(range) => range,
@@ -177,6 +213,34 @@ async fn show(State(s): State<AppState>, Path(id): Path<String>, headers: Header
         }
         None => Ok((StatusCode::OK, out, bytes).into_response()),
     }
+}
+
+/// `DELETE /api/chat-videos/:id`: a site admin's takedown. The file out of the bucket, the row
+/// gone, its poster taken down with it, and the lines naming it say "removed". 204; 401 nobody,
+/// 403 anyone else, 404 no such video.
+async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    let me = chat_images::admin(&s, me)?;
+    let Ok(id) = Uuid::parse_str(id.trim()) else {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad video"));
+    };
+    let row: Option<(String, Option<Uuid>)> = sqlx::query_as("SELECT mime, poster FROM chat_videos WHERE id = $1").bind(id).fetch_optional(&s.db).await?;
+    let Some((mime, poster)) = row else {
+        return Err(media::missing(&s.db, Kind::Video, id).await);
+    };
+    if let Err(e) = s3::delete(&s.s3, &key_of(id, &mime)).await {
+        log::warn!("{}: take down chat video {id}: {e}", me.name);
+        return Err(ApiError::new(StatusCode::BAD_GATEWAY, "could not delete the video"));
+    }
+    media::remember_removed(&s.db, Kind::Video, id, me.id).await?;
+    sqlx::query("DELETE FROM chat_videos WHERE id = $1").bind(id).execute(&s.db).await?;
+    if let Some(poster) = poster {
+        let mime: Option<String> = sqlx::query_scalar("SELECT mime FROM chat_images WHERE id = $1").bind(poster).fetch_optional(&s.db).await?;
+        if let Some(mime) = mime {
+            chat_images::remove(&s, &me, poster, &mime).await?;
+        }
+    }
+    log::info!("{}: took down chat video {id}", me.name);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// The one range a `Range: bytes=…` header asks of a file `len` long, as `start..=end`.
@@ -216,6 +280,385 @@ fn key_of(id: Uuid, mime: &str) -> String {
     let ext = if mime == "video/webm" { "webm" } else { "mp4" };
     format!("chat-videos/{id}.{ext}")
 }
+
+// ---- ffmpeg -------------------------------------------------------------------------------------
+
+/// What `prepare` made of an upload: the file to keep, its type, its real length and a poster.
+#[derive(Debug)]
+struct Ready {
+    mime: &'static str,
+    video: Vec<u8>,
+    poster: Vec<u8>,
+    duration_ms: u64,
+    bytes_in: usize,
+    /// The copy failed and it was encoded again.
+    encoded: bool,
+}
+
+#[derive(Debug, PartialEq)]
+enum Failed {
+    /// The file's fault: a 400 in these words.
+    Refused(&'static str),
+    /// Ours (ffmpeg missing, a timeout, the disk): logged, a 500.
+    Broken(String),
+}
+
+const TOO_LONG: &str = "video too long. 30 seconds at most";
+const UNKNOWN_LENGTH: &str = "could not tell how long that video is";
+const UNREADABLE: &str = "could not read that video";
+
+const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+const COPY_TIMEOUT: Duration = Duration::from_secs(30);
+const ENCODE_TIMEOUT: Duration = Duration::from_secs(120);
+const POSTER_TIMEOUT: Duration = Duration::from_secs(15);
+/// ffprobe's packet list, at most: a 30 second clip's is a few hundred kb.
+const MAX_PROBE_OUTPUT: u64 = 16 * 1024 * 1024;
+/// A chat picture's ceiling (chat_images.rs): the poster is one.
+const MAX_POSTER_BYTES: usize = 256 * 1024;
+
+/// ffmpeg's and ffprobe's paths: `FFMPEG`/`FFPROBE` when set, otherwise found on the PATH.
+fn bin(var: &str, name: &str) -> String {
+    std::env::var(var).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| name.to_owned())
+}
+
+/// A directory of one upload's files, gone when this is.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> std::io::Result<Scratch> {
+        let dir = std::env::temp_dir().join(format!("chat-video-{}", Uuid::from_u128(rand::random())));
+        std::fs::create_dir(&dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(Scratch(dir))
+    }
+
+    fn file(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The upload made ready to keep, on a blocking thread: probed, its length checked, remuxed
+/// (or, when that fails, encoded again), and a poster drawn.
+fn prepare(body: &[u8], mime: &'static str) -> Result<Ready, Failed> {
+    let (demuxer, ext) = if mime == "video/webm" { ("matroska", "webm") } else { ("mov", "mp4") };
+    let scratch = Scratch::new().map_err(|e| Failed::Broken(format!("scratch dir: {e}")))?;
+    let input = scratch.file(&format!("in.{ext}"));
+    std::fs::write(&input, body).map_err(|e| Failed::Broken(format!("write the upload: {e}")))?;
+
+    let streams = probe_streams(&scratch, &input, demuxer)?;
+    check_codecs(mime, &streams.codecs)?;
+    let packets_ms = packets_end_ms(&scratch, &input, demuxer)?;
+    let duration_ms = length_of(streams.duration_ms, packets_ms)?;
+
+    let copy = scratch.file(&format!("copy.{ext}"));
+    let (kept, kept_mime, kept_demuxer, encoded) = match remux(&input, demuxer, &copy, mime) {
+        Ok(()) => (copy, mime, demuxer, false),
+        Err(why) => {
+            log::info!("chat video: copy failed ({why}), encoding again");
+            let encoded = scratch.file("encoded.mp4");
+            encode(&input, demuxer, &encoded)?;
+            (encoded, "video/mp4", "mov", true)
+        }
+    };
+    let poster = poster(&scratch, &kept, kept_demuxer)?;
+    let video = std::fs::read(&kept).map_err(|e| Failed::Broken(format!("read the copy: {e}")))?;
+    if video.is_empty() {
+        return Err(Failed::Broken("ffmpeg wrote nothing".to_owned()));
+    }
+    Ok(Ready { mime: kept_mime, video, poster, duration_ms: duration_ms.min(MAX_MS + SLACK_MS), bytes_in: body.len(), encoded })
+}
+
+/// The length to go by: the longer of the container's word and the packets' last timestamp, so
+/// neither a header that lies short nor one that says nothing lets a long file by.
+fn length_of(header_ms: Option<u64>, packets_ms: Option<u64>) -> Result<u64, Failed> {
+    let ms = match (header_ms.filter(|ms| *ms > 0), packets_ms.filter(|ms| *ms > 0)) {
+        (None, None) => return Err(Failed::Refused(UNKNOWN_LENGTH)),
+        (a, b) => a.unwrap_or(0).max(b.unwrap_or(0)),
+    };
+    if ms > MAX_MS + SLACK_MS {
+        return Err(Failed::Refused(TOO_LONG));
+    }
+    Ok(ms)
+}
+
+#[derive(Debug, Default)]
+struct Streams {
+    /// (codec_type, codec_name) of each stream.
+    codecs: Vec<(String, String)>,
+    duration_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct ProbeJson {
+    #[serde(default)]
+    streams: Vec<ProbeStream>,
+    #[serde(default)]
+    format: Option<ProbeFormat>,
+}
+
+#[derive(Deserialize)]
+struct ProbeStream {
+    #[serde(default)]
+    codec_type: String,
+    #[serde(default)]
+    codec_name: String,
+}
+
+#[derive(Deserialize)]
+struct ProbeFormat {
+    duration: Option<String>,
+}
+
+/// ffprobe's word on the streams and the container's length.
+fn probe_streams(scratch: &Scratch, input: &FsPath, demuxer: &str) -> Result<Streams, Failed> {
+    let out = scratch.file("streams.json");
+    let mut cmd = Command::new(bin("FFPROBE", "ffprobe"));
+    cmd.args(["-v", "error", "-protocol_whitelist", "file", "-f", demuxer, "-show_entries", "format=duration:stream=codec_type,codec_name", "-of", "json"]).arg(input);
+    run(&mut cmd, Some(&out), PROBE_TIMEOUT).map_err(|why| refused_or_broken(why, UNREADABLE))?;
+    let raw = read_capped(&out, MAX_PROBE_OUTPUT)?;
+    let parsed: ProbeJson = serde_json::from_slice(&raw).map_err(|e| Failed::Broken(format!("ffprobe json: {e}")))?;
+    Ok(Streams {
+        codecs: parsed.streams.into_iter().map(|s| (s.codec_type, s.codec_name)).collect(),
+        duration_ms: parsed.format.and_then(|f| f.duration).as_deref().and_then(seconds_ms),
+    })
+}
+
+/// The end of the last packet of any stream, in ms: `pts + duration`, read off every packet.
+fn packets_end_ms(scratch: &Scratch, input: &FsPath, demuxer: &str) -> Result<Option<u64>, Failed> {
+    let out = scratch.file("packets.csv");
+    let mut cmd = Command::new(bin("FFPROBE", "ffprobe"));
+    cmd.args(["-v", "error", "-protocol_whitelist", "file", "-f", demuxer, "-show_entries", "packet=pts_time,duration_time", "-of", "csv=p=0"]).arg(input);
+    run(&mut cmd, Some(&out), PROBE_TIMEOUT).map_err(|why| refused_or_broken(why, UNREADABLE))?;
+    let raw = read_capped(&out, MAX_PROBE_OUTPUT)?;
+    Ok(last_packet_ms(&String::from_utf8_lossy(&raw)))
+}
+
+/// The packets' list as ffprobe writes it, `pts,duration[,…]` a line, `N/A` for one not known.
+fn last_packet_ms(csv: &str) -> Option<u64> {
+    csv.lines()
+        .filter_map(|line| {
+            let mut fields = line.split(',');
+            let pts = fields.next().and_then(|f| f.trim().parse::<f64>().ok())?;
+            let dur = fields.next().and_then(|f| f.trim().parse::<f64>().ok()).unwrap_or(0.0);
+            let end = pts + dur.max(0.0);
+            end.is_finite().then_some(end)
+        })
+        .fold(None, |most: Option<f64>, end| Some(most.map_or(end, |m| m.max(end))))
+        .filter(|end| *end > 0.0)
+        .map(|end| (end * 1000.0).round() as u64)
+}
+
+fn seconds_ms(raw: &str) -> Option<u64> {
+    raw.trim().parse::<f64>().ok().filter(|s| s.is_finite() && *s > 0.0).map(|s| (s * 1000.0).round() as u64)
+}
+
+/// The container's codecs, by ffprobe this time: every video stream H.264 (mp4) or VP8/VP9
+/// (webm), every sound stream AAC or Opus, and at least one video stream. Other streams (an
+/// iPhone's metadata track, subtitles) are left out of the copy, so they do not matter here.
+fn check_codecs(mime: &str, codecs: &[(String, String)]) -> Result<(), Failed> {
+    let (videos, sounds, words): (&[&str], &[&str], &'static str) =
+        if mime == "video/webm" { (&["vp8", "vp9"], &["opus"], WEBM_CODECS) } else { (&["h264"], &["aac"], MP4_CODECS) };
+    let mut video = false;
+    for (kind, codec) in codecs {
+        match kind.as_str() {
+            "video" if videos.contains(&codec.as_str()) => video = true,
+            "video" => return Err(Failed::Refused(words)),
+            "audio" if !sounds.contains(&codec.as_str()) => return Err(Failed::Refused(words)),
+            _ => {}
+        }
+    }
+    if !video {
+        return Err(Failed::Refused(NO_VIDEO));
+    }
+    Ok(())
+}
+
+/// The first video and sound stream copied as they are into a fresh file of the same container:
+/// no other stream, no metadata (the file's or a stream's), no chapters, no encoder's name, and
+/// an mp4's index at the front so it plays before it has all come.
+fn remux(input: &FsPath, demuxer: &str, out: &FsPath, mime: &str) -> Result<(), String> {
+    let mut cmd = ffmpeg_reading(input, demuxer);
+    cmd.args(["-map", "0:v:0", "-map", "0:a:0?", "-c", "copy"]);
+    strip(&mut cmd);
+    if mime == "video/webm" {
+        cmd.args(["-f", "webm"]);
+    } else {
+        cmd.args(["-movflags", "+faststart", "-f", "mp4"]);
+    }
+    cmd.arg(out);
+    run(&mut cmd, None, COPY_TIMEOUT).map_err(|why| why.to_string())?;
+    match std::fs::metadata(out) {
+        Ok(m) if m.len() > 0 => Ok(()),
+        _ => Err("an empty copy".to_owned()),
+    }
+}
+
+/// The copy's fallback: an H.264/AAC mp4, 1280 on its long side at most, a fast preset at a
+/// modest quality on two threads, cut at the 30 seconds.
+fn encode(input: &FsPath, demuxer: &str, out: &FsPath) -> Result<(), Failed> {
+    let mut cmd = ffmpeg_reading(input, demuxer);
+    cmd.args(["-map", "0:v:0", "-map", "0:a:0?", "-t", "30.5"])
+        .args(["-vf", "scale=w='min(1280,iw)':h='min(1280,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2"])
+        .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-pix_fmt", "yuv420p", "-threads", "2"])
+        .args(["-c:a", "aac", "-b:a", "96k", "-ac", "2"]);
+    strip(&mut cmd);
+    cmd.args(["-movflags", "+faststart", "-f", "mp4"]).arg(out);
+    run(&mut cmd, None, ENCODE_TIMEOUT).map_err(|why| refused_or_broken(why, UNREADABLE))
+}
+
+/// A frame of the kept file as a jpeg, 640 on its long side at most: a second in, or the first
+/// frame for a clip shorter than that.
+fn poster(scratch: &Scratch, video: &FsPath, demuxer: &str) -> Result<Vec<u8>, Failed> {
+    let out = scratch.file("poster.jpg");
+    for at in [Some("1"), None] {
+        let _ = std::fs::remove_file(&out);
+        let mut cmd = Command::new(bin("FFMPEG", "ffmpeg"));
+        cmd.args(["-nostdin", "-v", "error", "-y", "-protocol_whitelist", "file"]);
+        if let Some(at) = at {
+            cmd.args(["-ss", at]);
+        }
+        cmd.args(["-f", demuxer, "-i"]).arg(video);
+        cmd.args(["-map", "0:v:0", "-frames:v", "1", "-vf", "scale=w='min(640,iw)':h='min(640,ih)':force_original_aspect_ratio=decrease"])
+            .args(["-map_metadata", "-1", "-fflags", "+bitexact", "-c:v", "mjpeg", "-q:v", "5", "-f", "image2"])
+            .arg(&out);
+        if let Err(why) = run(&mut cmd, None, POSTER_TIMEOUT) {
+            if matches!(why, RunError::TimedOut | RunError::Spawn(_)) {
+                return Err(Failed::Broken(format!("poster: {why}")));
+            }
+            continue;
+        }
+        if let Ok(jpeg) = std::fs::read(&out) {
+            if jpeg.len() >= 3 && jpeg[..3] == [0xFF, 0xD8, 0xFF] && jpeg.len() <= MAX_POSTER_BYTES {
+                return Ok(jpeg);
+            }
+        }
+    }
+    Err(Failed::Refused("no picture in that video"))
+}
+
+/// ffmpeg, reading `input` as `demuxer` and nothing but the local file, writing over its output.
+fn ffmpeg_reading(input: &FsPath, demuxer: &str) -> Command {
+    let mut cmd = Command::new(bin("FFMPEG", "ffmpeg"));
+    cmd.args(["-nostdin", "-v", "error", "-y", "-protocol_whitelist", "file", "-f", demuxer, "-i"]).arg(input);
+    cmd
+}
+
+/// No metadata out: the file's, each stream's, the chapters', and no encoder's name.
+fn strip(cmd: &mut Command) {
+    cmd.args(["-map_metadata", "-1", "-map_metadata:s:v", "-1", "-map_metadata:s:a", "-1", "-map_chapters", "-1", "-fflags", "+bitexact"]);
+}
+
+#[derive(Debug)]
+enum RunError {
+    Spawn(std::io::Error),
+    TimedOut,
+    /// It ran and said no: the exit and the start of what it wrote to stderr.
+    Exit(String),
+}
+
+impl std::fmt::Display for RunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunError::Spawn(e) => write!(f, "could not start: {e}"),
+            RunError::TimedOut => write!(f, "timed out"),
+            RunError::Exit(why) => write!(f, "{why}"),
+        }
+    }
+}
+
+/// A file ffmpeg would not read is the file's fault; anything else is ours.
+fn refused_or_broken(why: RunError, words: &'static str) -> Failed {
+    match why {
+        RunError::Exit(said) => {
+            log::info!("chat video: {said}");
+            Failed::Refused(words)
+        }
+        other => Failed::Broken(other.to_string()),
+    }
+}
+
+fn read_capped(path: &FsPath, cap: u64) -> Result<Vec<u8>, Failed> {
+    let file = std::fs::File::open(path).map_err(|e| Failed::Broken(format!("read {}: {e}", path.display())))?;
+    let mut raw = Vec::new();
+    file.take(cap + 1).read_to_end(&mut raw).map_err(|e| Failed::Broken(format!("read {}: {e}", path.display())))?;
+    if raw.len() as u64 > cap {
+        return Err(Failed::Refused(UNREADABLE));
+    }
+    Ok(raw)
+}
+
+/// One run of ffmpeg or ffprobe: stdin closed, stdout to `stdout` (or nowhere), stderr kept to
+/// say why, killed past `timeout`. On linux, at a lower priority and with limits on its memory,
+/// cpu seconds and the size of a file it writes, so one bad file cannot take the box.
+fn run(cmd: &mut Command, stdout: Option<&FsPath>, timeout: Duration) -> Result<(), RunError> {
+    let dir = stdout.and_then(FsPath::parent).map(FsPath::to_path_buf).unwrap_or_else(std::env::temp_dir);
+    let err_path = dir.join(format!("stderr-{}", Uuid::from_u128(rand::random())));
+    let err_file = std::fs::File::create(&err_path).map_err(RunError::Spawn)?;
+    cmd.stdin(Stdio::null()).stderr(Stdio::from(err_file));
+    match stdout {
+        Some(path) => cmd.stdout(Stdio::from(std::fs::File::create(path).map_err(RunError::Spawn)?)),
+        None => cmd.stdout(Stdio::null()),
+    };
+    limit(cmd);
+    let mut child = cmd.spawn().map_err(RunError::Spawn)?;
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&err_path);
+                return Err(RunError::TimedOut);
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = std::fs::remove_file(&err_path);
+                return Err(RunError::Spawn(e));
+            }
+        }
+    };
+    let said = std::fs::read(&err_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&err_path);
+    if status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&said[..said.len().min(400)]).trim().replace('\n', " | ");
+    Err(RunError::Exit(format!("{status}: {said}")))
+}
+
+#[cfg(target_os = "linux")]
+fn limit(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt as _;
+    // SAFETY: between fork and exec only async-signal-safe calls (setrlimit, setpriority), no allocation
+    unsafe {
+        cmd.pre_exec(|| {
+            let cap = |what, n: libc::rlim_t| {
+                let lim = libc::rlimit { rlim_cur: n, rlim_max: n };
+                libc::setrlimit(what, &lim);
+            };
+            cap(libc::RLIMIT_AS, 2 << 30);
+            cap(libc::RLIMIT_CPU, 180);
+            cap(libc::RLIMIT_FSIZE, 64 << 20);
+            libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn limit(_: &mut Command) {}
 
 /// What the header says about a file: its type and, when written there, its length.
 #[derive(Debug, PartialEq)]
@@ -571,6 +1014,147 @@ mod tests {
         assert_eq!(probe(b""), Err(WRONG_TYPE));
         // an ftyp with nothing after it
         assert_eq!(probe(b"\x00\x00\x00\x10ftypisom\x00\x00\x02\x00"), Err(WRONG_TYPE));
+    }
+
+    #[test]
+    fn the_length_is_the_longer_reading_and_must_be_known() {
+        assert_eq!(length_of(Some(12_000), None), Ok(12_000));
+        // a recorder's webm: no word in the header, the packets say
+        assert_eq!(length_of(None, Some(9_000)), Ok(9_000));
+        // a header that lies short does not let a long file by
+        assert_eq!(length_of(Some(5_000), Some(45_000)), Err(Failed::Refused(TOO_LONG)));
+        assert_eq!(length_of(Some(31_000), Some(2_000)), Err(Failed::Refused(TOO_LONG)));
+        assert_eq!(length_of(Some(30_400), None), Ok(30_400), "the container's rounding");
+        // nothing known is refused: the page's own reading is not asked for any more
+        assert_eq!(length_of(None, None), Err(Failed::Refused(UNKNOWN_LENGTH)));
+        assert_eq!(length_of(Some(0), Some(0)), Err(Failed::Refused(UNKNOWN_LENGTH)));
+    }
+
+    #[test]
+    fn the_packets_say_where_the_file_ends() {
+        assert_eq!(last_packet_ms("0.000000,0.200000\n3.954000,0.020000\n3.994000,0.007000,\n1.0,0.5\n"), Some(4_001));
+        assert_eq!(last_packet_ms("N/A,N/A\n2.5,N/A\n"), Some(2_500));
+        assert_eq!(last_packet_ms(""), None);
+        assert_eq!(last_packet_ms("N/A,0.04\n"), None);
+    }
+
+    #[test]
+    fn ffprobe_codecs() {
+        let c = |pairs: &[(&str, &str)]| pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
+        assert_eq!(check_codecs("video/mp4", &c(&[("video", "h264"), ("audio", "aac"), ("data", "bin_data")])), Ok(()));
+        assert_eq!(check_codecs("video/mp4", &c(&[("video", "hevc")])), Err(Failed::Refused(MP4_CODECS)));
+        assert_eq!(check_codecs("video/mp4", &c(&[("video", "h264"), ("audio", "opus")])), Err(Failed::Refused(MP4_CODECS)));
+        assert_eq!(check_codecs("video/webm", &c(&[("video", "vp9"), ("audio", "opus")])), Ok(()));
+        assert_eq!(check_codecs("video/webm", &c(&[("video", "av1")])), Err(Failed::Refused(WEBM_CODECS)));
+        assert_eq!(check_codecs("video/webm", &c(&[("audio", "opus")])), Err(Failed::Refused(NO_VIDEO)));
+    }
+
+    /// ffmpeg on this machine, or the ffmpeg tests skip (say so, and pass): the box's image has it,
+    /// a laptop may not. `FFMPEG_TESTS=off` skips them on purpose.
+    fn have_ffmpeg() -> bool {
+        if std::env::var("FFMPEG_TESTS").as_deref() == Ok("off") {
+            return false;
+        }
+        let ok = |name: &str| Command::new(name).arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+        let have = ok(&bin("FFMPEG", "ffmpeg")) && ok(&bin("FFPROBE", "ffprobe"));
+        if !have {
+            eprintln!("no ffmpeg/ffprobe here: the ffmpeg tests are skipped");
+        }
+        have
+    }
+
+    /// A test clip `seconds` long, made by ffmpeg: an H.264/AAC mp4, or a webm the way a browser's
+    /// recorder writes one (`-live 1`: no duration in the header, clusters of unknown size). It
+    /// carries a title, to see the copy leave it out.
+    fn clip(scratch: &Scratch, seconds: u32, webm: bool) -> Vec<u8> {
+        let out = scratch.file(if webm { "clip.webm" } else { "clip.mp4" });
+        let mut cmd = Command::new(bin("FFMPEG", "ffmpeg"));
+        cmd.args(["-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x48:rate=5", "-f", "lavfi", "-i", "sine=frequency=440"])
+            .args(["-t", &seconds.to_string(), "-metadata", "title=SECRET-TITLE"]);
+        if webm {
+            cmd.args(["-c:v", "libvpx", "-deadline", "realtime", "-b:v", "50k", "-c:a", "libopus", "-f", "webm", "-live", "1"]);
+        } else {
+            cmd.args(["-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-f", "mp4"]);
+        }
+        let status = cmd.arg(&out).status().expect("ffmpeg");
+        assert!(status.success(), "ffmpeg made no clip");
+        std::fs::read(&out).unwrap()
+    }
+
+    #[test]
+    fn a_short_clip_is_copied_bare_with_a_poster() {
+        if !have_ffmpeg() {
+            return;
+        }
+        let scratch = Scratch::new().unwrap();
+        let mp4 = clip(&scratch, 3, false);
+        let ready = prepare(&mp4, "video/mp4").expect("a 3s mp4 is fine");
+        assert_eq!(ready.mime, "video/mp4");
+        assert!(!ready.encoded, "an H.264 mp4 copies");
+        assert!((2_900..=3_200).contains(&ready.duration_ms), "{}", ready.duration_ms);
+        assert!(!ready.video.windows(12).any(|w| w == b"SECRET-TITLE"), "the copy keeps no metadata");
+        assert!(mp4.windows(12).any(|w| w == b"SECRET-TITLE"), "the clip did have it");
+        assert_eq!(&ready.poster[..3], &[0xFF, 0xD8, 0xFF], "the poster is a jpeg");
+        // faststart: the index before the frames
+        let moov = ready.video.windows(4).position(|w| w == b"moov").unwrap();
+        let mdat = ready.video.windows(4).position(|w| w == b"mdat").unwrap();
+        assert!(moov < mdat, "moov first");
+
+        // the copy's fallback, run on its own: an H.264 mp4 of the clip, with no metadata
+        let input = scratch.file("again-in.mp4");
+        std::fs::write(&input, &mp4).unwrap();
+        let out = scratch.file("again.mp4");
+        encode(&input, "mov", &out).expect("encodes");
+        let again = std::fs::read(&out).unwrap();
+        assert_eq!(probe(&again).map(|p| p.mime), Ok("video/mp4"));
+        assert!(!again.windows(12).any(|w| w == b"SECRET-TITLE"));
+
+        // a recorder's webm has no length in its header: the packets give it
+        let webm = clip(&scratch, 3, true);
+        assert_eq!(probe(&webm).unwrap().duration_ms, None);
+        let ready = prepare(&webm, "video/webm").expect("a 3s recorder webm is fine");
+        assert_eq!(ready.mime, "video/webm");
+        assert!((2_900..=3_200).contains(&ready.duration_ms), "{}", ready.duration_ms);
+        assert!(!ready.video.windows(12).any(|w| w == b"SECRET-TITLE"));
+    }
+
+    #[test]
+    fn a_long_clip_is_refused() {
+        if !have_ffmpeg() {
+            return;
+        }
+        let scratch = Scratch::new().unwrap();
+        assert_eq!(prepare(&clip(&scratch, 32, false), "video/mp4").unwrap_err(), Failed::Refused(TOO_LONG));
+        // no length in the header, and long all the same: the packets tell
+        let webm = clip(&scratch, 33, true);
+        assert_eq!(probe(&webm).unwrap().duration_ms, None);
+        assert_eq!(prepare(&webm, "video/webm").unwrap_err(), Failed::Refused(TOO_LONG));
+    }
+
+    #[test]
+    fn a_clip_of_unknown_length_is_refused() {
+        if !have_ffmpeg() {
+            return;
+        }
+        let scratch = Scratch::new().unwrap();
+        let webm = clip(&scratch, 3, true);
+        // the header, then one empty cluster (its timestamp alone): streams, and no length anywhere
+        let cluster = webm.windows(4).position(|w| w == [0x1F, 0x43, 0xB6, 0x75]).unwrap();
+        let mut bare = webm[..cluster].to_vec();
+        bare.extend_from_slice(&[0x1F, 0x43, 0xB6, 0x75, 0x83, 0xE7, 0x81, 0x00]);
+        assert_eq!(probe(&bare).map(|p| p.duration_ms), Ok(None), "the header walk is happy with it");
+        assert_eq!(prepare(&bare, "video/webm").unwrap_err(), Failed::Refused(UNKNOWN_LENGTH));
+        // the header alone, cut before the cluster: ffprobe will not read it at all
+        assert_eq!(prepare(&webm[..cluster], "video/webm").unwrap_err(), Failed::Refused(UNREADABLE));
+    }
+
+    #[test]
+    fn a_run_past_its_timeout_is_killed() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5");
+        let started = Instant::now();
+        assert!(matches!(run(&mut cmd, None, Duration::from_millis(200)), Err(RunError::TimedOut)));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

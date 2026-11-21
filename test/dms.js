@@ -200,8 +200,15 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     expect(unknown.status() === 400 && /no such picture/.test(await said(unknown)), `an unknown id got ${unknown.status()} ${JSON.stringify(await body(unknown))}`);
     expect(many.status() === 400 && /too many pictures/.test(await said(many)), `eleven got ${many.status()} ${JSON.stringify(await body(many))}`);
     expect(nothing.status() === 400 && /nothing to say/.test(await said(nothing)), `no words and no picture got ${nothing.status()} ${JSON.stringify(await body(nothing))}`);
-    const bytes = await anon.get(`/api/chat-images/${pictureId}`);
+    // a direct message's picture is for the two of them (media.rs): ben reads it, uncached and never sniffed; nobody does not
+    const bytes = await ben.get(`/api/chat-images/${pictureId}`);
     expect(bytes.status() === 200 && /image\/jpeg/.test(bytes.headers()['content-type'] || ''), `the picture reads back ${bytes.status()} ${bytes.headers()['content-type']}`);
+    expect(bytes.headers()['cache-control'] === 'private, no-store' && bytes.headers()['x-content-type-options'] === 'nosniff', `a dm picture's headers ${JSON.stringify(bytes.headers())}`);
+    const peek = await anon.get(`/api/chat-images/${pictureId}`);
+    expect(peek.status() === 401, `nobody reading a dm picture got ${peek.status()}`);
+    // only the uploader may put an upload on a line: ben may not send ann's picture on
+    const theirs = await ben.post(`/api/dm/${ANN}`, { data: { text: '', images: [pictureId] } });
+    expect(theirs.status() === 400 && /not your picture/.test(await said(theirs)), `ben sending ann's picture got ${theirs.status()} ${JSON.stringify(await body(theirs))}`);
     return `picture ${pictureId.slice(0, 8)} on lines ${line.id} and ${both.id}`;
   };
 
@@ -362,7 +369,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     await annPage.waitForFunction(() => !document.querySelector('#friend-chat-send')?.disabled, null, { timeout: 5000 });
     const annsPicture = ((await annPage.getAttribute('#friend-chat-picture-preview img', 'src')) || '').split('/').pop();
     expect(UUID.test(annsPicture || ''), `the strip shows ${annsPicture}`);
-    const bytes = await anon.get(`/api/chat-images/${annsPicture}`);
+    // not posted yet: ann's alone (media.rs), read with the page's own cookie
+    const bytes = await annPage.request.get(`${BASE}/api/chat-images/${annsPicture}`);
+    expect((await anon.get(`/api/chat-images/${annsPicture}`)).status() === 401, 'an upload not posted yet is not for nobody');
     expect(bytes.status() === 200 && /^image\/(webp|jpeg)$/.test(bytes.headers()['content-type'] || ''), `the picked picture reads back ${bytes.status()} ${bytes.headers()['content-type']}`);
     // enter in the empty box: the picture goes alone, the strip empties, and the api has the line with the id and no words
     await annPage.press('#friend-chat-text', 'Enter');

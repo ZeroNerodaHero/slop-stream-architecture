@@ -34,10 +34,11 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{self, Account, Me};
-use crate::chat::{clean_text, picture_ids, split_pictures, video_id, Video, MAX_TEXT_CHARS, NO_SUCH_LINE};
+use crate::chat::{clean_text, picture_ids, split_pictures, video_id, Video, MAX_TEXT_CHARS, NOT_YOUR_PICTURE, NOT_YOUR_VIDEO, NO_SUCH_LINE};
+use crate::media::{self, Kind, Place, Refusal};
 use crate::history::{self, Bind, Search};
 use crate::presence::{self, Presence};
-use crate::{chat_images, chat_videos, emotes, follows, notify, reactions};
+use crate::{chat_videos, emotes, follows, notify, reactions};
 use crate::{ApiError, ApiResult, AppState, Name};
 
 /// Lines in one page of a thread. A shorter page is the start of the thread.
@@ -135,12 +136,14 @@ async fn quote(db: &PgPool, a: Uuid, b: Uuid, id: i64) -> Result<Option<QuoteRow
     .await
 }
 
-/// Every id a line names is a picture `POST /api/chat-images` kept (the say's check, chat.rs
-/// `pictures_exist`): 400 `no such picture` otherwise.
-async fn pictures_exist(db: &PgPool, ids: &[String]) -> Result<(), ApiError> {
+/// Every id a line names is a picture `POST /api/chat-images` kept for the writer (the say's
+/// check, chat.rs `pictures_exist`): 400 `no such picture` or `not your picture` otherwise.
+async fn pictures_exist(db: &PgPool, ids: &[String], who: Uuid) -> Result<(), ApiError> {
     for id in ids {
-        if !chat_images::exists(db, id).await? {
-            return Err(ApiError::new(StatusCode::BAD_REQUEST, "no such picture"));
+        match media::check(db, Kind::Image, id, Some(who)).await? {
+            Ok(()) => {}
+            Err(Refusal::Missing) => return Err(ApiError::new(StatusCode::BAD_REQUEST, "no such picture")),
+            Err(Refusal::NotYours) => return Err(ApiError::new(StatusCode::BAD_REQUEST, NOT_YOUR_PICTURE)),
         }
     }
     Ok(())
@@ -320,13 +323,20 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     // each emote the writer may not use (not in its group) goes back to plain `:name:` (emotes.rs)
     let text = emotes::settle(&s.db, Some(me.id), &text).await;
     // the pictures must be ones the upload kept: a lookup each, paid for by the rate like the say's (chat.rs `accept`)
-    pictures_exist(&s.db, &images).await?;
-    // the video too, with its poster, which the line carries beside it
+    pictures_exist(&s.db, &images, me.id).await?;
+    // the video too, the writer's own, with its poster, which the line carries beside it
     let video = match video {
-        Some(id) => match chat_videos::poster_of(&s.db, &id).await? {
-            Some(poster) => Some(Video { id, poster: poster.to_string() }),
-            None => return Err(ApiError::new(StatusCode::BAD_REQUEST, "no such video")),
-        },
+        Some(id) => {
+            match media::check(&s.db, Kind::Video, &id, Some(me.id)).await? {
+                Ok(()) => {}
+                Err(Refusal::Missing) => return Err(ApiError::new(StatusCode::BAD_REQUEST, "no such video")),
+                Err(Refusal::NotYours) => return Err(ApiError::new(StatusCode::BAD_REQUEST, NOT_YOUR_VIDEO)),
+            }
+            match chat_videos::poster_of(&s.db, &id).await? {
+                Some(poster) => Some(Video { id, poster: poster.to_string() }),
+                None => return Err(ApiError::new(StatusCode::BAD_REQUEST, "no such video")),
+            }
+        }
         None => None,
     };
     // the line answered must be this thread's: a lookup, paid for by the rate like the pictures'
@@ -335,6 +345,8 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
         None => None,
     };
     let reply = reply.as_ref().map(quote_json);
+    // the uploads are this thread's now: for the two of them alone (media.rs)
+    crate::chat::mark_posted(&s.db, &Place::dm(me.id, other.id), &images, video.as_ref()).await?;
     let image = if images.is_empty() { None } else { Some(images.join(",")) };
     let (id, at): (i64, i64) = sqlx::query_as(
         "INSERT INTO dms (from_id, to_id, text, image, reply_to, video) VALUES ($1, $2, $3, $4, $5, $6)

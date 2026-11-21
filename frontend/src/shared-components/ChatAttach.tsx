@@ -48,8 +48,7 @@ export function pasteFiles(e: ClipboardEvent, take: (files: File[]) => void) {
 
 /**
  * One video going up (docs/chat.md "videos"): checked here first (`readVideo`: the type, 10 mb,
- * 30 seconds), its poster drawn from a frame and kept as a chat picture, then the file itself
- * with its progress, 0 to 1 (`progress`, null when nothing is going up). `done` gets the video;
+ * 30 seconds), then the file itself (the api draws its poster) with its progress, 0 to 1 (`progress`, null when nothing is going up). `done` gets the video;
  * a refusal is `fail`'s, in the words the box shows.
  */
 export function useVideoUpload() {
@@ -58,9 +57,8 @@ export function useVideoUpload() {
     if (progress !== null) return;
     setProgress(0);
     try {
-      const { durationMs, poster } = await readVideo(file);
-      const still = await api.uploadChatImage(poster);
-      const saved = await api.uploadChatVideo(file, still.id, durationMs, setProgress);
+      await readVideo(file);
+      const saved = await api.uploadChatVideo(file, setProgress);
       done({ id: saved.id, poster: saved.poster });
     } catch (err) {
       fail(messageOf(err));
