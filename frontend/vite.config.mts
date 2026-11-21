@@ -101,7 +101,9 @@ export default defineConfig(({ mode }) => {
         '/thumb': { target: backend, changeOrigin: true, secure: false, configure: explain },
         '/ws': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain },
         '/chat': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain },
-        '/events': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain }
+        '/events': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain },
+        // the voice channels' socket: caddy sends it on to the voice server (docs/voice.md)
+        '^/voice$': { target: backend.replace(/^http/, 'ws'), ws: true, changeOrigin: true, secure: false, configure: explain }
       }
     },
     build: {

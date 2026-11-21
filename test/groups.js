@@ -50,6 +50,8 @@ async function step(name, fn) {
 const expect = (cond, what) => {
   if (!cond) throw new Error(what);
 };
+/** the text channels' names in order. every group has a voice channel too (docs/voice.md), which these steps leave alone */
+const textNames = (channels) => channels.filter((c) => c.kind !== 'voice').map((c) => c.name).join(' ');
 const body = async (res) => {
   try {
     return await res.json();
@@ -285,7 +287,7 @@ const dropAll = async (ctx, names) => {
     expect(shown.status() === 200, `making it public again got ${shown.status()}`);
     const lines = await anon.get(`/api/groups/${slug}/messages`);
     const byChannel = await body(lines);
-    expect(lines.status() === 200 && byChannel && Array.isArray(byChannel.general) && Object.keys(byChannel).length === guest.channels.length, `messages got ${lines.status()} ${JSON.stringify(byChannel)}`);
+    expect(lines.status() === 200 && byChannel && Array.isArray(byChannel.general) && Object.keys(byChannel).length === guest.channels.filter((c) => c.kind !== 'voice').length, `messages got ${lines.status()} ${JSON.stringify(byChannel)}`);
     const bot = await anon.get('/api/groups/bot/messages');
     const none = await anon.get(`/api/groups/nosuch${RUN}/messages`);
     expect(bot.status() === 404 && none.status() === 404, `bot ${bot.status()}, no such ${none.status()}`);
@@ -471,7 +473,7 @@ const dropAll = async (ctx, names) => {
     // the new channel is last; the channels power puts them in order, and everyone hears the whole order.
     // a member without the power cannot, nobody cannot, and a name that is not a channel or named twice is 400
     const before = await body(await anon.get(`/api/groups/${slug}`));
-    expect(before.channels.map((c) => c.name).join(' ') === 'general clips', `before the move: ${before.channels.map((c) => c.name).join(' ')}`);
+    expect(textNames(before.channels) === 'general clips', `before the move: ${textNames(before.channels)}`);
     const noPower = await member.put(`/api/groups/${slug}/channels`, { data: { order: ['clips', 'general'] } });
     const nobodyMoves = await anon.put(`/api/groups/${slug}/channels`, { data: { order: ['clips', 'general'] } });
     const notOne = await maker.put(`/api/groups/${slug}/channels`, { data: { order: ['clips', 'nosuch'] } });
@@ -483,12 +485,12 @@ const dropAll = async (ctx, names) => {
     expect(moved.status() === 200 && order.order.join(' ') === 'clips general', `the move got ${moved.status()} ${JSON.stringify(order)}`);
     await w.waitForFunction(() => window.__groupFrames.some((f) => f.what === 'channel_order'), null, { timeout: 10000 });
     const ordered = await w.evaluate(() => window.__groupFrames.find((f) => f.what === 'channel_order'));
-    expect(ordered.group === slug && Array.isArray(ordered.order) && ordered.order.join(' ') === 'clips general', `the channel_order frame ${JSON.stringify(ordered)}`);
+    expect(ordered.group === slug && Array.isArray(ordered.order) && ordered.order.filter((n) => n !== 'voice').join(' ') === 'clips general', `the channel_order frame ${JSON.stringify(ordered)}`);
     const after = await body(await anon.get(`/api/groups/${slug}`));
-    expect(after.channels.map((c) => c.name).join(' ') === 'clips general', `after the move the room lists ${after.channels.map((c) => c.name).join(' ')}`);
+    expect(textNames(after.channels) === 'clips general', `after the move the room lists ${textNames(after.channels)}`);
     const explored = await body(await maker.get('/api/explore'));
     const mine = explored.yours.find((g) => g.name === slug);
-    expect(mine && mine.channels.map((c) => c.name).join(' ') === 'clips general', `explore lists ${JSON.stringify(mine && mine.channels.map((c) => c.name))}`);
+    expect(mine && textNames(mine.channels) === 'clips general', `explore lists ${JSON.stringify(mine && mine.channels.map((c) => c.name))}`);
     // the name changes: the member mutes clips and says a line in it first, so both can be seen to follow the name.
     // a member without the power cannot rename, nobody cannot, general stays, a history word and a name the server
     // has are refused; then clips is highlights (typed any way), its place kept, and everyone hears channel_renamed
@@ -529,7 +531,7 @@ const dropAll = async (ctx, names) => {
     const heardRename = await w.evaluate(() => window.__groupFrames.find((f) => f.what === 'channel_renamed'));
     expect(heardRename.group === slug && heardRename.channel === 'clips' && heardRename.name === 'highlights', `the channel_renamed frame ${JSON.stringify(heardRename)}`);
     const asMember = await body(await member.get(`/api/groups/${slug}`));
-    expect(asMember.channels.map((c) => c.name).join(' ') === 'highlights general', `after the rename the room lists ${asMember.channels.map((c) => c.name).join(' ')}`);
+    expect(textNames(asMember.channels) === 'highlights general', `after the rename the room lists ${textNames(asMember.channels)}`);
     expect(asMember.muted.join(' ') === 'highlights', `the mute followed the name: ${JSON.stringify(asMember.muted)}`);
     const movedLines = await body(await anon.get(`/api/groups/${slug}/messages`));
     expect(
@@ -636,7 +638,7 @@ const dropAll = async (ctx, names) => {
     expect(made.status() === 201 && staffers.channels.join(' ') === 'staff', `the role got ${made.status()} ${JSON.stringify(staffers)}`);
     // the member holds no role: not in their room (the role still says what it keeps), explore or messages; nobody's either; the owner's, yes
     const asMember = await body(await member.get(`/api/groups/${slug}`));
-    expect(!asMember.channels.some((c) => c.name === 'staff'), `the member's room lists ${asMember.channels.map((c) => c.name).join(' ')}`);
+    expect(!asMember.channels.some((c) => c.name === 'staff'), `the member's room lists ${textNames(asMember.channels)}`);
     expect(asMember.roles.find((r) => r.id === staffers.id).channels.join(' ') === 'staff', `the member's room says the role keeps ${JSON.stringify(asMember.roles)}`);
     const asNobody = await body(await anon.get(`/api/groups/${slug}`));
     expect(!asNobody.channels.some((c) => c.name === 'staff'), `nobody's room lists ${asNobody.channels.map((c) => c.name).join(' ')}`);
@@ -1397,7 +1399,9 @@ const dropAll = async (ctx, names) => {
     await q.click('#manage-tab-channels');
     await q.waitForSelector('#manage-panel-channels #manage-channels li[data-channel="clips"]', { timeout: 5000 });
     const rowsBefore = await q.$$eval('#manage-channels li', (rows) => rows.map((row) => row.dataset.channel));
-    expect(rowsBefore.join(' ') === 'general clips', `the tab's rows read ${rowsBefore.join(' ')}`);
+    // the tab lists the voice ones too: the group's own `voice` sits between, made with it
+    expect(rowsBefore.join(' ') === 'general voice clips', `the tab's rows read ${rowsBefore.join(' ')}`);
+    expect(!(await q.$('#channel-remove-voice')), 'the last voice channel has a delete');
     expect(!(await q.$('#channel-remove-general')) && !(await q.$('#channel-rename-general')), 'general has a delete or a pencil');
     expect(!(await q.$('#channel-up-clips')) && !(await q.$('#channel-down-clips')), 'the row still has up and down');
     const put = q.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === `/api/groups/${madeName}/channels`, { timeout: 10000 });
@@ -1405,13 +1409,14 @@ const dropAll = async (ctx, names) => {
     await q.focus('#channel-drag-clips');
     await q.keyboard.press('Space');
     await q.keyboard.press('ArrowUp');
+    await q.keyboard.press('ArrowUp');
     await q.keyboard.press('Space');
     const putRes = await put;
     expect(putRes.status() === 200, `the move got ${putRes.status()}`);
     await q.waitForFunction(() => document.querySelector('#manage-channels li')?.dataset.channel === 'clips', null, { timeout: 10000 });
     expect((await channelNames()).join(' ') === 'clips general', `after the move the list reads ${(await channelNames()).join(' ')}`);
     const movedRoom = await body(await maker.get(`/api/groups/${madeName}`));
-    expect(movedRoom.channels.map((c) => c.name).join(' ') === 'clips general', `the api lists ${movedRoom.channels.map((c) => c.name).join(' ')}`);
+    expect(textNames(movedRoom.channels) === 'clips general', `the api lists ${textNames(movedRoom.channels)}`);
     await q.hover('#manage-channels li[data-channel="clips"]');
     await q.click('#channel-rename-clips');
     await q.waitForSelector('#channel-name-clips', { timeout: 5000 });

@@ -27,7 +27,10 @@
 //! renegotiates. an empty seat's m-line gets an idle track nobody writes to: webrtc-rs
 //! cannot put a track back on a sender once it was replaced with none.
 //!
-//! closing the socket, or the peer going failed/closed (the ice timeout), frees the seat.
+//! closing the socket, or the peer going failed/closed (the ice timeout), frees the seat. a
+//! peer that fails is said first, as an error frame: one that never connected is "no audio
+//! path" (nothing came over udp: the port is shut somewhere between, 7883 not open in the
+//! cloud firewall), one that did is "voice lost its connection".
 //! at most 4 voice peers per address, and /ws is rate limited per address like the stream's.
 //!
 //! who is in voice lives in the api (docs/voice.md), and we keep it current: `attached`
@@ -85,6 +88,7 @@ const BEAT_EVERY: Duration = Duration::from_secs(15);
 #[derive(Clone)]
 struct Voice {
     public_ip: String,
+    udp_port: u16,
     mux: Arc<UDPMuxDefault>,
     open: bool,
     api: Api,
@@ -317,6 +321,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     let voice = Voice {
         public_ip,
+        udp_port,
         mux,
         open,
         api: Api {
@@ -611,7 +616,8 @@ async fn talk(
     attached: &mut Option<tokio::task::JoinHandle<()>>,
 ) {
     let dead = Arc::new(Notify::new());
-    let peer = match voice_peer(voice, tag, dead.clone()).await {
+    let linked = Arc::new(AtomicBool::new(false));
+    let peer = match voice_peer(voice, tag, dead.clone(), linked.clone()).await {
         Ok(peer) => peer,
         Err(e) => {
             log::error!("{tag}: peer setup: {e}");
@@ -705,7 +711,10 @@ async fn talk(
                     _ => continue,
                 },
                 _ = dead.notified() => {
-                    log::info!("{tag}: peer gone");
+                    // the page hears why, rather than a socket that just closes
+                    let why = gone_word(linked.load(Ordering::SeqCst), voice.udp_port);
+                    log::info!("{tag}: peer gone: {why}");
+                    refuse(socket, &why).await;
                     break;
                 }
                 changed = seats.changed() => {
@@ -766,8 +775,18 @@ async fn negotiate(peer: &RTCPeerConnection, sdp: String) -> anyhow::Result<Stri
     .map_err(|_| anyhow::anyhow!("negotiation timed out"))?
 }
 
-/// the stream's ice settings (main.rs new_peer) with the voice codecs
-async fn voice_peer(voice: &Voice, tag: &str, dead: Arc<Notify>) -> anyhow::Result<RTCPeerConnection> {
+/// the word for a page whose peer failed: `linked`, it had connected once
+fn gone_word(linked: bool, udp_port: u16) -> String {
+    if linked {
+        "voice lost its connection".to_owned()
+    } else {
+        format!("no audio path: nothing reached the voice server over udp {udp_port}, a firewall is closing it")
+    }
+}
+
+/// the stream's ice settings (main.rs new_peer) with the voice codecs. `linked` is set once
+/// the peer connects, `dead` told when it fails or closes
+async fn voice_peer(voice: &Voice, tag: &str, dead: Arc<Notify>, linked: Arc<AtomicBool>) -> anyhow::Result<RTCPeerConnection> {
     let (media, registry) = voice_media_setup()?;
     let mut setting = SettingEngine::default();
     setting.set_udp_network(UDPNetwork::Muxed(voice.mux.clone()));
@@ -793,6 +812,9 @@ async fn voice_peer(voice: &Voice, tag: &str, dead: Arc<Notify>) -> anyhow::Resu
     let tag = tag.to_owned();
     peer.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
         log::info!("{tag}: peer {state}");
+        if state == RTCPeerConnectionState::Connected {
+            linked.store(true, Ordering::SeqCst);
+        }
         if matches!(state, RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed) {
             dead.notify_one();
         }
@@ -925,6 +947,12 @@ mod tests {
         assert_eq!(read_join(&frame(serde_json::json!({ "role": "voice", "grant": GRANT })), true, true), Err("bad json"));
         let watch = frame(serde_json::json!({ "role": "watch", "grant": GRANT, "sdp": "x" }));
         assert_eq!(read_join(&watch, true, true), Err("bad join"));
+    }
+
+    #[test]
+    fn why_a_peer_went() {
+        assert_eq!(gone_word(true, 7883), "voice lost its connection");
+        assert!(gone_word(false, 7883).contains("udp 7883"));
     }
 
     #[test]

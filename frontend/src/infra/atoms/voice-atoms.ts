@@ -31,15 +31,23 @@ export interface VoiceSeat {
   line: number;
 }
 
-/** This tab's call. `joining` from the click to the answer; `error` is a quiet line under the list, '' for none. */
+/**
+ * This tab's call. `joining` from the click to the answer; `linked` once the audio itself is
+ * through (the peer connected over udp), which can lag the answer or never come; `error` is a
+ * quiet line under the list, '' for none.
+ */
 export interface VoiceCall {
   phase: 'idle' | 'joining' | 'connected';
   server: string;
   channel: string;
+  linked: boolean;
   error: string;
 }
 
-const IDLE: VoiceCall = { phase: 'idle', server: '', channel: '', error: '' };
+const IDLE: VoiceCall = { phase: 'idle', server: '', channel: '', linked: false, error: '' };
+
+/** A call whose audio never got through: the answer came over the socket, the udp did not. */
+const NO_AUDIO_PATH = 'no audio path: nothing got through to the voice server over udp, a firewall is closing it';
 
 export const voiceCallAtom = atom<VoiceCall>(IDLE);
 /** Who sits where in the room, as the last seats frame said. Your own seat is not in it. */
@@ -127,7 +135,7 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
   if (call.phase !== 'idle' && call.server === server && call.channel === channel) return;
   leaveVoice();
   const mine = attempt;
-  store.set(voiceCallAtom, { phase: 'joining', server, channel, error: '' });
+  store.set(voiceCallAtom, { phase: 'joining', server, channel, linked: false, error: '' });
 
   let grant;
   try {
@@ -168,7 +176,8 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
     audios.push(audio);
   }
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'failed') fail(mine, 'voice lost its connection');
+    if (pc.connectionState === 'connected' && mine === attempt) setCall({ linked: true });
+    if (pc.connectionState === 'failed') fail(mine, store.get(voiceCallAtom).linked ? 'voice lost its connection' : NO_AUDIO_PATH);
   };
 
   try {
@@ -186,7 +195,9 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
   const ws = new WebSocket(socketUrl(grant.url, location.href));
   live.ws = ws;
   ws.onopen = () => ws.send(JSON.stringify({ role: 'voice', grant: grant.grant, sdp: pc.localDescription?.sdp ?? '' }));
-  ws.onclose = () => fail(mine, store.get(voiceCallAtom).phase === 'connected' ? 'voice dropped' : 'voice is unreachable');
+  // the voice server says why in an error frame when it knows (that one wins: fail tears this
+  // handler down); a socket that only closes is said from what this side saw
+  ws.onclose = (e: CloseEvent) => fail(mine, closedWord(store.get(voiceCallAtom), e.code));
   ws.onmessage = (e: MessageEvent) => {
     let msg: { error?: string; sdp?: string; event?: string; seats?: VoiceSeat[] };
     try {
@@ -209,6 +220,13 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
     }
   };
   live.timer = setInterval(() => void readLevels(mine, me), LEVEL_MS);
+}
+
+/** Why the socket closed with no word from the voice server, from where the call had got to. */
+function closedWord(call: VoiceCall, code: number): string {
+  if (call.phase !== 'connected') return code === 1006 ? 'voice is unreachable: the voice server did not answer' : `voice is unreachable (${code})`;
+  if (!call.linked) return NO_AUDIO_PATH;
+  return code === 1006 ? 'voice dropped: the connection to the voice server broke' : `voice dropped: the voice server closed the call (${code})`;
 }
 
 /** Who is speaking: each heard m-line's `audioLevel` by its seat's name, and the mic's as `me`. Set only when the set changes. */
