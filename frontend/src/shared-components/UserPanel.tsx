@@ -203,7 +203,7 @@ export function DrawerOpener() {
  * messages (while that setting is on), a phone's bell, the gear, and log out. The picture, and a login's name, are the way to
  * your own page, `/watch/<you>`: your status, your about me, your links, your calendar as everyone sees them (the about me and the links are written there too); the
  * gear is the way to the user modal (profile, groups,
- * security, notifications; appearance, chat, sidebar, advanced). The friend chat window opens
+ * security, notifications; appearance, chat, voice, sidebar, advanced). The friend chat window opens
  * from a friend's chat button on their row (Friends.tsx). Go live is the right end of the page's title row.
  * The ids are the ones the tests key on; `data-open` says which state the panel is in.
  */

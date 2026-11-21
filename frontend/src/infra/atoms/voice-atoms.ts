@@ -7,10 +7,13 @@
  * that person is heard on. Who is in which channel is the room's (`voice` in room-atoms.ts,
  * kept by the `voice` and `voice_left` facts); this module is only this tab's own call, and who
  * is speaking in it, from each m-line's `audioLevel` (getStats). Same shape as the other atom
- * modules: atoms for what renders, module handles, action functions.
+ * modules: atoms for what renders, module handles, action functions. The devices a call uses
+ * (the mic, the speakers, a camera for later) are picked in the user modal's voice tab and kept
+ * in this browser; they are at the end of this file.
  */
 
 import { atom } from 'jotai';
+import { atomWithStorage } from 'jotai/utils';
 
 import { api, messageOf } from '@/infra/api';
 import { socketUrl } from '@/infra/frames';
@@ -64,6 +67,8 @@ interface Live {
   pc: RTCPeerConnection;
   ws: WebSocket | null;
   mic: MediaStream;
+  /** The device the mic was opened on: the picked one, or the default when that was gone. */
+  micFor: string;
   audios: HTMLAudioElement[];
   timer: ReturnType<typeof setInterval> | null;
 }
@@ -147,8 +152,9 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
   if (mine !== attempt) return;
 
   let mic: MediaStream;
+  let micFor: string;
   try {
-    mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    ({ stream: mic, device: micFor } = await openDevice('audio', store.get(voiceInputAtom), MIC_AUDIO));
   } catch {
     return fail(mine, 'no microphone: allow it in the browser to talk');
   }
@@ -164,7 +170,9 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
   }
   const pc = new RTCPeerConnection();
   const audios: HTMLAudioElement[] = [];
-  live = { pc, ws: null, mic, audios, timer: null };
+  live = { pc, ws: null, mic, micFor, audios, timer: null };
+  // the mic is allowed now, so the browser names the devices: a pick that is gone shows as gone
+  void refreshVoiceDevices();
   applyMic();
   // m-line 0 is the mic; 1 to 15 are where the others are heard, in the order they were added
   pc.addTransceiver(track, { direction: 'sendrecv', streams: [mic] });
@@ -174,6 +182,7 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
     audio.autoplay = true;
     audio.muted = store.get(voiceDeafAtom);
     audio.srcObject = new MediaStream([t.receiver.track]);
+    void sinkTo(audio, store.get(voiceOutputAtom));
     audios.push(audio);
   }
   // what ice did, in the console: a call that never links says how far it got
@@ -264,4 +273,221 @@ async function readLevels(mine: number, me: string): Promise<void> {
   });
   const was = store.get(voiceSpeakingAtom);
   if (was.size !== speaking.size || [...speaking].some((n) => !was.has(n))) store.set(voiceSpeakingAtom, speaking);
+}
+
+// ---- devices ------------------------------------------------------------------------------
+
+/** A pick that is no device in particular: the browser's own (the system's). */
+export const DEFAULT_DEVICE = 'default';
+
+export interface VoiceDevice {
+  id: string;
+  label: string;
+}
+
+/**
+ * What is plugged in, by kind. The browser names its devices (and gives their ids) only once
+ * one of that kind was allowed: until then a list is empty and its `named` is false, and a
+ * kept pick cannot be told from a gone one.
+ */
+export interface VoiceDevices {
+  inputs: VoiceDevice[];
+  outputs: VoiceDevice[];
+  cameras: VoiceDevice[];
+  micNamed: boolean;
+  cameraNamed: boolean;
+}
+
+export const voiceDevicesAtom = atom<VoiceDevices>({ inputs: [], outputs: [], cameras: [], micNamed: false, cameraNamed: false });
+
+/** The browser can send a player's sound to a device of its choosing. Not safari, not an older firefox: the speakers are the system's there. */
+export const SINK_SUPPORTED = typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype;
+
+/** The three picks, kept in this browser. A kept id stays kept while its device is unplugged, so plugging it back in brings it back. */
+const storedInputAtom = atomWithStorage<unknown>('settings.voiceInput', DEFAULT_DEVICE, undefined, { getOnInit: true });
+const storedOutputAtom = atomWithStorage<unknown>('settings.voiceOutput', DEFAULT_DEVICE, undefined, { getOnInit: true });
+const storedCameraAtom = atomWithStorage<unknown>('settings.voiceCamera', DEFAULT_DEVICE, undefined, { getOnInit: true });
+
+/** The kept pick, when it is plugged in (or the list is not known yet); the default when it is gone. */
+function inUse(kept: unknown, list: readonly VoiceDevice[], named: boolean): string {
+  const id = typeof kept === 'string' && kept ? kept : DEFAULT_DEVICE;
+  if (id === DEFAULT_DEVICE || !named) return id;
+  return list.some((d) => d.id === id) ? id : DEFAULT_DEVICE;
+}
+
+/** Read: the device each is on now. */
+export const voiceInputAtom = atom((get) => inUse(get(storedInputAtom), get(voiceDevicesAtom).inputs, get(voiceDevicesAtom).micNamed));
+export const voiceOutputAtom = atom((get) => inUse(get(storedOutputAtom), get(voiceDevicesAtom).outputs, get(voiceDevicesAtom).micNamed));
+export const voiceCameraAtom = atom((get) => inUse(get(storedCameraAtom), get(voiceDevicesAtom).cameras, get(voiceDevicesAtom).cameraNamed));
+
+/** A call on now follows a new mic and new speakers at once. */
+export function setVoiceInput(id: string): void {
+  store.set(storedInputAtom, id);
+  void switchMic();
+}
+
+export function setVoiceOutput(id: string): void {
+  store.set(storedOutputAtom, id);
+  applySink();
+}
+
+/** Kept for video in voice, which is not here yet: nothing uses it but the tab's preview. */
+export function setVoiceCamera(id: string): void {
+  store.set(storedCameraAtom, id);
+}
+
+const MIC_AUDIO = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+
+/** The picked device was asked for and is not there (unplugged, or an id from another day). */
+function gone(err: unknown): boolean {
+  const name = (err as { name?: string } | null)?.name;
+  return name === 'OverconstrainedError' || name === 'NotFoundError';
+}
+
+/** `deviceId`'s stream, else the browser's own when that one is gone. `device` is which it got. Throws as getUserMedia does. */
+async function openDevice(kind: 'audio' | 'video', deviceId: string, base: MediaTrackConstraints): Promise<{ stream: MediaStream; device: string }> {
+  if (deviceId !== DEFAULT_DEVICE) {
+    try {
+      return { stream: await navigator.mediaDevices.getUserMedia({ [kind]: { ...base, deviceId: { exact: deviceId } } }), device: deviceId };
+    } catch (err) {
+      if (!gone(err)) throw err;
+    }
+  }
+  return { stream: await navigator.mediaDevices.getUserMedia({ [kind]: base }), device: DEFAULT_DEVICE };
+}
+
+/** The mic for a call or the tab's meter: the picked one, else the browser's. */
+export async function openVoiceMic(deviceId = store.get(voiceInputAtom)): Promise<MediaStream> {
+  return (await openDevice('audio', deviceId, MIC_AUDIO)).stream;
+}
+
+/** The camera for the tab's preview, and for video in voice when it comes. */
+export async function openVoiceCamera(deviceId = store.get(voiceCameraAtom)): Promise<MediaStream> {
+  return (await openDevice('video', deviceId, {})).stream;
+}
+
+/** Sends `audio` to `deviceId`, or to the default when it cannot be had. Nothing where the browser cannot. */
+async function sinkTo(audio: HTMLAudioElement, deviceId: string): Promise<void> {
+  if (!SINK_SUPPORTED) return;
+  try {
+    await audio.setSinkId(deviceId === DEFAULT_DEVICE ? '' : deviceId);
+  } catch {
+    await audio.setSinkId('').catch(() => undefined);
+  }
+}
+
+/** The call's players, to the speakers in use. */
+function applySink(): void {
+  for (const audio of live?.audios ?? []) void sinkTo(audio, store.get(voiceOutputAtom));
+}
+
+/** Which switch is the current one: a mic that opens after a newer pick is put down. */
+let micSwitch = 0;
+
+/**
+ * The call's mic, onto the device in use now, when it is on another: the new track replaces
+ * the old one on m-line 0's sender, so nothing is offered again and the seat stays.
+ */
+async function switchMic(): Promise<void> {
+  const call = live;
+  const want = store.get(voiceInputAtom);
+  const [now] = call?.mic.getAudioTracks() ?? [];
+  if (!call || (call.micFor === want && now?.readyState === 'live')) return;
+  const mine = ++micSwitch;
+  let next: { stream: MediaStream; device: string };
+  try {
+    next = await openDevice('audio', want, MIC_AUDIO);
+  } catch {
+    return; // the old mic stays
+  }
+  const [track] = next.stream.getAudioTracks();
+  const sender = call.pc.getTransceivers()[0]?.sender;
+  const drop = () => {
+    for (const t of next.stream.getTracks()) t.stop();
+  };
+  if (mine !== micSwitch || live !== call || !track || !sender) return drop();
+  try {
+    await sender.replaceTrack(track);
+  } catch {
+    return drop();
+  }
+  if (live !== call) return drop();
+  const old = call.mic;
+  call.mic = next.stream;
+  call.micFor = next.device;
+  for (const t of old.getTracks()) t.stop();
+  applyMic();
+}
+
+let watching = false;
+
+/** The devices plugged in now, into `voiceDevicesAtom`; a call on moves off one that went. Watches for plugging from its first call on. */
+export async function refreshVoiceDevices(): Promise<void> {
+  if (!navigator.mediaDevices?.enumerateDevices) return;
+  if (!watching) {
+    watching = true;
+    navigator.mediaDevices.addEventListener('devicechange', () => void refreshVoiceDevices());
+  }
+  let devices: MediaDeviceInfo[];
+  try {
+    devices = await navigator.mediaDevices.enumerateDevices();
+  } catch {
+    return;
+  }
+  // `default` and `communications` are chrome's stand-ins for another device in the list: the default pick is them
+  const listOf = (kind: MediaDeviceKind, word: string) =>
+    devices
+      .filter((d) => d.kind === kind && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
+      .map((d, i) => ({ id: d.deviceId, label: d.label || `${word} ${i + 1}` }));
+  const named = (kind: MediaDeviceKind) => devices.some((d) => d.kind === kind && d.label);
+  store.set(voiceDevicesAtom, {
+    inputs: listOf('audioinput', 'mic'),
+    outputs: listOf('audiooutput', 'speakers'),
+    cameras: listOf('videoinput', 'camera'),
+    micNamed: named('audioinput'),
+    cameraNamed: named('videoinput')
+  });
+  void switchMic();
+  applySink();
+}
+
+/** Asks for the mic, so the browser names the devices. Throws as getUserMedia does. */
+export async function allowMic(): Promise<void> {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  for (const t of stream.getTracks()) t.stop();
+  await refreshVoiceDevices();
+}
+
+/** The test tone: a short beep, faded in and out so it does not click. */
+const TONE_HZ = 660;
+const TONE_S = 0.5;
+
+/** A short beep through the speakers picked. */
+export async function playTestTone(): Promise<void> {
+  if (typeof AudioContext === 'undefined') return;
+  const ctx = new AudioContext();
+  const out = ctx.createMediaStreamDestination();
+  const gain = ctx.createGain();
+  const osc = ctx.createOscillator();
+  osc.frequency.value = TONE_HZ;
+  osc.connect(gain).connect(out);
+  const audio = new Audio();
+  audio.srcObject = out.stream;
+  try {
+    await sinkTo(audio, store.get(voiceOutputAtom));
+    await ctx.resume();
+    await audio.play();
+    const t = ctx.currentTime;
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.25, t + 0.02);
+    gain.gain.setValueAtTime(0.25, t + TONE_S - 0.05);
+    gain.gain.linearRampToValueAtTime(0, t + TONE_S);
+    osc.start(t);
+    osc.stop(t + TONE_S);
+    await new Promise((done) => setTimeout(done, TONE_S * 1000 + 150));
+  } finally {
+    audio.pause();
+    audio.srcObject = null;
+    await ctx.close().catch(() => undefined);
+  }
 }

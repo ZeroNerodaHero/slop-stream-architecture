@@ -2,6 +2,7 @@ import {
   RiChat1Line,
   RiCloseLine,
   RiGroupLine,
+  RiMicLine,
   RiNotification3Line,
   RiPaletteLine,
   RiShieldKeyholeLine,
@@ -28,6 +29,7 @@ import { NotificationsTab } from '@/shared-components/user-modal/NotificationsTa
 import { ProfileTab } from '@/shared-components/user-modal/ProfileTab';
 import { SecurityTab } from '@/shared-components/user-modal/SecurityTab';
 import { SidebarTab } from '@/shared-components/user-modal/SidebarTab';
+import { VoiceTab } from '@/shared-components/user-modal/VoiceTab';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -38,6 +40,7 @@ const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> =
   notifications: { label: 'notifications', group: 'you', icon: <RiNotification3Line aria-hidden size={18} /> },
   appearance: { label: 'appearance', group: 'this browser', icon: <RiPaletteLine aria-hidden size={18} /> },
   chat: { label: 'chat', group: 'this browser', icon: <RiChat1Line aria-hidden size={18} /> },
+  voice: { label: 'voice', group: 'this browser', icon: <RiMicLine aria-hidden size={18} /> },
   sidebar: { label: 'sidebar', group: 'this browser', icon: <RiSideBarLine aria-hidden size={18} /> },
   advanced: { label: 'advanced', group: 'this browser', icon: <RiToolsLine aria-hidden size={18} /> }
 };
@@ -73,7 +76,7 @@ function roveTabs(e: KeyboardEvent<HTMLDivElement>, order: readonly UserTab[]) {
 /**
  * The user modal: who you are and how this browser shows things, the way discord does its
  * settings. A rail of tabs down the left (the account: profile, groups, security,
- * notifications; this browser: appearance, chat, sidebar, advanced; a phone has no advanced,
+ * notifications; this browser: appearance, chat, voice, sidebar, advanced; a phone has no advanced,
  * `tabsFor`), the open one's pane on the right. Mounted by the Shell; it renders nothing until `openUserModal`, and the page
  * behind follows every change at once, so the layout and theme cards are their own preview.
  * A native <dialog>: the browser keeps focus in it, closes it on escape and hands focus back
@@ -256,6 +259,7 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
           {tab === 'notifications' && <NotificationsTab />}
           {tab === 'appearance' && <AppearanceTab />}
           {tab === 'chat' && <ChatTab />}
+          {tab === 'voice' && <VoiceTab />}
           {tab === 'sidebar' && <SidebarTab />}
           {tab === 'advanced' && <AdvancedTab />}
         </div>

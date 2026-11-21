@@ -12,10 +12,10 @@ import { atomWithStorage } from 'jotai/utils';
 
 import { store } from '@/infra/store';
 
-/** The account's four, then this browser's four: what the pages look like, the chat, the column beside the page, the rest. */
-export type UserTab = 'profile' | 'groups' | 'security' | 'notifications' | 'appearance' | 'chat' | 'sidebar' | 'advanced';
+/** The account's four, then this browser's five: what the pages look like, the chat, the devices a voice call uses, the column beside the page, the rest. */
+export type UserTab = 'profile' | 'groups' | 'security' | 'notifications' | 'appearance' | 'chat' | 'voice' | 'sidebar' | 'advanced';
 /** The order down the rail. The dialog renders from this, and the arrow keys walk it. */
-export const USER_TABS: readonly UserTab[] = ['profile', 'groups', 'security', 'notifications', 'appearance', 'chat', 'sidebar', 'advanced'];
+export const USER_TABS: readonly UserTab[] = ['profile', 'groups', 'security', 'notifications', 'appearance', 'chat', 'voice', 'sidebar', 'advanced'];
 
 /** Where the gear lands with nothing kept, or with a tab kept that is gone now (or not on this screen, `tabsFor`). */
 export const DEFAULT_TAB: UserTab = 'appearance';
