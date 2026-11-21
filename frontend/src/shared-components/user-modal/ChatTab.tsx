@@ -305,15 +305,6 @@ export function ChatTab() {
       )}
 
       <fieldset className={FIELDSET}>
-        <legend className={SECTION_TITLE}>hide bots</legend>
-        <div role="presentation" className="mt-2 grid grid-cols-2 gap-2 sm:gap-4">
-          {BOT_OPTIONS.map(({ hide, id, label, icon }) => (
-            <OptionCard key={id} id={id} name="bots" checked={hide === hideBots} onChange={() => setHideBots(hide)} picture={icon} label={label} compact />
-          ))}
-        </div>
-      </fieldset>
-
-      <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>the lines</legend>
         <div role="presentation" className="mt-2 grid grid-cols-3 gap-2 sm:gap-4">
           {STYLE_OPTIONS.map(({ style, label }) => (
@@ -358,6 +349,15 @@ export function ChatTab() {
         <div role="presentation" className="mt-2 grid grid-cols-2 gap-2 sm:gap-4">
           {LINK_OPTIONS.map(({ ask, id, label, icon }) => (
             <OptionCard key={id} id={id} name="links" checked={ask === linkWarning} onChange={() => setLinkWarning(ask)} picture={icon} label={label} compact />
+          ))}
+        </div>
+      </fieldset>
+
+      <fieldset className={FIELDSET}>
+        <legend className={SECTION_TITLE}>hide bots</legend>
+        <div role="presentation" className="mt-2 grid grid-cols-2 gap-2 sm:gap-4">
+          {BOT_OPTIONS.map(({ hide, id, label, icon }) => (
+            <OptionCard key={id} id={id} name="bots" checked={hide === hideBots} onChange={() => setHideBots(hide)} picture={icon} label={label} compact />
           ))}
         </div>
       </fieldset>
