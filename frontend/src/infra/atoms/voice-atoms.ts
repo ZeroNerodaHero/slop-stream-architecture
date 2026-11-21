@@ -18,6 +18,7 @@ import { atomWithStorage } from 'jotai/utils';
 import { api, messageOf } from '@/infra/api';
 import { socketUrl } from '@/infra/frames';
 import { store } from '@/infra/store';
+import { trimOffer } from '@/infra/voice-offer';
 
 /** How many m-lines hear the others: a room's 16 seats less your own. */
 const HEARD_LINES = 15;
@@ -214,7 +215,8 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
 
   const ws = new WebSocket(socketUrl(grant.url, location.href));
   live.ws = ws;
-  ws.onopen = () => ws.send(JSON.stringify({ role: 'voice', grant: grant.grant, sdp: pc.localDescription?.sdp ?? '' }));
+  // trimmed: a phone's full offer is over the voice server's 48 KB (voice-offer.ts)
+  ws.onopen = () => ws.send(JSON.stringify({ role: 'voice', grant: grant.grant, sdp: trimOffer(pc.localDescription?.sdp ?? '') }));
   // the voice server says why in an error frame when it knows (that one wins: fail tears this
   // handler down); a socket that only closes is said from what this side saw
   ws.onclose = (e: CloseEvent) => fail(mine, closedWord(store.get(voiceCallAtom), e.code));
