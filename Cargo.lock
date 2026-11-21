@@ -134,6 +134,7 @@ dependencies = [
  "env_logger",
  "hmac",
  "image",
+ "libc",
  "log",
  "rand 0.8.8",
  "redis",

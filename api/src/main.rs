@@ -52,6 +52,7 @@ mod groups;
 mod history;
 mod home;
 mod janny;
+mod media;
 mod schema;
 mod models;
 mod monitor;

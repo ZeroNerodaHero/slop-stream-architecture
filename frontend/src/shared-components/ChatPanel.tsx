@@ -23,6 +23,7 @@ import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
 import { roleColorsAtom } from '@/infra/atoms/room-atoms';
 import { type ChatStyle, chatStyleAtom, hideBotsAtom, profilePopupEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { EQUES, showWelcomesAtom, type Welcome } from '@/infra/atoms/welcome-atoms';
+import { type MediaGone, whyGone } from '@/infra/chat-video';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingVideo, splitFiles, useVideoUpload, VideoProgress } from '@/shared-components/ChatAttach';
@@ -30,7 +31,7 @@ import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
 import { ChatLineShape, type ChatLineShapeProps, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ReactionChips } from '@/shared-components/Reactions';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
-import { ChatVideoPlayer } from '@/shared-components/ChatVideoPlayer';
+import { ChatVideoPlayer, MediaGoneNote } from '@/shared-components/ChatVideoPlayer';
 import { useEmoteComplete } from '@/shared-components/EmoteComplete';
 import { Face } from '@/shared-components/Face';
 import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
@@ -307,6 +308,8 @@ const THUMB_HOVER =
  */
 export function ChatImages({ ids, small = false }: { ids: string[]; small?: boolean }) {
   const [view, setView] = useState<{ at: number; host: HTMLElement } | null>(null);
+  // pictures that would not load, and why (an admin took it down, or it is not this viewer's to see): the word stands in their place
+  const [gone, setGone] = useState<Record<string, MediaGone>>({});
 
   if (ids.length === 0) return null;
   const many = ids.length > 1;
@@ -320,6 +323,8 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
         <span key={r} className={cn('flex gap-1', many && (small ? 'h-16' : 'h-24'))}>
           {row.map((id, j) => {
             const i = r * first + j;
+            const why = gone[id];
+            if (why) return <MediaGoneNote key={id} why={why} className={many ? 'min-w-0 flex-1 justify-center' : undefined} />;
             return (
               <button
                 key={id}
@@ -329,7 +334,12 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
                 className={cn(THUMB_HOVER, many ? 'min-w-0 flex-1' : 'block max-w-full')}
                 onClick={(e) => setView({ at: i, host: e.currentTarget.ownerDocument.body })}
               >
-                <img src={pictureSrc(id)} alt="" className={many ? 'h-full w-full object-cover' : cn('max-w-full object-contain', small ? 'max-h-20' : 'max-h-[7.5rem]')} />
+                <img
+                  src={pictureSrc(id)}
+                  alt=""
+                  onError={() => void whyGone(pictureSrc(id)).then((w) => w && setGone((all) => ({ ...all, [id]: w })))}
+                  className={many ? 'h-full w-full object-cover' : cn('max-w-full object-contain', small ? 'max-h-20' : 'max-h-[7.5rem]')}
+                />
               </button>
             );
           })}

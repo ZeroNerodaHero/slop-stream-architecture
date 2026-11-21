@@ -1001,17 +1001,39 @@ pub(crate) fn video_id(video: Option<String>) -> Result<Option<String>, &'static
     }
 }
 
-/// The video `id` the api kept, with its poster: `no such video` otherwise.
-async fn video_of(db: &sqlx::PgPool, name: &str, id: Option<&str>) -> Result<Option<Video>, &'static str> {
+/// The video `id` the api kept, with its poster, uploaded by `who` (media.rs `check`): `no such
+/// video` or `not your video` otherwise.
+async fn video_of(db: &sqlx::PgPool, name: &str, id: Option<&str>, who: Option<Uuid>) -> Result<Option<Video>, &'static str> {
     let Some(id) = id else { return Ok(None) };
-    match crate::chat_videos::poster_of(db, id).await {
-        Ok(Some(poster)) => Ok(Some(Video { id: id.to_owned(), poster: poster.to_string() })),
-        Ok(None) => Err("no such video"),
-        Err(e) => {
-            log::warn!("{name}: video: {e}");
-            Err("chat is busy, try again")
-        }
+    let busy = |e: sqlx::Error| {
+        log::warn!("{name}: video: {e}");
+        "chat is busy, try again"
+    };
+    match crate::media::check(db, crate::media::Kind::Video, id, who).await.map_err(busy)? {
+        Ok(()) => {}
+        Err(crate::media::Refusal::Missing) => return Err("no such video"),
+        Err(crate::media::Refusal::NotYours) => return Err(NOT_YOUR_VIDEO),
     }
+    match crate::chat_videos::poster_of(db, id).await.map_err(busy)? {
+        Some(poster) => Ok(Some(Video { id: id.to_owned(), poster: poster.to_string() })),
+        None => Err("no such video"),
+    }
+}
+
+/// The words for a picture or a video somebody else uploaded: only its uploader may post it.
+pub(crate) const NOT_YOUR_PICTURE: &str = "not your picture";
+pub(crate) const NOT_YOUR_VIDEO: &str = "not your video";
+
+/// The line's pictures, video and poster are posted `place` now (media.rs `mark_posted`): the
+/// first line to name each says who may see it.
+pub(crate) async fn mark_posted(db: &sqlx::PgPool, place: &crate::media::Place, images: &[String], video: Option<&Video>) -> Result<(), sqlx::Error> {
+    use crate::media::{mark_posted, Kind};
+    let mut pictures: Vec<&str> = images.iter().map(String::as_str).collect();
+    if let Some(video) = video {
+        pictures.push(&video.poster);
+        mark_posted(db, Kind::Video, &[&video.id], place).await?;
+    }
+    mark_posted(db, Kind::Image, &pictures, place).await
 }
 
 /// Why a line was not taken: the words alone (`error`), or words with how long until one would
@@ -1108,8 +1130,10 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
             return Err(refused);
         }
     }
-    pictures_exist(&s.db, room, images).await?;
-    let video = video_of(&s.db, room, video).await?;
+    // only the uploader may put an upload on a line; a nick has none
+    let uploader = w.user_id.filter(|_| w.verified);
+    pictures_exist(&s.db, room, images, uploader).await?;
+    let video = video_of(&s.db, room, video, uploader).await?;
     // the emotes: each token the speaker may not use (not in its group, a nick) goes back to plain `:name:` (emotes.rs)
     let settled = crate::emotes::settle(&s.db, w.user_id.filter(|_| w.verified), text).await;
     let text = settled.as_str();
@@ -1145,6 +1169,13 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
         if let Err(e) = set.query_async::<()>(&mut r).await {
             log::warn!("{room}: cooldown: {e}");
             return Err("chat is down, try again".into());
+        }
+    }
+    // the line is going out: its uploads are this room's now, a group channel's for its members (media.rs)
+    if !images.is_empty() || video.is_some() {
+        if let Err(e) = mark_posted(&s.db, &crate::media::Place::room(room, server), images, video.as_ref()).await {
+            log::warn!("{room}: posted: {e}");
+            return Err("chat is busy, try again".into());
         }
     }
     // the badges as json, the picture's version and the account as text, and no field at
@@ -1872,11 +1903,13 @@ pub(crate) fn picture_ids(image: Option<String>, images: Vec<String>) -> Result<
     Ok(out)
 }
 
-async fn pictures_exist(db: &sqlx::PgPool, name: &str, ids: &[String]) -> Result<(), &'static str> {
+/// Every picture is one the api kept, uploaded by `who` (media.rs `check`).
+async fn pictures_exist(db: &sqlx::PgPool, name: &str, ids: &[String], who: Option<Uuid>) -> Result<(), &'static str> {
     for id in ids {
-        match crate::chat_images::exists(db, id).await {
-            Ok(true) => {}
-            Ok(false) => return Err("no such picture"),
+        match crate::media::check(db, crate::media::Kind::Image, id, who).await {
+            Ok(Ok(())) => {}
+            Ok(Err(crate::media::Refusal::Missing)) => return Err("no such picture"),
+            Ok(Err(crate::media::Refusal::NotYours)) => return Err(NOT_YOUR_PICTURE),
             Err(e) => {
                 log::warn!("{name}: picture: {e}");
                 return Err("chat is busy, try again");
