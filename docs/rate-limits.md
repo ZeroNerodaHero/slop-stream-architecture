@@ -5,7 +5,7 @@ it the answer is `429` with `Retry-After` (seconds) and `{"error": "...", "retry
 
 - **Key.** "account / IP" means the login when the cookie is a real one, else the address
   Caddy saw (`X-Forwarded-For`). The handlers' own older limits (signup, login, DMs, follows,
-  people search, chat images, error reports) still apply on top.
+  people search, chat images, chat videos, error reports) still apply on top.
 - **Not counted.** Requests with no `X-Forwarded-For` (they came from inside the compose
   network: video's publisher calls, the tests run inside, the dummy box) and reserved-name
   requests carrying the dummy password.
@@ -75,6 +75,8 @@ load, per action), not a measurement.
 | ✅ | `PATCH`, `DELETE /api/groups/{group}/emotes/{id}` | Rename, delete a group emote | none | **120** (moderate) | account | 10 min | rare |
 | ✅ | `POST /api/chat-images` | Upload a chat image | 30 / account | same (Retry-After) **+ 60** (upload) | account | 10 min; 1 h | low (per pasted image) |
 | ✅ | `GET /api/chat-images/{id}` | Show a chat image | none | **600** | account / IP | 1 min | high (images in chat) |
+| ✅ | `POST /api/chat-videos` | Upload a chat video (10 MB, 30 s) | 5 / account | same (Retry-After) **+ 12** (video-upload) | account | 10 min; 1 h | low (per video) |
+| ✅ | `GET /api/chat-videos/{id}` | Play a chat video (Range, 206) | none | **600** | account / IP | 1 min | medium (one request per seek or buffer) |
 | ✅ | `GET /api/models`, `/models/{id}`, `/models/{id}/thumb` | Demo VRM models | none | **600** | account / IP | 1 min | low (go-live page) |
 | ✅ | `GET /api/notifications` | Inbox | none | **600** | account | 1 min | medium (per open) |
 | ✅ | `PUT /api/notifications/read`, `/settings` | Mark read / settings | none | **120** | account | 1 min | low |

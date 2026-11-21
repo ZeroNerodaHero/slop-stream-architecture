@@ -115,6 +115,7 @@ import { GroupModHost, lineModItems, useCardMod } from '@/shared-components/Grou
 import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack } from '@/shared-components/MobileSheet';
 import { BAR_BUTTON, when } from '@/shared-components/ChatLine';
 import { ChatImages, ChatPanel } from '@/shared-components/ChatPanel';
+import { ChatVideoPlayer } from '@/shared-components/ChatVideoPlayer';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { INPUT } from '@/shared-components/input';
 import { PersonCard, usePeek } from '@/shared-components/PersonCard';
@@ -842,6 +843,12 @@ function ChannelPins({ server, channel, room }: { server: string; channel: strin
                       {pictures.length > 0 && (
                         <div data-pin-pictures={pin.id} className="relative z-10">
                           <ChatImages ids={pictures} small />
+                        </div>
+                      )}
+                      {/* over the row's click too, so a press plays the video and does not open the line */}
+                      {pin.video && (
+                        <div data-pin-video={pin.id} className="relative z-10">
+                          <ChatVideoPlayer video={pin.video} small />
                         </div>
                       )}
                     </div>

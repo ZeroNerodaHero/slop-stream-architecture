@@ -444,12 +444,15 @@ export interface Quoted {
   text: string;
   avatar: number | null;
   images: number;
+  /** The line had a video. */
+  video?: boolean;
   gone?: boolean;
 }
 
-/** A quote's words: the start of the line on one line (an emote as its `:name:`), or its pictures when it had no words. */
-export function quoteWords(q: Pick<Quoted, 'text' | 'images'>): string {
+/** A quote's words: the start of the line on one line (an emote as its `:name:`), or its pictures (or its video) when it had no words. */
+export function quoteWords(q: Pick<Quoted, 'text' | 'images' | 'video'>): string {
   if (q.text) return plainEmotes(q.text).replace(/\s+/g, ' ');
+  if (q.video && q.images === 0) return 'a video';
   if (q.images > 1) return `${q.images} pictures`;
   if (q.images === 1) return 'a picture';
   return '';

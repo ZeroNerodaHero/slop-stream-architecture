@@ -81,6 +81,9 @@ pub(crate) const MODERATE: Rule = rule("moderate", 120, 600, Key::Who);
 /// Anything that puts a file in the bucket: avatar, card pictures, offline picture,
 /// scene assets, about page and its files, a group's icon and banner, a chat image, a group's emote.
 pub(crate) const UPLOAD: Rule = rule("upload", 60, 3600, Key::Who);
+/// A chat video (chat_videos.rs): up to 10 mb each into a bucket on the box's own disk, so far
+/// fewer than the other uploads, on top of the handler's own 5 per 10 minutes.
+pub(crate) const VIDEO_UPLOAD: Rule = rule("video-upload", 12, 3600, Key::Who);
 /// Going live: a video probe and a session row each.
 pub(crate) const GO_LIVE: Rule = rule("go-live", 10, 600, Key::Who);
 /// The publisher's own calls on its stream: heartbeat (every 15s), stop, attached, viewers.
@@ -118,6 +121,7 @@ pub(crate) fn api_rule(method: &Method, path: &str) -> Rule {
         // `/api/search` is the people search, typed into: READ, with its own 180 a minute
         p if read && p != "/api/search" && p.ends_with("/search") => SEARCH,
         _ if read => READ,
+        "/api/chat-videos" => VIDEO_UPLOAD,
         p if is_upload(method, p) => UPLOAD,
         p if is_moderation(method, p) => MODERATE,
         _ => WRITE,
@@ -455,6 +459,9 @@ mod tests {
         assert_eq!(api_rule(&put, "/api/streamers/{name}/about-file"), UPLOAD);
         assert_eq!(api_rule(&put, "/api/groups/{group}/icon"), UPLOAD);
         assert_eq!(api_rule(&post, "/api/chat-images"), UPLOAD);
+        assert_eq!(api_rule(&post, "/api/chat-videos"), VIDEO_UPLOAD);
+        assert_eq!(api_rule(&get, "/api/chat-videos/{id}"), READ);
+        assert!(VIDEO_UPLOAD.max < UPLOAD.max && VIDEO_UPLOAD.window_secs >= UPLOAD.window_secs, "videos are counted tighter than pictures");
         // a group's emote: the upload is a file; a rename and a delete are the group's setup; the lists are reads
         assert_eq!(api_rule(&post, "/api/groups/{group}/emotes"), UPLOAD);
         assert_eq!(api_rule(&Method::PATCH, "/api/groups/{group}/emotes/{id}"), MODERATE);

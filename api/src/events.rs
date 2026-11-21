@@ -224,6 +224,9 @@ enum Out {
         from_id: Option<String>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         images: Vec<String>,
+        /// the video on the line and its poster (chat_videos.rs). absent for none
+        #[serde(skip_serializing_if = "Option::is_none")]
+        video: Option<crate::chat::Video>,
         /// the quote of the line it answers (dms.rs `quote_json`). absent for none
         #[serde(skip_serializing_if = "Option::is_none")]
         reply: Option<Value>,
@@ -703,8 +706,9 @@ impl Gateway {
                 let at: i64 = entry.get("at").unwrap_or(0);
                 let from_id: Option<String> = entry.get("from_id").filter(|id: &String| !id.is_empty());
                 let images = crate::chat::split_pictures(entry.get("images"));
+                let video = crate::chat::Video::parse(entry.get::<String>("video").as_deref());
                 let reply: Option<Value> = entry.get::<String>("reply").and_then(|r| serde_json::from_str(&r).ok());
-                self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id, images, reply }).await;
+                self.tell(&[&from, &name], Out::Dm { id, from: from.clone(), to: name.clone(), text, at, from_id, images, video, reply }).await;
             }
             // a reaction on a direct message: `name` is the other side. both names' sockets, as the line went
             "dm_react" => {

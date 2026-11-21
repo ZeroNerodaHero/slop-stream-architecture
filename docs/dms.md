@@ -40,6 +40,8 @@ sequenceDiagram
 
 **the chat's pictures, not a second kind.** a picture on a line is the same thing in a room and in a thread: shrunk by the page to about five lines tall, put up once as webp (jpeg when the browser cannot write it) to `POST /api/chat-images`, and named by id on the line. so the upload, the bucket key (`chat/<id>`), the `chat_images` row, the cap of ten, the id check before a line is kept and the grid the page draws (`ChatImages`) are the room chat's, and a thread's row keeps the ids joined by commas in `image` the way `chat_lines` does. `GET /api/chat-images/<id>` is public and cached a day, as it is for the rooms: a picture is as private as its uuid, which only the two of them are handed.
 
+**a video too, the room chat's** (`chat.md` "videos", a test version): one per line, an mp4 or webm of 10 mb and 30 seconds at most, put up by `POST /api/chat-videos` with its poster (a chat picture the page drew from a frame), and named on the line as `video`. the row keeps `<video>,<poster>` in `video` (migration `0012-chat-videos`); every line the api hands out (a page, a hit, the 201, the `dm` frame, the list's `last`) carries `video: { id, poster }` when it has one, a quote `video: true`. 400 `bad video`, `no such video`. `has:video` finds a thread's uploaded ones as well as its links to one.
+
 ## the table
 
 ```sql

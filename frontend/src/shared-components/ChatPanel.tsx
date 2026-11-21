@@ -25,10 +25,12 @@ import { type ChatStyle, chatStyleAtom, hideBotsAtom, profilePopupEnabledAtom } 
 import { EQUES, showWelcomesAtom, type Welcome } from '@/infra/atoms/welcome-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
+import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingVideo, splitFiles, useVideoUpload, VideoProgress } from '@/shared-components/ChatAttach';
 import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
 import { ChatLineShape, type ChatLineShapeProps, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ReactionChips } from '@/shared-components/Reactions';
 import { SearchHit, SearchResults } from '@/shared-components/ChatSearch';
+import { ChatVideoPlayer } from '@/shared-components/ChatVideoPlayer';
 import { useEmoteComplete } from '@/shared-components/EmoteComplete';
 import { Face } from '@/shared-components/Face';
 import { INPUT, INPUT_BUTTON } from '@/shared-components/input';
@@ -654,6 +656,7 @@ export function RoomLines({
             pictures={
               <>
                 <ChatImages ids={line.images} />
+                {line.video && <ChatVideoPlayer video={line.video} />}
                 <ChatEmbeds text={line.text} />
               </>
             }
@@ -682,7 +685,7 @@ export function RoomLines({
               line.reply && (
                 <ReplyQuote
                   shape={shape}
-                  quote={{ from: line.reply.from, text: line.reply.text, avatar: line.reply.avatar ?? null, images: line.reply.images ?? 0 }}
+                  quote={{ from: line.reply.from, text: line.reply.text, avatar: line.reply.avatar ?? null, images: line.reply.images ?? 0, video: line.reply.video }}
                   color={line.reply.verified ? roleColor(line.reply.from) : undefined}
                   onJump={jumps ? () => void room.jumpToReply(line.reply!.id) : undefined}
                 />
@@ -747,6 +750,8 @@ export function ChatPanel({
   const phase = useAtomValue(room.phaseAtom);
   const draft = useAtomValue(room.draftAtom);
   const images = useAtomValue(room.imagesAtom);
+  const video = useAtomValue(room.videoAtom);
+  const videoUp = useVideoUpload();
   const replyTo = useAtomValue(room.replyAtom);
   const replyColor = useRoleColors(room)(replyTo?.verified ? replyTo.from : '');
   const notice = useAtomValue(room.noticeAtom);
@@ -847,8 +852,21 @@ export function ChatPanel({
     if (el.scrollTop < 48) void room.loadOlder();
   }
 
-  async function pickPictures(list: FileList | null) {
-    const files = list ? [...list] : [];
+  /** Files from the picker, a paste or a drop: the pictures up the pictures' way, a video (one) up its own. */
+  function pickFiles(list: FileList | File[] | null) {
+    const { pictures, videos } = splitFiles(list ? [...list] : []);
+    if (fileRef.current) fileRef.current.value = '';
+    // the room the files were picked in, even when the panel moves to another before they are up
+    const into = room;
+    const [first] = videos;
+    if (first) {
+      if (video || videos.length > 1 || videoUp.progress !== null) into.showNotice('one video at a time');
+      if (!video && videoUp.progress === null) void videoUp.upload(first, (v) => into.setVideo(v), (words) => into.showNotice(words, 5000));
+    }
+    void pickPictures(pictures);
+  }
+
+  async function pickPictures(files: File[]) {
     if (files.length === 0 || uploading) return;
     // the room the pictures were picked in, even when the panel moves to another before they are up
     const into = room;
@@ -912,6 +930,10 @@ export function ChatPanel({
       data-phase={phase}
       data-room={room.key}
       className={embedded ? cn('relative flex flex-col', className) : panelClassName(cn('relative flex min-h-[320px] flex-col', className))}
+      // a picture or a video dropped anywhere on the chat, or pasted into its box, goes where the picker's would
+      onDragOver={needsNick ? undefined : dragFiles}
+      onDrop={needsNick ? undefined : (e) => dropFiles(e, pickFiles)}
+      onPaste={needsNick ? undefined : (e) => pasteFiles(e, pickFiles)}
     >
       {/* on a phone this bar is dropped, kept for screen readers and ids as they are: a stream's chat (watch, go live) leaves the lines room over the keyboard, and a
           group's title row already names the channel and has the pins (ServerRoom.tsx, which gives a phone no `headerEnd`) */}
@@ -994,6 +1016,7 @@ export function ChatPanel({
                   who={<span className="font-semibold text-primaryBlue">{line.from}</span>}
                   text={line.text}
                   images={line.images.length}
+                  video={!!line.video}
                   onClick={() => {
                     // a server's hit from another channel: the lines move there now, and the page's address follows
                     if (elsewhere !== null) onChannel?.(elsewhere);
@@ -1051,7 +1074,7 @@ export function ChatPanel({
                   <span className={cn('font-semibold', !replyColor && 'text-textPrimary')} style={replyColor ? { color: replyColor } : undefined}>
                     {replyTo.from}
                   </span>
-                  <span className="sr-only">: {quoteWords({ text: replyTo.text, images: replyTo.images.length })}</span>
+                  <span className="sr-only">: {quoteWords({ text: replyTo.text, images: replyTo.images.length, video: !!replyTo.video })}</span>
                 </span>
                 <Tooltip content="cancel reply">
                   <button
@@ -1069,8 +1092,10 @@ export function ChatPanel({
                 </Tooltip>
               </div>
             )}
-            {images.length > 0 && (
+            {videoUp.progress !== null && <VideoProgress progress={videoUp.progress} />}
+            {(images.length > 0 || video) && (
               <div id="chat-picture-preview" className="mb-2 flex flex-wrap gap-2">
+                {video && <PendingVideo video={video} onRemove={() => room.setVideo(null)} />}
                 {images.map((id) => (
                   <span key={id} className="relative">
                     <img src={pictureSrc(id)} alt="" className="h-20 w-20 object-cover" />
@@ -1091,11 +1116,11 @@ export function ChatPanel({
             {/* `relative`: the emote list stands over this row (EmoteComplete.tsx) */}
             <div className="relative flex items-center gap-2">
               {emotes.list}
-              <Tooltip content={images.length >= MAX_CHAT_IMAGES ? `${MAX_CHAT_IMAGES} pictures at most` : 'add a picture'}>
+              <Tooltip content={images.length >= MAX_CHAT_IMAGES ? `${MAX_CHAT_IMAGES} pictures at most` : 'add a picture or a video'}>
                 <button
                   type="button"
                   id="chat-picture"
-                  aria-label="picture"
+                  aria-label="picture or video"
                   className="flex h-8 w-8 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
                   disabled={uploading || images.length >= MAX_CHAT_IMAGES}
                   onClick={() => fileRef.current?.click()}
@@ -1103,7 +1128,7 @@ export function ChatPanel({
                   <RiImageAddLine size={20} aria-hidden />
                 </button>
               </Tooltip>
-              <input ref={fileRef} id="chat-picture-file" type="file" accept="image/*" multiple className="hidden" onChange={(e) => void pickPictures(e.target.files)} />
+              <input ref={fileRef} id="chat-picture-file" type="file" accept={ATTACH_ACCEPT} multiple className="hidden" onChange={(e) => pickFiles(e.target.files)} />
               <input
                 ref={textRef}
                 id="chat-text"

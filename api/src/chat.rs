@@ -169,6 +169,9 @@ pub(crate) struct Line {
     /// every picture on the line, the ids `POST /api/chat-images` handed back. absent when there are none
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) images: Vec<String>,
+    /// the video on the line (`POST /api/chat-videos`) and its poster. absent when there is none
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) video: Option<Video>,
     /// the line this one answers, as that line was when the reply was said (`Reply`). absent for
     /// a line that answers nothing
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,6 +192,28 @@ pub(crate) struct React {
     pub(crate) emoji: String,
     pub(crate) who: String,
     pub(crate) on: bool,
+}
+
+/// A video on a line (chat_videos.rs, docs/chat.md "videos"): its id and its poster's, a picture
+/// of `POST /api/chat-images`. Kept as `<video>,<poster>`: `vid` in the stream, `video` on the
+/// row (a room's and a direct message's), the way `image` keeps the pictures' ids.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub(crate) struct Video {
+    pub(crate) id: String,
+    pub(crate) poster: String,
+}
+
+impl Video {
+    /// The stored `<video>,<poster>`; anything else is no video.
+    pub(crate) fn parse(raw: Option<&str>) -> Option<Video> {
+        let (id, poster) = raw?.split_once(',')?;
+        let (id, poster) = (Uuid::parse_str(id.trim()).ok()?, Uuid::parse_str(poster.trim()).ok()?);
+        Some(Video { id: id.to_string(), poster: poster.to_string() })
+    }
+
+    pub(crate) fn stored(&self) -> String {
+        format!("{},{}", self.id, self.poster)
+    }
 }
 
 /// The words of a quote: the start of the line answered, enough for the one row the panel draws.
@@ -214,6 +239,9 @@ pub(crate) struct Reply {
     /// how many pictures the line had, so a quote of pictures alone has something to say
     #[serde(default)]
     pub(crate) images: usize,
+    /// the line had a video, so a quote of a video alone says so
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) video: bool,
 }
 
 impl Reply {
@@ -226,6 +254,7 @@ impl Reply {
             verified: line.verified,
             avatar: line.avatar,
             images: line.images.len(),
+            video: line.video.is_some(),
         }
     }
 }
@@ -242,6 +271,9 @@ enum In {
         /// Every id, when the page sent more than one. Empty means use `image`.
         #[serde(default)]
         images: Vec<String>,
+        /// The id `POST /api/chat-videos` handed back: one video, at most, on a line.
+        #[serde(default)]
+        video: Option<String>,
         /// On a server socket (`/chat/<server>/*`): which channel the line is for. Ignored elsewhere.
         #[serde(default)]
         channel: Option<String>,
@@ -764,8 +796,8 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                     _ => continue,
                 };
-                let (text, image, images, reply) = match serde_json::from_str::<In>(&text) {
-                    Ok(In::Say { text, image, images, reply, .. }) => (text, image, images, reply),
+                let (text, image, images, video, reply) = match serde_json::from_str::<In>(&text) {
+                    Ok(In::Say { text, image, images, video, reply, .. }) => (text, image, images, video, reply),
                     Ok(In::React { id, emoji, on, .. }) => {
                         let reacted = on_react(&s, &name, &name, server.as_deref(), &mut who, &mut speaker, (&headers, &hello, &ip), (&id, &emoji, on)).await;
                         if let Err((error, wait)) = reacted {
@@ -775,7 +807,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     }
                     _ => continue,
                 };
-                let (text, images) = match parse_say(text, image, images) {
+                let (text, images, video) = match parse_say(text, image, images, video) {
                     Ok(Some(say)) => say,
                     Ok(None) => continue,
                     Err(why) => {
@@ -806,7 +838,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     }
                 }
                 let Some(w) = who.as_ref() else { continue };
-                if let Err(why) = accept(&s, &name, server.as_deref(), w, &text, &images, reply.as_deref()).await {
+                if let Err(why) = accept(&s, &name, server.as_deref(), w, &text, &images, video.as_deref(), reply.as_deref()).await {
                     let _ = send(&mut socket, &why.frame()).await;
                     continue;
                 }
@@ -942,21 +974,44 @@ impl Limiter {
     }
 }
 
-/// A `say` as it came: the words cleaned, the pictures' ids checked for shape. `Ok(None)` is
-/// an empty line, dropped without a word. `Err` is what the socket hears. Nothing here asks
-/// redis or the database, so it costs no token.
-fn parse_say(text: String, image: Option<String>, images: Vec<String>) -> Result<Option<(String, Vec<String>)>, &'static str> {
+/// A `say` as it came: the words cleaned, the pictures' and the video's ids checked for shape.
+/// `Ok(None)` is an empty line, dropped without a word. `Err` is what the socket hears. Nothing
+/// here asks redis or the database, so it costs no token.
+#[allow(clippy::type_complexity)]
+fn parse_say(text: String, image: Option<String>, images: Vec<String>, video: Option<String>) -> Result<Option<(String, Vec<String>, Option<String>)>, &'static str> {
     let text = clean_text(&text);
     let images = picture_ids(image, images)?;
+    let video = video_id(video)?;
     // an emote's token counts as its `:name:`, the words the reader sees (emotes.rs); written out it is longer, to a ceiling a frame holds
     let chars = crate::emotes::shown_chars(&text);
-    if chars == 0 && images.is_empty() {
+    if chars == 0 && images.is_empty() && video.is_none() {
         return Ok(None);
     }
     if chars > MAX_TEXT_CHARS || text.chars().count() > crate::emotes::max_raw_chars(MAX_TEXT_CHARS) {
         return Err("too long");
     }
-    Ok(Some((text, images)))
+    Ok(Some((text, images, video)))
+}
+
+/// The video a say named, read as a uuid; none for an empty one. dms.rs reads a line's the same way.
+pub(crate) fn video_id(video: Option<String>) -> Result<Option<String>, &'static str> {
+    match video.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        None => Ok(None),
+        Some(raw) => Uuid::parse_str(raw).map(|id| Some(id.to_string())).map_err(|_| "bad video"),
+    }
+}
+
+/// The video `id` the api kept, with its poster: `no such video` otherwise.
+async fn video_of(db: &sqlx::PgPool, name: &str, id: Option<&str>) -> Result<Option<Video>, &'static str> {
+    let Some(id) = id else { return Ok(None) };
+    match crate::chat_videos::poster_of(db, id).await {
+        Ok(Some(poster)) => Ok(Some(Video { id: id.to_owned(), poster: poster.to_string() })),
+        Ok(None) => Err("no such video"),
+        Err(e) => {
+            log::warn!("{name}: video: {e}");
+            Err("chat is busy, try again")
+        }
+    }
 }
 
 /// Why a line was not taken: the words alone (`error`), or words with how long until one would
@@ -1004,7 +1059,8 @@ type Standing = (bool, bool, Option<i64>, i32, i32);
 /// but whose expire did not would otherwise live forever), and the row for history on its own
 /// task. A reply's line must be in the same room (`reply_to`). `Err` is what the socket hears,
 /// and the line is not kept.
-async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: &str, images: &[String], reply: Option<&str>) -> Result<(), Refused> {
+#[allow(clippy::too_many_arguments)]
+async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: &str, images: &[String], video: Option<&str>, reply: Option<&str>) -> Result<(), Refused> {
     // the cooldown keys this line sets, with their life in ms and the words when one is still alive
     let mut cooldowns: Vec<(String, i64, &'static str)> = Vec::new();
     // a channel is open to read. talking is for people in the server.
@@ -1053,6 +1109,7 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
         }
     }
     pictures_exist(&s.db, room, images).await?;
+    let video = video_of(&s.db, room, video).await?;
     // the emotes: each token the speaker may not use (not in its group, a nick) goes back to plain `:name:` (emotes.rs)
     let settled = crate::emotes::settle(&s.db, w.user_id.filter(|_| w.verified), text).await;
     let text = settled.as_str();
@@ -1114,6 +1171,10 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
     if let Some(rest) = &rest {
         fields.push(("imgs", rest.as_str()));
     }
+    let vid = video.as_ref().map(Video::stored);
+    if let Some(vid) = &vid {
+        fields.push(("vid", vid.as_str()));
+    }
     let quoted = reply.as_ref().and_then(|r| serde_json::to_string(r).ok());
     if let Some(quoted) = &quoted {
         fields.push(("r", quoted.as_str()));
@@ -1136,7 +1197,7 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
     // follows on its own, so a slow database does not hold this socket.
     if s.persist {
         if let Some(id) = id {
-            remember(s, room, &id, w, text, images, reply);
+            remember(s, room, &id, w, text, images, vid.as_deref(), reply);
         }
     }
     // a channel's line is news to the server's other members (docs/notifications.md): their
@@ -1559,12 +1620,12 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                             let _ = send(&mut socket, &Out::ReactRefused { error, react: &id, wait }).await;
                         }
                     }
-                    Ok(In::Say { text, image, images, channel, reply }) => {
+                    Ok(In::Say { text, image, images, video, channel, reply }) => {
                         let Some(channel) = channel.map(|c| c.trim().to_lowercase()).filter(|c| joined.iter().any(|j| j.as_ref() == c)) else {
                             let _ = send(&mut socket, &Out::Error { error: "say which channel" }).await;
                             continue;
                         };
-                        let (text, images) = match parse_say(text, image, images) {
+                        let (text, images, video) = match parse_say(text, image, images, video) {
                             Ok(Some(say)) => say,
                             Ok(None) => continue,
                             Err(why) => {
@@ -1595,7 +1656,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                         }
                         let Some(w) = who.as_ref() else { continue };
                         let room = format!("{server}/{channel}");
-                        if let Err(why) = accept(&s, &room, Some(&server), w, &text, &images, reply.as_deref()).await {
+                        if let Err(why) = accept(&s, &room, Some(&server), w, &text, &images, video.as_deref(), reply.as_deref()).await {
                             let _ = send(&mut socket, &why.frame()).await;
                             continue;
                         }
@@ -1613,7 +1674,8 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
 }
 
 /// The row for a line redis already accepted. Its own task: the socket goes back to the room.
-fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[String], reply: Option<Reply>) {
+#[allow(clippy::too_many_arguments)]
+fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[String], video: Option<&str>, reply: Option<Reply>) {
     let db = s.db.clone();
     let room = room.to_owned();
     let id = id.to_owned();
@@ -1621,13 +1683,14 @@ fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[
     let user_id = w.user_id;
     let text = text.to_owned();
     let image = if images.is_empty() { None } else { Some(images.join(",")) };
+    let video = video.map(str::to_owned);
     let streamer = w.streamer;
     let verified = w.verified;
     let groups = w.groups.clone();
     tokio::spawn(async move {
         let inserted = tokio::time::timeout(
             Duration::from_secs(2),
-            history::store(&db, &room, &id, &speaker, user_id, &text, image.as_deref(), streamer, verified, &groups, reply.as_ref()),
+            history::store(&db, &room, &id, &speaker, user_id, &text, image.as_deref(), video.as_deref(), streamer, verified, &groups, reply.as_ref()),
         )
         .await;
         match inserted {
@@ -1852,6 +1915,8 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         images
     };
     let image = images.first().cloned();
+    // no `vid` field (or one this build cannot read) is a line with no video
+    let video = Video::parse(entry.get::<String>("vid").as_deref());
     // no `r` field (or one this build cannot read) is a line that answers nothing
     let reply: Option<Reply> = entry.get::<String>("r").and_then(|r| serde_json::from_str(&r).ok());
     Some(Line {
@@ -1867,6 +1932,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         user_id,
         image,
         images,
+        video,
         reply,
         reactions: Vec::new(),
     })
@@ -1984,6 +2050,7 @@ mod tests {
             at: 1729000000000,
             image: None,
             images: Vec::new(),
+            video: None,
             reply: None,
             reactions: Vec::new(),
         };
@@ -2019,6 +2086,7 @@ mod tests {
             at: 1729000000000,
             image: Some("6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e".into()),
             images: vec!["6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e".into()],
+            video: None,
             reply: None,
             reactions: Vec::new(),
         };
@@ -2056,12 +2124,27 @@ mod tests {
     /// The words are cleaned and the pictures' ids checked before a line costs a token.
     #[test]
     fn a_say_is_cleaned_before_it_costs() {
-        assert_eq!(parse_say("  hi  ".into(), None, Vec::new()), Ok(Some(("hi".into(), Vec::new()))));
-        assert_eq!(parse_say("   ".into(), None, Vec::new()), Ok(None));
-        assert_eq!(parse_say("x".repeat(MAX_TEXT_CHARS + 1), None, Vec::new()), Err("too long"));
-        assert_eq!(parse_say(String::new(), Some("not-an-id".into()), Vec::new()), Err("bad picture"));
+        assert_eq!(parse_say("  hi  ".into(), None, Vec::new(), None), Ok(Some(("hi".into(), Vec::new(), None))));
+        assert_eq!(parse_say("   ".into(), None, Vec::new(), None), Ok(None));
+        assert_eq!(parse_say("   ".into(), None, Vec::new(), Some(" ".into())), Ok(None), "an empty video is none");
+        assert_eq!(parse_say("x".repeat(MAX_TEXT_CHARS + 1), None, Vec::new(), None), Err("too long"));
+        assert_eq!(parse_say(String::new(), Some("not-an-id".into()), Vec::new(), None), Err("bad picture"));
+        assert_eq!(parse_say(String::new(), None, Vec::new(), Some("not-an-id".into())), Err("bad video"));
         let id = "6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e";
-        assert_eq!(parse_say(String::new(), Some(id.into()), Vec::new()), Ok(Some((String::new(), vec![id.into()]))));
+        assert_eq!(parse_say(String::new(), Some(id.into()), Vec::new(), None), Ok(Some((String::new(), vec![id.into()], None))));
+        // a video alone is a line
+        assert_eq!(parse_say(String::new(), None, Vec::new(), Some(id.to_uppercase())), Ok(Some((String::new(), Vec::new(), Some(id.into())))));
+    }
+
+    #[test]
+    fn a_video_is_kept_as_its_id_and_its_posters() {
+        let v = Video { id: "6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e".into(), poster: "7c2d0c3a-7c2d-4e5f-9a10-11b12c13d14e".into() };
+        assert_eq!(Video::parse(Some(&v.stored())), Some(v.clone()));
+        assert_eq!(Video::parse(Some("6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e")), None, "no poster, no video");
+        assert_eq!(Video::parse(Some("x,y")), None);
+        assert_eq!(Video::parse(None), None);
+        let json = serde_json::to_value(&v).unwrap();
+        assert_eq!(json["poster"], "7c2d0c3a-7c2d-4e5f-9a10-11b12c13d14e");
     }
 
     fn about(wait: Duration, secs: f64) -> bool {
@@ -2350,6 +2433,7 @@ mod tests {
             at: 1729000000000,
             image: None,
             images: Vec::new(),
+            video: None,
             reply: None,
             reactions: Vec::new(),
         }];
@@ -2389,6 +2473,7 @@ mod tests {
             at: 1729000000000,
             image: None,
             images: Vec::new(),
+            video: None,
             reply: None,
             reactions: Vec::new(),
         }];

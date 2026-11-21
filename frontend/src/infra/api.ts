@@ -1,6 +1,7 @@
 /** The json api behind /api. Same origin, so the dev server and caddy both forward it. */
 
 import type { ChatLine } from '@/infra/atoms/chat-atoms';
+import type { ChatVideo } from '@/infra/chat-video';
 import type { Emote, GroupEmote } from '@/infra/emotes';
 import type { NotificationKind, Presence, PresenceChoice } from '@/infra/frames';
 import { report } from '@/infra/report';
@@ -79,6 +80,8 @@ export interface DmLine {
   text: string;
   at: number;
   images: string[];
+  /** The video on it (`uploadChatVideo`'s id) and its poster. Absent or null for none. */
+  video?: ChatVideo | null;
   /** The line of the thread this one answers (dms.rs `quote_json`): who wrote it as they are named now, the start of its words, their face, how many pictures; `gone` for one not there any more. Null or absent for none. */
   reply?: DmReply | null;
   /** The emoji on the line and who put them there (dms.rs, reactions.rs), as they are now; `dm_react` frames keep it so. Absent from a frame, which carries a new line: none yet. */
@@ -92,6 +95,8 @@ export interface DmReply {
   text?: string;
   avatar?: number | null;
   images?: number;
+  /** The line answered had a video. */
+  video?: boolean;
   gone?: boolean;
 }
 
@@ -914,6 +919,36 @@ export const api = {
   search: (q: string) => request<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
   /** A picture for a chat line, already shrunk. Webp, or jpeg when the browser cannot write webp. */
   uploadChatImage: (picture: Blob) => request<{ id: string }>('POST', '/api/chat-images', picture),
+  /**
+   * A video for a chat line, the file as it is (an mp4 or a webm, 10 mb and 30 seconds at most), with its poster (an
+   * `uploadChatImage` id) and the length the page measured. `onProgress` hears the share sent, 0 to 1: an xhr, since
+   * fetch cannot say. 400 the type's, the codecs' or the length's words, `no such poster`; 413 too big; 429 `slow down`.
+   */
+  uploadChatVideo: (video: Blob, poster: string, durationMs: number, onProgress?: (sent: number) => void) =>
+    new Promise<{ id: string; poster: string; duration_ms: number }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/chat-videos?poster=${encodeURIComponent(poster)}&duration=${Math.round(durationMs)}`);
+      if (video.type) xhr.setRequestHeader('content-type', video.type);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && e.total > 0) onProgress?.(e.loaded / e.total);
+      };
+      xhr.onload = () => {
+        let data: unknown = null;
+        try {
+          data = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+        } catch {
+          data = null;
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(data as { id: string; poster: string; duration_ms: number });
+          return;
+        }
+        const said = data && typeof data === 'object' && 'error' in data ? String((data as { error: unknown }).error) : '';
+        reject(new ApiError(said || (xhr.status === 413 ? 'video too big. 10 mb at most' : `http ${xhr.status}`), xhr.status));
+      };
+      xhr.onerror = () => reject(new ApiError('could not send the video', 0));
+      xhr.send(video);
+    }),
   /** Everyone with a row who is not live: home's second half, online first. 100 at most. */
   people: () => request<Person[]>('GET', '/api/people'),
   /** The names whose last stream ended most recently and who are not live again, newest end first, 12 at most: home's recently offline. */
@@ -924,8 +959,13 @@ export const api = {
   dmThread: (name: string, before?: number) =>
     request<{ name: string; friends: boolean; lines: DmLine[] }>('GET', `/api/dm/${encodeURIComponent(name)}${before === undefined ? '' : `?before=${before}`}`),
   /** A line to a friend: the words, and the pictures on it (`uploadChatImage`'s ids, ten at most; the words may be empty then). 201 with the line as kept; it also comes back on the events socket. 400 `too long`, `nothing to say`, `no such picture`, 403 not friends, 429 `slow down`. */
-  sendDm: (name: string, text: string, images: string[] = [], reply: number | null = null) =>
-    request<DmLine & { to: string }>('POST', `/api/dm/${encodeURIComponent(name)}`, reply === null ? { text, images } : { text, images, reply }),
+  sendDm: (name: string, text: string, images: string[] = [], reply: number | null = null, video: string | null = null) =>
+    request<DmLine & { to: string }>('POST', `/api/dm/${encodeURIComponent(name)}`, {
+      text,
+      images,
+      ...(reply === null ? {} : { reply }),
+      ...(video === null ? {} : { video })
+    }),
   /** The login's `emoji` on line `id` of the thread with `name`, or off it. The line's reactions as they are now; both sides' devices hear the change on the socket (`dm_react`). 400 `not a reaction`, `no such line`, `too many reactions`, 403 not friends, 429 `slow down`. */
   reactDm: (name: string, id: number, emoji: string, on: boolean) =>
     request<{ id: number; reactions: unknown }>('PUT', `/api/dm/${encodeURIComponent(name)}/react`, { id, emoji, on }),

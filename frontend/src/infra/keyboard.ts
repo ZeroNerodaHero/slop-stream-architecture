@@ -348,6 +348,9 @@ const HAND_MS = 250;
  * the newest line"; `key` re-arms it for a new list element. Pair with `stuckAfterScroll` in
  * the list's `onScroll`.
  */
+/** A line's media changed size with no `load` to say so (a video's poster): the list keeps its newest line in view through it. */
+export const MEDIA_SIZED = 'chat-media-sized';
+
 export function useBottomPin(list: RefObject<HTMLElement | null>, stuck: { current: boolean }, key?: unknown) {
   useEffect(() => {
     const el = list.current;
@@ -360,6 +363,8 @@ export function useBottomPin(list: RefObject<HTMLElement | null>, stuck: { curre
     const onLoad = (e: Event) => {
       if (e.target instanceof HTMLImageElement) restick();
     };
+    // a chat video's poster coming in grows its line, and fires no `load` of its own (ChatVideoPlayer.tsx)
+    el.addEventListener(MEDIA_SIZED, restick, true);
     const down = () => {
       hand.touching = true;
     };
@@ -382,6 +387,7 @@ export function useBottomPin(list: RefObject<HTMLElement | null>, stuck: { curre
     return () => {
       seen.disconnect();
       el.removeEventListener('load', onLoad, true);
+      el.removeEventListener(MEDIA_SIZED, restick, true);
       el.removeEventListener('touchstart', down);
       el.removeEventListener('touchend', up);
       el.removeEventListener('touchcancel', up);

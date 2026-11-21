@@ -24,6 +24,7 @@ import { forgetMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { encodeEmotes, tokensAsTyped } from '@/infra/emotes';
 import { hideBotsAtom } from '@/infra/atoms/settings-atoms';
+import { type ChatVideo, videoOf } from '@/infra/chat-video';
 import { relayUrl } from '@/infra/relay';
 import { store } from '@/infra/store';
 import { applyReaction, type Reaction, reacted, reactionsOf } from '@/shared-components/reaction-list';
@@ -46,6 +47,8 @@ export interface ChatLine {
   image?: string | null;
   /** Every picture on the line, the ids from `POST /api/chat-images`. Empty when there are none. */
   images: string[];
+  /** The video on the line (`POST /api/chat-videos`) and its poster. Absent or null for none. */
+  video?: ChatVideo | null;
   /** On a search hit of a server alone: the channel the line is in, since a server's search spans every channel the viewer sees (`search`). */
   channel?: string;
   /** The line this one answers, as it was when the reply was said (chat.rs `Reply`). Absent for none, and on an older chat. */
@@ -63,6 +66,8 @@ export interface ChatReply {
   verified?: boolean;
   avatar?: number | null;
   images?: number;
+  /** The line answered had a video. */
+  video?: boolean;
 }
 
 /** The automatic group a socket that says `bot: true` wears. The hide switch keys on it. */
@@ -218,6 +223,8 @@ export class ChatRoom {
   readonly countAtom: PrimitiveAtom<number> = atom(0);
   readonly draftAtom: PrimitiveAtom<string> = atom('');
   readonly imagesAtom: PrimitiveAtom<string[]> = atom<string[]>([]);
+  /** The video waiting to go with the next line (`POST /api/chat-videos`'s id and its poster): one at most. */
+  readonly videoAtom: PrimitiveAtom<ChatVideo | null> = atom<ChatVideo | null>(null);
   readonly noticeAtom: PrimitiveAtom<string> = atom('');
   /** True while this socket speaks as the streamer. */
   readonly asStreamerAtom: PrimitiveAtom<boolean> = atom(false);
@@ -273,7 +280,7 @@ export class ChatRoom {
    * frames in order, so a drop (`slow down`, chat busy or down) is of the oldest, and goes back
    * into the box; a line that comes back through the room is off the list.
    */
-  private inFlight: { text: string; images: string[]; reply: ChatLine | null }[] = [];
+  private inFlight: { text: string; images: string[]; video: ChatVideo | null; reply: ChatLine | null }[] = [];
   private flashTimer: ReturnType<typeof setTimeout> | null = null;
   /** A server socket has been open before: the next open is after a drop (`refreshReactions`). */
   private wasOpen = false;
@@ -308,10 +315,11 @@ export class ChatRoom {
     this.tierAtom = atom((get) => (get(meAtom) || get(asStreamer) ? TIERS.login : TIERS.anon));
     const draft = this.draftAtom;
     const images = this.imagesAtom;
+    const video = this.videoAtom;
     const phase = this.phaseAtom;
     this.canSendAtom = atom((get) => {
       const length = chars(get(draft).trim());
-      const picture = get(images).length > 0;
+      const picture = get(images).length > 0 || get(video) !== null;
       return get(phase) === 'open' && length <= MAX_CHAT_CHARS && (length > 0 || picture);
     });
   }
@@ -406,6 +414,7 @@ export class ChatRoom {
     store.set(this.asStreamerAtom, false);
     store.set(this.draftAtom, '');
     store.set(this.imagesAtom, []);
+    store.set(this.videoAtom, null);
     store.set(this.replyAtom, null);
     store.set(this.flashAtom, null);
     store.set(this.noticeAtom, '');
@@ -437,6 +446,11 @@ export class ChatRoom {
     const now = store.get(this.imagesAtom);
     if (!id || now.includes(id) || now.length >= MAX_CHAT_IMAGES) return;
     store.set(this.imagesAtom, [...now, id]);
+  }
+
+  /** The video on the next line, or none again (its ×). */
+  setVideo(video: ChatVideo | null) {
+    store.set(this.videoAtom, video);
   }
 
   removeImage(id: string) {
@@ -561,7 +575,8 @@ export class ChatRoom {
     const ws = this.ws;
     const text = store.get(this.draftAtom).trim();
     const images = store.get(this.imagesAtom);
-    if (!ws || ws.readyState !== WebSocket.OPEN || (!text && images.length === 0)) return;
+    const video = store.get(this.videoAtom);
+    if (!ws || ws.readyState !== WebSocket.OPEN || (!text && images.length === 0 && !video)) return;
     if (chars(text) > MAX_CHAT_CHARS) {
       this.showNotice('too long');
       return;
@@ -583,6 +598,7 @@ export class ChatRoom {
     // each `:name:` of the login's emotes goes out as its token (emotes.ts); the box keeps what it showed
     const words = encodeEmotes(text);
     const say: Record<string, unknown> = images.length ? { type: 'say', text: words, image: images[0], images } : { type: 'say', text: words };
+    if (video) say.video = video.id;
     // a server socket is every channel: the line says which
     if (this.server) say.channel = this.channel;
     // a reply names the line it answers; the chat finds it in this room and keeps its quote with the line
@@ -590,9 +606,10 @@ export class ChatRoom {
     if (reply) say.reply = reply.id;
     record(`/chat/${this.key}`, 'out', say);
     ws.send(JSON.stringify(say));
-    this.inFlight.push({ text, images, reply });
+    this.inFlight.push({ text, images, video, reply });
     store.set(this.draftAtom, '');
     store.set(this.imagesAtom, []);
+    store.set(this.videoAtom, null);
     store.set(this.replyAtom, null);
     // your own line goes out: the view goes to the newest line, out of a jump too, and again when the line comes back
     this.toLatest();
@@ -684,7 +701,7 @@ export class ChatRoom {
       } else if (msg.type === 'message' && msg.id) {
         // the box's words, with each emote as the `:name:` it showed: the chat writes back a token the speaker may not use as just that
         const said = tokensAsTyped(msg.text ?? '');
-        const sent = this.inFlight.findIndex((p) => p.text === said && samePictures(p.images, picturesOf(msg)));
+        const sent = this.inFlight.findIndex((p) => p.text === said && samePictures(p.images, picturesOf(msg)) && (p.video?.id ?? null) === (videoOf(msg.video)?.id ?? null));
         if (sent >= 0) this.inFlight.splice(sent, 1);
         const line = fromWire(msg as ChatLine);
         // another channel's line waits on the shelf; the one on screen's goes up like a stream's
@@ -746,6 +763,7 @@ export class ChatRoom {
       const lost = this.inFlight.shift();
       if (lost?.text && !store.get(this.draftAtom)) store.set(this.draftAtom, lost.text);
       if (lost && lost.images.length > 0 && store.get(this.imagesAtom).length === 0) store.set(this.imagesAtom, lost.images);
+      if (lost?.video && !store.get(this.videoAtom)) store.set(this.videoAtom, lost.video);
       // the line it answered, back over the box with it; not when that line is what the chat could not find
       if (lost?.reply && error !== 'no such line' && !store.get(this.replyAtom)) store.set(this.replyAtom, lost.reply);
     }
@@ -1153,6 +1171,7 @@ function fromWire(line: ChatLine): ChatLine {
     avatar: typeof line.avatar === 'number' ? line.avatar : null,
     image: images[0] ?? null,
     images,
+    video: videoOf(line.video),
     reply: line.reply && typeof line.reply === 'object' && typeof line.reply.id === 'string' ? line.reply : undefined,
     reactions: reactionsOf(line.reactions)
   };
