@@ -23,6 +23,7 @@ import {
   RiSettings3Line,
   RiShieldStarLine,
   RiTimeLine,
+  RiTimerLine,
   RiUnpinLine,
   RiUserUnfollowLine,
   RiVipCrownLine,
@@ -58,6 +59,7 @@ import {
   groupImage,
   type GroupMember,
   type GroupRole,
+  type GroupTimeout,
   groupWords,
   homeChannel,
   isVoice,
@@ -87,7 +89,8 @@ import {
   rosterMoreAtom,
   setChannelMuted,
   setChannelOrder,
-  setPinned
+  setPinned,
+  timeoutsTickAtom
 } from '@/infra/atoms/room-atoms';
 import { roomMembersOpenAtom } from '@/infra/atoms/settings-atoms';
 import { leaveVoice } from '@/infra/atoms/voice-atoms';
@@ -97,7 +100,7 @@ import { GROUP_BANNER, GROUP_ICON } from '@/infra/picture';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
-import { Button } from '@/shared-components/Button';
+import { Button, buttonClassName } from '@/shared-components/Button';
 import { type ChatSearch, comboProps, SearchFilters, SearchSuggestions, useChatSearch } from '@/shared-components/ChatSearch';
 import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Face } from '@/shared-components/Face';
@@ -356,6 +359,25 @@ const TIMEOUTS: { key: string; label: string }[] = [
   { key: '3600', label: 'an hour' },
   { key: '86400', label: 'a day' }
 ];
+
+/** What `extend` adds to a running timeout (seconds, and the word). */
+const EXTENDS: { key: string; label: string }[] = [
+  { key: '600', label: '10 more minutes' },
+  { key: '3600', label: 'an hour more' },
+  { key: '86400', label: 'a day more' }
+];
+
+/** The longest a timeout runs, the api's cap: a week. */
+const TIMEOUT_MAX_SECS = 7 * 86400;
+
+/** How long until `unix` (seconds) from `now` (ms), in words: "45s left", "12m left", "3h 5m left", "2d 4h left". */
+function leftWords(unix: number, now: number): string {
+  const secs = Math.max(0, Math.ceil(unix - now / 1000));
+  if (secs < 60) return `${secs}s left`;
+  if (secs < 3600) return `${Math.ceil(secs / 60)}m left`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m left`;
+  return `${Math.floor(secs / 86400)}d ${Math.floor((secs % 86400) / 3600)}h left`;
+}
 
 /** Whether a member's timeout (unix seconds) is still running. */
 function timedOut(member: GroupMember): boolean {
@@ -2337,7 +2359,7 @@ interface ManageProps {
   run: Run;
 }
 
-type ManageTab = 'about' | 'channels' | 'roles' | 'members' | 'bans';
+type ManageTab = 'about' | 'channels' | 'roles' | 'members' | 'timeouts' | 'bans';
 
 /**
  * The rail of the manage dialog, in order and in groups, each tab with the power that shows
@@ -2383,6 +2405,13 @@ const MANAGE_TABS: {
     shown: (room) => manages(room)
   },
   {
+    id: 'timeouts',
+    label: 'timeouts',
+    group: 'members',
+    icon: <RiTimerLine aria-hidden size={18} />,
+    shown: (room) => room.perms.kick
+  },
+  {
     id: 'bans',
     label: 'bans',
     group: 'members',
@@ -2410,7 +2439,7 @@ const RAIL_STEP: Record<string, number | undefined> = {
 /**
  * What a power does, in a dialog over the room (`manage`, the gear in the header), laid out
  * like the user modal: a rail of tabs down the left, in groups (group: about and the listing,
- * channels, roles; members: members, bans), for an owner `delete group` at the foot of the
+ * channels, roles; members: members, timeouts, bans), for an owner `delete group` at the foot of the
  * rail, and the open tab's pane on the right. A tab shows for the power behind it, and the
  * first one this login may see opens.
  * The pictures are an owner's: the top of `about` here, and the pictures themselves at the
@@ -2634,6 +2663,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
             {tab === 'channels' && <ChannelsSection server={server} channel={channel} room={room} run={run} />}
             {tab === 'roles' && <RolesSection server={server} room={room} run={run} />}
             {tab === 'members' && <MembersSection server={server} room={room} me={me} run={run} />}
+            {tab === 'timeouts' && <TimeoutsSection server={server} room={room} run={run} />}
             {tab === 'bans' && <BansSection server={server} room={room} run={run} />}
           </div>
         </div>
@@ -2943,6 +2973,98 @@ function MembersSection({ server, room, me, run }: ManageProps & { me: string | 
           }}
           onNo={() => setHanding(null)}
         />
+      )}
+    </Section>
+  );
+}
+
+/**
+ * Every timeout still running, the soonest to end first, for the kick power: the face and the
+ * name, when it ends and the time left (ticking each second), the reason, and who set it. `lift`
+ * ends it now; `extend` sets it again from now to the time left and the more picked (a week at
+ * most), keeping its reason. A row goes when its time runs out. The list is the api's
+ * (`groupTimeouts`), asked again on each `timeout` fact (`timeoutsTickAtom`), so a timeout set
+ * or lifted anywhere shows here.
+ */
+function TimeoutsSection({ server, run }: ManageProps) {
+  const tick = useAtomValue(timeoutsTickAtom);
+  const [list, setList] = useState<GroupTimeout[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    let live = true;
+    api.groupTimeouts(server).then(
+      (rows) => {
+        if (!live) return;
+        setList(rows);
+        setFailed(false);
+      },
+      () => live && setFailed(true)
+    );
+    return () => {
+      live = false;
+    };
+  }, [server, tick]);
+
+  const running = (list ?? []).filter((item) => item.until * 1000 > now);
+  const ticking = running.length > 0;
+  useEffect(() => {
+    if (!ticking) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [ticking]);
+
+  return (
+    <Section title="timeouts" description="who cannot say anything in the group's channels right now, the soonest to end first.">
+      {list === null ? (
+        <p className="text-textTertiary">{failed ? "couldn't load the timeouts." : 'loading…'}</p>
+      ) : running.length === 0 ? (
+        <p id="group-timeouts-empty" className="text-textTertiary">
+          nobody is timed out.
+        </p>
+      ) : (
+        <ul id="group-timeouts" className="flex flex-col gap-2">
+          {running.map((item) => {
+            const remaining = item.until - Math.floor(now / 1000);
+            // at the week's cap there is nothing to add
+            const more = remaining < TIMEOUT_MAX_SECS ? EXTENDS : [];
+            return (
+              <li key={item.name} data-timeout={item.name} className="flex items-start gap-2 border border-primaryStroke px-2 py-1.5">
+                <Face name={item.name} version={item.avatar} className="h-8 w-8 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline gap-x-2">
+                    <span className="font-semibold">{item.name}</span>
+                    {!item.member && <span className="text-xs text-textTertiary">left the group</span>}
+                  </div>
+                  <p className="text-textSecondary">
+                    until {untilWords(item.until)} · <span className="whitespace-nowrap tabular-nums text-decrease">{leftWords(item.until, now)}</span>
+                  </p>
+                  {item.reason && <p className="break-words text-textTertiary">{item.reason}</p>}
+                  {item.by && <p className="text-xs text-textTertiary">by {item.by}</p>}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {item.member && more.length > 0 && (
+                    <HoverMenu
+                      label={`extend ${item.name}'s timeout`}
+                      items={more}
+                      onPick={(add) => {
+                        const seconds = Math.min(TIMEOUT_MAX_SECS, Math.max(0, item.until - Math.floor(Date.now() / 1000)) + Number(add));
+                        void run(() => api.timeoutMember(server, item.name, seconds, item.reason));
+                      }}
+                      className={buttonClassName('secondary', undefined, 'sm')}
+                    >
+                      extend
+                    </HoverMenu>
+                  )}
+                  <Button id={`timeouts-lift-${item.name}`} size="sm" variant="outline" onClick={() => void run(() => api.liftTimeout(server, item.name))}>
+                    lift
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </Section>
   );

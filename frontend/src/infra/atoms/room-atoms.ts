@@ -142,6 +142,9 @@ function withPin(pins: Record<string, string[]> | undefined, channel: string, id
 /** Bumped on every pin or unpin of the room on screen: an open pins panel asks its list again. */
 export const pinsTickAtom = atom(0);
 
+/** Bumped on every `timeout` fact of the room on screen: an open timeouts tab asks its list again. */
+export const timeoutsTickAtom = atom(0);
+
 /**
  * The channels power pins a line of `channel`, or unpins it (docs/groups.md "pins"). The mark
  * and the count move at once; the api is told, and the fact it sends lands on every other room
@@ -569,6 +572,7 @@ function apply(change: GroupChange): void {
     case 'timeout':
       // the roster's mark; the chat itself refuses a timed-out login's lines, whatever the page knows
       store.set(roomAtom, { ...room, roster: room.roster?.map((m) => (m.name === change.who ? { ...m, timeout: change.until } : m)) ?? room.roster });
+      store.set(timeoutsTickAtom, store.get(timeoutsTickAtom) + 1);
       return;
     case 'live': {
       const live = room.live ?? [];
