@@ -4,6 +4,7 @@ import { RouterProvider } from 'react-router-dom';
 
 import { applyStoredTextSize, applyStoredTheme } from '@/infra/atoms/settings-atoms';
 import { startEvents } from '@/infra/events';
+import { installMobileKeyboard } from '@/infra/keyboard';
 import { installPrefetch } from '@/infra/prefetch';
 import { installReporting, report } from '@/infra/report';
 import { router } from '@/router';
@@ -36,6 +37,10 @@ startEvents();
 // a press on a link to home, a stream's page or a group asks for that page's data before the
 // click lands (docs/spec.md "Prefetch on press", infra/prefetch.ts)
 installPrefetch();
+
+// a phone's on-screen keyboard, for every box on every page: the visual viewport as css variables, the
+// page pinned while a box has the focus (infra/keyboard.ts). nothing on a desktop's width
+installMobileKeyboard();
 
 // no picture lifts off as a ghost when dragged: nothing on these pages is a thing to drop
 // anywhere. at the document, not on each <img>: that reaches the pre-react avatar card the api

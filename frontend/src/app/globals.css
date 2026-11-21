@@ -75,6 +75,26 @@ html:has([data-sheet-open]) {
   overflow: hidden;
 }
 
+/* a phone's page while a box has the focus, or while a page that is the window is up (infra/keyboard.ts): nothing
+   scrolls or bounces, so iOS cannot scroll the page to bring the box over the keyboard. the body stays drawn where
+   it was scrolled to (--lock-y), moved down by however far the browser panned the visual viewport (--vvt), so what
+   is on screen stays on screen. a desktop's page is never pinned */
+@media (max-width: 767.98px) {
+  html[data-kbd-lock] {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  html[data-kbd-lock] body {
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: calc(var(--vvt, 0px) - var(--lock-y, 0px));
+    width: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+}
+
 /* a phone's dialog sheet (MobileSheet.tsx) slides up from the foot as it opens. a desktop's dialog has no slide */
 @keyframes sheet-up {
   from {

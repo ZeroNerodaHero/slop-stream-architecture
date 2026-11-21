@@ -241,8 +241,9 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
         // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
         'overflow-hidden bg-backgroundSecondary p-0 text-base text-textPrimary',
         'open:flex flex-col',
-        // full bleed on a phone: the browser's margins and size caps of a modal dialog go
-        'm-0 h-dvh max-h-none w-full max-w-none border-0',
+        // full bleed on a phone: the browser's margins and size caps of a modal dialog go. it is what the keyboard leaves
+        // of the window (keyboard.ts, --vvt and --vvh), so a box in it stays over the keyboard
+        'm-0 h-dvh max-h-none w-full max-w-none border-0 max-md:mt-[var(--vvt,0px)] max-md:h-[var(--vvh,100dvh)]',
         // past a phone (mobile.ts), as tall as what is in it, between a floor and the window: hung from a fixed top, so a tab with more in it grows the box downward and the head stays put.
         // `h-fit`, not `h-auto`: a modal dialog is pinned top and bottom, and an auto height would stretch between the two
         'md:mx-auto md:mb-auto md:mt-[8dvh] md:h-fit md:max-h-[calc(92dvh-1.5rem)] md:min-h-[min(22rem,calc(92dvh-1.5rem))] md:w-[min(720px,calc(100vw-3rem))]',

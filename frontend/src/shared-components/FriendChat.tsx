@@ -46,7 +46,8 @@ import {
 import { followingAtom, friendsOpenAtom } from '@/infra/atoms/follow-atoms';
 import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatStyleAtom, type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
-import { useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
+import { keepFocus, stuckAfterScroll, useBottomPin, useKeyboard } from '@/infra/keyboard';
+import { useIsMobile } from '@/infra/mobile';
 import { compressChatImage } from '@/infra/picture';
 import { usePrefetchOnPointerDown } from '@/infra/prefetch';
 import { store } from '@/infra/store';
@@ -413,15 +414,14 @@ type SheetGrip = Pick<DOMAttributes<HTMLElement>, 'onPointerDown' | 'onPointerMo
  * A phone's chat sheet, while `active` (a phone, the chat open): the slide up once it is on
  * screen, the slide down before `onDismiss` takes it off (a tap on the dim page, a drag down
  * let go past `SHEET_SNAP` of its height or flicked, Escape, the browser's back button), and the
- * keyboard's place (`useVisibleViewport`). While it is open the document is pinned
- * (`useLockedDocument`), as the /live page's is, so iOS cannot scroll the page to bring the box
- * over the keyboard: any scroll it applies on a focus or a pan of the visual viewport is put back.
+ * keyboard's place (`useKeyboard`, keyboard.ts: while its box has the focus the document is pinned,
+ * so iOS cannot scroll the page to bring the box over the keyboard).
  * `grip` goes on the grabber and on the head: the sheet follows the finger. The drag's numbers and
  * the back button are every phone sheet's (MobileSheet.tsx).
  */
 function useSheet(active: boolean, onDismiss: () => void) {
-  const view = useVisibleViewport(active, true);
-  useLockedDocument(active);
+  const kb = useKeyboard();
+  const view = active && kb.height ? kb : null;
   // in: a frame after it is on screen, so the slide up has a place to start from. leaving: sliding down, then gone
   const [entered, setEntered] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -505,9 +505,9 @@ type Sheet = ReturnType<typeof useSheet>;
  * A phone's chat (below 768px, mobile.ts): a sheet up from the foot of the window to 20% from its
  * top, over the page dimmed, with a grabber at its head (`useSheet`). It sits on the keyboard
  * while one is up: its top stays where it was if it can, and it shrinks so the box's row sits
- * flush on the keyboard (the foot of the visual viewport, `useVisibleViewport`); on a window too
+ * flush on the keyboard (the foot of the visual viewport, `useKeyboard`); on a window too
  * short for that its top comes up too, never past `SHEET_GAP` from the top. The page under it
- * does not scroll (`useLockedDocument`, and globals.css's `data-sheet-open`). Drawn into the
+ * does not scroll (globals.css's `data-sheet-open`, and keyboard.ts's pin while typing). Drawn into the
  * body, over the drawers.
  */
 function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; label: string; with?: string; children: ReactNode }) {
@@ -774,35 +774,9 @@ export function FriendChat() {
   }, [searching]);
 
   // The newest line stays in view when the log changes shape after the lines did: a picture on a
-  // line finishes loading and the line grows, or the strip of picked pictures opens under the log
-  // and the log shrinks. Either would leave the view a picture short of the bottom. `load` does
-  // not bubble, so it is caught on its way down; the observer sees the log's own box change.
-  useEffect(() => {
-    const el = log.current;
-    if (!el) return;
-    const restick = () => {
-      if (stuck.current) el.scrollTop = el.scrollHeight;
-    };
-    const onLoad = (e: Event) => {
-      if (e.target instanceof HTMLImageElement) restick();
-    };
-    el.addEventListener('load', onLoad, true);
-    const watcher = new ResizeObserver(restick);
-    watcher.observe(el);
-    return () => {
-      el.removeEventListener('load', onLoad, true);
-      watcher.disconnect();
-    };
-  }, [name, open]);
-
-  // a phone's keyboard coming up: the sheet shrinks over it, and the newest line is what stays in view over the box
-  const keyboard = mobile && (sheet.view?.keyboard ?? false);
-  useLayoutEffect(() => {
-    const el = log.current;
-    if (!keyboard || !el) return;
-    el.scrollTop = el.scrollHeight;
-    stuck.current = true;
-  }, [keyboard]);
+  // line finishes loading and the line grows, the strip of picked pictures opens under the log, or
+  // a phone's keyboard comes up and the sheet shrinks over it (keyboard.ts)
+  useBottomPin(log, stuck, `${name}:${open}`);
 
   // the window going while a drag is on: its listeners go with it
   useEffect(() => () => stop.current?.(), []);
@@ -905,7 +879,7 @@ export function FriendChat() {
 
   function onScroll(e: UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;
-    stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight <= STUCK_PX;
+    stuck.current = stuckAfterScroll(el, stuck.current, STUCK_PX);
     if (el.scrollTop < 48 && name && thread?.loaded && !thread.start && !prepending.current) {
       prepending.current = true;
       hold.current = el.scrollHeight;
@@ -1279,6 +1253,8 @@ export function FriendChat() {
                 <Button
                   id="friend-chat-send"
                   type="submit"
+                  // a finger's press keeps the box's focus, so a phone's keyboard stays up through the send
+                  onPointerDown={keepFocus}
                   variant="primary"
                   className={cn(INPUT_BUTTON, mobile ? 'h-11 min-w-[44px] shrink-0 py-0' : 'h-[1.875rem] text-sm')}
                   disabled={(!draft.trim() && pictures.length === 0) || left < 0 || sending || uploading}

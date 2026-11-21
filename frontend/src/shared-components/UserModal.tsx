@@ -133,8 +133,9 @@ function UserDialog() {
         // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
         'overflow-hidden bg-backgroundSecondary p-0 text-base text-textPrimary',
         'open:flex flex-col sm:flex-row',
-        // full bleed on a phone: the browser's margins and size caps of a modal dialog go
-        'm-0 h-dvh max-h-none w-full max-w-none border-0',
+        // full bleed on a phone: the browser's margins and size caps of a modal dialog go. it is what the keyboard leaves
+        // of the window (keyboard.ts, --vvt and --vvh), so a box in it stays over the keyboard
+        'm-0 h-dvh max-h-none w-full max-w-none border-0 max-md:mt-[var(--vvt,0px)] max-md:h-[var(--vvh,100dvh)]',
         // past a phone (mobile.ts), the box in the middle. below it a page over the page, its × a finger's (MobileSheet.tsx)
         'md:m-auto md:h-[min(680px,calc(100dvh-3rem))] md:w-[min(960px,calc(100vw-3rem))] md:border md:border-primaryStroke',
         'backdrop:bg-black/60 md:backdrop:backdrop-blur-sm'
