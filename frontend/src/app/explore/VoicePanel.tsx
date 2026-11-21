@@ -1,10 +1,36 @@
-import { RiAddLine, RiHeadphoneLine, RiLogoutBoxRLine, RiMicLine, RiMicOffLine, RiPencilLine, RiVolumeUpLine } from '@remixicon/react';
+import {
+  RiAddLine,
+  RiHeadphoneLine,
+  RiLogoutBoxRLine,
+  RiMicLine,
+  RiMicOffLine,
+  RiPencilLine,
+  RiSignalWifi1Fill,
+  RiSignalWifi2Fill,
+  RiSignalWifiErrorLine,
+  RiSignalWifiFill,
+  RiSignalWifiLine,
+  RiVolumeUpLine
+} from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type ReactNode } from 'react';
 
 import { canEditChannel, type Channel, type GroupRoom, isVoice } from '@/infra/api';
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
-import { joinVoice, leaveVoice, setVoiceDeaf, setVoiceMuted, voiceCallAtom, voiceDeafAtom, voiceMutedAtom, voiceSpeakingAtom } from '@/infra/atoms/voice-atoms';
+import {
+  joinVoice,
+  leaveVoice,
+  setVoiceDeaf,
+  setVoiceMuted,
+  type VoiceCall,
+  voiceCallAtom,
+  voiceDeafAtom,
+  voiceMutedAtom,
+  voiceQuality,
+  voiceSpeakingAtom,
+  type VoiceStats,
+  voiceStatsAtom
+} from '@/infra/atoms/voice-atoms';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { Tooltip } from '@/shared-components/Tooltip';
@@ -16,9 +42,14 @@ const PENCIL_HIDDEN = 'opacity-0 transition-opacity duration-150 focus-visible:o
 const BAR_BUTTON =
   'flex h-7 w-7 max-md:h-11 max-md:w-11 shrink-0 items-center justify-center border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 
+/** Mute, deafen and leave, in the row of the channel you are in: smaller than the pencil, the row's height. */
+const CALL_BUTTON =
+  'flex h-6 w-6 max-md:h-9 max-md:w-9 shrink-0 items-center justify-center border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
+
 /**
  * The group's voice channels and who is in each (docs/voice.md), over the roster. A click on a
- * channel joins it; while in one, a bar under the list has mute, deafen and leave. Who is in
+ * channel joins it; while in one, its row has the signal (how the call is getting through, the
+ * numbers on hover), mute, deafen and leave at the right. Who is in
  * where is the room's `voice`, kept by the `voice` and `voice_left` facts; a ring on a face is
  * that person speaking, for the channel you are in. Always there: every group has a voice
  * channel (made with it, migration 0005 for the older ones). `onAdd`, given to the channels
@@ -46,6 +77,7 @@ export function VoicePanel({
   const speaking = useAtomValue(voiceSpeakingAtom);
   const muted = useAtomValue(voiceMutedAtom);
   const deaf = useAtomValue(voiceDeafAtom);
+  const stats = useAtomValue(voiceStatsAtom);
   const channels = (room.channels ?? []).filter(isVoice);
   const here = call.phase !== 'idle' && call.server === room.name;
   const avatarOf = (name: string) => room.roster?.find((m) => m.name === name)?.avatar ?? null;
@@ -77,7 +109,7 @@ export function VoicePanel({
           const mine = here && call.channel === item.name;
           return (
             <li key={item.name}>
-              {/* the row is the box: the join fills it and the pencil sits in it at the right, up with the pointer anywhere on the row */}
+              {/* the row is the box: the join fills it, then the pencil (up with the pointer anywhere on the row), then the call's controls on the row you are in */}
               <div className={cn('group/voice flex items-center', mine ? 'bg-primaryStroke/40' : 'hover:bg-primaryStroke/20')}>
                 <button
                   id={`group-voice-${item.name}`}
@@ -91,7 +123,6 @@ export function VoicePanel({
                 >
                   <RiVolumeUpLine aria-hidden size={14} className="shrink-0 text-textTertiary" />
                   <span className="min-w-0 flex-1 truncate">{item.name}</span>
-                  {mine && call.phase === 'joining' && <span className="text-xs font-normal text-textTertiary">joining…</span>}
                 </button>
                 {onEdit && canEditChannel(item) && (
                   <Tooltip content="edit">
@@ -106,6 +137,20 @@ export function VoicePanel({
                       <RiPencilLine aria-hidden size={14} />
                     </button>
                   </Tooltip>
+                )}
+                {mine && (
+                  <div id="group-voice-controls" className="flex shrink-0 items-center gap-0.5 pr-0.5">
+                    <Signal call={call} stats={stats} />
+                    <BarButton label={muted ? 'unmute' : 'mute'} pressed={muted} onClick={() => setVoiceMuted(!muted)}>
+                      {muted ? <RiMicOffLine aria-hidden size={14} /> : <RiMicLine aria-hidden size={14} />}
+                    </BarButton>
+                    <BarButton label={deaf ? 'undeafen' : 'deafen'} pressed={deaf} onClick={() => setVoiceDeaf(!deaf)}>
+                      <RiHeadphoneLine aria-hidden size={14} />
+                    </BarButton>
+                    <BarButton label="leave voice" danger onClick={leaveVoice}>
+                      <RiLogoutBoxRLine aria-hidden size={14} />
+                    </BarButton>
+                  </div>
                 )}
               </div>
               {people.length > 0 && (
@@ -132,22 +177,6 @@ export function VoicePanel({
           {call.error}
         </p>
       )}
-      {here && call.phase === 'connected' && (
-        <div id="group-voice-bar" className="mt-1 flex items-center gap-1 border-t border-primaryStroke pt-2">
-          <span className={cn('min-w-0 flex-1 truncate px-1 text-xs', call.linked ? 'text-increase' : 'text-textTertiary')}>
-            {call.linked ? `in ${call.channel}` : `connecting to ${call.channel}…`}
-          </span>
-          <BarButton label={muted ? 'unmute' : 'mute'} pressed={muted} onClick={() => setVoiceMuted(!muted)}>
-            {muted ? <RiMicOffLine aria-hidden size={16} /> : <RiMicLine aria-hidden size={16} />}
-          </BarButton>
-          <BarButton label={deaf ? 'undeafen' : 'deafen'} pressed={deaf} onClick={() => setVoiceDeaf(!deaf)}>
-            <RiHeadphoneLine aria-hidden size={16} />
-          </BarButton>
-          <BarButton label="leave voice" danger onClick={leaveVoice}>
-            <RiLogoutBoxRLine aria-hidden size={16} />
-          </BarButton>
-        </div>
-      )}
     </section>
   );
 }
@@ -160,10 +189,80 @@ function BarButton({ label, pressed, danger, onClick, children }: { label: strin
         aria-label={label}
         aria-pressed={pressed}
         onClick={onClick}
-        className={cn(BAR_BUTTON, danger ? 'text-decrease' : pressed ? 'border-primaryBlue text-primaryBlue' : 'text-textSecondary hover:text-textPrimary')}
+        className={cn(CALL_BUTTON, danger ? 'text-decrease' : pressed ? 'border-primaryBlue text-primaryBlue' : 'text-textSecondary hover:text-textPrimary')}
       >
         {children}
       </button>
+    </Tooltip>
+  );
+}
+
+type SignalKind = 'connecting' | 'dropped' | 'good' | 'ok' | 'poor';
+
+const SIGNAL: Record<SignalKind, { Icon: typeof RiSignalWifiFill; className: string }> = {
+  connecting: { Icon: RiSignalWifiLine, className: 'text-textTertiary animate-[pulse_3s_ease-in-out_infinite] motion-reduce:animate-none' },
+  good: { Icon: RiSignalWifiFill, className: 'text-increase' },
+  ok: { Icon: RiSignalWifi2Fill, className: 'text-caution' },
+  poor: { Icon: RiSignalWifi1Fill, className: 'text-decrease' },
+  dropped: { Icon: RiSignalWifiErrorLine, className: 'text-decrease' }
+};
+
+/** Where the call is: connecting until the audio is through and the first numbers are in, then how good the path is, or dropped while ice has lost it. */
+function signalOf(call: VoiceCall, stats: VoiceStats | null): SignalKind {
+  if (call.phase !== 'connected' || !call.linked || !stats) return 'connecting';
+  if (stats.dropped) return 'dropped';
+  return voiceQuality(stats) ?? 'connecting';
+}
+
+/** A number for the stat block, or a dash when the browser did not say. */
+function num(n: number | null, unit: string, digits = 0): string {
+  return n === null ? '–' : `${n.toFixed(digits)} ${unit}`;
+}
+
+/** The call's signal mark: an icon in the quality's colour, and on hover or focus the word and the numbers under it. */
+function Signal({ call, stats }: { call: VoiceCall; stats: VoiceStats | null }) {
+  const kind = signalOf(call, stats);
+  const { Icon, className } = SIGNAL[kind];
+  const word = kind === 'connecting' ? 'connecting…' : kind;
+  const rows: [string, string][] = stats
+    ? [
+        ['ping', num(stats.rtt, 'ms')],
+        ['jitter', num(stats.jitter, 'ms')],
+        ['packet loss', num(stats.loss, '%', 1)],
+        ['up', num(stats.up, 'kbps')],
+        ['down', num(stats.down, 'kbps')],
+        ['codec', stats.codec || '–'],
+        ['route', stats.route || '–']
+      ]
+    : [];
+  const tip =
+    kind === 'connecting' ? (
+      word
+    ) : (
+      <span id="group-voice-signal-tip" className="flex flex-col gap-1">
+        <span>{word}</span>
+        <span className="grid grid-cols-[auto_auto] gap-x-4 font-normal tabular-nums">
+          {rows.map(([label, value]) => (
+            <span key={label} className="contents">
+              <span className="text-textTertiary">{label}</span>
+              <span className="text-right text-textPrimary">{value}</span>
+            </span>
+          ))}
+        </span>
+      </span>
+    );
+  return (
+    <Tooltip content={tip}>
+      <span
+        id="group-voice-signal"
+        role="img"
+        tabIndex={0}
+        aria-label={kind === 'connecting' ? word : `signal ${word}`}
+        data-signal={kind}
+        className={cn(CALL_BUTTON, 'hover:border-transparent', className)}
+      >
+        <Icon aria-hidden size={14} />
+      </span>
     </Tooltip>
   );
 }
