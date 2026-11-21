@@ -1,14 +1,24 @@
-//! `video voice`: a small voice sfu, same binary. a spike: there is no grant yet, so it
-//! turns everyone away unless VOICE_DEV_OPEN=1.
+//! `video voice`: a small voice sfu, same binary. who may talk where is the api's word: a page
+//! brings a grant from `POST /api/groups/:group/voice/:channel/join`, and we redeem it once with
+//! the api (`POST /api/voice/redeem`, X-Voice-Secret) for the person and the room. the room and
+//! the name come from that reply, never from the page.
 //!
 //! websocket on :7881/ws (VOICE_WS_PORT), media on one udp port, 7883 (VOICE_UDP_PORT).
 //! `GET /health` on the same port says {ok, rooms, peers}. the first frame, within 10s:
-//!   {"role":"voice","room":"<server>/<channel>","user":"<name>","sdp":"<offer>"}
+//!   {"role":"voice","grant":"<64 hex>","sdp":"<offer>"}
 //! the offer is audio only: m-line 0 is your mic and must send, the rest (15 at most)
 //! are recvonly and are where you hear the others. we answer {"sdp":"<answer>"} or
 //! {"error":"..."}, then send
 //!   {"event":"seats","seats":[{"seat":0,"user":"a","line":1},...]}
-//! right after the answer and on every join and leave.
+//! right after the answer and on every join and leave. a grant the api turns down (used,
+//! older than 30s, no longer yours to use) is "bad grant"; an api that does not answer within
+//! 1.5s is "api unreachable".
+//!
+//! env: API_URL (http://api:4000) and VOICE_SECRET, the api's own. with VOICE_SECRET unset or
+//! empty no grant can be redeemed, and every join is "voice is not open". VOICE_DEV_OPEN=1 is
+//! for the spike (test/voice-spike.js): it also takes the old frame,
+//!   {"role":"voice","room":"<server>/<channel>","user":"<name>","sdp":"<offer>"}
+//! from anyone, and those joins are never told to the api.
 //!
 //! a room has 16 seats and each person takes the lowest free one. your own seat is not
 //! in the list and has no m-line: seat N is heard on m-line N+1 if N is below your seat
@@ -19,6 +29,12 @@
 //!
 //! closing the socket, or the peer going failed/closed (the ice timeout), frees the seat.
 //! at most 4 voice peers per address, and /ws is rate limited per address like the stream's.
+//!
+//! who is in voice lives in the api (docs/groups.md "voice"), and we keep it current: `attached`
+//! once a granted person has their answer, `left` when their seat frees, and every 15s one
+//! `beat` naming everyone granted we have seated. a box that dies says nothing, and the api's
+//! sweep drops its people within a minute. a call that fails is a warning in the log; nobody is
+//! dropped for it. neither the secret nor a grant is ever logged.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -61,14 +77,104 @@ const MAX_MEDIA_LINES: usize = 16;
 const MAX_PEERS_PER_IP: usize = 4;
 const MAX_USER_CHARS: usize = 32;
 const JOIN_TIMEOUT: Duration = Duration::from_secs(10);
+/// how long any one call to the api may take, as the stream's (main.rs)
+const API_TIMEOUT: Duration = Duration::from_millis(1500);
+/// how often everyone seated is told to the api, a third of its sweep's 45s
+const BEAT_EVERY: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 struct Voice {
     public_ip: String,
     mux: Arc<UDPMuxDefault>,
     open: bool,
+    api: Api,
     state: Arc<Mutex<Rooms>>,
     next_id: Arc<AtomicU64>,
+}
+
+/// the api's internal voice routes. no Debug, so the secret cannot end up in a log line.
+#[derive(Clone)]
+struct Api {
+    url: String,
+    /// VOICE_SECRET, None while it is unset or empty: no grant can be redeemed
+    secret: Option<Arc<str>>,
+    http: reqwest::Client,
+}
+
+/// what a redeemed grant stands for, the api's reply
+#[derive(Deserialize)]
+struct Redeemed {
+    user_id: String,
+    name: String,
+    server: String,
+    channel: String,
+}
+
+impl Api {
+    /// POST `path` with the secret. Err is already logged, as a warning.
+    async fn post(&self, path: &str, body: &serde_json::Value) -> Result<reqwest::Response, ()> {
+        let Some(secret) = &self.secret else { return Err(()) };
+        self.http
+            .post(format!("{}{path}", self.url))
+            .header("x-voice-secret", &**secret)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| log::warn!("voice: api unreachable for {path}: {}", e.without_url()))
+    }
+
+    /// the grant, redeemed once. Err is the word for the page.
+    async fn redeem(&self, grant: &str) -> Result<Redeemed, &'static str> {
+        let res = self
+            .post("/api/voice/redeem", &serde_json::json!({ "grant": grant }))
+            .await
+            .map_err(|()| "api unreachable")?;
+        let status = res.status();
+        if !status.is_success() {
+            if !status.is_client_error() {
+                log::warn!("voice: api answered {status} to redeem");
+            }
+            return Err("bad grant");
+        }
+        let who = res.json::<Redeemed>().await.map_err(|e| {
+            log::warn!("voice: redeem reply: {}", e.without_url());
+            "bad grant"
+        })?;
+        if !valid_room(&format!("{}/{}", who.server, who.channel)) || !valid_user(&who.name) {
+            log::warn!("voice: redeem named a room or person we cannot seat");
+            return Err("bad grant");
+        }
+        Ok(who)
+    }
+
+    /// a presence call (`attached`, `left`, `beat`): a failure is only a warning
+    async fn tell(&self, path: &str, body: serde_json::Value) {
+        match self.post(path, &body).await {
+            Ok(res) if res.status().is_success() => {}
+            Ok(res) => log::warn!("voice: api answered {} to {path}", res.status()),
+            Err(()) => {}
+        }
+    }
+}
+
+/// a granted person, as the api knows them: what `attached` and `left` say
+struct Presence {
+    api: Api,
+    user_id: String,
+    server: String,
+    channel: String,
+}
+
+impl Presence {
+    async fn attached(self: Arc<Self>, seat: usize) {
+        let body = serde_json::json!({ "user_id": self.user_id, "server": self.server, "channel": self.channel, "seat": seat });
+        self.api.tell("/api/voice/attached", body).await;
+    }
+
+    async fn left(&self) {
+        let body = serde_json::json!({ "user_id": self.user_id, "server": self.server });
+        self.api.tell("/api/voice/left", body).await;
+    }
 }
 
 #[derive(Default)]
@@ -88,6 +194,8 @@ type Snapshot = Arc<Vec<Option<Sitter>>>;
 #[derive(Clone)]
 struct Sitter {
     user: String,
+    /// the api's user id for a granted person, None for a dev-open join
+    uid: Option<String>,
     /// tells two people in the same seat apart, one after the other
     id: u64,
     mic: Arc<TrackLocalStaticRTP>,
@@ -133,12 +241,44 @@ fn line_of(seat: usize, own: usize) -> usize {
     }
 }
 
+/// the first frame as it comes. `room` and `user` are the dev-open frame's.
 #[derive(Deserialize)]
 struct Join {
     role: String,
-    room: String,
-    user: String,
+    grant: Option<String>,
+    room: Option<String>,
+    user: Option<String>,
     sdp: String,
+}
+
+/// who a join says it is: a grant to redeem, or (dev-open only) a room and a name
+#[derive(Debug, PartialEq)]
+enum Claim {
+    Grant(String),
+    Open { room: String, user: String },
+}
+
+/// the first frame read, with `open` (VOICE_DEV_OPEN=1) and `granting` (a secret to redeem
+/// with). a grant wins over a room and name in the same frame. Err is the word for the page.
+fn read_join(text: &str, open: bool, granting: bool) -> Result<(Claim, String), &'static str> {
+    let join = serde_json::from_str::<Join>(text).map_err(|_| "bad json")?;
+    if join.role != "voice" {
+        return Err("bad join");
+    }
+    let claim = match (join.grant, join.room, join.user) {
+        (Some(_), _, _) if !granting => return Err("voice is not open"),
+        (Some(grant), _, _) if valid_grant(&grant) => Claim::Grant(grant),
+        (Some(_), _, _) => return Err("bad grant"),
+        (None, _, _) if !open => return Err("bad grant"),
+        (None, Some(room), Some(user)) if valid_room(&room) && valid_user(&user) => Claim::Open { room, user },
+        (None, _, _) => return Err("bad join"),
+    };
+    Ok((claim, join.sdp))
+}
+
+/// the shape of what join hands out: 32 bytes as hex. anything else is not worth a call.
+fn valid_grant(grant: &str) -> bool {
+    grant.len() == 64 && grant.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 #[derive(Serialize)]
@@ -153,25 +293,43 @@ pub async fn run() -> anyhow::Result<()> {
     let ws_port = env_port("VOICE_WS_PORT", 7881);
     let udp_port = env_port("VOICE_UDP_PORT", 7883);
     let open = std::env::var("VOICE_DEV_OPEN").is_ok_and(|v| v.trim() == "1");
+    let api_url = std::env::var("API_URL")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| "http://api:4000".into())
+        .trim_end_matches('/')
+        .to_owned();
+    let secret = std::env::var("VOICE_SECRET").ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
 
     if public_ip.parse::<Ipv4Addr>().is_err() {
         anyhow::bail!("PUBLIC_IP={public_ip:?} is not an ipv4 address");
     }
     let mux = UDPMuxDefault::new(UDPMuxParams::new(media_socket(udp_port)?));
     log::info!("voice: media on udp {udp_port}, advertising {public_ip}");
+    if secret.is_some() {
+        log::info!("voice: grants are redeemed with the api at {api_url}");
+    }
     if open {
         log::warn!("voice: VOICE_DEV_OPEN=1, anyone may join any room");
-    } else {
-        log::info!("voice: closed (no grant yet; VOICE_DEV_OPEN=1 opens it)");
+    } else if secret.is_none() {
+        log::info!("voice: closed (VOICE_SECRET is empty; VOICE_DEV_OPEN=1 opens it)");
     }
 
     let voice = Voice {
         public_ip,
         mux,
         open,
+        api: Api {
+            url: api_url,
+            secret: secret.map(Arc::from),
+            http: reqwest::Client::builder().timeout(API_TIMEOUT).build()?,
+        },
         state: Arc::default(),
         next_id: Arc::default(),
     };
+    if voice.api.secret.is_some() {
+        tokio::spawn(beat(voice.clone()));
+    }
     let router = Router::new()
         .route("/health", get(health))
         .route("/ws", get(ws))
@@ -201,6 +359,20 @@ async fn health(State(voice): State<Voice>) -> Json<serde_json::Value> {
     let state = voice.state.lock().unwrap_or_else(|e| e.into_inner());
     let peers: usize = state.rooms.values().map(|r| r.seats.taken()).sum();
     Json(serde_json::json!({ "ok": true, "rooms": state.rooms.len(), "peers": peers }))
+}
+
+/// every `BEAT_EVERY`, one `beat` to the api naming everyone granted we have seated, so its
+/// sweep keeps them. nothing is sent while nobody is.
+async fn beat(voice: Voice) {
+    let mut tick = tokio::time::interval(BEAT_EVERY);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        let peers = voice.seated();
+        if !peers.is_empty() {
+            voice.api.tell("/api/voice/beat", serde_json::json!({ "peers": peers })).await;
+        }
+    }
 }
 
 async fn ws(
@@ -258,7 +430,7 @@ impl Voice {
     }
 
     /// the lowest free seat in `name` with a new mic track, and the room's seats to follow
-    fn sit(&self, held: &mut Held, name: &str, user: &str) -> Option<(usize, Arc<TrackLocalStaticRTP>, watch::Receiver<Snapshot>)> {
+    fn sit(&self, held: &mut Held, name: &str, user: &str, uid: Option<&str>) -> Option<(usize, Arc<TrackLocalStaticRTP>, watch::Receiver<Snapshot>)> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let room = state.rooms.entry(name.to_owned()).or_insert_with(|| Room {
@@ -266,7 +438,8 @@ impl Voice {
             tx: watch::Sender::new(Arc::new(Vec::new())),
         });
         let mic = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("mic{id}"), "voice".to_owned()));
-        let Some(seat) = room.seats.take(Sitter { user: user.to_owned(), id, mic: mic.clone() }) else {
+        let sitter = Sitter { user: user.to_owned(), uid: uid.map(str::to_owned), id, mic: mic.clone() };
+        let Some(seat) = room.seats.take(sitter) else {
             if room.seats.taken() == 0 {
                 state.rooms.remove(name);
             }
@@ -276,6 +449,29 @@ impl Voice {
         let snapshot = Arc::new(room.seats.snapshot());
         room.tx.send_replace(snapshot);
         Some((seat, mic, room.tx.subscribe()))
+    }
+
+    /// everyone granted we have seated, as `beat` names them: `[{user_id, server}]`
+    fn seated(&self) -> Vec<serde_json::Value> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state
+            .rooms
+            .iter()
+            .flat_map(|(name, room)| {
+                let server = name.split_once('/').map_or(name.as_str(), |(server, _)| server);
+                room.seats.0.iter().flatten().filter_map(move |s| {
+                    s.uid.as_ref().map(|uid| serde_json::json!({ "user_id": uid, "server": server }))
+                })
+            })
+            .collect()
+    }
+
+    /// whether `uid` still has a seat in `server` here (a second tab): their `left` waits for it
+    fn sits_in(&self, uid: &str, server: &str) -> bool {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.rooms.iter().any(|(name, room)| {
+            name.split_once('/').is_some_and(|(s, _)| s == server) && room.seats.0.iter().flatten().any(|s| s.uid.as_deref() == Some(uid))
+        })
     }
 }
 
@@ -348,30 +544,49 @@ async fn handle(voice: Voice, mut socket: WebSocket, ip: IpAddr) {
         Ok(Some(Ok(Message::Text(text)))) => text.to_string(),
         _ => return,
     };
-    // no grant in p0: closed unless a dev opened it
-    if !voice.open {
+    // no secret to redeem a grant with: closed unless a dev opened it
+    if !voice.open && voice.api.secret.is_none() {
         return refuse(&mut socket, "voice is not open").await;
     }
-    let Ok(join) = serde_json::from_str::<Join>(&text) else {
-        return refuse(&mut socket, "bad json").await;
+    let (claim, sdp) = match read_join(&text, voice.open, voice.api.secret.is_some()) {
+        Ok(join) => join,
+        Err(e) => return refuse(&mut socket, e).await,
     };
-    if join.role != "voice" || !valid_room(&join.room) || !valid_user(&join.user) {
-        return refuse(&mut socket, "bad join").await;
-    }
-    let Some(offer) = check_offer(&join.sdp) else {
+    // the offer and the address are checked before the grant is spent on them
+    let Some(offer) = check_offer(&sdp) else {
         return refuse(&mut socket, "bad offer").await;
     };
     let Some(mut held) = voice.hold_ip(ip) else {
         return refuse(&mut socket, "too many voice peers from this address").await;
     };
-    let Some((seat, mic, mut seats)) = voice.sit(&mut held, &join.room, &join.user) else {
+    let (room, user, presence) = match claim {
+        Claim::Open { room, user } => (room, user, None),
+        Claim::Grant(grant) => match voice.api.redeem(&grant).await {
+            Ok(who) => {
+                let room = format!("{}/{}", who.server, who.channel);
+                let presence = Presence { api: voice.api.clone(), user_id: who.user_id, server: who.server, channel: who.channel };
+                (room, who.name, Some(Arc::new(presence)))
+            }
+            Err(e) => return refuse(&mut socket, e).await,
+        },
+    };
+    let uid = presence.as_ref().map(|p| p.user_id.as_str());
+    let Some((seat, mic, mut seats)) = voice.sit(&mut held, &room, &user, uid) else {
         return refuse(&mut socket, "room full").await;
     };
-    let tag = format!("voice {} seat {seat}", join.room);
-    log::info!("{tag}: {} joined", join.user);
-    talk(&voice, &mut socket, &tag, join.sdp, &offer, seat, mic, &mut seats).await;
-    log::info!("{tag}: {} left", join.user);
+    let tag = format!("voice {room} seat {seat}");
+    log::info!("{tag}: {user} joined");
+    let mut attached = None;
+    talk(&voice, &mut socket, &tag, sdp, &offer, seat, mic, &mut seats, presence.clone(), &mut attached).await;
+    log::info!("{tag}: {user} left");
     drop(held);
+    // the seat is free: `left`, once `attached` is through so the two cannot cross
+    if let (Some(presence), Some(attached)) = (presence, attached) {
+        let _ = attached.await;
+        if !voice.sits_in(&presence.user_id, &presence.server) {
+            presence.left().await;
+        }
+    }
 }
 
 /// what one m-line that hears a seat is bound to
@@ -392,6 +607,8 @@ async fn talk(
     seat: usize,
     mic: Arc<TrackLocalStaticRTP>,
     seats: &mut watch::Receiver<Snapshot>,
+    presence: Option<Arc<Presence>>,
+    attached: &mut Option<tokio::task::JoinHandle<()>>,
 ) {
     let dead = Arc::new(Notify::new());
     let peer = match voice_peer(voice, tag, dead.clone()).await {
@@ -473,6 +690,8 @@ async fn talk(
     }
 
     if send(socket, &serde_json::json!({ "sdp": answer })).await.is_ok() {
+        // spawned, so the first seats frame does not wait on the api
+        *attached = presence.map(|p| tokio::spawn(p.attached(seat)));
         let mut current = seats.borrow_and_update().clone();
         loop {
             rebind(tag, &mut lines, &current, seat).await;
@@ -662,6 +881,50 @@ mod tests {
         assert!(check_offer("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n").is_none());
         let big = voice_offer(1) + &"a=x\r\n".repeat(MAX_SDP_BYTES / 5);
         assert!(check_offer(&big).is_none());
+    }
+
+    const GRANT: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn frame(v: serde_json::Value) -> String {
+        v.to_string()
+    }
+
+    #[test]
+    fn a_grant_frame() {
+        let granted = frame(serde_json::json!({ "role": "voice", "grant": GRANT, "sdp": "x" }));
+        assert_eq!(read_join(&granted, false, true), Ok((Claim::Grant(GRANT.into()), "x".into())));
+        assert_eq!(read_join(&granted, true, true), Ok((Claim::Grant(GRANT.into()), "x".into())));
+        // the room and name a page sends next to a grant count for nothing
+        let both = frame(serde_json::json!({ "role": "voice", "grant": GRANT, "room": "a/b", "user": "c", "sdp": "x" }));
+        assert_eq!(read_join(&both, true, true), Ok((Claim::Grant(GRANT.into()), "x".into())));
+        // no secret to redeem it with
+        assert_eq!(read_join(&granted, true, false), Err("voice is not open"));
+        // not the shape join hands out: never sent to the api
+        for bad in ["", "abc", &GRANT[1..], &format!("{GRANT}0"), &GRANT.replace('a', "g")] {
+            let f = frame(serde_json::json!({ "role": "voice", "grant": bad, "sdp": "x" }));
+            assert_eq!(read_join(&f, true, true), Err("bad grant"), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_dev_open_frame() {
+        let old = frame(serde_json::json!({ "role": "voice", "room": "spike/lounge", "user": "a", "sdp": "x" }));
+        let open = Claim::Open { room: "spike/lounge".into(), user: "a".into() };
+        assert_eq!(read_join(&old, true, false), Ok((open, "x".into())));
+        // only while dev-open: otherwise it needs a grant
+        assert_eq!(read_join(&old, false, true), Err("bad grant"));
+        let bad_room = frame(serde_json::json!({ "role": "voice", "room": "Spike", "user": "a", "sdp": "x" }));
+        assert_eq!(read_join(&bad_room, true, false), Err("bad join"));
+        let no_user = frame(serde_json::json!({ "role": "voice", "room": "spike/lounge", "sdp": "x" }));
+        assert_eq!(read_join(&no_user, true, false), Err("bad join"));
+    }
+
+    #[test]
+    fn frames_that_are_not_joins() {
+        assert_eq!(read_join("nope", true, true), Err("bad json"));
+        assert_eq!(read_join(&frame(serde_json::json!({ "role": "voice", "grant": GRANT })), true, true), Err("bad json"));
+        let watch = frame(serde_json::json!({ "role": "watch", "grant": GRANT, "sdp": "x" }));
+        assert_eq!(read_join(&watch, true, true), Err("bad join"));
     }
 
     #[test]
