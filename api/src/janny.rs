@@ -228,8 +228,8 @@ async fn log_action(db: &PgPool, stream: &Stream, actor: &Account, action: &str,
 
 /// `DELETE /api/streams/:name/chat/:id`: the line goes, from redis and postgres, with its
 /// reactions; its pictures stay in the bucket. Its copy is the log's. Every socket in the room
-/// hears `{"type":"delete","id"}`. The streamer's lines stay (`may_act`); a janny may delete
-/// their own. 204.
+/// hears `{"type":"delete","id"}`. The streamer's lines stay (`may_act`), but for the streamer
+/// themselves (and an admin); a janny may delete their own. 204.
 async fn delete_line(State(s): State<AppState>, Path((name, id)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let stream = the_stream(&s.db, &name).await?;
     let (me, rank) = moderator(&s, me, &stream).await?;
@@ -238,11 +238,16 @@ async fn delete_line(State(s): State<AppState>, Path((name, id)): Path<(String, 
     let Some(line) = crate::history::line_at(&s.db, &mut r, &stream.name, &id).await? else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, crate::chat::NO_SUCH_LINE));
     };
-    let target = if line.streamer {
+    // a line of my own: the streamer's in their own chat (said as the room, logged in or with the
+    // grant), or a janny's own. deleting it outranks nobody
+    let speaker = line.user_id.filter(|_| line.verified);
+    let own = speaker == Some(me.id) || (line.streamer && stream.owner == Some(me.id));
+    let target = if own {
+        Rank::Nobody
+    } else if line.streamer {
         Rank::Owner
     } else {
-        match line.user_id.filter(|_| line.verified) {
-            Some(user) if user == me.id => Rank::Nobody,
+        match speaker {
             Some(user) => rank_on(&s.db, &admin_ids(&s), &stream, user).await?,
             None => Rank::Nobody,
         }
