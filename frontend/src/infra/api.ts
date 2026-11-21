@@ -425,6 +425,8 @@ export interface GroupRoom {
   roster?: GroupMember[] | null;
   /** Asked for a page of it (`group(name, roster)`): where the next page starts (`groupMembersPage`'s `after`). Null once the roster is whole; absent on an older api. */
   roster_next?: string | null;
+  /** Who holds each role, by role id: the names, the whole group's and not a page's, so a chat line's speaker wears their role's colour (ChatPanel.tsx). A role nobody holds is absent. The roster's rule: null when it is; absent on an older api. */
+  holders?: Record<string, string[]> | null;
   /** Who is banned, for the ban power. Null for anyone else; absent on an older api. */
   bans?: GroupBan[] | null;
 }

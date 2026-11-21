@@ -398,8 +398,8 @@ pub(crate) fn routes() -> Router<AppState> {
 
 /// `GET /api/groups/:group`: the whole room in one answer. The group, its roles, what the
 /// login may do, its channels, who in it is live, who is in which voice channel, the roster (anyone's on a public group; a
-/// member's or a site admin's on a private one), and (for the ban power) the bans. `roster`
-/// and `bans` are null for someone who may not see them. `?roster=<n>` cuts the roster to its
+/// member's or a site admin's on a private one), and (for the ban power) the bans. `roster`,
+/// `holders` (who holds each role) and `bans` are null for someone who may not see them. `?roster=<n>` cuts the roster to its
 /// first page, `roster_next` the cursor for `GET .../members?after=`. The page loads this once and then
 /// follows the `group` facts on the events socket (docs/groups.md); nothing here is asked
 /// again on a channel change.
@@ -444,11 +444,12 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
     // `?roster=` asks for its first page alone (`limit`, as `GET .../members` reads it), and
     // `roster_next` is where the next one starts: null when the roster came whole
     let first = page_of(q.roster, None, None)?;
-    let (roster, roster_next) = if public || mine || admin {
+    // `holders` is the roster's too: who holds which role, the whole group's
+    let (roster, roster_next, holders) = if public || mine || admin {
         let (list, next) = members_of(&s.db, &group, &member_order, first.as_ref()).await?;
-        (Some(list), next)
+        (Some(list), next, Some(holders_of(&s.db, &group).await?))
     } else {
-        (None, None)
+        (None, None, None)
     };
     let bans = if powers & BAN != 0 { Some(bans_of(&s.db, &group).await?) } else { None };
     Ok(Json(json!({
@@ -476,6 +477,7 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
         "voice": voice,
         "roster": roster,
         "roster_next": roster_next,
+        "holders": holders,
         "bans": bans,
     })))
 }
@@ -606,6 +608,26 @@ async fn roles_of(db: &sqlx::PgPool, group: &str) -> Result<Vec<Value>, sqlx::Er
     .fetch_all(db)
     .await?;
     Ok(roles.into_iter().map(|(id, name, color, perms, channels, cooldown)| role_json(id, &name, &color, perms, &channels, cooldown)).collect())
+}
+
+/// Who holds each role, by the name they have now: `{"<role id>": [name, …]}`, a role nobody
+/// holds left out. The whole group's, not a roster page's, so a line's speaker past the pages
+/// loaded so far still wears their role's colour in the chat (docs/groups.md).
+async fn holders_of(db: &sqlx::PgPool, group: &str) -> Result<Value, sqlx::Error> {
+    let rows: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT rm.role_id, s.name FROM role_members rm
+         JOIN roles r ON r.id = rm.role_id
+         JOIN streamers s ON s.id = rm.user_id
+         WHERE r.group_name = $1 ORDER BY s.name",
+    )
+    .bind(group)
+    .fetch_all(db)
+    .await?;
+    let mut holders: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    for (id, name) in rows {
+        holders.entry(id.to_string()).or_default().push(name);
+    }
+    Ok(json!(holders))
 }
 
 /// The channels a role's body names, cleaned, as the shaper may put them: each a channel of the

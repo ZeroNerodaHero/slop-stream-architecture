@@ -458,16 +458,19 @@ export function quoteWords(q: Pick<Quoted, 'text' | 'images'>): string {
  * from the face's column (the time's in a log) up into the quote, then the speaker's tiny face,
  * their name in bold and one line of their words, cut to fit; in `bubbles` the same quote at the
  * top of the box, a stroke at its left. A click goes to the line (`onJump`), which lights up there
- * or says it is not to be found; a line that is gone says so and goes nowhere.
+ * or says it is not to be found; a line that is gone says so and goes nowhere. `color`: the name's,
+ * their role's in a group's channel (ChatPanel.tsx `useRoleColors`); the text's otherwise.
  */
-export function ReplyQuote({ shape, quote, onJump }: { shape: ChatStyle; quote: Quoted; onJump?: () => void }) {
+export function ReplyQuote({ shape, quote, onJump, color }: { shape: ChatStyle; quote: Quoted; onJump?: () => void; color?: string }) {
   const words = quoteWords(quote);
   const body = quote.gone ? (
     <span className="truncate italic text-textTertiary">original message was deleted</span>
   ) : (
     <>
       <Face name={quote.from} version={quote.avatar} className="h-4 w-4 shrink-0 text-[9px]" />
-      <span className="shrink-0 font-semibold text-textPrimary">{quote.from}</span>
+      <span className={cn('shrink-0 font-semibold', !color && 'text-textPrimary')} style={color ? { color } : undefined}>
+        {quote.from}
+      </span>
       <span className="min-w-0 truncate text-textSecondary">{words}</span>
     </>
   );
