@@ -54,7 +54,8 @@ import { myNameAtom } from '@/infra/atoms/profile-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-atoms';
 import { chatModalOpenAtom } from '@/infra/atoms/settings-atoms';
 import { ChatOpenButton, ChatSlot, chatLayoutClass, useChatSide } from '@/shared-components/ChatSlot';
-import { CHAT_MOBILE, keyboardStrip, useChatTyping, useIsMobile, useLockedDocument, useVisibleViewport } from '@/infra/mobile';
+import { usePinnedPage, useKeyboard, useTypingIn } from '@/infra/keyboard';
+import { CHAT_MOBILE, keyboardStrip, useIsMobile } from '@/infra/mobile';
 import { KbdDebug } from '@/shared-components/KbdDebug';
 import { dummyPage } from '@/infra/about';
 import { api } from '@/infra/api';
@@ -187,11 +188,11 @@ export function WatchPage() {
   const [tab, setTab] = useState<PhoneTab>('about');
   const mobile = useIsMobile();
   const [body, narrow] = useNarrowBody(!mobile);
-  // a phone's page is the window (as go live's is): the visual viewport (mobile.ts) is its box, so the send row stays over the keyboard
-  const view = useVisibleViewport(mobile, true);
-  useLockedDocument(mobile);
+  // a phone's page is the window (as go live's is): the visual viewport (keyboard.ts, --vvt and --vvh) is its box, so the send row stays over the keyboard
+  usePinnedPage(mobile);
+  const keyboard = useKeyboard().keyboard;
   // a phone's player is a strip while the chat is typed in, so the chat has the room; the tabs hide
-  const typing = useChatTyping(mobile, view?.keyboard ?? false);
+  const typing = useTypingIn('chat-text') && mobile;
   const strip = keyboardStrip(typing);
   const [phoneTab, setPhoneTab] = useState<PhoneTab>('chat');
   // a phone's tabs once opened stay mounted, hidden while another is open (the chat keeps its place and
@@ -639,9 +640,8 @@ export function WatchPage() {
       );
     return (
       <div
-        data-keyboard={typing || (view?.keyboard ?? false)}
-        className="group/phone fixed inset-x-0 top-0 flex h-[100dvh] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
-        style={view ? { height: view.height, transform: view.top ? `translateY(${view.top}px)` : undefined } : undefined}
+        data-keyboard={typing || keyboard}
+        className="group/phone fixed inset-x-0 top-[var(--vvt,0px)] flex h-[var(--vvh,100dvh)] flex-col overflow-hidden bg-background pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
       >
         <PageFrame
           title={title}

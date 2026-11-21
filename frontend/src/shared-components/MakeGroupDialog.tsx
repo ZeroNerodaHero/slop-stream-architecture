@@ -12,7 +12,7 @@ import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { GroupMark } from '@/shared-components/GroupMark';
 import { INPUT } from '@/shared-components/input';
-import { SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack, useSheetKeyboard } from '@/shared-components/MobileSheet';
+import { SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack } from '@/shared-components/MobileSheet';
 import { PicturePick } from '@/shared-components/PicturePick';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { VisibilityToggle } from '@/shared-components/VisibilityToggle';
@@ -126,7 +126,6 @@ export function MakeGroupDialog({ onClose }: { onClose: () => void }) {
     if (pressedBackdrop.current && e.target === e.currentTarget) onClose();
   };
   useSheetBack(onClose);
-  useSheetKeyboard(dialogRef);
 
   return (
     <dialog
