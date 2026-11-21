@@ -1,5 +1,5 @@
 //! Voice channels: the grant a page takes to the voice server, and the voice server's own
-//! calls back here (docs/groups.md "voice").
+//! calls back here (docs/voice.md).
 //!
 //! Joining is two steps. The page asks `POST /api/groups/:group/voice/:channel/join` with its
 //! login; the api checks the person may be there and hands back a grant, 32 random bytes as hex,
@@ -162,15 +162,18 @@ fn same(a: &str, b: &str) -> bool {
     a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// VOICE_SECRET as `secret`, or 503 `voice is off` while it is unset or empty.
+fn voice_on(secret: Option<&str>) -> Result<&str, ApiError> {
+    secret.ok_or_else(|| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "voice is off"))
+}
+
 /// The gate on every internal route, with VOICE_SECRET as `secret`: 404 for anything caddy
 /// passed, 503 `voice is off` without a secret, 403 `bad secret` for a wrong or missing header.
 fn inside(headers: &HeaderMap, secret: Option<&str>) -> Result<(), ApiError> {
     if headers.contains_key("x-forwarded-for") {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such route"));
     }
-    let Some(secret) = secret else {
-        return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "voice is off"));
-    };
+    let secret = voice_on(secret)?;
     let given = headers.get("x-voice-secret").and_then(|v| v.to_str().ok()).unwrap_or("");
     if given.is_empty() || !same(given, secret) {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "bad secret"));
@@ -232,8 +235,9 @@ fn new_grant() -> String {
 /// `POST /api/groups/:group/voice/:channel/join`: a grant to take to the voice server,
 /// `{url: "/voice", grant, ttl: 30}`. 401 nobody; 403 not a member; 404 `no such channel` (or
 /// one this login does not see); 400 `not a voice channel`; 409 `already in voice` while in
-/// another channel; 409 `channel full` at its `user_limit` (16 when 0). An owner, the channels
-/// power and a site admin are never kept out by the limit.
+/// another channel; 409 `channel full` at its `user_limit` (16 when 0); then 503 `voice is off`
+/// with VOICE_SECRET unset or empty, since no voice server could redeem the grant. An owner, the
+/// channels power and a site admin are never kept out by the limit.
 async fn join(State(s): State<AppState>, Path((group, channel)): Path<(String, String)>, Me(me): Me) -> ApiResult {
     let who = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
     let (server, channel) = channel_names(&group, &channel)?;
@@ -250,6 +254,7 @@ async fn join(State(s): State<AppState>, Path((group, channel)): Path<(String, S
             return Err(ApiError::new(StatusCode::CONFLICT, "channel full"));
         }
     }
+    voice_on(secret())?;
     let grant = new_grant();
     let kept = json!(Grant { user_id: who.id, name: who.name, server, channel }).to_string();
     let set: Option<String> = redis::cmd("SET")
@@ -507,6 +512,13 @@ mod tests {
         assert_eq!(inside(&h, None).unwrap_err().message(), "no such route");
         h.insert("x-forwarded-for", HeaderValue::from_static(""));
         assert_eq!(inside(&h, Some("s3cret")).unwrap_err().message(), "no such route");
+    }
+
+    #[test]
+    fn join_needs_voice_on() {
+        let off = voice_on(None).unwrap_err();
+        assert_eq!((off.0, off.message()), (StatusCode::SERVICE_UNAVAILABLE, "voice is off"));
+        assert_eq!(voice_on(Some("s3cret")).unwrap(), "s3cret");
     }
 
     #[test]

@@ -4,7 +4,8 @@
 // channel`), the voice power is reached like any other (a roles holder cannot hand it out, the
 // owner can), and the join route's answers: nobody 401, not a member 403, a channel that is not
 // there or kept from you 404, a text channel 400, a member gets a 64-hex grant for /voice good for
-// 30s, and the internal redeem route is a 404 from outside. Locally it also writes who is in voice
+// 30s (a stack with no VOICE_SECRET answers it 503 `voice is off` instead), and the internal
+// redeem route is a 404 from outside. Locally it also writes who is in voice
 // straight into redis (as the voice server's calls would) for `already in voice` 409, `channel
 // full` 409 (the owner never kept out) and the room's `voice`, which hides a channel you cannot see.
 // The voice server part runs only with VOICE=1, against a stack started with `--profile voice` and
@@ -136,6 +137,8 @@ window.packets = async (n) => {
   let slug = GROUP;
   const uid = {};
   const join = (who, channel) => who.post(`/api/groups/${slug}/voice/${channel}/join`);
+  // a stack with no VOICE_SECRET answers a join that passed every check 503 `voice is off`, not a grant
+  const granted = async (r) => r.status() === 200 || (!VOICE && r.status() === 503 && (await body(r)).error === 'voice is off');
   const room = async (who) => body(await who.get(`/api/groups/${slug}`));
   const roles = [];
 
@@ -273,6 +276,12 @@ window.packets = async (n) => {
     expect(text.status() === 400 && (await body(text)).error === 'not a voice channel', `general got ${await said(text)}`);
     const ok = await join(member, 'lounge');
     const grant = await body(ok);
+    if (ok.status() === 503) {
+      expect(await granted(ok), `the member's join got ${await said(ok)}`);
+      const owners503 = await join(owner, 'backroom');
+      expect(await granted(owners503), `the owner's join to backroom got ${await said(owners503)}`);
+      return `${nobody.status()} ${stranger.status()} ${none.status()} ${kept404.status()} ${text.status()}, then 503 voice is off (no VOICE_SECRET here)`;
+    }
     expect(ok.status() === 200 && grant.url === '/voice' && HEX64.test(grant.grant) && grant.ttl === 30, `the member's join got ${ok.status()} ${JSON.stringify(grant && { ...grant, grant: grant.grant && grant.grant.length })}`);
     const owners = await body(await join(owner, 'backroom'));
     expect(owners && HEX64.test(owners.grant) && owners.grant !== grant.grant, 'the owner has no grant for backroom, or the same one');
@@ -280,7 +289,7 @@ window.packets = async (n) => {
   });
 
   await step('the internal routes are not reachable from outside: redeem, attached, left, beat 404', async () => {
-    const grant = (await body(await join(member, 'lounge'))).grant;
+    const grant = (await body(await join(member, 'lounge'))).grant || '0'.repeat(64);
     const tried = [];
     for (const [path, data] of [
       ['redeem', { grant }],
@@ -315,7 +324,7 @@ window.packets = async (n) => {
       expect(busy.status() === 409 && (await body(busy)).error === 'already in voice', `in another channel got ${busy.status()} ${JSON.stringify(await body(busy))}`);
       redis('SET', `voiceof:${uid[MEMBER]}`, `${slug}/lounge`);
       const same = await join(member, 'lounge');
-      expect(same.status() === 200, `back into their own channel got ${same.status()}`);
+      expect(await granted(same), `back into their own channel got ${same.status()}`);
       redis('DEL', `voiceof:${uid[MEMBER]}`);
       // lounge holds one, and the member is in it: the outsider (a member from here) is 409, the owner is not
       expect((await outsider.post(`/api/groups/${slug}/join`)).status() === 204, 'the outsider joining failed');
@@ -324,10 +333,10 @@ window.packets = async (n) => {
       const full = await join(outsider, 'lounge');
       expect(full.status() === 409 && (await body(full)).error === 'channel full', `the second into a channel of one got ${full.status()} ${JSON.stringify(await body(full))}`);
       const theOwner = await join(owner, 'lounge');
-      expect(theOwner.status() === 200, `the owner into a full channel got ${theOwner.status()}`);
+      expect(await granted(theOwner), `the owner into a full channel got ${theOwner.status()}`);
       // the one already in it takes no second seat
       const again = await join(member, 'lounge');
-      expect(again.status() === 200, `the member already in it got ${again.status()}`);
+      expect(await granted(again), `the member already in it got ${again.status()}`);
       // 0 is 16: fifteen others and the outsider still fits, sixteen and it does not
       sql(`UPDATE channels SET user_limit = 0 WHERE server = '${slug}' AND name = 'lounge'`);
       redis('DEL', `voice:${slug}`, `voiceof:${uid[MEMBER]}`);
@@ -336,7 +345,7 @@ window.packets = async (n) => {
       const fits = await join(outsider, 'lounge');
       redis('HSET', `voice:${slug}`, ...fake(15));
       const over = await join(outsider, 'lounge');
-      expect(fits.status() === 200 && over.status() === 409, `with 15 in: ${fits.status()}, with 16: ${over.status()}`);
+      expect((await granted(fits)) && over.status() === 409, `with 15 in: ${fits.status()}, with 16: ${over.status()}`);
       return `"already in voice", "channel full" at 1 and at 16, the owner ${theOwner.status()}`;
     } finally {
       unseat();

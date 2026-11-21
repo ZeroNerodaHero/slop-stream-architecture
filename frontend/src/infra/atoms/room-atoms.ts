@@ -14,7 +14,7 @@
 
 import { atom } from 'jotai';
 
-import { api, type Channel, type GroupMember, type GroupRoom, messageOf, statusOf } from '@/infra/api';
+import { api, type Channel, type GroupMember, type GroupRoom, isVoice, messageOf, statusOf, type VoiceMember } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { type ChatLine, findServerChat, serverChat } from '@/infra/atoms/chat-atoms';
 import { holdPresence, onEvents, releasePresence, unwatchPresence, watchPresence } from '@/infra/events';
@@ -225,11 +225,14 @@ function applyRename(room: GroupRoom, from: string, to: string): void {
     channels: channels.filter((c) => c.name !== to).map((c) => (c.name === from ? { ...c, name: to } : c)),
     muted: room.muted?.map((c) => (c === from ? to : c)) ?? room.muted,
     // the pins follow the channel (the api's table moves them with it)
-    pins: room.pins && from in room.pins ? Object.fromEntries(Object.entries(room.pins).map(([c, ids]) => [c === from ? to : c, ids])) : room.pins
+    pins: room.pins && from in room.pins ? Object.fromEntries(Object.entries(room.pins).map(([c, ids]) => [c === from ? to : c, ids])) : room.pins,
+    // and who is in a voice one
+    voice: room.voice && from in room.voice ? Object.fromEntries(Object.entries(room.voice).map(([c, people]) => [c === from ? to : c, people])) : room.voice
   });
   const chat = findServerChat(room.name);
   chat?.moveChannelLines(from, to);
-  chat?.followChannel(to);
+  // a voice channel has no lines for the chat to follow
+  if (!channels.some((c) => c.name === from && isVoice(c))) chat?.followChannel(to);
   store.set(channelRenamedAtom, { from, to });
 }
 
@@ -283,7 +286,7 @@ function reconcileChannels(server: string, was: Channel[], now: Channel[]): void
   const chat = findServerChat(server);
   for (const c of went) chat?.dropChannel(c.name);
   if (went.length > 0) chat?.reconnect();
-  else for (const c of came) chat?.followChannel(c.name);
+  else for (const c of came) if (!isVoice(c)) chat?.followChannel(c.name);
   if (came.length > 0) void loadLines();
 }
 
@@ -389,6 +392,16 @@ function iHold(room: GroupRoom, me: string | null, id: string): boolean {
   return row ? row.roles.some((r) => r.id === id) : !!room.roster_next;
 }
 
+/** `voice` without the people `out` picks; a channel left empty goes. */
+function withoutVoice(voice: Record<string, VoiceMember[]>, out: (p: VoiceMember, channel: string) => boolean): Record<string, VoiceMember[]> {
+  const next: Record<string, VoiceMember[]> = {};
+  for (const [channel, people] of Object.entries(voice)) {
+    const left = people.filter((p) => !out(p, channel));
+    if (left.length > 0) next[channel] = left;
+  }
+  return next;
+}
+
 /**
  * One change onto the room. A change about me is asked of the api instead: the roster, the
  * bans and my powers are mine to see or not, and the frame says the same thing to everyone.
@@ -426,7 +439,7 @@ function apply(change: GroupChange): void {
       const mine = about(change.channel.made_by ?? '');
       const can_delete = change.channel.name !== 'general' && (mine || room.perms.channels);
       store.set(roomAtom, { ...room, channels: [...channels, { ...change.channel, can_delete }] });
-      findServerChat(room.name)?.followChannel(change.channel.name);
+      if (!isVoice(change.channel)) findServerChat(room.name)?.followChannel(change.channel.name);
       return;
     }
     case 'unchannel':
@@ -436,7 +449,8 @@ function apply(change: GroupChange): void {
         channels: (room.channels ?? []).filter((c) => c.name !== change.channel),
         muted: room.muted?.filter((c) => c !== change.channel) ?? room.muted,
         // its pins went with it too
-        pins: room.pins ? Object.fromEntries(Object.entries(room.pins).filter(([c]) => c !== change.channel)) : room.pins
+        pins: room.pins ? Object.fromEntries(Object.entries(room.pins).filter(([c]) => c !== change.channel)) : room.pins,
+        voice: room.voice ? withoutVoice(room.voice, (_, c) => c === change.channel) : room.voice
       });
       findServerChat(room.name)?.dropChannel(change.channel);
       return;
@@ -543,6 +557,19 @@ function apply(change: GroupChange): void {
     }
     case 'ended':
       if (room.live?.includes(change.who)) store.set(roomAtom, { ...room, live: room.live.filter((n) => n !== change.who) });
+      return;
+    case 'voice': {
+      // one channel at a time: a move is a voice in the new one, so they leave any other
+      const voice = withoutVoice(room.voice ?? {}, (p) => p.uid === change.uid);
+      const came: VoiceMember = { name: change.who, uid: change.uid, since: Date.now() };
+      const kept = (room.voice?.[change.channel] ?? []).find((p) => p.uid === change.uid);
+      // a channel this login does not see keeps its people out of this room, as the api's room does
+      if ((room.channels ?? []).some((c) => c.name === change.channel)) voice[change.channel] = [...(voice[change.channel] ?? []), kept ?? came];
+      store.set(roomAtom, { ...room, voice });
+      return;
+    }
+    case 'voice_left':
+      if (room.voice) store.set(roomAtom, { ...room, voice: withoutVoice(room.voice, (p) => p.uid === change.uid) });
       return;
     case 'deleted':
       store.set(roomGoneAtom, true);

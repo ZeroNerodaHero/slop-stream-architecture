@@ -38,7 +38,7 @@ export type GroupChange =
   | { what: 'left'; who: string; by: 'leave' | 'kick'; members: number }
   | { what: 'banned'; who: string; reason: string; members: number }
   | { what: 'unbanned'; who: string }
-  | { what: 'channel'; channel: { name: string; about: string; made_by: string | null; cooldown?: number } }
+  | { what: 'channel'; channel: { name: string; about: string; made_by: string | null; cooldown?: number; kind?: 'text' | 'voice'; user_limit?: number } }
   | { what: 'unchannel'; channel: string }
   /** The channel's cooldown is `cooldown` seconds now (0: none). */
   | { what: 'channel_cooldown'; channel: string; cooldown: number }
@@ -70,6 +70,10 @@ export type GroupChange =
   /** A line was pinned in a channel, or unpinned (docs/groups.md "pins"): its id alone, the topic being everyone's. */
   | { what: 'pin'; channel: string; id: string }
   | { what: 'unpin'; channel: string; id: string }
+  /** `who` is in voice channel `channel` now (docs/voice.md); `uid` their id. */
+  | { what: 'voice'; who: string; uid: string; channel: string }
+  /** `who` left voice, from `channel`. */
+  | { what: 'voice_left'; who: string; uid: string; channel: string }
   | { what: 'deleted' };
 
 export type ServerFrame =
