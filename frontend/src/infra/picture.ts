@@ -32,9 +32,24 @@ export interface PictureSpec {
   size: { width: number; height: number } | null;
   /** Jpeg (and webp) qualities, tried in order until the bytes are under `max`. */
   qualities: readonly number[];
+  /** The output's format when `size` is set: a jpeg unless this says png (a picture with holes in it, an emote). */
+  type?: 'image/png';
   /** The api's ceiling for the bytes, which the route stops reading at. */
   max: number;
 }
+
+/**
+ * A group's custom emote (docs/chat.md "emotes"): a 128x128 png, holes kept, which the api decodes
+ * and draws again as a webp of the same size (emotes.rs `redraw`).
+ */
+export const EMOTE_PICTURE: PictureSpec = {
+  title: 'a new emote',
+  where: 'in the chat, the channels and messages, for everyone in the group',
+  size: { width: 128, height: 128 },
+  qualities: [1],
+  type: 'image/png',
+  max: 512 * 1024
+};
 
 /** 256x256 at `groups/<name>/icon.jpg`. The group's picture, square, like an avatar. */
 export const GROUP_ICON: PictureSpec = {
@@ -267,9 +282,11 @@ const kb = (bytes: number) => (bytes >= 1024 * 1024 ? `${bytes / (1024 * 1024)} 
  */
 export async function pictureFor(spec: PictureSpec, file: Blob, picture: ImageBitmap, rect: Rect): Promise<Blob> {
   if (spec.size) {
-    for (const quality of spec.qualities) {
-      const jpeg = await cutPicture(picture, rect, spec.size.width, spec.size.height, 'image/jpeg', quality);
-      if (jpeg.size <= spec.max) return jpeg;
+    const type = spec.type ?? 'image/jpeg';
+    // a png has no quality: one try. a jpeg gets softer
+    for (const quality of type === 'image/png' ? [undefined] : spec.qualities) {
+      const cut = await cutPicture(picture, rect, spec.size.width, spec.size.height, type, quality);
+      if (cut.size <= spec.max) return cut;
     }
     throw new Error(`too much detail for ${kb(spec.max)}. try a plainer picture`);
   }

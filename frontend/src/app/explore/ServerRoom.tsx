@@ -4,6 +4,7 @@ import {
   RiArrowRightSLine,
   RiCloseLine,
   RiDeleteBinLine,
+  RiEmotionLine,
   RiForbidLine,
   RiGlobalLine,
   RiGroupLine,
@@ -47,6 +48,7 @@ import {
 import { createPortal } from 'react-dom';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
+import { EmotesSection } from '@/app/explore/EmotesSection';
 import { PinSheet, PinSheetButton } from '@/app/explore/PinSheet';
 import { VoicePanel } from '@/app/explore/VoicePanel';
 import { useVoiceView, VoiceRoom } from '@/app/explore/VoiceRoom';
@@ -72,6 +74,7 @@ import {
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
 import { type ChatLine, reconnectChat, serverChat } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
+import { loadMyEmotes } from '@/infra/emotes';
 import { PRESENCE_WORD, presenceOfAtom, presencesAtom } from '@/infra/atoms/presence-atoms';
 import {
   channelRenamedAtom,
@@ -219,7 +222,7 @@ const ORDERS = [
 ] as const;
 
 /**
- * The five powers: the word for each (the role rows' icons, the role editor's tiles), a few words
+ * The six powers: the word for each (the role rows' icons, the role editor's tiles), a few words
  * for the tile, what it lets a holder do (the api's checks in `group_mod.rs` and `groups.rs`), and
  * its icon, the manage tabs' icons where a tab is that power's.
  */
@@ -240,7 +243,8 @@ const POWERS: { key: keyof RolePerms; label: string; short: string; description:
     Icon: RiHashtag
   },
   { key: 'kick', label: 'kick', short: 'kick & time out', description: 'kick members and time them out', Icon: RiUserUnfollowLine },
-  { key: 'ban', label: 'ban', short: 'ban & unban', description: 'ban and unban members', Icon: RiForbidLine }
+  { key: 'ban', label: 'ban', short: 'ban & unban', description: 'ban and unban members', Icon: RiForbidLine },
+  { key: 'emotes', label: 'emotes', short: 'add, rename, delete', description: "upload, rename and delete the group's custom emotes", Icon: RiEmotionLine }
 ];
 
 /** A power's name and what it does, for a tooltip. */
@@ -249,7 +253,7 @@ function powerTip(power: (typeof POWERS)[number]): string {
 }
 
 /**
- * The five power icons in a row, each one's name and what it does on hover: lit (`on`'s colour,
+ * The six power icons in a row, each one's name and what it does on hover: lit (`on`'s colour,
  * the row's grey unless given) where the role carries it, faint where it does not.
  */
 function PowerIcons({ perms, color }: { perms: RolePerms; color?: string }) {
@@ -278,7 +282,7 @@ function PowerIcons({ perms, color }: { perms: RolePerms; color?: string }) {
  * One power in the role editor's grid: the whole tile is the toggle, the icon over the name over a
  * few words of what it does (the rest in its tooltip). Pressed, the border and the icon and name go
  * blue. `locked` is the owner role's (on, and not to be changed); `mine` false greys a power this
- * login cannot give, and says so. On a phone the five sit three over two (`className` the spans).
+ * login cannot give, and says so. On a phone the six sit three over three (`className` the spans).
  */
 function PowerTile({
   power,
@@ -325,8 +329,8 @@ function PowerTile({
   );
 }
 
-/** Where each tile sits: one of five on a wide screen; on a phone the first three a third each, the last two a half. */
-const TILE_SPAN = ['col-span-2', 'col-span-2', 'col-span-2', 'col-span-3', 'col-span-3'].map((span) => `${span} md:col-span-1`);
+/** Where each tile sits: one of six on a wide screen; on a phone a third each, three over three. */
+const TILE_SPAN = POWERS.map(() => 'col-span-2 md:col-span-1');
 
 /**
  * A role's name as it reads: its colour, except the yellow on a light theme, where it is pulled
@@ -341,7 +345,8 @@ const NO_PERMS: RolePerms = {
   roles: false,
   channels: false,
   kick: false,
-  ban: false
+  ban: false,
+  emotes: false
 };
 
 /** A role's cooldown, the choices (seconds): off, then a few steps up to five minutes. The api takes any 0 to 3600. */
@@ -401,9 +406,9 @@ function reaches(room: GroupRoom, perms: RolePerms): boolean {
   return room.owner || room.admin === true || POWERS.every((power) => !perms[power.key] || room.perms[power.key]);
 }
 
-/** Whether this login holds a power. Every power does something to a member, so this is the members tab's rule too. */
+/** Whether this login holds a power that does something to a member: the members tab's rule. The emotes power does nothing to one. */
 function manages(room: GroupRoom): boolean {
-  return room.owner || POWERS.some((power) => room.perms[power.key]);
+  return room.owner || POWERS.some((power) => power.key !== 'emotes' && room.perms[power.key]);
 }
 
 /** What the group calls its owner role (docs/groups.md): `owner` until an owner renames it; an older api has no word for it. */
@@ -1206,8 +1211,9 @@ export function ServerPage() {
     try {
       await api.joinGroup(server);
       // the open chat says hello again, so my lines wear the badge; the room is asked again,
-      // since what a member may see (the roster) is not what a stranger may
+      // since what a member may see (the roster) is not what a stranger may; the group's emotes are mine to use now
       reconnectChat();
+      void loadMyEmotes();
       await reloadRoom();
     } catch (err) {
       setActionError(messageOf(err));
@@ -1223,6 +1229,7 @@ export function ServerPage() {
     try {
       await api.leaveGroup(server);
       reconnectChat();
+      void loadMyEmotes();
       if (lastOne) {
         navigate('/groups');
         return;
@@ -2356,7 +2363,7 @@ interface ManageProps {
   run: Run;
 }
 
-type ManageTab = 'about' | 'channels' | 'roles' | 'members' | 'timeouts' | 'bans';
+type ManageTab = 'about' | 'channels' | 'roles' | 'emotes' | 'members' | 'timeouts' | 'bans';
 
 /**
  * The rail of the manage dialog, in order and in groups, each tab with the power that shows
@@ -2393,6 +2400,13 @@ const MANAGE_TABS: {
     group: 'group',
     icon: <RiShieldStarLine aria-hidden size={18} />,
     shown: (room) => room.perms.roles
+  },
+  {
+    id: 'emotes',
+    label: 'emotes',
+    group: 'group',
+    icon: <RiEmotionLine aria-hidden size={18} />,
+    shown: (room) => room.perms.emotes === true
   },
   {
     id: 'members',
@@ -2659,6 +2673,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
             )}
             {tab === 'channels' && <ChannelsSection server={server} channel={channel} room={room} run={run} />}
             {tab === 'roles' && <RolesSection server={server} room={room} run={run} />}
+            {tab === 'emotes' && <EmotesSection server={server} />}
             {tab === 'members' && <MembersSection server={server} room={room} me={me} run={run} />}
             {tab === 'timeouts' && <TimeoutsSection server={server} room={room} run={run} />}
             {tab === 'bans' && <BansSection server={server} room={room} run={run} />}
@@ -3715,7 +3730,7 @@ function RolesSection({ server, room, run }: ManageProps) {
                   className={cn(INPUT, 'min-w-0 flex-1')}
                 />
                 {/* the role form's tiles, every one on and locked: an owner's */}
-                <div role="group" aria-label="powers" className="grid grid-cols-6 gap-1.5 md:grid-cols-[repeat(5,minmax(0,1fr))]">
+                <div role="group" aria-label="powers" className="grid grid-cols-6 gap-1.5 md:grid-cols-[repeat(6,minmax(0,1fr))]">
                   {POWERS.map((power, i) => (
                     <PowerTile key={power.key} power={power} id={`owner-role-perm-${power.key}`} on locked className={TILE_SPAN[i]} />
                   ))}
@@ -3839,16 +3854,16 @@ function RolesSection({ server, room, run }: ManageProps) {
                       </div>
                     </div>
                     {/* the powers, a tile each: the icon, the name and a few words; the tile is the toggle. one this login lacks is not its to give: greyed, and it says so */}
-                    <div role="group" aria-label="powers" className="grid grid-cols-6 gap-1.5 md:grid-cols-[repeat(5,minmax(0,1fr))]">
+                    <div role="group" aria-label="powers" className="grid grid-cols-6 gap-1.5 md:grid-cols-[repeat(6,minmax(0,1fr))]">
                       {POWERS.map((power, i) => {
-                        const on = open.perms[power.key];
+                        const on = open.perms[power.key] === true;
                         return (
                           <PowerTile
                             key={power.key}
                             power={power}
                             id={`role-perm-${power.key}`}
                             on={on}
-                            mine={room.perms[power.key]}
+                            mine={room.perms[power.key] === true}
                             onToggle={() => setDraft({ ...open, perms: { ...open.perms, [power.key]: !on } })}
                             className={TILE_SPAN[i]}
                           />
@@ -3966,4 +3981,4 @@ const SWATCH = 'h-[30px] w-[30px] shrink-0 border-2';
 /** The chosen square: a dark ring, a hair of the page inside it so the ring reads on any colour. */
 const SWATCH_ON = 'border-textPrimary outline outline-2 -outline-offset-4 outline-background';
 
-const ALL_PERMS: RolePerms = { appearance: true, roles: true, channels: true, kick: true, ban: true };
+const ALL_PERMS: RolePerms = { appearance: true, roles: true, channels: true, kick: true, ban: true, emotes: true };

@@ -97,6 +97,12 @@ a line may answer another line of its thread (`chat.md` "replies", the same thin
 
 a line wears emoji the room chat's way (`chat.md` "reactions": the same 32, the same once-per-emoji rule, 20 different at most, the same picker and chips in the window). `PUT /api/dm/:name/react` with `{ id, emoji, on }` puts the login's emoji on line `id` of the thread, or takes it off: 200 with `{ id, reactions }`, the line's reactions as they are now, which the window puts in at once (the socket may be down). 400 `not a reaction`, `no such line` (a line not of this pair), `too many reactions`; 403 in the friends' words for anyone who is not one, as a line is; 429 past 120 a minute (`rl:dmreact:name:`). a change is a `dm_react` fact to both; one that was so already (on twice, off of nothing) is none. the rows are `dm_reactions` (migration `0003-reactions`: the line, the emoji, the account, when; they go with the line and with the account), and every line the api hands out (a page, a search hit) has `reactions`, `[{ emoji, count, who }]` with the first 25 names as each is named now (`reactions::dm_reactions_sql!`, joined in `LINE_SELECT`). a new line's 201 and `dm` frame carry none; `lineOf` leaves `reactions` off such a line and `merge` keeps what the line had.
 
+a reaction may be a group's custom emote by its id, for a member of its group (`chat.md` "emotes"); 403 `you can't use that emote` otherwise.
+
+### emotes
+
+a line may carry a group's custom emotes, `<:name:id>` in its words, as a room's line does (`chat.md` "emotes"). `POST /api/dm/:name` settles them after the rate (`emotes::settle`): each one the writer is not in the group of goes back to plain `:name:`, and `too long` counts each as its `:name:`. the window's box has the same `:` list (`#friend-chat-emotes`), and the lines draw them the same way.
+
 ## the facts, the frames
 
 | fact on `events` | the gateway | the frame |

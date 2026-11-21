@@ -43,6 +43,7 @@ mod chat;
 mod chat_images;
 mod debug;
 mod dms;
+mod emotes;
 mod events;
 mod follows;
 mod group_mod;
@@ -990,6 +991,7 @@ fn router(state: AppState) -> Router {
         .merge(follows::routes())
         .merge(dms::routes())
         .merge(chat_images::routes())
+        .merge(emotes::routes())
         .merge(models::routes())
         .merge(notify::routes())
         .merge(presence::routes())

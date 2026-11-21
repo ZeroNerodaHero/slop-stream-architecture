@@ -36,8 +36,10 @@ pub(crate) const KICK: i32 = 8;
 pub(crate) const BAN: i32 = 16;
 /// In a voice channel: server mute, deafen, disconnect, and move someone to another voice channel.
 pub(crate) const VOICE: i32 = 32;
+/// Upload, rename and delete the group's custom emotes (emotes.rs).
+pub(crate) const EMOTES: i32 = 64;
 
-const ALL: i32 = APPEARANCE | ROLES | CHANNELS | KICK | BAN | VOICE;
+const ALL: i32 = APPEARANCE | ROLES | CHANNELS | KICK | BAN | VOICE | EMOTES;
 const MAX_ROLES: i64 = 20;
 const MAX_ICON: usize = 256 * 1024;
 /// The banner is 2560x640, the room's width on a sharp screen; a photo at that size needs the room.
@@ -49,7 +51,7 @@ struct Held {
     perms: i32,
 }
 
-fn bits_of(appearance: bool, roles: bool, channels: bool, kick: bool, ban: bool, voice: bool) -> i32 {
+fn bits_of(appearance: bool, roles: bool, channels: bool, kick: bool, ban: bool, voice: bool, emotes: bool) -> i32 {
     let mut bits = 0;
     if appearance {
         bits |= APPEARANCE;
@@ -69,6 +71,9 @@ fn bits_of(appearance: bool, roles: bool, channels: bool, kick: bool, ban: bool,
     if voice {
         bits |= VOICE;
     }
+    if emotes {
+        bits |= EMOTES;
+    }
     bits
 }
 
@@ -80,6 +85,7 @@ fn perms_json(bits: i32) -> Value {
         "kick": bits & KICK != 0,
         "ban": bits & BAN != 0,
         "voice": bits & VOICE != 0,
+        "emotes": bits & EMOTES != 0,
     })
 }
 
@@ -268,11 +274,13 @@ struct PermsIn {
     ban: bool,
     #[serde(default)]
     voice: bool,
+    #[serde(default)]
+    emotes: bool,
 }
 
 impl PermsIn {
     fn bits(&self) -> i32 {
-        bits_of(self.appearance, self.roles, self.channels, self.kick, self.ban, self.voice) & ALL
+        bits_of(self.appearance, self.roles, self.channels, self.kick, self.ban, self.voice, self.emotes) & ALL
     }
 }
 
@@ -1815,8 +1823,10 @@ mod tests {
 
     #[test]
     fn powers_pack() {
-        assert_eq!(bits_of(true, false, true, false, false, false), APPEARANCE | CHANNELS);
-        assert_eq!(bits_of(false, false, false, false, false, true), VOICE);
+        assert_eq!(bits_of(true, false, true, false, false, false, false), APPEARANCE | CHANNELS);
+        assert_eq!(bits_of(false, false, false, false, false, true, false), VOICE);
+        assert_eq!(bits_of(false, false, false, false, false, false, true), EMOTES);
+        assert_eq!(perms_json(EMOTES)["emotes"], json!(true));
         assert_eq!(PermsIn { kick: true, ban: true, ..PermsIn::default() }.bits(), KICK | BAN);
         assert_eq!(perms_json(ROLES)["roles"], json!(true));
         assert_eq!(perms_json(ROLES)["kick"], json!(false));

@@ -569,6 +569,7 @@ pub(crate) async fn delete_if_empty(s: &AppState, group: &str) -> Result<(), sql
     if !exists {
         return Ok(());
     }
+    crate::emotes::drop_group(s, group).await;
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/icon.jpg")).await;
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/banner.jpg")).await;
     sqlx::query("DELETE FROM groups WHERE name = $1").bind(group).execute(&s.db).await?;
@@ -595,6 +596,7 @@ async fn remove(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
     if made_by != Some(who.id) && !owner && !s.admins.iter().any(|a| a.id == who.id) {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "not your group"));
     }
+    crate::emotes::drop_group(&s, &group).await;
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/icon.jpg")).await;
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/banner.jpg")).await;
     sqlx::query("DELETE FROM groups WHERE name = $1").bind(&group).execute(&s.db).await?;

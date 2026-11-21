@@ -13,6 +13,7 @@ import {
 } from 'react';
 
 import { searchRoom } from '@/infra/atoms/chat-atoms';
+import { plainEmotes } from '@/infra/emotes';
 import { Button } from '@/shared-components/Button';
 import { stamp, when } from '@/shared-components/ChatLine';
 import { Face } from '@/shared-components/Face';
@@ -762,7 +763,7 @@ export function SearchHit({ id, at, before, who, text, images, onClick, attrs }:
       >
         {before}
         {who}
-        {text && <span className="text-textSecondary">: {text}</span>}
+        {text && <span className="text-textSecondary">: {plainEmotes(text)}</span>}
         {images > 0 && (
           // over the button's `after`, so the pointer reaches the mark and its tooltip; the click still falls through to the row
           <Tooltip content={pictures}>

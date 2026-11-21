@@ -14,6 +14,7 @@ import { atom } from 'jotai';
 import { api, type Explore, type Group, type NewGroup, type Server, messageOf } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { reconnectChat } from '@/infra/atoms/chat-atoms';
+import { loadMyEmotes } from '@/infra/emotes';
 import { roomAtom } from '@/infra/atoms/room-atoms';
 import { queryClient } from '@/infra/query-client';
 import { store } from '@/infra/store';
@@ -176,7 +177,11 @@ async function act(doing: string, call: () => Promise<unknown>, done: string, we
     await loadGroups();
     void loadMyServers();
     store.set(groupsStatusAtom, done);
-    if (wearing) reconnectChat();
+    // in or out of a group: the badge on my lines, and the emotes I may use (emotes.ts)
+    if (wearing) {
+      reconnectChat();
+      void loadMyEmotes();
+    }
     return true;
   } catch (err) {
     store.set(groupsStatusAtom, `not ${doing}: ${messageOf(err)}`);

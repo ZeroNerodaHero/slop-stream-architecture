@@ -1,7 +1,9 @@
 /**
  * Reactions (docs/chat.md "reactions"): the emoji a line may wear, and what the pages do with the
  * frames that change them. The api allows these and no others, in this order (api/src/reactions.rs
- * `EMOJIS`; a test there reads this list), so the picker never offers one it would refuse.
+ * `EMOJIS`; a test there reads this list), so the picker never offers one it would refuse. A
+ * reaction may also be a group's custom emote, by its id (emotes.ts `isEmoteId`), for a reactor
+ * in that group; the picker offers the login's own (Reactions.tsx).
  */
 
 /** The picker's grid, the first `QUICK` of them its quick row. */
@@ -135,8 +137,9 @@ export function applyReaction(list: readonly Reaction[] | undefined, emoji: stri
 /**
  * Who put `r` there, in words, for its chip's tooltip: `you, bob and 3 others reacted with 🔥`.
  * You first when you are one, then the names in the order they came, then how many past those.
+ * `glyph` is how the reaction reads: the emoji, or a custom emote's `:name:`.
  */
-export function whoReacted(r: Reaction, me: string | null | undefined): string {
+export function whoReacted(r: Reaction, me: string | null | undefined, glyph: string = r.emoji): string {
   const mine = reacted(r, me);
   const names = mine ? ['you', ...r.who.filter((n) => n !== me)] : r.who.slice();
   const shown = names.slice(0, 10);
@@ -147,7 +150,7 @@ export function whoReacted(r: Reaction, me: string | null | undefined): string {
       : shown.length > 1
         ? `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}`
         : (shown[0] ?? '');
-  return `${list} reacted with ${r.emoji}`;
+  return `${list} reacted with ${glyph}`;
 }
 
 /** Whether `me` is among those who put `r` there: the api's word for it, or their name among the shown. */

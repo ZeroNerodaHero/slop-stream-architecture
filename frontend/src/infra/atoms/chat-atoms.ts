@@ -22,6 +22,7 @@ import { atomWithStorage } from 'jotai/utils';
 import { api, type GroupBadge, type Owner } from '@/infra/api';
 import { forgetMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
+import { encodeEmotes, tokensAsTyped } from '@/infra/emotes';
 import { hideBotsAtom } from '@/infra/atoms/settings-atoms';
 import { relayUrl } from '@/infra/relay';
 import { store } from '@/infra/store';
@@ -579,7 +580,9 @@ export class ChatRoom {
       return;
     }
     // `image` is the first, so a chat that only knows one picture still keeps that one
-    const say: Record<string, unknown> = images.length ? { type: 'say', text, image: images[0], images } : { type: 'say', text };
+    // each `:name:` of the login's emotes goes out as its token (emotes.ts); the box keeps what it showed
+    const words = encodeEmotes(text);
+    const say: Record<string, unknown> = images.length ? { type: 'say', text: words, image: images[0], images } : { type: 'say', text: words };
     // a server socket is every channel: the line says which
     if (this.server) say.channel = this.channel;
     // a reply names the line it answers; the chat finds it in this room and keeps its quote with the line
@@ -679,7 +682,9 @@ export class ChatRoom {
         store.set(this.linesAtom, msg.messages.slice(-KEEP_LINES).map(fromWire));
         store.set(this.loadedAtom, true);
       } else if (msg.type === 'message' && msg.id) {
-        const sent = this.inFlight.findIndex((p) => p.text === (msg.text ?? '') && samePictures(p.images, picturesOf(msg)));
+        // the box's words, with each emote as the `:name:` it showed: the chat writes back a token the speaker may not use as just that
+        const said = tokensAsTyped(msg.text ?? '');
+        const sent = this.inFlight.findIndex((p) => p.text === said && samePictures(p.images, picturesOf(msg)));
         if (sent >= 0) this.inFlight.splice(sent, 1);
         const line = fromWire(msg as ChatLine);
         // another channel's line waits on the shelf; the one on screen's goes up like a stream's
