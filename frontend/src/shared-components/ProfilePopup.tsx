@@ -32,6 +32,7 @@ import { Socials } from '@/shared-components/Socials';
 import { StreamStill } from '@/shared-components/StreamStill';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { ViewerCount } from '@/shared-components/ViewerCount';
+import { useHeardUid, VoiceLevel } from '@/shared-components/VoiceLevel';
 import { cn } from '@/utils/cn';
 import { monthOf } from '@/utils/since';
 import { roveTabs } from '@/utils/tabs';
@@ -209,6 +210,8 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
   // a phone's is a sheet up from the foot (MobileSheet.tsx): the back button shuts it, and the page under it stays
   useSheetBack(close);
   const mobile = useIsMobile();
+  // in your voice channel: your own level for them, the hover card's foot (VoiceLevel.tsx), which a phone has no hover for
+  const heardUid = useHeardUid(name);
 
   const presence = (trusted ? heard : undefined) ?? card?.presence;
   const live = presence === 'streaming';
@@ -346,6 +349,8 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
           </Link>
         )}
       </div>
+
+      {mobile && heardUid && <VoiceLevel id="profile-popup-voice" name={name} uid={heardUid} className="shrink-0 border-b border-t-0 px-5 py-3" />}
 
       {/* `relative`: what is `absolute` or `sr-only` under here has its place inside the scroller (relative-parent.mdc) */}
       <div id="profile-popup-body" className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5">

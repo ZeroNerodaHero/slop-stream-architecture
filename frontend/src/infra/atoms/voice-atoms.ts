@@ -95,11 +95,22 @@ interface Live {
   pc: RTCPeerConnection;
   ws: WebSocket | null;
   audios: HTMLAudioElement[];
+  /** What each of `audios` plays, and its gain once a level of yours needs one (`amplify`). */
+  heard: Heard[];
+  /** The context the gains are on: made with the first one, closed with the call. */
+  ctx: AudioContext | null;
   timer: ReturnType<typeof setInterval> | null;
   /** Fails the try when no answer came in ANSWER_MS; cleared by the answer. */
   deadline: ReturnType<typeof setTimeout> | null;
   /** The counters at the last stats read, for the deltas of the next; null before the first. */
   sample: StatsSample | null;
+}
+
+/** One heard m-line: the track off the peer, and once it is turned up or down, the gain it goes through and the silent player that keeps chrome feeding web audio. */
+interface Heard {
+  raw: MediaStream;
+  gain: GainNode | null;
+  keep: HTMLAudioElement | null;
 }
 
 let live: Live | null = null;
@@ -135,10 +146,11 @@ function teardown(): void {
   was.pc.onconnectionstatechange = null;
   was.pc.oniceconnectionstatechange = null;
   was.pc.close();
-  for (const audio of was.audios) {
+  for (const audio of [...was.audios, ...was.heard.flatMap((h) => (h.keep ? [h.keep] : []))]) {
     audio.pause();
     audio.srcObject = null;
   }
+  void was.ctx?.close().catch(() => undefined);
 }
 
 /** Reasons another try would get the same answer: the channel is full, voice is shut to you, the mic is blocked or missing. */
@@ -216,7 +228,7 @@ export function setVoiceMuted(muted: boolean): void {
 
 export function setVoiceDeaf(deaf: boolean): void {
   store.set(voiceDeafAtom, deaf);
-  for (const audio of live?.audios ?? []) audio.muted = deaf;
+  applyHeard();
   applyMic();
   sayVoiceState(store.get(voiceMutedAtom), deaf);
 }
@@ -266,8 +278,9 @@ async function tryJoin(server: string, channel: string, me: string): Promise<voi
   const track = mic.out;
   const pc = new RTCPeerConnection();
   const audios: HTMLAudioElement[] = [];
+  const heard: Heard[] = [];
   // from here teardown lets go of the mic
-  live = { pc, ws: null, audios, timer: null, deadline: null, sample: null };
+  live = { pc, ws: null, audios, heard, ctx: null, timer: null, deadline: null, sample: null };
   live.deadline = setTimeout(() => fail(mine, 'voice timed out: no answer from the voice server'), ANSWER_MS);
   // the mic is allowed now, so the browser names the devices: a pick that is gone shows as gone
   void refreshVoiceDevices();
@@ -280,11 +293,13 @@ async function tryJoin(server: string, channel: string, me: string): Promise<voi
     const t = pc.addTransceiver('audio', { direction: 'recvonly' });
     const audio = new Audio();
     audio.autoplay = true;
-    audio.muted = store.get(voiceDeafAtom);
-    audio.srcObject = new MediaStream([t.receiver.track]);
+    const raw = new MediaStream([t.receiver.track]);
+    audio.srcObject = raw;
     void sinkTo(audio, store.get(voiceOutputAtom));
     audios.push(audio);
+    heard.push({ raw, gain: null, keep: null });
   }
+  applyHeard();
   // what ice did, in the console: a call that never links says how far it got
   pc.oniceconnectionstatechange = () => console.info(`voice: ice ${pc.iceConnectionState}`);
   pc.onconnectionstatechange = () => {
@@ -335,7 +350,7 @@ async function tryJoin(server: string, channel: string, me: string): Promise<voi
           );
           sayVoiceState(store.get(voiceMutedAtom), store.get(voiceDeafAtom));
           videoSeats(store.get(voiceSeatsAtom));
-          for (const audio of audios) void audio.play().catch(() => {});
+          for (const audio of [...audios, ...heard.flatMap((h) => (h.keep ? [h.keep] : []))]) void audio.play().catch(() => {});
         },
         () => fail(mine, 'bad answer')
       );
@@ -399,6 +414,108 @@ async function readLevels(mine: number, me: string): Promise<void> {
   // `disconnected` is ice's own word for a path that stopped answering, before it gives up as `failed`
   store.set(voiceStatsAtom, { ...read.stats, dropped: call.pc.connectionState === 'disconnected' });
 }
+
+// ---- how loud each person is to you -------------------------------------------------------
+
+/** Your own level for someone you hear: their volume in percent (0 to HEARD_MAX, 100 as they come) and whether you muted them for yourself. Nobody else hears a difference. */
+export interface HeardLevel {
+  volume: number;
+  muted: boolean;
+}
+
+export const HEARD_DEFAULT: HeardLevel = { volume: 100, muted: false };
+/** The loudest a person can be turned up to, in percent: past 100 is a gain, which an element's volume cannot do. */
+export const HEARD_MAX = 200;
+
+/** The levels, by user id, kept in this browser: a rejoin and a reload keep them. Only the ones moved off the default are kept. */
+const storedHeardAtom = atomWithStorage<unknown>('voice.heard', {}, undefined, { getOnInit: true });
+
+/** Read: the kept levels, by user id, what was kept checked over. */
+export const voiceHeardAtom = atom((get) => {
+  const kept = get(storedHeardAtom);
+  const levels: Record<string, HeardLevel> = {};
+  if (!kept || typeof kept !== 'object') return levels;
+  for (const [uid, level] of Object.entries(kept as Record<string, unknown>)) {
+    if (!level || typeof level !== 'object') continue;
+    const { volume, muted } = level as Partial<HeardLevel>;
+    levels[uid] = { volume: typeof volume === 'number' && Number.isFinite(volume) ? Math.min(HEARD_MAX, Math.max(0, volume)) : 100, muted: muted === true };
+  }
+  return levels;
+});
+
+/** Name to user id for whoever is in voice in the room on the page (room-atoms.ts keeps it): the seats frame says names, the levels are kept by id. */
+export const voiceUidsAtom = atom<ReadonlyMap<string, string>>(new Map<string, string>());
+
+/** `uid`'s level: what is kept, else the default. */
+export function heardLevelOf(levels: Record<string, HeardLevel>, uid: string): HeardLevel {
+  return levels[uid] ?? HEARD_DEFAULT;
+}
+
+/** Moves `uid`'s level, live on the call. Back at the default, nothing is kept for them. */
+export function setHeardLevel(uid: string, next: Partial<HeardLevel>): void {
+  const levels = { ...store.get(voiceHeardAtom) };
+  const level = { ...heardLevelOf(levels, uid), ...next };
+  level.volume = Math.round(Math.min(HEARD_MAX, Math.max(0, level.volume)));
+  if (level.volume === HEARD_DEFAULT.volume && level.muted === HEARD_DEFAULT.muted) delete levels[uid];
+  else levels[uid] = level;
+  store.set(storedHeardAtom, levels);
+}
+
+/**
+ * Each heard line as its seat's person is to you: muted when you are deafened or muted them
+ * (the element's own mute), and their volume. A line plays straight off the peer until somebody
+ * on it is turned off 100%; from then it goes through a gain (`amplify`), which is how it goes
+ * past 100 and how a phone (whose element volume is fixed) turns it down. Where web audio will
+ * not run, the element's volume, up to 100.
+ */
+function applyHeard(): void {
+  const call = live;
+  if (!call) return;
+  const deaf = store.get(voiceDeafAtom);
+  const levels = store.get(voiceHeardAtom);
+  const uids = store.get(voiceUidsAtom);
+  const userOfLine = new Map(store.get(voiceSeatsAtom).map((s) => [s.line, s.user]));
+  call.audios.forEach((audio, i) => {
+    const user = userOfLine.get(i + 1);
+    const uid = user === undefined ? undefined : uids.get(user);
+    const level = uid === undefined ? HEARD_DEFAULT : heardLevelOf(levels, uid);
+    audio.muted = deaf || level.muted;
+    const gain = level.volume / 100;
+    const h = call.heard[i];
+    if (h && !h.gain && gain !== 1) amplify(call, audio, h);
+    if (h?.gain) h.gain.gain.setTargetAtTime(gain, h.gain.context.currentTime, 0.02);
+    else audio.volume = Math.min(1, gain);
+  });
+}
+
+/** Puts a heard line through a gain: the track into web audio and back out to the same element, so its speakers (`sinkTo`) and its mute stand. */
+function amplify(call: Live, audio: HTMLAudioElement, h: Heard): void {
+  if (typeof AudioContext === 'undefined') return;
+  try {
+    call.ctx ??= new AudioContext();
+    // a slider moved is a gesture: the context may start now
+    void call.ctx.resume().catch(() => undefined);
+    const gain = call.ctx.createGain();
+    const out = call.ctx.createMediaStreamDestination();
+    call.ctx.createMediaStreamSource(h.raw).connect(gain).connect(out);
+    // chrome hands a peer's track to web audio only while a media element plays it too: this one, silent
+    const keep = new Audio();
+    keep.muted = true;
+    keep.srcObject = h.raw;
+    void keep.play().catch(() => undefined);
+    audio.srcObject = out.stream;
+    audio.volume = 1;
+    void audio.play().catch(() => undefined);
+    h.gain = gain;
+    h.keep = keep;
+  } catch {
+    // no gain to be had: the element's volume, up to 100
+  }
+}
+
+store.sub(voiceSeatsAtom, applyHeard);
+store.sub(voiceUidsAtom, applyHeard);
+store.sub(voiceHeardAtom, applyHeard);
 
 // ---- quality ------------------------------------------------------------------------------
 

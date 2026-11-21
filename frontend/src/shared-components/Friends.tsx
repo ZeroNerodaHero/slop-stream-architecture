@@ -281,6 +281,7 @@ function Row({ id, person, side, open, folded = false, onPick, children }: RowPr
       onPointerLeave={(e) => peek.leave(e.currentTarget)}
       onFocus={(e) => peek.show(e, e.currentTarget.closest('#friends'))}
       onBlur={peek.blur}
+      onKeyDown={peek.keyDown}
     >
       <Link
         id={id}
@@ -310,7 +311,7 @@ function Row({ id, person, side, open, folded = false, onPick, children }: RowPr
         {open && !folded && person.presence === 'streaming' && <StreamStill name={person.name} className="h-8 max-md:h-10" />}
       </Link>
       {open && children}
-      {open && peek.at && <PersonCard id={`friends-peek-${person.name}`} person={person} at={peek.at} side={side} />}
+      {open && peek.at && <PersonCard id={`friends-peek-${person.name}`} person={person} at={peek.at} side={side} hold={peek.hold} />}
     </li>
   );
 }

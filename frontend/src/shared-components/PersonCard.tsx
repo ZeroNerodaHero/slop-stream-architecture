@@ -1,5 +1,5 @@
 import { useAtomValue } from 'jotai';
-import { type CSSProperties, type FocusEvent, type PointerEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import { type CSSProperties, type FocusEvent, type KeyboardEvent, type PointerEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { api, type GroupBadge } from '@/infra/api';
@@ -23,8 +23,10 @@ const CARD_W = 260;
 const GAP = 4;
 /** The moderator's box at the card's left (`actions`): one icon button wide, its stroke shared with the card's. */
 const ACTIONS_W = 30;
-/** How long a card with buttons waits after the pointer leaves its row, or itself, before it goes: time to cross the gap between them. */
-const LINGER_MS = 250;
+/** How long the card waits after the pointer leaves its row, or itself, before it goes: time to cross the gap between them. */
+const LINGER_MS = 180;
+/** What on the card the keyboard can reach. */
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** A button in the moderator's box on the card (GroupMod.tsx `useCardMod`): an icon, its name the tooltip, red when it removes someone. */
 export interface CardAction {
@@ -35,10 +37,18 @@ export interface CardAction {
   onPick: () => void;
 }
 
-/** The pointer on a card that can be pressed: while it is there the card stays (`usePeek`'s `hold`). */
+/** The card's side of `usePeek`: while the pointer or the keyboard is on it, or something on it is held, it stays. */
 export interface PeekHold {
+  /** The card's element, for the hover and focus checks. */
+  setCard: (el: HTMLElement | null) => void;
   enter: () => void;
   leave: () => void;
+  /** Something on the card is held (a slider dragged, a menu open): it stays whatever the pointer does until let go, then goes a moment later if nothing is on it. */
+  pin: (on: boolean) => void;
+  /** Escape closes it and hands the focus back to the row; tab off either end goes back to the row. */
+  keyDown: (e: KeyboardEvent<HTMLElement>) => void;
+  /** The focus left the card: it goes, unless for the row or the pointer is still on it. */
+  blur: (e: FocusEvent<HTMLElement>) => void;
 }
 
 /**
@@ -94,18 +104,30 @@ function peeking(e: PointerEvent<Element> | FocusEvent<Element>) {
   return lastInput !== 'touch' && lastInput !== 'pen';
 }
 
+/** The row's own link or button, for the focus handed back from the card: the row itself when it takes the focus. */
+function rowTarget(row: HTMLElement): HTMLElement {
+  return row.matches(FOCUSABLE) ? row : (row.querySelector<HTMLElement>(FOCUSABLE) ?? row);
+}
+
 /**
  * The hover and focus bookkeeping for the card over one row. `show` measures and shows after
  * `delay` (a panel that widens on hover has settled by then, and a pointer crossing rows does
- * not flash a card per row); the card goes when both the pointer and the focus have left the
- * row. `at` is where to put it, or null. Only a mouse's hover or a focus that no tap left shows
- * it (`peeking`).
+ * not flash a card per row). The card can be pointed at: it stays while the pointer is on the
+ * row or on it, and goes `LINGER_MS` after it has left both (time to cross the gap), and stays
+ * whatever the pointer does while something on it is held (`hold.pin`: a slider dragged). The
+ * keyboard reaches it too: tab from the row goes into its buttons, tab off either end comes
+ * back, and escape on either closes it. Only a mouse's hover or a focus that no tap left shows
+ * it (`peeking`): a phone's tap opens the profile sheet, as before.
  */
 export function usePeek(delay: number) {
   const [at, setAt] = useState<CardSpot | null>(null);
   const timer = useRef<number | null>(null);
-  /** A card with buttons, going once the pointer has been away from the row and the card `LINGER_MS`. */
+  /** The card going, once the pointer has been away from the row and the card `LINGER_MS`. */
   const closing = useRef<number | null>(null);
+  const row = useRef<HTMLElement | null>(null);
+  const card = useRef<HTMLElement | null>(null);
+  /** Something on the card is held: the card stays until it is let go. */
+  const pinned = useRef(false);
   const stay = () => {
     if (closing.current !== null) {
       window.clearTimeout(closing.current);
@@ -119,29 +141,82 @@ export function usePeek(delay: number) {
       timer.current = null;
     }
   };
+  const close = () => {
+    clear();
+    pinned.current = false;
+    setAt(null);
+  };
+  /** The card is in use: held, the pointer on it or its row, or the keyboard in it. */
+  const inUse = () => {
+    const c = card.current;
+    if (pinned.current || c?.matches(':hover') || row.current?.matches(':hover')) return true;
+    return !!c && lastInput === 'keyboard' && c.contains(c.ownerDocument.activeElement);
+  };
   const goSoon = () => {
     stay();
     closing.current = window.setTimeout(() => {
       closing.current = null;
-      setAt(null);
+      if (!inUse()) setAt(null);
     }, LINGER_MS);
   };
   // a row that goes while its timer runs: nothing shows
   useEffect(() => clear, []);
   useEffect(trackInput, []);
-  const show = (e: PointerEvent<Element> | FocusEvent<Element>, column: Element | null) => {
+  const show = (e: PointerEvent<HTMLElement> | FocusEvent<HTMLElement>, column: Element | null) => {
     if (!column || !peeking(e)) return;
-    const row = e.currentTarget;
+    const el = e.currentTarget;
+    row.current = el;
     clear();
     timer.current = window.setTimeout(() => {
       timer.current = null;
-      if (!row.isConnected) return;
+      if (!el.isConnected) return;
       setAt({
-        row: row.getBoundingClientRect(),
+        row: el.getBoundingClientRect(),
         column: column.getBoundingClientRect(),
-        host: row.closest<HTMLElement>('dialog:modal') ?? row.ownerDocument.body
+        host: el.closest<HTMLElement>('dialog:modal') ?? el.ownerDocument.body
       });
     }, delay);
+  };
+  /** The focus back on the row, the card closed or left open. */
+  const backToRow = () => {
+    if (row.current?.isConnected) rowTarget(row.current).focus();
+  };
+  const hold: PeekHold = {
+    setCard: (el) => {
+      card.current = el;
+    },
+    enter: stay,
+    leave: () => {
+      if (!pinned.current) goSoon();
+    },
+    pin: (on) => {
+      pinned.current = on;
+      if (on) stay();
+      else goSoon();
+    },
+    keyDown: (e) => {
+      if (e.key === 'Escape') {
+        // the card's, not a dialog's under it
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+        backToRow();
+        return;
+      }
+      if (e.key !== 'Tab' || !card.current) return;
+      const list = [...card.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      const edge = e.shiftKey ? list[0] : list[list.length - 1];
+      if (list.length > 0 && document.activeElement !== edge) return;
+      e.preventDefault();
+      // forward off the end: the card is done with, and the next tab goes on down the list
+      if (!e.shiftKey) close();
+      backToRow();
+    },
+    blur: (e) => {
+      const to = e.relatedTarget as Node | null;
+      if (card.current?.contains(to) || row.current?.contains(to) || inUse()) return;
+      close();
+    }
   };
   return {
     at,
@@ -157,34 +232,42 @@ export function usePeek(delay: number) {
       if (!e.target.matches(':focus-visible')) return;
       // from inside the popup, not from any dialog: a watch page's chat is in one of its own (ChatSlot.tsx), and the focus moving from name to name there is an arrival
       if (e.relatedTarget instanceof Element && e.relatedTarget.closest('#profile-popup')) return;
+      // back from the card: it is up already
+      if (at && card.current?.contains(e.relatedTarget as Node | null)) return;
       show(e, column);
     },
-    /**
-     * The pointer left `row`. The card stays while the focus is still in it. `linger`: the card has
-     * buttons (`actions`), so it waits a moment for the pointer to reach it, and stays while it is
-     * on it (`hold`).
-     */
-    leave(row: Element, linger = false) {
-      if (row.contains(document.activeElement)) return;
+    /** The pointer left `row`. The card stays while the focus is still in it, and a moment for the pointer to reach the card. */
+    leave(el: Element) {
+      if (el.contains(document.activeElement)) return;
+      // a card about to show does not: the pointer only passed
       clear();
-      if (linger) goSoon();
-      else setAt(null);
+      if (!pinned.current) goSoon();
     },
-    /** The focus left `row`, and not for something in it or for the card's buttons. The card stays while the pointer is still on it. */
+    /** The focus left `row`, and not for something in it or for the card. The card stays while the pointer is still on either. */
     blur(e: FocusEvent<HTMLElement>) {
-      const row = e.currentTarget;
-      if (row.contains(e.relatedTarget as Node | null) || row.matches(':hover')) return;
-      if (e.relatedTarget instanceof Element && e.relatedTarget.closest('[data-peek-hold]')) return;
-      clear();
-      setAt(null);
+      const el = e.currentTarget;
+      const to = e.relatedTarget as Node | null;
+      if (el.contains(to) || card.current?.contains(to) || inUse()) return;
+      close();
     },
-    /** The pointer on the card itself (one with buttons): it stays there, and goes a moment after it leaves. */
-    hold: { enter: stay, leave: goSoon } satisfies PeekHold,
+    /** A key on the row: tab goes into the card's buttons while it is up, escape closes it. */
+    keyDown(e: KeyboardEvent<HTMLElement>) {
+      if (!at) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+        return;
+      }
+      if (e.key !== 'Tab' || e.shiftKey) return;
+      const first = card.current?.querySelector<HTMLElement>(FOCUSABLE);
+      if (!first) return;
+      e.preventDefault();
+      first.focus();
+    },
+    hold,
     /** The card goes now: one of its buttons was pressed, and what it opened covers the page. */
-    close() {
-      clear();
-      setAt(null);
-    }
+    close
   };
 }
 
@@ -194,10 +277,12 @@ interface PersonCardProps {
   at: CardSpot;
   /** Which side of the page the column is on: the card goes out the other way. Not given (the chat, which can be anywhere): the side the column is nearer. */
   side?: PanelSide;
-  /** A moderator's buttons (GroupMod.tsx `useCardMod`), in a box at the card's left: the card can be pointed at then, and stays while it is (`hold`). None or empty: the card is not for pressing. */
+  /** A moderator's buttons (GroupMod.tsx `useCardMod`), in a box at the card's left. None or empty: no box. */
   actions?: CardAction[] | null;
-  /** `usePeek`'s `hold`, with `actions`. */
-  hold?: PeekHold;
+  /** What goes at the foot of the card, under the rest: your own level for someone in your voice channel (VoiceLevel.tsx). */
+  below?: ReactNode;
+  /** `usePeek`'s `hold`: the card can be pointed at and tabbed into, and stays while it is. */
+  hold: PeekHold;
 }
 
 /**
@@ -217,12 +302,14 @@ interface PersonCardProps {
  * holds the name, the ✓ and the picture alone, a roster's row those and the word, and what is
  * missing comes from one `GET /api/streamers/:name` asked when the card shows (follow-atoms
  * keeps the answer a while, so hovering the same name again asks nothing). Until it answers,
- * or when it does not, the face has no square and there is no status. Not for pressing. Drawn into the body
+ * or when it does not, the face has no square and there is no status. The pointer can cross onto
+ * it and the keyboard tab into it (usePeek), for a moderator's box and `below`. Drawn into the body
  * (no list clips it, and a window's transform does not move it), it goes out on the side away
  * from the edge, kept on screen, and hangs down from the row in the top half of the screen and
  * up from it in the bottom half.
  */
-export function PersonCard({ id, person, at, side, actions, hold }: PersonCardProps) {
+export function PersonCard({ id, person, at, side, actions, below, hold }: PersonCardProps) {
+  const { setCard } = hold;
   const peek = useAtomValue(peeksAtom)[person.name]?.card;
   // the profile popup is up (a click on this row opened it, like as not): the page under it is not being pointed at, and a card left there would show through, dimmed
   const covered = useAtomValue(profilePopupAtom) !== null;
@@ -254,12 +341,16 @@ export function PersonCard({ id, person, at, side, actions, hold }: PersonCardPr
     ...(at.row.top < h / 2 ? { top: at.row.top } : { bottom: h - at.row.bottom })
   };
   return createPortal(
+    // the pointer can cross onto it from the row and stay; tab from the row comes in here (usePeek)
     <div
+      ref={setCard}
       style={style}
-      data-peek-hold={pressable || undefined}
-      onPointerEnter={pressable ? hold?.enter : undefined}
-      onPointerLeave={pressable ? hold?.leave : undefined}
-      className={cn('fixed z-[60]', pressable ? 'pointer-events-auto' : 'pointer-events-none')}
+      data-peek-hold
+      onPointerEnter={hold.enter}
+      onPointerLeave={hold.leave}
+      onKeyDown={hold.keyDown}
+      onBlur={hold.blur}
+      className="pointer-events-auto fixed z-[60]"
     >
       {pressable && (
         // a column of icon buttons against the card's left side, its top level with the card's: one stroke between them
@@ -290,7 +381,9 @@ export function PersonCard({ id, person, at, side, actions, hold }: PersonCardPr
       )}
       <div
         id={id}
-        role="tooltip"
+        // with something to press it is a little dialog of its own; without, it only says who they are
+        role={pressable || below ? 'dialog' : 'tooltip'}
+        aria-label={pressable || below ? person.name : undefined}
         data-presence={presence}
         className="flex flex-col gap-2.5 border border-primaryStroke bg-backgroundSecondary p-3 text-sm text-textPrimary"
       >
@@ -343,6 +436,7 @@ export function PersonCard({ id, person, at, side, actions, hold }: PersonCardPr
         )}
         {/* the status, the width of the card: whole words, four lines at most */}
         {bio && <span className="line-clamp-4 break-words text-sm leading-snug">{bio}</span>}
+        {below}
       </div>
     </div>,
     at.host
