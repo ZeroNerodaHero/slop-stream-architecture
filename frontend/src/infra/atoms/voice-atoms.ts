@@ -90,6 +90,7 @@ function teardown(): void {
     was.ws.close();
   }
   was.pc.onconnectionstatechange = null;
+  was.pc.oniceconnectionstatechange = null;
   was.pc.close();
   for (const track of was.mic.getTracks()) track.stop();
   for (const audio of was.audios) {
@@ -175,7 +176,10 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
     audio.srcObject = new MediaStream([t.receiver.track]);
     audios.push(audio);
   }
+  // what ice did, in the console: a call that never links says how far it got
+  pc.oniceconnectionstatechange = () => console.info(`voice: ice ${pc.iceConnectionState}`);
   pc.onconnectionstatechange = () => {
+    console.info(`voice: peer ${pc.connectionState}`);
     if (pc.connectionState === 'connected' && mine === attempt) setCall({ linked: true });
     if (pc.connectionState === 'failed') fail(mine, store.get(voiceCallAtom).linked ? 'voice lost its connection' : NO_AUDIO_PATH);
   };
@@ -222,10 +226,14 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
   live.timer = setInterval(() => void readLevels(mine, me), LEVEL_MS);
 }
 
-/** Why the socket closed with no word from the voice server, from where the call had got to. */
+/**
+ * Why the socket closed with no word from the voice server, from where the call had got to. An
+ * ice that never connects is the voice server's to say (its `no audio path` frame), so a bare
+ * close before the audio linked is the socket's doing, not udp's.
+ */
 function closedWord(call: VoiceCall, code: number): string {
   if (call.phase !== 'connected') return code === 1006 ? 'voice is unreachable: the voice server did not answer' : `voice is unreachable (${code})`;
-  if (!call.linked) return NO_AUDIO_PATH;
+  if (!call.linked) return code === 1006 ? 'voice dropped before the audio connected: the connection to the voice server broke' : `voice dropped before the audio connected (${code})`;
   return code === 1006 ? 'voice dropped: the connection to the voice server broke' : `voice dropped: the voice server closed the call (${code})`;
 }
 

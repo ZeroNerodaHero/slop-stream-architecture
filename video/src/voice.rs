@@ -59,7 +59,9 @@ use webrtc::ice::mdns::MulticastDnsMode;
 use webrtc::ice::network_type::NetworkType;
 use webrtc::ice::udp_mux::{UDPMuxDefault, UDPMuxParams};
 use webrtc::ice::udp_network::UDPNetwork;
+use webrtc::ice_transport::ice_candidate_pair::RTCIceCandidatePair;
 use webrtc::ice_transport::ice_candidate_type::RTCIceCandidateType;
+use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
@@ -809,6 +811,17 @@ async fn voice_peer(voice: &Voice, tag: &str, dead: Arc<Notify>, linked: Arc<Ato
         .with_interceptor_registry(registry)
         .build();
     let peer = api.new_peer_connection(RTCConfiguration::default()).await?;
+    // what ice did and which pair won, so a call that never links says how far it got
+    let ice_tag = tag.to_owned();
+    peer.on_ice_connection_state_change(Box::new(move |state: RTCIceConnectionState| {
+        log::info!("{ice_tag}: ice {state}");
+        Box::pin(async {})
+    }));
+    let pair_tag = tag.to_owned();
+    peer.dtls_transport().ice_transport().on_selected_candidate_pair_change(Box::new(move |pair: RTCIceCandidatePair| {
+        log::info!("{pair_tag}: ice pair {pair}");
+        Box::pin(async {})
+    }));
     let tag = tag.to_owned();
     peer.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
         log::info!("{tag}: peer {state}");
