@@ -22,7 +22,7 @@ import rnnoiseSimdWasmUrl from '@sapphi-red/web-noise-suppressor/rnnoise_simd.wa
 // oxlint-disable-next-line import/default -- `?url` is vite's: the default export is the file's url
 import rnnoiseWorkletUrl from '@sapphi-red/web-noise-suppressor/rnnoiseWorklet.js?url';
 
-import { api, messageOf } from '@/infra/api';
+import { api, messageOf, statusOf } from '@/infra/api';
 import { socketUrl } from '@/infra/frames';
 import { FLOOR_DB, type Level, levelAnalyser, levelOf } from '@/infra/mic-level';
 import { store } from '@/infra/store';
@@ -41,6 +41,10 @@ const LEVEL_MS = 150;
 const SPEAKING = 0.03;
 /** How often the call's quality (ping, loss, bitrate) is read: off the same getStats as the levels, every so many of them. */
 const STATS_MS = 2000;
+/** How long a join waits for the voice server's answer once the mic is held: a socket that opens and says nothing is a failed try. */
+const ANSWER_MS = 15000;
+/** The waits before each retry of a join that failed: 5 tries in all, the first at once. */
+export const RETRY_MS: readonly number[] = [1000, 2000, 4000, 8000];
 
 export interface VoiceSeat {
   seat: number;
@@ -54,19 +58,22 @@ export interface VoiceSeat {
 }
 
 /**
- * This tab's call. `joining` from the click to the answer; `linked` once the audio itself is
- * through (the peer connected over udp), which can lag the answer or never come; `error` is a
- * quiet line under the list, '' for none.
+ * This tab's call. `joining` from the click to the answer, through every retry and the waits
+ * between them; `linked` once the audio itself is through (the peer connected over udp), which
+ * can lag the answer or never come; `failed` once the last try failed, still on its server and
+ * channel (the greyed seat and the dialog say why) until it is left or tried again. `error` is
+ * the last try's reason, '' for none; `retry` is which retry this is, 0 for the first try.
  */
 export interface VoiceCall {
-  phase: 'idle' | 'joining' | 'connected';
+  phase: 'idle' | 'joining' | 'connected' | 'failed';
   server: string;
   channel: string;
   linked: boolean;
   error: string;
+  retry: number;
 }
 
-const IDLE: VoiceCall = { phase: 'idle', server: '', channel: '', linked: false, error: '' };
+const IDLE: VoiceCall = { phase: 'idle', server: '', channel: '', linked: false, error: '', retry: 0 };
 
 /** A call whose audio never got through: the answer came over the socket, the udp did not. */
 const NO_AUDIO_PATH = 'no audio path: nothing got through to the voice server over udp, a firewall is closing it';
@@ -89,13 +96,19 @@ interface Live {
   ws: WebSocket | null;
   audios: HTMLAudioElement[];
   timer: ReturnType<typeof setInterval> | null;
+  /** Fails the try when no answer came in ANSWER_MS; cleared by the answer. */
+  deadline: ReturnType<typeof setTimeout> | null;
   /** The counters at the last stats read, for the deltas of the next; null before the first. */
   sample: StatsSample | null;
 }
 
 let live: Live | null = null;
-/** Which join is the current one: anything an older one finishes after a leave is dropped. */
+/** Which try is the current one: anything an older one finishes after a leave or a retry is dropped. */
 let attempt = 0;
+/** The wait before the next retry, while there is one. */
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+/** Who the join is for: a retry joins as them again. */
+let joiningAs = '';
 
 function setCall(next: Partial<VoiceCall>): void {
   store.set(voiceCallAtom, { ...store.get(voiceCallAtom), ...next });
@@ -113,6 +126,7 @@ function teardown(): void {
   if (!was) return;
   releaseVoiceMic();
   if (was.timer) clearInterval(was.timer);
+  if (was.deadline) clearTimeout(was.deadline);
   if (was.ws) {
     was.ws.onclose = null;
     was.ws.onmessage = null;
@@ -127,15 +141,57 @@ function teardown(): void {
   }
 }
 
-/** The call went wrong: down, with the word under the list. */
-function fail(mine: number, error: string): void {
-  if (mine !== attempt) return;
-  teardown();
-  store.set(voiceCallAtom, { ...IDLE, error });
+/** Reasons another try would get the same answer: the channel is full, voice is shut to you, the mic is blocked or missing. */
+const FINAL = ['room full', 'too many voice peers', 'voice is not open', 'not allowed', 'notallowederror', 'notfounderror', 'unauthorized'];
+
+/** Whether a join that failed with `error` is worth another try. `status` is the grant's http status when the api answered with one: a 4xx is final. */
+export function retryable(error: string, status?: number): boolean {
+  if (status !== undefined && status >= 400 && status < 500) return false;
+  const said = error.toLowerCase();
+  return !FINAL.some((word) => said.includes(word));
 }
 
-/** Out of the call, if in one. Clicked, or the page going away. */
+/** The wait before retry number `retry` (1 for the first), or null once the tries are spent. */
+export function retryDelay(retry: number): number | null {
+  return RETRY_MS[retry - 1] ?? null;
+}
+
+function clearRetry(): void {
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = null;
+}
+
+/**
+ * The try went wrong: everything put down (no mic, socket or peer through a wait). A join whose
+ * audio never got through tries again from scratch after its wait, still `joining`, unless the
+ * reason is final or the tries are spent: then `failed`, on the same server and channel, for the
+ * dialog. A call that was through and dropped is not retried.
+ */
+function fail(mine: number, error: string, status?: number): void {
+  if (mine !== attempt) return;
+  teardown();
+  const call = store.get(voiceCallAtom);
+  const retry = call.retry + 1;
+  const wait = retryDelay(retry);
+  if (!call.linked && wait !== null && retryable(error, status)) {
+    console.info(`voice: try ${retry} failed (${error}), again in ${wait}ms`);
+    // the next try's number now: anything the one that failed still finishes is dropped
+    const next = ++attempt;
+    store.set(voiceCallAtom, { ...call, phase: 'joining', linked: false, error, retry });
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      // the call as it is now: a channel renamed during the wait is joined by its new name
+      const now = store.get(voiceCallAtom);
+      if (next === attempt && now.phase === 'joining') void tryJoin(now.server, now.channel, joiningAs);
+    }, wait);
+    return;
+  }
+  store.set(voiceCallAtom, { ...call, phase: 'failed', linked: false, error });
+}
+
+/** Out of the call, if in one, and no more retries. Clicked (leave, cancel, dismiss), another channel, or the page going away. */
 export function leaveVoice(): void {
+  clearRetry();
   attempt++;
   teardown();
   store.set(voiceCallAtom, IDLE);
@@ -165,30 +221,45 @@ export function setVoiceDeaf(deaf: boolean): void {
   sayVoiceState(store.get(voiceMutedAtom), deaf);
 }
 
-/** Into `channel` of `server`. Already in it: nothing. In another: out of that one first. */
+/** The mic could not be had: its DOMException's name goes in the reason, so a blocked or missing one is final (`retryable`) and the dialog can say which. */
+function noMic(err: unknown): string {
+  const name = (err as { name?: string } | null)?.name || 'Error';
+  return `no microphone (${name}): allow it in the browser to talk`;
+}
+
+/**
+ * Into `channel` of `server`: a run of up to 5 tries (fail). Already in it or joining it: nothing;
+ * failed there, a fresh run. In another: out of that one first.
+ */
 export async function joinVoice(server: string, channel: string, me: string): Promise<void> {
   const call = store.get(voiceCallAtom);
-  if (call.phase !== 'idle' && call.server === server && call.channel === channel) return;
+  if ((call.phase === 'joining' || call.phase === 'connected') && call.server === server && call.channel === channel) return;
   leaveVoice();
+  joiningAs = me;
+  store.set(voiceCallAtom, { ...IDLE, phase: 'joining', server, channel });
+  await tryJoin(server, channel, me);
+}
+
+/** One try, from scratch: a fresh grant, mic, peer and socket. `attempt` is already this try's. */
+async function tryJoin(server: string, channel: string, me: string): Promise<void> {
   const mine = attempt;
-  store.set(voiceCallAtom, { phase: 'joining', server, channel, linked: false, error: '' });
 
   let grant;
   try {
     grant = await api.joinVoice(server, channel);
   } catch (err) {
-    return fail(mine, messageOf(err));
+    return fail(mine, messageOf(err), statusOf(err));
   }
   if (mine !== attempt) return;
 
   try {
     await holdVoiceMic();
-  } catch {
-    return fail(mine, 'no microphone: allow it in the browser to talk');
+  } catch (err) {
+    return fail(mine, noMic(err));
   }
   if (mine !== attempt || !mic) {
     releaseVoiceMic();
-    if (mine === attempt) fail(mine, 'no microphone: allow it in the browser to talk');
+    if (mine === attempt) fail(mine, noMic(new DOMException('no microphone', 'NotFoundError')));
     return;
   }
 
@@ -196,7 +267,8 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
   const pc = new RTCPeerConnection();
   const audios: HTMLAudioElement[] = [];
   // from here teardown lets go of the mic
-  live = { pc, ws: null, audios, timer: null, sample: null };
+  live = { pc, ws: null, audios, timer: null, deadline: null, sample: null };
+  live.deadline = setTimeout(() => fail(mine, 'voice timed out: no answer from the voice server'), ANSWER_MS);
   // the mic is allowed now, so the browser names the devices: a pick that is gone shows as gone
   void refreshVoiceDevices();
   applyMic();
@@ -254,6 +326,7 @@ export async function joinVoice(server: string, channel: string, me: string): Pr
       pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp }).then(
         () => {
           if (mine !== attempt) return;
+          if (live?.deadline) clearTimeout(live.deadline);
           setCall({ phase: 'connected' });
           startVideo(
             pc,
