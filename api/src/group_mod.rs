@@ -34,8 +34,10 @@ pub(crate) const CHANNELS: i32 = 4;
 pub(crate) const KICK: i32 = 8;
 /// The same, and they cannot join again until the ban is lifted.
 pub(crate) const BAN: i32 = 16;
+/// In a voice channel: server mute, deafen, disconnect, and move someone to another voice channel.
+pub(crate) const VOICE: i32 = 32;
 
-const ALL: i32 = APPEARANCE | ROLES | CHANNELS | KICK | BAN;
+const ALL: i32 = APPEARANCE | ROLES | CHANNELS | KICK | BAN | VOICE;
 const MAX_ROLES: i64 = 20;
 const MAX_ICON: usize = 256 * 1024;
 /// The banner is 2560x640, the room's width on a sharp screen; a photo at that size needs the room.
@@ -47,7 +49,7 @@ struct Held {
     perms: i32,
 }
 
-fn bits_of(appearance: bool, roles: bool, channels: bool, kick: bool, ban: bool) -> i32 {
+fn bits_of(appearance: bool, roles: bool, channels: bool, kick: bool, ban: bool, voice: bool) -> i32 {
     let mut bits = 0;
     if appearance {
         bits |= APPEARANCE;
@@ -64,6 +66,9 @@ fn bits_of(appearance: bool, roles: bool, channels: bool, kick: bool, ban: bool)
     if ban {
         bits |= BAN;
     }
+    if voice {
+        bits |= VOICE;
+    }
     bits
 }
 
@@ -74,6 +79,7 @@ fn perms_json(bits: i32) -> Value {
         "channels": bits & CHANNELS != 0,
         "kick": bits & KICK != 0,
         "ban": bits & BAN != 0,
+        "voice": bits & VOICE != 0,
     })
 }
 
@@ -249,11 +255,13 @@ struct PermsIn {
     kick: bool,
     #[serde(default)]
     ban: bool,
+    #[serde(default)]
+    voice: bool,
 }
 
 impl PermsIn {
     fn bits(&self) -> i32 {
-        bits_of(self.appearance, self.roles, self.channels, self.kick, self.ban) & ALL
+        bits_of(self.appearance, self.roles, self.channels, self.kick, self.ban, self.voice) & ALL
     }
 }
 
@@ -1387,10 +1395,28 @@ mod tests {
 
     #[test]
     fn powers_pack() {
-        assert_eq!(bits_of(true, false, true, false, false), APPEARANCE | CHANNELS);
+        assert_eq!(bits_of(true, false, true, false, false, false), APPEARANCE | CHANNELS);
+        assert_eq!(bits_of(false, false, false, false, false, true), VOICE);
         assert_eq!(PermsIn { kick: true, ban: true, ..PermsIn::default() }.bits(), KICK | BAN);
         assert_eq!(perms_json(ROLES)["roles"], json!(true));
         assert_eq!(perms_json(ROLES)["kick"], json!(false));
+        assert_eq!(perms_json(ROLES)["voice"], json!(false));
+    }
+
+    #[test]
+    fn voice_goes_round() {
+        let back = |bits: i32| {
+            let p: PermsIn = serde_json::from_value(perms_json(bits)).unwrap();
+            p.bits()
+        };
+        assert_eq!(back(VOICE), VOICE);
+        assert_eq!(back(VOICE | KICK), VOICE | KICK);
+        assert_eq!(back(ALL), ALL);
+        assert_eq!(perms_json(VOICE)["voice"], json!(true));
+        assert_eq!(perms_json(VOICE)["ban"], json!(false));
+        // an older client that never heard of voice gives none
+        let old: PermsIn = serde_json::from_value(json!({ "kick": true })).unwrap();
+        assert_eq!(old.bits(), KICK);
     }
 
     #[test]
@@ -1400,6 +1426,7 @@ mod tests {
         assert!(shaper.reaches(ROLES));
         assert!(shaper.reaches(ROLES | KICK));
         assert!(!shaper.reaches(BAN));
+        assert!(!shaper.reaches(VOICE));
         assert!(!shaper.reaches(ROLES | KICK | APPEARANCE));
         assert!(Shaper { owner: true, admin: false, perms: 0 }.reaches(ALL));
         assert!(Shaper { owner: false, admin: true, perms: 0 }.reaches(ALL));
