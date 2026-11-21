@@ -64,6 +64,17 @@ closing the socket, or the peer going failed or closed (the ice timeout), frees 
 
 the page ([voice-atoms.ts](../frontend/src/infra/atoms/voice-atoms.ts)) says `connecting to <channel>…` in the bar from the answer until its peer connects, then `in <channel>`. a call that ends shows its reason under the list: the voice server's error word when it sent one, else from what the page saw (`no audio path...` when its own peer failed before connecting, `voice dropped before the audio connected` when only the socket closed before then, `voice dropped: ...` when it had connected, `voice is unreachable` before an answer). both sides log what ice did: the voice server its ice states and the pair that won (`ice pair (local) ... <-> (remote) ...`), the page `voice: ice ...` and `voice: peer ...` in the console.
 
+## the mic
+
+the page opens the mic once ([voice-atoms.ts](../frontend/src/infra/atoms/voice-atoms.ts), "the mic"), for the call and for the user modal's voice tab together: whoever holds it shares the one getUserMedia stream and the one AudioContext, and the last to let go stops the tracks and closes the context. raw mic → rnnoise (voice isolation) → the noise gate ([voice-gate-worklet.js](../frontend/src/infra/voice-gate-worklet.js)) → the track m-line 0 sends. the tab's meter reads an analyser before the gate. a new device or a new setting opens a new mic and swaps it onto the call's sender (`replaceTrack`): no new offer, the seat stays.
+
+the voice tab's settings, kept in this browser (`settings.voice*` in localStorage):
+
+- **voice isolation** (on by default): rnnoise in an AudioWorklet (`@sapphi-red/web-noise-suppressor`), its wasm fetched the first time it is on. the browser's `noiseSuppression` is off while it is on, so the voice is not cleaned twice. needs a 48kHz context; where it cannot run (no web audio, firefox at another rate) the tab says so and the browser's suppression is used.
+- **echo cancellation** and **auto gain**: getUserMedia constraints, on by default.
+- **input mode**: voice activity, where the gate opens over the input sensitivity (dB on the meter's scale, a mark on the meter; all the way left is always open), or push to talk.
+- **push to talk**: a key (`KeyboardEvent.code`, default backtick) and a release delay (default 200ms). while in a call the mic's track is enabled only while the key is down, not while typing in a box. the page's own keys only: it does nothing while another window or tab has the focus, and losing the focus lets the key go. mute and deafen are over both modes. the voice panel's mic button goes green while the key has the mic open.
+
 ## who is in voice
 
 the voice server tells the api, and the api keeps it in redis:

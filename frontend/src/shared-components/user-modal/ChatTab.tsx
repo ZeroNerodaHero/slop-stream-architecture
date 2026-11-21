@@ -19,9 +19,10 @@ import {
   setPipChatPlace,
   setProfilePopupEnabled
 } from '@/infra/atoms/settings-atoms';
+import { setShowWelcomes, showWelcomesAtom } from '@/infra/atoms/welcome-atoms';
 import { useIsMobile } from '@/infra/mobile';
 import { GeneratedAvatar } from '@/shared-components/GeneratedAvatar';
-import { FIELDSET, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
+import { CHECKBOX, FIELDSET, Info, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 /** The places the stream's chat can sit. The card's picture is the page. */
@@ -257,6 +258,7 @@ export function ChatTab() {
   const chatStyle = useAtomValue(chatStyleAtom);
   const profilePopup = useAtomValue(profilePopupEnabledAtom);
   const linkWarning = useAtomValue(linkWarningAtom);
+  const showWelcomes = useAtomValue(showWelcomesAtom);
   // a phone's watch page and go live page are the window, the chat in a tab under the player (mobile.ts): no side to pick
   const mobile = useIsMobile();
   return (
@@ -359,6 +361,16 @@ export function ChatTab() {
           {BOT_OPTIONS.map(({ hide, id, label, icon }) => (
             <OptionCard key={id} id={id} name="bots" checked={hide === hideBots} onChange={() => setHideBots(hide)} picture={icon} label={label} compact />
           ))}
+        </div>
+      </fieldset>
+
+      {/* the bot Eques's line at the top of a stream's chat when it opens (welcome-atoms.ts): this browser's, on to start */}
+      <fieldset className={FIELDSET}>
+        <legend className={SECTION_TITLE}>welcome</legend>
+        <div className="flex items-center gap-2 py-1.5 text-sm font-semibold text-textPrimary">
+          <input id="show-welcomes" type="checkbox" checked={showWelcomes} onChange={(e) => setShowWelcomes(e.target.checked)} className={CHECKBOX} />
+          <label htmlFor="show-welcomes">show welcome messages</label>
+          <Info tip="the line Eques says when you open a stream's chat. hiding the bots hides it too" />
         </div>
       </fieldset>
     </div>

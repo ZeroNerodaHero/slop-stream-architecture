@@ -17,7 +17,8 @@ import { meAtom, reloadMe } from '@/infra/atoms/auth-atoms';
 import { nickAtom, reconnectChat, refaceLines } from '@/infra/atoms/chat-atoms';
 import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { followIdentityOnLivePage } from '@/infra/atoms/publish-atoms';
-import { socialsAtom, watchNameAtom } from '@/infra/atoms/watch-atoms';
+import { socialsAtom, watchNameAtom, watchWelcomeAtom } from '@/infra/atoms/watch-atoms';
+import { type Welcome, welcomeOf } from '@/infra/atoms/welcome-atoms';
 import { onEvents, reconnectEvents } from '@/infra/events';
 import { cleanName, isDummyName, isValidName } from '@/infra/names';
 import { AVATAR_PICTURE, OFFLINE_PICTURE } from '@/infra/picture';
@@ -66,6 +67,12 @@ export const profileSocialsDirtyAtom = atom((get) => socialsKey(get(profileSocia
 /** The api keeps this many characters of the line, one line. The box stops there too. */
 export const MAX_OFFLINE_NOTE_CHARS = 140;
 
+/** My chat welcome as the api last gave or took it (welcome-atoms.ts): what my own chat shows. null until loaded, or from an older api. */
+export const profileWelcomeAtom = atom<Welcome | null>(null);
+/** Its words as typed in the box. */
+export const profileWelcomeDraftAtom = atom('');
+export const profileWelcomeStatusAtom = atom('');
+
 /** The picture to show for me, if it has been loaded for the name I am now. */
 export const myAvatarVersionAtom = atom((get) => (get(profileForAtom) === get(myNameAtom) ? get(profileAvatarAtom) : null));
 /** The same for the offline picture. */
@@ -92,6 +99,7 @@ export const whyNotEditAtom = atom((get) => {
 
 let loadedBio = '';
 let loadedNote = '';
+let loadedWelcome = '';
 let generation = 0;
 
 /**
@@ -105,6 +113,9 @@ export async function loadMyProfile(): Promise<void> {
   if (store.get(profileForAtom) !== name) {
     if (store.get(profileBioAtom).trim() === loadedBio) store.set(profileBioAtom, '');
     if (store.get(profileOfflineNoteAtom).trim() === loadedNote) store.set(profileOfflineNoteAtom, '');
+    if (store.get(profileWelcomeDraftAtom) === loadedWelcome) store.set(profileWelcomeDraftAtom, '');
+    store.set(profileWelcomeAtom, null);
+    store.set(profileWelcomeStatusAtom, '');
     if (socialsKey(store.get(profileSocialsAtom)) === store.get(loadedSocialsAtom)) store.set(profileSocialsAtom, EMPTY_SOCIALS);
     store.set(profileBioStatusAtom, '');
     store.set(profileAvatarStatusAtom, '');
@@ -116,7 +127,7 @@ export async function loadMyProfile(): Promise<void> {
     store.set(loadedSocialsAtom, socialsKey(EMPTY_SOCIALS));
     store.set(profileVerifiedAtom, false);
     store.set(profileForAtom, name);
-    loadedBio = loadedNote = '';
+    loadedBio = loadedNote = loadedWelcome = '';
   }
   if (!isValidName(name)) return;
   try {
@@ -126,6 +137,10 @@ export async function loadMyProfile(): Promise<void> {
     if (!store.get(profileBioAtom)) store.set(profileBioAtom, loadedBio);
     loadedNote = p.offline_note ?? '';
     if (!store.get(profileOfflineNoteAtom)) store.set(profileOfflineNoteAtom, loadedNote);
+    const welcome = welcomeOf(p);
+    store.set(profileWelcomeAtom, welcome);
+    loadedWelcome = welcome?.message ?? '';
+    if (!store.get(profileWelcomeDraftAtom)) store.set(profileWelcomeDraftAtom, loadedWelcome);
     // the links: the api's, unless a row was added while it was answering (an untouched draft is the empty document)
     const socials = cleanSocials(p.socials);
     store.set(loadedSocialsAtom, socialsKey(socials));
@@ -139,9 +154,10 @@ export async function loadMyProfile(): Promise<void> {
 }
 
 /** My own page open in this tab shows the links from its grant: a save shows there at once, no reload. */
-function alsoOnWatchPage(name: string, saved: { socials?: Socials }) {
+function alsoOnWatchPage(name: string, saved: { socials?: Socials; welcome?: Welcome }) {
   if (store.get(watchNameAtom) !== name) return;
   if (saved.socials) store.set(socialsAtom, saved.socials);
+  if (saved.welcome) store.set(watchWelcomeAtom, saved.welcome);
 }
 
 /** The status, as typed; the api keeps it as one line, and the box shows that if nothing was typed meanwhile. */
@@ -247,6 +263,33 @@ export async function saveMyOfflineNote(): Promise<void> {
     store.set(profileOfflineNoteStatusAtom, saved.offline_note ? 'saved' : 'cleared');
   } catch (err) {
     store.set(profileOfflineNoteStatusAtom, `not saved: ${messageOf(err)}`);
+  }
+}
+
+/**
+ * The chat welcome: on or off, and the words. The switch goes up with the words as last saved,
+ * the save button with the words as typed; the api keeps them cleaned (empty is the default
+ * words), and the box shows that if nothing was typed meanwhile.
+ */
+export async function saveMyWelcome(on: boolean, message: string): Promise<void> {
+  const name = store.get(myNameAtom);
+  if (!isValidName(name)) {
+    store.set(profileWelcomeStatusAtom, 'pick a name first');
+    return;
+  }
+  store.set(profileWelcomeStatusAtom, 'saving');
+  try {
+    const saved = await api.saveWelcome(name, { on, message });
+    const welcome = welcomeOf(saved);
+    if (store.get(profileForAtom) === name && welcome) {
+      store.set(profileWelcomeAtom, welcome);
+      if (store.get(profileWelcomeDraftAtom) === message) store.set(profileWelcomeDraftAtom, welcome.message);
+      loadedWelcome = welcome.message;
+    }
+    store.set(profileWelcomeStatusAtom, saved.welcome_on ? 'saved' : 'saved · off');
+    if (welcome) alsoOnWatchPage(name, { welcome });
+  } catch (err) {
+    store.set(profileWelcomeStatusAtom, `not saved: ${messageOf(err)}`);
   }
 }
 

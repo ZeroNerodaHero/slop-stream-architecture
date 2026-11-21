@@ -16,11 +16,12 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
-import { api, messageOf, type Owner } from '@/infra/api';
+import { api, type GroupBadge, messageOf, type Owner } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { type ChatLine, type ChatRoom, chatRoomFor, chatSpeakerAtom, isBotLine, MAX_CHAT_IMAGES, nickAtom, nickIsValidAtom, setNick } from '@/infra/atoms/chat-atoms';
+import { BOT_GROUP, type ChatLine, type ChatRoom, chatRoomFor, chatSpeakerAtom, isBotLine, MAX_CHAT_IMAGES, nickAtom, nickIsValidAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
-import { type ChatStyle, chatStyleAtom, profilePopupEnabledAtom } from '@/infra/atoms/settings-atoms';
+import { type ChatStyle, chatStyleAtom, hideBotsAtom, profilePopupEnabledAtom } from '@/infra/atoms/settings-atoms';
+import { EQUES, showWelcomesAtom, type Welcome } from '@/infra/atoms/welcome-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ChatLineShape, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
@@ -94,6 +95,8 @@ interface ChatPanelProps {
   lineActions?: (line: ChatLine) => ReactNode;
   /** Rows of a line's `more` menu after its own: a group moderator's delete, kick, timeout and ban (GroupMod.tsx `lineModItems`). */
   lineMenu?: (line: ChatLine) => LineMenuItem[];
+  /** A stream's chat welcome (welcome-atoms.ts): `Eques` says it at the top of the lines, on this screen alone. The watch page's and the go live page's chat. */
+  welcome?: Welcome | null;
   className?: string;
 }
 
@@ -451,6 +454,52 @@ function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
   );
 }
 
+/** The badge the bots' lines wear (the `bot` group, schema.sql), worn by `Eques` too. */
+const BOT_BADGE: GroupBadge = { name: BOT_GROUP, badge: 'BOT', color: '#5865f2' };
+
+/**
+ * The chat welcome: one line from the bot `Eques` at the top of the lines, in the shape the lines
+ * take, stamped when the chat was opened (`room` remounts it). Drawn here and nowhere else: not
+ * in the room's lines, so never sent, kept, counted as unread or searched, and no action bar. A
+ * bot's line, so the bots' switch hides it, and so does this browser's `show welcome messages`.
+ * Its links go through `ExternalLink` (LinkedText), the leave-site word with them.
+ */
+function WelcomeLine({ welcome }: { welcome: Welcome }) {
+  const shape = useAtomValue(chatStyleAtom);
+  const hideBots = useAtomValue(hideBotsAtom);
+  const show = useAtomValue(showWelcomesAtom);
+  const [at] = useState(() => Date.now());
+  if (!welcome.on || hideBots || !show) return null;
+  return (
+    <ChatLineShape
+      shape={shape}
+      mine={false}
+      at={at}
+      name={EQUES}
+      crowd
+      who={
+        <>
+          <span data-from={EQUES} className="font-semibold text-textSecondary">
+            {EQUES}
+          </span>
+          <span className="ml-1 inline-flex items-center gap-1 align-middle">
+            <Badge group={BOT_BADGE} />
+          </span>
+        </>
+      }
+      face={<Face name={EQUES} version={null} className="h-8 w-8 text-sm" />}
+      words={
+        <span className="whitespace-pre-wrap">
+          <LinkedText text={welcome.message} />
+        </span>
+      }
+      attrs={{ id: 'chat-welcome', 'data-bot': true, 'data-welcome': '' }}
+      first
+      bucket
+    />
+  );
+}
+
 /**
  * What stands in the lines' place while the room's past is on its way: grey lines in the shape
  * the lines will take, so the panel reads as a chat that has not arrived and not as one with
@@ -635,6 +684,7 @@ export function ChatPanel({
   lineMark,
   lineActions,
   lineMenu,
+  welcome = null,
   className
 }: ChatPanelProps) {
   const server = channel !== undefined;
@@ -883,6 +933,7 @@ export function ChatPanel({
             className={cn('flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-2 py-1 text-sm leading-snug', shape === 'log' ? 'gap-1' : 'gap-0.5')}
           >
             {waiting && <ChatSkeleton shape={shape} />}
+            {!waiting && !server && welcome && <WelcomeLine key={room.key} welcome={welcome} />}
             {!waiting && lines.length === 0 && (
               <p className="text-textTertiary">{hiddenBots ? `only bots so far, ${hiddenBots} lines hidden.` : 'nothing yet. say something.'}</p>
             )}

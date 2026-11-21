@@ -43,7 +43,8 @@ import {
   watchPhaseAtom,
   watchRenamedToAtom,
   watchToneAtom,
-  watchViewersAtom
+  watchViewersAtom,
+  watchWelcomeAtom
 } from '@/infra/atoms/watch-atoms';
 import { dmActiveAtom, dmOpenAtom, hideDms, openDm } from '@/infra/atoms/dm-atoms';
 import { followingAtom, loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
@@ -228,6 +229,7 @@ export function WatchPage() {
   const avatar = useAtomValue(avatarAtom);
   const offline = useAtomValue(offlineAtom);
   const offlineNote = useAtomValue(offlineNoteAtom);
+  const welcome = useAtomValue(watchWelcomeAtom);
   const followers = useAtomValue(followersAtom);
   const socials = useAtomValue(socialsAtom);
   const joined = useAtomValue(joinedAtom);
@@ -624,7 +626,7 @@ export function WatchPage() {
     };
     const content = (t: PhoneTab) =>
       t === 'chat' ? (
-        <ChatPanel name={name} lineActions={modActions} className={cn('h-full min-h-0 flex-1', CHAT_MOBILE)} />
+        <ChatPanel name={name} lineActions={modActions} welcome={welcome} className={cn('h-full min-h-0 flex-1', CHAT_MOBILE)} />
       ) : t === 'about' ? (
         <>
           <div className="[&>div]:mt-0">{status}</div>
@@ -799,7 +801,7 @@ export function WatchPage() {
             className={cn(!chatTab ? 'contents' : deskTab !== 'chat' && 'invisible h-0 overflow-hidden')}
           >
             <ChatSlot tabbed={chatTab}>
-              <ChatPanel name={name} lineActions={modActions} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
+              <ChatPanel name={name} lineActions={modActions} welcome={welcome} className={cn('h-full min-h-0 flex-1', chatSide === 'modal' && 'border-0')} />
             </ChatSlot>
           </div>
         )}

@@ -52,6 +52,9 @@ export interface Streamer extends OAuthVerified {
   socials?: Socials;
   /** About me (docs/about.md): the words first on the about tab. Empty for none; absent on an older api. */
   about?: string;
+  /** The chat welcome (welcome-atoms.ts): whether the bot `Eques` says it when a viewer opens the chat, and the words. Absent on an older api: none said. */
+  welcome_on?: boolean;
+  welcome?: string;
   /** The word next to the name: `offline` `online` `dnd` `streaming`. See docs/status.md. */
   presence: Presence;
   /** How many follow the name (docs/follows.md). Absent on an older api. */
@@ -511,6 +514,9 @@ export interface WatchGrant extends OAuthVerified {
   socials?: Socials;
   /** About me (docs/about.md), for the about tab. Absent on an older api. */
   about?: string;
+  /** The chat welcome (welcome-atoms.ts): whether the bot `Eques` says it when a viewer opens the chat, and the words. Absent on an older api: none said. */
+  welcome_on?: boolean;
+  welcome?: string;
   /** How many follow the name, and whether the asking login does (docs/follows.md). Absent on an older api. */
   followers?: number;
   following?: boolean;
@@ -929,6 +935,9 @@ export const api = {
   offlineUrl: (name: string, version: number) => `/api/streamers/${encodeURIComponent(name)}/offline?v=${version}`,
   /** The line under the word while not live. One line, 140 characters; empty clears it. */
   saveOfflineNote: (name: string, note: string) => request<{ name: string; offline_note: string }>('PUT', `/api/streamers/${name}/offline-note`, { note }),
+  /** The chat welcome, through the bio's gate (welcome-atoms.ts). The words cleaned, 300 characters; empty is the default words. */
+  saveWelcome: (name: string, welcome: { on: boolean; message: string }) =>
+    request<{ name: string; welcome_on: boolean; welcome: string }>('PUT', `/api/streamers/${name}/welcome`, welcome),
   /** The links under the player, replaced whole, through the bio's gate (docs/socials.md). 400 `bad url…` / `bad kind` / `too many links…`; the answer is the document as kept. */
   saveSocials: (name: string, socials: Socials) => request<{ name: string; socials: Socials }>('PUT', `/api/streamers/${name}/socials`, socials),
   /** The presence choice, through the bio's gate. The answer also arrives on the events socket, to every tab and device. */
