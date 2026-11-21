@@ -8,9 +8,17 @@
 //! learns who it is talking to. The voice server never sees the cookie, and a grant is good for
 //! one connection and half a minute.
 //!
-//! Who is in a channel is `voice:<server>`, a hash of user id to `{name, channel, ...}`, and
-//! `voiceof:<user>` says `server/channel` for whoever is in one. The voice server writes both
-//! through its own calls; join only reads them, for `already in voice` and `channel full`.
+//! Who is in a channel is `voice:<server>`, a hash of user id to `{name, channel, seat, since,
+//! beat, session}`, and `voiceof:<user>` says `server/channel` for whoever is in one;
+//! `voice:servers` is the set of servers with anyone in voice. The voice server writes them
+//! through its own calls: `attached` once a person has a seat, `left` when the seat frees, and
+//! one `beat` every 15s for everyone seated. Each stay is a `voice_sessions` row (its id is the
+//! field's `session`), and each change is a group fact on `group:<server>`, `voice` and
+//! `voice_left`, `{who, uid, channel}`. Join only reads them, for `already in voice` and
+//! `channel full`.
+//!
+//! A voice server that dies says nothing, so `sweep` drops every field whose beat is older than
+//! `STALE_AFTER` the same way `left` does: its people are gone within a minute.
 //!
 //! The internal routes answer only inside the compose network: a request caddy passed (it
 //! always sets X-Forwarded-For) is a 404, and one without `X-Voice-Secret` equal to
@@ -34,18 +42,61 @@ use uuid::Uuid;
 
 use crate::auth::Me;
 use crate::group_mod::{allows, CHANNELS};
-use crate::groups::{channel_names, may_see, member};
+use crate::groups::{channel_names, may_see, member, tell};
 use crate::{ApiError, ApiResult, AppState};
 
 /// How long a grant waits to be redeemed, in seconds.
 const GRANT_TTL: u64 = 30;
 /// How many fit in a voice channel whose `user_limit` is 0 (no limit set).
 const DEFAULT_LIMIT: usize = 16;
+/// How often `sweep` looks, in milliseconds.
+const SWEEP_EVERY: i64 = 15_000;
+/// A field whose beat is older than this, in milliseconds, is a seat nobody holds any more: three
+/// beats missed. Swept within `STALE_AFTER + SWEEP_EVERY`, a minute.
+const STALE_AFTER: i64 = 45_000;
+/// The set of servers that have had anyone in voice, for `sweep`.
+const SERVERS_KEY: &str = "voice:servers";
+
+/// Takes field ARGV[1] out of hash KEYS[1] and → it, or nil when it is not there. With ARGV[2]
+/// set, a field whose beat is at or past ARGV[2] stays (a beat came in after the sweep looked).
+const TAKE: &str = r"
+local v = redis.call('HGET', KEYS[1], ARGV[1])
+if not v then return false end
+if ARGV[2] ~= '' then
+  local ok, t = pcall(cjson.decode, v)
+  if ok and type(t) == 'table' and tonumber(t.beat) and tonumber(t.beat) >= tonumber(ARGV[2]) then return false end
+end
+redis.call('HDEL', KEYS[1], ARGV[1])
+return v";
+
+/// Sets `beat` to ARGV[2] in field ARGV[1] of hash KEYS[1], only while the field is there: a
+/// beat never brings back someone who left. → 1 when it did.
+const BEAT: &str = r"
+local v = redis.call('HGET', KEYS[1], ARGV[1])
+if not v then return 0 end
+local ok, t = pcall(cjson.decode, v)
+if not ok or type(t) ~= 'table' then return 0 end
+t.beat = tonumber(ARGV[2])
+redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(t))
+return 1";
+
+/// Deletes KEYS[1] only while it still holds ARGV[1].
+const DEL_IF: &str = r"
+if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end
+return 0";
+
+/// Forgets server ARGV[1] in set KEYS[2] only while its hash KEYS[1] is empty.
+const FORGET_IF_EMPTY: &str = r"
+if redis.call('HLEN', KEYS[1]) == 0 then return redis.call('SREM', KEYS[2], ARGV[1]) end
+return 0";
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/groups/{group}/voice/{channel}/join", post(join))
         .route("/api/voice/redeem", post(redeem))
+        .route("/api/voice/attached", post(attached))
+        .route("/api/voice/left", post(left))
+        .route("/api/voice/beat", post(beat))
 }
 
 /// What a grant stands for: who, and where they may talk.
@@ -67,6 +118,33 @@ fn voiceof_key(user: Uuid) -> String {
 
 fn voice_key(server: &str) -> String {
     format!("voice:{server}")
+}
+
+/// One person in voice: the value of their field in `voice:<server>`. `since` and `beat` are
+/// unix milliseconds (as a chat line's `at`), `session` the `voice_sessions` row of this stay.
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+struct Seated {
+    name: String,
+    channel: String,
+    seat: usize,
+    since: i64,
+    beat: i64,
+    session: i64,
+}
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+/// The beat in a field of `voice:<server>`, None when it has none or is not json.
+fn beat_of(field: &str) -> Option<i64> {
+    serde_json::from_str::<Value>(field).ok()?["beat"].as_i64()
+}
+
+/// Whether a field last beat at `beat` is a seat nobody holds at `now`: more than `STALE_AFTER`
+/// seconds ago, or no beat at all.
+fn stale(beat: Option<i64>, now: i64) -> bool {
+    beat.is_none_or(|b| now - b > STALE_AFTER)
 }
 
 /// VOICE_SECRET, read once. None while it is unset or empty: voice is off.
@@ -210,6 +288,206 @@ async fn redeem(State(s): State<AppState>, headers: HeaderMap, body: Result<Json
     Ok(Json(json!(grant)))
 }
 
+/// Takes `user` out of voice in `server`: their field (with `older_than`, only while its beat is
+/// older than that: the sweep's), their open `voice_sessions` rows, `voiceof` while it still
+/// names this stay, then `voice_left` to the group. Row first, then the fact. → whether there
+/// was a field to take.
+async fn leave(s: &AppState, server: &str, user: Uuid, older_than: Option<i64>) -> Result<bool, ApiError> {
+    let mut redis = s.redis.clone();
+    let taken: Option<String> = redis::cmd("EVAL")
+        .arg(TAKE)
+        .arg(1)
+        .arg(voice_key(server))
+        .arg(user.to_string())
+        .arg(older_than.map(|t| t.to_string()).unwrap_or_default())
+        .query_async(&mut redis)
+        .await?;
+    if taken.is_none() && older_than.is_some() {
+        return Ok(false);
+    }
+    sqlx::query("UPDATE voice_sessions SET left_at = now() WHERE user_id = $1 AND server = $2 AND left_at IS NULL")
+        .bind(user)
+        .bind(server)
+        .execute(&s.db)
+        .await?;
+    let Some(taken) = taken else { return Ok(false) };
+    let seated = serde_json::from_str::<Value>(&taken).unwrap_or_default();
+    let (name, channel) = (seated["name"].as_str().unwrap_or(""), seated["channel"].as_str().unwrap_or(""));
+    let _: i64 = redis::cmd("EVAL")
+        .arg(DEL_IF)
+        .arg(1)
+        .arg(voiceof_key(user))
+        .arg(format!("{server}/{channel}"))
+        .query_async(&mut redis)
+        .await?;
+    tell(s, server, "voice_left", json!({ "who": name, "uid": user, "channel": channel })).await;
+    Ok(true)
+}
+
+#[derive(Deserialize)]
+struct AttachedBody {
+    user_id: Uuid,
+    server: String,
+    channel: String,
+    seat: usize,
+}
+
+/// `POST /api/voice/attached {user_id, server, channel, seat}`: the voice server's, inside only,
+/// once the person has a seat. Asks `may_talk` again, takes them out of wherever they were
+/// (`leave`), opens a `voice_sessions` row, writes their field, `voiceof` and `voice:servers`,
+/// then tells the group `voice {who, uid, channel}`. → `{session}`.
+async fn attached(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<AttachedBody>, JsonRejection>) -> ApiResult {
+    inside(&headers, secret())?;
+    let Json(body) = body?;
+    let (server, channel) = channel_names(&body.server, &body.channel)?;
+    let user = body.user_id;
+    may_talk(&s, user, &server, &channel).await?;
+    let name: String = sqlx::query_scalar("SELECT name FROM streamers WHERE id = $1")
+        .bind(user)
+        .fetch_optional(&s.db)
+        .await?
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such account"))?;
+    let mut redis = s.redis.clone();
+    let was: Option<String> = redis::cmd("GET").arg(voiceof_key(user)).query_async(&mut redis).await?;
+    if let Some((old, _)) = was.as_deref().and_then(|w| w.split_once('/')) {
+        leave(&s, old, user, None).await?;
+    }
+    if was.is_none_or(|w| !w.starts_with(&format!("{server}/"))) {
+        // a field here that voiceof did not know of (a voice server that restarted)
+        leave(&s, &server, user, None).await?;
+    }
+    let session: i64 = sqlx::query_scalar("INSERT INTO voice_sessions (server, channel, user_id) VALUES ($1, $2, $3) RETURNING id")
+        .bind(&server)
+        .bind(&channel)
+        .bind(user)
+        .fetch_one(&s.db)
+        .await?;
+    let now = now_ms();
+    let seated = Seated { name: name.clone(), channel: channel.clone(), seat: body.seat, since: now, beat: now, session };
+    let () = redis::pipe()
+        .atomic()
+        .cmd("HSET")
+        .arg(voice_key(&server))
+        .arg(user.to_string())
+        .arg(json!(seated).to_string())
+        .ignore()
+        .cmd("SET")
+        .arg(voiceof_key(user))
+        .arg(format!("{server}/{channel}"))
+        .ignore()
+        .cmd("SADD")
+        .arg(SERVERS_KEY)
+        .arg(&server)
+        .ignore()
+        .query_async(&mut redis)
+        .await?;
+    tell(&s, &server, "voice", json!({ "who": name, "uid": user, "channel": channel })).await;
+    Ok(Json(json!({ "session": session })))
+}
+
+#[derive(Deserialize)]
+struct Peer {
+    user_id: Uuid,
+    server: String,
+}
+
+/// `POST /api/voice/left {user_id, server}`: the voice server's, inside only, when a seat
+/// frees. `leave`, and → `{left}`, false when they were not in voice there (already swept, or
+/// a second call).
+async fn left(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<Peer>, JsonRejection>) -> ApiResult {
+    inside(&headers, secret())?;
+    let Json(body) = body?;
+    let server = body.server.trim().to_lowercase();
+    let left = leave(&s, &server, body.user_id, None).await?;
+    Ok(Json(json!({ "left": left })))
+}
+
+#[derive(Deserialize)]
+struct BeatBody {
+    peers: Vec<Peer>,
+}
+
+/// `POST /api/voice/beat {peers: [{user_id, server}]}`: the voice server's, inside only, every
+/// 15s for everyone it has seated. Sets each one's `beat` to now; someone not in voice (swept,
+/// left) stays out. → `{beat}`, how many it found.
+async fn beat(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<BeatBody>, JsonRejection>) -> ApiResult {
+    inside(&headers, secret())?;
+    let Json(body) = body?;
+    if body.peers.is_empty() {
+        return Ok(Json(json!({ "beat": 0 })));
+    }
+    let now = now_ms();
+    let mut pipe = redis::pipe();
+    for peer in &body.peers {
+        pipe.cmd("EVAL")
+            .arg(BEAT)
+            .arg(1)
+            .arg(voice_key(&peer.server.trim().to_lowercase()))
+            .arg(peer.user_id.to_string())
+            .arg(now);
+    }
+    let found: Vec<i64> = pipe.query_async(&mut s.redis.clone()).await?;
+    Ok(Json(json!({ "beat": found.iter().sum::<i64>() })))
+}
+
+/// Every `SWEEP_EVERY`, takes out of voice everyone whose beat is older than
+/// `STALE_AFTER` (`sweep_once`). Not at boot: after an api outage the voice server's next beat
+/// brings its people's fields back to now, and it beats every 15s, so the first sweep waits a
+/// full `STALE_AFTER`. Never runs while voice is off.
+pub(crate) async fn sweep(s: AppState) {
+    if secret().is_none() {
+        return;
+    }
+    let every = std::time::Duration::from_millis(SWEEP_EVERY.unsigned_abs());
+    let start = tokio::time::Instant::now() + std::time::Duration::from_millis(STALE_AFTER.unsigned_abs());
+    let mut tick = tokio::time::interval_at(start, every);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay); // a woken box sweeps once, not n times
+    loop {
+        tick.tick().await;
+        match sweep_once(&s).await {
+            Ok(0) => {}
+            Ok(n) => log::info!("voice sweep: {n} gone without a word"),
+            Err(e) => log::warn!("voice sweep: {}", e.message()),
+        }
+    }
+}
+
+/// One sweep over `voice:servers`: `leave` for each stale field (only while it is still stale,
+/// so a beat that lands meanwhile wins), and a server whose hash is empty is forgotten. A field
+/// whose key is not a user id is dropped outright. → how many it took out.
+async fn sweep_once(s: &AppState) -> Result<usize, ApiError> {
+    let mut redis = s.redis.clone();
+    let servers: Vec<String> = redis::cmd("SMEMBERS").arg(SERVERS_KEY).query_async(&mut redis).await?;
+    let now = now_ms();
+    let mut gone = 0;
+    for server in servers {
+        let fields: HashMap<String, String> = redis::cmd("HGETALL").arg(voice_key(&server)).query_async(&mut redis).await?;
+        for (uid, field) in &fields {
+            if !stale(beat_of(field), now) {
+                continue;
+            }
+            let Ok(user) = Uuid::parse_str(uid) else {
+                let _: i64 = redis::cmd("HDEL").arg(voice_key(&server)).arg(uid).query_async(&mut redis).await?;
+                continue;
+            };
+            match leave(s, &server, user, Some(now - STALE_AFTER)).await {
+                Ok(true) => gone += 1,
+                Ok(false) => {}
+                Err(e) => log::warn!("voice sweep: {server} {user}: {}", e.message()),
+            }
+        }
+        let _: i64 = redis::cmd("EVAL")
+            .arg(FORGET_IF_EMPTY)
+            .arg(2)
+            .arg(voice_key(&server))
+            .arg(SERVERS_KEY)
+            .arg(&server)
+            .query_async(&mut redis)
+            .await?;
+    }
+    Ok(gone)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +544,30 @@ mod tests {
         let g = Grant { user_id: Uuid::from_u128(7), name: "a".into(), server: "s".into(), channel: "c".into() };
         let back: Grant = serde_json::from_str(&json!(g).to_string()).unwrap();
         assert_eq!(back, g);
+    }
+
+    #[test]
+    fn the_sweep_age_check() {
+        let now = 1_795_000_000_000;
+        assert!(!stale(Some(now), now));
+        assert!(!stale(Some(now - STALE_AFTER), now));
+        assert!(stale(Some(now - STALE_AFTER - 1), now));
+        assert!(stale(None, now));
+        assert!(!stale(Some(now + 5_000), now)); // a clock a little ahead is not stale
+        assert_eq!(beat_of(r#"{"name":"a","beat":12}"#), Some(12));
+        assert_eq!(beat_of(r#"{"name":"a"}"#), None);
+        assert_eq!(beat_of("not json"), None);
+        // swept within a minute of the last beat
+        const { assert!(STALE_AFTER + SWEEP_EVERY <= 60_000) };
+    }
+
+    #[test]
+    fn a_seated_field_counts_and_beats() {
+        let s = Seated { name: "a".into(), channel: "lounge".into(), seat: 3, since: 10, beat: 20, session: 5 };
+        let field = json!(s).to_string();
+        assert_eq!(beat_of(&field), Some(20));
+        let mut f = HashMap::new();
+        f.insert(Uuid::from_u128(2).to_string(), field);
+        assert_eq!(others_in(&f, "lounge", Uuid::from_u128(1)), 1);
     }
 }
