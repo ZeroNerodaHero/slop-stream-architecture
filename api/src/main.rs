@@ -1182,6 +1182,7 @@ async fn main() {
         .expect("bind");
     log::info!("api on 0.0.0.0:{port}");
     tokio::spawn(sweep_sessions(state.clone()));
+    tokio::spawn(voice::sweep(state.clone()));
     axum::serve(listener, router(state))
         .with_graceful_shutdown(wait_for_signal())
         .await
