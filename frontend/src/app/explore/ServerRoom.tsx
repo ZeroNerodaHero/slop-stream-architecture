@@ -13,6 +13,7 @@ import {
   RiLogoutBoxRLine,
   RiNotificationLine,
   RiNotificationOffLine,
+  RiPaletteLine,
   RiPencilLine,
   RiPushpinFill,
   RiPushpinLine,
@@ -24,7 +25,8 @@ import {
   RiUnpinLine,
   RiUserUnfollowLine,
   RiVipCrownLine,
-  RiVolumeUpLine
+  RiVolumeUpLine,
+  type RemixiconComponentType
 } from '@remixicon/react';
 import { useAtom, useAtomValue } from 'jotai';
 import {
@@ -205,68 +207,121 @@ const ORDERS = [
 ] as const;
 
 /**
- * The five powers: the word for each (the rows, the role editor's list), what it lets a holder
- * do (the api's checks in `group_mod.rs` and `groups.rs`), and its icon, the manage tabs' icons
- * where a tab is that power's.
+ * The five powers: the word for each (the role rows' icons, the role editor's tiles), a few words
+ * for the tile, what it lets a holder do (the api's checks in `group_mod.rs` and `groups.rs`), and
+ * its icon, the manage tabs' icons where a tab is that power's.
  */
-const POWERS: { key: keyof RolePerms; label: string; description: string; icon: ReactNode }[] = [
+const POWERS: { key: keyof RolePerms; label: string; short: string; description: string; Icon: RemixiconComponentType }[] = [
   {
     key: 'appearance',
-    label: 'about & access',
+    label: 'about',
+    short: 'text, privacy, order',
     description: 'edit the about text, switch the group public or private, and set the member order',
-    icon: <RiInformationLine aria-hidden size={16} />
+    Icon: RiInformationLine
   },
-  {
-    key: 'roles',
-    label: 'roles',
-    description: 'make, edit and hand out roles',
-    icon: <RiShieldStarLine aria-hidden size={16} />
-  },
+  { key: 'roles', label: 'roles', short: 'make & assign', description: 'make, edit and hand out roles', Icon: RiShieldStarLine },
   {
     key: 'channels',
     label: 'channels',
+    short: 'add, edit, cooldown',
     description: 'add, rename, reorder and delete channels, set their cooldowns and who sees them, and see every channel',
-    icon: <RiHashtag aria-hidden size={16} />
+    Icon: RiHashtag
   },
-  {
-    key: 'kick',
-    label: 'kick',
-    description: 'kick members and time them out',
-    icon: <RiUserUnfollowLine aria-hidden size={16} />
-  },
-  { key: 'ban', label: 'ban', description: 'ban and unban members', icon: <RiForbidLine aria-hidden size={16} /> }
+  { key: 'kick', label: 'kick', short: 'kick & time out', description: 'kick members and time them out', Icon: RiUserUnfollowLine },
+  { key: 'ban', label: 'ban', short: 'ban & unban', description: 'ban and unban members', Icon: RiForbidLine }
 ];
 
+/** A power's name and what it does, for a tooltip. */
+function powerTip(power: (typeof POWERS)[number]): string {
+  return `${power.label}: ${power.description}`;
+}
+
 /**
- * One power in the role editor's list: the whole row is the toggle, the icon, the name and what
- * it does. Pressed, the border and the icon and name go blue. `locked` is the owner role's (on,
- * and not to be changed); `mine` false greys a power this login cannot give, and says so.
+ * The five power icons in a row, each one's name and what it does on hover: lit (`on`'s colour,
+ * the row's grey unless given) where the role carries it, faint where it does not.
  */
-function PowerRow({ power, id, on, mine = true, locked = false, onToggle }: { power: (typeof POWERS)[number]; id: string; on: boolean; mine?: boolean; locked?: boolean; onToggle?: () => void }) {
+function PowerIcons({ perms, color }: { perms: RolePerms; color?: string }) {
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      {POWERS.map((power) => {
+        const on = perms[power.key];
+        return (
+          <Tooltip key={power.key} content={powerTip(power)}>
+            <span
+              role="img"
+              aria-label={on ? power.label : `no ${power.label}`}
+              className={cn('flex', on ? !color && 'text-textSecondary' : 'text-textTertiary/40')}
+              style={on && color ? { color } : undefined}
+            >
+              <power.Icon aria-hidden size={15} />
+            </span>
+          </Tooltip>
+        );
+      })}
+    </span>
+  );
+}
+
+/**
+ * One power in the role editor's grid: the whole tile is the toggle, the icon over the name over a
+ * few words of what it does (the rest in its tooltip). Pressed, the border and the icon and name go
+ * blue. `locked` is the owner role's (on, and not to be changed); `mine` false greys a power this
+ * login cannot give, and says so. On a phone the five sit three over two (`className` the spans).
+ */
+function PowerTile({
+  power,
+  id,
+  on,
+  mine = true,
+  locked = false,
+  onToggle,
+  className
+}: {
+  power: (typeof POWERS)[number];
+  id: string;
+  on: boolean;
+  mine?: boolean;
+  locked?: boolean;
+  onToggle?: () => void;
+  className?: string;
+}) {
   const still = locked || !mine;
   return (
-    <Tooltip content={mine ? null : 'not yours to give'}>
+    <Tooltip content={mine ? powerTip(power) : `${power.label}: not yours to give`} className="max-w-72 whitespace-normal">
       <button
         id={id}
         type="button"
         aria-pressed={on}
         aria-disabled={still || undefined}
+        aria-description={power.description}
         onClick={() => !still && onToggle?.()}
         className={cn(
-          'flex w-full items-start gap-2 border px-2 py-1.5 text-left focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue',
+          'flex min-w-0 flex-col items-center gap-1 border px-1 pb-1.5 pt-1.5 focus-visible:outline focus-visible:outline-1 focus-visible:outline-primaryBlue',
           on ? 'border-primaryBlue' : 'border-primaryStroke',
           still ? 'cursor-default' : 'hover:bg-primaryStroke/20',
-          !mine && 'opacity-40'
+          !mine && 'opacity-40',
+          className
         )}
       >
-        <span className={cn('mt-0.5 shrink-0', on ? 'text-primaryBlue' : 'text-textTertiary')}>{power.icon}</span>
-        <span className="text-sm">
-          <span className={cn('font-semibold', on ? 'text-primaryBlue' : 'text-textPrimary')}>{power.label}</span>{' '}
-          <span className="text-textSecondary">{power.description}</span>
+        <power.Icon aria-hidden size={18} className={on ? 'text-primaryBlue' : 'text-textTertiary'} />
+        <span className="flex max-w-full flex-col items-center gap-[2px]">
+          <span className={cn('text-[13px] font-semibold leading-[15px]', on ? 'text-primaryBlue' : 'text-textPrimary')}>{power.label}</span>
+          <span className="max-w-full truncate whitespace-nowrap text-[10.5px] leading-[13px] text-textTertiary">{power.short}</span>
         </span>
       </button>
     </Tooltip>
   );
+}
+
+/** Where each tile sits: one of five on a wide screen; on a phone the first three a third each, the last two a half. */
+const TILE_SPAN = ['col-span-2', 'col-span-2', 'col-span-2', 'col-span-3', 'col-span-3'].map((span) => `${span} md:col-span-1`);
+
+/**
+ * A role's name as it reads: its colour, except the yellow on a light theme, where it is pulled
+ * toward black to stand off the page (the colour itself, and the dot, stay as chosen).
+ */
+function roleInk(color: string): string {
+  return color.toLowerCase() === '#f2cc60' ? `light-dark(color-mix(in srgb, ${color} 58%, black), ${color})` : color;
 }
 
 const NO_PERMS: RolePerms = {
@@ -3145,20 +3200,6 @@ function freshRoleName(roles: GroupRole[]): string {
   return `new role ${n}`;
 }
 
-/** The words for a role in its row: the powers it carries (or `no powers`), the channels kept to it when there are any, and its cooldown when it has one. */
-function roleWords(role: GroupRole): string {
-  const words = [
-    POWERS.filter((power) => role.perms[power.key])
-      .map((power) => power.label)
-      .join(', ') || 'no powers'
-  ];
-  const kept = role.channels ?? [];
-  const cooldown = role.cooldown ?? 0;
-  if (kept.length > 0) words.push(`keeps ${kept.map((name) => `#${name}`).join(', ')}`);
-  if (cooldown > 0) words.push(`cooldown ${cooldownWords(cooldown)}`);
-  return words.join(' · ');
-}
-
 /**
  * The roles, each a row: the name in its colour, the powers it carries and the channels kept
  * to it. A row within reach is the click: it opens in place as the name, the colour, the
@@ -3177,8 +3218,6 @@ function RolesSection({ server, room, run }: ManageProps) {
   const [removing, setRemoving] = useState(false);
   /** The name box that has had its open-time select. A later focus of the same box (a click into the word) edits in place; a role opened is a new box. */
   const selected = useRef<HTMLInputElement | null>(null);
-  // a power this login lacks is one it cannot put on a role; an owner and a site admin lack none
-  const short = POWERS.filter((power) => !room.perms[power.key]);
   const full = room.roles.length >= ROLE_CAP;
   const ownerRole = ownerRoleOf(room);
   // the row open in place: the draft, while the role it is of is still there
@@ -3254,22 +3293,25 @@ function RolesSection({ server, room, run }: ManageProps) {
   }
 
   return (
-    <Section
-      title="roles"
-      description={`${room.roles.length} of ${ROLE_CAP}. a name, a colour and the powers it carries; click one to change or delete it. ${
-        short.length > 0 ? 'a role carries only the powers you hold. ' : ''
-      }only an owner can hand the group on, or change the pictures.`}
-    >
+    <Section title="roles" description={`${room.roles.length} of ${ROLE_CAP}`}>
       <ul id="group-roles" className="flex flex-col gap-1">
         {/* the owner role first: every power, every channel, not a row of the api's roles. an owner renames it, nothing else changes */}
-        <li data-role={ownerRole} data-owner data-open={ownerDraft !== null || undefined} className={cn(ownerDraft !== null && 'border border-primaryStroke p-3')}>
+        <li
+          data-role={ownerRole}
+          data-owner
+          data-open={ownerDraft !== null || undefined}
+          className={cn('border', ownerDraft !== null ? 'border-primaryBlue' : 'border-primaryStroke')}
+        >
           {ownerDraft !== null ? (
-            <form id="owner-role-form" onSubmit={(e) => void saveOwner(e)} className="flex flex-col gap-3">
-              {/* the crown beside the name: the owner role's mark where the role form has its colour */}
-              <div className="flex items-center gap-2">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center text-primaryBlue">
-                  <RiVipCrownLine aria-hidden size={16} />
+            <form id="owner-role-form" onSubmit={(e) => void saveOwner(e)}>
+              <div className="flex items-center gap-2.5 border-b border-primaryStroke px-2.5 py-2">
+                <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[15px] font-semibold text-primaryBlue">
+                  <RiVipCrownLine aria-hidden size={16} className="shrink-0" />
+                  <span className="truncate">{ownerDraft.trim() || ownerRole}</span>
                 </span>
+                <PowerIcons perms={ALL_PERMS} color="rgb(var(--primary-color))" />
+              </div>
+              <div className="flex flex-col gap-2.5 p-2.5">
                 <input
                   id="owner-role-name"
                   value={ownerDraft}
@@ -3281,47 +3323,40 @@ function RolesSection({ server, room, run }: ManageProps) {
                   onFocus={(e) => e.currentTarget.select()}
                   className={cn(INPUT, 'min-w-0 flex-1')}
                 />
-              </div>
-              {/* the role form's list of powers, every one on and locked: an owner's */}
-              <div role="group" aria-label="powers" className="flex flex-col gap-1">
-                {POWERS.map((power) => (
-                  <PowerRow key={power.key} power={power} id={`owner-role-perm-${power.key}`} on locked />
-                ))}
-              </div>
-              <p className="text-xs text-textTertiary">
-                an owner has every power and sees every channel. only the name changes here; who owns the group is the members tab.
-              </p>
-              <div className="flex items-center gap-3">
-                <button id="owner-role-save" type="submit" className="text-sm font-semibold text-primaryBlue disabled:opacity-40" disabled={!ownerDraft.trim()}>
-                  save
-                </button>
-                <button id="owner-role-cancel" type="button" className="text-sm text-textTertiary" onClick={() => setOwnerDraft(null)}>
-                  cancel
-                </button>
+                {/* the role form's tiles, every one on and locked: an owner's */}
+                <div role="group" aria-label="powers" className="grid grid-cols-6 gap-1.5 md:grid-cols-[repeat(5,minmax(0,1fr))]">
+                  {POWERS.map((power, i) => (
+                    <PowerTile key={power.key} power={power} id={`owner-role-perm-${power.key}`} on locked className={TILE_SPAN[i]} />
+                  ))}
+                </div>
+                <p className="text-xs text-textTertiary">
+                  an owner has every power and sees every channel. only the name changes here; who owns the group is the members tab.
+                </p>
+                <div className="flex items-center justify-end gap-1.5">
+                  <Button id="owner-role-cancel" size="sm" onClick={() => setOwnerDraft(null)}>
+                    cancel
+                  </Button>
+                  <Button id="owner-role-save" type="submit" size="sm" variant="primary" className="text-white" disabled={!ownerDraft.trim()}>
+                    save
+                  </Button>
+                </div>
               </div>
             </form>
           ) : room.owner ? (
             <button
               type="button"
-              className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-primaryStroke/20"
+              className={ROLE_ROW}
               onClick={() => {
                 setDraft(null);
                 setOwnerDraft(ownerRole);
               }}
             >
-              <span className="flex items-center gap-1.5 font-semibold text-primaryBlue">
-                <RiVipCrownLine aria-hidden size={14} />
-                {ownerRole}
-              </span>
-              <span className="truncate text-xs text-textTertiary">every power · sees every channel</span>
+              <OwnerRowBody name={ownerRole} />
+              <RiArrowRightSLine aria-hidden size={16} className="shrink-0 text-textTertiary" />
             </button>
           ) : (
-            <span className="flex items-center gap-2 px-2 py-1">
-              <span className="flex items-center gap-1.5 font-semibold text-primaryBlue">
-                <RiVipCrownLine aria-hidden size={14} />
-                {ownerRole}
-              </span>
-              <span className="truncate text-xs text-textTertiary">every power · sees every channel</span>
+            <span className={cn(ROLE_ROW, 'cursor-default hover:bg-transparent')}>
+              <OwnerRowBody name={ownerRole} />
             </span>
           )}
         </li>
@@ -3332,101 +3367,159 @@ function RolesSection({ server, room, run }: ManageProps) {
             // and written only while the role as it is and as it would be are both within reach, the api's rule for a save and a delete:
             // a power taken from this login mid-edit greys save and delete and leaves the row open, with cancel the way out
             const mayWrite = within && reaches(room, open.perms);
+            const custom = !SWATCHES.includes(open.color.toLowerCase());
+            const cooldowns = COOLDOWNS.includes(open.cooldown) ? COOLDOWNS : [...COOLDOWNS, open.cooldown].sort((a, b) => a - b);
             return (
-              <li key={role.id} data-role={role.name} data-open className="border border-primaryStroke p-3">
-                <form id="role-form" onSubmit={(e) => void save(e)} className="flex flex-col gap-3">
-                  <input
-                    id="role-name"
-                    value={open.name}
-                    onChange={(e) => setDraft({ ...open, name: e.target.value })}
-                    placeholder="role"
-                    maxLength={32}
-                    aria-label="role name"
-                    autoFocus
-                    onFocus={(e) => {
-                      if (selected.current === e.currentTarget) return;
-                      selected.current = e.currentTarget;
-                      e.currentTarget.select();
-                    }}
-                    className={INPUT}
-                  />
-                  <div role="group" aria-label="colour" className="flex flex-wrap items-center gap-1">
-                    {COLORS.map((swatch) => (
-                      <button
-                        key={swatch}
-                        type="button"
-                        aria-label={swatch}
-                        aria-pressed={swatch === open.color}
-                        onClick={() => setDraft({ ...open, color: swatch })}
-                        style={{ backgroundColor: swatch }}
-                        className={cn('h-6 w-6 border-2', swatch === open.color ? 'border-textPrimary' : 'border-transparent')}
-                      />
-                    ))}
-                  </div>
-                  {/* the powers, a row each: the icon, the name and what it does; the row is the toggle. one this login lacks is not its to give: greyed, and it says so */}
-                  <div role="group" aria-label="powers" className="flex flex-col gap-1">
-                    {POWERS.map((power) => {
-                      const on = open.perms[power.key];
-                      return (
-                        <PowerRow
-                          key={power.key}
-                          power={power}
-                          id={`role-perm-${power.key}`}
-                          on={on}
-                          mine={room.perms[power.key]}
-                          onToggle={() => setDraft({ ...open, perms: { ...open.perms, [power.key]: !on } })}
-                        />
-                      );
-                    })}
-                  </div>
-                  {/* the cooldown: seconds between its holders' lines, as pressed words; off unless a role says otherwise */}
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span className="text-sm font-semibold text-textSecondary">cooldown</span>
-                    {(COOLDOWNS.includes(open.cooldown) ? COOLDOWNS : [...COOLDOWNS, open.cooldown].sort((a, b) => a - b)).map((seconds) => (
-                      <button
-                        key={seconds}
-                        id={`role-cooldown-${seconds}`}
-                        type="button"
-                        aria-pressed={open.cooldown === seconds}
-                        onClick={() => setDraft({ ...open, cooldown: seconds })}
-                        className={cn('text-sm font-semibold', open.cooldown === seconds ? 'text-primaryBlue' : 'text-textTertiary hover:text-textPrimary')}
-                      >
-                        {cooldownWords(seconds)}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <button
-                      id="role-save"
-                      type="submit"
-                      className="text-sm font-semibold text-primaryBlue disabled:opacity-40"
-                      disabled={!open.name.trim() || !mayWrite}
-                    >
-                      save
-                    </button>
-                    <button id="role-cancel" type="button" className="text-sm text-textTertiary" onClick={() => setDraft(null)}>
-                      cancel
-                    </button>
-                    <button
+              <li key={role.id} data-role={role.name} data-open className="border border-primaryBlue">
+                <form id="role-form" onSubmit={(e) => void save(e)}>
+                  <div className="flex items-center gap-2.5 border-b border-primaryStroke px-2.5 py-2">
+                    <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[15px] font-semibold" style={{ color: roleInk(open.color) }}>
+                      <span aria-hidden className="h-2 w-2 shrink-0" style={{ backgroundColor: open.color }} />
+                      <span className="truncate">{open.name.trim() || role.name}</span>
+                    </span>
+                    <PowerIcons perms={open.perms} color={open.color} />
+                    <Button
                       id="role-delete"
-                      type="button"
-                      className="ml-auto text-sm text-decrease disabled:opacity-40"
+                      size="sm"
+                      variant="outline-danger"
+                      className="gap-1 border-decrease/40 px-2 py-1 text-xs"
                       disabled={removing || !mayWrite}
                       onClick={() => void remove()}
                     >
+                      <RiDeleteBinLine aria-hidden size={14} />
                       delete
-                    </button>
+                    </Button>
+                  </div>
+                  <div className="flex flex-col gap-2.5 p-2.5">
+                    {/* the name, and the colour beside it: three swatches and a square for any other */}
+                    <div className="flex items-center gap-2">
+                      <input
+                        id="role-name"
+                        value={open.name}
+                        onChange={(e) => setDraft({ ...open, name: e.target.value })}
+                        placeholder="role"
+                        maxLength={32}
+                        aria-label="role name"
+                        autoFocus
+                        onFocus={(e) => {
+                          if (selected.current === e.currentTarget) return;
+                          selected.current = e.currentTarget;
+                          e.currentTarget.select();
+                        }}
+                        className={cn(INPUT, 'min-w-0 flex-1')}
+                      />
+                      <div role="group" aria-label="colour" className="flex shrink-0 items-center gap-1">
+                        {SWATCHES.map((swatch) => {
+                          const on = swatch === open.color.toLowerCase();
+                          return (
+                            <Tooltip key={swatch} content={swatch}>
+                              <button
+                                type="button"
+                                aria-label={swatch}
+                                aria-pressed={on}
+                                onClick={() => setDraft({ ...open, color: swatch })}
+                                style={{ backgroundColor: swatch }}
+                                className={cn(SWATCH, on ? SWATCH_ON : 'border-transparent')}
+                              />
+                            </Tooltip>
+                          );
+                        })}
+                        <Tooltip content="any colour">
+                          {/* the native picker, unseen over the square; it opens on the click. a colour of its own shows in the square */}
+                          <label
+                            className={cn(
+                              SWATCH,
+                              'relative flex cursor-pointer items-center justify-center text-textTertiary focus-within:outline focus-within:outline-1 focus-within:outline-primaryBlue',
+                              custom ? SWATCH_ON : 'border-dashed border-secondaryStroke hover:text-textPrimary'
+                            )}
+                            style={custom ? { backgroundColor: open.color } : undefined}
+                          >
+                            {!custom && <RiPaletteLine aria-hidden size={15} />}
+                            <input
+                              id="role-color"
+                              type="color"
+                              value={open.color}
+                              onChange={(e) => setDraft({ ...open, color: e.target.value })}
+                              aria-label="any colour"
+                              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                            />
+                          </label>
+                        </Tooltip>
+                      </div>
+                    </div>
+                    {/* the powers, a tile each: the icon, the name and a few words; the tile is the toggle. one this login lacks is not its to give: greyed, and it says so */}
+                    <div role="group" aria-label="powers" className="grid grid-cols-6 gap-1.5 md:grid-cols-[repeat(5,minmax(0,1fr))]">
+                      {POWERS.map((power, i) => {
+                        const on = open.perms[power.key];
+                        return (
+                          <PowerTile
+                            key={power.key}
+                            power={power}
+                            id={`role-perm-${power.key}`}
+                            on={on}
+                            mine={room.perms[power.key]}
+                            onToggle={() => setDraft({ ...open, perms: { ...open.perms, [power.key]: !on } })}
+                            className={TILE_SPAN[i]}
+                          />
+                        );
+                      })}
+                    </div>
+                    {/* the cooldown: seconds between its holders' lines, one segment each; off unless a role says otherwise */}
+                    <div className="flex flex-col gap-1">
+                      <span id="role-cooldown-label" className="text-xs font-semibold text-textSecondary">
+                        cooldown
+                      </span>
+                      <div
+                        role="group"
+                        aria-labelledby="role-cooldown-label"
+                        className="grid divide-x divide-primaryStroke border border-primaryStroke"
+                        style={{ gridTemplateColumns: `repeat(${cooldowns.length}, minmax(0, 1fr))` }}
+                      >
+                        {cooldowns.map((seconds) => (
+                          <button
+                            key={seconds}
+                            id={`role-cooldown-${seconds}`}
+                            type="button"
+                            aria-pressed={open.cooldown === seconds}
+                            onClick={() => setDraft({ ...open, cooldown: seconds })}
+                            className={cn(
+                              'py-1.5 text-sm font-semibold focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue',
+                              open.cooldown === seconds ? 'bg-primaryBlue/10 text-primaryBlue' : 'text-textTertiary hover:text-textPrimary'
+                            )}
+                          >
+                            {cooldownWords(seconds)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-end gap-1.5">
+                      <Button id="role-cancel" size="sm" onClick={() => setDraft(null)}>
+                        cancel
+                      </Button>
+                      <Button id="role-save" type="submit" size="sm" variant="primary" className="text-white" disabled={!open.name.trim() || !mayWrite}>
+                        save
+                      </Button>
+                    </div>
                   </div>
                 </form>
               </li>
             );
           }
+          const body = (
+            <>
+              <span className="flex min-w-0 flex-1 items-center gap-1.5 font-semibold" style={{ color: roleInk(role.color) }}>
+                <span aria-hidden className="h-2 w-2 shrink-0" style={{ backgroundColor: role.color }} />
+                <span className="truncate">{role.name}</span>
+              </span>
+              <PowerIcons perms={role.perms} />
+            </>
+          );
           return (
-            <li key={role.id} data-role={role.name} data-reach={within || undefined}>
+            <li key={role.id} data-role={role.name} data-reach={within || undefined} className="border border-primaryStroke">
               {within ? (
                 <button
                   type="button"
-                  className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-primaryStroke/20"
+                  className={ROLE_ROW}
                   onClick={() => {
                     setOwnerDraft(null);
                     setDraft({
@@ -3438,18 +3531,11 @@ function RolesSection({ server, room, run }: ManageProps) {
                     });
                   }}
                 >
-                  <span className="font-semibold" style={{ color: role.color }}>
-                    {role.name}
-                  </span>
-                  <span className="truncate text-xs text-textTertiary">{roleWords(role)}</span>
+                  {body}
+                  <RiArrowRightSLine aria-hidden size={16} className="shrink-0 text-textTertiary" />
                 </button>
               ) : (
-                <span className="flex items-center gap-2 px-2 py-1">
-                  <span className="font-semibold" style={{ color: role.color }}>
-                    {role.name}
-                  </span>
-                  <span className="truncate text-xs text-textTertiary">{roleWords(role)}</span>
-                </span>
+                <span className={cn(ROLE_ROW, 'cursor-default hover:bg-transparent')}>{body}</span>
               )}
             </li>
           );
@@ -3458,19 +3544,38 @@ function RolesSection({ server, room, run }: ManageProps) {
       {full ? (
         <p className="text-textTertiary">{ROLE_CAP} roles is the cap. delete one to add another.</p>
       ) : (
-        <button
-          id="role-add"
-          type="button"
-          className="self-start text-sm font-semibold text-primaryBlue disabled:opacity-40"
-          disabled={adding}
-          onClick={() => void add()}
-        >
+        <Button id="role-add" size="sm" className="w-full gap-1.5 py-2 text-primaryBlue" disabled={adding} onClick={() => void add()}>
+          <RiAddLine aria-hidden size={16} />
           add role
-        </button>
+        </Button>
       )}
     </Section>
   );
 }
+
+/** A role's row, closed: the name on the left, its power icons on the right, the chevron after when it opens. */
+const ROLE_ROW = 'flex w-full items-center gap-2.5 px-2.5 py-1.5 text-left hover:bg-primaryStroke/20';
+
+/** The owner role's row: the crown and the name in blue, every power lit. */
+function OwnerRowBody({ name }: { name: string }) {
+  return (
+    <>
+      <span className="flex min-w-0 flex-1 items-center gap-1.5 font-semibold text-primaryBlue">
+        <RiVipCrownLine aria-hidden size={15} className="shrink-0" />
+        <span className="truncate">{name}</span>
+      </span>
+      <PowerIcons perms={ALL_PERMS} color="rgb(var(--primary-color))" />
+    </>
+  );
+}
+
+/** The role editor's colour squares: the first three of COLORS, then one for any other. */
+const SWATCHES: string[] = COLORS.slice(0, 3).map((color) => color.toLowerCase());
+const SWATCH = 'h-[30px] w-[30px] shrink-0 border-2';
+/** The chosen square: a dark ring, a hair of the page inside it so the ring reads on any colour. */
+const SWATCH_ON = 'border-textPrimary outline outline-2 -outline-offset-4 outline-background';
+
+const ALL_PERMS: RolePerms = { appearance: true, roles: true, channels: true, kick: true, ban: true };
 
 /** An owner's delete. It asks first, in its own dialog over this one; a yes goes to /groups. */
 function DeleteSection({ server, run }: { server: string; run: Run }) {
