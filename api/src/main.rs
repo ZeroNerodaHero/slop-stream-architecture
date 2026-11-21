@@ -114,7 +114,7 @@ pub(crate) struct AppState {
     /// The pages' error reports. None when DEBUG_DATABASE_URL is empty. See debug.rs.
     pub(crate) debug: Option<PgPool>,
     pub(crate) redis: ConnectionManager,
-    http: reqwest::Client,
+    pub(crate) http: reqwest::Client,
     video_url: String,
     /// Names starting with this are the fake streams of `video dummy`.
     pub(crate) dummy_prefix: String,

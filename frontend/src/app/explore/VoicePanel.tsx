@@ -15,8 +15,9 @@ import {
 import { useAtomValue } from 'jotai';
 import { type ReactNode } from 'react';
 
-import { canEditChannel, type Channel, type GroupRoom, isVoice } from '@/infra/api';
+import { canEditChannel, type Channel, type GroupRoom, isVoice, type VoiceMember } from '@/infra/api';
 import { meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
+import { presenceOfAtom } from '@/infra/atoms/presence-atoms';
 import {
   joinVoice,
   keyName,
@@ -36,6 +37,9 @@ import {
   voiceStatsAtom
 } from '@/infra/atoms/voice-atoms';
 import { Face } from '@/shared-components/Face';
+import { useCardMod } from '@/shared-components/GroupMod';
+import { PersonCard, usePeek } from '@/shared-components/PersonCard';
+import { ProfileLink } from '@/shared-components/ProfileLink';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
@@ -44,6 +48,9 @@ const PENCIL_HIDDEN = 'opacity-0 transition-opacity duration-150 focus-visible:o
 
 const BAR_BUTTON =
   'flex h-7 w-7 max-md:h-11 max-md:w-11 shrink-0 items-center justify-center border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
+
+/** How long the pointer rests on a person before their card shows: the roster's (ServerRoom.tsx `PEEK_MS`). */
+const PEEK_MS = 200;
 
 /** Mute, deafen and leave in the header, and the signal on your channel's row: smaller than the pencil, the row's height. */
 const CALL_BUTTON =
@@ -87,6 +94,8 @@ export function VoicePanel({
   const talking = useAtomValue(voicePttHeldAtom) && ptt && !muted && !deaf;
   const channels = (room.channels ?? []).filter(isVoice);
   const here = call.phase !== 'idle' && call.server === room.name;
+  // a moderator muted my mic here (voice.rs `server_mute`): the voice server carries nothing of it, and only a moderator lifts it
+  const serverMuted = here && !!me && Object.values(room.voice ?? {}).some((people) => people.some((p) => p.name === me && p.muted));
   const avatarOf = (name: string) => room.roster?.find((m) => m.name === name)?.avatar ?? null;
 
   const join = (channel: string) => {
@@ -104,15 +113,21 @@ export function VoicePanel({
         <h3 className="pl-0.5 text-xs font-semibold uppercase tracking-wider text-textTertiary">voice</h3>
         {here && (
           <div id="group-voice-controls" className="flex shrink-0 items-center gap-0.5">
-            <BarButton
-              id="group-voice-mute"
-              label={muted ? 'unmute' : ptt ? `mute (push to talk: hold ${pttKey})` : 'mute'}
-              pressed={muted}
-              talking={ptt ? talking : undefined}
-              onClick={() => setVoiceMuted(!muted)}
-            >
-              {muted ? <RiMicOffLine aria-hidden size={14} /> : <RiMicLine aria-hidden size={14} />}
-            </BarButton>
+            {serverMuted ? (
+              <BarButton id="group-voice-mute" label="server muted" danger disabled>
+                <RiMicOffLine aria-hidden size={14} />
+              </BarButton>
+            ) : (
+              <BarButton
+                id="group-voice-mute"
+                label={muted ? 'unmute' : ptt ? `mute (push to talk: hold ${pttKey})` : 'mute'}
+                pressed={muted}
+                talking={ptt ? talking : undefined}
+                onClick={() => setVoiceMuted(!muted)}
+              >
+                {muted ? <RiMicOffLine aria-hidden size={14} /> : <RiMicLine aria-hidden size={14} />}
+              </BarButton>
+            )}
             <BarButton label={deaf ? 'undeafen' : 'deafen'} pressed={deaf} onClick={() => setVoiceDeaf(!deaf)}>
               <RiHeadphoneLine aria-hidden size={14} />
             </BarButton>
@@ -162,17 +177,9 @@ export function VoicePanel({
               </div>
               {people.length > 0 && (
                 <ul aria-label={`in ${item.name}`} className="flex flex-col gap-0.5 py-0.5 pl-6">
-                  {people.map((p) => {
-                    const talking = mine && speaking.has(p.name);
-                    return (
-                      <li key={p.uid} data-speaking={talking || undefined} className="flex items-center gap-2 text-textSecondary">
-                        <span className={cn('flex shrink-0 outline outline-2 outline-offset-1', talking ? 'outline-increase' : 'outline-transparent')}>
-                          <Face name={p.name} version={avatarOf(p.name)} className="h-5 w-5 text-[10px]" />
-                        </span>
-                        <span className="min-w-0 truncate">{p.name}</span>
-                      </li>
-                    );
-                  })}
+                  {people.map((p) => (
+                    <VoicePerson key={p.uid} person={p} avatar={avatarOf(p.name)} talking={mine && speaking.has(p.name)} />
+                  ))}
                 </ul>
               )}
             </li>
@@ -202,12 +209,60 @@ export function VoicePanel({
   );
 }
 
+/**
+ * One person in a voice channel: their face (a ring while they speak, for the channel you are in),
+ * their name, and a red mic when a moderator muted them. The roster's row's way (ServerRoom.tsx
+ * `Member`): one link to them that opens the profile popup, and the pointer resting on it puts
+ * their card (PersonCard.tsx) beside the column, a moderator's buttons at its left.
+ */
+function VoicePerson({ person, avatar, talking }: { person: VoiceMember; avatar: number | null; talking: boolean }) {
+  const presence = useAtomValue(presenceOfAtom(person.name));
+  const peek = usePeek(PEEK_MS);
+  const actions = useCardMod(person.name, peek.close);
+  const column = (el: Element) => el.closest('#group-voice');
+  return (
+    <li
+      data-voice-member={person.name}
+      data-speaking={talking || undefined}
+      data-muted={person.muted || undefined}
+      className="flex text-textSecondary"
+      onPointerEnter={(e) => peek.show(e, column(e.currentTarget))}
+      onPointerLeave={(e) => peek.leave(e.currentTarget, !!actions)}
+      onFocus={(e) => peek.focus(e, column(e.currentTarget))}
+      onBlur={peek.blur}
+    >
+      <ProfileLink
+        // only a login takes a seat, so the ✓ is theirs
+        person={{ name: person.name, verified: true, avatar }}
+        live={presence === 'streaming'}
+        className="flex min-w-0 flex-1 items-center gap-2 border border-transparent p-px outline-none hover:border-primaryStroke hover:text-textPrimary focus-visible:border-primaryBlue max-md:min-h-11"
+      >
+        <span className={cn('flex shrink-0 outline outline-2 outline-offset-1', talking ? 'outline-increase' : 'outline-transparent')}>
+          <Face name={person.name} version={avatar} className="h-5 w-5 text-[10px]" />
+        </span>
+        <span className="min-w-0 flex-1 truncate">{person.name}</span>
+        {person.muted && (
+          <Tooltip content="server muted">
+            <span role="img" aria-label="server muted" className="flex shrink-0 pr-0.5 text-decrease">
+              <RiMicOffLine aria-hidden size={14} />
+            </span>
+          </Tooltip>
+        )}
+      </ProfileLink>
+      {peek.at && (
+        <PersonCard id={`voice-peek-${person.name}`} person={{ name: person.name, verified: true, avatar, presence }} at={peek.at} actions={actions} hold={peek.hold} />
+      )}
+    </li>
+  );
+}
+
 /** `talking`: in push to talk, the key has the mic open (green), or not (undefined outside push to talk). */
 function BarButton({
   id,
   label,
   pressed,
   danger,
+  disabled,
   talking,
   onClick,
   children
@@ -216,8 +271,9 @@ function BarButton({
   label: string;
   pressed?: boolean;
   danger?: boolean;
+  disabled?: boolean;
   talking?: boolean;
-  onClick: () => void;
+  onClick?: () => void;
   children: ReactNode;
 }) {
   return (
@@ -227,6 +283,7 @@ function BarButton({
         type="button"
         aria-label={label}
         aria-pressed={pressed}
+        disabled={disabled}
         data-talking={talking || undefined}
         onClick={onClick}
         className={cn(

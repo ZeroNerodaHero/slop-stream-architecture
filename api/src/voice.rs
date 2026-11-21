@@ -113,6 +113,8 @@ return 0";
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/groups/{group}/voice/{channel}/join", post(join))
+        .route("/api/groups/{group}/voice-mute", post(server_mute))
+        .route("/api/groups/{group}/voice-disconnect", post(disconnect))
         .route("/api/voice/redeem", post(redeem))
         .route("/api/voice/attached", post(attached))
         .route("/api/voice/left", post(left))
@@ -138,6 +140,12 @@ fn voiceof_key(user: Uuid) -> String {
 
 fn voice_key(server: &str) -> String {
     format!("voice:{server}")
+}
+
+/// The set of user ids a moderator muted in `server`'s voice (`server_mute`): their mic carries
+/// nothing until a moderator lifts it, across leaving and coming back.
+pub(crate) fn muted_key(server: &str) -> String {
+    format!("voicemuted:{server}")
 }
 
 /// One person in voice: the value of their field in `voice:<server>`. `since` and `beat` are
@@ -223,6 +231,15 @@ async fn may_talk(s: &AppState, user: Uuid, server: &str, channel: &str) -> Resu
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such channel"))?;
     if kind != "voice" {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "not a voice channel"));
+    }
+    // a timeout keeps them out of voice as it keeps their lines out (group_mod.rs `timeout`)
+    let timed_out: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM timeouts WHERE group_name = $1 AND user_id = $2 AND until > now())")
+        .bind(server)
+        .bind(user)
+        .fetch_one(&s.db)
+        .await?;
+    if timed_out {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "timed out"));
     }
     Ok(limit)
 }
@@ -310,7 +327,156 @@ async fn redeem(State(s): State<AppState>, headers: HeaderMap, body: Result<Json
     let kept: Option<String> = redis::cmd("GETDEL").arg(grant_key(&body.grant)).query_async(&mut s.redis.clone()).await?;
     let grant: Grant = kept.and_then(|k| serde_json::from_str(&k).ok()).ok_or_else(bad_grant)?;
     may_talk(&s, grant.user_id, &grant.server, &grant.channel).await?;
-    Ok(Json(json!(grant)))
+    let muted = is_muted(&s, &grant.server, grant.user_id).await?;
+    let mut out = json!(grant);
+    out["muted"] = json!(muted);
+    Ok(Json(out))
+}
+
+async fn is_muted(s: &AppState, server: &str, user: Uuid) -> Result<bool, redis::RedisError> {
+    redis::cmd("SISMEMBER").arg(muted_key(server)).arg(user.to_string()).query_async(&mut s.redis.clone()).await
+}
+
+// ---- moderating voice -----------------------------------------------------------------------
+
+/// What a moderator tells the voice server about someone (`tell_voice`): their mic off or on
+/// again, or their seat taken. The voice server's `POST /internal/voice` (video/src/voice.rs).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Order {
+    Mute,
+    Unmute,
+    Disconnect,
+}
+
+impl Order {
+    fn word(self) -> &'static str {
+        match self {
+            Order::Mute => "mute",
+            Order::Unmute => "unmute",
+            Order::Disconnect => "disconnect",
+        }
+    }
+}
+
+/// VOICE_URL, the voice server inside the compose network (`http://voice:7881`). Its
+/// `/internal/voice` is not behind caddy: caddy sends `/voice` alone there, as `/ws`.
+fn voice_url() -> &'static str {
+    static URL: OnceLock<String> = OnceLock::new();
+    URL.get_or_init(|| {
+        std::env::var("VOICE_URL")
+            .ok()
+            .map(|u| u.trim().trim_end_matches('/').to_owned())
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(|| "http://voice:7881".to_owned())
+    })
+}
+
+/// The voice server's body for an order about `user` in `server`.
+fn order_body(order: Order, user: Uuid, server: &str) -> Value {
+    json!({ "action": order.word(), "user_id": user, "server": server })
+}
+
+/// Tells the voice server an order about `user` in `server`, with VOICE_SECRET (never logged).
+/// → how many seats it touched, None when it could not be told (voice off, the box down): the
+/// api's side stands anyway (`muted_key` is read again at the next redeem; a disconnect takes
+/// the seat out of the room here too).
+async fn tell_voice(s: &AppState, order: Order, user: Uuid, server: &str) -> Option<u64> {
+    let secret = secret()?;
+    let res = s
+        .http
+        .post(format!("{}/internal/voice", voice_url()))
+        .header("x-voice-secret", secret)
+        .json(&order_body(order, user, server))
+        .send()
+        .await;
+    match res {
+        Ok(res) if res.status().is_success() => res.json::<Value>().await.ok().and_then(|v| v["seats"].as_u64()),
+        Ok(res) => {
+            log::warn!("voice {}: the voice server answered {}", order.word(), res.status());
+            None
+        }
+        Err(e) => {
+            log::warn!("voice {}: voice server unreachable: {}", order.word(), e.without_url());
+            None
+        }
+    }
+}
+
+/// Takes `user` out of voice in `server` now, whatever voice server seats them: a kick, a ban,
+/// a timeout (group_mod.rs), a moderator's disconnect. The voice server drops their peer, and
+/// their seat leaves the room here at once rather than at its `left`. Never fails the caller:
+/// a voice server that does not answer is a warning, and the seat goes from the room anyway.
+pub(crate) async fn drop_from_voice(s: &AppState, server: &str, user: Uuid) {
+    if secret().is_none() {
+        return;
+    }
+    let now: Result<Option<String>, redis::RedisError> = redis::cmd("GET").arg(voiceof_key(user)).query_async(&mut s.redis.clone()).await;
+    let here = match now {
+        Ok(now) => now.is_some_and(|w| w.starts_with(&format!("{server}/"))),
+        Err(e) => {
+            log::warn!("voice drop {server}: {e}");
+            true
+        }
+    };
+    if !here {
+        return;
+    }
+    tell_voice(s, Order::Disconnect, user, server).await;
+    if let Err(e) = leave(s, server, user, None).await {
+        log::warn!("voice drop {server}: {}", e.message());
+    }
+}
+
+#[derive(Deserialize)]
+struct MuteBody {
+    name: String,
+    muted: bool,
+}
+
+#[derive(Deserialize)]
+struct NameBody {
+    name: String,
+}
+
+/// The powers that moderate voice: kick (docs/groups.md) or the voice power, which says so.
+const VOICE_MOD: i32 = crate::group_mod::KICK | crate::group_mod::VOICE;
+
+/// `POST /api/groups/:group/voice-mute {name, muted}`: a moderator's mute on `name`'s mic in this
+/// group's voice, or its lifting. The voice server stops carrying their audio (and starts again);
+/// they cannot lift it themselves, and it stays across leaving and coming back. The kick or voice
+/// power; not on yourself (400), an owner only by an owner (403), a member (404). A `voice_mute`
+/// fact `{who, uid, muted}`. → `{muted}`.
+async fn server_mute(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<MuteBody>, JsonRejection>) -> ApiResult {
+    let who = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
+    let Json(body) = body?;
+    let server = crate::group_mod::server(&s.db, &group).await?;
+    let (user, name) = crate::group_mod::moderated(&s, &who, &server, VOICE_MOD, &body.name).await?;
+    let mut redis = s.redis.clone();
+    let changed: i64 = if body.muted {
+        redis::cmd("SADD").arg(muted_key(&server)).arg(user.to_string()).query_async(&mut redis).await?
+    } else {
+        redis::cmd("SREM").arg(muted_key(&server)).arg(user.to_string()).query_async(&mut redis).await?
+    };
+    tell_voice(&s, if body.muted { Order::Mute } else { Order::Unmute }, user, &server).await;
+    if changed > 0 {
+        log::info!("{}: {} {name} in {server}'s voice", who.name, if body.muted { "muted" } else { "unmuted" });
+        tell(&s, &server, "voice_mute", json!({ "who": name, "uid": user, "muted": body.muted })).await;
+    }
+    Ok(Json(json!({ "muted": body.muted })))
+}
+
+/// `POST /api/groups/:group/voice-disconnect {name}`: `name` out of this group's voice now
+/// (`drop_from_voice`); they may join again. The kick or voice power, and the rules of
+/// `server_mute`. 204, also when they were not in voice.
+async fn disconnect(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, body: Result<Json<NameBody>, JsonRejection>) -> Result<StatusCode, ApiError> {
+    let who = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
+    let Json(body) = body?;
+    let server = crate::group_mod::server(&s.db, &group).await?;
+    let (user, name) = crate::group_mod::moderated(&s, &who, &server, VOICE_MOD, &body.name).await?;
+    voice_on(secret())?;
+    drop_from_voice(&s, &server, user).await;
+    log::info!("{}: disconnected {name} from {server}'s voice", who.name);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Takes `user` out of voice in `server`: their field (with `older_than`, only while its beat is
@@ -381,7 +547,7 @@ struct AttachedBody {
 /// `POST /api/voice/attached {user_id, server, channel, seat}`: the voice server's, inside only,
 /// once the person has a seat. Asks `may_talk` again, takes them out of wherever they were
 /// (`leave`), opens a `voice_sessions` row, writes their field, `voiceof` and `voice:servers`,
-/// then tells the group `voice {who, uid, channel}`. → `{session}`.
+/// then tells the group `voice {who, uid, channel, muted}`. → `{session}`.
 async fn attached(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<AttachedBody>, JsonRejection>) -> ApiResult {
     inside(&headers, secret())?;
     let Json(body) = body?;
@@ -427,7 +593,9 @@ async fn attached(State(s): State<AppState>, headers: HeaderMap, body: Result<Js
         .ignore()
         .query_async(&mut redis)
         .await?;
-    tell(&s, &server, "voice", json!({ "who": name, "uid": user, "channel": channel })).await;
+    // a moderator's mute from before they came rides along, so the room marks the seat at once
+    let muted = is_muted(&s, &server, user).await.unwrap_or(false);
+    tell(&s, &server, "voice", json!({ "who": name, "uid": user, "channel": channel, "muted": muted })).await;
     Ok(Json(json!({ "session": session })))
 }
 
@@ -538,6 +706,28 @@ async fn sweep_once(s: &AppState) -> Result<usize, ApiError> {
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+
+    #[test]
+    fn an_order_says_what_who_and_where() {
+        let user = Uuid::from_u128(7);
+        assert_eq!(order_body(Order::Mute, user, "g"), json!({ "action": "mute", "user_id": user, "server": "g" }));
+        assert_eq!(order_body(Order::Unmute, user, "g")["action"], "unmute");
+        assert_eq!(order_body(Order::Disconnect, user, "g")["action"], "disconnect");
+    }
+
+    #[test]
+    fn voice_is_moderated_by_kick_or_the_voice_power() {
+        use crate::group_mod::{BAN, KICK, VOICE};
+        assert_ne!(VOICE_MOD & KICK, 0);
+        assert_ne!(VOICE_MOD & VOICE, 0);
+        assert_eq!(VOICE_MOD & BAN, 0, "ban alone does not mute");
+    }
+
+    #[test]
+    fn the_mute_set_is_the_servers() {
+        assert_eq!(muted_key("g"), "voicemuted:g");
+        assert_ne!(muted_key("g"), voice_key("g"));
+    }
 
     #[test]
     fn the_gate() {

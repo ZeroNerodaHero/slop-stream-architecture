@@ -455,6 +455,11 @@ mod tests {
         assert_eq!(api_rule(&put, "/api/groups/{group}/icon"), UPLOAD);
         assert_eq!(api_rule(&post, "/api/chat-images"), UPLOAD);
         assert_eq!(api_rule(&post, "/api/groups/{group}/ban"), MODERATE);
+        // a channel's line deleted, a voice mute and a disconnect are moderation; a member's log is a read
+        assert_eq!(api_rule(&del, "/api/groups/{group}/channels/{channel}/messages/{id}"), MODERATE);
+        assert_eq!(api_rule(&post, "/api/groups/{group}/voice-mute"), MODERATE);
+        assert_eq!(api_rule(&post, "/api/groups/{group}/voice-disconnect"), MODERATE);
+        assert_eq!(api_rule(&Method::GET, "/api/groups/{group}/members/{name}/messages"), READ);
         assert_eq!(api_rule(&del, "/api/streams/{name}/chat/{id}"), MODERATE);
         assert_eq!(api_rule(&post, "/api/streams/{name}/bans"), MODERATE);
         assert_eq!(api_rule(&del, "/api/streams/{name}/timeouts/{user}"), MODERATE);

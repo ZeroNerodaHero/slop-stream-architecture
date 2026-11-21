@@ -313,6 +313,8 @@ export interface VoiceMember {
   name: string;
   uid: string;
   since: number;
+  /** A moderator muted their mic (`voiceMute`): the voice server carries nothing of it until lifted. */
+  muted?: boolean;
 }
 
 /** `POST .../voice/:channel/join`: the grant to bring to the voice server at `url`, good once and for `ttl` seconds. */
@@ -441,6 +443,9 @@ export interface GroupMember {
   /** Timed out (docs/groups.md): until when, unix seconds, while it runs; null or absent otherwise. */
   timeout?: number | null;
 }
+
+/** One of a member's lines in the group (`groupMemberMessages`): the line, and the channel it is in. */
+export type MemberLine = ChatLine & { channel: string };
 
 export interface GroupBan {
   name: string;
@@ -804,8 +809,9 @@ export const api = {
   giveRole: (group: string, id: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/roles/${id}/members`, { name }),
   takeRole: (group: string, id: string, name: string) =>
     request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/roles/${id}/members/${encodeURIComponent(name)}`),
-  /** No line of `name`'s in the group's channels for `seconds` (10 to a week). The kick power; not an owner unless by an owner. Set again, the new end stands. */
-  timeoutMember: (group: string, name: string, seconds: number) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/timeout`, { name, seconds }),
+  /** No line of `name`'s in the group's channels, and no voice, for `seconds` (10 to a week), `reason` kept with it. The kick power; not an owner unless by an owner. Set again, the new end stands. */
+  timeoutMember: (group: string, name: string, seconds: number, reason = '') =>
+    request<null>('POST', `/api/groups/${encodeURIComponent(group)}/timeout`, { name, seconds, reason }),
   /** The timeout lifted early. The kick power. */
   liftTimeout: (group: string, name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/timeout/${encodeURIComponent(name)}`),
   /** The group is `name`'s from now on and not this login's: they are made an owner and the login stops being one, in one go. An owner, for a member who is not one; the cap on owning counts for them. */
@@ -814,6 +820,21 @@ export const api = {
   renameOwnerRole: (group: string, name: string) => request<{ name: string }>('PUT', `/api/groups/${encodeURIComponent(group)}/owner-role`, { name }),
   revokeOwner: (group: string, name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/owners/${encodeURIComponent(name)}`),
   kickMember: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/kick`, { name }),
+  /** One member as the roster has them (joined, roles, timeout): a page of the roster may not have them. The roster's rule. */
+  groupMember: (group: string, name: string) => request<GroupMember>('GET', `/api/groups/${encodeURIComponent(group)}/members/${encodeURIComponent(name)}`),
+  /** A member's lines in the channels this login sees, newest first, 50 a page; `before` the last page's `next`. The kick or ban power. */
+  groupMemberMessages: (group: string, name: string, before?: string | null) => {
+    const query = before ? `?before=${encodeURIComponent(before)}` : '';
+    return request<{ lines: MemberLine[]; next: string | null }>('GET', `/api/groups/${encodeURIComponent(group)}/members/${encodeURIComponent(name)}/messages${query}`);
+  },
+  /** A channel's line out for good, for everyone in the room. Its author, or the kick power for anyone else's. */
+  deleteGroupMessage: (group: string, channel: string, id: string) =>
+    request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/channels/${encodeURIComponent(channel)}/messages/${encodeURIComponent(id)}`),
+  /** A moderator's mute on `name`'s mic in the group's voice, or its lifting: they cannot lift it themselves. The kick or voice power. */
+  voiceMute: (group: string, name: string, muted: boolean) =>
+    request<{ muted: boolean }>('POST', `/api/groups/${encodeURIComponent(group)}/voice-mute`, { name, muted }),
+  /** `name` out of the group's voice now; they may join again. The kick or voice power. */
+  voiceDisconnect: (group: string, name: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/voice-disconnect`, { name }),
   banMember: (group: string, name: string, reason: string) => request<null>('POST', `/api/groups/${encodeURIComponent(group)}/ban`, { name, reason }),
   unbanMember: (group: string, name: string) => request<null>('DELETE', `/api/groups/${encodeURIComponent(group)}/bans/${encodeURIComponent(name)}`),
   // ---- a stream chat's jannies (docs/jannies.md). the streamer, their jannies, site jannies and admins; the api has the last word on who outranks whom

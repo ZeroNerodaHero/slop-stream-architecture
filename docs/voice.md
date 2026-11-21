@@ -95,6 +95,7 @@ the facts go to `group:<server>` on `/events`, both `{who, uid, channel}`: `voic
 | `voice:<server>` | hash, user id to `{name, channel, seat, since, beat, session}` (`since` and `beat` unix ms, `session` the row's id) | while anyone is in voice there |
 | `voiceof:<uid>` | `<server>/<channel>` this person is in | until they leave or are swept |
 | `voice:servers` | set of servers that have had anyone in voice, for the sweep | a server goes when its hash is empty |
+| `voicemuted:<server>` | set of user ids a moderator muted in this server's voice | until a moderator unmutes them |
 
 ### voice_sessions
 
@@ -111,6 +112,16 @@ one row per stay: `id`, `server`, `channel`, `user_id`, `joined_at`, `left_at` (
 neither the secret nor a grant is ever logged.
 
 join looks at VOICE_SECRET too, last: with voice off it hands out no grants and answers 503 `voice is off`, which the page shows as a quiet line. a grant brought to a voice server with no secret is still `voice is not open`.
+
+## moderating voice
+
+a moderator (the kick power, or the voice power; an owner, a site admin) can mute someone's mic or take them out of voice, from the voice row's card or the member's info (`GroupMod.tsx`). never themselves, an owner only by an owner.
+
+- `POST /api/groups/:group/voice-mute {name, muted}` puts their id in `voicemuted:<server>` (or takes it out), tells the voice server, and sends a `voice_mute {who, uid, muted}` fact. the room's `voice` marks the seat `muted: true`, as does the `voice` fact when they come back. the voice server drops every packet from a muted mic, so the page cannot lift it; a redeem says `muted` for someone muted before they came.
+- `POST /api/groups/:group/voice-disconnect {name}` ends their socket with `{"error":"disconnected"}` and takes their seat out of the room at once. they may join again.
+- a kick, a ban and a timeout drop them out of voice the same way. `may_talk` refuses a timed out member (403 `timed out`) until it ends, and a kicked or banned one is no member.
+
+the api tells the voice server on `POST /internal/voice {action: mute|unmute|disconnect, user_id, server}` at VOICE_URL (`http://voice:7881`), with `X-Voice-Secret`: the guard of the internal routes above, on its side. caddy sends `/voice` alone there, so `/internal/voice` is not reachable from outside. a voice server that does not answer is a warning: the mute stands in redis for the next join, and a disconnect still takes the seat out of the room.
 
 ## limits
 

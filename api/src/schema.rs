@@ -23,6 +23,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("0007-jannies", include_str!("../migrations/0007-jannies.sql")),
     ("0008-oauth-identity-shown", include_str!("../migrations/0008-oauth-identity-shown.sql")),
     ("0009-chat-welcome", include_str!("../migrations/0009-chat-welcome.sql")),
+    ("0010-timeout-reason", include_str!("../migrations/0010-timeout-reason.sql")),
 ];
 
 /// Apply `schema.sql` when the database has no tables yet. The chat process does not call this.
