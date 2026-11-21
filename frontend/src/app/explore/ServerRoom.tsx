@@ -102,6 +102,7 @@ import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Face } from '@/shared-components/Face';
 import { RailFace } from '@/shared-components/Friends';
 import { GroupMark } from '@/shared-components/GroupMark';
+import { GroupModHost, lineModItems, useCardMod } from '@/shared-components/GroupMod';
 import { PAGE_DIALOG, SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack } from '@/shared-components/MobileSheet';
 import { BAR_BUTTON, when } from '@/shared-components/ChatLine';
 import { ChatImages, ChatPanel } from '@/shared-components/ChatPanel';
@@ -1467,6 +1468,8 @@ export function ServerPage() {
                 headerEnd={mobile ? undefined : <ChannelPins server={server} channel={channel} room={room} />}
                 lineMark={(line) => (pinnedHere.has(line.id) ? <PinMark /> : null)}
                 lineActions={room.perms.channels ? (line) => <PinAction server={server} channel={channel} line={line} pinned={pinnedHere.has(line.id)} /> : undefined}
+                // a search hit says its own channel
+                lineMenu={(line) => lineModItems(room, me, line.channel ?? channel, line)}
                 className={cn('h-full', ROOM_CHAT_MOBILE)}
               />
             </div>
@@ -1511,6 +1514,7 @@ export function ServerPage() {
           {managing && <ManageDialog server={server} channel={channel} room={room} me={me ?? null} onClose={() => setManaging(false)} />}
           {addingVoice && <ChannelDialog server={server} channels={room.channels ?? []} kind="voice" onClose={() => setAddingVoice(false)} />}
           {editingVoice && <ChannelDialog server={server} channels={room.channels ?? []} editing={editingVoice} onClose={() => setEditingVoice(null)} />}
+          <GroupModHost server={server} />
         </>
       )}
     </PageFrame>
@@ -1862,6 +1866,8 @@ const PEEK_MS = 200;
 function Member({ member, live, ownerRole, flat }: { member: GroupMember; live: boolean; ownerRole: string; flat: boolean }) {
   const presence = useAtomValue(presenceOfAtom(member.name));
   const peek = usePeek(PEEK_MS);
+  // a moderator's buttons on the card (GroupMod.tsx): the card waits for the pointer to cross to them
+  const actions = useCardMod(member.name, peek.close);
   return (
     <li
       data-member={member.name}
@@ -1869,7 +1875,7 @@ function Member({ member, live, ownerRole, flat }: { member: GroupMember; live: 
       data-presence={presence}
       className="flex"
       onPointerEnter={(e) => peek.show(e, e.currentTarget.closest('#group-roster'))}
-      onPointerLeave={(e) => peek.leave(e.currentTarget)}
+      onPointerLeave={(e) => peek.leave(e.currentTarget, !!actions)}
       onFocus={(e) => peek.focus(e, e.currentTarget.closest('#group-roster'))}
       onBlur={peek.blur}
     >
@@ -1912,7 +1918,15 @@ function Member({ member, live, ownerRole, flat }: { member: GroupMember; live: 
         </span>
       </ProfileLink>
       {/* every member is a login, so the ✓ is theirs; the word is the row's, and the status the card asks for */}
-      {peek.at && <PersonCard id={`roster-peek-${member.name}`} person={{ name: member.name, verified: true, avatar: member.avatar ?? null, presence }} at={peek.at} />}
+      {peek.at && (
+        <PersonCard
+          id={`roster-peek-${member.name}`}
+          person={{ name: member.name, verified: true, avatar: member.avatar ?? null, presence }}
+          at={peek.at}
+          actions={actions}
+          hold={peek.hold}
+        />
+      )}
     </li>
   );
 }

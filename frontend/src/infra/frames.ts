@@ -75,8 +75,10 @@ export type GroupChange =
   /** A line was pinned in a channel, or unpinned (docs/groups.md "pins"): its id alone, the topic being everyone's. */
   | { what: 'pin'; channel: string; id: string }
   | { what: 'unpin'; channel: string; id: string }
+  /** A moderator muted `who`'s mic in voice, or lifted it (`muted` false). */
+  | { what: 'voice_mute'; who: string; uid: string; muted: boolean }
   /** `who` is in voice channel `channel` now (docs/voice.md); `uid` their id. */
-  | { what: 'voice'; who: string; uid: string; channel: string }
+  | { what: 'voice'; who: string; uid: string; channel: string; muted?: boolean }
   /** `who` left voice, from `channel`. */
   | { what: 'voice_left'; who: string; uid: string; channel: string }
   | { what: 'deleted' };

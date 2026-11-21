@@ -6,7 +6,7 @@
  */
 
 /** Below this the bar is empty: room noise, a mic left open in a quiet room. 0 dB, a full-scale signal, is the top. */
-const FLOOR_DB = -50;
+export const FLOOR_DB = -50;
 /** The bar falls at most this much of its height per second, so a word leaves a trail instead of a flicker. It rises at once. */
 const RELEASE_PER_S = 2.5;
 /** A frame this long after the last one was a hidden tab: the fall is bounded, not caught up on in one jump. */
