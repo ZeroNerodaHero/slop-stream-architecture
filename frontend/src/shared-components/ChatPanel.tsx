@@ -26,7 +26,7 @@ import { EQUES, showWelcomesAtom, type Welcome } from '@/infra/atoms/welcome-ato
 import { type MediaGone, whyGone } from '@/infra/chat-video';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
-import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingVideo, splitFiles, useVideoUpload, VideoProgress } from '@/shared-components/ChatAttach';
+import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingVideo, PICTURE_ACCEPT, splitFiles, STREAM_CHAT_VIDEO, STREAM_VIDEO_OFF, useVideoUpload, VideoProgress } from '@/shared-components/ChatAttach';
 import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
 import { ChatLineShape, type ChatLineShapeProps, LineActions, type LineMenuItem, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ReactionChips } from '@/shared-components/Reactions';
@@ -762,6 +762,8 @@ export function ChatPanel({
   const images = useAtomValue(room.imagesAtom);
   const video = useAtomValue(room.videoAtom);
   const videoUp = useVideoUpload();
+  // a stream's box takes pictures alone while videos are off there (ChatAttach.tsx `STREAM_CHAT_VIDEO`); a group channel's takes both
+  const takesVideos = server || STREAM_CHAT_VIDEO;
   const replyTo = useAtomValue(room.replyAtom);
   const replyColor = useRoleColors(room)(replyTo?.verified ? replyTo.from : '');
   const notice = useAtomValue(room.noticeAtom);
@@ -869,7 +871,9 @@ export function ChatPanel({
     // the room the files were picked in, even when the panel moves to another before they are up
     const into = room;
     const [first] = videos;
-    if (first) {
+    if (first && !takesVideos) {
+      into.showNotice(STREAM_VIDEO_OFF, 5000);
+    } else if (first) {
       if (video || videos.length > 1 || videoUp.progress !== null) into.showNotice('one video at a time');
       if (!video && videoUp.progress === null) void videoUp.upload(first, (v) => into.setVideo(v), (words) => into.showNotice(words, 5000));
     }
@@ -1126,11 +1130,19 @@ export function ChatPanel({
             {/* `relative`: the emote list stands over this row (EmoteComplete.tsx) */}
             <div className="relative flex items-center gap-2">
               {emotes.list}
-              <Tooltip content={images.length >= MAX_CHAT_IMAGES ? `${MAX_CHAT_IMAGES} pictures at most` : 'add a picture or a video'}>
+              <Tooltip
+                content={
+                  images.length >= MAX_CHAT_IMAGES
+                    ? `${MAX_CHAT_IMAGES} pictures at most`
+                    : takesVideos
+                      ? 'add a picture or a video'
+                      : `add a picture. ${STREAM_VIDEO_OFF}`
+                }
+              >
                 <button
                   type="button"
                   id="chat-picture"
-                  aria-label="picture or video"
+                  aria-label={takesVideos ? 'picture or video' : 'picture'}
                   className="flex h-8 w-8 shrink-0 items-center justify-center text-textTertiary disabled:opacity-40"
                   disabled={uploading || images.length >= MAX_CHAT_IMAGES}
                   onClick={() => fileRef.current?.click()}
@@ -1138,7 +1150,7 @@ export function ChatPanel({
                   <RiImageAddLine size={20} aria-hidden />
                 </button>
               </Tooltip>
-              <input ref={fileRef} id="chat-picture-file" type="file" accept={ATTACH_ACCEPT} multiple className="hidden" onChange={(e) => pickFiles(e.target.files)} />
+              <input ref={fileRef} id="chat-picture-file" type="file" accept={takesVideos ? ATTACH_ACCEPT : PICTURE_ACCEPT} multiple className="hidden" onChange={(e) => pickFiles(e.target.files)} />
               <input
                 ref={textRef}
                 id="chat-text"

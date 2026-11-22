@@ -11,6 +11,16 @@ import { Tooltip } from '@/shared-components/Tooltip';
  */
 export const ATTACH_ACCEPT = 'image/*,video/mp4,video/webm,video/*';
 
+/**
+ * Videos in a stream's chat (docs/chat.md "videos"): off until a stream's chat has moderation, so
+ * its box takes pictures alone (`PICTURE_ACCEPT`) and a video dropped or pasted there hears
+ * `STREAM_VIDEO_OFF`. A group channel and a direct message keep them. `true` turns them back on;
+ * the chat holds the same flag and has the last word (chat.rs `STREAM_CHAT_VIDEO`).
+ */
+export const STREAM_CHAT_VIDEO = false;
+export const STREAM_VIDEO_OFF = 'videos are off in stream chat for now';
+export const PICTURE_ACCEPT = 'image/*';
+
 /** The files a paste or a drop carries, pictures and videos alike; none for words alone. */
 export function filesOf(data: DataTransfer | null): File[] {
   return data ? [...data.files] : [];

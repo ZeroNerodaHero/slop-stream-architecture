@@ -1024,6 +1024,18 @@ async fn video_of(db: &sqlx::PgPool, name: &str, id: Option<&str>, who: Option<U
 pub(crate) const NOT_YOUR_PICTURE: &str = "not your picture";
 pub(crate) const NOT_YOUR_VIDEO: &str = "not your video";
 
+/// Videos on a stream's chat (docs/chat.md "videos"): off until a stream's chat has moderation.
+/// A group channel's and a direct message's (dms.rs) take them as ever. `true` turns them back
+/// on; the pages hold the same flag (ChatAttach.tsx `STREAM_CHAT_VIDEO`).
+const STREAM_CHAT_VIDEO: bool = false;
+/// The words for a video on a stream's line while `STREAM_CHAT_VIDEO` is off.
+const NO_STREAM_VIDEO: &str = "videos are off in stream chat for now";
+
+/// A line naming a video in a stream's room (no `server`) while they are off there (`on`).
+fn stream_video_refusal(server: Option<&str>, video: Option<&str>, on: bool) -> Option<&'static str> {
+    (server.is_none() && video.is_some() && !on).then_some(NO_STREAM_VIDEO)
+}
+
 /// The line's pictures, video and poster are posted `place` now (media.rs `mark_posted`): the
 /// first line to name each says who may see it.
 pub(crate) async fn mark_posted(db: &sqlx::PgPool, place: &crate::media::Place, images: &[String], video: Option<&Video>) -> Result<(), sqlx::Error> {
@@ -1129,6 +1141,9 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
         if let Some(refused) = stream_refusal(s, room, w).await {
             return Err(refused);
         }
+    }
+    if let Some(words) = stream_video_refusal(server, video, STREAM_CHAT_VIDEO) {
+        return Err(words.into());
     }
     // only the uploader may put an upload on a line; a nick has none
     let uploader = w.user_id.filter(|_| w.verified);
@@ -2167,6 +2182,19 @@ mod tests {
         assert_eq!(parse_say(String::new(), Some(id.into()), Vec::new(), None), Ok(Some((String::new(), vec![id.into()], None))));
         // a video alone is a line
         assert_eq!(parse_say(String::new(), None, Vec::new(), Some(id.to_uppercase())), Ok(Some((String::new(), Vec::new(), Some(id.into())))));
+    }
+
+    /// A video on a stream's line is refused while they are off there; a group channel's is not.
+    #[test]
+    fn videos_are_off_in_a_streams_chat() {
+        let id = Some("6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e");
+        assert!(!STREAM_CHAT_VIDEO, "videos stay off in a stream's chat until it has moderation");
+        assert_eq!(stream_video_refusal(None, id, STREAM_CHAT_VIDEO), Some("videos are off in stream chat for now"));
+        assert_eq!(stream_video_refusal(None, None, STREAM_CHAT_VIDEO), None, "a line with no video goes");
+        assert_eq!(stream_video_refusal(Some("cats"), id, STREAM_CHAT_VIDEO), None, "a group channel keeps its videos");
+        assert_eq!(stream_video_refusal(None, id, true), None, "the flag turns them back on");
+        let refused: Refused = NO_STREAM_VIDEO.into();
+        assert!(matches!(refused.frame(), Out::Error { error: "videos are off in stream chat for now" }), "the socket hears it as an error and stays open");
     }
 
     #[test]
