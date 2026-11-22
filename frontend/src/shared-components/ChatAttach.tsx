@@ -11,6 +11,16 @@ import { Tooltip } from '@/shared-components/Tooltip';
  */
 export const ATTACH_ACCEPT = 'image/*,video/mp4,video/webm,video/*';
 
+/**
+ * Videos in a stream's chat (docs/chat.md "videos"): off until a stream's chat has moderation, so
+ * its box takes pictures alone (`PICTURE_ACCEPT`) and a video dropped or pasted there hears
+ * `STREAM_VIDEO_OFF`. A group channel and a direct message keep them. `true` turns them back on;
+ * the chat holds the same flag and has the last word (chat.rs `STREAM_CHAT_VIDEO`).
+ */
+export const STREAM_CHAT_VIDEO = false;
+export const STREAM_VIDEO_OFF = 'videos are off in stream chat for now';
+export const PICTURE_ACCEPT = 'image/*';
+
 /** The files a paste or a drop carries, pictures and videos alike; none for words alone. */
 export function filesOf(data: DataTransfer | null): File[] {
   return data ? [...data.files] : [];
@@ -48,8 +58,7 @@ export function pasteFiles(e: ClipboardEvent, take: (files: File[]) => void) {
 
 /**
  * One video going up (docs/chat.md "videos"): checked here first (`readVideo`: the type, 10 mb,
- * 30 seconds), its poster drawn from a frame and kept as a chat picture, then the file itself
- * with its progress, 0 to 1 (`progress`, null when nothing is going up). `done` gets the video;
+ * 30 seconds), then the file itself (the api draws its poster) with its progress, 0 to 1 (`progress`, null when nothing is going up). `done` gets the video;
  * a refusal is `fail`'s, in the words the box shows.
  */
 export function useVideoUpload() {
@@ -58,9 +67,8 @@ export function useVideoUpload() {
     if (progress !== null) return;
     setProgress(0);
     try {
-      const { durationMs, poster } = await readVideo(file);
-      const still = await api.uploadChatImage(poster);
-      const saved = await api.uploadChatVideo(file, still.id, durationMs, setProgress);
+      await readVideo(file);
+      const saved = await api.uploadChatVideo(file, setProgress);
       done({ id: saved.id, poster: saved.poster });
     } catch (err) {
       fail(messageOf(err));

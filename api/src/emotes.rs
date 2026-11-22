@@ -18,7 +18,7 @@ use std::io::Cursor;
 use axum::extract::multipart::MultipartError;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch};
 use axum::{Json, Router};
@@ -226,12 +226,17 @@ pub(crate) fn redraw(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
     Ok(out)
 }
 
-/// The one place an emote's picture is looked at before it is kept, after `redraw`.
+/// The one place an emote's picture is looked at before it is kept, after `redraw`: the single
+/// moderation hook for emotes, and every emote upload passes through it.
+///
+/// It must FAIL CLOSED once it is wired to anything: a check that errors, times out or cannot be
+/// reached refuses the upload (an `Err`, never a quiet `Ok`), so an outage of the checker is not
+/// a way past it. Only "checked, and fine" may return `Ok`.
 ///
 /// TODO(moderation): group icons, banners and avatars go through no safety or moderation check
 /// today (group_mod.rs `put_icon`, profile.rs `put_avatar` keep the bytes as they come), so there
 /// is no shared path to call. When one exists (a hash match against a known-bad list, a
-/// classifier), call it here and refuse with its words; every emote upload passes through this.
+/// classifier), call it here and refuse with its words. Nothing outside is wired yet.
 async fn screen(_group: &str, _who: &crate::auth::Account, _webp: &[u8]) -> Result<(), ApiError> {
     Ok(())
 }
@@ -311,7 +316,7 @@ fn form_error(e: MultipartError) -> ApiError {
 /// `POST /api/groups/:group/emotes`, multipart: `name` and `image` (png, jpeg or webp, 512 kb).
 /// A manager's. 201 with the emote. 400 for the name's rule or a non-picture, 409 for a name the
 /// group has, 409 `FULL` at the cap, 413 past the size, 429 past `RATE_PER_WINDOW` an hour.
-async fn upload(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, mut form: Multipart) -> Result<(StatusCode, Json<Value>), ApiError> {
+async fn upload(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, headers: HeaderMap, mut form: Multipart) -> Result<(StatusCode, Json<Value>), ApiError> {
     let who = me.ok_or_else(login)?;
     let group = group_mod::server(&s.db, &group).await?;
     need_manager(&s, who.id, &group).await?;
@@ -348,12 +353,14 @@ async fn upload(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
         return Err(ApiError::new(StatusCode::CONFLICT, FULL));
     }
     let id: Option<Uuid> = sqlx::query_scalar(
-        "INSERT INTO group_emotes (group_name, name, key, created_by) VALUES ($1, $2, '', $3)
+        "INSERT INTO group_emotes (group_name, name, key, created_by, sha256, uploader_ip) VALUES ($1, $2, '', $3, $4, $5)
          ON CONFLICT (group_name, name) DO NOTHING RETURNING id",
     )
     .bind(&group)
     .bind(&name)
     .bind(who.id)
+    .bind(crate::media::sha256_hex(&webp))
+    .bind(crate::ratelimit::forwarded_ip(&headers))
     .fetch_optional(&mut *tx)
     .await?;
     let Some(id) = id else { return Err(ApiError::new(StatusCode::CONFLICT, TAKEN)) };
@@ -465,7 +472,11 @@ async fn picture(State(s): State<AppState>, Path(id): Path<String>) -> Result<Re
     let key: Option<String> = sqlx::query_scalar("SELECT key FROM group_emotes WHERE id = $1").bind(id).fetch_optional(&s.db).await?;
     let Some(key) = key.filter(|k| !k.is_empty()) else { return Err(ApiError::new(StatusCode::NOT_FOUND, NO_SUCH_EMOTE)) };
     match s3::get(&s.s3, &key).await {
-        Ok(Some(bytes)) => Ok(([(header::CONTENT_TYPE, "image/webp"), (header::CACHE_CONTROL, "public, max-age=86400")], bytes).into_response()),
+        Ok(Some(bytes)) => Ok((
+            [(header::CONTENT_TYPE, "image/webp"), (header::CACHE_CONTROL, crate::media::PUBLIC_CACHE), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")],
+            bytes,
+        )
+            .into_response()),
         Ok(None) => Err(ApiError::new(StatusCode::NOT_FOUND, NO_SUCH_EMOTE)),
         Err(e) => {
             log::error!("s3 emote {id}: {e}");
