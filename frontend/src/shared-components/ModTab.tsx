@@ -1,6 +1,6 @@
-import { RiSearchLine } from '@remixicon/react';
+import { RiIndeterminateCircleLine, RiSearchLine } from '@remixicon/react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
+import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 
 import { type ModLogRow, type SearchHit, api, messageOf } from '@/infra/api';
 import { PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
@@ -13,12 +13,8 @@ import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { INPUT } from '@/shared-components/input';
 import { WELCOME_TIP, WelcomeEditor } from '@/shared-components/WelcomeEditor';
-import { SECTION_TITLE } from '@/shared-components/user-modal/parts';
+import { Info } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
-
-const ROW = 'flex items-center gap-3 border-b border-primaryStroke py-1.5 last:border-b-0';
-/** A face in a row of the tab: the jannies, the banned. */
-const ROW_FACE = 'h-7 w-7 text-xs';
 
 /** "3m ago", "2h ago", "4d ago". */
 function ago(iso: string): string {
@@ -71,9 +67,10 @@ function chipColor(action: string): string {
   return 'border-primaryStroke text-textTertiary';
 }
 
-/** The log's filters: which actions each shows. `all` shows every one. */
+/** The log's filters: which actions each shows. `all` shows every one, `active` what still stands (`standing`). */
 const FILTERS = [
   { word: 'all', actions: null },
+  { word: 'active', actions: null },
   { word: 'deletes', actions: ['delete'] },
   { word: 'bans', actions: ['ban', 'unban'] },
   { word: 'timeouts', actions: ['timeout', 'untimeout'] },
@@ -147,8 +144,8 @@ function JannySearch({ skip, busy, onPick }: { skip: Set<string>; busy: boolean;
   };
 
   return (
-    // its own height, not the row's: the list opens under the box, not under the jannies beside it
-    <div className="relative min-w-0 self-start">
+    // the list opens over the jannies under the box
+    <div className="relative min-w-0">
       <label htmlFor="mod-janny-search" className="sr-only">
         find someone to make a janny
       </label>
@@ -177,7 +174,7 @@ function JannySearch({ skip, busy, onPick }: { skip: Set<string>; busy: boolean;
           autoComplete="off"
           autoCapitalize="off"
           spellCheck={false}
-          className={cn(INPUT, 'h-8 pl-10 pr-3 text-sm max-md:h-10 max-md:pl-12')}
+          className={cn(INPUT, 'h-9 pl-10 pr-3 text-sm max-md:h-11 max-md:pl-12')}
         />
       </div>
       {shown && (
@@ -218,6 +215,36 @@ function JannySearch({ skip, busy, onPick }: { skip: Set<string>; busy: boolean;
   );
 }
 
+/** What the ⓘ beside each card's title says: the lines that used to sit under the titles. */
+const JANNIES_TIP = 'jannies can delete lines, time out and ban. not you, not each other';
+const BANS_TIP = 'who cannot talk in your chat. a ban lasts until you lift it, a timeout ends on its own';
+const LOG_TIP = 'what you and your jannies did in your chat, newest first';
+
+/** One card of the tab: a stroke, the lifted fill, the small title with its ⓘ, a count at the right. */
+function Card({ id, title, tip, count, children }: { id?: string; title: string; tip: string; count?: number; children: ReactNode }) {
+  return (
+    <section id={id} className="flex min-w-0 flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3 md:p-4">
+      <div className="flex items-center gap-1.5">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-textSecondary">{title}</h3>
+        <Info tip={tip} />
+        {count !== undefined && <span className="ml-auto text-sm tabular-nums text-textTertiary">{count}</span>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * A row of the jannies or the banned: the face, the name, what it is, the one button. The name and
+ * what it is share a line; on a phone the name sits over it. Both truncate, the button never shrinks.
+ */
+const ROW = 'flex items-center gap-2 border-b border-primaryStroke px-3 py-1.5 last:border-b-0 max-md:min-h-[52px] max-md:py-2';
+const ROW_FACE = 'h-6 w-6 shrink-0 text-[10px]';
+const ROW_TEXT = 'flex min-w-0 flex-1 items-center gap-2 max-md:flex-col max-md:items-stretch max-md:gap-0';
+const ROW_NAME = 'min-w-0 truncate text-sm font-semibold';
+const ROW_WHAT = 'min-w-0 flex-1 truncate text-sm text-textSecondary max-md:text-[13px]';
+const ROWS = 'border border-primaryStroke bg-background';
+
 /** My chat welcome, the profile tab's editor (WelcomeEditor.tsx): the same atoms, so a save in one shows in the other. */
 function WelcomeSection() {
   // Mount only: my welcome as the api has it (the same name again keeps the draft).
@@ -226,22 +253,66 @@ function WelcomeSection() {
   }, []);
 
   return (
-    <section id="mod-welcome" className="flex max-w-[520px] flex-col gap-2">
-      <h3 className={SECTION_TITLE}>welcome message</h3>
-      <p className="text-sm text-textSecondary">{WELCOME_TIP}.</p>
+    <Card id="mod-welcome" title="welcome message" tip={WELCOME_TIP}>
       <div className="min-w-0">
         <WelcomeEditor id="mod-welcome" />
       </div>
-    </section>
+    </Card>
+  );
+}
+
+/**
+ * The log rows whose doing still stands: the newest ban of someone still banned, the newest
+ * timeout of someone still timed out, the newest add of someone still a janny.
+ */
+function standing(rows: ModLogRow[], banned: Set<string>, timedOut: Set<string>, jannies: Set<string>): Set<ModLogRow> {
+  const newest = new Map<string, ModLogRow>();
+  for (const row of rows) {
+    const still =
+      (row.action === 'ban' && banned.has(row.target)) || (row.action === 'timeout' && timedOut.has(row.target)) || (row.action === 'janny' && jannies.has(row.target));
+    if (!still) continue;
+    const key = `${row.action}:${row.target}`;
+    const had = newest.get(key);
+    if (!had || new Date(row.at).getTime() > new Date(had.at).getTime()) newest.set(key, row);
+  }
+  return new Set(newest.values());
+}
+
+/** A log row's time: "2d ago", the full date and time on hover and focus. */
+function When({ at }: { at: string }) {
+  return (
+    <Tooltip content={new Date(at).toLocaleString()}>
+      <span tabIndex={0} className="outline-none focus-visible:text-primaryBlue">
+        {ago(at)}
+      </span>
+    </Tooltip>
+  );
+}
+
+/** A log row's action, in its colour. */
+function Chip({ action }: { action: string }) {
+  return <span className={cn('inline-block shrink-0 border px-1.5 text-xs leading-5', chipColor(action))}>{action}</span>;
+}
+
+/** A log row's detail, the whole of it on hover and focus; `—` for none. */
+function Detail({ text }: { text: string }) {
+  if (!text) return <span>—</span>;
+  return (
+    <Tooltip content={text}>
+      <span tabIndex={0} className="block truncate outline-none focus-visible:text-primaryBlue">
+        {text}
+      </span>
+    </Tooltip>
   );
 }
 
 /**
  * The mod tab, on my own page only (docs/jannies.md): my stream's jannies (found by name and
- * added in one pick, removed from the list beside), who is banned or timed out of my chat (lift
- * either), and the log of what was done in it, filtered by kind. A janny deletes, bans and times
- * out from the chat's lines; this is where the streamer keeps the list. Above them, what Eques
- * says to each viewer who opens my chat.
+ * added in one pick, removed from the list under the box), who is banned or timed out of my chat
+ * (lift either), and the log of what was done in it, filtered by kind or to what still stands. A
+ * janny deletes, bans and times out from the chat's lines; this is where the streamer keeps the
+ * list. Beside them, what Eques says to each viewer who opens my chat. Two columns from md, one
+ * card under another on a phone.
  */
 export function ModTab({ name }: { name: string }) {
   const client = useQueryClient();
@@ -255,8 +326,18 @@ export function ModTab({ name }: { name: string }) {
   const listed = [...(jannies.data ?? []).map((j) => j.name), ...(bans.data?.bans ?? []).map((b) => b.name), ...(bans.data?.timeouts ?? []).map((t) => t.name)];
   const faces = useFaces([...new Set(listed)]);
   const skip = new Set([name, ...(jannies.data ?? []).map((j) => j.name)]);
+  const banCount = bans.data ? bans.data.bans.length + bans.data.timeouts.length : undefined;
+  const live =
+    filter === 'active'
+      ? standing(
+          log.data ?? [],
+          new Set((bans.data?.bans ?? []).map((b) => b.name)),
+          new Set((bans.data?.timeouts ?? []).map((t) => t.name)),
+          new Set((jannies.data ?? []).map((j) => j.name))
+        )
+      : null;
   const actions = FILTERS.find((f) => f.word === filter)?.actions ?? null;
-  const rows = (log.data ?? []).filter((row) => !actions || (actions as readonly string[]).includes(row.action));
+  const rows = (log.data ?? []).filter((row) => (live ? live.has(row) : !actions || (actions as readonly string[]).includes(row.action)));
 
   const run = async (what: () => Promise<unknown>, done = '') => {
     setBusy(true);
@@ -274,32 +355,46 @@ export function ModTab({ name }: { name: string }) {
     }
   };
 
-  return (
-    <div id="mod-tab" className="flex flex-col gap-6">
-      <WelcomeSection />
+  const chip = (word: Filter) => (
+    <Button
+      key={word}
+      size="sm"
+      data-filter={word}
+      aria-pressed={filter === word}
+      onClick={() => setFilter(word)}
+      className={cn('shrink-0', word === 'deletes' && 'ml-auto', filter === word && 'border-primaryBlue bg-primaryBlue/10 text-primaryBlue')}
+    >
+      {word}
+    </Button>
+  );
 
-      <section className="flex flex-col gap-2">
-        <h3 className={SECTION_TITLE}>jannies</h3>
-        <p className="text-sm text-textSecondary">jannies can delete lines, time out and ban. not you, not each other.</p>
-        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <JannySearch skip={skip} busy={busy} onPick={(who) => run(() => api.addStreamJanny(name, who), `${who} is a janny now`)} />
-          <div className="min-w-0">
+  return (
+    <div id="mod-tab" className="flex flex-col gap-4">
+      <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2">
+        <WelcomeSection />
+
+        <div className="flex min-w-0 flex-col gap-4">
+          <Card id="mod-jannies-card" title="jannies" tip={JANNIES_TIP} count={jannies.data?.length}>
+            <JannySearch skip={skip} busy={busy} onPick={(who) => run(() => api.addStreamJanny(name, who), `${who} is a janny now`)} />
             {jannies.isError ? (
               <p className="text-sm text-decrease">{messageOf(jannies.error)}</p>
             ) : jannies.data && jannies.data.length === 0 ? (
               <p className="text-sm text-textTertiary">no jannies yet.</p>
             ) : (
-              <ul id="mod-jannies" aria-label="jannies">
+              <ul id="mod-jannies" aria-label="jannies" className={cn(ROWS, !jannies.data && 'hidden')}>
                 {(jannies.data ?? []).map((j) => (
                   <li key={j.name} className={ROW}>
                     <Face name={j.name} version={faces.get(j.name) ?? null} className={ROW_FACE} />
-                    <span className="min-w-0 flex-1 truncate font-semibold">{j.name}</span>
-                    <span className="shrink-0 text-xs text-textTertiary">added {ago(j.added_at)}</span>
+                    <div className={ROW_TEXT}>
+                      <span className={ROW_NAME}>{j.name}</span>
+                      <span className={ROW_WHAT}>added {ago(j.added_at)}</span>
+                    </div>
                     <Button
                       size="sm"
                       variant="outline-danger"
                       disabled={busy}
                       onClick={() => void run(() => api.removeStreamJanny(name, j.name), `${j.name} is not a janny any more`)}
+                      className="shrink-0"
                     >
                       remove
                     </Button>
@@ -307,126 +402,138 @@ export function ModTab({ name }: { name: string }) {
                 ))}
               </ul>
             )}
-          </div>
+          </Card>
+
+          <Card id="mod-bans-card" title="banned and timed out" tip={BANS_TIP} count={banCount}>
+            {bans.isError ? (
+              <p className="text-sm text-decrease">{messageOf(bans.error)}</p>
+            ) : banCount === 0 ? (
+              <p id="mod-bans-none" className="flex items-center justify-center gap-2 border border-dashed border-primaryStroke px-3 py-6 text-sm text-textSecondary">
+                <RiIndeterminateCircleLine aria-hidden size={16} className="shrink-0 text-textTertiary" />
+                no bans or timeouts
+              </p>
+            ) : (
+              <ul id="mod-bans" aria-label="banned and timed out" className={cn(ROWS, !bans.data && 'hidden')}>
+                {(bans.data?.bans ?? []).map((b) => (
+                  <li key={`ban-${b.name}`} className={ROW}>
+                    <Face name={b.name} version={faces.get(b.name) ?? null} className={ROW_FACE} />
+                    <div className={ROW_TEXT}>
+                      <span className={ROW_NAME}>{b.name}</span>
+                      <span className={ROW_WHAT}>
+                        banned{b.by ? ` by ${b.by}` : ''}
+                        {b.reason && <span className="text-textTertiary"> · {b.reason}</span>}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => void run(() => api.unbanFromChat(name, b.name), `${b.name}'s ban is lifted`)}
+                      className="shrink-0"
+                    >
+                      unban
+                    </Button>
+                  </li>
+                ))}
+                {(bans.data?.timeouts ?? []).map((t) => (
+                  <li key={`timeout-${t.name}`} className={ROW}>
+                    <Face name={t.name} version={faces.get(t.name) ?? null} className={ROW_FACE} />
+                    <div className={ROW_TEXT}>
+                      <span className={ROW_NAME}>{t.name}</span>
+                      <span className={ROW_WHAT}>
+                        timed out{t.by ? ` by ${t.by}` : ''} · {left(t.until)}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => void run(() => api.liftChatTimeout(name, t.name), `${t.name}'s timeout is lifted`)}
+                      className="shrink-0"
+                    >
+                      untimeout
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
         </div>
-        {status && (
-          <p id="mod-status" aria-live="polite" className="text-sm text-textSecondary">
-            {status}
-          </p>
-        )}
-      </section>
+      </div>
 
-      <section className="flex flex-col gap-2">
-        <h3 className={SECTION_TITLE}>banned and timed out</h3>
-        {bans.isError ? (
-          <p className="text-sm text-decrease">{messageOf(bans.error)}</p>
-        ) : bans.data && bans.data.bans.length === 0 && bans.data.timeouts.length === 0 ? (
-          <p className="text-sm text-textTertiary">nobody.</p>
-        ) : (
-          <ul id="mod-bans" className="max-w-[520px]">
-            {(bans.data?.bans ?? []).map((b) => (
-              <li key={`ban-${b.name}`} className={ROW}>
-                <Face name={b.name} version={faces.get(b.name) ?? null} className={ROW_FACE} />
-                <span className="min-w-0 flex-1 truncate">
-                  <span className="font-semibold">{b.name}</span>
-                  <span className="text-sm text-textSecondary"> banned{b.by ? ` by ${b.by}` : ''}</span>
-                  {b.reason && <span className="text-sm text-textTertiary"> · {b.reason}</span>}
-                </span>
-                <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(() => api.unbanFromChat(name, b.name), `${b.name}'s ban is lifted`)}>
-                  unban
-                </Button>
-              </li>
-            ))}
-            {(bans.data?.timeouts ?? []).map((t) => (
-              <li key={`timeout-${t.name}`} className={ROW}>
-                <Face name={t.name} version={faces.get(t.name) ?? null} className={ROW_FACE} />
-                <span className="min-w-0 flex-1 truncate">
-                  <span className="font-semibold">{t.name}</span>
-                  <span className="text-sm text-textSecondary"> timed out{t.by ? ` by ${t.by}` : ''}</span>
-                  <span className="text-sm text-textTertiary"> · {left(t.until)}</span>
-                </span>
-                <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(() => api.liftChatTimeout(name, t.name), `${t.name}'s timeout is lifted`)}>
-                  lift
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {status && (
+        <p id="mod-status" aria-live="polite" className="text-sm text-textSecondary">
+          {status}
+        </p>
+      )}
 
-      <section className="flex flex-col gap-2">
-        <h3 className={SECTION_TITLE}>mod log</h3>
-        <div id="mod-log-filters" role="group" aria-label="show" className="flex gap-2 overflow-x-auto">
-          {FILTERS.map(({ word }) => (
-            <Button
-              key={word}
-              size="sm"
-              data-filter={word}
-              aria-pressed={filter === word}
-              onClick={() => setFilter(word)}
-              className={cn('shrink-0', filter === word && 'border-primaryBlue text-primaryBlue')}
-            >
-              {word}
-            </Button>
-          ))}
+      <Card id="mod-log-card" title="mod log" tip={LOG_TIP} count={log.data ? rows.length : undefined}>
+        {/* one row: all and active at the left, the kinds at the right; on a phone it scrolls sideways */}
+        <div id="mod-log-filters" role="group" aria-label="show" className="flex flex-nowrap gap-2 overflow-x-auto">
+          {FILTERS.map(({ word }) => chip(word))}
         </div>
         {log.isError ? (
           <p className="text-sm text-decrease">{messageOf(log.error)}</p>
         ) : log.data && rows.length === 0 ? (
           <p className="text-sm text-textTertiary">nothing yet.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table id="mod-log" className="w-full min-w-[560px] table-fixed border-collapse text-sm">
+          <div className={cn(ROWS, !log.data && 'hidden')}>
+            <table id="mod-log" className="w-full table-fixed border-collapse text-sm max-md:hidden">
               <colgroup>
-                <col className="w-[76px]" />
-                <col className="w-[120px]" />
                 <col className="w-[96px]" />
+                <col className="w-[22%]" />
                 <col className="w-[120px]" />
+                <col className="w-[22%]" />
                 <col />
               </colgroup>
               <thead>
-                <tr className="border-b border-primaryStroke text-left text-xs text-textTertiary">
-                  <th className="py-1 pr-3 font-normal">when</th>
-                  <th className="py-1 pr-3 font-normal">who</th>
-                  <th className="py-1 pr-3 font-normal">action</th>
-                  <th className="py-1 pr-3 font-normal">target</th>
-                  <th className="py-1 font-normal">detail</th>
+                <tr className="border-b border-primaryStroke text-left text-xs uppercase tracking-wide text-textSecondary">
+                  <th className="px-3 py-2 font-semibold">when</th>
+                  <th className="py-2 pr-3 font-semibold">who</th>
+                  <th className="py-2 pr-3 font-semibold">action</th>
+                  <th className="py-2 pr-3 font-semibold">target</th>
+                  <th className="py-2 pr-3 font-semibold">detail</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row, i) => {
-                  const detail = detailOf(row);
-                  return (
-                    <tr key={`${row.at}-${i}`} data-action={row.action} className="border-b border-primaryStroke last:border-b-0">
-                      <td className="py-1 pr-3 text-textTertiary">
-                        <Tooltip content={new Date(row.at).toLocaleString()}>
-                          <span tabIndex={0} className="outline-none focus-visible:text-primaryBlue">
-                            {ago(row.at)}
-                          </span>
-                        </Tooltip>
-                      </td>
-                      <td className="truncate py-1 pr-3 font-semibold">{row.actor}</td>
-                      <td className="py-1 pr-3">
-                        <span className={cn('inline-block border px-1.5 text-xs leading-5', chipColor(row.action))}>{row.action}</span>
-                      </td>
-                      <td className="truncate py-1 pr-3">{row.target}</td>
-                      <td className="py-1 text-textSecondary">
-                        {detail && (
-                          <Tooltip content={detail}>
-                            <span tabIndex={0} className="block truncate outline-none focus-visible:text-primaryBlue">
-                              {detail}
-                            </span>
-                          </Tooltip>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {rows.map((row, i) => (
+                  <tr key={`${row.at}-${i}`} data-action={row.action} className="border-b border-primaryStroke last:border-b-0">
+                    <td className="px-3 py-2 text-textTertiary">
+                      <When at={row.at} />
+                    </td>
+                    <td className="truncate py-2 pr-3">{row.actor}</td>
+                    <td className="py-2 pr-3">
+                      <Chip action={row.action} />
+                    </td>
+                    <td className="truncate py-2 pr-3">{row.target}</td>
+                    <td className="py-2 pr-3 text-textSecondary">
+                      <Detail text={detailOf(row)} />
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
+            {/* a phone: each row two lines, who and what and when, then to whom and the detail on one line that ends in … when it runs long */}
+            <ul id="mod-log-rows" aria-label="mod log" className="md:hidden">
+              {rows.map((row, i) => (
+                <li key={`${row.at}-${i}`} data-action={row.action} className="flex flex-col gap-0.5 border-b border-primaryStroke px-3 py-2 text-sm last:border-b-0">
+                  <div className="flex items-center gap-2">
+                    <span className="min-w-0 truncate font-semibold">{row.actor}</span>
+                    <Chip action={row.action} />
+                    <span className="ml-auto shrink-0 text-xs text-textTertiary">
+                      <When at={row.at} />
+                    </span>
+                  </div>
+                  <p className="truncate text-textSecondary">
+                    {row.target}
+                    {detailOf(row) && ` · ${detailOf(row)}`}
+                  </p>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
-      </section>
+      </Card>
     </div>
   );
 }
