@@ -1367,7 +1367,6 @@ export function ServerPage() {
               log in to join
             </Button>
           )}
-          {!mine && <p className="text-sm text-textSecondary">you can read this. join to talk.</p>}
           {mine && !leaving && (
             <Tooltip content={lastMember ? 'leave and delete' : 'leave'}>
               <button

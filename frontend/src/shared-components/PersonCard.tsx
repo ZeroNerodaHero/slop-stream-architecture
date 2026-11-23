@@ -297,12 +297,13 @@ interface PersonCardProps {
  * Streaming, a frame of the stream (StreamStill.tsx, kept a few seconds old) stands between
  * the name and the status, the card's width: the preview of what they are streaming, the
  * sidebar's small one made big. The sidebar's rows, the chat window's tabs, a chat line's
- * speaker and a group's roster (ServerRoom.tsx) all show it. A row holds all of it (the
- * following list, a search's hits, the open chats), so the card is up at once; a chat line
- * holds the name, the ✓ and the picture alone, a roster's row those and the word, and what is
- * missing comes from one `GET /api/streamers/:name` asked when the card shows (follow-atoms
- * keeps the answer a while, so hovering the same name again asks nothing). Until it answers,
- * or when it does not, the face has no square and there is no status. The pointer can cross onto
+ * speaker and a group's roster (ServerRoom.tsx) all show it. A row (the following list, a
+ * search's hits, the open chats) holds the word and the presence, so those are up at once; a
+ * chat line holds the name, the ✓ and the picture alone, a roster's row those and the word. The
+ * rest (the badge, the thumbnail, what a row lacks) comes from one `GET /api/streamers/:name`
+ * asked whenever the card shows (follow-atoms keeps the answer a while, so hovering the same
+ * name again asks nothing). Until it answers, or when it does not, what came from the row is
+ * all there is: a chat line's card has no square and no status. The pointer can cross onto
  * it and the keyboard tab into it (usePeek), for a moderator's box and `below`. Drawn into the body
  * (no list clips it, and a window's transform does not move it), it goes out on the side away
  * from the edge, kept on screen, and hangs down from the row in the top half of the screen and
@@ -313,11 +314,10 @@ export function PersonCard({ id, person, at, side, actions, below, hold }: Perso
   const peek = useAtomValue(peeksAtom)[person.name]?.card;
   // the profile popup is up (a click on this row opened it, like as not): the page under it is not being pointed at, and a card left there would show through, dimmed
   const covered = useAtomValue(profilePopupAtom) !== null;
-  // not streaming, the card shows their thumbnail, which only the api's card has: so it asks then too (kept a while, follow-atoms)
-  const asks = person.bio === undefined || person.presence === undefined || person.presence !== 'streaming';
+  // always asks: the group badge and the thumbnail are only on the api's card, never on a row (kept a while, follow-atoms, so hovering again asks nothing)
   useEffect(() => {
-    if (asks) void loadPeek(person.name);
-  }, [person.name, asks]);
+    void loadPeek(person.name);
+  }, [person.name]);
   // home's list, the count its cards show: null while it has not come, or did not say. Above the early return: every hook runs on every render (React #300 when the popup opens over a shown card)
   const viewers = useAtomValue(homeStreamsAtom)?.find((s) => s.name === person.name)?.viewers ?? null;
   if (covered) return null;
@@ -387,10 +387,11 @@ export function PersonCard({ id, person, at, side, actions, below, hold }: Perso
         data-presence={presence}
         className="flex flex-col gap-2.5 border border-primaryStroke bg-backgroundSecondary p-3 text-sm text-textPrimary"
       >
-        {/* beside the face and as tall as it: the name along its top (leading-4, so its cap sits level with the face's top), the badge and the count along its bottom */}
+        {/* beside the face and exactly as tall as it: two leading-4 lines (16 + 16 = the face's 32px), the name on top and the badge and the
+            count below; with nothing for the second line the name sits centred beside the face */}
         <span className="flex items-center gap-2.5">
           <span className="relative shrink-0">
-            <Face name={person.name} version={person.avatar} className="h-10 w-10 text-base" />
+            <Face name={person.name} version={person.avatar} className="h-8 w-8 text-sm" />
             {presence && (
               <>
                 <PresenceSquare status={presence} className="border-backgroundSecondary" />
@@ -399,17 +400,19 @@ export function PersonCard({ id, person, at, side, actions, below, hold }: Perso
               </>
             )}
           </span>
-          <span className="flex h-10 min-w-0 flex-1 flex-col items-start justify-between">
+          <span className="flex h-8 min-w-0 flex-1 flex-col items-start justify-center">
             <Who
               name={person.name}
               verified={person.verified}
               oauthVerified={person.oauth_verified ?? known?.oauth_verified}
               className="max-w-full text-sm font-semibold leading-4"
             />
-            <span className="flex min-w-0 max-w-full items-center gap-2 text-xs leading-4">
-              {badge && <Badge group={badge} className="min-w-0" />}
-              {presence === 'streaming' && <ViewerCount count={viewers} className="shrink-0 whitespace-nowrap text-textSecondary" />}
-            </span>
+            {(badge || presence === 'streaming') && (
+              <span className="flex min-w-0 max-w-full items-center gap-2 text-xs leading-4">
+                {badge && <Badge group={badge} className="min-w-0" />}
+                {presence === 'streaming' && <ViewerCount count={viewers} className="shrink-0 whitespace-nowrap text-textSecondary" />}
+              </span>
+            )}
           </span>
         </span>
         {presence === 'streaming' ? (

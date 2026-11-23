@@ -140,13 +140,13 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-4">
+      <div className="grid grid-cols-2 gap-2">
         <Button id="auth-submit" type="submit" variant="primary" className={BUTTON} disabled={busy || !name || !password || unmet}>
           {signingUp ? 'make the account' : 'log in'}
         </Button>
         <Button
           id="auth-switch"
-          size="sm"
+          className={BUTTON}
           onClick={() => {
             clearAuthError();
             onMode(signingUp ? 'login' : 'signup');

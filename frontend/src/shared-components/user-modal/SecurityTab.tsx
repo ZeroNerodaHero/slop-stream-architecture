@@ -112,13 +112,13 @@ function LoggedOut() {
             minLength={signingUp ? 8 : undefined}
           />
         </Field>
-        <div className="flex flex-wrap items-center gap-4">
+        <div className="grid grid-cols-2 gap-2">
           <Button id="sec-submit" type="submit" variant="primary" className={BUTTON} disabled={busy || !name || !password || !!problem}>
             {signingUp ? 'sign up' : 'log in'}
           </Button>
           <Button
             id="sec-mode"
-            size="sm"
+            className={BUTTON}
             onClick={() => {
               setSigningUp((s) => !s);
               clearAuthError();
