@@ -3,19 +3,22 @@
 //!
 //! Webp, or jpeg when the browser cannot write webp. Profile pictures, group
 //! pictures, thumbnails and the offline picture stay jpeg and do not come through here.
+//!
+//! Who may post one and who is served one is media.rs's: a stream's are public, a group
+//! channel's and a direct message's are for those who may read them.
 
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
 use axum::extract::{DefaultBodyLimit, Path, State};
-use axum::http::{header, StatusCode};
-use axum::response::IntoResponse;
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::json;
-use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::Me;
+use crate::media::{self, Kind};
 use crate::s3;
 use crate::{ApiError, ApiResult, AppState};
 
@@ -28,16 +31,11 @@ const RATE_WINDOW_SECS: i64 = 600;
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/chat-images", post(upload))
-        .route("/api/chat-images/{id}", get(show))
+        .route("/api/chat-images/{id}", get(show).delete(take_down))
         .layer(DefaultBodyLimit::max(MAX_BYTES))
 }
 
-/// The say checks this before it keeps a line that names a picture.
-pub(crate) async fn exists(db: &PgPool, id: &str) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM chat_images WHERE id = $1::uuid)").bind(id).fetch_one(db).await
-}
-
-async fn upload(State(s): State<AppState>, Me(me): Me, body: Result<Bytes, BytesRejection>) -> ApiResult {
+async fn upload(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, body: Result<Bytes, BytesRejection>) -> ApiResult {
     let me = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "log in to send a picture"))?;
     let body = match body {
         Ok(body) => body,
@@ -53,12 +51,23 @@ async fn upload(State(s): State<AppState>, Me(me): Me, body: Result<Bytes, Bytes
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "not a picture"));
     };
     crate::auth::limit(&s, &format!("rl:chatimg:{}", me.id), RATE_WINDOW_SECS, RATE_PER_WINDOW, "slow down").await?;
-    // postgres makes the id, the same as every other id. the row first; a failed save deletes it.
-    let id: Uuid = match sqlx::query_scalar("INSERT INTO chat_images (id, mime, created_by) VALUES (gen_random_uuid(), $1, $2) RETURNING id")
-        .bind(mime)
-        .bind(me.id)
-        .fetch_one(&s.db)
-        .await
+    let id = store(&s, &me, mime, &body, crate::ratelimit::forwarded_ip(&headers).as_deref()).await?;
+    Ok(Json(json!({ "id": id })))
+}
+
+/// A chat picture kept: the row (postgres makes the id, the same as every other id, with the
+/// bytes' sha256 and the uploader's address), then the bytes; a failed save deletes the row.
+/// The upload's way in, and a chat video's poster's (chat_videos.rs), which the api drew itself.
+pub(crate) async fn store(s: &AppState, me: &crate::auth::Account, mime: &str, body: &[u8], ip: Option<&str>) -> Result<Uuid, ApiError> {
+    let id: Uuid = match sqlx::query_scalar(
+        "INSERT INTO chat_images (id, mime, created_by, sha256, uploader_ip) VALUES (gen_random_uuid(), $1, $2, $3, $4) RETURNING id",
+    )
+    .bind(mime)
+    .bind(me.id)
+    .bind(media::sha256_hex(body))
+    .bind(ip)
+    .fetch_one(&s.db)
+    .await
     {
         Ok(id) => id,
         Err(e) => {
@@ -66,22 +75,30 @@ async fn upload(State(s): State<AppState>, Me(me): Me, body: Result<Bytes, Bytes
             return Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not save the picture"));
         }
     };
-    let key = key_of(id, mime);
-    if let Err(e) = s3::put(&s.s3, &key, &body, mime).await {
+    if let Err(e) = s3::put(&s.s3, &key_of(id, mime), body, mime).await {
         let _ = sqlx::query("DELETE FROM chat_images WHERE id = $1").bind(id).execute(&s.db).await;
         log::warn!("{}: chat picture: {e}", me.name);
         return Err(ApiError::new(StatusCode::BAD_GATEWAY, "could not save the picture"));
     }
-    Ok(Json(json!({ "id": id })))
+    Ok(id)
 }
 
-async fn show(State(s): State<AppState>, Path(id): Path<String>) -> Result<impl IntoResponse, ApiError> {
+/// `GET /api/chat-images/:id`: the picture, to whoever may see it (media.rs `access`): anyone for
+/// a stream's, cached a day; a member or one of the two for a group's or a direct message's, not
+/// cached. 401/403 for anyone else, 410 `removed` for one an admin took down.
+async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>) -> Result<Response, ApiError> {
     let Ok(id) = Uuid::parse_str(id.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
     };
+    let Some(access) = media::access(&s.db, Kind::Image, id, me.map(|m| m.id)).await? else {
+        return Err(media::missing(&s.db, Kind::Image, id).await);
+    };
+    if let Some(no) = media::refused(&access) {
+        return Err(no);
+    }
     let mime: Option<String> = sqlx::query_scalar("SELECT mime FROM chat_images WHERE id = $1").bind(id).fetch_optional(&s.db).await?;
     let Some(mime) = mime else {
-        return Err(ApiError::new(StatusCode::NOT_FOUND, "no such picture"));
+        return Err(media::missing(&s.db, Kind::Image, id).await);
     };
     let bytes = match s3::get(&s.s3, &key_of(id, &mime)).await {
         Ok(Some(bytes)) => bytes,
@@ -91,7 +108,58 @@ async fn show(State(s): State<AppState>, Path(id): Path<String>) -> Result<impl 
             return Err(ApiError::new(StatusCode::BAD_GATEWAY, "could not load the picture"));
         }
     };
-    Ok(([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "public, max-age=86400".to_owned())], bytes))
+    let mut out = HeaderMap::new();
+    out.insert(header::CONTENT_TYPE, HeaderValue::from_str(&mime).unwrap_or(HeaderValue::from_static("application/octet-stream")));
+    media::headers(&mut out, access == media::Access::Public);
+    Ok((out, bytes).into_response())
+}
+
+/// `DELETE /api/chat-images/:id`: a site admin's takedown. The bytes out of the bucket, the row
+/// gone (a video it was the poster of keeps no poster), and the lines naming it say "removed".
+/// 204; 401 nobody, 403 anyone else, 404 no such picture.
+async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    let me = admin(&s, me)?;
+    let Ok(id) = Uuid::parse_str(id.trim()) else {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
+    };
+    let mime: Option<String> = sqlx::query_scalar("SELECT mime FROM chat_images WHERE id = $1").bind(id).fetch_optional(&s.db).await?;
+    let Some(mime) = mime else {
+        return Err(media::missing(&s.db, Kind::Image, id).await);
+    };
+    remove(&s, &me, id, &mime).await?;
+    log::info!("{}: took down chat picture {id}", me.name);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The picture `id` out of the bucket, then its row; a failed delete in the bucket keeps the row,
+/// so the takedown can be tried again. chat_videos.rs takes a video's poster down this way too.
+pub(crate) async fn remove(s: &AppState, me: &crate::auth::Account, id: Uuid, mime: &str) -> Result<(), ApiError> {
+    if let Err(e) = s3::delete(&s.s3, &key_of(id, mime)).await {
+        log::warn!("{}: take down chat picture {id}: {e}", me.name);
+        return Err(ApiError::new(StatusCode::BAD_GATEWAY, "could not delete the picture"));
+    }
+    media::remember_removed(&s.db, Kind::Image, id, me.id).await?;
+    sqlx::query("DELETE FROM chat_images WHERE id = $1").bind(id).execute(&s.db).await?;
+    Ok(())
+}
+
+/// A picture of the api's own that is not wanted after all (a video's poster whose video was not
+/// saved): out of the bucket and its row gone, no note kept.
+pub(crate) async fn discard(s: &AppState, id: Uuid, mime: &str) {
+    if let Err(e) = s3::delete(&s.s3, &key_of(id, mime)).await {
+        log::warn!("discard chat picture {id}: {e}");
+    }
+    let _ = sqlx::query("DELETE FROM chat_images WHERE id = $1").bind(id).execute(&s.db).await;
+}
+
+/// The site admins (`ADMIN_NAMES`), the same check as emotes.rs's and janny.rs's.
+pub(crate) fn admin(s: &AppState, me: Option<crate::auth::Account>) -> Result<crate::auth::Account, ApiError> {
+    let me = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
+    if s.admins.iter().any(|a| a.id == me.id) {
+        Ok(me)
+    } else {
+        Err(ApiError::new(StatusCode::FORBIDDEN, "admins only"))
+    }
 }
 
 fn key_of(id: Uuid, mime: &str) -> String {

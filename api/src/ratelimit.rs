@@ -146,6 +146,10 @@ fn is_upload(method: &Method, path: &str) -> bool {
 }
 
 fn is_moderation(method: &Method, path: &str) -> bool {
+    // a site admin's takedown of a chat picture or video (chat_images.rs, chat_videos.rs)
+    if method == Method::DELETE && matches!(path, "/api/chat-images/{id}" | "/api/chat-videos/{id}") {
+        return true;
+    }
     // a stream chat's jannies (janny.rs): deleting a line, bans, timeouts, naming jannies
     if path.starts_with("/api/jannies") {
         return true;
@@ -461,6 +465,9 @@ mod tests {
         assert_eq!(api_rule(&post, "/api/chat-images"), UPLOAD);
         assert_eq!(api_rule(&post, "/api/chat-videos"), VIDEO_UPLOAD);
         assert_eq!(api_rule(&get, "/api/chat-videos/{id}"), READ);
+        assert_eq!(api_rule(&get, "/api/chat-images/{id}"), READ);
+        assert_eq!(api_rule(&del, "/api/chat-videos/{id}"), MODERATE);
+        assert_eq!(api_rule(&del, "/api/chat-images/{id}"), MODERATE);
         assert!(VIDEO_UPLOAD.max < UPLOAD.max && VIDEO_UPLOAD.window_secs >= UPLOAD.window_secs, "videos are counted tighter than pictures");
         // a group's emote: the upload is a file; a rename and a delete are the group's setup; the lists are reads
         assert_eq!(api_rule(&post, "/api/groups/{group}/emotes"), UPLOAD);

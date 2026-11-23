@@ -920,14 +920,14 @@ export const api = {
   /** A picture for a chat line, already shrunk. Webp, or jpeg when the browser cannot write webp. */
   uploadChatImage: (picture: Blob) => request<{ id: string }>('POST', '/api/chat-images', picture),
   /**
-   * A video for a chat line, the file as it is (an mp4 or a webm, 10 mb and 30 seconds at most), with its poster (an
-   * `uploadChatImage` id) and the length the page measured. `onProgress` hears the share sent, 0 to 1: an xhr, since
-   * fetch cannot say. 400 the type's, the codecs' or the length's words, `no such poster`; 413 too big; 429 `slow down`.
+   * A video for a chat line, the file as it is (an mp4 or a webm, 10 mb and 30 seconds at most). The api measures it,
+   * keeps a copy with no metadata and draws its poster, whose id comes back. `onProgress` hears the share sent, 0 to 1:
+   * an xhr, since fetch cannot say. 400 the type's, the codecs' or the length's words; 413 too big; 429 `slow down`.
    */
-  uploadChatVideo: (video: Blob, poster: string, durationMs: number, onProgress?: (sent: number) => void) =>
+  uploadChatVideo: (video: Blob, onProgress?: (sent: number) => void) =>
     new Promise<{ id: string; poster: string; duration_ms: number }>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', `/api/chat-videos?poster=${encodeURIComponent(poster)}&duration=${Math.round(durationMs)}`);
+      xhr.open('POST', '/api/chat-videos');
       if (video.type) xhr.setRequestHeader('content-type', video.type);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && e.total > 0) onProgress?.(e.loaded / e.total);
