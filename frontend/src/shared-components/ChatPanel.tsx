@@ -518,7 +518,7 @@ export function EquesLine({ message, at, attrs }: { message: string; at: number;
       crowd
       who={
         <>
-          <span data-from={EQUES} className="font-semibold text-textSecondary">
+          <span data-from={EQUES} className="font-semibold normal-case text-textSecondary">
             {EQUES}
           </span>
           <span className="ml-1 inline-flex items-center gap-1 align-middle">
@@ -526,7 +526,7 @@ export function EquesLine({ message, at, attrs }: { message: string; at: number;
           </span>
         </>
       }
-      face={<Face name={EQUES} version={null} className="h-8 w-8 text-sm" />}
+      face={<img src="/icon-192.png?v=2" alt={EQUES} draggable={false} className="h-8 w-8 shrink-0 border border-primaryStroke object-cover" />}
       words={
         <span className="whitespace-pre-wrap">
           <LinkedText text={message} />
