@@ -38,6 +38,7 @@
 //! uptimes, build). The pages post their own failures to /api/errors (debug.rs).
 
 mod about_page;
+mod analytics;
 mod auth;
 mod chat;
 mod chat_images;
@@ -784,6 +785,11 @@ async fn go_live(
     .bind(id)
     .execute(&s.db)
     .await?;
+    // an account's stream gets its stats row (docs/analytics.md). a failure costs the stats, not
+    // the stream: the sampler's sync makes the row within the minute
+    if let Err(e) = analytics::open(&s.db, id).await {
+        log::warn!("{name}: analytics row for session {id}: {e}");
+    }
 
     // no `live` fact yet: the page has not reached video, and a watcher told now would be
     // answered "not live". video says when it has the publisher (`attached`), and that is
@@ -845,8 +851,9 @@ struct ViewersQuery {
 
 /// How many different addresses are receiving the stream, from video, whenever the number
 /// moves (docs/viewers.md: video counts once ICE and DTLS are done, and says so at most once a
-/// second per stream). A fact for the name's watchers and for home (docs/status.md); nothing
-/// is stored here, the home service keeps the latest in its table.
+/// second per stream). A fact for the name's watchers and for home (docs/status.md); the home
+/// service keeps the latest in its table. Stored here: the stream's peak, when this is a new
+/// one (docs/analytics.md); the count over time is the sampler's.
 async fn viewers(State(s): State<AppState>, Name(name): Name, q: Result<Query<ViewersQuery>, QueryRejection>) -> ApiResult {
     let Query(q) = q?;
     let owner = Owner { session: q.session, token: q.token };
@@ -854,6 +861,9 @@ async fn viewers(State(s): State<AppState>, Name(name): Name, q: Result<Query<Vi
         return Err(ApiError::not_yours());
     }
     presence::publish_viewers(&mut s.redis.clone(), &name, owner.session, q.viewers).await;
+    if let Err(e) = analytics::peak(&s.db, owner.session, q.viewers).await {
+        log::warn!("{name}: peak viewers: {e}");
+    }
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -938,6 +948,10 @@ async fn stop(
     if done.rows_affected() == 0 {
         return Err(ApiError::not_yours());
     }
+    // the stats row ends with it now, not at the sampler's next sync (docs/analytics.md)
+    if let Err(e) = analytics::ended(&s.db, owner.session).await {
+        log::warn!("{name}: analytics end of session {}: {e}", owner.session);
+    }
 
     // only while this session still holds it, in one step: a go-live that took the name
     // between a read here and the delete would lose its fresh key to this one's stop
@@ -1001,6 +1015,7 @@ fn router(state: AppState) -> Router {
         .merge(debug::routes())
         .merge(voice::routes())
         .merge(janny::routes())
+        .merge(analytics::routes())
         .route("/api/health", get(health))
         // `GET /api/streams`, the home list, is the home service's (`api home`, home.rs): caddy sends it there
         .route("/api/streamers/{name}", get(get_streamer).put(put_streamer))
@@ -1209,6 +1224,8 @@ async fn main() {
     log::info!("api on 0.0.0.0:{port}");
     tokio::spawn(sweep_sessions(state.clone()));
     tokio::spawn(voice::sweep(state.clone()));
+    // the viewer count once a minute, and the stats rows kept in step with `sessions` (analytics.rs)
+    tokio::spawn(analytics::sampler(state.clone()));
     axum::serve(listener, router(state))
         .with_graceful_shutdown(wait_for_signal())
         .await

@@ -1,4 +1,5 @@
 import {
+  RiBarChart2Line,
   RiChat1Line,
   RiCloseLine,
   RiGroupLine,
@@ -30,12 +31,14 @@ import { NotificationsTab } from '@/shared-components/user-modal/NotificationsTa
 import { ProfileTab } from '@/shared-components/user-modal/ProfileTab';
 import { SecurityTab } from '@/shared-components/user-modal/SecurityTab';
 import { SidebarTab } from '@/shared-components/user-modal/SidebarTab';
+import { StatsTab } from '@/shared-components/user-modal/StatsTab';
 import { VoiceTab } from '@/shared-components/user-modal/VoiceTab';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> = {
   profile: { label: 'profile', group: 'you', icon: <RiUserLine aria-hidden size={18} /> },
+  stats: { label: 'stats', group: 'you', icon: <RiBarChart2Line aria-hidden size={18} /> },
   groups: { label: 'groups', group: 'you', icon: <RiGroupLine aria-hidden size={18} /> },
   security: { label: 'security', group: 'you', icon: <RiShieldKeyholeLine aria-hidden size={18} /> },
   notifications: { label: 'notifications', group: 'you', icon: <RiNotification3Line aria-hidden size={18} /> },
@@ -77,7 +80,7 @@ function roveTabs(e: KeyboardEvent<HTMLDivElement>, order: readonly UserTab[]) {
 
 /**
  * The user modal: who you are and how this browser shows things, the way discord does its
- * settings. A rail of tabs down the left (the account: profile, groups, security,
+ * settings. A rail of tabs down the left (the account: profile, stats, groups, security,
  * notifications; this browser: appearance, chat, voice, sidebar, advanced; a phone has no advanced,
  * `tabsFor`), the open one's pane on the right. Mounted by the Shell; it renders nothing until `openUserModal`, and the page
  * behind follows every change at once, so the layout and theme cards are their own preview.
@@ -340,6 +343,7 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
             {TABS[tab].label}
           </h2>
           {tab === 'profile' && <ProfileTab />}
+          {tab === 'stats' && <StatsTab />}
           {tab === 'groups' && <GroupsTab />}
           {tab === 'security' && <SecurityTab />}
           {tab === 'notifications' && <NotificationsTab />}

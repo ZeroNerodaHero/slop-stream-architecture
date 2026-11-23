@@ -16,6 +16,7 @@ import { reportPeerFailure } from '@/infra/report';
 import { cleanSocials, EMPTY_SOCIALS, type Socials } from '@/infra/socials';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
+import { watchBeat } from '@/infra/watch-beat';
 import { perfBegin, perfMark } from '@/infra/watch-perf';
 import type { Tone } from '@/shared-components/StatusLine';
 
@@ -365,6 +366,8 @@ function stopWatchStats() {
 function setPhase(phase: WatchPhase, message: string) {
   store.set(watchPhaseAtom, phase);
   store.set(watchMessageAtom, message);
+  // the streamer's stats count a viewer while frames play (watch-beat.ts)
+  watchBeat(store.get(watchNameAtom), SOUND_PHASES.includes(phase));
 }
 
 /**
