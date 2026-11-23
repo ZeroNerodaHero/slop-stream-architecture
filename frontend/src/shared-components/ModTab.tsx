@@ -234,10 +234,15 @@ function Card({ id, title, tip, count, children }: { id?: string; title: string;
   );
 }
 
-/** A row of the jannies or the banned: the face, the name, what it is, the one button. */
-const ROW = 'flex items-center gap-2 border-b border-primaryStroke px-3 py-1.5 last:border-b-0 max-md:min-h-11';
-const ROW_FACE = 'h-6 w-6 text-[10px]';
-const ROW_NAME = 'min-w-0 shrink truncate text-sm font-semibold';
+/**
+ * A row of the jannies or the banned: the face, the name, what it is, the one button. The name and
+ * what it is share a line; on a phone the name sits over it. Both truncate, the button never shrinks.
+ */
+const ROW = 'flex items-center gap-2 border-b border-primaryStroke px-3 py-1.5 last:border-b-0 max-md:min-h-[52px] max-md:py-2';
+const ROW_FACE = 'h-6 w-6 shrink-0 text-[10px]';
+const ROW_TEXT = 'flex min-w-0 flex-1 items-center gap-2 max-md:flex-col max-md:items-stretch max-md:gap-0';
+const ROW_NAME = 'min-w-0 truncate text-sm font-semibold';
+const ROW_WHAT = 'min-w-0 flex-1 truncate text-sm text-textSecondary max-md:text-[13px]';
 const ROWS = 'border border-primaryStroke bg-background';
 
 /** My chat welcome, the profile tab's editor (WelcomeEditor.tsx): the same atoms, so a save in one shows in the other. */
@@ -380,8 +385,10 @@ export function ModTab({ name }: { name: string }) {
                 {(jannies.data ?? []).map((j) => (
                   <li key={j.name} className={ROW}>
                     <Face name={j.name} version={faces.get(j.name) ?? null} className={ROW_FACE} />
-                    <span className={ROW_NAME}>{j.name}</span>
-                    <span className="min-w-0 flex-1 truncate text-sm text-textSecondary">added {ago(j.added_at)}</span>
+                    <div className={ROW_TEXT}>
+                      <span className={ROW_NAME}>{j.name}</span>
+                      <span className={ROW_WHAT}>added {ago(j.added_at)}</span>
+                    </div>
                     <Button
                       size="sm"
                       variant="outline-danger"
@@ -410,11 +417,13 @@ export function ModTab({ name }: { name: string }) {
                 {(bans.data?.bans ?? []).map((b) => (
                   <li key={`ban-${b.name}`} className={ROW}>
                     <Face name={b.name} version={faces.get(b.name) ?? null} className={ROW_FACE} />
-                    <span className={ROW_NAME}>{b.name}</span>
-                    <span className="min-w-0 flex-1 truncate text-sm text-textSecondary">
-                      banned{b.by ? ` by ${b.by}` : ''}
-                      {b.reason && <span className="text-textTertiary"> · {b.reason}</span>}
-                    </span>
+                    <div className={ROW_TEXT}>
+                      <span className={ROW_NAME}>{b.name}</span>
+                      <span className={ROW_WHAT}>
+                        banned{b.by ? ` by ${b.by}` : ''}
+                        {b.reason && <span className="text-textTertiary"> · {b.reason}</span>}
+                      </span>
+                    </div>
                     <Button
                       size="sm"
                       variant="outline"
@@ -429,10 +438,12 @@ export function ModTab({ name }: { name: string }) {
                 {(bans.data?.timeouts ?? []).map((t) => (
                   <li key={`timeout-${t.name}`} className={ROW}>
                     <Face name={t.name} version={faces.get(t.name) ?? null} className={ROW_FACE} />
-                    <span className={ROW_NAME}>{t.name}</span>
-                    <span className="min-w-0 flex-1 truncate text-sm text-textSecondary">
-                      timed out{t.by ? ` by ${t.by}` : ''} · {left(t.until)}
-                    </span>
+                    <div className={ROW_TEXT}>
+                      <span className={ROW_NAME}>{t.name}</span>
+                      <span className={ROW_WHAT}>
+                        timed out{t.by ? ` by ${t.by}` : ''} · {left(t.until)}
+                      </span>
+                    </div>
                     <Button
                       size="sm"
                       variant="outline"
@@ -456,7 +467,7 @@ export function ModTab({ name }: { name: string }) {
         </p>
       )}
 
-      <Card id="mod-log-card" title="mod log" tip={LOG_TIP}>
+      <Card id="mod-log-card" title="mod log" tip={LOG_TIP} count={log.data ? rows.length : undefined}>
         {/* one row: all and active at the left, the kinds at the right; on a phone it scrolls sideways */}
         <div id="mod-log-filters" role="group" aria-label="show" className="flex flex-nowrap gap-2 overflow-x-auto">
           {FILTERS.map(({ word }) => chip(word))}
@@ -502,7 +513,7 @@ export function ModTab({ name }: { name: string }) {
                 ))}
               </tbody>
             </table>
-            {/* a phone: each row two lines, who and what and when, then to whom and the detail */}
+            {/* a phone: each row two lines, who and what and when, then to whom and the detail on one line that ends in … when it runs long */}
             <ul id="mod-log-rows" aria-label="mod log" className="md:hidden">
               {rows.map((row, i) => (
                 <li key={`${row.at}-${i}`} data-action={row.action} className="flex flex-col gap-0.5 border-b border-primaryStroke px-3 py-2 text-sm last:border-b-0">
@@ -513,12 +524,10 @@ export function ModTab({ name }: { name: string }) {
                       <When at={row.at} />
                     </span>
                   </div>
-                  <div className="flex min-w-0 items-center gap-2 text-textSecondary">
-                    <span className="shrink-0">{row.target}</span>
-                    <span className="min-w-0 flex-1">
-                      <Detail text={detailOf(row)} />
-                    </span>
-                  </div>
+                  <p className="truncate text-textSecondary">
+                    {row.target}
+                    {detailOf(row) && ` · ${detailOf(row)}`}
+                  </p>
                 </li>
               ))}
             </ul>
