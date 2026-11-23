@@ -49,6 +49,8 @@ export const RETRY_MS: readonly number[] = [1000, 2000, 4000, 8000];
 const MOVE_MS = 5000;
 /** How often the grant is asked again meanwhile. */
 const MOVE_ASK_MS = 200;
+/** A call that was through and dropped joins again on its own (a fresh run of tries), at most once in this long: one that keeps dropping ends as failed. */
+const REJOIN_GAP_MS = 30000;
 
 export interface VoiceSeat {
   seat: number;
@@ -126,6 +128,8 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let joiningAs = '';
 /** When this tab last put down a socket to the voice server, 0 for never: until its `left` lands the api still has it in that call. */
 let putDownAt = 0;
+/** When a dropped call last joined again on its own, 0 for never. */
+let rejoinedAt = 0;
 
 function setCall(next: Partial<VoiceCall>): void {
   store.set(voiceCallAtom, { ...store.get(voiceCallAtom), ...next });
@@ -180,16 +184,28 @@ function clearRetry(): void {
   retryTimer = null;
 }
 
+/** Whether a call that was through ended by its connection breaking (the socket, or the peer's ice), not by a word from the voice server such as a moderator's `disconnected`. */
+export function dropped(error: string): boolean {
+  return error.startsWith('voice dropped') || error === 'voice lost its connection';
+}
+
 /**
  * The try went wrong: everything put down (no mic, socket or peer through a wait). A join whose
  * audio never got through tries again from scratch after its wait, still `joining`, unless the
  * reason is final or the tries are spent: then `failed`, on the same server and channel, for the
- * dialog. A call that was through and dropped is not retried.
+ * dialog. A call that was through and dropped (a redeploy of the voice server or of caddy, a
+ * network that changed) starts a fresh run of tries, once per REJOIN_GAP_MS; any other end of a
+ * call that was through is not retried.
  */
 function fail(mine: number, error: string, status?: number): void {
   if (mine !== attempt) return;
   teardown();
-  const call = store.get(voiceCallAtom);
+  let call = store.get(voiceCallAtom);
+  if (call.linked && dropped(error) && Date.now() - rejoinedAt > REJOIN_GAP_MS) {
+    rejoinedAt = Date.now();
+    console.info(`voice: dropped (${error}), joining again`);
+    call = { ...call, linked: false, retry: 0 };
+  }
   const retry = call.retry + 1;
   const wait = retryDelay(retry);
   if (!call.linked && wait !== null && retryable(error, status)) {
