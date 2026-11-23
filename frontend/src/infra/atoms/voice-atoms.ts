@@ -45,6 +45,10 @@ const STATS_MS = 2000;
 const ANSWER_MS = 15000;
 /** The waits before each retry of a join that failed: 5 tries in all, the first at once. */
 export const RETRY_MS: readonly number[] = [1000, 2000, 4000, 8000];
+/** How long after this tab put down a call of its own an `already in voice` from the grant is that call still: the voice server's `left` is on its way to the api (a move to another channel asks at once). */
+const MOVE_MS = 5000;
+/** How often the grant is asked again meanwhile. */
+const MOVE_ASK_MS = 200;
 
 export interface VoiceSeat {
   seat: number;
@@ -120,6 +124,8 @@ let attempt = 0;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 /** Who the join is for: a retry joins as them again. */
 let joiningAs = '';
+/** When this tab last put down a socket to the voice server, 0 for never: until its `left` lands the api still has it in that call. */
+let putDownAt = 0;
 
 function setCall(next: Partial<VoiceCall>): void {
   store.set(voiceCallAtom, { ...store.get(voiceCallAtom), ...next });
@@ -139,6 +145,7 @@ function teardown(): void {
   if (was.timer) clearInterval(was.timer);
   if (was.deadline) clearTimeout(was.deadline);
   if (was.ws) {
+    putDownAt = Date.now();
     was.ws.onclose = null;
     was.ws.onmessage = null;
     was.ws.close();
@@ -257,10 +264,20 @@ async function tryJoin(server: string, channel: string, me: string): Promise<voi
   const mine = attempt;
 
   let grant;
-  try {
-    grant = await api.joinVoice(server, channel);
-  } catch (err) {
-    return fail(mine, messageOf(err), statusOf(err));
+  for (;;) {
+    try {
+      grant = await api.joinVoice(server, channel);
+      break;
+    } catch (err) {
+      if (mine !== attempt) return;
+      // our own call, just put down, that the api has not heard leave yet: not someone else's
+      if (statusOf(err) === 409 && messageOf(err).includes('already in voice') && Date.now() - putDownAt < MOVE_MS) {
+        await new Promise((done) => setTimeout(done, MOVE_ASK_MS));
+        if (mine !== attempt) return;
+        continue;
+      }
+      return fail(mine, messageOf(err), statusOf(err));
+    }
   }
   if (mine !== attempt) return;
 
