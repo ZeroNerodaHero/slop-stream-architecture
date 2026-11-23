@@ -64,5 +64,5 @@ it helps the http side, not the video:
 ## not here
 
 - a test in `test/`. a raw check is one page publishing and five watching from one browser: `/viewers` says 1 and the fifth gets the error.
-- views over time, peak viewers. that is a row per join in the database, from the same `add_viewer`.
+- views over time and peak viewers are analytics.md: the api samples `GET /viewers` once a minute and keeps the peak of the pushes.
 - the chat panel's own `count` is still chat sockets, not viewers.
