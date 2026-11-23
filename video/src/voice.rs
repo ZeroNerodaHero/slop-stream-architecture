@@ -921,11 +921,7 @@ async fn talk(
         let heard = offer.iter().filter(|s| s.kind == Media::Audio && s.receives && !s.sends).count();
         for i in 1..heard + 1 {
             let idle = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("line{i}"), "voice".to_owned()));
-            peer.add_transceiver_from_track(
-                idle.clone() as Arc<dyn TrackLocal + Send + Sync>,
-                Some(RTCRtpTransceiverInit { direction: RTCRtpTransceiverDirection::Sendonly, send_encodings: vec![] }),
-            )
-            .await?;
+            add_line(&peer, idle.clone()).await?;
             idles.push(idle);
         }
         anyhow::Ok(video.add_lines(&peer, offer).await?)
@@ -1154,11 +1150,7 @@ impl Video {
         for _ in 0..new {
             self.made += 1;
             let idle = Arc::new(TrackLocalStaticRTP::new(vp8_capability(), format!("video{}", self.made), "voice".to_owned()));
-            peer.add_transceiver_from_track(
-                idle.clone() as Arc<dyn TrackLocal + Send + Sync>,
-                Some(RTCRtpTransceiverInit { direction: RTCRtpTransceiverDirection::Sendonly, send_encodings: vec![] }),
-            )
-            .await?;
+            add_line(peer, idle.clone()).await?;
             idles.push(idle);
         }
         Ok(idles)
@@ -1234,6 +1226,22 @@ impl Video {
         }
         self.lines.iter().filter_map(|l| Some((l.bound?, l.mid.clone()))).collect()
     }
+}
+
+/// a sendonly line with `idle` on it, its sequence numbers the sender's own. a line carries one
+/// sitter's packets, then another's (replace_track), on one ssrc, and each comer's browser starts
+/// its numbers anywhere: one that starts behind the last is a replay to the viewer's srtp, every
+/// packet dropped until it catches up (minutes). the transformer goes on from the last number at
+/// each replace_track, and must be on before the line sends anything
+async fn add_line(peer: &RTCPeerConnection, idle: Arc<TrackLocalStaticRTP>) -> anyhow::Result<()> {
+    let t = peer
+        .add_transceiver_from_track(
+            idle as Arc<dyn TrackLocal + Send + Sync>,
+            Some(RTCRtpTransceiverInit { direction: RTCRtpTransceiverDirection::Sendonly, send_encodings: vec![] }),
+        )
+        .await?;
+    t.sender().await.enable_seq_transformer()?;
+    Ok(())
 }
 
 /// point every m-line at the mic of whoever sits in its seat now, or at its idle track

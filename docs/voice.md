@@ -58,7 +58,7 @@ with the voice server started with `VOICE_DEV_OPEN=1` it also takes the old `{"r
 
 ## seats
 
-a room is one voice channel, `<server>/<channel>`, with 16 seats. each person takes the lowest free one. joins and leaves only swap the track behind each m-line (`replace_track`), so nobody renegotiates. the voice server sends `{"event":"seats","seats":[{"seat","user","line"}]}` right after the answer and on every join and leave; `line` is the m-line that seat is heard on.
+a room is one voice channel, `<server>/<channel>`, with 16 seats. each person takes the lowest free one. joins and leaves only swap the track behind each m-line (`replace_track`), so nobody renegotiates. a line is one ssrc whoever it carries, so the voice server numbers its packets on from the last (webrtc-rs `enable_seq_transformer`): each browser starts its own numbers anywhere, and one that started behind would be a replay to the listener, dropped for minutes. the voice server sends `{"event":"seats","seats":[{"seat","user","line"}]}` right after the answer and on every join and leave; `line` is the m-line that seat is heard on.
 
 closing the socket, or the peer going failed or closed (the ice timeout), frees the seat.
 

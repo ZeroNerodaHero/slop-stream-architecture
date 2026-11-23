@@ -210,7 +210,22 @@ async function grabFrames(p) {
       expect(seat === seatB, `D sat in seat ${seat}, not B's seat ${seatB}`);
       await grabFrames(D);
       await D.browser.close();
+      await pollUntil(() => seatsOf(A), (s) => !s.some((x) => x.user === 'D'), { timeout: 20000, label: 'A sees D leave' });
       return `B's seat ${seatB} went to D`;
+    });
+    // a seat taken again is the same m-line at A, the same ssrc: each comer's browser starts its
+    // sequence numbers anywhere, and one that starts behind the last is a replay to A's srtp
+    // (dropped, silent for minutes) unless the voice server renumbers the line
+    await step('A hears each of four comers in the same seat, one after the other', async () => {
+      const out = [];
+      for (const user of ['E', 'F', 'G', 'H']) {
+        const p = await open(user);
+        out.push((await hears(A, user)).replace(/^A hears /, ''));
+        await grabFrames(p);
+        await p.browser.close();
+        await pollUntil(() => seatsOf(A), (s) => !s.some((x) => x.user === user), { timeout: 20000, label: `A sees ${user} leave` });
+      }
+      return out.join('; ');
     });
     await grabFrames(A);
   } catch (e) {
