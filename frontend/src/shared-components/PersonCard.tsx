@@ -387,10 +387,11 @@ export function PersonCard({ id, person, at, side, actions, below, hold }: Perso
         data-presence={presence}
         className="flex flex-col gap-2.5 border border-primaryStroke bg-backgroundSecondary p-3 text-sm text-textPrimary"
       >
-        {/* beside the face and as tall as it: the name along its top (leading-4, so its cap sits level with the face's top), the badge and the count along its bottom */}
+        {/* beside the face and exactly as tall as it: two leading-4 lines (16 + 16 = the face's 32px), the name on top and the badge and the
+            count below; with nothing for the second line the name sits centred beside the face */}
         <span className="flex items-center gap-2.5">
           <span className="relative shrink-0">
-            <Face name={person.name} version={person.avatar} className="h-10 w-10 text-base" />
+            <Face name={person.name} version={person.avatar} className="h-8 w-8 text-sm" />
             {presence && (
               <>
                 <PresenceSquare status={presence} className="border-backgroundSecondary" />
@@ -399,17 +400,19 @@ export function PersonCard({ id, person, at, side, actions, below, hold }: Perso
               </>
             )}
           </span>
-          <span className="flex h-10 min-w-0 flex-1 flex-col items-start justify-between">
+          <span className="flex h-8 min-w-0 flex-1 flex-col items-start justify-center">
             <Who
               name={person.name}
               verified={person.verified}
               oauthVerified={person.oauth_verified ?? known?.oauth_verified}
               className="max-w-full text-sm font-semibold leading-4"
             />
-            <span className="flex min-w-0 max-w-full items-center gap-2 text-xs leading-4">
-              {badge && <Badge group={badge} className="min-w-0" />}
-              {presence === 'streaming' && <ViewerCount count={viewers} className="shrink-0 whitespace-nowrap text-textSecondary" />}
-            </span>
+            {(badge || presence === 'streaming') && (
+              <span className="flex min-w-0 max-w-full items-center gap-2 text-xs leading-4">
+                {badge && <Badge group={badge} className="min-w-0" />}
+                {presence === 'streaming' && <ViewerCount count={viewers} className="shrink-0 whitespace-nowrap text-textSecondary" />}
+              </span>
+            )}
           </span>
         </span>
         {presence === 'streaming' ? (
