@@ -44,6 +44,8 @@
 //! for the others' tiles, the seats frame's `mute` and `deaf`. those are the page's own word:
 //! they carry nothing about what is sent.
 //!
+//! the socket gets a ping every 30s (PING_EVERY), so nothing between forgets an idle call, and a
+//! page that sent nothing back for 90s is gone, as is one that does not take a frame within 10s.
 //! closing the socket, or the peer going failed/closed (the ice timeout), frees the seat. a
 //! peer that fails is said first, as an error frame: one that never connected is "no audio
 //! path" (nothing came over udp: the port is shut somewhere between, 7883 not open in the
@@ -120,6 +122,14 @@ const JOIN_TIMEOUT: Duration = Duration::from_secs(10);
 const API_TIMEOUT: Duration = Duration::from_millis(1500);
 /// how often everyone seated is told to the api, a third of its sweep's 45s
 const BEAT_EVERY: Duration = Duration::from_secs(15);
+/// a ping on the socket this often, as the api's chat and events (api/src/socket.rs): a call's
+/// socket can say nothing for an hour, and a nat or a proxy between forgets an idle connection.
+/// one that sent nothing back (pong, text, anything) for IDLE_LIMIT is gone
+const PING_EVERY: Duration = Duration::from_secs(30);
+const IDLE_LIMIT: Duration = Duration::from_secs(90);
+/// a frame that cannot be written in this long is a page that stopped reading: the call ends
+/// rather than wait in the write, deaf to the kick and the peer's end, for as long as tcp keeps it
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 struct Voice {
@@ -733,7 +743,8 @@ async fn refuse(socket: &mut WebSocket, error: &str) {
 }
 
 async fn send(socket: &mut WebSocket, msg: &serde_json::Value) -> anyhow::Result<()> {
-    socket.send(Message::Text(serde_json::to_string(msg)?.into())).await?;
+    let text = Message::Text(serde_json::to_string(msg)?.into());
+    tokio::time::timeout(SEND_TIMEOUT, socket.send(text)).await??;
     Ok(())
 }
 
@@ -921,11 +932,7 @@ async fn talk(
         let heard = offer.iter().filter(|s| s.kind == Media::Audio && s.receives && !s.sends).count();
         for i in 1..heard + 1 {
             let idle = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("line{i}"), "voice".to_owned()));
-            peer.add_transceiver_from_track(
-                idle.clone() as Arc<dyn TrackLocal + Send + Sync>,
-                Some(RTCRtpTransceiverInit { direction: RTCRtpTransceiverDirection::Sendonly, send_encodings: vec![] }),
-            )
-            .await?;
+            add_line(&peer, idle.clone()).await?;
             idles.push(idle);
         }
         anyhow::Ok(video.add_lines(&peer, offer).await?)
@@ -998,14 +1005,31 @@ async fn talk(
         // spawned, so the first seats frame does not wait on the api
         *attached = presence.map(|p| tokio::spawn(p.attached(seat)));
         let mut current = seats.borrow_and_update().clone();
+        let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + PING_EVERY, PING_EVERY);
+        let mut heard = tokio::time::Instant::now();
+        // false after a ping or a pong: nothing changed, so no seats frame
+        let mut tell = true;
         loop {
-            rebind(tag, &mut lines, &current, seat).await;
-            let mids = video.rebind(tag, &current, seat).await;
-            if send(socket, &seats_event(&current, seat, &mids)).await.is_err() {
-                break;
+            if tell {
+                rebind(tag, &mut lines, &current, seat).await;
+                let mids = video.rebind(tag, &current, seat).await;
+                if send(socket, &seats_event(&current, seat, &mids)).await.is_err() {
+                    break;
+                }
             }
+            tell = true;
             tokio::select! {
-                msg = socket.recv() => match msg {
+                _ = ping.tick() => {
+                    tell = false;
+                    if heard.elapsed() > IDLE_LIMIT {
+                        log::info!("{tag}: the page went silent, dropping");
+                        break;
+                    }
+                    if !matches!(tokio::time::timeout(SEND_TIMEOUT, socket.send(Message::Ping(Default::default()))).await, Ok(Ok(()))) {
+                        break;
+                    }
+                }
+                msg = socket.recv() => match { heard = tokio::time::Instant::now(); msg } {
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                     Some(Ok(Message::Text(text))) => {
                         let Ok(said) = serde_json::from_str::<Said>(&text) else { continue };
@@ -1026,7 +1050,7 @@ async fn talk(
                             }
                         }
                     }
-                    _ => continue,
+                    _ => tell = false,
                 },
                 _ = sat.kick.notified() => {
                     log::info!("{tag}: disconnected by a moderator");
@@ -1154,11 +1178,7 @@ impl Video {
         for _ in 0..new {
             self.made += 1;
             let idle = Arc::new(TrackLocalStaticRTP::new(vp8_capability(), format!("video{}", self.made), "voice".to_owned()));
-            peer.add_transceiver_from_track(
-                idle.clone() as Arc<dyn TrackLocal + Send + Sync>,
-                Some(RTCRtpTransceiverInit { direction: RTCRtpTransceiverDirection::Sendonly, send_encodings: vec![] }),
-            )
-            .await?;
+            add_line(peer, idle.clone()).await?;
             idles.push(idle);
         }
         Ok(idles)
@@ -1234,6 +1254,22 @@ impl Video {
         }
         self.lines.iter().filter_map(|l| Some((l.bound?, l.mid.clone()))).collect()
     }
+}
+
+/// a sendonly line with `idle` on it, its sequence numbers the sender's own. a line carries one
+/// sitter's packets, then another's (replace_track), on one ssrc, and each comer's browser starts
+/// its numbers anywhere: one that starts behind the last is a replay to the viewer's srtp, every
+/// packet dropped until it catches up (minutes). the transformer goes on from the last number at
+/// each replace_track, and must be on before the line sends anything
+async fn add_line(peer: &RTCPeerConnection, idle: Arc<TrackLocalStaticRTP>) -> anyhow::Result<()> {
+    let t = peer
+        .add_transceiver_from_track(
+            idle as Arc<dyn TrackLocal + Send + Sync>,
+            Some(RTCRtpTransceiverInit { direction: RTCRtpTransceiverDirection::Sendonly, send_encodings: vec![] }),
+        )
+        .await?;
+    t.sender().await.enable_seq_transformer()?;
+    Ok(())
 }
 
 /// point every m-line at the mic of whoever sits in its seat now, or at its idle track

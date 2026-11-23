@@ -452,6 +452,35 @@ window.packets = async (n) => {
     return `voice_left after ${f.at - t0} ms`;
   });
 
+  // what the page does on a click on another channel (voice-atoms.ts joinVoice): its socket shut,
+  // then a grant for the new channel at once. voiceof still names the old one until the voice
+  // server's `left` lands, so that first ask can be `already in voice`; the page asks again
+  await step('voice: moving lounge -> backroom: closed, then a grant within 5s, and seated there', async () => {
+    if (!VOICE) return skipVoice;
+    const was = people[OWNER];
+    await was.page.evaluate(() => window.ws.close());
+    const t0 = Date.now();
+    const first = await join(ctx.owner.request, 'backroom');
+    const said = `${first.status()} ${(await body(first)).error || 'a grant'}`;
+    let grant = first.status() === 200 ? (await body(first)).grant : null;
+    while (!grant && Date.now() - t0 < 5000) {
+      await sleep(100);
+      const res = await join(ctx.owner.request, 'backroom');
+      if (res.status() === 200) grant = (await body(res)).grant;
+    }
+    expect(grant, `no grant for backroom within 5s (the first ask: ${said})`);
+    const ms = Date.now() - t0;
+    await was.page.close();
+    const now = await talk(OWNER, ctx.owner, 'backroom', grant);
+    expect(!now.error, `${OWNER} in backroom: ${now.error}`);
+    people[OWNER] = now;
+    const moved = await pollUntil(() => room(owner), (r) => (r.voice.backroom || []).some((p) => p.name === OWNER) && !(r.voice.lounge || []).length, {
+      timeout: 5000,
+      label: "the room's backroom",
+    });
+    return `the first ask ${said}, a grant after ${ms} ms; the room ${JSON.stringify(Object.keys(moved.voice))}`;
+  });
+
   // the owner leaves too, so the server's hash is empty before the group goes
   if (people[OWNER]) {
     await people[OWNER].page.close().catch(() => {});
