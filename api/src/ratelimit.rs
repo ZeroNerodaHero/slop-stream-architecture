@@ -445,6 +445,10 @@ mod tests {
         assert_eq!(api_rule(&get, "/watch/{*rest}"), PAGE);
         assert_eq!(api_rule(&post, "/api/streams/{name}/go-live"), GO_LIVE);
         assert_eq!(api_rule(&post, "/api/streams/{name}/heartbeat"), STREAM);
+        // a watcher's beat (analytics.rs) is a write of theirs, not the publisher's
+        assert_eq!(api_rule(&post, "/api/streams/{name}/watching"), WRITE);
+        assert_eq!(api_rule(&get, "/api/stats"), READ);
+        assert_eq!(api_rule(&get, "/api/stats/streams/{id}"), READ);
         assert_eq!(api_rule(&post, "/api/login"), AUTH);
         assert_eq!(api_rule(&get, "/api/me"), READ);
         assert_eq!(api_rule(&get, "/api/oauth/{provider}/start"), OAUTH);
