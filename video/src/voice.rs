@@ -67,8 +67,11 @@
 //!
 //! who is in voice lives in the api (docs/voice.md), and we keep it current: `attached`
 //! once a granted person has their answer, `left` when their seat frees, and every 15s one
-//! `beat` naming everyone granted we have seated. a box that dies says nothing, and the api's
-//! sweep drops its people within a minute. a call that fails is a warning in the log; nobody is
+//! `beat` naming everyone granted we have seated. an `attached` the api does not take (unreachable,
+//! a 5xx) is tried again 3 times in about 7s, and a beat's reply names anyone seated it has no
+//! field for (those tries all failed, or redis lost them), who is attached again. a box that dies
+//! says nothing, and the api's sweep drops its people within a minute. a call that fails is a
+//! warning in the log; nobody is
 //! dropped for it. neither the secret nor a grant is ever logged.
 
 use std::collections::HashMap;
@@ -127,6 +130,10 @@ const JOIN_TIMEOUT: Duration = Duration::from_secs(10);
 const API_TIMEOUT: Duration = Duration::from_millis(1500);
 /// how often everyone seated is told to the api, a third of its sweep's 45s
 const BEAT_EVERY: Duration = Duration::from_secs(15);
+/// the waits before each new try of an `attached` the api did not take (unreachable, a 5xx): four
+/// tries in about 7s. a seat the api still has no field for after that is found by the next beat
+/// that names it (`Api::beat`), and attached again from there
+const ATTACH_RETRY: [Duration; 3] = [Duration::from_secs(1), Duration::from_secs(2), Duration::from_secs(4)];
 /// a ping on the socket this often, as the api's chat and events (api/src/socket.rs): a call's
 /// socket can say nothing for an hour, and a nat or a proxy between forgets an idle connection.
 /// one that sent nothing back (pong, text, anything) for IDLE_LIMIT is gone
@@ -209,12 +216,42 @@ impl Api {
         Ok(who)
     }
 
-    /// a presence call (`attached`, `left`, `beat`): a failure is only a warning
+    /// a presence call (`left`): a failure is only a warning
     async fn tell(&self, path: &str, body: serde_json::Value) {
         match self.post(path, &body).await {
             Ok(res) if res.status().is_success() => {}
             Ok(res) => log::warn!("voice: api answered {} to {path}", res.status()),
             Err(()) => {}
+        }
+    }
+
+    /// one `beat` naming everyone seated (`[{user_id, server}]`). → those the api has no field for,
+    /// `(user_id, server)`: an `attached` that never went through, or a redis that lost them. none
+    /// when the beat failed (a warning), or from an older api, which does not say
+    async fn beat(&self, peers: Vec<serde_json::Value>) -> Vec<(String, String)> {
+        #[derive(Deserialize)]
+        struct Missing {
+            user_id: String,
+            server: String,
+        }
+        #[derive(Deserialize)]
+        struct Beat {
+            #[serde(default)]
+            missing: Vec<Missing>,
+        }
+        match self.post("/api/voice/beat", &serde_json::json!({ "peers": peers })).await {
+            Ok(res) if res.status().is_success() => match res.json::<Beat>().await {
+                Ok(beat) => beat.missing.into_iter().map(|m| (m.user_id, m.server)).collect(),
+                Err(e) => {
+                    log::warn!("voice: beat reply: {}", e.without_url());
+                    Vec::new()
+                }
+            },
+            Ok(res) => {
+                log::warn!("voice: api answered {} to /api/voice/beat", res.status());
+                Vec::new()
+            }
+            Err(()) => Vec::new(),
         }
     }
 }
@@ -225,17 +262,71 @@ struct Presence {
     user_id: String,
     server: String,
     channel: String,
+    /// their seat was let go: no `attached` from here on
+    gone: AtomicBool,
+    /// rung with `gone`, so an `attached` waiting to try again stops at once
+    bye: Notify,
+    /// the api turned `attached` down (a 4xx: they may not be there any more), and would again
+    refused: AtomicBool,
+    /// one call at a time about this seat, so an `attached` (the first, or one a beat asks for)
+    /// and the `left` cannot cross. holds when an `attached` last went through
+    turn: tokio::sync::Mutex<Option<tokio::time::Instant>>,
 }
 
 impl Presence {
-    async fn attached(self: Arc<Self>, seat: usize) {
-        let body = serde_json::json!({ "user_id": self.user_id, "server": self.server, "channel": self.channel, "seat": seat });
-        self.api.tell("/api/voice/attached", body).await;
+    fn new(api: Api, user_id: String, server: String, channel: String) -> Self {
+        Presence { api, user_id, server, channel, gone: AtomicBool::new(false), bye: Notify::new(), refused: AtomicBool::new(false), turn: Default::default() }
     }
 
-    async fn left(&self) {
-        let body = serde_json::json!({ "user_id": self.user_id, "server": self.server });
-        self.api.tell("/api/voice/left", body).await;
+    /// `attached` for `seat`, tried again after each of ATTACH_RETRY while the api does not take it
+    /// and the seat is held; a 4xx is not tried again. `since` is when a beat that found them
+    /// missing was sent: nothing to do if an `attached` went through after that (the first one,
+    /// landing after the beat looked)
+    async fn attached(self: Arc<Self>, seat: usize, since: Option<tokio::time::Instant>) {
+        let mut last = self.turn.lock().await;
+        if since.is_some_and(|since| last.is_some_and(|at| at >= since)) {
+            return;
+        }
+        let body = serde_json::json!({ "user_id": self.user_id, "server": self.server, "channel": self.channel, "seat": seat });
+        let mut waits = ATTACH_RETRY.iter();
+        loop {
+            if self.gone.load(Ordering::SeqCst) || self.refused.load(Ordering::SeqCst) {
+                return;
+            }
+            match self.api.post("/api/voice/attached", &body).await {
+                Ok(res) if res.status().is_success() => {
+                    *last = Some(tokio::time::Instant::now());
+                    return;
+                }
+                Ok(res) if res.status().is_client_error() => {
+                    log::warn!("voice: api answered {} to attached, not trying again", res.status());
+                    self.refused.store(true, Ordering::SeqCst);
+                    return;
+                }
+                Ok(res) => log::warn!("voice: api answered {} to attached", res.status()),
+                Err(()) => {}
+            }
+            let Some(&wait) = waits.next() else {
+                log::warn!("voice: attached failed {} times; a beat that misses them tries again", ATTACH_RETRY.len() + 1);
+                return;
+            };
+            tokio::select! {
+                _ = tokio::time::sleep(wait) => {}
+                _ = self.bye.notified() => return,
+            }
+        }
+    }
+
+    /// their seat is free: no more `attached`, and `left` once one in flight is through, unless
+    /// they still sit in this server from another tab
+    async fn left(&self, voice: &Voice) {
+        self.gone.store(true, Ordering::SeqCst);
+        self.bye.notify_one();
+        let _turn = self.turn.lock().await;
+        if !voice.sits_in(&self.user_id, &self.server) {
+            let body = serde_json::json!({ "user_id": self.user_id, "server": self.server });
+            self.api.tell("/api/voice/left", body).await;
+        }
     }
 }
 
@@ -260,6 +351,9 @@ struct Sitter {
     uid: Option<String>,
     /// their page's id for itself, from the grant: with `uid`, which seat is that tab's
     tab: Option<String>,
+    /// what the api is told of them, None for a dev-open join: a beat that finds them missing
+    /// attaches them again through it
+    presence: Option<Arc<Presence>>,
     /// tells two people in the same seat apart, one after the other
     id: u64,
     mic: Arc<TrackLocalStaticRTP>,
@@ -650,15 +744,24 @@ async fn health(State(voice): State<Voice>) -> Json<serde_json::Value> {
 }
 
 /// every `BEAT_EVERY`, one `beat` to the api naming everyone granted we have seated, so its
-/// sweep keeps them. nothing is sent while nobody is.
+/// sweep keeps them. nothing is sent while nobody is. someone the api says it has no field for is
+/// attached again: an `attached` whose tries all failed, a redis that restarted empty, an api
+/// out for longer than its sweep. never someone whose seat was let go meanwhile (`Presence`)
 async fn beat(voice: Voice) {
     let mut tick = tokio::time::interval(BEAT_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tick.tick().await;
         let peers = voice.seated();
-        if !peers.is_empty() {
-            voice.api.tell("/api/voice/beat", serde_json::json!({ "peers": peers })).await;
+        if peers.is_empty() {
+            continue;
+        }
+        let asked = tokio::time::Instant::now();
+        for (uid, server) in voice.api.beat(peers).await {
+            if let Some((presence, seat)) = voice.presence_of(&uid, &server) {
+                log::info!("voice {server}: the api has no seat for someone seated, attaching again");
+                tokio::spawn(presence.attached(seat, Some(asked)));
+            }
         }
     }
 }
@@ -732,8 +835,9 @@ impl Voice {
 
     /// the lowest free seat in `name` with a new mic track, and the room's seats to follow. a
     /// granted join from a tab that still holds a seat takes that one's place (`Rooms::replace`)
-    fn sit(&self, held: &mut Held, name: &str, user: &str, uid: Option<&str>, tab: Option<&str>, muted: bool) -> Option<Sat> {
+    fn sit(&self, held: &mut Held, name: &str, user: &str, presence: Option<&Arc<Presence>>, tab: Option<&str>, muted: bool) -> Option<Sat> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let uid = presence.map(|p| p.user_id.as_str());
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let (Some(uid), Some(tab)) = (uid, tab) {
             let n = state.replace(uid, tab, name);
@@ -751,6 +855,7 @@ impl Voice {
             user: user.to_owned(),
             uid: uid.map(str::to_owned),
             tab: tab.map(str::to_owned),
+            presence: presence.cloned(),
             id,
             mic: mic.clone(),
             muted: muted.clone(),
@@ -797,6 +902,18 @@ impl Voice {
                 })
             })
             .collect()
+    }
+
+    /// the presence and seat of one of `uid`'s seats in `server` that is still held, for a beat
+    /// that found them missing (one is enough: the api keeps one field a person)
+    fn presence_of(&self, uid: &str, server: &str) -> Option<(Arc<Presence>, usize)> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.rooms.iter().filter(|(name, _)| name.split_once('/').is_some_and(|(s, _)| s == server)).find_map(|(_, room)| {
+            room.seats.0.iter().enumerate().find_map(|(seat, s)| {
+                let p = s.as_ref()?.presence.as_ref()?;
+                (p.user_id == uid && !p.gone.load(Ordering::SeqCst)).then(|| (p.clone(), seat))
+            })
+        })
     }
 
     /// whether `uid` still has a seat in `server` here (a second tab): their `left` waits for it
@@ -920,14 +1037,13 @@ async fn handle(voice: Voice, mut socket: WebSocket, ip: IpAddr) {
         Claim::Grant(grant) => match voice.api.redeem(&grant).await {
             Ok(who) => {
                 let room = format!("{}/{}", who.server, who.channel);
-                let presence = Presence { api: voice.api.clone(), user_id: who.user_id, server: who.server, channel: who.channel };
+                let presence = Presence::new(voice.api.clone(), who.user_id, who.server, who.channel);
                 (room, who.name, Some(Arc::new(presence)), who.muted, who.tab)
             }
             Err(e) => return refuse(&mut socket, e).await,
         },
     };
-    let uid = presence.as_ref().map(|p| p.user_id.as_str());
-    let Some(mut sat) = voice.sit(&mut held, &room, &user, uid, tab.as_deref(), muted) else {
+    let Some(mut sat) = voice.sit(&mut held, &room, &user, presence.as_ref(), tab.as_deref(), muted) else {
         return refuse(&mut socket, "room full").await;
     };
     let tag = format!("voice {room} seat {}", sat.seat);
@@ -937,12 +1053,9 @@ async fn handle(voice: Voice, mut socket: WebSocket, ip: IpAddr) {
     talk(&voice, &mut socket, &tag, sdp, &offer, &mut sat, presence.clone(), &mut attached, joined).await;
     log::info!("{tag}: {user} left");
     drop(held);
-    // the seat is free: `left`, once `attached` is through so the two cannot cross
-    if let (Some(presence), Some(attached)) = (presence, attached) {
-        let _ = attached.await;
-        if !voice.sits_in(&presence.user_id, &presence.server) {
-            presence.left().await;
-        }
+    // the seat is free: `left`, once an `attached` in flight is through so the two cannot cross
+    if let (Some(presence), Some(_)) = (presence, attached) {
+        presence.left(&voice).await;
     }
 }
 
@@ -1074,7 +1187,7 @@ async fn talk(
 
     if send(socket, &serde_json::json!({ "sdp": answer })).await.is_ok() {
         // spawned, so the first seats frame does not wait on the api
-        *attached = presence.map(|p| tokio::spawn(p.attached(seat)));
+        *attached = presence.map(|p| tokio::spawn(p.attached(seat, None)));
         let mut current = seats.borrow_and_update().clone();
         let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + PING_EVERY, PING_EVERY);
         let mut heard = tokio::time::Instant::now();
@@ -1488,6 +1601,7 @@ mod tests {
             user: user.to_owned(),
             uid: uid.map(str::to_owned),
             tab: None,
+            presence: None,
             id: 0,
             mic,
             muted: Arc::default(),
@@ -1567,6 +1681,76 @@ mod tests {
         assert!(back.has_changed().unwrap(), "a room it left hears its seats now");
         let now = back.borrow_and_update();
         assert_eq!(now.iter().flatten().map(|s| s.id).collect::<Vec<_>>(), vec![3]);
+    }
+
+    /// an api on a free local port whose `/api/voice/attached` answers `statuses` in turn (then
+    /// 200), and the calls it got
+    async fn scripted_api(statuses: Vec<u16>) -> (Api, Arc<Mutex<Vec<String>>>) {
+        let calls: Arc<Mutex<Vec<String>>> = Arc::default();
+        let script = Arc::new(Mutex::new(statuses.into_iter()));
+        let (seen, next) = (calls.clone(), script.clone());
+        let app = Router::new().route(
+            "/api/voice/{what}",
+            post(move |axum::extract::Path(what): axum::extract::Path<String>| {
+                let (seen, next) = (seen.clone(), next.clone());
+                async move {
+                    seen.lock().unwrap().push(what);
+                    StatusCode::from_u16(next.lock().unwrap().next().unwrap_or(200)).unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let api = Api { url, secret: Some(Arc::from("s")), http: reqwest::Client::builder().timeout(API_TIMEOUT).build().unwrap() };
+        (api, calls)
+    }
+
+    fn presence(api: Api) -> Arc<Presence> {
+        Arc::new(Presence::new(api, "u1".into(), "g".into(), "lounge".into()))
+    }
+
+    #[tokio::test]
+    async fn an_attached_the_api_did_not_take_is_tried_again() {
+        let (api, calls) = scripted_api(vec![503]).await;
+        let p = presence(api);
+        tokio::time::timeout(Duration::from_secs(5), p.clone().attached(0, None)).await.unwrap();
+        assert_eq!(*calls.lock().unwrap(), ["attached", "attached"], "a 503, then again 1s on");
+        assert!(p.turn.lock().await.is_some(), "it went through");
+        // a beat sent before that found them missing: already done
+        let before = tokio::time::Instant::now() - Duration::from_secs(1);
+        p.clone().attached(0, Some(before)).await;
+        assert_eq!(calls.lock().unwrap().len(), 2);
+        // a beat sent after it (redis lost them since): attached again
+        p.clone().attached(0, Some(tokio::time::Instant::now())).await;
+        assert_eq!(calls.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn an_attached_the_api_refused_or_a_seat_let_go_is_not_tried() {
+        let (api, calls) = scripted_api(vec![403]).await;
+        let p = presence(api.clone());
+        p.clone().attached(0, None).await;
+        p.clone().attached(0, Some(tokio::time::Instant::now())).await;
+        assert_eq!(*calls.lock().unwrap(), ["attached"], "a 4xx would come again");
+        // the api down for good: left stops the tries at once, then says `left`
+        let (down, calls) = scripted_api(vec![503; 10]).await;
+        let p = presence(down);
+        let trying = tokio::spawn(p.clone().attached(0, None));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let voice_less = || async {
+            // left asks sits_in of a Voice: an empty one, nobody seated
+            let mux = UDPMuxDefault::new(UDPMuxParams::new(tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap()));
+            Voice { public_ip: "127.0.0.1".into(), udp_port: 0, mux, open: false, api: api.clone(), state: Arc::default(), next_id: Arc::default() }
+        };
+        let voice = voice_less().await;
+        let t = std::time::Instant::now();
+        tokio::time::timeout(Duration::from_secs(3), p.left(&voice)).await.expect("left does not wait out the retries");
+        assert!(t.elapsed() < Duration::from_millis(900), "{:?}", t.elapsed());
+        trying.await.unwrap();
+        assert_eq!(*calls.lock().unwrap(), ["attached", "left"]);
+        p.clone().attached(0, Some(tokio::time::Instant::now())).await;
+        assert_eq!(calls.lock().unwrap().len(), 2, "nothing after the seat is let go");
     }
 
     #[tokio::test]

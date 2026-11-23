@@ -672,7 +672,9 @@ struct BeatBody {
 
 /// `POST /api/voice/beat {peers: [{user_id, server}]}`: the voice server's, inside only, every
 /// 15s for everyone it has seated. Sets each one's `beat` to now; someone not in voice (swept,
-/// left) stays out. → `{beat}`, how many it found.
+/// left) stays out. → `{beat, missing}`: how many it found, and the peers it had no field for
+/// (an `attached` that never got here, a redis that lost them), which the voice server attaches
+/// again: an `attached` is how anyone comes back, never a beat.
 async fn beat(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<BeatBody>, JsonRejection>) -> ApiResult {
     inside(&headers, secret())?;
     let Json(body) = body?;
@@ -690,7 +692,18 @@ async fn beat(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<B
             .arg(now);
     }
     let found: Vec<i64> = pipe.query_async(&mut s.redis.clone()).await?;
-    Ok(Json(json!({ "beat": found.iter().sum::<i64>() })))
+    Ok(Json(json!({ "beat": found.iter().sum::<i64>(), "missing": missing(&body.peers, &found) })))
+}
+
+/// The peers a beat found no field for (`found` is BEAT's answer for each, in order), as
+/// `[{user_id, server}]`.
+fn missing(peers: &[Peer], found: &[i64]) -> Vec<Value> {
+    peers
+        .iter()
+        .zip(found)
+        .filter(|(_, &f)| f == 0)
+        .map(|(p, _)| json!({ "user_id": p.user_id, "server": p.server.trim().to_lowercase() }))
+        .collect()
 }
 
 /// Every `SWEEP_EVERY`, takes out of voice everyone whose beat is older than
@@ -868,6 +881,14 @@ mod tests {
         assert_eq!(beat_of("not json"), None);
         // swept within a minute of the last beat
         const { assert!(STALE_AFTER + SWEEP_EVERY <= 60_000) };
+    }
+
+    #[test]
+    fn a_beat_names_who_it_did_not_find() {
+        let peer = |n: u128, server: &str| Peer { user_id: Uuid::from_u128(n), server: server.into() };
+        let peers = [peer(1, "g"), peer(2, " G "), peer(3, "h")];
+        assert_eq!(missing(&peers, &[1, 0, 0]), vec![json!({ "user_id": Uuid::from_u128(2), "server": "g" }), json!({ "user_id": Uuid::from_u128(3), "server": "h" })]);
+        assert!(missing(&peers, &[1, 1, 1]).is_empty());
     }
 
     #[test]

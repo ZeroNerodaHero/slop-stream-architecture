@@ -102,9 +102,11 @@ the voice server tells the api, and the api keeps it in redis:
 
 - `attached` once a person has their answer: the api writes their field in `voice:<server>`, `voiceof:<uid>`, adds the server to `voice:servers`, opens a `voice_sessions` row, and tells the group `voice`.
 - `left` when their seat frees: the field and `voiceof` go, the row gets its `left_at`, and the group hears `voice_left`.
-- one `beat` every 15s naming everyone it has seated: each one's `beat` is set to now. a beat never brings back someone who left.
+- one `beat` every 15s naming everyone it has seated: each one's `beat` is set to now. a beat never brings back someone who left. its answer, `{beat, missing}`, names the peers the api had no field for, and the voice server sends `attached` for each again while their seat is held: an `attached` whose tries all failed, a redis that restarted empty, an api that was out for longer than the sweep.
 
-the api's sweep looks every 15s and takes out, the same way `left` does, everyone whose beat is more than 45s old: a voice server that dies says nothing, and its people are gone within a minute. the sweep does not run while voice is off. a call from the voice server that fails is a warning in its log; nobody is dropped for it.
+an `attached` the api does not take (unreachable within 1.5s, or a 5xx) is tried again after 1s, 2s and 4s, then left to the next beat that finds them missing; a 4xx (they may not be there any more) is not tried again. the `attached` calls and the `left` of one seat go one at a time, and a seat let go stops its tries, so neither can bring back someone who left.
+
+the api's sweep looks every 15s and takes out, the same way `left` does, everyone whose beat is more than 45s old: a voice server that dies says nothing, and its people are gone within a minute. the sweep does not run while voice is off. a call from the voice server that fails is a warning in its log; nobody is dropped for it, and someone seated whose `attached` never got through, or whom redis lost, is in the room again within a beat of the api answering (above).
 
 the facts go to `group:<server>` on `/events`, both `{who, uid, channel}`: `voice` and `voice_left`. the room (`GET /api/groups/{group}`) has `voice`, `{"<channel>": [{name, uid, since}]}`, only the channels this login sees; with redis down it is `{}`.
 
@@ -124,7 +126,7 @@ one row per stay: `id`, `server`, `channel`, `user_id`, `joined_at`, `left_at` (
 
 ## the internal routes
 
-`POST /api/voice/redeem {grant}`, `POST /api/voice/attached {user_id, server, channel, seat}`, `POST /api/voice/left {user_id, server}`, `POST /api/voice/beat {peers: [{user_id, server}]}`. only the voice server calls them, from inside the compose network, and each has the same guard:
+`POST /api/voice/redeem {grant}`, `POST /api/voice/attached {user_id, server, channel, seat}`, `POST /api/voice/left {user_id, server}`, `POST /api/voice/beat {peers: [{user_id, server}]}` → `{beat, missing: [{user_id, server}]}`. only the voice server calls them, from inside the compose network, and each has the same guard:
 
 - anything caddy passed (it always sets `X-Forwarded-For`) is a 404 `no such route`.
 - with VOICE_SECRET unset or empty, voice is off: 503 `voice is off`.
