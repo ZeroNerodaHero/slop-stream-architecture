@@ -711,6 +711,58 @@ async function answerOf<T>(method: string, path: string, response: Promise<Respo
   return data as T;
 }
 
+/** The two ranges the stats tab offers. */
+export type StatsDays = 7 | 30;
+
+/** One of my streams, as the stats list has it (analytics.rs `stream_json`). Times rfc3339, lengths in seconds. */
+export interface StreamStatsRow {
+  id: number;
+  /** The name it went out under (an account renamed since keeps its streams). */
+  name: string;
+  started_at: string;
+  ended_at: string | null;
+  live: boolean;
+  duration_secs: number;
+  peak_viewers: number;
+  /** The average of the per-minute samples. null: no sample yet (under a minute, or video never answered). */
+  avg_viewers: number | null;
+  watch_secs: number;
+  /** Different viewers: logins and anonymous browsers both. */
+  unique_viewers: number;
+}
+
+/** One stream in full: the row, the graph and the rest. */
+export interface StreamDetail extends StreamStatsRow {
+  /** `[unix ms, viewers]`, one a minute, oldest first. */
+  points: [number, number][];
+  account_viewers: number;
+  anon_viewers: number;
+  /** Follows that came while it was live, and are still there. */
+  new_follows: number;
+  /** Chat lines from anyone but the streamer, while it was live. 0 where chat history is off. */
+  chat_messages: number;
+  chatters: number;
+}
+
+export interface StatsSummary {
+  days: StatsDays;
+  streams: number;
+  live_secs: number;
+  avg_viewers: number | null;
+  peak_viewers: number;
+  watch_secs: number;
+  unique_viewers: number;
+  new_follows: number;
+}
+
+export interface Stats {
+  summary: StatsSummary;
+  /** The range's streams, newest first. */
+  streams: StreamStatsRow[];
+  /** The last stream, whenever it was. null: never live with this account. */
+  last: StreamDetail | null;
+}
+
 function ownerQuery(owner: Owner): string {
   return `session=${owner.session}&token=${owner.token}`;
 }
@@ -1034,6 +1086,15 @@ export const api = {
   watch: (name: string) => request<WatchGrant>('POST', `/api/streams/${name}/watch`, undefined, { timeoutMs: 15000 }),
   /** The same grant, asked by index.html's boot script (`fetch` of that path, the same timeout): read like `watch`'s. */
   watchAsked: (name: string, response: Promise<Response>) => answerOf<WatchGrant>('POST', `/api/streams/${name}/watch`, response),
+  /** The watch page's beat for the streamer's stats (watch-beat.ts). `anon` is this browser's id, ignored for a login. Not reported: a beat lost is a minute less, nothing to fix. */
+  watching: (name: string, anon: string) =>
+    request<{ ok: boolean; counted: boolean }>('POST', `/api/streams/${name}/watching?anon=${encodeURIComponent(anon)}`, undefined, { report: false }),
+  /** The last beat, on the way out: survives page teardown, unlike fetch. */
+  watchingBeacon: (name: string, anon: string) => navigator.sendBeacon(`/api/streams/${name}/watching?anon=${encodeURIComponent(anon)}&leave=1`),
+  /** My streams' numbers (docs/analytics.md): the range's summary and streams, and the last stream in full. 401 for nobody logged in. */
+  stats: (days: StatsDays) => request<Stats>('GET', `/api/stats?days=${days}`),
+  /** One of my streams in full, for the graph. 404 for one that is not mine. */
+  statsStream: (id: number) => request<StreamDetail>('GET', `/api/stats/streams/${id}`),
   /** The picture of a stream, made on the video machine. `bucket` changes every few seconds so the browser re-fetches. */
   thumbUrl: (name: string, bucket: number) => `/thumb/${encodeURIComponent(name)}.jpg?t=${bucket}`,
   /** The body is wanted on a 503 too (it says which part is down), so not through `request`. */
