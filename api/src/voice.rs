@@ -121,13 +121,33 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/voice/beat", post(beat))
 }
 
-/// What a grant stands for: who, and where they may talk.
+/// What a grant stands for: who, and where they may talk. `tab` is the page's own id for itself
+/// (`tab_of`), handed on to the voice server: a join from the same tab takes that tab's old seat.
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct Grant {
     user_id: Uuid,
     name: String,
     server: String,
     channel: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tab: Option<String>,
+}
+
+/// The join's body, all of it optional: `tab`, the page's id for itself.
+#[derive(Deserialize, Default)]
+struct JoinBody {
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+/// A page's id for itself, kept while it is 1 to 64 of a-z A-Z 0-9 _ -: one random per page
+/// load, so a second tab is a second id. 400 `bad tab` for anything else; none is fine.
+fn tab_of(tab: Option<String>) -> Result<Option<String>, ApiError> {
+    match tab {
+        None => Ok(None),
+        Some(t) if (1..=64).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') => Ok(Some(t)),
+        Some(_) => Err(ApiError::new(StatusCode::BAD_REQUEST, "bad tab")),
+    }
 }
 
 fn grant_key(grant: &str) -> String {
@@ -274,9 +294,16 @@ fn new_grant() -> String {
 /// one this login does not see); 400 `not a voice channel`; 409 `already in voice` while in
 /// another channel; 409 `channel full` at its `user_limit` (16 when 0); then 503 `voice is off`
 /// with VOICE_SECRET unset or empty, since no voice server could redeem the grant. An owner, the
-/// channels power and a site admin are never kept out by the limit.
-async fn join(State(s): State<AppState>, Path((group, channel)): Path<(String, String)>, Me(me): Me) -> ApiResult {
+/// channels power and a site admin are never kept out by the limit. The body `{tab}` is optional
+/// (`tab_of`).
+async fn join(
+    State(s): State<AppState>,
+    Path((group, channel)): Path<(String, String)>,
+    Me(me): Me,
+    body: Result<Option<Json<JoinBody>>, JsonRejection>,
+) -> ApiResult {
     let who = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
+    let tab = tab_of(body?.map(|Json(b)| b).unwrap_or_default().tab)?;
     let (server, channel) = channel_names(&group, &channel)?;
     let limit = may_talk(&s, who.id, &server, &channel).await?;
     let mut redis = s.redis.clone();
@@ -293,7 +320,7 @@ async fn join(State(s): State<AppState>, Path((group, channel)): Path<(String, S
     }
     voice_on(secret())?;
     let grant = new_grant();
-    let kept = json!(Grant { user_id: who.id, name: who.name, server, channel }).to_string();
+    let kept = json!(Grant { user_id: who.id, name: who.name, server, channel, tab }).to_string();
     let set: Option<String> = redis::cmd("SET")
         .arg(grant_key(&grant))
         .arg(kept)
@@ -316,7 +343,8 @@ struct RedeemBody {
 
 /// `POST /api/voice/redeem {grant}`: the voice server's, inside only (`inside`). Takes the grant
 /// out of redis (GETDEL, so a second redeem of it is a 403 `bad grant`, as is one past its half
-/// minute), asks `may_talk` again, and → `{user_id, name, server, channel}`.
+/// minute), asks `may_talk` again, and → `{user_id, name, server, channel, muted}`, and `tab`
+/// when the join named one.
 async fn redeem(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<RedeemBody>, JsonRejection>) -> ApiResult {
     inside(&headers, secret())?;
     let Json(body) = body?;
@@ -784,9 +812,25 @@ mod tests {
 
     #[test]
     fn a_grant_round_trips() {
-        let g = Grant { user_id: Uuid::from_u128(7), name: "a".into(), server: "s".into(), channel: "c".into() };
+        let g = Grant { user_id: Uuid::from_u128(7), name: "a".into(), server: "s".into(), channel: "c".into(), tab: None };
         let back: Grant = serde_json::from_str(&json!(g).to_string()).unwrap();
         assert_eq!(back, g);
+        assert!(!json!(g).to_string().contains("tab"), "no tab, none said");
+        let g = Grant { tab: Some("t1".into()), ..g };
+        assert_eq!(json!(g)["tab"], "t1");
+        // a grant kept before tabs were
+        let old: Grant = serde_json::from_str(r#"{"user_id":"00000000-0000-0000-0000-000000000007","name":"a","server":"s","channel":"c"}"#).unwrap();
+        assert_eq!(old.tab, None);
+    }
+
+    #[test]
+    fn a_tab_is_short_and_plain() {
+        assert_eq!(tab_of(None).unwrap(), None);
+        assert_eq!(tab_of(Some("a1-_Z".into())).unwrap().as_deref(), Some("a1-_Z"));
+        assert_eq!(tab_of(Some("x".repeat(64))).unwrap().map(|t| t.len()), Some(64));
+        for bad in ["", "a b", "a/b", "é", &"x".repeat(65)] {
+            assert_eq!(tab_of(Some(bad.into())).unwrap_err().message(), "bad tab", "{bad:?}");
+        }
     }
 
     #[test]

@@ -828,9 +828,9 @@ export const api = {
   /** Someone who may add a channel. 403 until they have joined, or without the power. The new channel goes after the last. */
   createChannel: (server: string, name: string, about = '', kind: ChannelKind = 'text') =>
     request<Channel>('POST', `/api/groups/${encodeURIComponent(server)}/channels`, { name, about, kind }),
-  /** A grant for the voice server (docs/voice.md). 409 `already in voice` / `channel full`; 503 `voice is off` while the box has no voice. Not reported: a 503 here is a setting, not a fault. */
-  joinVoice: (server: string, channel: string) =>
-    request<VoiceGrant>('POST', `/api/groups/${encodeURIComponent(server)}/voice/${encodeURIComponent(channel)}/join`, undefined, { report: false }),
+  /** A grant for the voice server (docs/voice.md). `tab` is this page's id for itself: a join from the same tab takes the seat it still holds. 409 `already in voice` / `channel full`; 503 `voice is off` while the box has no voice. Not reported: a 503 here is a setting, not a fault. */
+  joinVoice: (server: string, channel: string, tab: string) =>
+    request<VoiceGrant>('POST', `/api/groups/${encodeURIComponent(server)}/voice/${encodeURIComponent(channel)}/join`, { tab }, { report: false }),
   /** The channels in this order, from the top. The channels power. A channel not named keeps its place after these. → the whole order as it now stands. */
   setChannelOrder: (server: string, order: string[]) => request<{ order: string[] }>('PUT', `/api/groups/${encodeURIComponent(server)}/channels`, { order }),
   /** The channel is called `name` from now on (its lines, mutes, pins and inbox rows with it), and `about` is its line; either may be left out. Who made it, or the channels power; text or voice, the home channel too. → the channel as the room lists it. */

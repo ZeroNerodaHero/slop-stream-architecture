@@ -46,7 +46,9 @@
 //!
 //! the socket gets a ping every 30s (PING_EVERY), so nothing between forgets an idle call, and a
 //! page that sent nothing back for 90s is gone, as is one that does not take a frame within 10s.
-//! closing the socket, or the peer going failed/closed (the ice timeout), frees the seat. a
+//! closing the socket, or the peer going failed/closed (the ice timeout), frees the seat, and so
+//! does a newer join of the same account from the same tab (the grant's `tab`, the page's id for
+//! itself): it takes the old seat's place at once, and the old socket hears "replaced". a
 //! peer that fails is said first, as an error frame: one that never connected is "no audio
 //! path" (nothing came over udp: the port is shut somewhere between, 7883 not open in the
 //! cloud firewall), one that did is "voice lost its connection".
@@ -161,6 +163,10 @@ struct Redeemed {
     /// a moderator muted them before they came (the api's `voicemuted:<server>`)
     #[serde(default)]
     muted: bool,
+    /// the page's id for itself, when its join named one: a join from the same tab takes the
+    /// seat that tab still holds (`Rooms::replace`)
+    #[serde(default)]
+    tab: Option<String>,
 }
 
 impl Api {
@@ -249,6 +255,8 @@ struct Sitter {
     user: String,
     /// the api's user id for a granted person, None for a dev-open join
     uid: Option<String>,
+    /// their page's id for itself, from the grant: with `uid`, which seat is that tab's
+    tab: Option<String>,
     /// tells two people in the same seat apart, one after the other
     id: u64,
     mic: Arc<TrackLocalStaticRTP>,
@@ -256,6 +264,8 @@ struct Sitter {
     muted: Arc<AtomicBool>,
     /// a moderator's disconnect: their socket ends when this is told
     kick: Arc<Notify>,
+    /// a newer join from the same tab took their seat: their socket ends, nothing said to the api
+    replaced: Arc<Notify>,
     /// their camera and screen, and what their page says of itself
     show: Show,
 }
@@ -341,6 +351,40 @@ impl Rooms {
                 }
                 n += 1;
             }
+        }
+        n
+    }
+
+    /// every seat `uid` holds from `tab`, taken out of its room now and its socket told to end: a
+    /// tab that joins again (its network changed, its call dropped) has one seat, not a ghost of
+    /// the last one until its ice times out. a second tab has its own tab id and keeps its seat.
+    /// `into` is the room the new join is about to sit in: its seats frame is that join's to send.
+    /// → how many seats it took
+    fn replace(&mut self, uid: &str, tab: &str, into: &str) -> usize {
+        let mut n = 0;
+        let mut emptied = Vec::new();
+        for (name, room) in &mut self.rooms {
+            let mut took = false;
+            for slot in &mut room.seats.0 {
+                if slot.as_ref().is_some_and(|s| s.uid.as_deref() == Some(uid) && s.tab.as_deref() == Some(tab)) {
+                    if let Some(old) = slot.take() {
+                        old.replaced.notify_one();
+                        took = true;
+                        n += 1;
+                    }
+                }
+            }
+            if !took || name == into {
+                continue;
+            }
+            if room.seats.taken() == 0 {
+                emptied.push(name.clone());
+            } else {
+                room.tx.send_replace(Arc::new(room.seats.snapshot()));
+            }
+        }
+        for name in emptied {
+            self.rooms.remove(&name);
         }
         n
     }
@@ -617,28 +661,31 @@ async fn ws(
         .on_upgrade(move |socket| handle(voice, socket, ip))
 }
 
-/// a seat just taken: its number, the mic the others hear it by, the room's seats to follow, and
-/// the moderator's two handles on it
+/// a seat just taken: its number, the mic the others hear it by, the room's seats to follow, the
+/// moderator's two handles on it, and the bell a newer join from the same tab rings
 struct Sat {
     seat: usize,
     mic: Arc<TrackLocalStaticRTP>,
     seats: watch::Receiver<Snapshot>,
     muted: Arc<AtomicBool>,
     kick: Arc<Notify>,
+    replaced: Arc<Notify>,
 }
 
 /// a seat and an address slot, given back on drop however the socket ends
 struct Held {
     voice: Voice,
     ip: IpAddr,
-    seat: Option<(String, usize)>,
+    /// the room, the seat and the sitter's id: a seat a newer join from the same tab took
+    /// (`Rooms::replace`) is someone else's by now, and stays theirs
+    seat: Option<(String, usize, u64)>,
 }
 
 impl Drop for Held {
     fn drop(&mut self) {
         let mut state = self.voice.state.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((name, seat)) = self.seat.take() {
-            if let Some(room) = state.rooms.get_mut(&name) {
+        if let Some((name, seat, id)) = self.seat.take() {
+            if let Some(room) = state.rooms.get_mut(&name).filter(|r| r.seats.0.get(seat).is_some_and(|s| s.as_ref().is_some_and(|s| s.id == id))) {
                 room.seats.free(seat);
                 if room.seats.taken() == 0 {
                     state.rooms.remove(&name);
@@ -668,23 +715,32 @@ impl Voice {
         Some(Held { voice: self.clone(), ip, seat: None })
     }
 
-    /// the lowest free seat in `name` with a new mic track, and the room's seats to follow
-    fn sit(&self, held: &mut Held, name: &str, user: &str, uid: Option<&str>, muted: bool) -> Option<Sat> {
+    /// the lowest free seat in `name` with a new mic track, and the room's seats to follow. a
+    /// granted join from a tab that still holds a seat takes that one's place (`Rooms::replace`)
+    fn sit(&self, held: &mut Held, name: &str, user: &str, uid: Option<&str>, tab: Option<&str>, muted: bool) -> Option<Sat> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let (Some(uid), Some(tab)) = (uid, tab) {
+            let n = state.replace(uid, tab, name);
+            if n > 0 {
+                log::info!("voice {name}: {user} joined again from the same tab, {n} old seat(s) let go");
+            }
+        }
         let room = state.rooms.entry(name.to_owned()).or_insert_with(|| Room {
             seats: Seats::new(),
             tx: watch::Sender::new(Arc::new(Vec::new())),
         });
         let mic = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("mic{id}"), "voice".to_owned()));
-        let (muted, kick) = (Arc::new(AtomicBool::new(muted)), Arc::new(Notify::new()));
+        let (muted, kick, replaced) = (Arc::new(AtomicBool::new(muted)), Arc::new(Notify::new()), Arc::new(Notify::new()));
         let sitter = Sitter {
             user: user.to_owned(),
             uid: uid.map(str::to_owned),
+            tab: tab.map(str::to_owned),
             id,
             mic: mic.clone(),
             muted: muted.clone(),
             kick: kick.clone(),
+            replaced: replaced.clone(),
             show: Show::new(id),
         };
         let Some(seat) = room.seats.take(sitter) else {
@@ -693,10 +749,10 @@ impl Voice {
             }
             return None;
         };
-        held.seat = Some((name.to_owned(), seat));
+        held.seat = Some((name.to_owned(), seat, id));
         let snapshot = Arc::new(room.seats.snapshot());
         room.tx.send_replace(snapshot);
-        Some(Sat { seat, mic, seats: room.tx.subscribe(), muted, kick })
+        Some(Sat { seat, mic, seats: room.tx.subscribe(), muted, kick, replaced })
     }
 
     /// `change` on what the sitter `id` in `seat` of `name` shows, told to the room when it
@@ -844,19 +900,19 @@ async fn handle(voice: Voice, mut socket: WebSocket, ip: IpAddr) {
     let Some(mut held) = voice.hold_ip(ip) else {
         return refuse(&mut socket, "too many voice peers from this address").await;
     };
-    let (room, user, presence, muted) = match claim {
-        Claim::Open { room, user } => (room, user, None, false),
+    let (room, user, presence, muted, tab) = match claim {
+        Claim::Open { room, user } => (room, user, None, false, None),
         Claim::Grant(grant) => match voice.api.redeem(&grant).await {
             Ok(who) => {
                 let room = format!("{}/{}", who.server, who.channel);
                 let presence = Presence { api: voice.api.clone(), user_id: who.user_id, server: who.server, channel: who.channel };
-                (room, who.name, Some(Arc::new(presence)), who.muted)
+                (room, who.name, Some(Arc::new(presence)), who.muted, who.tab)
             }
             Err(e) => return refuse(&mut socket, e).await,
         },
     };
     let uid = presence.as_ref().map(|p| p.user_id.as_str());
-    let Some(mut sat) = voice.sit(&mut held, &room, &user, uid, muted) else {
+    let Some(mut sat) = voice.sit(&mut held, &room, &user, uid, tab.as_deref(), muted) else {
         return refuse(&mut socket, "room full").await;
     };
     let tag = format!("voice {room} seat {}", sat.seat);
@@ -1055,6 +1111,13 @@ async fn talk(
                 _ = sat.kick.notified() => {
                     log::info!("{tag}: disconnected by a moderator");
                     refuse(socket, "disconnected").await;
+                    break;
+                }
+                _ = sat.replaced.notified() => {
+                    // its seat is gone already. said briefly: this socket is most likely the dead one
+                    // of a network that changed, and a page that does hear it has a newer call
+                    log::info!("{tag}: replaced by a newer join from the same tab");
+                    let _ = tokio::time::timeout(Duration::from_secs(1), refuse(socket, "replaced")).await;
                     break;
                 }
                 _ = dead.notified() => {
@@ -1406,7 +1469,17 @@ mod tests {
 
     fn sitter(user: &str, uid: Option<&str>) -> Sitter {
         let mic = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("mic-{user}"), "voice".to_owned()));
-        Sitter { user: user.to_owned(), uid: uid.map(str::to_owned), id: 0, mic, muted: Arc::default(), kick: Arc::new(Notify::new()), show: Show::new(0) }
+        Sitter {
+            user: user.to_owned(),
+            uid: uid.map(str::to_owned),
+            tab: None,
+            id: 0,
+            mic,
+            muted: Arc::default(),
+            kick: Arc::new(Notify::new()),
+            replaced: Arc::new(Notify::new()),
+            show: Show::new(0),
+        }
     }
 
     fn room_of(sitters: Vec<Sitter>) -> Room {
@@ -1439,6 +1512,48 @@ mod tests {
         assert_eq!(rooms.moderate("nobody", "g", Action::Mute), 0);
     }
 
+    fn tabbed(user: &str, uid: &str, tab: &str, id: u64) -> Sitter {
+        Sitter { tab: Some(tab.to_owned()), id, ..sitter(user, Some(uid)) }
+    }
+
+    fn ids(room: &Room) -> Vec<Option<u64>> {
+        room.seats.0.iter().map(|s| s.as_ref().map(|s| s.id)).filter(|s| s.is_some()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_join_from_the_same_tab_takes_that_tabs_seat_and_no_other() {
+        let mut rooms = Rooms::default();
+        // u1 from tab t1 (id 1) and from a second tab t2 (id 2), u2 from a tab also called t1 (id 3)
+        let old = tabbed("a", "u1", "t1", 1);
+        let bell = old.replaced.clone();
+        let second = tabbed("a", "u1", "t2", 2);
+        let quiet = second.replaced.clone();
+        rooms.rooms.insert("g/lounge".into(), room_of(vec![old, second, tabbed("b", "u2", "t1", 3)]));
+        let mut seen = rooms.rooms["g/lounge"].tx.subscribe();
+        assert_eq!(rooms.replace("u1", "t1", "g/lounge"), 1);
+        assert_eq!(ids(&rooms.rooms["g/lounge"]), vec![Some(2), Some(3)], "the second tab and someone else's same-named tab stay");
+        assert!(rooms.rooms["g/lounge"].seats.0[0].is_none(), "the old seat is free for the new join");
+        tokio::time::timeout(Duration::from_millis(100), bell.notified()).await.expect("the old socket is told");
+        assert!(tokio::time::timeout(Duration::from_millis(50), quiet.notified()).await.is_err(), "the second tab is not");
+        assert!(!seen.has_changed().unwrap(), "the room the join sits in hears it from the join");
+        // nothing from that tab any more: nothing taken
+        assert_eq!(rooms.replace("u1", "t1", "g/lounge"), 0);
+    }
+
+    #[test]
+    fn a_tab_that_moves_leaves_its_old_room() {
+        let mut rooms = Rooms::default();
+        rooms.rooms.insert("g/lounge".into(), room_of(vec![tabbed("a", "u1", "t1", 1)]));
+        rooms.rooms.insert("g/back".into(), room_of(vec![tabbed("a", "u1", "t1", 2), tabbed("b", "u2", "x", 3)]));
+        let mut back = rooms.rooms["g/back"].tx.subscribe();
+        assert_eq!(rooms.replace("u1", "t1", "g/other"), 2);
+        assert!(!rooms.rooms.contains_key("g/lounge"), "a room left empty goes");
+        assert_eq!(ids(&rooms.rooms["g/back"]), vec![Some(3)]);
+        assert!(back.has_changed().unwrap(), "a room it left hears its seats now");
+        let now = back.borrow_and_update();
+        assert_eq!(now.iter().flatten().map(|s| s.id).collect::<Vec<_>>(), vec![3]);
+    }
+
     #[tokio::test]
     async fn a_disconnect_is_heard_even_before_the_socket_waits_for_it() {
         let mut rooms = Rooms::default();
@@ -1458,6 +1573,9 @@ mod tests {
         assert!(!r.muted, "an older api says nothing: not muted");
         let r: Redeemed = serde_json::from_str(r#"{"user_id":"u","name":"al","server":"g","channel":"lounge","muted":true}"#).unwrap();
         assert!(r.muted);
+        assert_eq!(r.tab, None, "an older api names no tab");
+        let r: Redeemed = serde_json::from_str(r#"{"user_id":"u","name":"al","server":"g","channel":"lounge","tab":"t1"}"#).unwrap();
+        assert_eq!(r.tab.as_deref(), Some("t1"));
     }
 
     #[test]
@@ -1566,7 +1684,7 @@ mod tests {
         let mic = Arc::new(TrackLocalStaticRTP::new(opus_voice_capability(), format!("mic{id}"), "voice".to_owned()));
         let mut show = Show::new(id);
         show.on = on;
-        Sitter { user: user.to_owned(), uid: None, id, mic, muted: Arc::default(), kick: Arc::new(Notify::new()), show }
+        Sitter { show, id, mic, ..sitter(user, None) }
     }
 
     #[test]
