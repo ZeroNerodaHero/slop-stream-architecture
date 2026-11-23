@@ -44,7 +44,7 @@ two steps, so the voice server never sees a cookie.
    - not a member of the server: 403 `join the server first`
    - no such channel, or one this login may not see: 404 `no such channel`
    - a text channel: 400 `not a voice channel`
-   - already in voice in another channel (`voiceof:<uid>`): 409 `already in voice`. in this same channel is fine.
+   - already in voice in another channel (`voiceof:<uid>`): 409 `already in voice`. in this same channel is fine. so is another channel when the voice server says it holds no seat of theirs in that server but this tab's (`count`, [the internal routes](#the-internal-routes)): `voiceof` that no `left` cleared (the voice server crashed or restarted, which says no `left`, and the sweep would take a minute), or this tab moving while its old socket's `left` is still on its way. a second tab that really is in a call there counts, and stays `already in voice`; so does a voice server that does not answer, or does not know `count` (an older one).
    - full (the others in it, from `voice:<server>`, at its `user_limit`, 16 when 0): 409 `channel full`. an owner, the channels power and a site admin are never kept out by this.
 
    - voice off (VOICE_SECRET unset or empty): 503 `voice is off`, since no voice server could redeem a grant.
@@ -142,7 +142,7 @@ a moderator (the kick power, or the voice power; an owner, a site admin) can mut
 - `POST /api/groups/:group/voice-disconnect {name}` ends their socket with `{"error":"disconnected"}` and takes their seat out of the room at once. they may join again.
 - a kick, a ban and a timeout drop them out of voice the same way. `may_talk` refuses a timed out member (403 `timed out`) until it ends, and a kicked or banned one is no member.
 
-the api tells the voice server on `POST /internal/voice {action: mute|unmute|disconnect, user_id, server}` at VOICE_URL (`http://voice:7881`), with `X-Voice-Secret`: the guard of the internal routes above, on its side. caddy sends `/voice` alone there, so `/internal/voice` is not reachable from outside. a voice server that does not answer is a warning: the mute stands in redis for the next join, and a disconnect still takes the seat out of the room.
+the api tells the voice server on `POST /internal/voice {action: mute|unmute|disconnect|count, user_id, server, tab?}` at VOICE_URL (`http://voice:7881`), with `X-Voice-Secret`: the guard of the internal routes above, on its side. caddy sends `/voice` alone there, so `/internal/voice` is not reachable from outside. a voice server that does not answer is a warning: the mute stands in redis for the next join, and a disconnect still takes the seat out of the room. `count` touches nothing and answers how many seats the person holds in that server, those of `tab` left out (join's `already in voice`).
 
 ## limits
 

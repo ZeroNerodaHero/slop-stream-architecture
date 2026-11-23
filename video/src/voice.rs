@@ -55,12 +55,15 @@
 //! at most 4 voice peers per address, and /ws is rate limited per address like the stream's.
 //!
 //! a moderator's word comes from the api, inside the compose network only: `POST /internal/voice`
-//!   {"action":"mute"|"unmute"|"disconnect","user_id":"<uuid>","server":"<name>"}
+//!   {"action":"mute"|"unmute"|"disconnect"|"count","user_id":"<uuid>","server":"<name>","tab":"<id>"?}
 //! with X-Voice-Secret, never through caddy (which sends `/voice` alone here, and always sets
 //! X-Forwarded-For: such a request is a 404). mute stops carrying that person's mic to anyone
 //! (their packets are dropped here, so they cannot lift it from the page), unmute carries it
 //! again, disconnect ends their socket with {"error":"disconnected"}. a redeem says `muted` for
-//! someone muted before they came. → {"seats": n}, how many seats it touched.
+//! someone muted before they came. → {"seats": n}, how many seats it touched. `count` touches
+//! nothing: how many seats they hold in that server, those of `"tab"` (when given) left out. the api
+//! asks it at a join while `voiceof` names another call, which the person may have left without a
+//! `left` (this box crashed or restarted, or that tab's own socket is closing now).
 //!
 //! who is in voice lives in the api (docs/voice.md), and we keep it current: `attached`
 //! once a granted person has their answer, `left` when their seat frees, and every 15s one
@@ -318,13 +321,15 @@ impl Show {
     }
 }
 
-/// what a moderator asks of a seat (`POST /internal/voice`)
+/// what the api asks of a person's seats (`POST /internal/voice`): a moderator's word, or only
+/// how many they hold (a join, while `voiceof` names another call)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Action {
     Mute,
     Unmute,
     Disconnect,
+    Count,
 }
 
 #[derive(Deserialize)]
@@ -332,22 +337,28 @@ struct Order {
     action: Action,
     user_id: String,
     server: String,
+    /// a count leaves out the seats of this page's own tab: its join takes them over
+    #[serde(default)]
+    tab: Option<String>,
 }
 
 impl Rooms {
-    /// `action` on every seat `uid` holds in `server`'s rooms (a second tab is a second seat). → how many
-    fn moderate(&self, uid: &str, server: &str, action: Action) -> usize {
+    /// `action` on every seat `uid` holds in `server`'s rooms (a second tab is a second seat), but
+    /// those of `tab` when it is given. → how many
+    fn moderate(&self, uid: &str, server: &str, action: Action, tab: Option<&str>) -> usize {
         let mut n = 0;
         for (name, room) in &self.rooms {
             if name.split_once('/').is_none_or(|(s, _)| s != server) {
                 continue;
             }
-            for sitter in room.seats.0.iter().flatten().filter(|s| s.uid.as_deref() == Some(uid)) {
+            let theirs = room.seats.0.iter().flatten().filter(|s| s.uid.as_deref() == Some(uid));
+            for sitter in theirs.filter(|s| tab.is_none() || s.tab.as_deref() != tab) {
                 match action {
                     Action::Mute => sitter.muted.store(true, Ordering::SeqCst),
                     Action::Unmute => sitter.muted.store(false, Ordering::SeqCst),
                     // a permit if the socket is not waiting yet: it ends at its next look
                     Action::Disconnect => sitter.kick.notify_one(),
+                    Action::Count => {}
                 }
                 n += 1;
             }
@@ -623,8 +634,12 @@ pub async fn run() -> anyhow::Result<()> {
 async fn moderate(State(voice): State<Voice>, headers: HeaderMap, body: Result<Json<Order>, axum::extract::rejection::JsonRejection>) -> Result<Json<serde_json::Value>, StatusCode> {
     inside(&headers, voice.api.secret.as_deref())?;
     let Json(order) = body.map_err(|_| StatusCode::BAD_REQUEST)?;
-    let n = voice.state.lock().unwrap_or_else(|e| e.into_inner()).moderate(&order.user_id, &order.server, order.action);
-    log::info!("voice: {:?} on {n} seat(s) in {}", order.action, order.server);
+    let n = voice.state.lock().unwrap_or_else(|e| e.into_inner()).moderate(&order.user_id, &order.server, order.action, order.tab.as_deref());
+    if order.action == Action::Count {
+        log::info!("voice: count, {n} seat(s) in {} but this tab's", order.server);
+    } else {
+        log::info!("voice: {:?} on {n} seat(s) in {}", order.action, order.server);
+    }
     Ok(Json(serde_json::json!({ "seats": n })))
 }
 
@@ -1502,14 +1517,14 @@ mod tests {
         rooms.rooms.insert("g/dev".into(), room_of(vec![sitter("u1", None)]));
         let muted = |rooms: &Rooms, room: &str, seat: usize| rooms.rooms[room].seats.0[seat].as_ref().unwrap().muted.load(Ordering::SeqCst);
 
-        assert_eq!(rooms.moderate("u1", "g", Action::Mute), 2);
+        assert_eq!(rooms.moderate("u1", "g", Action::Mute, None), 2);
         assert!(muted(&rooms, "g/lounge", 0) && muted(&rooms, "g/afk", 0));
         assert!(!muted(&rooms, "g/lounge", 1), "not bo");
         assert!(!muted(&rooms, "h/lounge", 0), "not another server");
         assert!(!muted(&rooms, "g/dev", 0), "not a name alone");
-        assert_eq!(rooms.moderate("u1", "g", Action::Unmute), 2);
+        assert_eq!(rooms.moderate("u1", "g", Action::Unmute, None), 2);
         assert!(!muted(&rooms, "g/lounge", 0));
-        assert_eq!(rooms.moderate("nobody", "g", Action::Mute), 0);
+        assert_eq!(rooms.moderate("nobody", "g", Action::Mute, None), 0);
     }
 
     fn tabbed(user: &str, uid: &str, tab: &str, id: u64) -> Sitter {
@@ -1559,7 +1574,7 @@ mod tests {
         let mut rooms = Rooms::default();
         rooms.rooms.insert("g/lounge".into(), room_of(vec![sitter("al", Some("u1"))]));
         let kick = rooms.rooms["g/lounge"].seats.0[0].as_ref().unwrap().kick.clone();
-        assert_eq!(rooms.moderate("u1", "g", Action::Disconnect), 1);
+        assert_eq!(rooms.moderate("u1", "g", Action::Disconnect, None), 1);
         // told first, waited on after: the permit is kept
         tokio::time::timeout(Duration::from_millis(100), kick.notified()).await.expect("the disconnect was kept for the socket");
     }
@@ -1576,6 +1591,23 @@ mod tests {
         assert_eq!(r.tab, None, "an older api names no tab");
         let r: Redeemed = serde_json::from_str(r#"{"user_id":"u","name":"al","server":"g","channel":"lounge","tab":"t1"}"#).unwrap();
         assert_eq!(r.tab.as_deref(), Some("t1"));
+        let o: Order = serde_json::from_str(r#"{"action":"count","user_id":"u1","server":"g","tab":"t1"}"#).unwrap();
+        assert_eq!((o.action, o.tab.as_deref()), (Action::Count, Some("t1")));
+    }
+
+    #[test]
+    fn a_count_leaves_out_the_asking_tab_and_touches_nothing() {
+        let mut rooms = Rooms::default();
+        rooms.rooms.insert("g/lounge".into(), room_of(vec![tabbed("al", "u1", "t1", 1), tabbed("bo", "u2", "t9", 2)]));
+        rooms.rooms.insert("g/afk".into(), room_of(vec![tabbed("al", "u1", "t2", 3)]));
+        rooms.rooms.insert("h/lounge".into(), room_of(vec![tabbed("al", "u1", "t3", 4)]));
+        assert_eq!(rooms.moderate("u1", "g", Action::Count, None), 2, "both tabs in g");
+        assert_eq!(rooms.moderate("u1", "g", Action::Count, Some("t1")), 1, "t1 asks: its own seat is not another call, t2's is");
+        assert_eq!(rooms.moderate("u1", "g", Action::Count, Some("t2")), 1);
+        assert_eq!(rooms.moderate("u1", "g", Action::Count, Some("t3")), 2);
+        assert_eq!(rooms.moderate("u1", "h", Action::Count, Some("t3")), 0, "a voice server that holds only this tab's seat");
+        assert_eq!(rooms.moderate("u9", "g", Action::Count, None), 0, "a voice server that never saw them (restarted)");
+        assert!(!rooms.rooms["g/lounge"].seats.0[0].as_ref().unwrap().muted.load(Ordering::SeqCst));
     }
 
     #[test]

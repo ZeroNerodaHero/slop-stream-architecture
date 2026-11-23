@@ -309,8 +309,10 @@ async fn join(
     let mut redis = s.redis.clone();
     let here = format!("{server}/{channel}");
     let now: Option<String> = redis::cmd("GET").arg(voiceof_key(who.id)).query_async(&mut redis).await?;
-    if now.is_some_and(|now| now != here) {
-        return Err(ApiError::new(StatusCode::CONFLICT, "already in voice"));
+    if let Some(now) = now.filter(|now| *now != here) {
+        if !stale_voiceof(&s, who.id, &now, tab.as_deref()).await {
+            return Err(ApiError::new(StatusCode::CONFLICT, "already in voice"));
+        }
     }
     if !allows(&s, who.id, &server, CHANNELS).await? {
         let fields: HashMap<String, String> = redis::cmd("HGETALL").arg(voice_key(&server)).query_async(&mut redis).await?;
@@ -334,6 +336,17 @@ async fn join(
         return Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "try again"));
     }
     Ok(Json(json!({ "url": "/voice", "grant": grant, "ttl": GRANT_TTL })))
+}
+
+/// Whether `voiceof` naming `now` (`server/channel`) is no other call of the person's: the voice
+/// server holds no seat of theirs in that server but the ones of this page's `tab`, which its join
+/// takes over. A voice server that restarted or crashed said no `left`, and a tab that moves or
+/// joins again asks before its old socket's `left` is through; a second tab that is really in a
+/// call is still `already in voice`. A voice server that does not answer, or does not know the
+/// question (an older one), is no answer: the call stands.
+async fn stale_voiceof(s: &AppState, user: Uuid, now: &str, tab: Option<&str>) -> bool {
+    let Some((server, _)) = now.split_once('/') else { return false };
+    tell_voice(s, Order::Count, user, server, tab).await == Some(0)
 }
 
 #[derive(Deserialize)]
@@ -367,13 +380,15 @@ async fn is_muted(s: &AppState, server: &str, user: Uuid) -> Result<bool, redis:
 
 // ---- moderating voice -----------------------------------------------------------------------
 
-/// What a moderator tells the voice server about someone (`tell_voice`): their mic off or on
-/// again, or their seat taken. The voice server's `POST /internal/voice` (video/src/voice.rs).
+/// What the api tells the voice server about someone (`tell_voice`): a moderator's mic off or on
+/// again, or their seat taken; or only how many seats they hold (join, `stale_voiceof`). The
+/// voice server's `POST /internal/voice` (video/src/voice.rs).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Order {
     Mute,
     Unmute,
     Disconnect,
+    Count,
 }
 
 impl Order {
@@ -382,6 +397,7 @@ impl Order {
             Order::Mute => "mute",
             Order::Unmute => "unmute",
             Order::Disconnect => "disconnect",
+            Order::Count => "count",
         }
     }
 }
@@ -399,22 +415,27 @@ fn voice_url() -> &'static str {
     })
 }
 
-/// The voice server's body for an order about `user` in `server`.
-fn order_body(order: Order, user: Uuid, server: &str) -> Value {
-    json!({ "action": order.word(), "user_id": user, "server": server })
+/// The voice server's body for an order about `user` in `server`; `tab`, for a count, is the
+/// page whose own seats are not counted.
+fn order_body(order: Order, user: Uuid, server: &str, tab: Option<&str>) -> Value {
+    let mut body = json!({ "action": order.word(), "user_id": user, "server": server });
+    if let Some(tab) = tab {
+        body["tab"] = json!(tab);
+    }
+    body
 }
 
 /// Tells the voice server an order about `user` in `server`, with VOICE_SECRET (never logged).
-/// → how many seats it touched, None when it could not be told (voice off, the box down): the
-/// api's side stands anyway (`muted_key` is read again at the next redeem; a disconnect takes
-/// the seat out of the room here too).
-async fn tell_voice(s: &AppState, order: Order, user: Uuid, server: &str) -> Option<u64> {
+/// → how many seats it touched (or counted), None when it could not be told (voice off, the box
+/// down): the api's side stands anyway (`muted_key` is read again at the next redeem; a
+/// disconnect takes the seat out of the room here too).
+async fn tell_voice(s: &AppState, order: Order, user: Uuid, server: &str, tab: Option<&str>) -> Option<u64> {
     let secret = secret()?;
     let res = s
         .http
         .post(format!("{}/internal/voice", voice_url()))
         .header("x-voice-secret", secret)
-        .json(&order_body(order, user, server))
+        .json(&order_body(order, user, server, tab))
         .send()
         .await;
     match res {
@@ -449,7 +470,7 @@ pub(crate) async fn drop_from_voice(s: &AppState, server: &str, user: Uuid) {
     if !here {
         return;
     }
-    tell_voice(s, Order::Disconnect, user, server).await;
+    tell_voice(s, Order::Disconnect, user, server, None).await;
     if let Err(e) = leave(s, server, user, None).await {
         log::warn!("voice drop {server}: {}", e.message());
     }
@@ -485,7 +506,7 @@ async fn server_mute(State(s): State<AppState>, Path(group): Path<String>, Me(me
     } else {
         redis::cmd("SREM").arg(muted_key(&server)).arg(user.to_string()).query_async(&mut redis).await?
     };
-    tell_voice(&s, if body.muted { Order::Mute } else { Order::Unmute }, user, &server).await;
+    tell_voice(&s, if body.muted { Order::Mute } else { Order::Unmute }, user, &server, None).await;
     if changed > 0 {
         log::info!("{}: {} {name} in {server}'s voice", who.name, if body.muted { "muted" } else { "unmuted" });
         tell(&s, &server, "voice_mute", json!({ "who": name, "uid": user, "muted": body.muted })).await;
@@ -738,9 +759,10 @@ mod tests {
     #[test]
     fn an_order_says_what_who_and_where() {
         let user = Uuid::from_u128(7);
-        assert_eq!(order_body(Order::Mute, user, "g"), json!({ "action": "mute", "user_id": user, "server": "g" }));
-        assert_eq!(order_body(Order::Unmute, user, "g")["action"], "unmute");
-        assert_eq!(order_body(Order::Disconnect, user, "g")["action"], "disconnect");
+        assert_eq!(order_body(Order::Mute, user, "g", None), json!({ "action": "mute", "user_id": user, "server": "g" }));
+        assert_eq!(order_body(Order::Unmute, user, "g", None)["action"], "unmute");
+        assert_eq!(order_body(Order::Disconnect, user, "g", None)["action"], "disconnect");
+        assert_eq!(order_body(Order::Count, user, "g", Some("t1")), json!({ "action": "count", "user_id": user, "server": "g", "tab": "t1" }));
     }
 
     #[test]
