@@ -11,7 +11,6 @@ import { myServersAtom } from '@/infra/atoms/groups-atoms';
 import {
   closeNotifications,
   dismissNotification,
-  KEEP,
   loadNotifications,
   markNotificationsRead,
   notificationsAtom,
@@ -397,7 +396,6 @@ function NotificationsList() {
               </li>
             ))}
           </ul>
-          {list.length >= KEEP && <p className="shrink-0 border-t border-primaryStroke px-3 py-1.5 text-xs text-textTertiary">the last {KEEP}. older ones are gone.</p>}
         </>
       )}
     </dialog>
