@@ -611,10 +611,10 @@ async fn ws(State(s): State<ChatState>, headers: HeaderMap, upgrade: WebSocketUp
     upgrade
         .max_message_size(MAX_FRAME_BYTES)
         .max_frame_size(MAX_FRAME_BYTES)
-        .on_upgrade(move |socket| async move {
+        .on_upgrade(move |socket| crate::timings::session("ws", "/rt", async move {
             let _slot = slot;
             handle(s, ip, headers, socket).await
-        })
+        }))
         .into_response()
 }
 
@@ -696,6 +696,7 @@ async fn handle(s: ChatState, ip: String, headers: HeaderMap, mut socket: WebSoc
             }
             incoming = socket.recv() => {
                 beat.heard();
+                crate::timings::heard(&incoming);
                 let text = match incoming {
                     Some(Ok(Message::Text(text))) => text,
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,

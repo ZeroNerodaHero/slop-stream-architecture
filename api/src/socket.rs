@@ -32,6 +32,7 @@ pub(crate) async fn send_frame(socket: &mut WebSocket, frame: Utf8Bytes) -> Resu
 }
 
 async fn send_frame_within(socket: &mut WebSocket, frame: Utf8Bytes, budget: Duration) -> Result<(), axum::Error> {
+    crate::timings::sent(frame.len());
     match tokio::time::timeout(budget, socket.send(Message::Text(frame))).await {
         Ok(sent) => sent,
         Err(_) => Err(axum::Error::new("the peer stopped reading")),

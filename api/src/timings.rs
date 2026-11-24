@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::env;
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
+use axum::extract::ws::Message;
 use axum::extract::{MatchedPath, Request};
 use axum::middleware::Next;
 use axum::response::Response;
@@ -63,11 +64,69 @@ pub(crate) struct Timing {
     pub(crate) sum_us: u64,
     pub(crate) max_us: u64,
     pub(crate) b: Vec<(u16, u64)>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub(crate) dir: String,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(crate) msgs: u64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(crate) bytes: u64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(crate) open: u64,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Dir {
+    In,
+    Out,
+    Inter,
+}
+
+impl Dir {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Dir::In => "in",
+            Dir::Out => "out",
+            Dir::Inter => "inter",
+        }
+    }
+}
+
+fn default_dir(kind: &str) -> Dir {
+    match kind {
+        "http" | "ws" | "session" | "setup" => Dir::In,
+        _ => Dir::Inter,
+    }
+}
+
+pub(crate) fn dir_of(kind: &str, dir: &str) -> &'static str {
+    match dir {
+        "in" => "in",
+        "out" => "out",
+        "inter" => "inter",
+        _ => default_dir(kind).as_str(),
+    }
+}
+
+fn line_key(kind: &str, method: &str, name: &str, dir: &str) -> String {
+    let dir = dir_of(kind, dir);
+    if dir == default_dir(kind).as_str() {
+        format!("{kind}\u{1f}{method}\u{1f}{name}")
+    } else {
+        format!("{kind}\u{1f}{method}\u{1f}{name}\u{1f}{dir}")
+    }
 }
 
 impl Timing {
     fn local_key(&self) -> String {
-        format!("{}\u{1f}{}\u{1f}{}", self.kind, self.method, self.name)
+        line_key(&self.kind, &self.method, &self.name, &self.dir)
+    }
+
+    pub(crate) fn active(&self) -> bool {
+        self.n > 0 || self.msgs > 0 || self.bytes > 0 || self.open > 0
     }
 
     pub(crate) fn key(&self) -> String {
@@ -95,6 +154,10 @@ struct Entry {
     kind: &'static str,
     method: String,
     name: String,
+    dir: Dir,
+    msgs: AtomicU64,
+    bytes: AtomicU64,
+    open: AtomicI64,
     n: AtomicU64,
     e4: AtomicU64,
     e5: AtomicU64,
@@ -105,9 +168,29 @@ struct Entry {
 }
 
 impl Entry {
-    fn new(kind: &'static str, method: &str, name: &str) -> Entry {
+    fn new(kind: &'static str, method: &str, name: &str, dir: Dir) -> Entry {
         let z = || AtomicU64::new(0);
-        Entry { kind, method: method.to_owned(), name: name.to_owned(), n: z(), e4: z(), e5: z(), err: z(), sum_us: z(), max_us: z(), b: std::array::from_fn(|_| z()) }
+        Entry {
+            kind,
+            method: method.to_owned(),
+            name: name.to_owned(),
+            dir,
+            msgs: z(),
+            bytes: z(),
+            open: AtomicI64::new(0),
+            n: z(),
+            e4: z(),
+            e5: z(),
+            err: z(),
+            sum_us: z(),
+            max_us: z(),
+            b: std::array::from_fn(|_| z()),
+        }
+    }
+
+    fn count(&self, bytes: usize) {
+        self.msgs.fetch_add(1, Relaxed);
+        self.bytes.fetch_add(bytes as u64, Relaxed);
     }
 
     fn add(&self, us: u64, outcome: Outcome) {
@@ -143,6 +226,10 @@ impl Entry {
             sum_us: self.sum_us.load(Relaxed),
             max_us: self.max_us.swap(0, Relaxed),
             b: self.b.iter().enumerate().filter_map(|(i, c)| Some((i as u16, c.load(Relaxed))).filter(|(_, c)| *c > 0)).collect(),
+            dir: self.dir.as_str().to_owned(),
+            msgs: self.msgs.load(Relaxed),
+            bytes: self.bytes.load(Relaxed),
+            open: self.open.load(Relaxed).max(0) as u64,
         }
     }
 }
@@ -154,25 +241,80 @@ struct Registry {
 
 static REG: LazyLock<Registry> = LazyLock::new(|| Registry { started: Utc::now().timestamp_millis(), map: RwLock::new(HashMap::new()) });
 
+fn entry(kind: &'static str, method: &str, name: &str, dir: Dir) -> Arc<Entry> {
+    let key = line_key(kind, method, name, dir.as_str());
+    if let Some(e) = REG.map.read().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return e.clone();
+    }
+    let mut map = REG.map.write().unwrap_or_else(|e| e.into_inner());
+    if map.len() >= MAX_KEYS && !map.contains_key(&key) {
+        let other = line_key(kind, "", "(other)", dir.as_str());
+        return map.entry(other).or_insert_with(|| Arc::new(Entry::new(kind, "", "(other)", dir))).clone();
+    }
+    map.entry(key).or_insert_with(|| Arc::new(Entry::new(kind, method, name, dir))).clone()
+}
+
+fn micros(d: Duration) -> u64 {
+    d.as_micros().min(u64::MAX as u128) as u64
+}
+
 pub(crate) fn record(kind: &'static str, method: &str, name: &str, took: Duration, outcome: Outcome) {
-    let key = format!("{kind}\u{1f}{method}\u{1f}{name}");
-    let found = REG.map.read().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
-    let entry = match found {
-        Some(e) => e,
-        None => {
-            let mut map = REG.map.write().unwrap_or_else(|e| e.into_inner());
-            if map.len() >= MAX_KEYS && !map.contains_key(&key) {
-                map.entry(format!("{kind}\u{1f}\u{1f}(other)")).or_insert_with(|| Arc::new(Entry::new(kind, "", "(other)"))).clone()
-            } else {
-                map.entry(key).or_insert_with(|| Arc::new(Entry::new(kind, method, name))).clone()
-            }
+    record_dir(kind, method, name, default_dir(kind), took, outcome);
+}
+
+pub(crate) fn record_dir(kind: &'static str, method: &str, name: &str, dir: Dir, took: Duration, outcome: Outcome) {
+    entry(kind, method, name, dir).add(micros(took), outcome);
+}
+
+pub(crate) struct Session {
+    inbound: Arc<Entry>,
+    outbound: Arc<Entry>,
+    started: Instant,
+    failed: AtomicBool,
+}
+
+impl Session {
+    pub(crate) fn open(proto: &'static str, name: &str) -> Session {
+        let inbound = entry("session", proto, name, Dir::In);
+        inbound.open.fetch_add(1, Relaxed);
+        Session { inbound, outbound: entry("session", proto, name, Dir::Out), started: Instant::now(), failed: AtomicBool::new(false) }
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.inbound.open.fetch_sub(1, Relaxed);
+        self.inbound.add(micros(self.started.elapsed()), if self.failed.load(Relaxed) { Outcome::Failed } else { Outcome::Ok });
+    }
+}
+
+tokio::task_local! {
+    static SESSION: Session;
+}
+
+pub(crate) async fn session<F: std::future::Future>(proto: &'static str, name: &str, f: F) -> F::Output {
+    SESSION.scope(Session::open(proto, name), f).await
+}
+
+pub(crate) fn sent(bytes: usize) {
+    let _ = SESSION.try_with(|s| s.outbound.count(bytes));
+}
+
+pub(crate) fn heard(incoming: &Option<Result<Message, axum::Error>>) {
+    let bytes = match incoming {
+        Some(Ok(Message::Text(t))) => t.len(),
+        Some(Ok(Message::Binary(b))) => b.len(),
+        Some(Err(_)) => {
+            let _ = SESSION.try_with(|s| s.failed.store(true, Relaxed));
+            return;
         }
+        _ => return,
     };
-    entry.add(took.as_micros().min(u64::MAX as u128) as u64, outcome);
+    let _ = SESSION.try_with(|s| s.inbound.count(bytes));
 }
 
 pub(crate) fn snapshot() -> Value {
-    let rows: Vec<Timing> = REG.map.read().unwrap_or_else(|e| e.into_inner()).values().map(|e| e.read()).filter(|t| t.n > 0).collect();
+    let rows: Vec<Timing> = REG.map.read().unwrap_or_else(|e| e.into_inner()).values().map(|e| e.read()).filter(Timing::active).collect();
     json!({ "started": REG.started, "rows": rows })
 }
 
@@ -192,11 +334,12 @@ fn method_name(m: &axum::http::Method) -> &'static str {
 pub(crate) async fn http(req: Request, next: Next) -> Response {
     let method = method_name(req.method());
     let path = req.extensions().get::<MatchedPath>().map(|p| p.as_str().to_owned());
+    let dir = if req.headers().contains_key("x-forwarded-for") { Dir::In } else { Dir::Inter };
     let started = Instant::now();
     let res = next.run(req).await;
     let status = res.status().as_u16();
     let kind = if status == 101 { "ws" } else { "http" };
-    record(kind, method, path.as_deref().unwrap_or("(no route)"), started.elapsed(), outcome(status));
+    record_dir(kind, method, path.as_deref().unwrap_or("(no route)"), dir, started.elapsed(), outcome(status));
     res
 }
 
@@ -436,17 +579,19 @@ fn diff_buckets(cur: &[(u16, u64)], prev: &[(u16, u64)]) -> Vec<(u16, u64)> {
 }
 
 fn delta(cur: &Timing, prev: Option<&Timing>) -> Option<Timing> {
-    let Some(p) = prev.filter(|p| p.n <= cur.n) else { return Some(cur.clone()).filter(|c| c.n > 0) };
-    let n = cur.n - p.n;
-    (n > 0).then(|| Timing {
-        n,
+    let Some(p) = prev.filter(|p| p.n <= cur.n && p.msgs <= cur.msgs && p.bytes <= cur.bytes) else { return Some(cur.clone()).filter(Timing::active) };
+    let d = Timing {
+        n: cur.n - p.n,
         e4: cur.e4.saturating_sub(p.e4),
         e5: cur.e5.saturating_sub(p.e5),
         err: cur.err.saturating_sub(p.err),
         sum_us: cur.sum_us.saturating_sub(p.sum_us),
         b: diff_buckets(&cur.b, &p.b),
+        msgs: cur.msgs - p.msgs,
+        bytes: cur.bytes - p.bytes,
         ..cur.clone()
-    })
+    };
+    d.active().then_some(d)
 }
 
 pub(crate) struct Collector {
@@ -471,9 +616,9 @@ impl Collector {
         self.from.iter().map(|(k, v)| format!("{k}={v}")).collect()
     }
 
-    pub(crate) async fn collect(&mut self, problems: &mut Vec<String>) -> Vec<Timing> {
+    pub(crate) async fn collect(&mut self, problems: &mut Vec<String>, running: Option<&[&str]>) -> Vec<Timing> {
         let mut set = tokio::task::JoinSet::new();
-        for (src, url) in &self.from {
+        for (src, url) in self.from.iter().filter(|(src, _)| running.is_none_or(|r| r.contains(&src.as_str()))) {
             let (client, src, url) = (self.client.clone(), src.clone(), format!("{url}/timings"));
             set.spawn(async move {
                 let got = async {
@@ -500,7 +645,7 @@ impl Collector {
         let cur: HashMap<String, Timing> = snap.rows.into_iter().map(|t| (t.local_key(), t)).collect();
         let out = match self.prev.get(src) {
             None => vec![],
-            Some((started, _)) if *started != snap.started => cur.values().filter(|t| t.n > 0).cloned().collect(),
+            Some((started, _)) if *started != snap.started => cur.values().filter(|t| t.active()).cloned().collect(),
             Some((_, prev)) => cur.iter().filter_map(|(k, t)| delta(t, prev.get(k))).collect(),
         };
         self.prev.insert(src.to_owned(), (snap.started, cur));
@@ -518,16 +663,26 @@ pub(crate) struct Agg {
     sum_us: u64,
     max_us: u64,
     b: Vec<(u16, u64)>,
+    msgs: u64,
+    bytes: u64,
+    open: u64,
 }
 
 impl Agg {
     fn of(t: &Timing) -> Agg {
         let mut b = t.b.clone();
         b.sort_unstable();
-        Agg { n: t.n, e4: t.e4, e5: t.e5, err: t.err, sum_us: t.sum_us, max_us: t.max_us, b }
+        Agg { n: t.n, e4: t.e4, e5: t.e5, err: t.err, sum_us: t.sum_us, max_us: t.max_us, b, msgs: t.msgs, bytes: t.bytes, open: t.open }
+    }
+
+    fn active(&self) -> bool {
+        self.n > 0 || self.msgs > 0 || self.bytes > 0 || self.open > 0
     }
 
     fn merge(&mut self, o: &Agg) {
+        self.msgs += o.msgs;
+        self.bytes += o.bytes;
+        self.open = self.open.max(o.open);
         self.n += o.n;
         self.e4 += o.e4;
         self.e5 += o.e5;
@@ -590,6 +745,9 @@ impl Agg {
         m.insert("p95".into(), json!(self.quantile(0.95)));
         m.insert("p99".into(), json!(self.quantile(0.99)));
         m.insert("max".into(), json!((self.max_us > 0).then(|| ms(self.max_us as f64))));
+        m.insert("msgs".into(), json!(self.msgs));
+        m.insert("bytes".into(), json!(self.bytes));
+        m.insert("open_peak".into(), json!(self.open));
         m
     }
 
@@ -608,32 +766,48 @@ fn blocking(name: &str) -> bool {
     name.ends_with(" BLOCK")
 }
 
+#[derive(Default, Debug, Clone)]
+struct Total {
+    agg: Agg,
+    rate: f64,
+    msgs_rate: f64,
+    bytes_rate: f64,
+    open: u64,
+}
+
 #[derive(Default, Debug)]
 pub(crate) struct Totals {
-    kinds: BTreeMap<String, (Agg, f64)>,
+    kinds: BTreeMap<(String, String), Total>,
 }
 
 impl Totals {
-    fn add(&mut self, kind: &str, agg: &Agg, rate: f64) {
-        let (a, r) = self.kinds.entry(kind.to_owned()).or_default();
-        a.merge(agg);
-        *r += rate;
+    fn add(&mut self, dir: &str, kind: &str, t: &Total) {
+        let s = self.kinds.entry((dir.to_owned(), kind.to_owned())).or_default();
+        s.agg.merge(&t.agg);
+        s.rate += t.rate;
+        s.msgs_rate += t.msgs_rate;
+        s.bytes_rate += t.bytes_rate;
+        s.open += t.open;
     }
 
     pub(crate) fn merge(&mut self, o: &Totals) {
-        for (kind, (agg, rate)) in &o.kinds {
-            self.add(kind, agg, *rate);
+        for ((dir, kind), t) in &o.kinds {
+            self.add(dir, kind, t);
         }
     }
 
     pub(crate) fn rows(&self, target: Option<&str>) -> Vec<Value> {
         self.kinds
             .iter()
-            .map(|(kind, (agg, rate))| {
-                let mut row = agg.row();
+            .map(|((dir, kind), t)| {
+                let mut row = t.agg.row();
                 row.insert("target".into(), json!(target));
                 row.insert("kind".into(), json!(kind));
-                row.insert("rate".into(), json!(crate::agent::round(*rate, 3)));
+                row.insert("dir".into(), json!(dir));
+                row.insert("rate".into(), json!(crate::agent::round(t.rate, 3)));
+                row.insert("msgs_rate".into(), json!(crate::agent::round(t.msgs_rate, 3)));
+                row.insert("bytes_rate".into(), json!(crate::agent::round(t.bytes_rate, 1)));
+                row.insert("open".into(), json!(t.open));
                 Value::Object(row)
             })
             .collect()
@@ -657,6 +831,7 @@ struct Line {
     method: String,
     name: String,
     src: String,
+    dir: String,
     tiers: Vec<VecDeque<(i64, Agg)>>,
 }
 
@@ -671,13 +846,13 @@ pub(crate) struct History {
 impl History {
     pub(crate) fn add(&mut self, at: i64, rows: &[Timing]) {
         self.since.get_or_insert(at);
-        for r in rows.iter().filter(|r| r.n > 0) {
+        for r in rows.iter().filter(|r| r.active()) {
             let key = r.key();
             if !self.lines.contains_key(&key) && self.lines.len() >= MAX_LINES {
                 self.dropped += 1;
                 continue;
             }
-            let line = self.lines.entry(key).or_insert_with(|| Line { kind: r.kind.clone(), method: r.method.clone(), name: r.name.clone(), src: r.src.clone(), tiers: vec![] });
+            let line = self.lines.entry(key).or_insert_with(|| Line { kind: r.kind.clone(), method: r.method.clone(), name: r.name.clone(), src: r.src.clone(), dir: dir_of(&r.kind, &r.dir).to_owned(), tiers: vec![] });
             line.tiers.resize_with(TIERS.len(), VecDeque::new);
             let agg = Agg::of(r);
             for (tier, (_, width, keep)) in line.tiers.iter_mut().zip(TIERS) {
@@ -722,10 +897,17 @@ impl History {
             for (_, a) in pts.iter().filter(|(t, _)| *t + width > from) {
                 total.merge(a);
             }
-            if total.n == 0 {
+            if !total.active() {
                 continue;
             }
+            let open = pts.back().filter(|(t, _)| *t + 2 * width > now).map_or(0, |(_, a)| a.open);
+            let dir = dir_of(&line.kind, &line.dir);
+            let sums = Total { agg: total.clone(), rate: total.n as f64 / span, msgs_rate: total.msgs as f64 / span, bytes_rate: total.bytes as f64 / span, open };
             let mut row = total.row();
+            row.insert("dir".into(), json!(dir));
+            row.insert("open".into(), json!(open));
+            row.insert("msgs_rate".into(), json!(crate::agent::round(sums.msgs_rate, 3)));
+            row.insert("bytes_rate".into(), json!(crate::agent::round(sums.bytes_rate, 1)));
             row.insert("target".into(), json!(target));
             row.insert("key".into(), json!(key));
             row.insert("kind".into(), json!(line.kind));
@@ -735,7 +917,7 @@ impl History {
             row.insert("rate".into(), json!(crate::agent::round(total.n as f64 / span, 3)));
             out.push(Value::Object(row));
             if !blocking(&line.name) {
-                totals.add(&line.kind, &total, total.n as f64 / span);
+                totals.add(dir, &line.kind, &sums);
             }
         }
         (out, totals)
@@ -752,7 +934,7 @@ impl History {
         }
         let col = |f: &dyn Fn(&Agg) -> Value| pts.iter().map(|(_, a)| f(a)).collect::<Vec<_>>();
         Some(json!({
-            "key": key, "kind": line.kind, "method": line.method, "name": line.name, "src": line.src,
+            "key": key, "kind": line.kind, "method": line.method, "name": line.name, "src": line.src, "dir": dir_of(&line.kind, &line.dir),
             "bucket_secs": TIERS[tier].1,
             "t": pts.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
             "n": col(&|a| json!(a.n)),
@@ -764,6 +946,9 @@ impl History {
             "p99": col(&|a| json!(a.quantile(0.99))),
             "max": col(&|a| json!((a.max_us > 0).then(|| ms(a.max_us as f64)))),
             "sum": col(&|a| json!(crate::agent::round(a.sum_us as f64 / 1000.0, 3))),
+            "msgs": col(&|a| json!(a.msgs)),
+            "bytes": col(&|a| json!(a.bytes)),
+            "open": col(&|a| json!(a.open)),
             "hist": total.hist(),
         }))
     }
@@ -783,6 +968,14 @@ mod tests {
         assert_eq!(bucket(u64::MAX), BUCKETS - 1);
         assert_eq!(bucket((1 << 32) - 1), BUCKETS - 1);
         assert!((1..BUCKETS).all(|i| bucket_us(i) > bucket_us(i - 1)));
+    }
+
+    #[test]
+    fn buckets_match_the_video_s() {
+        let pinned = [(0u64, 0usize), (7, 7), (8, 8), (15, 15), (16, 16), (1000, 63), (1_500_000, 147), (60_000_000, 190), (u64::MAX, 239)];
+        for (us, i) in pinned {
+            assert_eq!(bucket(us), i, "{us}us");
+        }
     }
 
     #[test]
@@ -906,6 +1099,77 @@ mod tests {
         assert_eq!(bars.len(), 1);
         let (lo, hi, c) = (bars[0][0].as_f64().unwrap(), bars[0][1].as_f64().unwrap(), bars[0][2].as_u64().unwrap());
         assert!(lo <= 50.0 && 50.0 < hi && c == 10, "{bars:?}");
+    }
+
+    #[tokio::test]
+    async fn a_session_counts_open_time_messages_and_bytes_each_way() {
+        let name = "/test-session";
+        let row = |dir: &str| -> Option<Timing> {
+            let snap: Snapshot = serde_json::from_value(snapshot()).unwrap();
+            snap.rows.into_iter().find(|r| r.kind == "session" && r.name == name && r.dir == dir)
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(session("ws", name, async move {
+            sent(100);
+            sent(20);
+            heard(&Some(Ok(Message::Text("hello".into()))));
+            heard(&Some(Ok(Message::Ping(Default::default()))));
+            let _ = rx.await;
+        }));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let open = row("in").unwrap();
+        assert_eq!((open.open, open.n, open.msgs, open.bytes), (1, 0, 1, 5));
+        let out = row("out").unwrap();
+        assert_eq!((out.msgs, out.bytes, out.open), (2, 120, 0));
+        tx.send(()).unwrap();
+        task.await.unwrap();
+        let closed = row("in").unwrap();
+        assert_eq!((closed.open, closed.n, closed.err), (0, 1, 0));
+        assert!(closed.sum_us >= 15_000, "the session lasted {}us", closed.sum_us);
+        sent(7);
+        assert_eq!(row("out").unwrap().bytes, 120, "a send outside a session counts nowhere");
+    }
+
+    #[test]
+    fn the_collector_keeps_an_open_gauge_with_no_new_calls() {
+        let mut c = Collector { client: reqwest::Client::new(), from: vec![], prev: HashMap::new() };
+        let row = |n: u64, msgs: u64, open: u64| Timing { kind: "session".into(), method: "ws".into(), name: "/rt".into(), dir: "in".into(), n, msgs, bytes: msgs * 10, open, ..Default::default() };
+        assert!(c.take("chat", Snapshot { started: 1, rows: vec![row(0, 5, 3)] }).is_empty());
+        let d = c.take("chat", Snapshot { started: 1, rows: vec![row(0, 9, 3)] });
+        assert_eq!((d[0].n, d[0].msgs, d[0].bytes, d[0].open), (0, 4, 40, 3));
+        let idle = c.take("chat", Snapshot { started: 1, rows: vec![row(0, 9, 2)] });
+        assert_eq!((idle[0].msgs, idle[0].open), (0, 2), "two still open, nothing said");
+        assert!(c.take("chat", Snapshot { started: 1, rows: vec![row(0, 9, 0)] }).is_empty());
+    }
+
+    #[test]
+    fn history_keeps_open_sessions_and_rates_and_totals_by_direction() {
+        let mut h = History::default();
+        let s = |dir: &str, n: u64, msgs: u64, open: u64| Timing { kind: "session".into(), method: "webrtc".into(), name: "watch".into(), src: "video".into(), dir: dir.into(), n, msgs, bytes: msgs * 1000, open, ..Default::default() };
+        h.add(1_000_020, &[s("in", 0, 0, 4), s("out", 0, 600, 0)]);
+        h.add(1_000_035, &[s("in", 0, 0, 5), s("out", 0, 600, 0)]);
+        let (rows, totals) = h.table(0, 1_000_040, "box");
+        assert_eq!(rows.len(), 2);
+        let inbound = rows.iter().find(|r| r["dir"] == "in").unwrap();
+        assert_eq!((inbound["open"].as_u64(), inbound["open_peak"].as_u64(), inbound["n"].as_u64()), (Some(5), Some(5), Some(0)));
+        let out = rows.iter().find(|r| r["dir"] == "out").unwrap();
+        assert_eq!(out["msgs"], 1200);
+        assert!(out["bytes_rate"].as_f64().unwrap() > 0.0);
+        assert_ne!(inbound["key"], out["key"]);
+        let t = totals.rows(None);
+        assert_eq!(t.iter().filter(|r| r["kind"] == "session").count(), 2);
+        assert_eq!(t.iter().find(|r| r["dir"] == "in").unwrap()["open"], 5);
+        let (later, _) = h.table(0, 1_000_000 + 240, "box");
+        assert_eq!(later.iter().find(|r| r["dir"] == "in").unwrap()["open"], 0, "no word from the line for minutes is no longer open");
+    }
+
+    #[test]
+    fn a_direction_keeps_the_old_key_when_it_is_the_kinds_own() {
+        assert_eq!(line_key("http", "GET", "/a", "in"), line_key("http", "GET", "/a", ""));
+        assert_ne!(line_key("http", "GET", "/a", "inter"), line_key("http", "GET", "/a", "in"));
+        assert_eq!(line_key("db", "", "SELECT ?", "inter"), "db\u{1f}\u{1f}SELECT ?");
+        assert_eq!(dir_of("redis", ""), "inter");
+        assert_eq!(dir_of("http", "sideways"), "in");
     }
 
     #[test]
