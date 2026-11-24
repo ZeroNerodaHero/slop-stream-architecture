@@ -710,6 +710,7 @@ export const api = {
   addSiteJanny: (who: string) => request<null>('POST', '/api/jannies', { name: who }),
   removeSiteJanny: (who: string) => request<null>('DELETE', `/api/jannies/${encodeURIComponent(who)}`),
   streams: () => request<LiveStream[]>('GET', '/api/streams', undefined, { cache: 'no-store' }),
+  streamsAsked: (response: Promise<Response>) => answerOf<LiveStream[]>('GET', '/api/streams', response),
   streamer: (name: string) => request<Streamer>('GET', `/api/streamers/${name}`),
   sessions: (name: string, from: Date, to: Date) =>
     request<SessionRow[]>(

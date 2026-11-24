@@ -1,6 +1,7 @@
 import weights from '@/assets/face_landmarker.task?url';
 import type { FaceLines, FaceMarks, FaceState, FromFaceWorker, LoadStep, ModelStats, RigInfo, ToFaceWorker } from '@/infra/face-wire';
 import FaceWorker from '@/infra/face.worker?worker';
+import faceWorkerUrl from '@/infra/face.worker?worker&url';
 
 export type { FaceLines, FaceMarks, FaceState, LoadStep, ModelStats, RigInfo, RigPart } from '@/infra/face-wire';
 
@@ -61,8 +62,28 @@ function pathHere(): 'worker' | 'page' {
   return can && asked !== 'page' ? 'worker' : 'page';
 }
 
+const loadFaceWasm = async () => (import.meta.env.DEV ? await import('@/infra/face-wasm.module') : await import('@/infra/face-wasm.classic')).default;
+
+let warmed = false;
+
+export function warmModelFiles(): void {
+  if (warmed) return;
+  warmed = true;
+  const warm = () => {
+    void loadFaceWasm().then((wasm) => {
+      for (const url of [faceWorkerUrl, wasm.loader, wasm.binary, weights]) {
+        void fetch(url, { priority: 'low' })
+          .then((res) => (res.ok ? res.blob() : null))
+          .catch(() => undefined);
+      }
+    });
+  };
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(warm, { timeout: 3000 });
+  else setTimeout(warm, 1000);
+}
+
 export async function startModel(options: ModelOptions): Promise<ModelSession> {
-  const wasm = (import.meta.env.DEV ? await import('@/infra/face-wasm.module') : await import('@/infra/face-wasm.classic')).default;
+  const wasm = await loadFaceWasm();
   const path = pathHere();
   const worker = new FaceWorker();
   const send = (msg: ToFaceWorker, transfer: Transferable[] = []) => worker.postMessage(msg, transfer);

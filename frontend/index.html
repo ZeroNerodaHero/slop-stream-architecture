@@ -47,6 +47,15 @@
         }
       } catch (e) {}
     </script>
+    <script>
+      try {
+        if (location.pathname === '/') {
+          var bootStreams = { born: performance.now(), response: fetch('/api/streams', { cache: 'no-store' }) };
+          bootStreams.response.catch(function () {});
+          window.__bootStreams = bootStreams;
+        }
+      } catch (e) {}
+    </script>
     <title>streams</title>
     <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=2" />

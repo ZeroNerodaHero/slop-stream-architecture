@@ -37,6 +37,10 @@ pub fn every_secs() -> u64 {
         .unwrap_or(5)
 }
 
+pub fn ask_after() -> Duration {
+    Duration::from_millis(every_secs() * 900)
+}
+
 pub fn due_after() -> Duration {
     Duration::from_secs(every_secs() * 2)
 }
@@ -104,13 +108,14 @@ impl ThumbTap {
         )
         .await?;
 
-        let every = every_secs();
-        let pick = format!("select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,{every})',scale=320:-2");
+        let gap = every_secs() as f64 * 0.8;
+        let pick = format!("select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,{gap})',scale=320:-2");
         let mut cmd = Command::new("ffmpeg");
         cmd.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "1"])
             .args(["-analyzeduration", "1500000", "-probesize", "1000000"])
             .args(["-protocol_whitelist", "file,udp,rtp", "-localaddr", "127.0.0.1"])
-            .args(["-listen_timeout", LISTEN_TIMEOUT_SECS, "-max_delay", MAX_DELAY_MICROS, "-i"])
+            .args(["-listen_timeout", LISTEN_TIMEOUT_SECS, "-max_delay", MAX_DELAY_MICROS])
+            .args(["-skip_frame", "nokey", "-i"])
             .arg(&sdp)
             .args(["-threads", "1"])
             .args(["-an", "-vf", &pick, "-fps_mode", "vfr", "-c:v", "mjpeg", "-q:v", "6"])

@@ -435,7 +435,7 @@ async fn thumb(State(app): State<App>, axum::extract::Path(file): axum::extract:
     }
     match tokio::fs::read(thumbs::jpeg_path(&name)).await {
         Ok(bytes) if bytes.len() > 4 => (
-            [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "public, max-age=3, s-maxage=3")],
+            [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "public, max-age=0, s-maxage=5, stale-while-revalidate=10")],
             bytes,
         )
             .into_response(),
@@ -590,28 +590,30 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
                     let mut told = false;
                     loop {
                         tokio::time::sleep(wait).await;
-                        wait = Duration::from_millis(2000);
+                        wait = Duration::from_millis(500);
                         if ffmpeg_gone.load(Ordering::Relaxed) {
                             break;
                         }
-                        let due = thumbs::picture_age(&room).await.is_none_or(|age| age > thumbs::due_after());
-                        if !due {
+                        let age = thumbs::picture_age(&room).await;
+                        if age.is_some_and(|age| age <= thumbs::due_after()) {
                             due_since = None;
                             if told {
                                 log::info!("thumb {room}: pictures again");
                                 told = false;
                             }
-                            continue;
+                        } else {
+                            let stuck = due_since.get_or_insert_with(Instant::now).elapsed() > thumbs::stale_after();
+                            if stuck && !told {
+                                log::warn!("thumb {room}: no new picture for {}s with keyframes asked for. ffmpeg stuck, or the video stopped", thumbs::stale_after().as_secs());
+                                told = true;
+                            }
+                            if stuck {
+                                wait = Duration::from_secs(10);
+                            }
                         }
-                        let stuck = due_since.get_or_insert_with(Instant::now).elapsed() > thumbs::stale_after();
-                        if stuck && !told {
-                            log::warn!("thumb {room}: no new picture for {}s with keyframes asked for. ffmpeg stuck, or the video stopped", thumbs::stale_after().as_secs());
-                            told = true;
+                        if age.is_none_or(|age| age >= thumbs::ask_after()) {
+                            hub.request_keyframe(&room, slot, Ask::Thumb).await;
                         }
-                        if stuck {
-                            wait = Duration::from_secs(10);
-                        }
-                        hub.request_keyframe(&room, slot, Ask::Thumb).await;
                     }
                 });
             }
