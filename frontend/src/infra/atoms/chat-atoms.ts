@@ -86,6 +86,8 @@ const TIERS: { anon: ChatTier; login: ChatTier } = {
   login: { burst: 3, window: 10_000, words: '3 lines in 10 seconds' }
 };
 
+const MODERATION_REJECTED = 'image rejected by moderation';
+const MODERATION_WORDS = 'have sex incel?';
 const NOTICE_WORDS: Record<string, string> = {
   cooldown: 'your role has a cooldown between lines',
   'channel cooldown': 'this channel has a cooldown between lines',
@@ -405,8 +407,8 @@ export class ChatRoom {
     }
   }
 
-  showNotice(text: string, ms = 3000) {
-    store.set(this.noticeAtom, text);
+  showNotice(text: string, ms = 4000) {
+    store.set(this.noticeAtom, text === MODERATION_REJECTED ? MODERATION_WORDS : text);
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
     this.noticeTimer = setTimeout(() => store.set(this.noticeAtom, ''), ms);
   }
