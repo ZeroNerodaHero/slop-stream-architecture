@@ -11,7 +11,11 @@ import { store } from '@/infra/store';
 
 export const KEEP = 30;
 
-const ALL_ON: NotifySettings = { live: true, follow: true, dm: true, chat: true };
+const ALL_ON: NotifySettings = { live: true, follow: true, dm: true, chat: true, mention: true };
+
+function inRoom(n: Pick<Notification, 'kind'>): boolean {
+  return n.kind === 'chat' || n.kind === 'mention';
+}
 
 function withEveryKind(settings: Partial<NotifySettings>): NotifySettings {
   return { ...ALL_ON, ...settings };
@@ -183,14 +187,14 @@ function viewedRoom(): { server: string; channel: string } | null {
 
 function viewingRoom(n: Pick<Notification, 'kind' | 'room'>): boolean {
   const viewed = viewedRoom();
-  return viewed !== null && n.kind === 'chat' && n.room === `${viewed.server}/${viewed.channel}`;
+  return viewed !== null && inRoom(n) && n.room === `${viewed.server}/${viewed.channel}`;
 }
 
 function readChannelNotifications(server: string, channel: string) {
   if (!store.get(meAtom)) return;
   const list = store.get(notificationsAtom);
   const room = `${server}/${channel}`;
-  const hit = (n: Notification) => n.kind === 'chat' && n.room === room && !n.read;
+  const hit = (n: Notification) => inRoom(n) && n.room === room && !n.read;
   if (!list?.some(hit)) return;
   const ids = new Set(list.filter(hit).map((n) => n.id));
   store.set(
@@ -239,7 +243,7 @@ function arrived(frame: {
   if (!store.get(meAtom)) return;
   const list = store.get(notificationsAtom);
   const row = rowOf(frame);
-  if (row.kind === 'chat' && row.read) {
+  if (inRoom(row) && row.read) {
     const at = roomOf(row);
     if (at) api.readChannel(at.server, at.channel).catch(() => undefined);
   }
@@ -288,8 +292,8 @@ function place(list: Notification[], row: Notification): Notification[] {
   if (actor) rest = rest.map((n) => (n.actor === actor && n.name !== row.name ? { ...n, name: row.name } : n));
   if (row.kind === 'dm') {
     rest = rest.filter((n) => !(n.kind === 'dm' && !n.read && (actor ? n.actor === actor : n.name === row.name)));
-  } else if (row.kind === 'chat' && row.room) {
-    rest = rest.filter((n) => !(n.kind === 'chat' && !n.read && n.room === row.room));
+  } else if (inRoom(row) && row.room) {
+    rest = rest.filter((n) => !(n.kind === row.kind && !n.read && n.room === row.room));
   }
   return [row, ...rest].slice(0, KEEP);
 }
@@ -334,7 +338,7 @@ function dmReadElsewhere(frame: { name: string; peer: string; peer_id?: string }
 function chatReadElsewhere(frame: { name: string; room: string }) {
   if (frame.name !== store.get(meAtom)) return;
   const list = store.get(notificationsAtom);
-  const hit = (n: Notification) => n.kind === 'chat' && !n.read && n.room === frame.room;
+  const hit = (n: Notification) => inRoom(n) && !n.read && n.room === frame.room;
   if (!list?.some(hit)) return;
   store.set(
     notificationsAtom,

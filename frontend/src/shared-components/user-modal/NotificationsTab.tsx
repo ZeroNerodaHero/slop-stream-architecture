@@ -1,4 +1,4 @@
-import { RiBroadcastLine, RiChat3Line, RiHashtag, RiUserFollowLine } from '@remixicon/react';
+import { RiAtLine, RiBroadcastLine, RiChat3Line, RiHashtag, RiUserFollowLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { type ReactNode, useEffect } from 'react';
 
@@ -37,6 +37,11 @@ const KINDS: readonly { kind: NotificationKind; label: string; icon: ReactNode }
     kind: 'chat',
     label: 'group messages',
     icon: <RiHashtag aria-hidden size={24} />
+  },
+  {
+    kind: 'mention',
+    label: 'someone mentions you',
+    icon: <RiAtLine aria-hidden size={24} />
   }
 ];
 

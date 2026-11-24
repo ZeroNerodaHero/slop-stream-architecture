@@ -2,7 +2,7 @@ import type { GroupBadge } from '@/infra/api';
 
 export type Presence = 'offline' | 'online' | 'dnd' | 'streaming';
 export type PresenceChoice = 'online' | 'dnd' | 'invisible';
-export type NotificationKind = 'live' | 'follow' | 'dm' | 'chat';
+export type NotificationKind = 'live' | 'follow' | 'dm' | 'chat' | 'mention';
 
 export type ClientFrame = { type: 'hello'; nick?: string } | { type: 'watch'; name: string } | { type: 'unwatch'; name: string };
 

@@ -100,7 +100,7 @@ export interface Notification {
 }
 
 export function roomOf(n: { kind: NotificationKind; room?: string | null }): { server: string; channel: string } | null {
-  if (n.kind !== 'chat' || !n.room) return null;
+  if ((n.kind !== 'chat' && n.kind !== 'mention') || !n.room) return null;
   const slash = n.room.indexOf('/');
   if (slash <= 0 || slash === n.room.length - 1) return null;
   return { server: n.room.slice(0, slash), channel: n.room.slice(slash + 1) };
@@ -111,6 +111,7 @@ export interface NotifySettings {
   follow: boolean;
   dm: boolean;
   chat: boolean;
+  mention: boolean;
 }
 
 export interface Followed extends OAuthVerified {
