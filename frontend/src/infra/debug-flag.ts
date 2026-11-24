@@ -1,4 +1,8 @@
-export const debug = { on: false, inspector: false };
+import type { RunKind } from './debug/rings.ts';
+
+export type DebugSink = (kind: RunKind, label: string, start: number, phases: readonly (readonly [string, number])[]) => void;
+
+export const debug: { on: boolean; inspector: boolean; sink: DebugSink | null } = { on: false, inspector: false, sink: null };
 
 const listeners = new Set<(on: boolean) => void>();
 

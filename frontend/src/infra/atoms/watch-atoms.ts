@@ -13,6 +13,7 @@ import { reportPeerFailure } from '@/infra/report';
 import { cleanSocials, EMPTY_SOCIALS } from '@/infra/socials';
 import { type StreamStats, startSampler } from '@/infra/stream-stats';
 import { store } from '@/infra/store';
+import { debug } from '@/infra/debug-flag';
 import { watchBeat } from '@/infra/watch-beat';
 import { perfBegin, perfMark } from '@/infra/watch-perf';
 import type { Tone } from '@/shared-components/StatusLine';
@@ -141,7 +142,7 @@ function dropPressed() {
 function warmOnPress(name: string) {
   if (pressed?.warm.name === name && isFresh(pressed.warm)) return;
   dropPressed();
-  perfBegin('press');
+  perfBegin('press', name);
   const warm = makeWarm(name);
   pressed = { warm, timer: setTimeout(dropPressed, PREFETCH_TTL_MS) };
 }
@@ -183,7 +184,7 @@ function takeBoot(name: string): { warm: Warm; grant: Promise<WatchGrant> } | nu
     closeWarm(warm);
     return null;
   }
-  perfBegin('boot', boot.born);
+  perfBegin('boot', name, boot.born);
   perfMark('peer', boot.born);
   if (boot.offerAt !== undefined) perfMark('offer', boot.offerAt);
   else
@@ -339,7 +340,7 @@ async function start(name: string): Promise<void> {
   const fromPress = takePressed(name);
   const boot = fromPress ? null : takeBoot(name);
   if (fromPress || boot) perfMark('start');
-  else perfBegin('start');
+  else perfBegin('start', name);
   early = fromPress ?? boot?.warm ?? (knownNotLive(name) ? null : makeWarm(name));
   const asked = takePrefetched<WatchGrant>(grantKey(name))?.answer ?? boot?.grant ?? api.watch(name);
   const ahead = early && handshake(name, early);
@@ -565,13 +566,25 @@ export function retry() {
   void start(store.get(watchNameAtom));
 }
 
-export function markPlaying() {
+export function markPlaying(e?: { currentTarget: EventTarget | null }) {
   if (!pc) return;
-  if (!played) perfMark('first-frame');
+  if (!played && debug.on) markFirstFrame(e?.currentTarget);
   played = true;
   failures = 0;
   store.set(needsTapAtom, false);
   setPhase('watching', 'watching');
+}
+
+function markFirstFrame(video: EventTarget | null | undefined) {
+  if (!(video instanceof HTMLVideoElement) || typeof video.requestVideoFrameCallback !== 'function') {
+    perfMark('first-frame', undefined, true);
+    return;
+  }
+  perfMark('first-frame');
+  const mine = attempt;
+  video.requestVideoFrameCallback((now) => {
+    if (mine === attempt) perfMark('first-frame-decoded', now);
+  });
 }
 
 export function markAutoplayBlocked() {

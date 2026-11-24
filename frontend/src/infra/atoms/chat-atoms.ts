@@ -664,7 +664,7 @@ export class ChatRoom {
     const key = `pending-${++this.sent}`;
     if (this.rt) {
       const topic = this.server ? chatTopicOf(`${this.server}/${this.channel}`) : this.rt.topic;
-      rtPerfSay(key);
+      rtPerfSay(key, undefined, topic);
       void rtAsk({ ...say, type: 'say', topic }).then((answer) => {
         rtPerfAnswer(key, answer.type === 'ack');
         if (answer.type === 'ack') {
@@ -942,6 +942,7 @@ export class ChatRoom {
       void this.fillGap();
       return;
     }
+    if (frame.type === 'message' && this.rt) rtPerfMark(this.rt.topic, 'first-line');
     const msg: Record<string, unknown> = { ...frame };
     delete msg.topic;
     this.onWire(msg as Wire, this.server ? channelOf(topic) : null);
