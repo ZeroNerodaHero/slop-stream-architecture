@@ -52,7 +52,8 @@ export type ChatPhase = 'off' | 'connecting' | 'open' | 'closed';
 export const MAX_CHAT_CHARS = 500;
 export { MAX_CHAT_IMAGES };
 const KEEP_LINES = 500;
-const RECONNECT_MS = 3000;
+const RETRY_FIRST_MS = 250;
+const RETRY_CAP_MS = 15_000;
 const OLDER_PAGE = 50;
 const MAX_LOADED = 2000;
 const LEAVE_MS = 100;
@@ -214,6 +215,7 @@ export class ChatRoom {
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
   private bucket: { tokens: number; at: number };
   private inFlight: ({ text: string; images: string[]; reply: ChatLine | null } & Attached)[] = [];
+  private retries = 0;
   private flashTimer: ReturnType<typeof setTimeout> | null = null;
   private wasOpen = false;
 
@@ -380,6 +382,7 @@ export class ChatRoom {
     store.set(this.waitAtom, 0);
     store.set(this.guestAtom, false);
     store.set(this.readerAtom, false);
+    this.retries = 0;
     this.owner = null;
     this.me = null;
     this.nick = '';
@@ -645,6 +648,7 @@ export class ChatRoom {
         return;
       }
       record(source, 'in', msg);
+      this.retries = 0;
       const tagged = this.server && typeof msg.channel === 'string' ? msg.channel : null;
       if (msg.type === 'ready') {
         store.set(this.readerAtom, msg.reader === true);
@@ -682,7 +686,7 @@ export class ChatRoom {
       this.timer = setTimeout(() => {
         this.timer = null;
         if (this.joins.size > 0) this.connect();
-      }, RECONNECT_MS);
+      }, retryAfter(this.retries++));
     };
   }
 
@@ -1110,6 +1114,11 @@ async function linesOf(response: Promise<Response>): Promise<ChatLine[]> {
   }
   if (!res.ok) throw new Error(data?.error || `http ${res.status}`);
   return (data?.lines ?? []).map(fromWire);
+}
+
+function retryAfter(tries: number): number {
+  const base = Math.min(RETRY_CAP_MS, RETRY_FIRST_MS * 2 ** tries);
+  return Math.round(base + Math.random() * base * 0.5);
 }
 
 function sameOwner(a: Owner | null, b: Owner | null): boolean {
