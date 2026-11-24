@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use axum::extract::ws::{Message, WebSocket};
+use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use serde::Serialize;
 
 pub(crate) const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -16,8 +16,19 @@ pub(crate) async fn send<T: Serialize>(socket: &mut WebSocket, out: &T) -> Resul
 }
 
 pub(crate) async fn send_within<T: Serialize>(socket: &mut WebSocket, out: &T, budget: Duration) -> Result<(), axum::Error> {
-    let text = serde_json::to_string(out).unwrap_or_default();
-    match tokio::time::timeout(budget, socket.send(Message::Text(text.into()))).await {
+    send_frame_within(socket, frame_of(out), budget).await
+}
+
+pub(crate) fn frame_of<T: Serialize>(out: &T) -> Utf8Bytes {
+    serde_json::to_string(out).unwrap_or_default().into()
+}
+
+pub(crate) async fn send_frame(socket: &mut WebSocket, frame: Utf8Bytes) -> Result<(), axum::Error> {
+    send_frame_within(socket, frame, SEND_TIMEOUT).await
+}
+
+async fn send_frame_within(socket: &mut WebSocket, frame: Utf8Bytes, budget: Duration) -> Result<(), axum::Error> {
+    match tokio::time::timeout(budget, socket.send(Message::Text(frame))).await {
         Ok(sent) => sent,
         Err(_) => Err(axum::Error::new("the peer stopped reading")),
     }

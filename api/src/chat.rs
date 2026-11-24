@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
-use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRef, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
@@ -23,7 +23,7 @@ use crate::auth::{client_ip, is_claimed, whoami, NICK_HAS_ACCOUNT};
 use crate::groups::{badges_of, Badge, BOT_GROUP};
 use crate::history;
 use crate::reactions::{self, Reaction};
-use crate::socket::{first_text, id_parts, send, DRAIN_LIMIT, IDLE_LIMIT, MAX_FRAME_BYTES, PING_EVERY, READ_BLOCK_MS, SEND_TIMEOUT};
+use crate::socket::{first_text, frame_of, id_parts, send, send_frame, DRAIN_LIMIT, IDLE_LIMIT, MAX_FRAME_BYTES, PING_EVERY, READ_BLOCK_MS, SEND_TIMEOUT};
 use crate::{owns_session, Name, Owner};
 
 const HISTORY_LINES: usize = 200;
@@ -78,10 +78,30 @@ struct Room {
 
 #[derive(Clone)]
 enum Event {
-    Line(Arc<Line>),
-    Count(usize),
-    React(Arc<React>),
-    Delete(Arc<str>),
+    Line(Arc<Line>, Utf8Bytes),
+    Count(usize, Utf8Bytes),
+    React(Arc<React>, Utf8Bytes),
+    Delete(Arc<str>, Utf8Bytes),
+}
+
+impl Event {
+    fn line(line: Line) -> Self {
+        let frame = frame_of(&Out::Message(&line));
+        Event::Line(Arc::new(line), frame)
+    }
+
+    fn count(count: usize) -> Self {
+        Event::Count(count, frame_of(&Out::Count { count }))
+    }
+
+    fn react(react: React) -> Self {
+        let frame = frame_of(&Out::React(&react));
+        Event::React(Arc::new(react), frame)
+    }
+
+    fn delete(id: &str) -> Self {
+        Event::Delete(id.into(), frame_of(&Out::Delete { id }))
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -604,20 +624,14 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
     loop {
         tokio::select! {
             event = rx.recv() => match event {
-                Ok(Event::Line(line)) => {
+                Ok(Event::Line(line, frame)) => {
                     let id = id_parts(&line.id);
                     if id <= last_seen { continue; }
                     last_seen = id;
-                    if send(&mut socket, &Out::Message(&line)).await.is_err() { break; }
+                    if send_frame(&mut socket, frame).await.is_err() { break; }
                 }
-                Ok(Event::Count(count)) => {
-                    if send(&mut socket, &Out::Count { count }).await.is_err() { break; }
-                }
-                Ok(Event::React(react)) => {
-                    if send(&mut socket, &Out::React(&react)).await.is_err() { break; }
-                }
-                Ok(Event::Delete(id)) => {
-                    if send(&mut socket, &Out::Delete { id: &id }).await.is_err() { break; }
+                Ok(Event::Count(_, frame) | Event::React(_, frame) | Event::Delete(_, frame)) => {
+                    if send_frame(&mut socket, frame).await.is_err() { break; }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     let missed = format!("missed {n} lines");
@@ -1311,19 +1325,19 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
     loop {
         tokio::select! {
             tagged = rx.recv() => match tagged {
-                Some((channel, Ok(Event::Line(line)))) => {
+                Some((channel, Ok(Event::Line(line, _)))) => {
                     let id = id_parts(&line.id);
                     if last_seen.get(&channel).is_some_and(|seen| id <= *seen) { continue; }
                     last_seen.insert(channel.clone(), id);
                     if send(&mut socket, &Out::ChannelMessage { channel: &channel, line: &line }).await.is_err() { break; }
                 }
-                Some((channel, Ok(Event::Count(count)))) => {
+                Some((channel, Ok(Event::Count(count, _)))) => {
                     if send(&mut socket, &Out::ChannelCount { channel: &channel, count }).await.is_err() { break; }
                 }
-                Some((channel, Ok(Event::React(react)))) => {
+                Some((channel, Ok(Event::React(react, _)))) => {
                     if send(&mut socket, &Out::ChannelReact { channel: &channel, react: &react }).await.is_err() { break; }
                 }
-                Some((channel, Ok(Event::Delete(id)))) => {
+                Some((channel, Ok(Event::Delete(id, _)))) => {
                     if send(&mut socket, &Out::ChannelDelete { channel: &channel, id: &id }).await.is_err() { break; }
                 }
                 Some((_, Err(n))) => {
@@ -1508,7 +1522,7 @@ impl ChatState {
         if room.count == 0 {
             rooms.remove(name);
         } else {
-            let _ = room.tx.send(Event::Count(room.count));
+            let _ = room.tx.send(Event::count(room.count));
         }
     }
 }
@@ -1522,7 +1536,7 @@ impl Room {
         *mine += 1;
         self.count += 1;
         let rx = self.tx.subscribe();
-        let _ = self.tx.send(Event::Count(self.count));
+        let _ = self.tx.send(Event::count(self.count));
         Some(rx)
     }
 }
@@ -1577,15 +1591,15 @@ async fn reader(client: redis::Client, name: String, start: Option<String>, reac
                 if reactions {
                     rlast = entry.id.clone();
                     if let Some(id) = entry.get::<String>("del") {
-                        let _ = tx.send(Event::Delete(id.into()));
+                        let _ = tx.send(Event::delete(&id));
                     } else if let Some(react) = react_from(&entry) {
-                        let _ = tx.send(Event::React(Arc::new(react)));
+                        let _ = tx.send(Event::react(react));
                     }
                     continue;
                 }
                 last = entry.id.clone();
                 if let Some(line) = line_from(entry) {
-                    let _ = tx.send(Event::Line(Arc::new(line)));
+                    let _ = tx.send(Event::line(line));
                 }
             }
         }
@@ -2245,6 +2259,42 @@ mod tests {
             In::Hello(hello) => assert!(hello.since.is_none() && hello.nick.is_none()),
             _ => panic!("not a hello"),
         }
+    }
+
+    #[test]
+    fn a_broadcast_is_written_once_and_every_socket_sends_the_same_bytes() {
+        let line = Line {
+            id: "1729000000000-0".into(),
+            from: "bob".into(),
+            text: "hi".into(),
+            streamer: false,
+            verified: true,
+            groups: Vec::new(),
+            avatar: Some(7),
+            oauth_verified: true,
+            user_id: Some(Uuid::nil()),
+            at: 1729000000000,
+            image: None,
+            images: Vec::new(),
+            video: None,
+            reply: None,
+            reactions: Vec::new(),
+        };
+        let written = serde_json::to_string(&Out::Message(&line)).unwrap();
+        let (tx, mut a) = broadcast::channel(4);
+        let mut b = tx.subscribe();
+        assert!(tx.send(Event::line(line)).is_ok());
+        let (Ok(Event::Line(_, one)), Ok(Event::Line(_, two))) = (a.try_recv(), b.try_recv()) else { panic!("no line") };
+        assert_eq!(one.as_str(), written);
+        assert!(!written.contains("user_id"));
+        assert_eq!(one.as_str().as_ptr(), two.as_str().as_ptr(), "the two sockets share one buffer");
+        let react = Event::react(React { id: "1729000000000-0".into(), emoji: "🔥".into(), who: "ann".into(), on: true });
+        let Event::React(r, frame) = react else { panic!("not a react") };
+        assert_eq!(frame.as_str(), serde_json::to_string(&Out::React(&r)).unwrap());
+        let Event::Delete(_, frame) = Event::delete("1729000000000-0") else { panic!("not a delete") };
+        assert_eq!(frame.as_str(), r#"{"type":"delete","id":"1729000000000-0"}"#);
+        let Event::Count(_, frame) = Event::count(3) else { panic!("not a count") };
+        assert_eq!(frame.as_str(), r#"{"type":"count","count":3}"#);
     }
 
     struct Rig {
