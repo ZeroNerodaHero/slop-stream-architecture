@@ -310,6 +310,11 @@ async fn send_with(
         &store.region,
         &amz_date,
     );
+    let op = match (key, range.is_some()) {
+        (None, _) => "bucket",
+        (Some(_), true) => "object range",
+        (Some(_), false) => "object",
+    };
     let http_method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
     let mut req = store
         .http
@@ -326,7 +331,14 @@ async fn send_with(
     if method == "PUT" || method == "POST" {
         req = req.body(body.to_vec());
     }
-    req.send().await.map_err(|e| e.to_string())
+    let started = std::time::Instant::now();
+    let res = req.send().await;
+    let outcome = match &res {
+        Ok(r) => crate::timings::outcome(r.status().as_u16()),
+        Err(_) => crate::timings::Outcome::Failed,
+    };
+    crate::timings::record("s3", method, op, started.elapsed(), outcome);
+    res.map_err(|e| e.to_string())
 }
 
 impl Store {

@@ -341,7 +341,8 @@ async fn tell_voice(s: &AppState, order: Order, user: Uuid, server: &str, tab: O
 
 async fn ask_voice(s: &AppState, word: &str, body: &Value) -> Option<u64> {
     let secret = secret()?;
-    let res = s.http.post(format!("{}/internal/voice", voice_url())).header("x-voice-secret", secret).json(body).send().await;
+    let req = s.http.post(format!("{}/internal/voice", voice_url())).header("x-voice-secret", secret).json(body);
+    let res = crate::timings::call("voice", "POST", "/internal/voice", req).await;
     match res {
         Ok(res) if res.status().is_success() => res.json::<Value>().await.ok().and_then(|v| v["seats"].as_u64()),
         Ok(res) => {

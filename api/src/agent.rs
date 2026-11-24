@@ -30,6 +30,8 @@ pub(crate) struct Sample {
     pub(crate) containers: Vec<Container>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) problems: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) timings: Vec<crate::timings::Timing>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -491,6 +493,7 @@ async fn sample_loop(app: App) {
     let (mut host_prev, mut cont_prev): (Option<HostRaw>, HashMap<String, ContainerRaw>) = (None, HashMap::new());
     let mut info: Option<DockerInfo> = None;
     let mut last_problems: Vec<String> = vec![];
+    let mut collector = crate::timings::Collector::from_env();
     loop {
         tick.tick().await;
         let at = Utc::now();
@@ -510,6 +513,7 @@ async fn sample_loop(app: App) {
                 vec![]
             }
         };
+        let timings = collector.collect(&mut problems).await;
         if problems != last_problems {
             for p in problems.iter().filter(|p| !last_problems.contains(p)) {
                 log::warn!("{p}");
@@ -517,7 +521,7 @@ async fn sample_loop(app: App) {
             last_problems = problems.clone();
         }
         let mut ring = app.ring.lock().await;
-        ring.push_back(Sample { at, host, containers, problems });
+        ring.push_back(Sample { at, host, containers, problems, timings });
         while ring.len() > app.cfg.keep {
             ring.pop_front();
         }
@@ -623,6 +627,12 @@ pub async fn run() -> anyhow::Result<()> {
         cfg.proc_dir.display(),
         cfg.socket
     );
+    let sources = crate::timings::Collector::from_env().sources();
+    if sources.is_empty() {
+        log::info!("agent: no TIMINGS_FROM, so no endpoint timings from this box");
+    } else {
+        log::info!("agent: endpoint timings from {}", sources.join(", "));
+    }
     if cfg.token.is_none() {
         log::warn!("no OPS_TOKEN: GET /api/metrics answers 404 to everyone. set OPS_TOKEN in .env");
     }
@@ -726,7 +736,7 @@ mod tests {
 
     #[test]
     fn a_sample_reads_back() {
-        let s = Sample { at: DateTime::from_timestamp(1_800_000_000, 0).unwrap(), host: Host { cpu_pct: Some(1.5), ..Default::default() }, containers: vec![], problems: vec![] };
+        let s = Sample { at: DateTime::from_timestamp(1_800_000_000, 0).unwrap(), host: Host { cpu_pct: Some(1.5), ..Default::default() }, containers: vec![], problems: vec![], timings: vec![] };
         let back: Sample = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
         assert_eq!(back, s);
     }

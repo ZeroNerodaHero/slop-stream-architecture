@@ -65,10 +65,12 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, video_url: &str, port: u16)
         .route("/api/streams", get(list))
         .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip))
         .layer(axum::middleware::map_response(crate::media::no_store_by_default))
+        .layer(axum::middleware::from_fn(crate::timings::http))
         .with_state(home);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     log::info!("home on {addr}");
+    crate::timings::serve();
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, router).with_graceful_shutdown(crate::wait_for_signal()).await?;
     Ok(())

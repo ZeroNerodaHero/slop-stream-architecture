@@ -5,7 +5,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::put;
 use axum::{Json, Router};
-use redis::aio::ConnectionManager;
+use crate::timings::Redis;
 use redis::streams::StreamMaxlen;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -111,7 +111,7 @@ pub(crate) async fn status_of(db: &PgPool, name: &str) -> Result<Status, sqlx::E
     Ok(raw.as_deref().and_then(Status::parse).unwrap_or_default())
 }
 
-pub(crate) async fn presence_with(r: &mut ConnectionManager, db: &PgPool, name: &str, live: bool) -> Result<Presence, ApiError> {
+pub(crate) async fn presence_with(r: &mut Redis, db: &PgPool, name: &str, live: bool) -> Result<Presence, ApiError> {
     if live {
         return Ok(Presence::Streaming);
     }

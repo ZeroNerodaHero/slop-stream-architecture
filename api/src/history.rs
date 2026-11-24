@@ -493,7 +493,7 @@ async fn redis_window(s: &ChatState, room: &str, id: &str) -> Result<Option<Vec<
     Ok(Some(lines))
 }
 
-pub(crate) async fn line_at(db: &PgPool, redis: &mut redis::aio::ConnectionManager, room: &str, id: &str) -> Result<Option<Line>, ApiError> {
+pub(crate) async fn line_at(db: &PgPool, redis: &mut crate::timings::Redis, room: &str, id: &str) -> Result<Option<Line>, ApiError> {
     let id = stream_id(id)?;
     let hit: StreamRangeReply = redis.xrange_count(room_key(room), &id, &id, 1).await?;
     if let Some(line) = hit.ids.into_iter().find_map(line_from) {
