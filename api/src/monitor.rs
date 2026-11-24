@@ -749,6 +749,26 @@ async fn series(State(app): State<App>, Query(q): Query<SeriesQuery>) -> Respons
 }
 
 #[derive(Deserialize)]
+struct TargetQuery {
+    target: String,
+}
+
+async fn architecture(State(app): State<App>, Query(q): Query<TargetQuery>) -> Response {
+    let m = app.metrics.lock().await;
+    let Some(h) = m.get(&q.target) else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such box" }))).into_response();
+    };
+    let mut out = match &h.latest {
+        Some(s) => crate::architecture::graph(s),
+        None => json!({ "at": null, "nodes": [], "edges": [], "networks": [] }),
+    };
+    out["target"] = json!(q.target);
+    out["status"] = json!(h.status);
+    out["now"] = json!(Utc::now());
+    Json(out).into_response()
+}
+
+#[derive(Deserialize)]
 struct TimingQuery {
     target: Option<String>,
     key: Option<String>,
@@ -932,6 +952,7 @@ pub async fn run() -> anyhow::Result<()> {
         .route("/api/monitor/metrics", get(series))
         .route("/api/monitor/timings", get(timing_table))
         .route("/api/monitor/timings/series", get(timing_series))
+        .route("/api/monitor/architecture", get(architecture))
         .route_layer(axum::middleware::from_fn_with_state(crate::ratelimit::Local::default(), crate::ratelimit::local))
         .layer(axum::middleware::map_response(crate::agent::no_store))
         .with_state(app.clone());

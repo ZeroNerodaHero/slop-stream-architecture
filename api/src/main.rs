@@ -1,6 +1,7 @@
 mod about_page;
 mod agent;
 mod analytics;
+mod architecture;
 mod auth;
 mod cf_purge;
 mod chat;
