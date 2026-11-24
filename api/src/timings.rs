@@ -40,6 +40,16 @@ pub(crate) fn bucket_us(i: usize) -> f64 {
     ((SUB + i % SUB) as u64 * width) as f64 + width as f64 / 2.0
 }
 
+fn bucket_bounds_us(i: usize) -> (u64, u64) {
+    if i < SUB {
+        return (i as u64, i as u64 + 1);
+    }
+    let k = i / SUB + SUB_BITS - 1;
+    let width = 1u64 << (k - SUB_BITS);
+    let lo = (SUB + i % SUB) as u64 * width;
+    (lo, lo + width)
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default)]
 pub(crate) struct Timing {
@@ -575,12 +585,55 @@ impl Agg {
         m.insert("e4".into(), json!(self.e4));
         m.insert("e5".into(), json!(self.e5));
         m.insert("err".into(), json!(self.err));
+        m.insert("sum_ms".into(), json!(crate::agent::round(self.sum_us as f64 / 1000.0, 3)));
         m.insert("mean".into(), json!((self.n > 0).then(|| ms(self.sum_us as f64 / self.n as f64))));
         m.insert("p50".into(), json!(self.quantile(0.5)));
         m.insert("p95".into(), json!(self.quantile(0.95)));
         m.insert("p99".into(), json!(self.quantile(0.99)));
         m.insert("max".into(), json!((self.max_us > 0).then(|| ms(self.max_us as f64))));
         m
+    }
+
+    fn hist(&self) -> Vec<(f64, f64, u64)> {
+        self.b
+            .iter()
+            .map(|&(i, c)| {
+                let (lo, hi) = bucket_bounds_us(i as usize);
+                (lo as f64 / 1000.0, hi as f64 / 1000.0, c)
+            })
+            .collect()
+    }
+}
+
+#[derive(Default, Debug)]
+pub(crate) struct Totals {
+    kinds: BTreeMap<String, (Agg, f64)>,
+}
+
+impl Totals {
+    fn add(&mut self, kind: &str, agg: &Agg, rate: f64) {
+        let (a, r) = self.kinds.entry(kind.to_owned()).or_default();
+        a.merge(agg);
+        *r += rate;
+    }
+
+    pub(crate) fn merge(&mut self, o: &Totals) {
+        for (kind, (agg, rate)) in &o.kinds {
+            self.add(kind, agg, *rate);
+        }
+    }
+
+    pub(crate) fn rows(&self, target: Option<&str>) -> Vec<Value> {
+        self.kinds
+            .iter()
+            .map(|(kind, (agg, rate))| {
+                let mut row = agg.row();
+                row.insert("target".into(), json!(target));
+                row.insert("kind".into(), json!(kind));
+                row.insert("rate".into(), json!(crate::agent::round(*rate, 3)));
+                Value::Object(row)
+            })
+            .collect()
     }
 }
 
@@ -653,12 +706,13 @@ impl History {
         self.dropped
     }
 
-    pub(crate) fn table(&self, tier: usize, now: i64, target: &str) -> Vec<Value> {
+    pub(crate) fn table(&self, tier: usize, now: i64, target: &str) -> (Vec<Value>, Totals) {
         let (_, width, keep) = TIERS[tier];
         let range = width * keep as i64;
         let from = now - range;
         let span = (now - self.since.unwrap_or(from).max(from)).max(width) as f64;
         let mut out = vec![];
+        let mut totals = Totals::default();
         for (key, line) in &self.lines {
             let Some(pts) = line.tiers.get(tier) else { continue };
             let mut total = Agg::default();
@@ -681,13 +735,20 @@ impl History {
             row.insert("spark".into(), json!(slots.iter().map(|s| s.quantile(0.95)).collect::<Vec<_>>()));
             row.insert("spark_n".into(), json!(slots.iter().map(|s| s.n).collect::<Vec<_>>()));
             out.push(Value::Object(row));
+            totals.add(&line.kind, &total, total.n as f64 / span);
         }
-        out
+        (out, totals)
     }
 
-    pub(crate) fn detail(&self, key: &str, tier: usize) -> Option<Value> {
+    pub(crate) fn detail(&self, key: &str, tier: usize, now: i64) -> Option<Value> {
         let line = self.lines.get(key)?;
         let pts = line.tiers.get(tier)?;
+        let (_, width, keep) = TIERS[tier];
+        let from = now - width * keep as i64;
+        let mut total = Agg::default();
+        for (_, a) in pts.iter().filter(|(t, _)| *t + width > from) {
+            total.merge(a);
+        }
         let col = |f: &dyn Fn(&Agg) -> Value| pts.iter().map(|(_, a)| f(a)).collect::<Vec<_>>();
         Some(json!({
             "key": key, "kind": line.kind, "method": line.method, "name": line.name, "src": line.src,
@@ -701,6 +762,8 @@ impl History {
             "p95": col(&|a| json!(a.quantile(0.95))),
             "p99": col(&|a| json!(a.quantile(0.99))),
             "max": col(&|a| json!((a.max_us > 0).then(|| ms(a.max_us as f64)))),
+            "sum": col(&|a| json!(crate::agent::round(a.sum_us as f64 / 1000.0, 3))),
+            "hist": total.hist(),
         }))
     }
 }
@@ -804,16 +867,51 @@ mod tests {
         let t = |n: u64, us: u64| Timing { kind: "http".into(), method: "GET".into(), name: "/a".into(), src: "api".into(), n, e5: 1, err: 1, sum_us: n * us, max_us: us, b: vec![(bucket(us) as u16, n)], ..Default::default() };
         h.add(1_000_020, &[t(10, 2000)]);
         h.add(1_000_080, &[t(30, 4000)]);
-        let rows = h.table(0, 1_000_090, "box");
+        let (rows, _) = h.table(0, 1_000_090, "box");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["n"], 40);
         assert_eq!(rows[0]["e5"], 2);
         assert_eq!(rows[0]["max"], 4.0);
+        assert_eq!(rows[0]["sum_ms"], 140.0);
         assert!(rows[0]["p50"].as_f64().unwrap() > 3.0);
-        let d = h.detail(rows[0]["key"].as_str().unwrap(), 0).unwrap();
+        let d = h.detail(rows[0]["key"].as_str().unwrap(), 0, 1_000_090).unwrap();
         assert_eq!(d["n"], json!([10, 30]));
+        assert_eq!(d["sum"], json!([20.0, 120.0]));
         h.add(1_000_000 + 8 * 86400, &[]);
         assert!(h.lines.is_empty());
+    }
+
+    #[test]
+    fn totals_merge_lines_and_boxes_per_kind() {
+        let t = |kind: &str, name: &str, n: u64, us: u64| Timing { kind: kind.into(), name: name.into(), src: "api".into(), n, sum_us: n * us, max_us: us, b: vec![(bucket(us) as u16, n)], ..Default::default() };
+        let mut h = History::default();
+        h.add(1_000_020, &[t("db", "SELECT ?", 90, 1000), t("db", "UPDATE t", 10, 50_000), t("redis", "GET", 5, 100)]);
+        let (rows, totals) = h.table(0, 1_000_030, "a");
+        let db = totals.rows(Some("a")).into_iter().find(|r| r["kind"] == "db").unwrap();
+        assert_eq!((db["target"].as_str(), db["n"].as_u64(), db["sum_ms"].as_f64()), (Some("a"), Some(100), Some(590.0)));
+        assert!(db["p50"].as_f64().unwrap() < 1.1 && db["p99"].as_f64().unwrap() > 45.0);
+        assert_eq!(db["max"], 50.0);
+        let mut all = Totals::default();
+        all.merge(&totals);
+        all.merge(&totals);
+        let both = all.rows(None);
+        assert_eq!(both.len(), 2);
+        assert_eq!(both.iter().find(|r| r["kind"] == "redis").unwrap()["n"], 10);
+        assert!(both.iter().all(|r| r["target"].is_null()));
+        let key = rows.iter().find(|r| r["name"] == "UPDATE t").unwrap()["key"].as_str().unwrap().to_owned();
+        let hist = h.detail(&key, 0, 1_000_030).unwrap()["hist"].clone();
+        let bars = hist.as_array().unwrap();
+        assert_eq!(bars.len(), 1);
+        let (lo, hi, c) = (bars[0][0].as_f64().unwrap(), bars[0][1].as_f64().unwrap(), bars[0][2].as_u64().unwrap());
+        assert!(lo <= 50.0 && 50.0 < hi && c == 10, "{bars:?}");
+    }
+
+    #[test]
+    fn bucket_bounds_hold_their_values() {
+        for us in [0u64, 5, 8, 9, 100, 1234, 999_999, 3_000_000_000] {
+            let (lo, hi) = bucket_bounds_us(bucket(us));
+            assert!(lo <= us && us < hi, "{us} in [{lo}, {hi})");
+        }
     }
 
     #[tokio::test]
