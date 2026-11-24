@@ -941,6 +941,7 @@ async fn main() {
 
     schema::ensure(&db).await.expect("schema");
     moderate::warn_if_keyless();
+    cf_purge::warn_if_off();
 
     if env::args().nth(1).as_deref() == Some("passwd") {
         let name = env::args().nth(2).unwrap_or_default();
