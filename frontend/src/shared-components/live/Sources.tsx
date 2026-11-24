@@ -498,7 +498,6 @@ export function Sources({ startStop = true }: { startStop?: boolean }) {
           <SourceList sources={sources} />
         )}
         <ModelControls onChange={() => setPicking(true)} />
-        <p className="px-3 py-2 text-xs text-textTertiary">drag a layer to move it, pull a corner to resize. arrow keys nudge, shift frees the shape</p>
         {status && (
           <p id="source-status" className="px-3 pb-2 text-xs text-textSecondary" aria-live="polite">
             {status}
