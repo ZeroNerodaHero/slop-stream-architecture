@@ -1,17 +1,3 @@
-//! Cloudflare Turnstile: a human check on signup and login. See docs/cloudflare-turnstile.md.
-//!
-//! The page draws Cloudflare's widget with the public site key (`GET /api/config/turnstile`),
-//! and the widget hands it a single-use token. The page sends it as `turnstile_token` with the
-//! signup, the login or the oauth name pick, and `verify` asks Cloudflare's siteverify about it
-//! with the secret before the route does anything expensive (argon2, the rate limit counters).
-//!
-//! Config is the environment, read once at boot (`Config::from_env`): on only when
-//! TURNSTILE_ENABLED is `true` or `1` and both TURNSTILE_SECRET and TURNSTILE_SITE_KEY are set.
-//! The flag on with a key missing is logged as an error and stays off; nothing crashes.
-//!
-//! Fails closed: while on, a token Cloudflare could not be asked about (a network error, a
-//! non-2xx, an answer that does not parse) is refused like a bad one.
-
 use std::time::Duration;
 
 use axum::extract::State;
@@ -24,13 +10,11 @@ use serde_json::{json, Value};
 use crate::{ApiError, AppState};
 
 const SITEVERIFY_URL: &str = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
-/// Cloudflare's tokens are at most 2048 characters; anything longer is not one.
 const MAX_TOKEN_CHARS: usize = 2048;
 const SITEVERIFY_TIMEOUT: Duration = Duration::from_secs(10);
 const MISSING: &str = "human check missing. try again";
 const FAILED: &str = "human check failed. try again";
 
-/// What the environment turned on. `keys` is None while off.
 #[derive(Clone, Default)]
 pub(crate) struct Config {
     keys: Option<Keys>,
@@ -72,18 +56,15 @@ impl Config {
         self.keys.is_some()
     }
 
-    /// What the pages may know: whether it is on, and the site key. Never the secret.
     fn public(&self) -> Value {
         json!({ "enabled": self.enabled(), "siteKey": self.keys.as_ref().map(|k| k.site_key.as_str()) })
     }
 }
 
-/// A token worth sending to Cloudflare: there, not blank, not longer than one can be.
 fn usable_token(token: Option<&str>) -> Option<&str> {
     token.map(str::trim).filter(|t| !t.is_empty() && t.len() <= MAX_TOKEN_CHARS)
 }
 
-/// The part of siteverify's answer that matters: `success` true, and nothing else counts.
 #[derive(Deserialize)]
 struct Answer {
     success: bool,
@@ -91,7 +72,6 @@ struct Answer {
     error_codes: Vec<String>,
 }
 
-/// Siteverify's body, read. Err for a body that is not its json.
 fn passed(body: &str) -> Result<bool, String> {
     let answer: Answer = serde_json::from_str(body).map_err(|e| e.to_string())?;
     if !answer.success {
@@ -100,15 +80,12 @@ fn passed(body: &str) -> Result<bool, String> {
     Ok(answer.success)
 }
 
-/// The human check, before anything expensive. Ok at once while off. `ip` is `client_ip`'s;
-/// `?` (not known) is left out of the ask.
 pub(crate) async fn verify(s: &AppState, token: Option<&str>, ip: &str) -> Result<(), ApiError> {
     let Some(keys) = &s.turnstile.keys else { return Ok(()) };
     let Some(token) = usable_token(token) else {
         return Err(ApiError::new(StatusCode::FORBIDDEN, MISSING));
     };
     let failed = || ApiError::new(StatusCode::FORBIDDEN, FAILED);
-    // its own scope: the serializer is not Send, so it must be gone before the await
     let form = {
         let mut form = url::form_urlencoded::Serializer::new(String::new());
         form.append_pair("secret", &keys.secret).append_pair("response", token);
@@ -147,7 +124,6 @@ pub(crate) async fn verify(s: &AppState, token: Option<&str>, ip: &str) -> Resul
     }
 }
 
-/// `GET /api/config/turnstile`: `{ enabled, siteKey }` for the widget. Public.
 async fn public_config(State(s): State<AppState>) -> Json<Value> {
     Json(s.turnstile.public())
 }

@@ -1,23 +1,3 @@
-//! Stream analytics, the first version (docs/analytics.md): what a streamer's streams did, for
-//! that streamer's eyes alone. Three tables (migration 0014): `stream_sessions` (one per stream
-//! an account made, the `sessions` row's id), `viewer_samples` (the viewer count once a minute)
-//! and `watch_sessions` (one stretch of one viewer watching). Nothing here deletes.
-//!
-//! Writes:
-//! - go-live opens the stream's row (`open`); every way a stream ends reaches it through the
-//!   `sessions` row (`sync`, each minute and at boot, and `ended` from stop at once).
-//! - `sampler`: once a minute, on the minute, video's `/viewers` (the same call home.rs heals its
-//!   table from) is written for every open stream. Two api processes write the same minute once.
-//! - video's `POST /api/streams/:name/viewers` raises `peak_viewers` (`peak`): finer than a sample.
-//! - `POST /api/streams/:name/watching`: the watch page's beat, every minute while the video
-//!   plays and once on leaving. A login counts as its id, anyone else as the random id their
-//!   browser keeps (`?anon=`). Nothing checks that id yet: a script can make up viewers here,
-//!   it cannot touch the viewer counts, which are video's.
-//!
-//! Reads: `GET /api/stats?days=7|30` and `GET /api/stats/streams/:id`, the logged-in account's
-//! own streams and nobody else's. Nobody logged in gets a 401: a stream with no account is not
-//! recorded at all, so there is nothing to show and nobody it could be shown to.
-
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -35,15 +15,10 @@ use uuid::Uuid;
 use crate::auth::Me;
 use crate::{video_viewers, ApiError, ApiResult, AppState, Name};
 
-/// A watch stretch whose last beat is older than this is over: the next beat starts a new one.
-/// The page beats every 60s, so two missed beats and a little.
 const WATCH_GAP_SECS: f64 = 150.0;
-/// The most streams the list of a range answers, newest first.
 const LIST_LIMIT: i64 = 50;
-/// The ranges a summary is asked for.
 const DAYS: [i64; 2] = [7, 30];
 
-/// The stream's row, at go-live, when an account went live (a free name's stream is nobody's to read).
 pub(crate) async fn open(db: &PgPool, session: i64) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO stream_sessions (id, streamer, started_at)
@@ -56,7 +31,6 @@ pub(crate) async fn open(db: &PgPool, session: i64) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-/// The stream ended (stop): its end, from its `sessions` row, at once rather than at the next sync.
 pub(crate) async fn ended(db: &PgPool, session: i64) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE stream_sessions ss SET ended_at = s.ended_at FROM sessions s
@@ -68,7 +42,6 @@ pub(crate) async fn ended(db: &PgPool, session: i64) -> Result<(), sqlx::Error> 
     Ok(())
 }
 
-/// Video's count moved: the peak, when it is a new one. A write only then.
 pub(crate) async fn peak(db: &PgPool, session: i64, viewers: usize) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE stream_sessions SET peak_viewers = $2 WHERE id = $1 AND ended_at IS NULL AND peak_viewers < $2")
         .bind(session)
@@ -82,10 +55,6 @@ fn clamp(viewers: usize) -> i32 {
     i32::try_from(viewers).unwrap_or(i32::MAX)
 }
 
-/// The rows put right with `sessions`, which is the truth for when a stream ran: an account's
-/// open stream with no row yet gets one (a go-live an older api took during a deploy), and an
-/// open row whose stream has ended takes its end (stop, video's word, the sweeper, a go-live that
-/// ended a stale one; any of them while this process was down). Returns how many rows it ended.
 pub(crate) async fn sync(db: &PgPool) -> Result<u64, sqlx::Error> {
     sqlx::query(
         "INSERT INTO stream_sessions (id, streamer, started_at)
@@ -103,8 +72,6 @@ pub(crate) async fn sync(db: &PgPool) -> Result<u64, sqlx::Error> {
     Ok(ended.rows_affected())
 }
 
-/// One sample per open stream that video has a count for, at the minute `at` falls in. A stream
-/// video does not list (seconds old, or gone and not ended yet) gets none for this minute.
 pub(crate) async fn sample(db: &PgPool, counts: &HashMap<String, usize>, at: DateTime<Utc>) -> Result<u64, sqlx::Error> {
     if counts.is_empty() {
         return Ok(0);
@@ -124,7 +91,6 @@ pub(crate) async fn sample(db: &PgPool, counts: &HashMap<String, usize>, at: Dat
     .bind(at)
     .execute(db)
     .await?;
-    // a sample above the peak (a count video never pushed: the api was down when it moved)
     sqlx::query(
         "UPDATE stream_sessions ss SET peak_viewers = v.viewers FROM viewer_samples v
          WHERE ss.ended_at IS NULL AND v.session_id = ss.id AND v.ts = date_trunc('minute', $1::timestamptz) AND v.viewers > ss.peak_viewers",
@@ -135,8 +101,6 @@ pub(crate) async fn sample(db: &PgPool, counts: &HashMap<String, usize>, at: Dat
     Ok(wrote.rows_affected())
 }
 
-/// The once-a-minute loop: sync at boot (whatever ended while this was down), then on every
-/// minute sync and sample. Video unreachable: that minute has no samples, nothing is guessed.
 pub(crate) async fn sampler(s: AppState) {
     match sync(&s.db).await {
         Ok(0) => {}
@@ -144,7 +108,6 @@ pub(crate) async fn sampler(s: AppState) {
         Err(e) => log::warn!("analytics sync: {e}"),
     }
     loop {
-        // a second past the next minute, so each minute's sample is in that minute whatever the drift
         let now = Utc::now();
         let into = now.timestamp().rem_euclid(60) as u64;
         tokio::time::sleep(Duration::from_secs(61 - into)).await;
@@ -159,17 +122,12 @@ pub(crate) async fn sampler(s: AppState) {
     }
 }
 
-/// Who is watching: a login, or a browser's anonymous id.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Viewer {
     pub(crate) id: Uuid,
     pub(crate) anon: bool,
 }
 
-/// One beat of the watch page for the name's open stream: the viewer's stretch goes on to now,
-/// or a new one starts when the last beat is past `WATCH_GAP_SECS` (a second tab of the same
-/// viewer goes on the same stretch). `leave` ends the stretch now and never starts one. Nothing
-/// for a name with no open stream, nor for the streamer watching themselves. True when written.
 pub(crate) async fn beat(db: &PgPool, name: &str, viewer: Viewer, leave: bool) -> Result<bool, sqlx::Error> {
     let stream: Option<(i64, Uuid)> = sqlx::query_as(
         "SELECT ss.id, ss.streamer FROM stream_sessions ss JOIN sessions s ON s.id = ss.id
@@ -211,7 +169,6 @@ pub(crate) async fn beat(db: &PgPool, name: &str, viewer: Viewer, leave: bool) -
     Ok(started.rows_affected() > 0)
 }
 
-/// `?anon=<uuid>&leave=1`. `anon` is ignored for a login.
 #[derive(Deserialize)]
 struct WatchingQuery {
     anon: Option<String>,
@@ -230,16 +187,12 @@ async fn watching(State(s): State<AppState>, Name(name): Name, me: Me, q: Result
     Ok(Json(json!({ "ok": true, "counted": counted })))
 }
 
-/// The login asking, or the words a page shows a guest instead of stats.
 fn owner(me: &Me) -> Result<Uuid, ApiError> {
     me.0.as_ref().map(|a| a.id).ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "make an account to see your stream stats"))
 }
 
-/// id, name, started_at, ended_at, peak, avg, watch seconds, unique viewers
 type StreamRow = (i64, String, DateTime<Utc>, Option<DateTime<Utc>>, i32, Option<f64>, f64, i64);
 
-/// A stream's numbers, as the list and the detail both carry them. The peak is the higher of
-/// video's pushes and the samples; the average is the samples'.
 const STREAM_COLUMNS: &str = "SELECT ss.id, s.name, ss.started_at, ss.ended_at,
        GREATEST(ss.peak_viewers, COALESCE(v.peak, 0)), v.avg, COALESCE(w.secs, 0), COALESCE(w.uniq, 0)
      FROM stream_sessions ss
@@ -258,10 +211,6 @@ fn stream_json(r: &StreamRow, now: DateTime<Utc>) -> Value {
     })
 }
 
-/// One stream in full: the list's numbers, the graph's points (`[unix ms, viewers]`, oldest
-/// first), who watched split into logins and anonymous browsers, the follows the account got
-/// while it was live (and still has), and its chat, the lines kept (CHAT_PERSIST) from anyone
-/// but the streamer.
 async fn stream_detail(db: &PgPool, streamer: Uuid, id: i64) -> Result<Option<Value>, sqlx::Error> {
     let row: Option<StreamRow> = sqlx::query_as(&format!("{STREAM_COLUMNS} WHERE ss.id = $1 AND ss.streamer = $2"))
         .bind(id)
@@ -289,7 +238,6 @@ async fn stream_detail(db: &PgPool, streamer: Uuid, id: i64) -> Result<Option<Va
         .bind(until)
         .fetch_one(db)
         .await?;
-    // the stream's room is its name as it was then (chat.rs `room_key` without the prefix)
     let (lines, chatters): (i64, i64) = sqlx::query_as(
         "SELECT count(*), count(DISTINCT COALESCE(user_id::text, speaker)) FROM chat_lines
          WHERE room = $1 AND at >= $2 AND at < $3 AND NOT streamer",
@@ -310,12 +258,8 @@ async fn stream_detail(db: &PgPool, streamer: Uuid, id: i64) -> Result<Option<Va
     Ok(Some(out))
 }
 
-/// streams, live seconds, avg, peak, watch seconds, unique viewers
 type SummaryRow = (i64, f64, Option<f64>, Option<i32>, f64, i64);
 
-/// The last `days` together: every stream started in them, the average of all their samples (so
-/// a long stream weighs more than a short one), the highest peak, the watch time, the different
-/// viewers across all of them, and the follows the account got in the range, live or not.
 async fn summary(db: &PgPool, streamer: Uuid, days: i64) -> Result<Value, sqlx::Error> {
     let since = Utc::now() - chrono::Duration::days(days);
     let (streams, live_secs, avg, peak, watch_secs, unique): SummaryRow = sqlx::query_as(
@@ -348,8 +292,6 @@ struct StatsQuery {
     days: Option<i64>,
 }
 
-/// The stats tab: the range's summary and its streams (newest first, at most LIST_LIMIT), and the
-/// last stream in full, whenever it was (null for an account that never went live).
 async fn stats(State(s): State<AppState>, me: Me, q: Result<Query<StatsQuery>, QueryRejection>) -> ApiResult {
     let streamer = owner(&me)?;
     let Query(q) = q?;
@@ -382,7 +324,6 @@ async fn stats(State(s): State<AppState>, me: Me, q: Result<Query<StatsQuery>, Q
     })))
 }
 
-/// One stream in full, the account's own: anyone else's (or none) is a 404, the same answer.
 async fn stream(State(s): State<AppState>, me: Me, Path(id): Path<i64>) -> ApiResult {
     let streamer = owner(&me)?;
     match stream_detail(&s.db, streamer, id).await? {
@@ -429,7 +370,6 @@ mod tests {
         Utc.with_ymd_and_hms(2026, 11, 23, 20, minute, second).unwrap()
     }
 
-    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored analytics` against a throwaway postgres (see auth.rs's `test_db`).
     #[tokio::test]
     #[ignore]
     async fn analytics_a_stream_is_opened_sampled_once_a_minute_and_closed_by_its_session() {
@@ -439,28 +379,22 @@ mod tests {
         let free = format!("ana1free-{run}");
         let user = row(&pool, &name, Some("hash")).await;
         let id = go_live(&pool, &name, Some(user)).await;
-        // a free name's stream is nobody's to read: no row, so no samples either
         let anon = go_live(&pool, &free, None).await;
         let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM stream_sessions WHERE id = ANY($1)").bind(vec![id, anon]).fetch_one(&pool).await.unwrap();
         assert_eq!(rows, 1);
 
         let counts = HashMap::from([(name.clone(), 3usize), (free.clone(), 9)]);
         assert_eq!(sample(&pool, &counts, at(1, 1)).await.unwrap(), 1);
-        // a second process, or a second tick in the same minute, writes nothing more
         assert_eq!(sample(&pool, &HashMap::from([(name.clone(), 5usize)]), at(1, 40)).await.unwrap(), 0);
         sample(&pool, &HashMap::from([(name.clone(), 7usize)]), at(2, 1)).await.unwrap();
-        // video does not list it this minute: no sample, not a zero
         sample(&pool, &HashMap::from([("someone-else".to_string(), 1usize)]), at(3, 1)).await.unwrap();
         assert_eq!(samples(&pool, id).await, vec![3, 7]);
 
-        // video pushed 12 between samples: the peak keeps it, a lower push does not lower it
         peak(&pool, id, 12).await.unwrap();
         peak(&pool, id, 4).await.unwrap();
         let p: i32 = sqlx::query_scalar("SELECT peak_viewers FROM stream_sessions WHERE id = $1").bind(id).fetch_one(&pool).await.unwrap();
         assert_eq!(p, 12);
 
-        // the sweeper (or anything else) ends the session: sync carries the end over, and an
-        // ended stream gets no more samples
         end(&pool, id).await;
         assert!(sync(&pool).await.unwrap() >= 1);
         let (ended, session_end): (Option<DateTime<Utc>>, Option<DateTime<Utc>>) =
@@ -475,8 +409,6 @@ mod tests {
         assert_eq!(samples(&pool, id).await, vec![3, 7]);
     }
 
-    /// An api that was down: a go-live it never saw gets its row at the next sync, and one that
-    /// ended meanwhile gets its end.
     #[tokio::test]
     #[ignore]
     async fn analytics_sync_heals_what_happened_while_the_api_was_down() {
@@ -484,7 +416,6 @@ mod tests {
         let run = std::process::id();
         let name = format!("ana2-{run}");
         let user = row(&pool, &name, Some("hash")).await;
-        // an older api's go-live: the session, no stream row
         let unseen: i64 = sqlx::query_scalar("INSERT INTO sessions (name, verified, user_id) VALUES ($1, true, $2) RETURNING id")
             .bind(&name)
             .bind(user)
@@ -498,7 +429,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(open_rows, 1);
-        // stop while the process was down: `ended` or the next sync closes it, either is enough
         end(&pool, unseen).await;
         ended(&pool, unseen).await.unwrap();
         sync(&pool).await.unwrap();
@@ -521,25 +451,21 @@ mod tests {
         let fan = row(&pool, &fan_name, Some("hash")).await;
         let stranger = Viewer { id: Uuid::from_u128(rand::random()), anon: true };
 
-        // not live: nothing written
         assert!(!beat(&pool, &name, stranger, false).await.unwrap());
         let id = go_live(&pool, &name, Some(streamer)).await;
 
         assert!(beat(&pool, &name, stranger, false).await.unwrap());
         assert!(beat(&pool, &name, stranger, false).await.unwrap(), "the next beat goes on the same stretch");
         assert!(beat(&pool, &name, Viewer { id: fan, anon: false }, false).await.unwrap());
-        // the streamer on their own page is not a viewer
         assert!(!beat(&pool, &name, Viewer { id: streamer, anon: false }, false).await.unwrap());
         let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM watch_sessions WHERE session_id = $1").bind(id).fetch_one(&pool).await.unwrap();
         assert_eq!(rows, 2);
 
-        // a stretch whose last beat is long gone (a closed lid): the next beat starts another
         sqlx::query("UPDATE watch_sessions SET joined_at = joined_at - interval '20 minutes', left_at = left_at - interval '10 minutes' WHERE viewer = $1")
             .bind(stranger.id)
             .execute(&pool)
             .await
             .unwrap();
-        // a leave never starts one
         assert!(!beat(&pool, &name, stranger, true).await.unwrap());
         assert!(beat(&pool, &name, stranger, false).await.unwrap());
         let theirs: i64 = sqlx::query_scalar("SELECT count(*) FROM watch_sessions WHERE session_id = $1 AND viewer = $2")
@@ -550,7 +476,6 @@ mod tests {
             .unwrap();
         assert_eq!(theirs, 2);
 
-        // the stats: two different viewers, one login and one browser, ten minutes watched and some
         let detail = stream_detail(&pool, streamer, id).await.unwrap().expect("their stream");
         assert_eq!(detail["unique_viewers"], 2);
         assert_eq!(detail["account_viewers"], 1);
@@ -572,12 +497,10 @@ mod tests {
         sample(&pool, &HashMap::from([(name.clone(), 4usize)]), Utc::now()).await.unwrap();
         sqlx::query("INSERT INTO follows (follower_id, followed_id) VALUES ($1, $2)").bind(other).bind(streamer).execute(&pool).await.unwrap();
 
-        // nobody logged in: refused, with the words the tab shows
         let err = owner(&Me(None)).expect_err("a guest");
         assert_eq!(axum::response::IntoResponse::into_response(err).status(), StatusCode::UNAUTHORIZED);
         assert_eq!(owner(&Me(Some(Account { id: streamer, name: name.clone() }))).unwrap(), streamer);
 
-        // someone else's stream is not there for them
         assert!(stream_detail(&pool, other, id).await.unwrap().is_none());
         let mine = stream_detail(&pool, streamer, id).await.unwrap().expect("my stream");
         assert_eq!(mine["points"].as_array().unwrap().len(), 1);

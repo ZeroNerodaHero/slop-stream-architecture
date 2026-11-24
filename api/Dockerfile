@@ -1,5 +1,3 @@
-# build context is the repo root (compose: context: ., dockerfile: api/Dockerfile)
-
 FROM rust:1-bookworm AS build
 ARG CARGO_BUILD_JOBS=1
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} \
@@ -22,16 +20,11 @@ RUN touch api/src/main.rs \
  && cargo build --release --locked -p api
 
 FROM debian:bookworm-slim
-# ffmpeg and ffprobe: a chat video's real length and codecs, its metadata-free copy and its poster
-# (chat_videos.rs). debian's build, with libx264 for the copy's fallback
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg \
  && rm -rf /var/lib/apt/lists/*
-# /data is for `api monitor` (its one json file). owned by app here, so the named volume
-# compose mounts there starts out writable by it
 RUN useradd -r -u 10001 -s /usr/sbin/nologin app && mkdir /data && chown app:app /data
 COPY --from=build /src/target/release/api /usr/local/bin/api
-# the commit this was built from, reported by /api/health. set by deploy.sh; "dev" by hand.
 ARG BUILD=dev
 ENV BUILD=${BUILD}
 USER app
