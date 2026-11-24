@@ -34,6 +34,7 @@ import {
 import { useAtom, useAtomValue } from 'jotai';
 import {
   Fragment,
+  memo,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -1639,7 +1640,7 @@ function ChannelDialog({
 
 const PEEK_MS = 200;
 
-function Member({ member, live, ownerRole, flat }: { member: GroupMember; live: boolean; ownerRole: string; flat: boolean }) {
+const Member = memo(function Member({ member, live, ownerRole, flat }: { member: GroupMember; live: boolean; ownerRole: string; flat: boolean }) {
   const presence = useAtomValue(presenceOfAtom(member.name));
   const peek = usePeek(PEEK_MS);
   const actions = useCardMod(member.name, peek.close);
@@ -1706,7 +1707,7 @@ function Member({ member, live, ownerRole, flat }: { member: GroupMember; live: 
       )}
     </li>
   );
-}
+});
 
 function rosterQuery(query: string): string {
   return query
