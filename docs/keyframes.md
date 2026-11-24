@@ -10,22 +10,42 @@ every request goes through `Hub::request_keyframe` (`video/src/main.rs`), per sl
 
 | reason | when | its rule |
 |---|---|---|
-| `Join` | a watcher's peer reaches `Connected`; one request per video slot | below |
+| `Join` | a watcher's ICE reaches `Connected` (the early ask); one per video slot it watches | below |
+| `Backup` | a watcher's peer reaches `Connected` (ICE and DTLS done); one per video slot it watches, with the slot's keyframe count at that moment | below |
 | `Lost` | a watcher sent a PLI or FIR (lost the picture) | none within `KEYFRAME_GAP`, 1.5s, of any request |
 | `Thumb` | the thumbnail's ffmpeg has no picture (`thumbs.rs`) | none within `FORCED_KEYFRAME_GAP`, 300ms, of any request |
 | `Trailing` | the one extra request a burst of joins scheduled | below |
 
-## a join
+## when a watcher asks
+
+a keyframe is no use to a watcher until its SRTP is up. webrtc-rs binds the watcher to the slot's track when it sets the answer, but every packet written to it before DTLS finishes is dropped (`SrtpWriterFuture::write_rtp` returns 0 until SRTP is ready). SRTP comes up just before the peer turns `Connected`. on prod the answer to `Connected` is ~400ms, and `Connected` to the first frame was ~0.5s when the only ask was at `Connected`.
+
+so each watcher asks at most twice per slot, once each:
+
+1. **early, at ICE connected** (`on_ice_connection_state_change`, `Connected` or `Completed`). ICE is done and only the DTLS handshake is left, ~one or two watcher round trips. the keyframe takes a publisher round trip plus the encode, about as long, so it often lands just after SRTP is up and the watcher has a picture one handshake sooner than before.
+2. **backup, at peer `Connected`**. it carries the slot's keyframe count read the moment the peer connected. it asks unless a keyframe is still to come:
+   - a keyframe was forwarded since this watcher connected (the count moved): skip, the watcher has it.
+   - a request is on its way (under `KEYFRAME_IN_FLIGHT`, 500ms, and nothing forwarded since): skip, it lands after `Connected`.
+   - otherwise the early keyframe (or someone else's) went by before SRTP was up: ask again, by the join rules below.
+
+**not at answer time.** an ask when the answer goes out lands a publisher round trip later (tens of ms) while the watcher still has ~400ms of ICE and DTLS to go: it would be dropped for that watcher nearly every time. it would also open the 300ms gap below and push the useful ask back. so nothing asks at answer time.
+
+## the join rules
 
 the slot counts the keyframes it forwards (`is_vp8_keyframe` in `media.rs`, on the first packet of partition 0, read in the publish loop, one atomic add). each request notes the count. so `KeyframeAsks::decide` knows whether a keyframe is **on its way** (a request under `KEYFRAME_IN_FLIGHT`, 500ms, old, and nothing forwarded since) or **gone** (one was forwarded since).
 
-1. a keyframe on its way: skip. the joiner's peer is bound before it lands, so it gets that one.
-2. no join asked in the last 300ms: this is the first join of a burst. ask now, whatever else asked lately. a watcher's loss or the thumbnail may have been answered before this peer existed, and that keyframe is no use to it.
-3. a join asked within 300ms, and its keyframe is gone: this joiner may have connected after it passed. schedule **one** trailing request at the end of the 300ms gap, shared by every join until then. when it fires it is skipped if a join asked since or a keyframe is on its way again.
+`Join` (early) and `Backup` share these, after the backup's own check above:
 
-so join requests stay at one per 300ms per slot (3.3 keyframes/s under any join rate, the bound before this), and no join waits out the 1.5s `KEYFRAME_GAP` for its browser's own PLI. before, a join inside 300ms of any request was dropped: the second wave of a go-live push (the `live` event makes every waiting watcher connect at once) often connected just after the first wave's keyframe went by and sat ~1.5s on a black picture. now it waits at most the rest of the gap plus one round trip to the publisher.
+1. a keyframe on its way: skip.
+2. no join-type request (`Join`, `Backup` or `Trailing`) in the last 300ms: this opens a gap. ask now, whatever else asked lately. a watcher's loss or the thumbnail may have been answered before this peer existed, and that keyframe is no use to it.
+3. a gap opened by an early `Join` gives **one re-ask**: the first backup in that gap that still needs a keyframe asks at once. this is the single-viewer case (its own early keyframe went by before its DTLS finished), and it waits for nothing. a gap opened by a backup or a trailing request gives none: its keyframe was asked for a watcher already connected.
+4. otherwise (a join-type request within 300ms, its keyframe gone, the re-ask spent or not given): schedule **one** trailing request at the end of the gap, shared by every join until then. when it fires it is skipped if a join asked since or a keyframe is on its way again. a backup that finds the trailing request already scheduled skips: it fires after this watcher connected.
 
-a request unanswered after 500ms is taken as lost (RTCP has no retransmission), and the next join asks again.
+so per slot, join-type requests are one opening each 300ms, at most one re-ask inside a gap an early ask opened, and the single trailing request (which opens the next gap). under a steady burst the trailing requests usually open the gaps and give no re-asks, so it stays near one per 300ms (3.3 keyframes/s), the bound before this. a watcher's backup never waits longer than the rest of one gap plus a publisher round trip, the same worst case as the single ask at `Connected` had, and no join waits out the 1.5s `KEYFRAME_GAP` for its browser's own PLI. before, a join inside 300ms of any request was dropped: the second wave of a go-live push (the `live` event makes every waiting watcher connect at once) often connected just after the first wave's keyframe went by and sat ~1.5s on a black picture. now it waits at most the rest of the gap plus one round trip to the publisher.
+
+a request unanswered after 500ms is taken as lost (RTCP has no retransmission), and the next join or backup asks again.
+
+the tests beside `KeyframeAsks` in `main.rs` pin these: a backup asking again when the early keyframe went before connect, skipping one on its way or one forwarded after connect, one re-ask per early gap, and a burst of watchers (one ICE-connected every 10ms, connected 120ms later) staying within two requests per 300ms with every watcher getting a keyframe within 360ms of connecting.
 
 ## a publisher that cannot be asked
 
