@@ -1,6 +1,6 @@
 # api/ source: accounts, storage, limits, ops
 
-the header comment of each file below and the doc comment of each top-level item, plus the notes from `api/Cargo.toml`, `api/Dockerfile`, `api/schema.sql` and `api/src/monitor.html`, moved here when the source lost its comments (`.cursor/rules/no-comments.mdc`). the code is the truth; these say what a piece was written for at the time of the move, so check a detail against the code before trusting it. the realtime and social modules are in `api-source-realtime.md`. the files #180 and #182 touch still carry their own comments.
+the header comment of each file below and the doc comment of each top-level item, plus the notes from `api/Cargo.toml`, `api/Dockerfile`, `api/schema.sql` and `api/src/monitor.html`, moved here when the source lost its comments (`.cursor/rules/no-comments.mdc`). the code is the truth; these say what a piece was written for at the time of the move, so check a detail against the code before trusting it. the realtime and social modules are in `api-source-realtime.md`. chat, groups, profiles, media, voice and boot are in `api-source-chat-groups.md`.
 
 ## `api/src/analytics.rs`
 

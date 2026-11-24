@@ -1,6 +1,6 @@
 # video/ source
 
-the header comment of each file in `video/src` and the doc comment of each top-level item, plus the notes from video's Dockerfiles and Cargo.toml, moved here when the source lost its comments (`.cursor/rules/no-comments.mdc`). the code is the truth; these say what a piece was written for at the time of the move, so check a detail against the code before trusting it. `video/src/voice.rs` was left out of that sweep (#182 touches it) and still carries its own.
+the header comment of each file in `video/src` and the doc comment of each top-level item, plus the notes from video's Dockerfiles and Cargo.toml, moved here when the source lost its comments (`.cursor/rules/no-comments.mdc`). the code is the truth; these say what a piece was written for at the time of the move, so check a detail against the code before trusting it.
 
 ## `video/src/dummy.rs`
 
@@ -332,6 +332,159 @@ room's files go with the room; at start there are no rooms, so anything here is 
 and would otherwise be served as live the moment that name went live again.
 
 `pub async fn ffmpeg_present`: Is there an ffmpeg to run? Checked once at startup.
+
+## `video/src/voice.rs`
+
+`video voice`: a small voice sfu, same binary. who may talk where is the api's word: a page
+brings a grant from `POST /api/groups/:group/voice/:channel/join`, and we redeem it once with
+the api (`POST /api/voice/redeem`, X-Voice-Secret) for the person and the room. the room and
+the name come from that reply, never from the page.
+
+websocket on :7881/ws (VOICE_WS_PORT), media on one udp port, 7883 (VOICE_UDP_PORT).
+`GET /health` on the same port says {ok, rooms, peers}. the first frame, within 10s:
+  {"role":"voice","grant":"<64 hex>","sdp":"<offer>"}
+the offer's audio: m-line 0 is your mic and must send, the other audio ones (15 at most)
+are recvonly and are where you hear the others. it may have video m-lines too (see video,
+below). we answer {"sdp":"<answer>"} or {"error":"..."}, then send
+  {"event":"seats","seats":[{"seat":0,"user":"a","line":1,"mute":false,"deaf":false,"video":[]},...]}
+right after the answer and on every join and leave. a grant the api turns down (used,
+older than 30s, no longer yours to use) is "bad grant"; an api that does not answer within
+1.5s is "api unreachable".
+
+env: API_URL (http://api:4000) and VOICE_SECRET, the api's own. with VOICE_SECRET unset or
+empty no grant can be redeemed, and every join is "voice is not open". VOICE_DEV_OPEN=1 is
+for the spike (test/voice-spike.js): it also takes the old frame,
+  {"role":"voice","room":"<server>/<channel>","user":"<name>","sdp":"<offer>"}
+from anyone, and those joins are never told to the api.
+
+a room has 16 seats and each person takes the lowest free one. your own seat is not
+in the list and has no m-line: seat N is heard on m-line N+1 if N is below your seat
+and on m-line N if it is above (`line` says which, so a page need not work it out).
+joins and leaves only swap the track behind those m-lines (replace_track), so nobody
+renegotiates. an empty seat's m-line gets an idle track nobody writes to: webrtc-rs
+cannot put a track back on a sender once it was replaced with none.
+
+video: a seat shows at most a camera and a screen, two tracks of its own (`camera<id>` and
+`screen<id>`, stream `seat<id>`), VP8 only. the page is always the one that offers, so
+there is no glare: after the answer it may send a new offer at any time,
+  {"sdp":"<offer>","video":{"<mid>":"camera","<mid>":"screen"}}
+(the join frame may carry `video` too), and gets {"sdp":"<answer>"} back. `video` names the
+page's own sending video m-lines; a sending one it does not name is "bad offer", and the audio
+m-lines must stay as they were. what sends is what shows: a camera line that goes inactive is
+the camera off. the page's recvonly video m-lines are where it sees the others, at most 30:
+each seat's `video` in the seats frame lists what it shows, `[{"kind":"camera","mid":"17"}]`,
+the mid that carries it, or null while the page has no free video m-line for it (it adds
+one and offers again). like the audio, a line only swaps tracks; a line given a new picture
+asks its sender for a keyframe (a PLI), and a viewer's own PLI or FIR is passed on the same
+way, at most one per KEYFRAME_GAP per track. the page also says
+  {"state":{"mute":true,"deaf":false}}
+for the others' tiles, the seats frame's `mute` and `deaf`. those are the page's own word:
+they carry nothing about what is sent.
+
+`const MAX_SDP_BYTES`: sixteen audio and 32 video m-lines, VP8 alone on the video ones
+
+`const MAX_VIDEO_LINES`: a camera and a screen sending, and the others' 15 of each to see
+
+`const KEYFRAME_GAP`: keyframe requests to one track's sender, at most one per this
+
+`const API_TIMEOUT`: how long any one call to the api may take, as the stream's (main.rs)
+
+`const BEAT_EVERY`: how often everyone seated is told to the api, a third of its sweep's 45s
+
+`const PING_EVERY`: a ping on the socket this often, as the api's chat and events (api/src/socket.rs): a call's
+socket can say nothing for an hour, and a nat or a proxy between forgets an idle connection.
+one that sent nothing back (pong, text, anything) for IDLE_LIMIT is gone
+
+`const SEND_TIMEOUT`: a frame that cannot be written in this long is a page that stopped reading: the call ends
+rather than wait in the write, deaf to the kick and the peer's end, for as long as tcp keeps it
+
+`struct Api`: the api's internal voice routes. no Debug, so the secret cannot end up in a log line.
+
+`struct Redeemed`: what a redeemed grant stands for, the api's reply
+
+`struct Presence`: a granted person, as the api knows them: what `attached` and `left` say
+
+`type Snapshot`: who sits where, as every peer of the room sees it
+
+`enum Kind`: a camera or a screen
+
+`struct Show`: what a seat shows. the tracks and their keyframe bells are the seat's for its whole stay;
+`on` says which of them its page is sending now
+
+`fn same`: whether two strings are the same, in a time that says nothing about where they differ (the
+length aside): every byte is looked at, with no early way out
+
+`fn inside`: the gate on `/internal/voice`, the api's voice.rs `inside`: 404 for anything caddy passed (it
+always sets X-Forwarded-For), 503 with no secret, 403 for a wrong or missing X-Voice-Secret
+
+`struct Seats`: the seats of a room. each comer takes the lowest free one.
+
+`fn line_of`: the m-line that carries `seat` to the person in `own`: theirs is skipped, and
+m-line 0 is their mic
+
+`struct Join`: the first frame as it comes. `room` and `user` are the dev-open frame's.
+
+`enum Claim`: who a join says it is: a grant to redeem, or (dev-open only) a room and a name
+
+`fn read_join`: the first frame read, with `open` (VOICE_DEV_OPEN=1) and `granting` (a secret to redeem
+with). a grant wins over a room and name in the same frame. Err is the word for the page.
+
+`fn valid_grant`: the shape of what join hands out: 32 bytes as hex. anything else is not worth a call.
+
+`fn read_labels`: the `video` the join frame and every later offer may carry: the page's sending video m-lines
+by mid, each `camera` or `screen`
+
+`fn sending_kinds`: which kind each sending video section is, from the page's labels: every one named, each
+kind at most once. None is a bad offer.
+
+`struct Said`: what the page says after the join: a new offer, or its own mute and deafen
+
+`struct Shown`: one picture a seat shows, and the mid that carries it to this page (None: no line free yet)
+
+`async fn moderate`: `POST /internal/voice {action, user_id, server}`: a moderator's word, from the api (the
+module's head). → {"seats": n}; 400 for a body that does not read.
+
+`struct Held`: a seat and an address slot, given back on drop however the socket ends
+
+`enum Media`: what an m= section carries
+
+`struct Section`: one m= section of an offer, as far as voice cares
+
+`fn check_offer`: the offer's sections if voice can take it: at most 128 KB, every section with a mid, the
+first one a sending audio one, 1 to 16 audio and at most 32 video, two of those sending at
+most, and nothing else (no data channel)
+
+`fn same_audio`: whether a later offer keeps the audio m-lines of the first, mid for mid
+
+`struct Line`: what one m-line that hears a seat is bound to
+
+`struct Joined`: the room a join sat in, and the `video` of its frame
+
+`fn on_of`: which of the camera and the screen a page sends, from its sending video mids
+
+`async fn renegotiate`: a later offer from the page: checked against the first, its new video lines readied, and
+answered. → the answer and the page's sending video mids; Err is the word for the page
+
+`struct Shower`: a page's camera and screen coming in, onto the seat's own tracks of those kinds
+
+`struct Screen`: one m-line that shows this page a camera or a screen
+
+`struct Video`: the m-lines a page sees the others' video on
+
+`async fn add_line`: a sendonly line with `idle` on it, its sequence numbers the sender's own. a line carries one
+sitter's packets, then another's (replace_track), on one ssrc, and each comer's browser starts
+its numbers anywhere: one that starts behind the last is a replay to the viewer's srtp, every
+packet dropped until it catches up (minutes). the transformer goes on from the last number at
+each replace_track, and must be on before the line sends anything
+
+`async fn rebind`: point every m-line at the mic of whoever sits in its seat now, or at its idle track
+
+`fn seats_event`: the seats frame for the page in `own`: everyone else, with what each shows and on which mid
+
+`fn gone_word`: the word for a page whose peer failed: `linked`, it had connected once
+
+`async fn voice_peer`: the stream's ice settings (main.rs new_peer) with the voice codecs. `linked` is set once
+the peer connects, `dead` told when it fails or closes
 
 ## build and config files
 

@@ -1,18 +1,8 @@
-//! The database is `api/schema.sql`, the baseline (the whole database as of 2026-11-19), plus
-//! the migrations after it, `api/migrations/NNNN-*.sql`, listed in `MIGRATIONS`. At boot the api
-//! applies the baseline to an empty database ("empty" is "no `streamers` table"), in one
-//! transaction, then each listed migration that `schema_migrations` does not have yet, in order,
-//! each in its own transaction with its row. A fresh database gets the baseline and every
-//! migration; an existing one gets only the new ones. Never edit the baseline or a migration that
-//! has shipped: a change is a new file (api/migrations/README.md).
-
 use sqlx::postgres::PgPool;
 use sqlx::{Connection, Executor};
 
 const SCHEMA: &str = include_str!("../schema.sql");
 
-/// The migrations after the baseline, in order: `("NNNN-what", include_str!("../migrations/NNNN-what.sql"))`.
-/// Append only. A name is applied once, ever (`schema_migrations`).
 const MIGRATIONS: &[(&str, &str)] = &[
     ("0001-channel-pins", include_str!("../migrations/0001-channel-pins.sql")),
     ("0002-replies", include_str!("../migrations/0002-replies.sql")),
@@ -31,11 +21,8 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("0015-image-moderation", include_str!("../migrations/0015-image-moderation.sql")),
 ];
 
-/// Apply `schema.sql` when the database has no tables yet. The chat process does not call this.
 pub(crate) async fn ensure(db: &PgPool) -> anyhow::Result<()> {
     let mut conn = db.acquire().await?;
-    // two api processes booting at once: the second waits, then finds the tables there.
-    // held on this connection, released when it is unlocked or closes
     conn.execute("SELECT pg_advisory_lock(839201)").await?;
     let applied = apply(&mut conn).await;
     let unlocked = conn.execute("SELECT pg_advisory_unlock(839201)").await;

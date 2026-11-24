@@ -1,23 +1,3 @@
-//! The demo models (docs/vtuber.md): a few `.vrm` files anyone may wear on the go live page,
-//! so a person with no model of their own can try one. They live in the bucket under
-//! `models/`, and the page's picker is one fetch: `GET /api/models` is the list (a name, an
-//! author, a licence, whether there is a thumbnail), `GET /api/models/<id>` the file and
-//! `GET /api/models/<id>/thumb` its picture. Nothing here is anyone's upload: a streamer's own
-//! model stays in their browser.
-//!
-//! The files get into the bucket from a folder, `random-media/vrms` in the repo, with
-//! `api models <dir>` (scripts/models.sh runs it in the api container, and deploy.sh runs that
-//! when the folder changed). Each `<name>.vrm` there is a model, its id the file's name; a
-//! picture beside it with the same name (`<name>.jpg`, `.png`, `.webp`) is its thumbnail, and
-//! without one the model's own embedded thumbnail is used when it is small. The name, the
-//! author and the licence are read from the file's own meta. The list is one object,
-//! `models/index.json`, written last, so the page never lists a file that is not there; a
-//! model taken out of the folder is taken out of the bucket.
-//!
-//! A `.vrm` is a glb: a 12 byte header, a json chunk, a binary chunk. This reads the header and
-//! the json chunk and nothing else: no mesh and no picture is decoded (the thumbnail's bytes
-//! are copied out as they are).
-
 use std::collections::HashSet;
 use std::ops::Range;
 use std::path::Path as FsPath;
@@ -37,48 +17,33 @@ use crate::ApiError;
 
 const INDEX_KEY: &str = "models/index.json";
 const MODEL_MIME: &str = "model/gltf-binary";
-/// A file's url carries `?v=`, the start of its hash, so the bytes behind one url never change.
 const FILE_CACHE: &str = "public, max-age=31536000, immutable";
-/// The folder is ours, so these are for mistakes, not for strangers: a file bigger than any
-/// model, a thumbnail that is really a photo, a list nobody would scroll.
 const MAX_MODEL_BYTES: usize = 64 * 1024 * 1024;
 const MAX_THUMB_BYTES: usize = 512 * 1024;
 const MAX_JSON_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MODELS: usize = 24;
 const MAX_ID_BYTES: usize = 48;
 const MAX_WORDS: usize = 80;
-/// The gltf extensions that pack a file's meshes or pictures, and the word for each. The page draws none of them.
 const PACKED: [(&str, &str); 3] = [("KHR_draco_mesh_compression", "draco"), ("EXT_meshopt_compression", "meshopt"), ("KHR_texture_basisu", "ktx2")];
-/// A model is tens of megabytes, and the bucket may be far away: the bucket client's usual
-/// 10 s is for pictures.
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const GLB_MAGIC: &[u8; 4] = b"glTF";
 const CHUNK_JSON: &[u8; 4] = b"JSON";
 const CHUNK_BIN: &[u8; 4] = b"BIN\0";
 const THUMB_EXTS: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
 
-/// One model of the list, as the page gets it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Entry {
-    /// The file's name without `.vrm`, as a slug: the url.
     id: String,
-    /// The model's own name, from its meta. The id when it has none.
     name: String,
-    /// Who made it, from its meta. Empty when it does not say.
     author: String,
-    /// The licence it names, in a few words. Empty when it does not say.
     licence: String,
-    /// `0` or `1`: which vrm it is.
     vrm: String,
     bytes: u64,
-    /// The start of the file's hash (the thumbnail's with it): the `?v=` of its urls.
     v: String,
-    /// It has a thumbnail in the bucket.
     thumb: bool,
 }
 
 impl Entry {
-    /// Whatever the bucket's list holds, the page is only handed rows it can draw and ask for.
     fn well_formed(&self) -> bool {
         valid_id(&self.id)
             && !self.name.is_empty()
@@ -104,7 +69,6 @@ fn thumb_key(id: &str) -> String {
     format!("models/{id}.thumb")
 }
 
-/// a-z 0-9 - _, 1 to 48: a file name's slug, and nothing a path could be made of.
 fn valid_id(id: &str) -> bool {
     (1..=MAX_ID_BYTES).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
@@ -118,8 +82,6 @@ fn bucket_failed(what: &str, err: String) -> ApiError {
     ApiError::new(StatusCode::BAD_GATEWAY, what)
 }
 
-/// The three reads. They want the bucket and nothing else of the api's state, so they are
-/// written against any state that can hand one over: the api's, and a test's bare bucket.
 pub(crate) fn routes<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -131,7 +93,6 @@ where
         .route("/api/models/{id}/thumb", get(thumb))
 }
 
-/// The list. No object yet (nobody ran `api models`) is an empty list, not an error.
 async fn list(State(store): State<s3::Store>) -> Result<Response, ApiError> {
     let index = match s3::get(&store, INDEX_KEY).await {
         Ok(Some(bytes)) => serde_json::from_slice::<Index>(&bytes).unwrap_or_else(|e| {
@@ -169,14 +130,12 @@ async fn thumb(State(store): State<s3::Store>, Path(id): Path<String>) -> Result
         Ok(None) => return Err(no_model()),
         Err(e) => return Err(bucket_failed("could not load the picture", e)),
     };
-    // the type is what the bytes are, not what a name said
     let Some(mime) = picture_mime(&bytes) else {
         return Err(no_model());
     };
     Ok(([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, FILE_CACHE), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], bytes).into_response())
 }
 
-/// Png, jpeg or webp by the first bytes. Never svg: a script.
 fn picture_mime(b: &[u8]) -> Option<&'static str> {
     if b.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
         return Some("image/png");
@@ -190,17 +149,12 @@ fn picture_mime(b: &[u8]) -> Option<&'static str> {
     None
 }
 
-// ---- reading a .vrm ---------------------------------------------------------------------
-
-/// What a `.vrm` says about itself.
 #[derive(Debug, PartialEq)]
 struct VrmInfo {
-    /// `0` (vrm 0.x) or `1` (vrm 1.0).
     version: &'static str,
     name: String,
     author: String,
     licence: String,
-    /// Where its own thumbnail's bytes are in the file, when it has one.
     thumb: Option<Range<usize>>,
 }
 
@@ -209,14 +163,11 @@ fn u32_at(b: &[u8], at: usize) -> Option<usize> {
     Some(u32::from_le_bytes(four) as usize)
 }
 
-/// A string kept to one line and `MAX_WORDS` characters.
 fn words(v: Option<&Value>) -> String {
     let s = v.and_then(Value::as_str).unwrap_or_default();
     s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_WORDS).collect()
 }
 
-/// The glb's header and json chunk: is it a vrm, what does it call itself, and where is its
-/// thumbnail. `Err` says why not, for the person who put the file in the folder.
 fn read_vrm(b: &[u8]) -> Result<VrmInfo, String> {
     if b.len() < 20 || &b[0..4] != GLB_MAGIC {
         return Err("not a glb".into());
@@ -233,20 +184,16 @@ fn read_vrm(b: &[u8]) -> Result<VrmInfo, String> {
     }
     let json_end = 20usize.checked_add(json_len).filter(|end| *end <= b.len()).ok_or("the json chunk runs past the file")?;
     let doc: Value = serde_json::from_slice(&b[20..json_end]).map_err(|_| "the json chunk does not parse")?;
-    // the binary chunk, when there is one: what a buffer view's offsets count from
     let bin: Option<Range<usize>> = u32_at(b, json_end).and_then(|len| {
         let start = json_end + 8;
         let end = start.checked_add(len)?;
         (b.get(json_end + 4..json_end + 8)? == CHUNK_BIN && end <= b.len()).then_some(start..end)
     });
 
-    // a buffer or a picture named by url is fetched by whoever draws the file: a model has everything inside
     let outside = |list: &str| doc[list].as_array().is_some_and(|items| items.iter().any(|item| item.get("uri").is_some()));
     if outside("buffers") || outside("images") {
         return Err("it points outside the file (a uri)".into());
     }
-    // what the page that draws it carries no decoder for (frontend/src/infra/vrm.ts): refused here, so the
-    // picker never lists a model it would then refuse
     if let Some(needed) = doc["extensionsRequired"].as_array() {
         for (extension, packer) in PACKED {
             if needed.iter().any(|e| e.as_str() == Some(extension)) {
@@ -262,17 +209,14 @@ fn read_vrm(b: &[u8]) -> Result<VrmInfo, String> {
         let licence = if url.contains("vrm.dev/licenses/1.0") { "VRM Public License 1.0".to_owned() } else { url };
         ("1", words(meta.get("name")), words(Some(&Value::String(authors))), licence, meta["thumbnailImage"].as_u64())
     } else if let Some(meta) = extensions["VRM"].get("meta") {
-        // 0.x names a licence by a word (`CC0`, `Redistribution_Prohibited`), and `Other` points at a url
         let named = words(meta.get("licenseName")).replace('_', " ");
         let licence = if named.eq_ignore_ascii_case("other") { words(meta.get("otherLicenseUrl")) } else { named };
-        // its thumbnail is a texture, whose `source` is the picture
         let image = meta["texture"].as_u64().and_then(|t| doc["textures"][t as usize]["source"].as_u64());
         ("0", words(meta.get("title")), words(meta.get("author")), licence, image)
     } else {
         return Err("a glb, but not a vrm (no VRM or VRMC_vrm in it)".into());
     };
 
-    // the picture's bytes: its buffer view, inside the binary chunk
     let thumb = image.zip(bin).and_then(|(image, bin)| {
         let view = &doc["bufferViews"][doc["images"][image as usize]["bufferView"].as_u64()? as usize];
         let start = bin.start.checked_add(view["byteOffset"].as_u64().unwrap_or(0) as usize)?;
@@ -282,7 +226,6 @@ fn read_vrm(b: &[u8]) -> Result<VrmInfo, String> {
     Ok(VrmInfo { version, name, author, licence, thumb })
 }
 
-/// A file's name as an id: lowercased, anything but a-z 0-9 - _ a dash, no dash doubled or at an end.
 fn slug(stem: &str) -> String {
     let mut out = String::new();
     for c in stem.trim().to_lowercase().chars() {
@@ -299,22 +242,16 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// A megabyte count for a person: `15.1 mb`.
 fn mb(bytes: u64) -> String {
     format!("{:.1} mb", bytes as f64 / 1_000_000.0)
 }
 
-// ---- the folder into the bucket: `api models <dir>` ---------------------------------------
-
-/// One model of the folder, read and ready to go up.
 struct Local {
     entry: Entry,
     file: Vec<u8>,
-    /// The thumbnail's bytes and where they came from (a file's name, or `the model's own`).
     thumb: Option<(Vec<u8>, String)>,
 }
 
-/// The picture beside `<stem>.vrm`, when there is one: `<stem>.jpg`, `.jpeg`, `.png` or `.webp`.
 fn sidecar(dir: &FsPath, stem: &str) -> Result<Option<(Vec<u8>, String)>, String> {
     for ext in THUMB_EXTS {
         let name = format!("{stem}.{ext}");
@@ -334,7 +271,6 @@ fn sidecar(dir: &FsPath, stem: &str) -> Result<Option<(Vec<u8>, String)>, String
     Ok(None)
 }
 
-/// One `.vrm` of the folder: read, checked, named. `Err` is the line to print for it.
 fn read_local(dir: &FsPath, path: &FsPath) -> Result<Local, String> {
     let stem = path.file_stem().and_then(|s| s.to_str()).ok_or("a name that is not text")?;
     let id = slug(stem);
@@ -346,7 +282,6 @@ fn read_local(dir: &FsPath, path: &FsPath) -> Result<Local, String> {
         return Err(format!("{}: a model here is {} at most", mb(file.len() as u64), mb(MAX_MODEL_BYTES as u64)));
     }
     let info = read_vrm(&file)?;
-    // the picture beside it, else its own when that is small enough to be a thumbnail
     let thumb = match sidecar(dir, stem)? {
         Some(found) => Some(found),
         None => info
@@ -374,7 +309,6 @@ fn read_local(dir: &FsPath, path: &FsPath) -> Result<Local, String> {
     Ok(Local { entry, file, thumb })
 }
 
-/// Every `.vrm` of `dir`, by name. The second list is the files refused, each with why.
 fn read_folder(dir: &FsPath) -> Result<(Vec<Local>, Vec<String>), String> {
     let mut paths: Vec<_> = std::fs::read_dir(dir)
         .map_err(|e| format!("{}: {e}", dir.display()))?
@@ -396,8 +330,6 @@ fn read_folder(dir: &FsPath) -> Result<(Vec<Local>, Vec<String>), String> {
     Ok((models, refused))
 }
 
-/// What a run has to do to the bucket: the ids whose bytes go up (new, or changed), and the
-/// ids to take out (in the bucket's list, gone from the folder).
 fn plan(old: &[Entry], new: &[Entry]) -> (Vec<String>, Vec<String>) {
     let put = new.iter().filter(|n| !old.contains(n)).map(|n| n.id.clone()).collect();
     let kept: HashSet<&str> = new.iter().map(|n| n.id.as_str()).collect();
@@ -405,9 +337,6 @@ fn plan(old: &[Entry], new: &[Entry]) -> (Vec<String>, Vec<String>) {
     (put, gone)
 }
 
-/// `api models <dir> [--dry-run]`: the folder's models into the bucket, and the list after
-/// them. `--dry-run` reads the folder, prints the list it would write and touches nothing (no
-/// bucket needed, so it runs anywhere). The bucket only: no postgres, no redis.
 pub(crate) async fn upload(args: &[String]) -> Result<(), String> {
     let dry = args.iter().any(|a| a == "--dry-run");
     let dirs: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
@@ -447,12 +376,10 @@ pub(crate) async fn upload(args: &[String]) -> Result<(), String> {
         s3::put(&store, &model_key(id), &m.file, MODEL_MIME).await?;
         match &m.thumb {
             Some((bytes, _)) => s3::put(&store, &thumb_key(id), bytes, picture_mime(bytes).unwrap_or("application/octet-stream")).await?,
-            // it had a picture before and has none now
             None => s3::delete(&store, &thumb_key(id)).await?,
         }
         println!("  put   {}", describe(m));
     }
-    // the list after the files it names, and before the ones it stops naming go
     let body = serde_json::to_vec(&Index { models: new }).map_err(|e| e.to_string())?;
     s3::put(&store, INDEX_KEY, &body, "application/json").await?;
     for id in &gone {
@@ -482,7 +409,6 @@ mod tests {
 
     const PNG: [u8; 12] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4];
 
-    /// A glb of `json` and `bin`, each padded to four bytes the way the format wants.
     fn glb(json: &Value, bin: &[u8]) -> Vec<u8> {
         let mut text = serde_json::to_vec(json).unwrap();
         while text.len() % 4 != 0 {
@@ -508,7 +434,6 @@ mod tests {
         out
     }
 
-    /// A vrm 0.x whose thumbnail is the png at byte 4 of the binary chunk, behind a texture.
     fn vrm0() -> Vec<u8> {
         let mut bin = vec![9, 9, 9, 9];
         bin.extend_from_slice(&PNG);
@@ -555,17 +480,13 @@ mod tests {
     fn what_is_not_a_vrm_is_refused_with_why() {
         assert_eq!(read_vrm(b"<svg></svg>").unwrap_err(), "not a glb");
         assert_eq!(read_vrm(&[]).unwrap_err(), "not a glb");
-        // a glb with no vrm in it
         let plain = glb(&json!({ "asset": { "version": "2.0" } }), &[]);
         assert!(read_vrm(&plain).unwrap_err().contains("not a vrm"));
-        // cut short: the header still says the whole length
         let file = vrm1();
         assert!(read_vrm(&file[..file.len() - 4]).unwrap_err().contains("cut short"));
-        // version 1 of gltf
         let mut old = vrm1();
         old[4] = 1;
         assert_eq!(read_vrm(&old).unwrap_err(), "not a gltf 2 file");
-        // a json chunk that says it is longer than the file
         let mut long = vrm1();
         long[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(read_vrm(&long).is_err());
@@ -587,14 +508,12 @@ mod tests {
             let packed = glb(&json!({ "extensionsRequired": [extension], "extensions": meta }), &[]);
             assert!(read_vrm(&packed).unwrap_err().contains(packer), "{extension}");
         }
-        // one it only uses where it can, and one the page reads: neither is a reason
         let fine = glb(&json!({ "extensionsUsed": ["KHR_draco_mesh_compression"], "extensionsRequired": ["VRMC_vrm"], "extensions": meta }), &[]);
         assert!(read_vrm(&fine).is_ok());
     }
 
     #[test]
     fn a_thumbnail_that_is_not_inside_the_file_is_no_thumbnail() {
-        // the view runs past the binary chunk
         let file = glb(
             &json!({
                 "bufferViews": [{ "buffer": 0, "byteOffset": 8, "byteLength": 400 }],
@@ -604,7 +523,6 @@ mod tests {
             &PNG,
         );
         assert_eq!(read_vrm(&file).expect("still a vrm").thumb, None);
-        // an index with nothing behind it, and a model with no binary chunk at all
         let file = glb(&json!({ "extensions": { "VRMC_vrm": { "meta": { "name": "x", "thumbnailImage": 7 } } } }), &[]);
         assert_eq!(read_vrm(&file).expect("still a vrm").thumb, None);
     }
@@ -637,14 +555,11 @@ mod tests {
     #[test]
     fn a_run_puts_what_changed_and_takes_out_what_left_the_folder() {
         let old = [entry("a", "000000000001"), entry("b", "000000000002"), entry("c", "000000000003")];
-        // a is as it was, b's bytes changed, c is gone, d is new
         let new = [entry("a", "000000000001"), entry("b", "00000000000f"), entry("d", "000000000004")];
         let (put, gone) = plan(&old, &new);
         assert_eq!(put, ["b", "d"]);
         assert_eq!(gone, ["c"]);
-        // nothing in the bucket yet: everything goes up, nothing to take out
         assert_eq!(plan(&[], &new), (vec!["a".to_owned(), "b".to_owned(), "d".to_owned()], vec![]));
-        // a list in the bucket with an id that is no id is never turned into a delete
         assert_eq!(plan(&[entry("../avatars", "000000000001")], &[]).1, Vec::<String>::new());
     }
 
@@ -658,7 +573,6 @@ mod tests {
         assert!(!Entry { name: String::new(), ..entry("a", "0123456789ab") }.well_formed());
     }
 
-    /// A stand-in bucket on this machine: the objects in a map, answered path-style the way s3 answers a GET.
     async fn bucket(objects: Vec<(&'static str, Vec<u8>)>) -> s3::Store {
         use std::collections::HashMap;
         use std::sync::Arc;
@@ -675,7 +589,6 @@ mod tests {
         s3::Store::for_test(&listen(app).await)
     }
 
-    /// `app` on a port of its own, and where it is.
     async fn listen(app: Router) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -686,7 +599,6 @@ mod tests {
     #[tokio::test]
     async fn the_three_routes_read_the_bucket() {
         let listed = [entry("seed-san", "0123456789ab"), entry("orion", "ba9876543210")];
-        // a row that is no row is in the bucket's list too: the page never sees it
         let mut in_bucket = listed.to_vec();
         in_bucket.push(entry("../avatars", "0123456789ab"));
         let store = bucket(vec![
@@ -717,7 +629,6 @@ mod tests {
         assert_eq!((res.status().as_u16(), head(&res, "content-type").as_str()), (200, "image/png"));
         assert_eq!(res.bytes().await.unwrap().to_vec(), PNG.to_vec());
 
-        // not there, not an id, and a thumbnail whose bytes are no picture: all the same 404
         for path in ["/api/models/nope", "/api/models/orion/thumb", "/api/models/Seed%20San", "/api/models/..%2Favatars", "/api/models/script/thumb"] {
             let res = get(path).await.unwrap();
             assert_eq!(res.status(), 404, "{path}");
@@ -732,11 +643,9 @@ mod tests {
         assert_eq!(res.status(), 200);
         assert_eq!(res.json::<Value>().await.unwrap(), json!({ "models": [] }));
 
-        // a list that is not a list (someone wrote the object by hand) is an empty list too
         let garbled = listen(routes::<s3::Store>().with_state(bucket(vec![("models/index.json", b"{ nope".to_vec())]).await)).await;
         assert_eq!(reqwest::get(format!("{garbled}/api/models")).await.unwrap().json::<Value>().await.unwrap(), json!({ "models": [] }));
 
-        // nothing listening where the bucket should be: a port that was just given back
         let gone = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
         let down = listen(routes::<s3::Store>().with_state(s3::Store::for_test(&format!("http://{gone}")))).await;
         let res = reqwest::get(format!("{down}/api/models")).await.unwrap();
@@ -759,11 +668,9 @@ mod tests {
 
         assert_eq!(models.iter().map(|m| m.entry.id.as_str()).collect::<Vec<_>>(), ["zero-model", "one"]);
         assert_eq!(refused, ["broken.vrm: not a glb"]);
-        // the picture beside it wins over the model's own
         let one = &models[1];
         assert_eq!(one.thumb.as_ref().map(|(bytes, from)| (bytes[..3].to_vec(), from.as_str())), Some((vec![0xFF, 0xD8, 0xFF], "one.jpg")));
         assert_eq!((one.entry.name.as_str(), one.entry.vrm.as_str(), one.entry.thumb), ("Seed-san", "1", true));
-        // none beside it: the model's own
         let zero = &models[0];
         assert_eq!(zero.thumb.as_ref().map(|(bytes, from)| (bytes.clone(), from.as_str())), Some((PNG.to_vec(), "the model's own")));
         assert!(zero.entry.well_formed() && one.entry.well_formed());
