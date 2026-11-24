@@ -3,26 +3,43 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>monitor</title>
+<meta name="robots" content="noindex, nofollow">
+<title>stats</title>
 <style>
   :root {
     --bg: rgb(15 17 21); --bg2: rgb(24 27 34); --bg3: rgb(32 36 46);
     --t1: rgb(242 243 245); --t2: rgb(154 163 178); --t3: rgb(110 118 132);
     --blue: rgb(79 139 255); --stroke: rgb(42 47 58);
-    --up: rgb(63 185 80); --down: rgb(248 81 73); --warn: rgb(242 204 96);
+    --up: rgb(63 185 80); --down: rgb(248 81 73); --warn: rgb(242 204 96); --violet: rgb(188 140 255);
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--t1); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
-  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; margin-bottom: 20px; }
+  main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; margin-bottom: 16px; }
   header h1 { font-size: 20px; margin: 0; font-weight: 600; border-left: 4px solid var(--blue); padding-left: 10px; line-height: 1.1; }
   a { color: var(--blue); text-decoration: none; } a:hover { text-decoration: underline; }
   .muted { color: var(--t2); } .dim { color: var(--t3); } .note { color: var(--warn); }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
   .yes { color: var(--up); } .no { color: var(--down); }
+  .bar-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 20px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 8px; flex: 1 1 auto; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .tab { display: flex; align-items: center; gap: 8px; background: var(--bg2); border: 1px solid var(--stroke); padding: 6px 12px; text-align: left; }
+  .tab:hover { border-color: var(--t3); }
+  .tab[aria-pressed="true"] { border-color: var(--blue); background: var(--bg3); }
+  .tab small { color: var(--t2); font-size: 12px; }
+  .dot { width: 9px; height: 9px; flex: none; background: var(--t3); }
+  .dot.up { background: var(--up); } .dot.down { background: var(--down); }
+  .seg { display: flex; border: 1px solid var(--stroke); }
+  .seg button { background: var(--bg2); border: 0; border-left: 1px solid var(--stroke); padding: 6px 12px; color: var(--t2); }
+  .seg button:first-child { border-left: 0; }
+  .seg button[aria-pressed="true"] { background: var(--bg3); color: var(--t1); }
+  .seg button:hover { color: var(--t1); }
   .target { background: var(--bg2); border: 1px solid var(--stroke); padding: 16px; margin-bottom: 24px; }
   .top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
   .name { font-size: 18px; font-weight: 600; }
+  button.name { background: none; border: 0; padding: 0; }
+  button.name:hover { color: var(--blue); }
   .pill { padding: 2px 10px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: rgb(15 17 21); }
   .pill.up { background: var(--up); } .pill.down { background: var(--down); } .pill.unknown { background: var(--t3); }
   .bar { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; margin: 12px 0 4px; }
@@ -32,25 +49,46 @@
   .grid div { background: var(--bg3); border: 1px solid var(--stroke); padding: 6px 10px; }
   .grid b { display: block; font-size: 11px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; }
   .down .grid { opacity: .55; }
+  h2 { font-size: 13px; font-weight: 600; color: var(--t2); text-transform: uppercase; letter-spacing: .06em; margin: 0 0 10px; }
   h3 { font-size: 12px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; margin: 18px 0 6px; }
   ul { list-style: none; margin: 0; padding: 0; }
   li { padding: 3px 0; border-top: 1px solid var(--stroke); } li:first-child { border-top: 0; }
   .when { color: var(--t3); margin-right: 10px; }
   .ev-down { color: var(--down); } .ev-up { color: var(--up); } .ev-restart { color: var(--warn); } .ev-build { color: var(--blue); }
   table { width: 100%; border-collapse: collapse; }
-  td { padding: 4px 8px 4px 0; border-top: 1px solid var(--stroke); vertical-align: top; }
-  tr.err { cursor: pointer; } tr.err:hover td { background: var(--bg3); }
+  td, th { padding: 4px 8px 4px 0; border-top: 1px solid var(--stroke); vertical-align: top; text-align: left; }
+  th { font-size: 11px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; border-top: 0; white-space: nowrap; }
+  tr.err, tr.ctr { cursor: pointer; } tr.err:hover td, tr.ctr:hover td { background: var(--bg3); }
   pre { white-space: pre-wrap; word-break: break-word; margin: 4px 0 8px; padding: 8px; background: var(--bg); border: 1px solid var(--stroke); color: var(--t2); }
   .empty { color: var(--t3); padding: 6px 0; }
+  .summary { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 10px; color: var(--t2); }
+  .summary b { color: var(--t1); font-weight: 600; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .tile { background: var(--bg3); border: 1px solid var(--stroke); padding: 8px 10px 6px; min-width: 0; }
+  .tile .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .tile .label { font-size: 11px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+  .tile .value { font-size: 13px; color: var(--t1); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile canvas { display: block; width: 100%; height: 72px; margin-top: 4px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; color: var(--t3); }
+  .legend i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; vertical-align: 0; }
+  .ctrs td { white-space: nowrap; }
+  .ctrs td.cell canvas { display: block; width: 72px; height: 18px; margin-top: 2px; }
+  .ctrs .detail td { background: var(--bg); padding: 10px; cursor: default; }
+  .scroll { overflow-x: auto; }
+  .st-running { color: var(--up); } .st-exited, .st-dead { color: var(--down); } .st-restarting, .st-paused, .st-created { color: var(--warn); }
 </style>
 </head>
 <body>
 <main>
   <header>
-    <h1>monitor</h1>
+    <h1>stats</h1>
     <span id="meta" class="muted"></span>
     <span id="asof" class="note"></span>
   </header>
+  <div class="bar-nav">
+    <nav id="tabs" class="tabs" aria-label="boxes"></nav>
+    <div id="ranges" class="seg" role="group" aria-label="range"></div>
+  </div>
   <div id="targets"></div>
 </main>
 <script>
@@ -58,6 +96,12 @@
   const $targets = document.getElementById('targets');
   const $meta = document.getElementById('meta');
   const $asof = document.getElementById('asof');
+  const $tabs = document.getElementById('tabs');
+  const $ranges = document.getElementById('ranges');
+
+  const RANGES = { '1h': { secs: 3600, every: 15000 }, '24h': { secs: 86400, every: 60000 }, '7d': { secs: 604800, every: 300000 } };
+  const ALL = '';
+  const COLORS = { blue: 'rgb(79 139 255)', green: 'rgb(63 185 80)', red: 'rgb(248 81 73)', yellow: 'rgb(242 204 96)', violet: 'rgb(188 140 255)', grid: 'rgb(42 47 58)', hover: 'rgb(110 118 132)' };
 
   const el = (tag, cls, text) => {
     const e = document.createElement(tag);
@@ -73,7 +117,20 @@
   const secsSince = (iso, now) => Math.max(0, Math.round((now - Date.parse(iso)) / 1000));
   const ago = (iso, now) => (iso ? `${human(secsSince(iso, now))} ago` : '—');
   const clock = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—');
-  const pct = (v) => (v === null || v === undefined ? '—' : `${v.toFixed(v >= 99.95 ? 2 : 1)}%`);
+  const stamp = (secs, range) => new Date(secs * 1000).toLocaleString(undefined, range === '1h' ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const has = (v) => v !== null && v !== undefined && !Number.isNaN(v);
+  const pct = (v) => (has(v) ? `${v.toFixed(v >= 99.95 ? 2 : 1)}%` : '—');
+  const pct1 = (v) => (has(v) ? `${v.toFixed(1)}%` : '—');
+  const unit = (v, base, units) => {
+    if (!has(v)) return '—';
+    let i = 0;
+    while (Math.abs(v) >= base && i < units.length - 1) { v /= base; i++; }
+    return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+  };
+  const bytes = (v) => unit(v, 1024, ['B', 'KiB', 'MiB', 'GiB', 'TiB']);
+  const bps = (v) => unit(v, 1000, ['bit/s', 'kbit/s', 'Mbit/s', 'Gbit/s']);
+  const Bps = (v) => (has(v) ? `${bytes(v)}/s` : '—');
+  const num = (v) => (has(v) ? String(Math.round(v * 100) / 100) : '—');
   const yn = (v) => (v === true ? el('span', 'yes', '✓') : v === false ? el('span', 'no', '✗') : el('span', 'dim', '—'));
   const field = (label, value) => {
     const d = el('div');
@@ -81,104 +138,435 @@
     d.append(value instanceof Node ? value : el('span', null, value ?? '—'));
     return d;
   };
+  const last = (arr) => {
+    for (let i = (arr || []).length - 1; i >= 0; i--) if (has(arr[i])) return arr[i];
+    return null;
+  };
 
-  function render(data) {
-    const now = Date.parse(data.now);
-    const m = data.monitor;
-    $meta.textContent = `build ${m.build} · up ${human(m.up_secs)} · every ${m.check_every_secs}s · down after ${m.down_after} misses · ${m.webhook ? 'webhook on' : 'no webhook'}`;
-    $targets.replaceChildren();
-    if (!data.targets.length) {
-      $targets.append(el('p', 'empty', 'nothing to watch. TARGETS in monitor/.env, then docker compose up -d'));
-      return;
+  const sel = { box: null, range: '1h' };
+  const expanded = new Set();
+  let state = null, series = null, cur = null, seriesKey = '', seriesAt = 0, lastOk = null;
+  const charts = [];
+
+  function readHash() {
+    const p = new URLSearchParams(location.hash.slice(1));
+    sel.box = p.has('box') ? p.get('box') : null;
+    sel.range = RANGES[p.get('range')] ? p.get('range') : '1h';
+  }
+  function writeHash() {
+    const p = new URLSearchParams();
+    if (sel.box !== null) p.set('box', sel.box);
+    if (sel.range !== '1h') p.set('range', sel.range);
+    history.replaceState(null, '', p.toString() ? `#${p}` : location.pathname);
+  }
+  function boxShown() {
+    if (!state || !state.targets.length) return ALL;
+    if (sel.box !== null && (sel.box === ALL || state.targets.some((t) => t.name === sel.box))) return sel.box;
+    return state.targets.length === 1 ? state.targets[0].name : ALL;
+  }
+  function choose(box, range) {
+    if (box !== undefined) sel.box = box;
+    if (range !== undefined) sel.range = range;
+    writeHash();
+    render();
+    loadSeries(true);
+  }
+
+  function draw(c) {
+    const { canvas, t, lines, t0, t1, gap, max: fixed, hover } = c;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const g = canvas.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    let max = fixed || 0;
+    for (const l of lines) for (const v of l.v || []) if (has(v) && v > max) max = v;
+    if (!max) max = 1;
+    const x = (ts) => ((ts - t0) / (t1 - t0)) * w;
+    const y = (v) => h - 1.5 - (v / max) * (h - 3);
+    g.strokeStyle = COLORS.grid;
+    g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(0, Math.round(y(max / 2)) + 0.5); g.lineTo(w, Math.round(y(max / 2)) + 0.5);
+    g.moveTo(0, h - 0.5); g.lineTo(w, h - 0.5);
+    g.stroke();
+    for (const l of lines) {
+      g.strokeStyle = l.color;
+      g.lineWidth = c.thin ? 1 : 1.5;
+      g.beginPath();
+      let pen = false, prev = null;
+      (l.v || []).forEach((v, i) => {
+        if (!has(v)) { pen = false; return; }
+        if (prev !== null && t[i] - prev > gap * 2.5) pen = false;
+        const px = x(t[i]), py = y(v);
+        if (pen) g.lineTo(px, py); else g.moveTo(px, py);
+        pen = true;
+        prev = t[i];
+      });
+      g.stroke();
     }
-    for (const t of data.targets) {
-      const card = el('section', `target ${t.status}`);
-      card.dataset.name = t.name;
-
-      const top = el('div', 'top');
-      top.append(el('span', 'name', t.name), el('span', `pill ${t.status}`, t.status));
-      if (t.since && t.status !== 'unknown') top.append(el('span', 'muted', `for ${human(secsSince(t.since, now))}`));
-      const a = el('a', 'mono', t.url);
-      a.href = t.url; a.target = '_blank'; a.rel = 'noopener';
-      top.append(a);
-      if (t.latency_ms !== null && t.latency_ms !== undefined) top.append(el('span', 'dim mono', `${t.latency_ms} ms`));
-      if (t.status === 'up' && t.failures > 0) top.append(el('span', 'note', `${t.failures} missed check${t.failures > 1 ? 's' : ''}: ${t.reason || ''}`));
-      if (t.status === 'down' && t.reason) top.append(el('span', 'no', t.reason));
-      card.append(top);
-
-      const bar = el('div', 'bar');
-      const hours = (t.hours || []).slice().reverse();
-      for (let i = hours.length; i < 24; i++) bar.append(el('i'));
-      for (const h of hours) {
-        const b = el('i', h.failed === 0 ? 'ok' : h.failed === h.checks ? 'bad' : 'some');
-        b.title = `${clock(h.start)} · ${h.checks} checks, ${h.failed} failed`;
-        bar.append(b);
-      }
-      card.append(bar, el('div', 'dim', `24h ${pct(t.uptime_24h)} · 7d ${pct(t.uptime_7d)} · checked ${ago(t.checked_at, now)}`));
-
-      const h = t.health || {};
-      const grid = el('div', 'grid');
-      grid.append(
-        field('release', h.version), field('build', h.build), field('env', h.env), field('live', h.live),
-        field('video', yn(h.video)), field('postgres', yn(h.postgres)), field('redis', yn(h.redis)), field('debug db', yn(h.debug_db)),
-        field('reports dropped', h.errors_dropped),
-        field('api up', h.up_secs != null ? human(h.up_secs) : '—'), field('video up', h.video_up_secs != null ? human(h.video_up_secs) : '—'),
-        field('video build', h.video_build)
-      );
-      card.append(grid);
-      if (t.status === 'down' && t.health) card.append(el('div', 'dim', 'the numbers above are from its last answer'));
-
-      card.append(el('h3', null, 'events'));
-      if (!t.events.length) card.append(el('div', 'empty', 'none yet'));
-      else {
-        const ul = el('ul');
-        for (const e of t.events) {
-          const li = el('li', `ev-${e.kind}`);
-          li.append(el('span', 'when mono', clock(e.at)), el('span', null, e.text));
-          ul.append(li);
-        }
-        card.append(ul);
-      }
-
-      card.append(el('h3', null, 'error reports from the pages'));
-      if (t.errors_status) card.append(el('div', 'empty', t.errors_status));
-      else if (!t.errors.length) card.append(el('div', 'empty', `none stored · checked ${ago(t.errors_at, now)}`));
-      else {
-        const table = el('table');
-        for (const r of t.errors) {
-          const tr = el('tr', 'err');
-          const where = r.page + (r.stream ? ` [${r.stream}${r.phase ? ' · ' + r.phase : ''}]` : '');
-          tr.append(el('td', 'mono dim', clock(r.at)), el('td', 'mono', r.kind), el('td', 'mono', where), el('td', null, r.message));
-          const detail = el('tr');
-          detail.hidden = true;
-          const td = el('td');
-          td.colSpan = 4;
-          const lines = [r.build && `build ${r.build}`, r.env && `env ${r.env}`, r.me && `login ${r.me}`, r.ip && `ip ${r.ip}`, r.ua && `ua ${r.ua}`, r.stack, r.extra && JSON.stringify(r.extra, null, 2)];
-          td.append(el('pre', 'mono', lines.filter(Boolean).join('\n')));
-          detail.append(td);
-          tr.addEventListener('click', () => { detail.hidden = !detail.hidden; });
-          table.append(tr, detail);
-        }
-        card.append(table);
-      }
-      $targets.append(card);
+    if (hover !== null && hover !== undefined && t[hover] !== undefined) {
+      g.strokeStyle = COLORS.hover;
+      g.beginPath();
+      g.moveTo(Math.round(x(t[hover])) + 0.5, 0); g.lineTo(Math.round(x(t[hover])) + 0.5, h);
+      g.stroke();
     }
   }
 
-  let last = null;
-  async function tick() {
+  function chart({ label, lines, max, now, value, read, thin, small }) {
+    const s = cur;
+    const t = s ? s.t : [];
+    const t1 = Math.floor(now / 1000), t0 = t1 - RANGES[sel.range].secs;
+    const canvas = el('canvas');
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', label);
+    const c = { canvas, t, lines, t0, t1, gap: s ? s.bucket_secs : 15, max, hover: null, thin };
+    charts.push(c);
+    if (small) return canvas;
+    const tile = el('div', 'tile');
+    const head = el('div', 'head');
+    const $value = el('span', 'value mono', value);
+    head.append(el('span', 'label', label), $value);
+    tile.append(head, canvas);
+    if (lines.length > 1) {
+      const legend = el('div', 'legend');
+      for (const l of lines) {
+        const item = el('span');
+        const sw = el('i');
+        sw.style.background = l.color;
+        item.append(sw, document.createTextNode(l.name));
+        legend.append(item);
+      }
+      tile.append(legend);
+    }
+    canvas.addEventListener('mousemove', (e) => {
+      if (!t.length) return;
+      const r = canvas.getBoundingClientRect();
+      const at = t0 + ((e.clientX - r.left) / r.width) * (t1 - t0);
+      let best = 0;
+      for (let i = 1; i < t.length; i++) if (Math.abs(t[i] - at) < Math.abs(t[best] - at)) best = i;
+      c.hover = best;
+      draw(c);
+      $value.textContent = `${stamp(t[best], sel.range)} · ${lines.map((l) => `${lines.length > 1 ? l.name + ' ' : ''}${read(l.v[best])}`).join(' · ')}`;
+    });
+    canvas.addEventListener('mouseleave', () => { c.hover = null; draw(c); $value.textContent = value; });
+    return tile;
+  }
+
+  function statusCard(t, now, overview) {
+    const card = el('section', `target ${t.status}`);
+    card.dataset.name = t.name;
+    const top = el('div', 'top');
+    if (overview) {
+      const b = el('button', 'name', t.name);
+      b.type = 'button';
+      b.title = `graphs for ${t.name}`;
+      b.addEventListener('click', () => choose(t.name));
+      top.append(b);
+    } else {
+      top.append(el('span', 'name', t.name));
+    }
+    top.append(el('span', `pill ${t.status}`, t.status));
+    if (t.since && t.status !== 'unknown') top.append(el('span', 'muted', `for ${human(secsSince(t.since, now))}`));
+    top.append(el('span', 'mono dim', t.url));
+    if (has(t.latency_ms)) top.append(el('span', 'dim mono', `${t.latency_ms} ms`));
+    if (t.status === 'up' && t.failures > 0) top.append(el('span', 'note', `${t.failures} missed check${t.failures > 1 ? 's' : ''}: ${t.reason || ''}`));
+    if (t.status === 'down' && t.reason) top.append(el('span', 'no', t.reason));
+    card.append(top);
+
+    const bar = el('div', 'bar');
+    const hours = (t.hours || []).slice().reverse();
+    for (let i = hours.length; i < 24; i++) bar.append(el('i'));
+    for (const h of hours) {
+      const b = el('i', h.failed === 0 ? 'ok' : h.failed === h.checks ? 'bad' : 'some');
+      b.title = `${clock(h.start)} · ${h.checks} checks, ${h.failed} failed`;
+      bar.append(b);
+    }
+    card.append(bar, el('div', 'dim', `24h ${pct(t.uptime_24h)} · 7d ${pct(t.uptime_7d)} · checked ${ago(t.checked_at, now)}`));
+
+    const m = t.metrics || {};
+    const host = m.host;
+    if (host) {
+      const sum = el('div', 'summary');
+      const disk = (host.disk || [])[0];
+      const part = (k, v) => { const s = el('span'); s.append(document.createTextNode(`${k} `), el('b', null, v)); sum.append(s); };
+      part('cpu', pct1(host.cpu_pct));
+      part('steal', pct1(host.steal_pct));
+      part('load', num(host.load1));
+      part('mem', host.mem_total ? `${bytes(host.mem_used)} / ${bytes(host.mem_total)}` : '—');
+      part('disk free', disk ? bytes(disk.avail) : '—');
+      part('net out', host.net ? bps(host.net.tx_bps) : '—');
+      part('containers', has(m.containers) ? m.containers : '—');
+      card.append(sum);
+    }
+    if (m.status) card.append(el('div', 'note', `host numbers: ${m.status}`));
+
+    const h = t.health || {};
+    const grid = el('div', 'grid');
+    grid.append(
+      field('release', h.version), field('build', h.build), field('env', h.env), field('live', h.live),
+      field('video', yn(h.video)), field('postgres', yn(h.postgres)), field('redis', yn(h.redis)), field('debug db', yn(h.debug_db)),
+      field('reports dropped', h.errors_dropped),
+      field('api up', h.up_secs != null ? human(h.up_secs) : '—'), field('video up', h.video_up_secs != null ? human(h.video_up_secs) : '—'),
+      field('video build', h.video_build)
+    );
+    card.append(grid);
+    if (t.status === 'down' && t.health) card.append(el('div', 'dim', 'the numbers above are from its last answer'));
+
+    card.append(el('h3', null, 'events'));
+    if (!t.events.length) card.append(el('div', 'empty', 'none yet'));
+    else {
+      const ul = el('ul');
+      for (const e of overview ? t.events.slice(0, 8) : t.events) {
+        const li = el('li', `ev-${e.kind}`);
+        li.append(el('span', 'when mono', clock(e.at)), el('span', null, e.text));
+        ul.append(li);
+      }
+      card.append(ul);
+    }
+
+    card.append(el('h3', null, 'error reports from the pages'));
+    if (t.errors_status) card.append(el('div', 'empty', t.errors_status));
+    else if (!t.errors.length) card.append(el('div', 'empty', `none stored · checked ${ago(t.errors_at, now)}`));
+    else {
+      const table = el('table');
+      for (const r of overview ? t.errors.slice(0, 10) : t.errors) {
+        const tr = el('tr', 'err');
+        const where = r.page + (r.stream ? ` [${r.stream}${r.phase ? ' · ' + r.phase : ''}]` : '');
+        tr.append(el('td', 'mono dim', clock(r.at)), el('td', 'mono', r.kind), el('td', 'mono', where), el('td', null, r.message));
+        const detail = el('tr');
+        detail.hidden = true;
+        const td = el('td');
+        td.colSpan = 4;
+        const lines = [r.build && `build ${r.build}`, r.env && `env ${r.env}`, r.me && `login ${r.me}`, r.ip && `ip ${r.ip}`, r.ua && `ua ${r.ua}`, r.stack, r.extra && JSON.stringify(r.extra, null, 2)];
+        td.append(el('pre', 'mono', lines.filter(Boolean).join('\n')));
+        detail.append(td);
+        tr.addEventListener('click', () => { detail.hidden = !detail.hidden; });
+        table.append(tr, detail);
+      }
+      card.append(table);
+    }
+    return card;
+  }
+
+  function hostSection(t, now) {
+    const sec = el('section', 'target');
+    sec.append(el('h2', null, 'host'));
+    const s = cur;
+    const latest = (s && s.latest) || null;
+    const H = latest ? latest.host : (t.metrics && t.metrics.host) || null;
+    const status = (s && s.status) || (t.metrics && t.metrics.status);
+    if (status) sec.append(el('p', 'note', status));
+    if (!H) {
+      sec.append(el('p', 'empty', status ? 'no numbers from this box yet' : 'waiting for the first numbers from this box'));
+      return sec;
+    }
+    const meta = [H.hostname && `host ${H.hostname}`, H.cpus && `${H.cpus} cpu${H.cpus > 1 ? 's' : ''}`, has(H.up_secs) && `up ${human(H.up_secs)}`, H.net && `net ${H.net.iface}`, latest && `sampled ${ago(latest.at, now)}`, s && s.agent && `agent ${s.agent.build}, every ${s.agent.every_secs}s`].filter(Boolean).join(' · ');
+    sec.append(el('div', 'dim', meta));
+    for (const p of (latest && latest.problems) || []) sec.append(el('div', 'note', p));
+    const S = (s && s.host) || {};
+    const disk = (H.disk || [])[0];
+    const tiles = el('div', 'tiles');
+    tiles.style.marginTop = '10px';
+    tiles.append(
+      chart({ label: 'cpu', now, max: 100, read: pct1, value: `${pct1(H.cpu_pct)} · steal ${pct1(H.steal_pct)} · iowait ${pct1(H.iowait_pct)}`,
+        lines: [{ name: 'busy', v: S.cpu_pct, color: COLORS.blue }, { name: 'steal', v: S.steal_pct, color: COLORS.red }, { name: 'iowait', v: S.iowait_pct, color: COLORS.yellow }] }),
+      chart({ label: 'load', now, max: H.cpus || 1, read: num, value: `${num(H.load1)} / ${num(H.load5)} / ${num(H.load15)}${H.cpus ? ` · ${H.cpus} cpus` : ''}`,
+        lines: [{ name: 'load1', v: S.load1, color: COLORS.blue }] }),
+      chart({ label: 'memory', now, max: H.mem_total, read: bytes, value: H.mem_total ? `${bytes(H.mem_used)} of ${bytes(H.mem_total)} (${pct1((100 * H.mem_used) / H.mem_total)})` : '—',
+        lines: [{ name: 'used', v: S.mem_used, color: COLORS.violet }] }),
+      chart({ label: 'swap', now, max: H.swap_total || 0, read: bytes, value: H.swap_total ? `${bytes(H.swap_used)} of ${bytes(H.swap_total)}` : 'no swap',
+        lines: [{ name: 'used', v: S.swap_used, color: COLORS.yellow }] }),
+      chart({ label: `disk ${disk ? disk.mount : ''}`, now, max: disk ? disk.total : 0, read: bytes, value: disk ? `${bytes(disk.avail)} free of ${bytes(disk.total)} (${pct1((100 * disk.used) / disk.total)} used)` : '—',
+        lines: [{ name: 'used', v: S.disk_used, color: COLORS.green }] }),
+      chart({ label: `network ${H.net ? H.net.iface : ''}`, now, read: bps, value: H.net ? `↓ ${bps(H.net.rx_bps)} · ↑ ${bps(H.net.tx_bps)}` : '—',
+        lines: [{ name: 'in', v: S.rx_bps, color: COLORS.green }, { name: 'out', v: S.tx_bps, color: COLORS.blue }] }),
+      chart({ label: 'pressure (time stalled)', now, max: 5, read: pct1, value: `cpu ${pct1(H.pressure && H.pressure.cpu)} · mem ${pct1(H.pressure && H.pressure.memory)} · io ${pct1(H.pressure && H.pressure.io)}`,
+        lines: [{ name: 'cpu', v: S.psi_cpu, color: COLORS.blue }, { name: 'memory', v: S.psi_memory, color: COLORS.violet }, { name: 'io', v: S.psi_io, color: COLORS.yellow }] })
+    );
+    sec.append(tiles);
+    return sec;
+  }
+
+  function containerSection(t, now) {
+    const sec = el('section', 'target');
+    sec.append(el('h2', null, 'containers'));
+    const s = cur;
+    const list = (s && s.latest && s.latest.containers) || [];
+    if (!list.length) {
+      sec.append(el('p', 'empty', !s ? 'loading' : s.status || !s.latest ? 'no numbers from this box yet' : 'no containers reported (is the docker socket mounted?)'));
+      return sec;
+    }
+    const C = s.containers || {};
+    const wrap = el('div', 'scroll');
+    const table = el('table', 'ctrs');
+    const head = el('tr');
+    for (const h of ['container', 'state', 'up', 'restarts', 'cpu', 'memory', 'net ↓ / ↑', 'disk r / w', 'pids']) head.append(el('th', null, h));
+    table.append(head);
+    for (const c of list) {
+      const cs = C[c.name] || {};
+      const tr = el('tr', 'ctr');
+      const name = el('td');
+      name.append(el('span', null, c.name));
+      if (c.service && c.service !== c.name) name.append(el('span', 'dim', ` ${c.service}`));
+      if (c.project && c.project !== 'stream') name.append(el('span', 'dim', ` (${c.project})`));
+      name.title = c.image;
+      const st = el('td', `st-${c.state}`, c.state + (c.health && c.health !== 'healthy' ? ` · ${c.health}` : ''));
+      const cell = (text, v, color, max) => {
+        const td = el('td', 'cell mono');
+        td.append(el('div', null, text));
+        if (s.t.length) td.append(chart({ label: text, lines: [{ v, color }], now, max, small: true, thin: true }));
+        return td;
+      };
+      const restarts = el('td', c.restarts > 0 ? 'note mono' : 'mono', has(c.restarts) ? c.restarts : '—');
+      tr.append(
+        name, st,
+        el('td', 'mono', c.up_since ? human(secsSince(c.up_since, now)) : '—'),
+        restarts,
+        cell(pct1(c.cpu_pct), cs.cpu_pct, COLORS.blue),
+        cell(`${bytes(c.mem_bytes)}${c.mem_limit ? ' / ' + bytes(c.mem_limit) : ''}`, cs.mem_bytes, COLORS.violet, c.mem_limit || 0),
+        el('td', 'mono', `${bps(c.rx_bps)} / ${bps(c.tx_bps)}`),
+        el('td', 'mono', `${Bps(c.read_bps)} / ${Bps(c.write_bps)}`),
+        el('td', 'mono', has(c.pids) ? c.pids : '—')
+      );
+      table.append(tr);
+      if (c.state !== 'running') continue;
+      const detail = el('tr', 'detail');
+      detail.hidden = !expanded.has(c.name);
+      const td = el('td');
+      td.colSpan = 9;
+      if (!detail.hidden) td.append(containerCharts(c, cs, now));
+      detail.append(td);
+      tr.addEventListener('click', () => {
+        if (expanded.has(c.name)) expanded.delete(c.name); else expanded.add(c.name);
+        render();
+      });
+      table.append(detail);
+    }
+    wrap.append(table);
+    sec.append(wrap, el('div', 'dim', 'click a container for its graphs'));
+    return sec;
+  }
+
+  function containerCharts(c, cs, now) {
+    const tiles = el('div', 'tiles');
+    tiles.append(
+      chart({ label: 'cpu (% of one core)', now, read: pct1, value: pct1(c.cpu_pct), lines: [{ name: 'cpu', v: cs.cpu_pct, color: COLORS.blue }] }),
+      chart({ label: 'memory', now, max: c.mem_limit || 0, read: bytes, value: `${bytes(c.mem_bytes)}${c.mem_limit ? ' of ' + bytes(c.mem_limit) : ''}`, lines: [{ name: 'memory', v: cs.mem_bytes, color: COLORS.violet }] }),
+      chart({ label: 'network', now, read: bps, value: `↓ ${bps(c.rx_bps)} · ↑ ${bps(c.tx_bps)}`, lines: [{ name: 'in', v: cs.rx_bps, color: COLORS.green }, { name: 'out', v: cs.tx_bps, color: COLORS.blue }] }),
+      chart({ label: 'disk io', now, read: Bps, value: `r ${Bps(c.read_bps)} · w ${Bps(c.write_bps)}`, lines: [{ name: 'read', v: cs.read_bps, color: COLORS.green }, { name: 'write', v: cs.write_bps, color: COLORS.yellow }] }),
+      chart({ label: 'pids', now, read: num, value: has(c.pids) ? String(c.pids) : '—', lines: [{ name: 'pids', v: cs.pids, color: COLORS.violet }] })
+    );
+    return tiles;
+  }
+
+  function renderNav(shown) {
+    $tabs.replaceChildren();
+    if (state.targets.length > 1) {
+      const all = el('button', 'tab');
+      all.type = 'button';
+      all.setAttribute('aria-pressed', String(shown === ALL));
+      const up = state.targets.filter((t) => t.status === 'up').length;
+      all.append(el('span', null, 'all boxes'), el('small', null, `${up}/${state.targets.length} up`));
+      all.addEventListener('click', () => choose(ALL));
+      $tabs.append(all);
+    }
+    for (const t of state.targets) {
+      const b = el('button', 'tab');
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(shown === t.name));
+      const H = t.metrics && t.metrics.host;
+      const disk = H && (H.disk || [])[0];
+      const mini = H ? `cpu ${pct1(H.cpu_pct)} · mem ${H.mem_total ? pct1((100 * H.mem_used) / H.mem_total) : '—'} · disk ${disk ? pct1((100 * disk.used) / disk.total) : '—'}` : '';
+      b.append(el('span', `dot ${t.status}`), el('span', null, t.name));
+      if (mini) b.append(el('small', null, mini));
+      b.addEventListener('click', () => choose(t.name));
+      $tabs.append(b);
+    }
+    $ranges.replaceChildren();
+    $ranges.hidden = shown === ALL;
+    for (const r of Object.keys(RANGES)) {
+      const b = el('button', null, r);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(sel.range === r));
+      b.addEventListener('click', () => choose(undefined, r));
+      $ranges.append(b);
+    }
+  }
+
+  function render() {
+    if (!state) return;
+    charts.length = 0;
+    const now = Date.parse(state.now) + (Date.now() - state.received);
+    const m = state.monitor;
+    $meta.textContent = `build ${m.build} · up ${human(m.up_secs)} · every ${m.check_every_secs}s · down after ${m.down_after} misses · ${m.webhook ? 'webhook on' : 'no webhook'}`;
+    $targets.replaceChildren();
+    if (!state.targets.length) {
+      $tabs.replaceChildren();
+      $ranges.hidden = true;
+      $targets.append(el('p', 'empty', 'nothing to watch. STATS_TARGETS in .env (or TARGETS in monitor/.env), then deploy'));
+      return;
+    }
+    const shown = boxShown();
+    cur = series && series.target === shown && series.range === sel.range ? series : null;
+    renderNav(shown);
+    if (shown === ALL) {
+      for (const t of state.targets) $targets.append(statusCard(t, now, true));
+    } else {
+      const t = state.targets.find((x) => x.name === shown);
+      $targets.append(hostSection(t, now), containerSection(t, now), statusCard(t, now, false));
+    }
+    for (const c of charts) draw(c);
+  }
+
+  async function loadState() {
     try {
       const res = await fetch('/api/monitor', { cache: 'no-store' });
       if (!res.ok) throw new Error(`GET /api/monitor answered ${res.status}`);
-      render(await res.json());
-      last = Date.now();
+      state = await res.json();
+      state.received = Date.now();
+      lastOk = Date.now();
       $asof.textContent = '';
+      render();
     } catch (e) {
-      $asof.textContent = last ? `could not refresh (${e.message}). as of ${clock(new Date(last).toISOString())}` : `could not load: ${e.message}`;
+      $asof.textContent = lastOk ? `could not refresh (${e.message}). as of ${clock(new Date(lastOk).toISOString())}` : `could not load: ${e.message}`;
     }
   }
+
+  async function loadSeries(force) {
+    const box = boxShown();
+    if (!state || box === ALL) return;
+    const key = `${box}|${sel.range}`;
+    if (!force && key === seriesKey && Date.now() - seriesAt < RANGES[sel.range].every) return;
+    seriesKey = key;
+    seriesAt = Date.now();
+    try {
+      const res = await fetch(`/api/monitor/metrics?target=${encodeURIComponent(box)}&range=${sel.range}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`GET /api/monitor/metrics answered ${res.status}`);
+      const s = await res.json();
+      if (`${s.target}|${s.range}` !== `${boxShown()}|${sel.range}`) return;
+      series = s;
+      render();
+    } catch (e) {
+      seriesAt = 0;
+      $asof.textContent = `could not load the graphs: ${e.message}`;
+    }
+  }
+
+  async function tick() {
+    await loadState();
+    await loadSeries(false);
+  }
+
+  readHash();
+  window.addEventListener('hashchange', () => { readHash(); render(); loadSeries(true); });
+  let resizeTimer = null;
+  window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { for (const c of charts) draw(c); }, 100); });
   tick();
-  setInterval(tick, 10000);
+  setInterval(tick, 5000);
 })();
 </script>
 </body>
