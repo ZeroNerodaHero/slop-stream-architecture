@@ -188,6 +188,7 @@ run about
 run socials
 run prefetch
 run rt
+run rt-page
 run voice
 if [ "$LOCAL" = 1 ]; then
   run regress
