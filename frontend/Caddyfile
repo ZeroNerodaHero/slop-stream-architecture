@@ -5,7 +5,23 @@
 	# compose publishes 443/tcp only, so don't advertise http/3
 	servers :443 {
 		protocols h1 h2
+
+		# cloudflare's ranges, from cloudflare.com/ips-v4 and /ips-v6. refresh when they change.
+		# only a request from one of them gets its CF-Connecting-IP trusted as the client ip; a
+		# direct request can't spoof it, the header is ignored. the proxies below then pin
+		# X-Forwarded-For to that client ip (real_ip snippet)
+		trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+		client_ip_headers CF-Connecting-IP
+		# read the header right to left, stopping at the first ip that isn't a trusted proxy
+		trusted_proxies_strict
 	}
+}
+
+# overwrite X-Forwarded-For with the client ip caddy resolved (the servers block above).
+# caddy would otherwise keep a trusted proxy's own X-Forwarded-For and append, so a visitor
+# could prepend a fake first entry, and api/src/ratelimit.rs and auth.rs read the first
+(real_ip) {
+	header_up X-Forwarded-For {client_ip}
 }
 
 # http://<ip> -> https://<ip>
@@ -20,40 +36,54 @@ http:// {
 	# the home list, served by the home container from its table (api/src/home.rs). an exact
 	# path: /api/streams/<name>/... stays the api's. caddy puts the longer path matcher first
 	handle /api/streams {
-		reverse_proxy home:4100
+		reverse_proxy home:4100 {
+			import real_ip
+		}
 	}
 
 	# json api. path kept, so /api/x -> api:4000/api/x
 	handle /api/* {
-		reverse_proxy api:4000
+		reverse_proxy api:4000 {
+			import real_ip
+		}
 	}
 
 	# video setup websocket. reverse_proxy does the upgrade on its own.
 	handle /ws {
-		reverse_proxy video:7880
+		reverse_proxy video:7880 {
+			import real_ip
+		}
 	}
 
 	# voice channel websocket, the voice container (video/src/voice.rs), which listens at /ws.
 	# an exact path, like /ws. a 502 until the voice profile is up (docker-compose.yml)
 	handle /voice {
 		rewrite * /ws
-		reverse_proxy voice:7881
+		reverse_proxy voice:7881 {
+			import real_ip
+		}
 	}
 
 	# text chat websocket, one per viewer
 	handle /chat/* {
-		reverse_proxy chat:4100
+		reverse_proxy chat:4100 {
+			import real_ip
+		}
 	}
 
 	# the events websocket: presence and pushes, one per browser, open on every page. its own
 	# container, the api binary run as `api events`. an exact path, like /ws. see docs/status.md
 	handle /events {
-		reverse_proxy events:4100
+		reverse_proxy events:4100 {
+			import real_ip
+		}
 	}
 
 	# the picture of each live stream, made on the video machine
 	handle /thumb/* {
-		reverse_proxy video:7880
+		reverse_proxy video:7880 {
+			import real_ip
+		}
 	}
 
 	# the one page the api serves: the same index.html, with a <title> and og:* tags
@@ -61,7 +91,9 @@ http:// {
 	# before react boots. api/src/profile.rs. everything else is the spa below.
 	handle /watch/* {
 		encode zstd gzip
-		reverse_proxy api:4000
+		reverse_proxy api:4000 {
+			import real_ip
+		}
 	}
 
 	# the api is down (./scripts/deploy.sh api, a crash): a shared watch link would be a bare
