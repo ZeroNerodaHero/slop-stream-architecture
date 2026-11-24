@@ -64,6 +64,7 @@ const LIVE_SET_FRESH: Duration = Duration::from_secs(1);
 const WS_PATH: &str = "/ws";
 
 type LiveCache = Arc<Mutex<Option<(Instant, Arc<HashSet<String>>)>>>;
+type RecentCache = Arc<Mutex<Option<(Instant, Value)>>>;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -82,6 +83,7 @@ pub(crate) struct AppState {
     s3: s3::Store,
     pub(crate) groups_per_owner: i64,
     live_cache: LiveCache,
+    recent_cache: RecentCache,
     pub(crate) oauth: Arc<oauth::Config>,
     pub(crate) turnstile: Arc<turnstile::Config>,
 }
@@ -1008,6 +1010,7 @@ async fn main() {
         s3,
         groups_per_owner,
         live_cache: Arc::default(),
+        recent_cache: Arc::default(),
         oauth: Arc::new(oauth::Config::from_env()),
         turnstile: Arc::new(turnstile::Config::from_env()),
     };
