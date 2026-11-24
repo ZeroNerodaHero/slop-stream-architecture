@@ -39,6 +39,12 @@ function crashedOutsideRoutes(error: unknown, info: { componentStack?: string })
   report('crash', error, { componentStack: info.componentStack });
 }
 
+declare global {
+  interface Window {
+    __bootCss?: Promise<unknown>;
+  }
+}
+
 const render = () =>
   createRoot(root, { onUncaughtError: crashedOutsideRoutes }).render(
     <QueryClientProvider client={queryClient}>
@@ -46,6 +52,6 @@ const render = () =>
     </QueryClientProvider>
   );
 
-const firstPage = loadFirstPage();
-if (firstPage) firstPage.then(render, render);
+const waits = [loadFirstPage(), window.__bootCss].filter((wait) => wait !== null && wait !== undefined);
+if (waits.length > 0) void Promise.allSettled(waits).then(render);
 else render();
