@@ -17,8 +17,8 @@ use uuid::Uuid;
 
 use crate::auth::{whoami, whoami_readonly, Account};
 use crate::chat::{self, ChatState, Event, Hello, Joined, Lease, Line, React, Speaker, Unknown, Who};
-use crate::events::{frame, Frame, Seat};
-use crate::socket::{first_text, ping, send, send_text, Beat, Heartbeat, PING_EVERY, SEND_TIMEOUT};
+use crate::events::{Frame, Seat};
+use crate::socket::{first_text, frame_of, ping, send, send_frame, Beat, Heartbeat, PING_EVERY, SEND_TIMEOUT};
 use crate::valid_name;
 
 pub(crate) const VERSION: u32 = 1;
@@ -501,9 +501,9 @@ fn forward(topic: Arc<str>, mut rx: broadcast::Receiver<Event>, out: Outbox) -> 
     Forward(tokio::spawn(async move {
         loop {
             let f = match rx.recv().await {
-                Ok(Event::Line(_, f) | Event::React(_, f) | Event::Delete(_, f)) => f,
-                Ok(Event::Count(count)) => frame(&RtOut::Count { topic: &topic, count }),
-                Err(broadcast::error::RecvError::Lagged(n)) => frame(&RtOut::Gap { topic: &topic, missed: Some(n) }),
+                Ok(Event::Line(.., f) | Event::React(.., f) | Event::Delete(.., f)) => f,
+                Ok(Event::Count(count, _)) => frame_of(&RtOut::Count { topic: &topic, count }),
+                Err(broadcast::error::RecvError::Lagged(n)) => frame_of(&RtOut::Gap { topic: &topic, missed: Some(n) }),
                 Err(broadcast::error::RecvError::Closed) => return,
             };
             out.put(f);
@@ -657,7 +657,7 @@ async fn handle(s: ChatState, ip: String, headers: HeaderMap, mut socket: WebSoc
         let wake = conn.gate.wake();
         tokio::select! {
             f = rx.recv() => match f {
-                Some(f) => if send_text(&mut socket, f.to_string(), SEND_TIMEOUT).await.is_err() { break; },
+                Some(f) => if send_frame(&mut socket, f).await.is_err() { break; },
                 None => break,
             },
             _ = behind.notified() => {
@@ -900,7 +900,7 @@ impl Conn {
         self.s.gateway.retell(&self.seat).await;
         for room in self.rooms.keys() {
             let topic = chat_topic(room);
-            self.out.put(frame(&RtOut::Count { topic: &topic, count: self.s.rooms_viewers(room) }));
+            self.out.put(frame_of(&RtOut::Count { topic: &topic, count: self.s.rooms_viewers(room) }));
         }
     }
 
@@ -1226,11 +1226,11 @@ mod tests {
             held.push(forward("chat:a".into(), tx.subscribe(), out));
             outs.push(rx);
         }
-        let f: Frame = frame(&RtOut::Delete { topic: "chat:a", id: "1-0" });
-        assert!(tx.send(Event::Delete("1-0".into(), f.clone())).is_ok());
+        let f: Frame = frame_of(&RtOut::Delete { topic: "chat:a", id: "1-0" });
+        assert!(tx.send(Event::Delete("1-0".into(), frame_of(&"legacy"), f.clone())).is_ok());
         for rx in &mut outs {
             let got = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await.unwrap().unwrap();
-            assert!(Arc::ptr_eq(&got, &f), "the same bytes, not a copy per socket");
+            assert_eq!(got.as_str().as_ptr(), f.as_str().as_ptr(), "the same bytes, not a copy per socket");
         }
         drop(held);
     }
@@ -1266,7 +1266,7 @@ mod tests {
         let (out, mut rx) = Outbox::new();
         let sub = tx.subscribe();
         for i in 0..10 {
-            assert!(tx.send(Event::Count(i)).is_ok());
+            assert!(tx.send(Event::count(i)).is_ok());
         }
         let _held = forward("chat:a".into(), sub, out);
         let first = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await.unwrap().unwrap();

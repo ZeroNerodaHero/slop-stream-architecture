@@ -1,7 +1,7 @@
 import { atom } from 'jotai';
 
 import { api, type GroupBadge, messageOf, type WatchGrant } from '@/infra/api';
-import { askLatest, type ChatLine, takeHistoryFrom } from '@/infra/atoms/chat-atoms';
+import { askLatest, type ChatLine, takeHistoryFrom, warmChat } from '@/infra/atoms/chat-atoms';
 import { presenceChanged, presencesAtom } from '@/infra/atoms/presence-atoms';
 import { pipAtom, socialsAtom, watchNameAtom, watchPhaseAtom, type WatchPhase, watchWelcomeAtom } from '@/infra/atoms/watch-state';
 import { welcomeOf } from '@/infra/atoms/welcome-atoms';
@@ -314,6 +314,7 @@ takeHistoryFrom((name) => takePrefetched<ChatLine[]>(chatKey(name))?.answer ?? n
 onPrefetch('watch', (name) => {
   if (keptInCorner(name)) return;
   prefetch(chatKey(name), null, 'drop', () => askLatest(name));
+  warmChat(name);
   prefetch(grantKey(name), name, 'drop', () => api.watch(name));
   if (!knownNotLive(name)) warmOnPress(name);
 });

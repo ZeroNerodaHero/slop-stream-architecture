@@ -28,6 +28,7 @@ export interface ChatLine {
   channel?: string;
   reply?: ChatReply;
   reactions?: Reaction[];
+  pending?: 'sending' | 'failed';
 }
 
 export interface ChatReply {
@@ -52,7 +53,9 @@ export type ChatPhase = 'off' | 'connecting' | 'open' | 'closed';
 export const MAX_CHAT_CHARS = 500;
 export { MAX_CHAT_IMAGES };
 const KEEP_LINES = 500;
-const RECONNECT_MS = 3000;
+const RETRY_FIRST_MS = 250;
+const RETRY_CAP_MS = 15_000;
+const FAILED_SHOWN_MS = 6000;
 const OLDER_PAGE = 50;
 const MAX_LOADED = 2000;
 const LEAVE_MS = 100;
@@ -150,6 +153,40 @@ export function setNick(raw: string) {
 }
 
 const rooms = new Map<string, ChatRoom>();
+
+const WARM_CHAT_MS = 5000;
+let warm: { name: string; ws: WebSocket; me: string | null | undefined; timer: ReturnType<typeof setTimeout> } | null = null;
+
+function dropWarm() {
+  if (!warm) return;
+  clearTimeout(warm.timer);
+  warm.ws.close();
+  warm = null;
+}
+
+export function warmChat(name: string) {
+  if (rooms.get(name)?.connected()) return;
+  if (warm?.name === name && warm.ws.readyState <= WebSocket.OPEN) {
+    clearTimeout(warm.timer);
+    warm.timer = setTimeout(dropWarm, WARM_CHAT_MS);
+    return;
+  }
+  dropWarm();
+  warm = { name, ws: new WebSocket(relayUrl(`/chat/${chatPath(name)}`)), me: store.get(meAtom), timer: setTimeout(dropWarm, WARM_CHAT_MS) };
+}
+
+function takeWarmChat(name: string): WebSocket | null {
+  const held = warm;
+  if (!held || held.name !== name) return null;
+  clearTimeout(held.timer);
+  warm = null;
+  const me = store.get(meAtom);
+  if (held.ws.readyState > WebSocket.OPEN || (held.me !== undefined && me !== undefined && held.me !== me)) {
+    held.ws.close();
+    return null;
+  }
+  return held.ws;
+}
 let shownServer: string | null = null;
 
 export function chatRoomKey(name: string, server: boolean): string {
@@ -191,6 +228,7 @@ export class ChatRoom {
   readonly scrollAtom: PrimitiveAtom<number> = atom(0);
   readonly guestAtom: PrimitiveAtom<boolean> = atom(false);
   readonly readerAtom: PrimitiveAtom<boolean> = atom(false);
+  readonly pendingAtom: PrimitiveAtom<ChatLine[]> = atom<ChatLine[]>([]);
   readonly channelAtom: PrimitiveAtom<string> = atom('');
   readonly replyAtom: PrimitiveAtom<ChatLine | null> = atom<ChatLine | null>(null);
   readonly flashAtom: PrimitiveAtom<string | null> = atom<string | null>(null);
@@ -213,7 +251,9 @@ export class ChatRoom {
   private leaving: ReturnType<typeof setTimeout> | null = null;
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
   private bucket: { tokens: number; at: number };
-  private inFlight: ({ text: string; images: string[]; reply: ChatLine | null } & Attached)[] = [];
+  private inFlight: ({ key: string; text: string; images: string[]; reply: ChatLine | null } & Attached)[] = [];
+  private sent = 0;
+  private retries = 0;
   private flashTimer: ReturnType<typeof setTimeout> | null = null;
   private wasOpen = false;
 
@@ -236,9 +276,14 @@ export class ChatRoom {
     this.bucket = { tokens: TIERS.anon.burst, at: Date.now() };
     const lines = this.linesAtom;
     const asStreamer = this.asStreamerAtom;
+    const pending = this.pendingAtom;
+    const shownChannel = this.channelAtom;
     this.visibleLinesAtom = atom((get) => {
       const all = get(lines);
-      return get(hideBotsAtom) ? all.filter((line) => !isBotLine(line)) : all;
+      const shown = get(hideBotsAtom) ? all.filter((line) => !isBotLine(line)) : all;
+      const here = get(shownChannel);
+      const mine = get(pending).filter((line) => (line.channel ?? '') === here);
+      return mine.length > 0 ? [...shown, ...mine] : shown;
     });
     this.hiddenBotLinesAtom = atom((get) => (get(hideBotsAtom) ? get(lines).filter(isBotLine).length : 0));
     this.tierAtom = atom((get) => (get(meAtom) || get(asStreamer) ? TIERS.login : TIERS.anon));
@@ -340,6 +385,10 @@ export class ChatRoom {
     return this.historyHeld ? NO_LINE_YET : undefined;
   }
 
+  connected(): boolean {
+    return this.ws !== null;
+  }
+
   reconnect() {
     if (this.joins.size === 0) return;
     this.hangUp();
@@ -380,6 +429,8 @@ export class ChatRoom {
     store.set(this.waitAtom, 0);
     store.set(this.guestAtom, false);
     store.set(this.readerAtom, false);
+    store.set(this.pendingAtom, []);
+    this.retries = 0;
     this.owner = null;
     this.me = null;
     this.nick = '';
@@ -550,7 +601,26 @@ export class ChatRoom {
     if (reply) say.reply = reply.id;
     record(`/chat/${this.key}`, 'out', say);
     ws.send(JSON.stringify(say));
-    this.inFlight.push({ text, images, reply, ...this.attach.take() });
+    const key = `pending-${++this.sent}`;
+    const asStreamer = store.get(this.asStreamerAtom);
+    const line: ChatLine = {
+      id: key,
+      from: asStreamer ? this.key : store.get(chatSpeakerAtom),
+      text: words,
+      streamer: asStreamer,
+      verified: Boolean(store.get(meAtom)),
+      groups: [],
+      avatar: null,
+      at: Date.now(),
+      image: images[0] ?? null,
+      images,
+      video,
+      reply: reply ? quoteOf(reply) : undefined,
+      channel: this.server ? this.channel : undefined,
+      pending: 'sending'
+    };
+    store.set(this.pendingAtom, [...store.get(this.pendingAtom), line]);
+    this.inFlight.push({ key, text, images, reply, ...this.attach.take() });
     store.set(this.draftAtom, '');
     store.set(this.replyAtom, null);
     this.toLatest();
@@ -594,7 +664,7 @@ export class ChatRoom {
 
     this.loadHistory();
     store.set(this.phaseAtom, 'connecting');
-    const ws = new WebSocket(relayUrl(`/chat/${chatPath(this.key)}`));
+    const ws = (this.server ? null : takeWarmChat(this.key)) ?? new WebSocket(relayUrl(`/chat/${chatPath(this.key)}`));
     this.ws = ws;
     this.me = known;
     this.nick = me ? '' : nick;
@@ -602,7 +672,7 @@ export class ChatRoom {
     store.set(this.readerAtom, false);
     const source = `/chat/${this.key}`;
 
-    ws.onopen = async () => {
+    const greet = async () => {
       if (!this.server) await this.settled();
       if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
       const speaker = store.get(meAtom);
@@ -624,6 +694,8 @@ export class ChatRoom {
       if (!this.server && this.wasOpen) void this.refreshLatest();
       this.wasOpen = true;
     };
+    if (ws.readyState === WebSocket.OPEN) void greet();
+    else ws.onopen = greet;
     ws.onmessage = (e) => {
       if (this.ws !== ws) return;
       let msg: {
@@ -645,6 +717,7 @@ export class ChatRoom {
         return;
       }
       record(source, 'in', msg);
+      this.retries = 0;
       const tagged = this.server && typeof msg.channel === 'string' ? msg.channel : null;
       if (msg.type === 'ready') {
         store.set(this.readerAtom, msg.reader === true);
@@ -653,7 +726,11 @@ export class ChatRoom {
         const sent = this.inFlight.findIndex(
           (p) => p.text === said && samePictures(p.images, picturesOf(msg)) && (p.video?.video?.id ?? null) === (videoOf(msg.video)?.id ?? null)
         );
-        if (sent >= 0) releaseAttached(this.inFlight.splice(sent, 1)[0]!);
+        if (sent >= 0) {
+          const echoed = this.inFlight.splice(sent, 1)[0]!;
+          releaseAttached(echoed);
+          this.dropPending(echoed.key);
+        }
         const line = fromWire(msg as ChatLine);
         if (tagged !== null && tagged !== this.channel) this.shelfAppend(tagged, line);
         else {
@@ -682,7 +759,7 @@ export class ChatRoom {
       this.timer = setTimeout(() => {
         this.timer = null;
         if (this.joins.size > 0) this.connect();
-      }, RECONNECT_MS);
+      }, retryAfter(this.retries++));
     };
   }
 
@@ -710,7 +787,18 @@ export class ChatRoom {
     }
   }
 
-  private restore(lost: { text: string; reply: ChatLine | null } & Attached, error: string | null) {
+  private dropPending(key: string) {
+    const pending = store.get(this.pendingAtom);
+    if (pending.some((line) => line.id === key)) store.set(this.pendingAtom, pending.filter((line) => line.id !== key));
+  }
+
+  private failPending(key: string) {
+    store.set(this.pendingAtom, store.get(this.pendingAtom).map((line) => (line.id === key ? { ...line, pending: 'failed' as const } : line)));
+    setTimeout(() => this.dropPending(key), FAILED_SHOWN_MS);
+  }
+
+  private restore(lost: { key: string; text: string; reply: ChatLine | null } & Attached, error: string | null) {
+    this.failPending(lost.key);
     if (lost.text && !store.get(this.draftAtom)) store.set(this.draftAtom, lost.text);
     this.attach.restore(lost, error && isPictureRefusal(error) ? error : null);
     if (lost.reply && error !== 'no such line' && !store.get(this.replyAtom)) store.set(this.replyAtom, lost.reply);
@@ -1110,6 +1198,24 @@ async function linesOf(response: Promise<Response>): Promise<ChatLine[]> {
   }
   if (!res.ok) throw new Error(data?.error || `http ${res.status}`);
   return (data?.lines ?? []).map(fromWire);
+}
+
+function retryAfter(tries: number): number {
+  const base = Math.min(RETRY_CAP_MS, RETRY_FIRST_MS * 2 ** tries);
+  return Math.round(base + Math.random() * base * 0.5);
+}
+
+function quoteOf(line: ChatLine): ChatReply {
+  return {
+    id: line.id,
+    from: line.from,
+    text: [...line.text].slice(0, 120).join(''),
+    streamer: line.streamer,
+    verified: line.verified,
+    avatar: line.avatar,
+    images: line.images.length,
+    video: Boolean(line.video)
+  };
 }
 
 function sameOwner(a: Owner | null, b: Owner | null): boolean {

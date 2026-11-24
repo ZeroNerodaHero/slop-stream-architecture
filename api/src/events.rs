@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::IntoResponse;
@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::auth::{is_claimed, whoami, NICK_HAS_ACCOUNT};
 use crate::chat::{clean_nick, valid_nick};
 use crate::presence::{self, Presence, Status, EVENTS_KEEP, EVENTS_KEY, SEEN_TTL_SECS, SEEN_WINDOW_MS};
-use crate::socket::{first_text, locked, ping, send, send_text, Beat, Heartbeat, IpSlots, DRAIN_LIMIT, MAX_FRAME_BYTES, READ_BLOCK_MS, SEND_TIMEOUT};
+use crate::socket::{first_text, frame_of, locked, ping, send, send_frame, Beat, Heartbeat, IpSlots, DRAIN_LIMIT, MAX_FRAME_BYTES, READ_BLOCK_MS, SEND_TIMEOUT};
 use crate::{live_key, valid_name};
 
 const REPLAY_MS: i64 = 10_000;
@@ -151,15 +151,11 @@ struct Entry {
     me: Option<(Presence, Status)>,
 }
 
-pub(crate) type Frame = Arc<str>;
-
-pub(crate) fn frame<T: Serialize>(out: &T) -> Frame {
-    serde_json::to_string(out).unwrap_or_default().into()
-}
+pub(crate) type Frame = Utf8Bytes;
 
 impl Entry {
     fn put(&self, out: Out) {
-        self.put_frame(frame(&out));
+        self.put_frame(frame_of(&out));
     }
 
     fn put_frame(&self, f: Frame) {
@@ -539,7 +535,7 @@ impl Gateway {
     }
 
     async fn tell(&self, names: &[&str], out: Out) {
-        let f = frame(&out);
+        let f = frame_of(&out);
         let s = self.registry.lock();
         let mut told: HashSet<SocketId> = HashSet::new();
         for name in names {
@@ -554,7 +550,7 @@ impl Gateway {
     }
 
     async fn fan(&self, name: &str, out: Out) {
-        let f = frame(&out);
+        let f = frame_of(&out);
         let s = self.registry.lock();
         let named = s.watchers.get(name).into_iter().flatten();
         let all = s.watchers.get(EVERYONE).into_iter().flatten().filter(|id| !s.watchers.get(name).is_some_and(|set| set.contains(id)));
@@ -566,7 +562,7 @@ impl Gateway {
     }
 
     async fn tell_topic(&self, topic: &str, out: Out) {
-        let f = frame(&out);
+        let f = frame_of(&out);
         let s = self.registry.lock();
         for id in s.watchers.get(topic).into_iter().flatten() {
             if let Some(e) = s.by_id.get(id) {
@@ -661,7 +657,7 @@ impl Gateway {
     }
 
     async fn renamed(&self, old: &str, new: &str) {
-        let f = frame(&Out::Renamed { name: old.to_owned(), to: new.to_owned() });
+        let f = frame_of(&Out::Renamed { name: old.to_owned(), to: new.to_owned() });
         let moved: Vec<SocketId> = {
             let mut s = self.registry.lock();
             let ids: Vec<SocketId> = s.own.remove(old).into_iter().flatten().collect();
@@ -975,7 +971,7 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
     loop {
         tokio::select! {
             out = rx.recv() => match out {
-                Some(out) => if send_text(&mut socket, out.to_string(), SEND_TIMEOUT).await.is_err() { break; },
+                Some(out) => if send_frame(&mut socket, out).await.is_err() { break; },
                 None => break,
             },
             _ = kick.notified() => {
