@@ -24,7 +24,7 @@ import { MakeGroupDialog } from '@/shared-components/MakeGroupDialog';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { usePeek } from '@/shared-components/peek';
 import { PersonRow, Who } from '@/shared-components/PersonRow';
-import { ProfileLink } from '@/shared-components/ProfileLink';
+import { ProfileLink, useShowProfile } from '@/shared-components/ProfileLink';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { ViewerCount } from '@/shared-components/ViewerCount';
@@ -407,6 +407,12 @@ function People() {
 
 function RecentCard({ person: p }: { person: Recent }) {
   const peek = usePeek(PEEK_MS);
+  const { show } = useShowProfile();
+  const target = { name: p.name, verified: p.verified, oauth_verified: p.oauth_verified, avatar: p.avatar };
+  const open = () => {
+    peek.close();
+    show(target);
+  };
   return (
     <article
       id={`recent-${p.name}`}
@@ -430,7 +436,7 @@ function RecentCard({ person: p }: { person: Recent }) {
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <ProfileLink
           id={`recent-link-${p.name}`}
-          person={{ name: p.name, verified: p.verified, oauth_verified: p.oauth_verified, avatar: p.avatar }}
+          person={target}
           className="flex min-w-0 border border-transparent outline-none after:absolute after:inset-0 focus-visible:border-primaryBlue"
         >
           <Who name={p.name} verified={p.verified} oauthVerified={p.oauth_verified} className="text-base" />
@@ -438,7 +444,7 @@ function RecentCard({ person: p }: { person: Recent }) {
         <div className="flex items-center gap-1.5 text-xs text-textTertiary">
           <RiTimeLine aria-hidden size={12} className="shrink-0" />
           <Tooltip content={new Date(p.ended_at).toLocaleString()}>
-            <span id={`recent-when-${p.name}`} className="relative z-10 whitespace-nowrap">
+            <span id={`recent-when-${p.name}`} className="relative z-10 whitespace-nowrap" onClick={open}>
               <TimeAgo at={p.ended_at} />
             </span>
           </Tooltip>
@@ -449,6 +455,7 @@ function RecentCard({ person: p }: { person: Recent }) {
               role="img"
               aria-label={`${p.followers} ${p.followers === 1 ? 'follower' : 'followers'}`}
               className="relative z-10 flex items-center gap-1 tabular-nums"
+              onClick={open}
             >
               <RiUserLine aria-hidden size={12} />
               {compactCount(p.followers)}
