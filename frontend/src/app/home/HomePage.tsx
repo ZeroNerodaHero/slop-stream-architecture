@@ -1,5 +1,5 @@
 import { RiTimeLine, RiUserLine } from '@remixicon/react';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -52,7 +52,7 @@ const CARD_LINK = cn(CARD, 'group transition-[border-color] duration-150 hover:b
 
 const stills = stillPictures({ custom: api.streamThumbUrl, camera: api.thumbUrl });
 
-function Thumb({ name }: { name: string }) {
+function Thumb({ name, first }: { name: string; first: boolean }) {
   const [src, setSrc] = useState(() => stills.src(name, []));
   const [missing, setMissing] = useState(false);
   const wait = useRef<number | null>(null);
@@ -70,6 +70,9 @@ function Thumb({ name }: { name: string }) {
       alt=""
       draggable={false}
       data-thumb={name}
+      loading={first ? 'eager' : 'lazy'}
+      fetchPriority={first ? 'high' : 'auto'}
+      decoding={first ? 'auto' : 'async'}
       className={cn('absolute inset-0 h-full w-full object-cover', missing && 'opacity-0')}
       onError={() => {
         if (wait.current !== null) return;
@@ -135,11 +138,13 @@ function Card({
   playing,
   onEnter,
   onLeave,
-  idPrefix = ''
+  idPrefix = '',
+  first = false
 }: {
   stream: LiveStream;
   now: number;
   featured: boolean;
+  first?: boolean;
   playing: boolean;
   onEnter: (pointer: string) => void;
   onLeave: () => void;
@@ -160,11 +165,17 @@ function Card({
         <div className="relative aspect-video overflow-hidden border-b border-primaryStroke bg-black">
           <div className="absolute inset-0 transition-transform duration-300 ease-out group-hover:scale-105">
             {thumbs.length > 0 ? (
-              <BlurredPicture name={stream.name} version={stream.avatar} src={stills.src(stream.name, thumbs)} />
+              <BlurredPicture
+                name={stream.name}
+                version={stream.avatar}
+                src={stills.src(stream.name, thumbs)}
+                loading={first ? 'eager' : 'lazy'}
+                fetchPriority={first ? 'high' : 'auto'}
+              />
             ) : (
               <>
                 {stream.avatar !== null && <BlurredPicture name={stream.name} version={stream.avatar} />}
-                <Thumb name={stream.name} />
+                <Thumb name={stream.name} first={first} />
               </>
             )}
             {playing && <PreviewVideo name={stream.name} />}
@@ -398,14 +409,22 @@ function RecentCard({ person: p, now }: { person: Recent; now: number }) {
   );
 }
 
-function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
+function RecentlyOffline({ liveKey, now }: { liveKey: string | null; now: number }) {
   const recent = useQuery({
-    queryKey: ['recent', liveKey],
+    queryKey: ['recent'],
     queryFn: api.recent,
-    placeholderData: keepPreviousData,
     refetchInterval: PEOPLE_POLL_MS,
     refetchOnWindowFocus: false
   });
+  const seenKey = useRef<string | null>(null);
+  const { refetch } = recent;
+
+  useEffect(() => {
+    if (liveKey === null) return;
+    if (seenKey.current !== null && seenKey.current !== liveKey) void refetch();
+    seenKey.current = liveKey;
+  }, [liveKey, refetch]);
+
   const list: Recent[] = recent.data ?? [];
   if (!recent.data || list.length === 0) return null;
   return (
@@ -571,8 +590,8 @@ export function HomePage() {
         <div id="list" className={cn(!list?.length && 'hidden')}>
           {featured.length > 0 && (
             <div id="featured" className={cn(FEATURED_GRID, rest.length > 0 && 'mb-6')}>
-              {featured.map((stream) => (
-                <Card key={stream.name} stream={stream} now={now} featured playing onEnter={() => undefined} onLeave={() => undefined} />
+              {featured.map((stream, i) => (
+                <Card key={stream.name} stream={stream} now={now} featured first={i === 0} playing onEnter={() => undefined} onLeave={() => undefined} />
               ))}
             </div>
           )}
@@ -603,7 +622,7 @@ export function HomePage() {
           onLeave={(name) => cardHover.leave(name)}
         />
       )}
-      {!error && <RecentlyOffline liveKey={namesKey} now={now} />}
+      {!error && <RecentlyOffline liveKey={list ? namesKey : null} now={now} />}
       {!error && <Groups />}
       {!error && <People />}
     </PageFrame>

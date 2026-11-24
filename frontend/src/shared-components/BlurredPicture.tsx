@@ -10,15 +10,26 @@ interface BlurredPictureProps {
   version: number | null;
   src?: string | null;
   className?: string;
+  loading?: 'eager' | 'lazy';
+  fetchPriority?: 'high' | 'low' | 'auto';
 }
 
-export function BlurredPicture({ name, version, src = null, className }: BlurredPictureProps) {
+export function BlurredPicture({ name, version, src = null, className, loading, fetchPriority }: BlurredPictureProps) {
   const [broken, setBroken] = useState<string | null>(null);
   const picture = src !== broken ? src : null;
   return (
     <span aria-hidden className={cn('absolute inset-0 overflow-hidden', className)}>
       {picture ? (
-        <img src={picture} alt="" draggable={false} className={BLURRED} onError={() => setBroken(picture)} />
+        <img
+          src={picture}
+          alt=""
+          draggable={false}
+          loading={loading}
+          fetchPriority={fetchPriority}
+          decoding={loading === 'lazy' ? 'async' : undefined}
+          className={BLURRED}
+          onError={() => setBroken(picture)}
+        />
       ) : (
         <Face name={name} version={version} className={cn(BLURRED, 'text-6xl')} />
       )}
