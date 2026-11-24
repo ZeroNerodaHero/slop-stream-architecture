@@ -26,50 +26,25 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 import { ago, since } from '@/utils/since';
 
-/** The people under the streams: who is here changes by the minute, not the second. */
 const PEOPLE_POLL_MS = 10_000;
-/** The first two cards, played live at the top: the streams that came first, until the home service ranks them. */
 const FEATURED = 2;
 
-/** One card per column, as many columns as fit: 1 on a phone, 2 on a tablet, 4 at full width. */
 const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4';
-/** The smaller grid of the people: a rectangle each, as many as fit. */
 const PEOPLE_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3';
-/** The recently offline: the same rectangle, the live cards' width, so "last live 12 min ago" has room beside the face and the button. */
 const RECENT_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3';
-/** The groups as squares, as many as fit. */
 const GROUPS_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3';
-/** The two cards played live at the top, side by side at lg and up. */
 const FEATURED_GRID = 'grid grid-cols-1 gap-4 lg:grid-cols-2';
-/** How many grey squares and rectangles stand in for the groups and the people before they have answered. */
 const GROUPS_GUESS = 6;
 const PEOPLE_GUESS = 8;
-/**
- * The words of a part's heading (`Part`): `active streams`, `recently offline`, `groups`,
- * `people`. The words and the count over a fat line as wide as they are, the line's colour saying
- * what the part holds: green under the live, grey under the rest. 33px tall in all, so in the title
- * row it stays inside go live's 38.
- */
 const SECTION_TITLE = 'flex items-baseline gap-2 border-b-4 pb-1 text-xl font-semibold leading-tight';
 const LIVE_LINE = 'border-increase';
 const OFFLINE_LINE = 'border-textTertiary';
-/** The number beside the words, a step quieter. */
 const SECTION_COUNT = 'text-textSecondary';
-/**
- * A card is the panel look without its offset shadow: in a grid, the offsets read as a second
- * box behind every stream. The stroke goes blue on hover and keyboard focus instead.
- */
 const CARD = 'border border-primaryStroke bg-backgroundSecondary';
 const CARD_LINK = cn(CARD, 'group transition-[border-color] duration-150 hover:border-primaryBlue focus-within:border-primaryBlue');
 
-/** One per page load, so a refresh can land on a different picture and a sitting page never does. */
 const stills = stillPictures({ custom: api.streamThumbUrl, camera: api.thumbUrl });
 
-/**
- * One picture for the whole visit. The streamer's own when they put some, else one frame
- * of the camera. A 404 on that first frame (it takes ~6s, home lists the stream within 3s)
- * asks again, and then the url stays: the next bucket used to swap the picture under you.
- */
 function Thumb({ name, thumbs }: { name: string; thumbs: number[] }) {
   const [src, setSrc] = useState(() => stills.src(name, thumbs));
   const [missing, setMissing] = useState(false);
@@ -110,10 +85,6 @@ function Thumb({ name, thumbs }: { name: string; thumbs: number[] }) {
   );
 }
 
-/**
- * The camera, once it is playing. Until then the still underneath shows, on the featured cards too:
- * a preview that video refused, or that is still connecting, is a picture and not a black box.
- */
 function PreviewVideo({ name }: { name: string }) {
   const stream = useAtomValue(previewStreamsAtom)[name] ?? null;
   const ref = useRef<HTMLVideoElement | null>(null);
@@ -141,7 +112,6 @@ function PreviewVideo({ name }: { name: string }) {
   );
 }
 
-/** The streamer's picture, or their first letter when they have none, so every card lines up the same. */
 function Face({ stream }: { stream: LiveStream }) {
   if (stream.avatar !== null) return <Avatar name={stream.name} version={stream.avatar} className="mr-0 h-9 w-9 shrink-0" />;
   return (
@@ -167,10 +137,8 @@ function Card({
   now: number;
   featured: boolean;
   playing: boolean;
-  /** A mouse or keyboard arrival. Touch is passed through and ignored: a tap is the click. */
   onEnter: (pointer: string) => void;
   onLeave: () => void;
-  /** Before the ids on the card (`viewers-<name>`), for a card that is on the page a second time (the following part). */
   idPrefix?: string;
 }) {
   const age = since(stream.since, now);
@@ -178,14 +146,12 @@ function Card({
     <article className={CARD_LINK} data-featured={featured ? stream.name : undefined} onPointerEnter={(event) => onEnter(event.pointerType)} onPointerLeave={onLeave}>
       <Link
         to={`/watch/${encodeURIComponent(stream.name)}`}
-        // a card is a stream: the page holds the player's box from its first paint (WatchPage.tsx)
         state={{ live: true }}
         aria-label={`watch ${stream.name}`}
         className="block outline-none"
         onFocus={() => onEnter('keyboard')}
         onBlur={onLeave}
       >
-        {/* one chip, top right: "live for 52 hr". the fake streams draw their name top-left and a clock bottom-left */}
         <div className="relative aspect-video overflow-hidden border-b border-primaryStroke bg-black">
           <div className="absolute inset-0 transition-transform duration-300 ease-out group-hover:scale-105">
             <Thumb name={stream.name} thumbs={stream.thumbs ?? []} />
@@ -195,7 +161,6 @@ function Card({
             <span aria-hidden className="h-2 w-2 animate-pulse bg-increase" />
             {age || 'live'}
           </span>
-          {/* bottom right, "3 watching": null when video did not answer (the list came from redis), absent on an older api. a chip only when there is a number to show */}
           {typeof stream.viewers === 'number' && (
             <span className="absolute bottom-3 right-3 z-10 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold text-white backdrop-blur-sm">
               <ViewerCount id={`${idPrefix}viewers-${stream.name}`} count={stream.viewers} />
@@ -214,7 +179,6 @@ function Card({
                   </span>
                 </Tooltip>
               )}
-              {/* the badge their chat lines wear; plain (a title, no card) since the whole card is the link */}
               {stream.badge && <Badge group={stream.badge} className="ml-1.5 shrink-0" />}
               {isDummyName(stream.name) && (
                 <span className="shrink-0">
@@ -230,24 +194,9 @@ function Card({
   );
 }
 
-/**
- * One part of the page under its heading (`#<id>`, `#<id>-title`). The heading is sticky and as
- * tall as the title row (PageFrame.tsx, 4rem), whose left end it stands in: on home the row is only
- * the bell and go live, and the page starts at its top, so `active streams` sits in the row at the
- * top of the page, and once the live cards have scrolled away the next part's heading pushes it out
- * and takes its place (a login's following, then the recently offline, the groups, the people), the
- * way a phone's contact list does its letters. The room under a part is padding inside it rather than a margin before the
- * next, so the push comes exactly when the part ends and not a gap later. The same z as the row
- * and later in the document, so the heading paints over it; the sidebar open (z-40) covers both.
- */
-/**
- * `aside`: a control beside the words (groups' `create group`), riding along in the sticky row. The section is named by the words alone.
- * `title`: the words without the count, for a phone's row (PageFrame.tsx), which says the part you are in.
- */
 function Part({ id, title, line, heading, aside, children }: { id: string; title: string; line: string; heading: ReactNode; aside?: ReactNode; children: ReactNode }) {
   return (
     <section id={id} aria-labelledby={`${id}-title`} data-title={title}>
-      {/* a phone's row says the part you are in (PageFrame.tsx), so there the heading does not stick: it scrolls with its part */}
       <h2 className="sticky top-0 z-30 flex h-16 w-fit items-center gap-4 max-md:static">
         <span id={`${id}-title`} className={cn(SECTION_TITLE, line)}>
           {heading}
@@ -259,15 +208,6 @@ function Part({ id, title, line, heading, aside, children }: { id: string; title
   );
 }
 
-/**
- * The streams of who you follow (docs/follows.md), under the active streams: their cards again,
- * so yours are found without reading the whole grid (a stream in both places is in both; that
- * is the point). For a login who follows someone; the count is how many of them are live, and
- * with none it says so. Who you follow is the sidebar's list, asked at login and on every open
- * of the panel; who is live is the page's own list, so a card here goes the moment the stream
- * ends, with its card above. A card plays on hover like the grid's; one whose stream is already
- * playing at the top plays here too, since that preview is up anyway.
- */
 function Followed({
   streams,
   now,
@@ -323,16 +263,9 @@ function Followed({
   );
 }
 
-/**
- * Everyone who is not live, under the streams (docs/follows.md): a rectangle each, the face, the
- * name with its marks, the word beside it, a line of the bio, and the follow button. Online
- * first, the api's order. The fake streams are people too when they are not on.
- */
 function People() {
   const people = useQuery({ queryKey: ['people'], queryFn: homePeople, refetchInterval: PEOPLE_POLL_MS, refetchOnWindowFocus: false });
   const list: Person[] = people.data ?? [];
-  // before the first answer: the heading and a row of grey rectangles, the people's shape, so the part is
-  // there from the first paint instead of arriving under the groups
   if (people.isPending) {
     return (
       <Part id="people" title="people" line={OFFLINE_LINE} heading="people">
@@ -395,12 +328,6 @@ function People() {
   );
 }
 
-/**
- * Who was live lately and is not now, under the live cards (docs/follows.md): the people's
- * rectangle, with a line saying when the last stream ended, "last live 3 hr ago", on the page's
- * clock. Newest end first, the api's order and cut. Asked again on the people's cadence, and the
- * moment the live set changes: a card that just left the grid above lands here without the wait.
- */
 function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
   const recent = useQuery({
     queryKey: ['recent', liveKey],
@@ -451,12 +378,6 @@ function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
   );
 }
 
-/**
- * Every group but `bot`, under recently offline: yours and the public ones, as squares. The
- * heading opens the list; beside it, `create group` for a login under the cap on owned
- * groups (the api's `groups_per_owner`), which opens the same dialog `/groups` has and ends
- * on the new room.
- */
 function Groups() {
   const me = useAtomValue(meAtom);
   const [making, setMaking] = useState(false);
@@ -490,7 +411,6 @@ function Groups() {
       }
     >
       {making && <MakeGroupDialog onClose={() => setMaking(false)} />}
-      {/* before the first answer: a row of grey squares, the groups' shape. the part always shows once asked (`no groups yet.` for none), so the grey never comes to nothing */}
       {loading && (
         <Skeleton id="home-groups-loading" className={GROUPS_GRID}>
           {Array.from({ length: GROUPS_GUESS }, (_, i) => (
@@ -511,10 +431,6 @@ function Groups() {
   );
 }
 
-/**
- * The featured cards' worth of grey, in their grid, for the moment before the first answer: the
- * top of the page as it is on a day with streams, so the two that come land where the grey was.
- */
 function StreamsSkeleton() {
   return (
     <Skeleton id="loading" className={FEATURED_GRID}>
@@ -537,9 +453,6 @@ function StreamsSkeleton() {
 }
 
 export function HomePage() {
-  // the list is one snapshot and then the facts over the events socket (home-atoms); nothing
-  // polls. the clock is the module's 1s tick, so the render never reads the time itself. the
-  // picture does not move with either: one still per visit
   const streams = useAtomValue(homeStreamsAtom);
   const error = useAtomValue(homeErrorAtom);
   const now = useAtomValue(homeNowAtom);
@@ -550,7 +463,6 @@ export function HomePage() {
   const [hover, setHover] = useState<string | null>(null);
   const [cardHover] = useState(() => hoverPreview(window, setHover));
 
-  // mount only: the feed and the snapshot on, and off on the way out
   useEffect(() => {
     enterHome();
     return leaveHome;
@@ -559,7 +471,6 @@ export function HomePage() {
   useEffect(() => {
     const liveNames = namesKey ? namesKey.split(',') : [];
     const names = liveNames.slice(0, FEATURED);
-    // gone offline, or moved up into featured: those cards' handlers are noops, so nothing would ever hang it up
     if (hover && (!liveNames.includes(hover) || names.includes(hover))) setHover(null);
     else if (hover) names.push(hover);
     setHomePreviews(names);
@@ -573,9 +484,6 @@ export function HomePage() {
     []
   );
 
-  // no title: the row is the bell and go live, `active streams` with its count is the first part's
-  // heading standing in it (Part), and the cards are the page. search is the sidebar's. the empty
-  // state has go live again.
   return (
     <PageFrame wide>
       <Part

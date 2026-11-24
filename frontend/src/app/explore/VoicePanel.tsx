@@ -49,34 +49,16 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { HeardMutedMark, useHeardUid, VoiceLevel } from '@/shared-components/VoiceLevel';
 import { cn } from '@/utils/cn';
 
-/** The pencil on a voice channel's row: up with the pointer on the row (`group/voice`), the focus on it, or no hover to wait for. */
 const PENCIL_HIDDEN = 'opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover/voice:opacity-100 [@media(hover:none)]:opacity-100';
 
 const BAR_BUTTON =
   'flex h-7 w-7 max-md:h-11 max-md:w-11 shrink-0 items-center justify-center border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 
-/** How long the pointer rests on a person before their card shows: the roster's (ServerRoom.tsx `PEEK_MS`). */
 const PEEK_MS = 200;
 
-/** Mute, deafen and leave in the header, and the signal on your channel's row: smaller than the pencil, the row's height. */
 const CALL_BUTTON =
   'flex h-6 w-6 max-md:h-9 max-md:w-9 shrink-0 items-center justify-center border border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 
-/**
- * The group's voice channels and who is in each (docs/voice.md), over the roster. A click on a
- * channel joins it; while in one, the header has mute, deafen and leave at the right, and its row
- * has the signal (how the call is getting through, the numbers on hover) at the very right. Who is in
- * where is the room's `voice`, kept by the `voice` and `voice_left` facts; a ring on a face is
- * that person speaking, for the channel you are in. Always there: every group has a voice
- * channel (made with it, migration 0005 for the older ones). `onAdd`, given to the channels
- * power, puts an `add channel` row after the last channel; ServerRoom has the dialog. With
- * `addFull` (the server has its 4 voice channels, VOICE_CHANNEL_CAP) the row stays, greyed,
- * and says the cap on hover and focus. With
- * `onEdit`, a channel this login may change (`can_edit`: who made it, or the channels power)
- * has a pencil at the right of its row, up with the pointer on the row, that opens its edit
- * (the name and the line about it; ServerRoom's dialog again). The call is the page's, not this panel's: a phone's drawer shutting keeps it, and leaving the
- * page (ServerRoom's room effect) ends it.
- */
 export function VoicePanel({
   room,
   flat = false,
@@ -89,10 +71,8 @@ export function VoicePanel({
   room: GroupRoom;
   flat?: boolean;
   onAdd?: () => void;
-  /** The server is at the voice cap: the add row is greyed and adds nothing. */
   addFull?: boolean;
   onEdit?: (channel: Channel) => void;
-  /** A click on a channel shows its call (VoiceRoom.tsx) instead of joining it. */
   onOpen?: (channel: string) => void;
   className?: string;
 }) {
@@ -104,30 +84,19 @@ export function VoicePanel({
   const stats = useAtomValue(voiceStatsAtom);
   const ptt = useAtomValue(voiceModeAtom) === 'ptt';
   const pttKey = keyName(useAtomValue(voicePttKeyAtom));
-  // push to talk with the key down and nothing muted: the mic button goes green while it is
   const talking = useAtomValue(voicePttHeldAtom) && ptt && !muted && !deaf;
   const channels = (room.channels ?? []).filter(isVoice);
   const here = call.phase !== 'idle' && call.server === room.name;
-  // the last try failed: the greyed seat stays, and only dismiss in the header
   const failed = here && call.phase === 'failed';
-  // a try failed and another is on its way: only cancel in the header
   const retrying = here && call.phase === 'joining' && call.retry > 0;
-  // mute, deafen and the mic's fill: joining (the first try) or connected
   const inCall = here && !failed && !retrying;
-  // a moderator muted my mic here (voice.rs `server_mute`): the voice server carries nothing of it, and only a moderator lifts it
   const serverMuted = inCall && !!me && Object.values(room.voice ?? {}).some((people) => people.some((p) => p.name === me && p.muted));
   const avatarOf = (name: string) => room.roster?.find((m) => m.name === name)?.avatar ?? null;
   const micButton = useRef<HTMLButtonElement>(null);
-  // the fill shows while the mic goes out: in push to talk, only with the key down
   const metering = inCall && !muted && !deaf && !serverMuted && (!ptt || talking);
-  // the failure whose dialog was closed: a new failure is a new call object, so its dialog opens on its own
   const [closedFail, setClosedFail] = useState<VoiceCall | null>(null);
   const failOpen = failed && closedFail !== call;
 
-  // Your level in the mute button's mic, many times a second while it is open: a frame loop
-  // writes `--lvl` on the button by hand, never through react. The call's shared mic's own
-  // reader (voice-atoms.ts `readVoiceMicLevel`), so the mic is not opened again and a new
-  // device is followed. No web audio: no reader, no fill.
   useEffect(() => {
     const el = micButton.current;
     if (!metering || !el) return;
@@ -184,7 +153,6 @@ export function VoicePanel({
                 ) : (
                   <>
                     <RiMicLine aria-hidden size={14} />
-                    {/* the capsule fills from its foot with your level (--lvl, 0..1): 62% down is the foot, 8% the top */}
                     {metering && (
                       <RiMicFill
                         aria-hidden
@@ -211,11 +179,9 @@ export function VoicePanel({
         {channels.map((item) => {
           const people = room.voice?.[item.name] ?? [];
           const mine = here && call.channel === item.name;
-          // your own seat before the server has you in it: greyed while joining, fainter once failed. the roster's entry takes over when it comes
           const pending = mine && !!me && (call.phase === 'joining' || failed) && !people.some((p) => p.name === me);
           return (
             <li key={item.name}>
-              {/* the row is the box: the join fills it, then the pencil (up with the pointer anywhere on the row), then the signal on the row you are in */}
               <div className={cn('group/voice flex items-center', mine ? 'bg-primaryStroke/40' : 'hover:bg-primaryStroke/20')}>
                 <button
                   id={`group-voice-${item.name}`}
@@ -261,7 +227,6 @@ export function VoicePanel({
         })}
         {onAdd && (
           <li>
-            {/* at the cap the row stays, greyed, and says why (a disabled button would take no hover) */}
             <Tooltip content={addFull ? `${VOICE_CHANNEL_CAP} voice channels at most` : null}>
               <button
                 id="group-voice-add"
@@ -288,11 +253,6 @@ export function VoicePanel({
   );
 }
 
-/**
- * Your own seat in the channel you are joining, before the server's roster has you: your face
- * and name greyed, `retrying…` after the name while a retry is on its way. Once the last try
- * failed, fainter, with a warning at the end that says why and opens the dialog again.
- */
 function PendingSeat({
   name,
   avatar,
@@ -336,14 +296,6 @@ function PendingSeat({
   );
 }
 
-/**
- * One person in a voice channel: their face (a ring while they speak, for the channel you are in),
- * their name, a red mic when a moderator muted them, and a muted speaker when you muted them for
- * yourself. The roster's row's way (ServerRoom.tsx `Member`): one link to them that opens the
- * profile popup, and the pointer resting on it puts their card (PersonCard.tsx) beside the
- * column, a moderator's buttons at its left and, while you are in their channel, your own level
- * for them at its foot (VoiceLevel.tsx).
- */
 function VoicePerson({ person, avatar, talking }: { person: VoiceMember; avatar: number | null; talking: boolean }) {
   const presence = useAtomValue(presenceOfAtom(person.name));
   const peek = usePeek(PEEK_MS);
@@ -363,7 +315,6 @@ function VoicePerson({ person, avatar, talking }: { person: VoiceMember; avatar:
       onKeyDown={peek.keyDown}
     >
       <ProfileLink
-        // only a login takes a seat, so the ✓ is theirs
         person={{ name: person.name, verified: true, avatar }}
         live={presence === 'streaming'}
         className="flex min-w-0 flex-1 items-center gap-2 border border-transparent p-px outline-none hover:border-primaryStroke hover:text-textPrimary focus-visible:border-primaryBlue max-md:min-h-11"
@@ -395,7 +346,6 @@ function VoicePerson({ person, avatar, talking }: { person: VoiceMember; avatar:
   );
 }
 
-/** `talking`: in push to talk, the key has the mic open (green), or not (undefined outside push to talk). */
 function BarButton({
   ref,
   id,
@@ -452,19 +402,16 @@ const SIGNAL: Record<SignalKind, { Icon: typeof RiSignalWifiFill; className: str
   dropped: { Icon: RiSignalWifiErrorLine, className: 'text-decrease' }
 };
 
-/** Where the call is: connecting until the audio is through and the first numbers are in, then how good the path is, or dropped while ice has lost it. */
 function signalOf(call: VoiceCall, stats: VoiceStats | null): SignalKind {
   if (call.phase !== 'connected' || !call.linked || !stats) return 'connecting';
   if (stats.dropped) return 'dropped';
   return voiceQuality(stats) ?? 'connecting';
 }
 
-/** A number for the stat block, or a dash when the browser did not say. */
 function num(n: number | null, unit: string, digits = 0): string {
   return n === null ? '–' : `${n.toFixed(digits)} ${unit}`;
 }
 
-/** The call's signal mark: an icon in the quality's colour, and on hover or focus the word and the numbers under it. */
 function Signal({ call, stats }: { call: VoiceCall; stats: VoiceStats | null }) {
   const kind = signalOf(call, stats);
   const { Icon, className } = SIGNAL[kind];

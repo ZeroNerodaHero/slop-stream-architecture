@@ -3,11 +3,6 @@ import { isRouteErrorResponse, useRouteError } from 'react-router-dom';
 import { Button } from '@/shared-components/Button';
 import { HomeLink } from '@/shared-components/PageFrame';
 
-/**
- * What a render crash shows instead of react router's default page. The report already
- * went out through the RouterProvider's onError in main.tsx. No PageFrame here on purpose:
- * if the header itself is what crashed, this page must not render it again.
- */
 export function CrashPage() {
   const err = useRouteError();
   const message = isRouteErrorResponse(err) ? `${err.status} ${err.statusText}` : err instanceof Error ? err.message : String(err);

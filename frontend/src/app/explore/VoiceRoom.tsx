@@ -39,15 +39,8 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { useHeardLevel } from '@/shared-components/VoiceLevel';
 import { cn } from '@/utils/cn';
 
-/** A member in voice, with the moderator's mute when the room says it (the group mod tools). */
 type Member = VoiceMember & { muted?: boolean };
 
-/**
- * The voice channel on screen in place of the chat, from the page's `?voice=<channel>`: a click
- * on a voice channel puts it there, a click on a text channel (a link without it) takes it off,
- * and the back button does what it should. Null for none, or a name that is no voice channel of
- * the room. `open` puts one there and keeps the page's path.
- */
 export function useVoiceView(room: GroupRoom | null | undefined): { view: string | null; open: (channel: string) => void } {
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -58,14 +51,6 @@ export function useVoiceView(room: GroupRoom | null | undefined): { view: string
   return { view, open };
 }
 
-/**
- * A voice channel as a call, where the chat is (ServerRoom). Not in it: a card with the
- * channel, who is in it, and `join voice`. In it (joining or joined): everyone as a tile, their
- * camera or their face, a ring while they talk, their mute and deafen; a screen shared is a tile
- * of its own. A click on a tile puts it big with the rest in a strip under it, a click on it
- * again puts it back. Under them the call's bar: mic, deafen, camera, screen, the voice tab,
- * leave. The call is voice-atoms.ts's and voice-video.ts's; this only draws it.
- */
 export function VoiceRoom({ room, channel, className }: { room: GroupRoom; channel: string; className?: string }) {
   const call = useAtomValue(voiceCallAtom);
   const here = call.phase !== 'idle' && call.server === room.name && call.channel === channel;
@@ -133,7 +118,6 @@ function FaceWithPresence({ name, version, className, ring }: { name: string; ve
   );
 }
 
-/** One tile: a person (their camera or their face) or a screen they share. */
 interface TileOf {
   key: string;
   name: string;
@@ -142,13 +126,10 @@ interface TileOf {
   self: boolean;
   mute: boolean;
   deaf: boolean;
-  /** A moderator muted their mic. */
   serverMuted: boolean;
-  /** Their user id, for a person tile of somebody else: you may have muted them for yourself (VoiceLevel.tsx). */
   uid?: string;
 }
 
-/** Columns for `n` tiles: a phone one or two, a wide screen up to four. */
 function columns(n: number): string {
   if (n <= 1) return 'grid-cols-1';
   if (n <= 4) return 'grid-cols-2';
@@ -193,7 +174,6 @@ function Call({ room, channel, className }: { room: GroupRoom; channel: string; 
     });
     if (screen) tiles.push({ key: `${s.seat}:screen`, name: s.user, kind: 'screen', stream: screen.stream, self: false, mute: false, deaf: false, serverMuted: false });
   }
-  // a focused tile that went (its screen stopped, its person left) is the grid again
   const focused = tiles.find((t) => t.key === focus) ?? null;
 
   const tile = (t: TileOf, size: 'grid' | 'big' | 'strip') => (
@@ -275,7 +255,6 @@ function Tile({
         'group/tile relative overflow-hidden border bg-backgroundTertiary',
         size === 'big' ? 'h-full w-full' : 'aspect-video',
         size === 'strip' && 'w-36 shrink-0 max-md:w-28',
-        // the ring while they talk: an outline, never a shadow
         talking ? 'border-increase outline outline-2 -outline-offset-2 outline-increase' : 'border-primaryStroke hover:border-secondaryStroke'
       )}
     >
@@ -310,7 +289,6 @@ function Tile({
   );
 }
 
-/** A state on a tile's name chip, named on hover. */
 function Mark({ label, icon, className }: { label: string; icon: ReactNode; className?: string }) {
   return (
     <Tooltip content={label}>
@@ -321,13 +299,11 @@ function Mark({ label, icon, className }: { label: string; icon: ReactNode; clas
   );
 }
 
-/** On a tile, someone you muted for yourself: nobody else hears a difference. */
 function HeardMutedOnTile({ uid }: { uid: string }) {
   if (!useHeardLevel(uid).muted) return null;
   return <Mark label="muted for you" icon={<RiVolumeMuteLine aria-hidden data-heard-muted size={12} />} />;
 }
 
-/** A camera or a screen, playing. No sound: a call's sound is voice-atoms.ts's players. */
 function Picture({ stream, mirror, contain }: { stream: MediaStream; mirror: boolean; contain: boolean }) {
   const video = useRef<HTMLVideoElement>(null);
   useEffect(() => {
@@ -353,13 +329,11 @@ function Picture({ stream, mirror, contain }: { stream: MediaStream; mirror: boo
 const CONTROL =
   'flex h-10 w-10 shrink-0 items-center justify-center border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primaryBlue disabled:opacity-50 max-md:h-11 max-md:w-11';
 
-/** The call's bar: mic, deafen, camera, screen (where the browser can), the voice tab, leave. A phone's is pinned to the foot over the safe area. */
 function ControlBar({ mobile }: { mobile: boolean }) {
   const call = useAtomValue(voiceCallAtom);
   const muted = useAtomValue(voiceMutedAtom);
   const deaf = useAtomValue(voiceDeafAtom);
   const local = useAtomValue(voiceLocalVideoAtom);
-  // a camera or a screen goes on the peer once the call is answered
   const ready = call.phase === 'connected';
   return (
     <div

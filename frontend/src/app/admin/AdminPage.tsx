@@ -9,9 +9,7 @@ import { cn } from '@/utils/cn';
 
 const POLL_MS = 10_000;
 const KINDS = ['all', 'crash', 'error', 'rejection', 'soft', 'api'] as const;
-/** Answers that do not change by asking again every 10s: not an admin, no admin, no debug database. */
 const STOP_POLLING = [401, 404, 503];
-/** Not an admin (or no admin here): no reason to poll the health either. */
 const STRANGER = [401, 404];
 
 const KIND_TONE: Record<string, string> = {
@@ -22,7 +20,6 @@ const KIND_TONE: Record<string, string> = {
   api: 'border-secondaryStroke text-textSecondary'
 };
 
-/** How long before `now` (the time the list was fetched): "now", "4m", "3h", "2d". */
 function ago(iso: string, now: number): string {
   const secs = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
   if (secs < 60) return 'now';
@@ -31,7 +28,6 @@ function ago(iso: string, now: number): string {
   return `${Math.floor(secs / 86400)}d`;
 }
 
-/** "3d 4h", "2h 05m", "12m", "40s". */
 function up(secs: number | null | undefined): string {
   if (secs === null || secs === undefined) return '—';
   const d = Math.floor(secs / 86400);
@@ -52,7 +48,6 @@ function Flag({ on, label }: { on: boolean; label: string }) {
   );
 }
 
-/** This box, from its own /api/health. */
 function HealthCard({ health, error }: { health: Health | undefined; error: unknown }) {
   if (error) {
     return (
@@ -152,10 +147,6 @@ function Row({ e, now }: { e: ClientError; now: number }) {
   );
 }
 
-/**
- * The site jannies (docs/jannies.md): they may delete lines, time out and ban in every stream's
- * chat, below the streamer and the admins. Chat only. Add by name, remove with a click.
- */
 function SiteJannies() {
   const client = useQueryClient();
   const list = useQuery({ queryKey: ['site-jannies'], queryFn: api.siteJannies, retry: false });
@@ -237,17 +228,12 @@ function notice(err: unknown): string {
   }
 }
 
-/**
- * /admin: this droplet's health and the failures its pages reported. For a login in
- * ADMIN_NAMES; everyone else gets told why not. See docs/debugging.md.
- */
 export function AdminPage() {
   const [kind, setKind] = useState<(typeof KINDS)[number]>('all');
   const [pageFilter, setPageFilter] = useState('');
   const errors = useQuery({
     queryKey: ['errors', kind],
     queryFn: () => api.errors(kind === 'all' ? undefined : kind),
-    // a 401, 404 or 503 does not change by asking again every 10s. a focus or a reload asks again
     refetchInterval: (q) => (STOP_POLLING.includes(statusOf(q.state.error) ?? 0) ? false : POLL_MS),
     retry: false
   });

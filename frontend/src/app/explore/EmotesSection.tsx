@@ -10,7 +10,6 @@ import { INPUT } from '@/shared-components/input';
 import { Section } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
-/** What a name box holds, as typed: lowercase, spaces and dashes as `_`, nothing else the rule refuses, 32 at most. */
 export function cleanEmoteName(raw: string): string {
   return raw
     .toLowerCase()
@@ -19,7 +18,6 @@ export function cleanEmoteName(raw: string): string {
     .slice(0, 32);
 }
 
-/** A first name for an emote from its file's: `Pog Champ.png` is `pog_champ`. Empty when nothing of it fits. */
 function nameFromFile(file: File): string {
   const name = cleanEmoteName(file.name.replace(/\.[^.]*$/, '')).replace(/^_+|_+$/g, '');
   return EMOTE_NAME.test(name) ? name : '';
@@ -31,20 +29,10 @@ function nameFault(name: string, taken: readonly GroupEmote[], self?: string): s
   return null;
 }
 
-/**
- * The manage dialog's `emotes` tab (docs/chat.md "emotes"): the group's custom emotes, for an
- * owner or a role with the emotes power. `add emote` picks a file, and the crop dialog takes it
- * from there: a square over the picture (dragged, its corners pulled, the slider and the wheel to
- * zoom), the name under it, and `save` sends both, the dialog staying up to say a refusal. The
- * list is each emote's picture, `:name:`, who put it up, and a rename and a delete; the count
- * against the cap over it. A change reads the login's own emotes again (`loadMyEmotes`), so the
- * composer's list and the picker have it at once.
- */
 export function EmotesSection({ server }: { server: string }) {
   const [emotes, setEmotes] = useState<GroupEmote[] | null>(null);
   const [max, setMax] = useState(MAX_EMOTES);
   const [error, setError] = useState('');
-  /** The emote whose name is being changed, and the words in its box. */
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState<GroupEmote | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -167,7 +155,6 @@ export function EmotesSection({ server }: { server: string }) {
                       onChange={(e) => setRenaming({ id: emote.id, name: cleanEmoteName(e.target.value) })}
                       onKeyDown={(e) => {
                         if (e.key === 'Escape') {
-                          // shuts the box, not the dialog
                           e.preventDefault();
                           e.stopPropagation();
                           setRenaming(null);
