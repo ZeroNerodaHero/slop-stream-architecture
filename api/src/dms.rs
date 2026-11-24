@@ -241,7 +241,7 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     }
     crate::auth::limit(&s, &format!("rl:dm:name:{}", me.name), RATE_WINDOW_SECS, RATE_PER_MINUTE, "slow down").await?;
     let text = emotes::settle(&s.db, Some(me.id), &text).await;
-    let mentions = crate::mentions::resolve(&s.db, s.hide_test, &text).await;
+    let mentions = crate::mentions::resolve(&s.db, &text).await;
     pictures_exist(&s.db, &images, me.id).await?;
     let video = match video {
         Some(id) => {
@@ -481,7 +481,7 @@ mod tests {
         let me = row(&pool, &format!("{p}c"), Some("h")).await;
         let friend = row(&pool, &format!("{p}f"), Some("h")).await;
         let text = format!("look @{p}F and @{p}nobody");
-        let mentions = crate::mentions::resolve(&pool, true, &text).await;
+        let mentions = crate::mentions::resolve(&pool, &text).await;
         assert_eq!(mentions, vec![format!("{p}f")]);
         let (named, _) = insert(&pool, me, friend, &text, None, None, None, &mentions).await.unwrap();
         let (plain, _) = insert(&pool, me, friend, "no one", None, None, None, &[]).await.unwrap();

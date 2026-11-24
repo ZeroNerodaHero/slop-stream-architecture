@@ -1162,7 +1162,7 @@ pub(crate) async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &
         Some(id) => Some(reply_to(s, room, id).await?),
         None => None,
     };
-    let (face, mentions) = tokio::join!(face_now(&s.db, room, w), crate::mentions::resolve(&s.db, s.hide_test, text));
+    let (face, mentions) = tokio::join!(face_now(&s.db, room, w), crate::mentions::resolve(&s.db, text));
     let avatar = face.avatar.map(|v| v.to_string());
     let mut r = s.redis.clone();
     if !cooldowns.is_empty() {
