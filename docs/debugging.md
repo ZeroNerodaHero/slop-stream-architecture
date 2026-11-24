@@ -250,6 +250,7 @@ the rest of a cold load is the box's: the document's ~180ms of tls and ~170ms to
 - `api/src/debug.rs` — the debug database (create, schema, lazy pool, retention), `POST` and `GET /api/errors`, the admin check.
 - `api/src/main.rs` — the wider `/api/health`, `ENV_NAME`, `BUILD`, `started`.
 - `video/src/main.rs` — json `/health`.
+- `api/src/timings.rs`, `video/src/timings.rs` — each process's timings on `:9300`: routes, calls, sessions and their direction (`docs/metrics.md`).
 - `frontend/src/infra/report.ts` — `report()`, the window hooks, the peer snapshot.
 - `frontend/src/main.tsx`, `router.tsx`, `app/CrashPage.tsx`, `app/admin/AdminPage.tsx`, the two atoms files, `infra/api.ts`.
 - `docker-compose.yml`, `deploy.sh`, the four dockerfiles (`api/`, `video/`, `video/Dockerfile.dummy`, `frontend/`), `.env.example` — `BUILD`, `ENV_NAME`, `ADMIN_NAMES`, `OPS_TOKEN`, `DEBUG_DATABASE_URL`.
