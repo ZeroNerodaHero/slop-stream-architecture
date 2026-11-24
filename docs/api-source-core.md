@@ -757,8 +757,18 @@ blocking tail needs. Lifted out of the chat with no change of behaviour; see doc
 
 `pub`: Message and frame cap, set on the upgrade so axum refuses a bigger one before any parser sees it.
 
-`pub`: A ping this often. A socket that sent nothing back (pong, text, anything)
-for IDLE_LIMIT is a vanished peer and is dropped, so it stops being counted.
+`pub`: A ping this often (20s). A socket that sent nothing back (pong, text, anything)
+for IDLE_LIMIT (45s) is a vanished peer and is dropped, so it stops being counted.
+`Heartbeat` is the pair as one future: `next()` is `Ping` every PING_EVERY and `Silent` IDLE_LIMIT
+after the last `heard()`, on tokio's clock, so a test with paused time walks it exactly. The cut is
+at 45s from the last word, not at the first ping after it.
+
+`IpSlots` / `IpSlot`: sockets one address holds open in one process. `take` before the upgrade, the
+slot is dropped with the socket's task, so a panic or an abort gives it back. Events caps 20, chat 32.
+No `x-forwarded-for` (inside the compose network) is no slot and no cap.
+
+`locked`: a std mutex locked through a poison: a handler that panicked holding it must not wedge
+every other socket. The registries behind it never wait on the network while held.
 
 `pub`: After SIGTERM: how long `run` waits for the sockets to say goodbye.
 

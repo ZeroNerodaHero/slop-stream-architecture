@@ -440,7 +440,7 @@ they carry nothing about what is sent.
 
 `const BEAT_EVERY`: how often everyone seated is told to the api, a third of its sweep's 45s
 
-`const PING_EVERY`: a ping on the socket this often, as the api's chat and events (api/src/socket.rs): a call's
+`const PING_EVERY`: a ping on the socket this often (30s; the api's chat and events ping at 20s and cut at 45s, api/src/socket.rs): a call's
 socket can say nothing for an hour, and a nat or a proxy between forgets an idle connection.
 one that sent nothing back (pong, text, anything) for IDLE_LIMIT is gone
 
