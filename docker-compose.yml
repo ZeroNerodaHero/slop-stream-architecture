@@ -90,6 +90,7 @@ services:
       VIDEO_URL: http://video:7880
       PORT: "4000"
       DUMMY_PASSWORD: ${DUMMY_PASSWORD:-}
+      HIDE_TEST_STREAMERS: ${HIDE_TEST_STREAMERS:-}
       ENV_NAME: ${ENV_NAME:-}
       ADMIN_NAMES: ${ADMIN_NAMES:-}
       OPS_TOKEN: ${OPS_TOKEN:-}
@@ -193,6 +194,7 @@ services:
     command: ["home"]
     environment:
       RATE_LIMITS: ${RATE_LIMITS:-}
+      HIDE_TEST_STREAMERS: ${HIDE_TEST_STREAMERS:-}
       DATABASE_URL: postgres://stream:stream@database:5432/stream
       REDIS_URL: redis://redis:6379/0
       VIDEO_URL: http://video:7880

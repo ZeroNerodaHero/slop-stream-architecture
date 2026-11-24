@@ -208,7 +208,7 @@ every knob in the root `.env.example`, with what its comment said. `./scripts/de
 | `GROUPS_PER_OWNER` | (empty) | how many groups one login may own: the ones it made plus the ones it was named owner of. empty: 2. at most 8, the groups a login may be in (its own included); more is read as 8. the pages offer create under it, and the api refuses at it. see docs/groups.md |
 | `VOICE_SECRET` | (empty) | voice channels (the voice container, docker-compose.yml). the api signs grants with it and the voice container redeems them with it. make one: openssl rand -hex 32 stays empty until voice is turned on; empty, the api answers voice joins with a 503. |
 
-not in `.env.example` (nor passed by `docker-compose.yml` yet; the api and home containers need a `HIDE_TEST_STREAMERS: ${HIDE_TEST_STREAMERS:-}` line each before a box can turn it on):
+not in `.env.example`; `docker-compose.yml` passes it to the api and home containers, unset means off:
 
 | variable | default | what it is |
 |---|---|---|

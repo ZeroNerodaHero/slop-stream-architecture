@@ -50,7 +50,7 @@ not filtered, and why:
 - **a name's own sub-resources** (`/avatar`, `/thumbs`, `/assets`, `/offline`, `/about-page`, `/about-file`, `/sessions`) and **the chat** (`/chat/:name`, its history): only reachable by the name, which no list hands out while hiding is on.
 - **the events socket's `/online`**: who has the site open, by login or guest nick, and those refuse the prefix.
 
-the switch is read by two processes, `api` and `home`. `docker-compose.yml` does not pass it to either container yet: on a compose box it stays off until `HIDE_TEST_STREAMERS: ${HIDE_TEST_STREAMERS:-}` is added under both.
+the switch is read by two processes, `api` and `home`. `docker-compose.yml` passes `HIDE_TEST_STREAMERS` from `.env` to both; unset (the default) means off.
 
 ## the dummy box
 
