@@ -369,7 +369,10 @@ export class ChatRoom {
     }
     this.owner = owner;
     this.hangUp();
-    if (!same) this.bucket = { tokens: this.tier().burst, at: Date.now() };
+    if (!same) {
+      this.bucket = { tokens: this.tier().burst, at: Date.now() };
+      if (rtOn) rtIdentify();
+    }
     this.connect();
   }
 
@@ -639,17 +642,21 @@ export class ChatRoom {
     if (video) say.video = video.id;
     const reply = store.get(this.replyAtom);
     if (reply) say.reply = reply.id;
+    const key = `pending-${++this.sent}`;
     if (this.rt) {
       const topic = this.server ? chatTopicOf(`${this.server}/${this.channel}`) : this.rt.topic;
       void rtAsk({ ...say, type: 'say', topic }).then((answer) => {
-        if (answer.type === 'nack') this.onError(answer.error, answer.wait, typeof this.me === 'string' ? this.me : null);
+        if (answer.type !== 'nack') return;
+        const at = this.inFlight.findIndex((sent) => sent.key === key);
+        const [lost] = at >= 0 ? this.inFlight.splice(at, 1) : [];
+        if (lost) this.restore(lost, answer.error);
+        this.onError(answer.error, answer.wait, typeof this.me === 'string' ? this.me : null, false);
       });
     } else if (ws) {
       if (this.server) say.channel = this.channel;
       record(`/chat/${this.key}`, 'out', say);
       ws.send(JSON.stringify(say));
     }
-    const key = `pending-${++this.sent}`;
     const asStreamer = store.get(this.asStreamerAtom);
     const line: ChatLine = {
       id: key,
@@ -915,7 +922,7 @@ export class ChatRoom {
     }
   }
 
-  private onError(error: string, wait: number | undefined, me: string | null) {
+  private onError(error: string, wait: number | undefined, me: string | null, unmatched = true) {
     const refused = /nick|account/.test(error);
     const gone = /no such channel|not a server|that name is reserved|bad name/.test(error);
     this.showNotice(NOTICE_WORDS[error] ?? error, refused || gone ? 8000 : 3000);
@@ -929,7 +936,7 @@ export class ChatRoom {
       this.refuse(ms);
     }
     if (error in NOTICE_WORDS && typeof wait === 'number' && wait > 0) this.refuse(wait);
-    if (/slow down|cooldown|timed out|banned|chat is (busy|down)|no such line|image rejected|never checked|picture/.test(error)) {
+    if (unmatched && /slow down|cooldown|timed out|banned|chat is (busy|down)|no such line|image rejected|never checked|picture/.test(error)) {
       const lost = this.inFlight.shift();
       if (lost) this.restore(lost, error);
     }
