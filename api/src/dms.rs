@@ -41,20 +41,20 @@ async fn peer(db: &PgPool, me: &Account, name: String) -> Result<Account, ApiErr
     Ok(Account { id, name })
 }
 
-type LineRow = (i64, String, String, i64, Option<String>, Option<i64>, Option<String>, Option<String>, Option<i64>, Option<String>, Value, Option<String>, Option<String>);
+type LineRow = (i64, String, String, i64, Option<String>, Option<i64>, Option<String>, Option<String>, Option<i64>, Option<String>, Value, Option<String>, Option<String>, Vec<String>);
 
 const LINE_SELECT: &str = concat!(
     "SELECT d.id, f.name, d.text, (EXTRACT(EPOCH FROM d.sent_at) * 1000)::bigint, d.image,
                 d.reply_to, qf.name, left(q.text, 120), (EXTRACT(EPOCH FROM qf.avatar_at))::bigint, q.image, ",
     reactions::dm_reactions_sql!(),
-    ", d.video, q.video
+    ", d.video, q.video, d.mentions
          FROM dms d JOIN streamers f ON f.id = d.from_id
          LEFT JOIN dms q ON q.id = d.reply_to
              AND LEAST(q.from_id, q.to_id) = LEAST(d.from_id, d.to_id) AND GREATEST(q.from_id, q.to_id) = GREATEST(d.from_id, d.to_id)
          LEFT JOIN streamers qf ON qf.id = q.from_id"
 );
 
-fn line_json((id, from, text, at, image, reply_to, quote_from, quote_text, quote_avatar, quote_image, reactions, video, quote_video): &LineRow) -> Value {
+fn line_json((id, from, text, at, image, reply_to, quote_from, quote_text, quote_avatar, quote_image, reactions, video, quote_video, mentions): &LineRow) -> Value {
     let reply = reply_to.map(|reply_to| match quote_from {
         Some(quote_from) => quote_json(&(reply_to, quote_from.clone(), quote_text.clone().unwrap_or_default(), *quote_avatar, quote_image.clone(), quote_video.clone())),
         None => json!({ "id": reply_to, "gone": true }),
@@ -62,6 +62,9 @@ fn line_json((id, from, text, at, image, reply_to, quote_from, quote_text, quote
     let mut line = json!({ "id": id, "from": from, "text": text, "at": at, "images": split_pictures(image.clone()), "reply": reply, "reactions": reactions });
     if let Some(video) = Video::parse(video.as_deref()) {
         line["video"] = json!(video);
+    }
+    if !mentions.is_empty() {
+        line["mentions"] = json!(mentions);
     }
     line
 }
@@ -238,6 +241,7 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     }
     crate::auth::limit(&s, &format!("rl:dm:name:{}", me.name), RATE_WINDOW_SECS, RATE_PER_MINUTE, "slow down").await?;
     let text = emotes::settle(&s.db, Some(me.id), &text).await;
+    let mentions = crate::mentions::resolve(&s.db, s.hide_test, &text).await;
     pictures_exist(&s.db, &images, me.id).await?;
     let video = match video {
         Some(id) => {
@@ -269,28 +273,37 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     let reply = reply.as_ref().map(quote_json);
     crate::chat::mark_posted(&s.db, &Place::dm(me.id, other.id), &images, video.as_ref()).await?;
     let image = if images.is_empty() { None } else { Some(images.join(",")) };
-    let (id, at): (i64, i64) = sqlx::query_as(
-        "INSERT INTO dms (from_id, to_id, text, image, reply_to, video) VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, (EXTRACT(EPOCH FROM sent_at) * 1000)::bigint",
-    )
-    .bind(me.id)
-    .bind(other.id)
-    .bind(&text)
-    .bind(&image)
-    .bind(body.reply)
-    .bind(video.as_ref().map(Video::stored))
-    .fetch_one(&s.db)
-    .await?;
+    let (id, at) = insert(&s.db, me.id, other.id, &text, image.as_deref(), body.reply, video.as_ref(), &mentions).await?;
     mark_read(&s.db, me.id, other.id, id).await?;
     notify::messaged(&s, &other, &me, &text).await;
     let mut r = s.redis.clone();
-    presence::publish_dm(&mut r, &me.name, &other.name, id, &text, &images, video.as_ref(), at, &me.id.to_string(), reply.as_ref()).await;
+    presence::publish_dm(&mut r, &me.name, &other.name, id, &text, &images, video.as_ref(), at, &me.id.to_string(), reply.as_ref(), &mentions).await;
     log::info!("{}: dm to {} ({} chars, {} pictures{})", me.name, other.name, text.chars().count(), images.len(), if video.is_some() { ", a video" } else { "" });
     let mut line = json!({ "id": id, "from": me.name, "to": other.name, "text": text, "at": at, "images": images, "reply": reply });
     if let Some(video) = &video {
         line["video"] = json!(video);
     }
+    if !mentions.is_empty() {
+        line["mentions"] = json!(mentions);
+    }
     Ok((StatusCode::CREATED, Json(line)))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert(db: &PgPool, from: Uuid, to: Uuid, text: &str, image: Option<&str>, reply: Option<i64>, video: Option<&Video>, mentions: &[String]) -> Result<(i64, i64), sqlx::Error> {
+    sqlx::query_as(
+        "INSERT INTO dms (from_id, to_id, text, image, reply_to, video, mentions) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, (EXTRACT(EPOCH FROM sent_at) * 1000)::bigint",
+    )
+    .bind(from)
+    .bind(to)
+    .bind(text)
+    .bind(image)
+    .bind(reply)
+    .bind(video.map(Video::stored))
+    .bind(mentions)
+    .fetch_one(db)
+    .await
 }
 
 #[derive(Deserialize)]
@@ -368,7 +381,7 @@ async fn read(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     Ok(StatusCode::NO_CONTENT)
 }
 
-type ThreadRow = (Uuid, String, bool, Option<i64>, String, String, i64, String, String, i64, i64, Option<String>, Option<String>);
+type ThreadRow = (Uuid, String, bool, Option<i64>, String, String, i64, String, String, i64, i64, Option<String>, Option<String>, Vec<String>);
 
 async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
@@ -383,7 +396,7 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
                 (SELECT count(*) FROM dms u
                   WHERE u.from_id = m.peer_id AND u.to_id = $1
                     AND u.id > COALESCE((SELECT r.last_read_id FROM dm_reads r WHERE r.reader_id = $1 AND r.peer_id = m.peer_id), 0)),
-                d.image, d.video
+                d.image, d.video, d.mentions
          FROM mine m
          JOIN streamers s ON s.id = m.peer_id
          JOIN dms d ON d.id = m.last_id
@@ -397,12 +410,16 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     .await?;
     let people: Vec<_> = rows.iter().map(|r| follows::choice(&r.1, &r.5)).collect();
     let words = follows::words(&s, &people).await?;
-    let out = rows.iter().map(|(peer, name, verified, avatar, bio, _, id, from, text, at, unread, image, video)| {
+    let out = rows.iter().map(|(peer, name, verified, avatar, bio, _, id, from, text, at, unread, image, video, mentions)| {
         let (live, word) = words.get(name).copied().unwrap_or((false, Presence::Offline));
+        let mut last = json!({ "id": id, "from": from, "text": text, "at": at, "images": split_pictures(image.clone()), "video": Video::parse(video.as_deref()) });
+        if !mentions.is_empty() {
+            last["mentions"] = json!(mentions);
+        }
         json!({
             "id": peer.to_string(),
             "name": name, "verified": verified, "avatar": avatar, "bio": bio, "live": live, "presence": word,
-            "last": { "id": id, "from": from, "text": text, "at": at, "images": split_pictures(image.clone()), "video": Video::parse(video.as_deref()) }, "unread": unread,
+            "last": last, "unread": unread,
         })
     });
     Ok(Json(Value::Array(out.collect())))
@@ -452,5 +469,30 @@ mod tests {
         let (sql, binds) = search_sql(&s, None);
         assert!(sql.contains("d.sent_at >= $4") && sql.ends_with("LIMIT $5"));
         assert_eq!(binds.len(), 2);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn a_dms_mentions_are_kept_and_read_back_in_the_thread() {
+        use crate::auth::tests::{row, test_db};
+
+        let pool = test_db().await;
+        let p = format!("mq{}-", std::process::id());
+        let me = row(&pool, &format!("{p}c"), Some("h")).await;
+        let friend = row(&pool, &format!("{p}f"), Some("h")).await;
+        let text = format!("look @{p}F and @{p}nobody");
+        let mentions = crate::mentions::resolve(&pool, true, &text).await;
+        assert_eq!(mentions, vec![format!("{p}f")]);
+        let (named, _) = insert(&pool, me, friend, &text, None, None, None, &mentions).await.unwrap();
+        let (plain, _) = insert(&pool, me, friend, "no one", None, None, None, &[]).await.unwrap();
+        let kept: Vec<String> = sqlx::query_scalar("SELECT mentions FROM dms WHERE id = $1").bind(named).fetch_one(&pool).await.unwrap();
+        assert_eq!(kept, mentions);
+        let sql = format!("{LINE_SELECT} WHERE d.id = ANY($1) ORDER BY d.id");
+        let rows: Vec<LineRow> = sqlx::query_as(&sql).bind(vec![named, plain]).fetch_all(&pool).await.unwrap();
+        let lines: Vec<Value> = rows.iter().map(line_json).collect();
+        assert_eq!(lines[0]["text"], text.as_str(), "the text is kept as said");
+        assert_eq!(lines[0]["mentions"], json!([format!("{p}f")]));
+        assert!(lines[1].get("mentions").is_none());
+        sqlx::query("DELETE FROM streamers WHERE id = ANY($1)").bind(vec![me, friend]).execute(&pool).await.unwrap();
     }
 }

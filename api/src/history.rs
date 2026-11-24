@@ -31,7 +31,7 @@ const LINE_COLUMNS: &str = concat!(
     crate::oauth::linked_sql!("u"),
     " OR ",
     crate::oauth::linked_sql!("r"),
-    "), l.reply, l.video"
+    "), l.reply, l.video, l.mentions"
 );
 const LINE_TABLES: &str = "chat_lines l
                            LEFT JOIN streamers u ON l.verified AND u.id = l.user_id
@@ -152,6 +152,7 @@ pub(crate) async fn store(
     verified: bool,
     groups: &[Badge],
     reply: Option<&Reply>,
+    mentions: &[String],
 ) -> Result<(), sqlx::Error> {
     let Some((at, seq)) = at_seq(id) else {
         log::warn!("{room}: history id {id} is not a redis stream id");
@@ -161,8 +162,8 @@ pub(crate) async fn store(
     let badges = serde_json::to_value(groups).unwrap_or_else(|_| json!([]));
     let reply = reply.and_then(|r| serde_json::to_value(r).ok());
     sqlx::query(
-        "INSERT INTO chat_lines (room, id, at, seq, speaker, user_id, \"text\", streamer, verified, badges, image, reply, video)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        "INSERT INTO chat_lines (room, id, at, seq, speaker, user_id, \"text\", streamer, verified, badges, image, reply, video, mentions)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          ON CONFLICT (room, id) DO NOTHING",
     )
     .bind(room)
@@ -178,6 +179,7 @@ pub(crate) async fn store(
     .bind(image)
     .bind(reply)
     .bind(video)
+    .bind(mentions)
     .execute(db)
     .await?;
     Ok(())
@@ -563,9 +565,9 @@ async fn pg_side(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, side: Sid
     Ok(lines)
 }
 
-type LineRow = (String, DateTime<Utc>, String, Option<Uuid>, String, bool, bool, Value, Option<String>, Option<i64>, String, bool, Option<Value>, Option<String>);
+type LineRow = (String, DateTime<Utc>, String, Option<Uuid>, String, bool, bool, Value, Option<String>, Option<i64>, String, bool, Option<Value>, Option<String>, Vec<String>);
 
-fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, avatar, _room, oauth_verified, reply, video): LineRow) -> Line {
+fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, avatar, _room, oauth_verified, reply, video, mentions): LineRow) -> Line {
     let groups = serde_json::from_value::<Vec<Badge>>(badges).unwrap_or_default();
     let images = crate::chat::split_pictures(image);
     let image = images.first().cloned();
@@ -583,6 +585,7 @@ fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, a
         images,
         video: crate::chat::Video::parse(video.as_deref()),
         reply: reply.and_then(|r| serde_json::from_value(r).ok()),
+        mentions,
         reactions: Vec::new(),
         at: at.timestamp_millis().max(0) as u64,
     }
@@ -691,7 +694,7 @@ mod tests {
     #[test]
     fn a_hit_says_its_channel_for_a_servers_search_alone() {
         let row = |room: &str| -> LineRow {
-            ("1729000000000-0".to_owned(), DateTime::from_timestamp_millis(1729000000000).unwrap(), "bob".to_owned(), None, "hi".to_owned(), false, false, json!([]), None, None, room.to_owned(), false, None, None)
+            ("1729000000000-0".to_owned(), DateTime::from_timestamp_millis(1729000000000).unwrap(), "bob".to_owned(), None, "hi".to_owned(), false, false, json!([]), None, None, room.to_owned(), false, None, None, Vec::new())
         };
         assert_eq!(hit_of(row("vip/clips"), Some("vip")).channel.as_deref(), Some("clips"));
         assert_eq!(hit_of(row("alice"), None).channel, None, "a stream's room has no channel");
@@ -807,7 +810,7 @@ mod tests {
         let alice_name = format!("alice6-{run}");
         let alice = row(&pool, &alice_name, Some("alice-hash")).await;
         sqlx::query("UPDATE streamers SET avatar_at = to_timestamp(1690000000) WHERE id = $1").bind(alice).execute(&pool).await.unwrap();
-        store(&pool, &room, "1729000000000-0", &alice_name, Some(alice), "hi", None, None, false, true, &[], None).await.unwrap();
+        store(&pool, &room, "1729000000000-0", &alice_name, Some(alice), "hi", None, None, false, true, &[], None, &[]).await.unwrap();
         assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, Some(1690000000));
         let mark = |pool: PgPool, room: String| async move {
             let (at, seq) = at_seq("1729000000001-0").unwrap();
@@ -853,12 +856,12 @@ mod tests {
         let al = row(&pool, &al_name, Some("h")).await;
         let bo = row(&pool, &format!("bo{run}"), Some("h")).await;
         let quote = Reply { id: "1729000000000-0".into(), from: "bo".into(), text: "hi al".into(), streamer: false, verified: true, avatar: None, images: 0, video: false };
-        store(&pool, &general, "1729000000000-0", "bo", Some(bo), "hi al", None, None, false, true, &[], None).await.unwrap();
-        store(&pool, &general, "1729000000001-0", &al_name, Some(al), "one", None, None, false, true, &[], Some(&quote)).await.unwrap();
-        store(&pool, &clips, "1729000000002-0", &al_name, Some(al), "two", None, None, false, true, &[], None).await.unwrap();
-        store(&pool, &general, "1729000000002-0", &al_name, Some(al), "three", None, None, false, true, &[], None).await.unwrap();
-        store(&pool, &general, "1729000000003-0", &al_name, None, "nick", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &hidden, "1729000000004-0", &al_name, Some(al), "secret", None, None, false, true, &[], None).await.unwrap();
+        store(&pool, &general, "1729000000000-0", "bo", Some(bo), "hi al", None, None, false, true, &[], None, &[]).await.unwrap();
+        store(&pool, &general, "1729000000001-0", &al_name, Some(al), "one", None, None, false, true, &[], Some(&quote), &[]).await.unwrap();
+        store(&pool, &clips, "1729000000002-0", &al_name, Some(al), "two", None, None, false, true, &[], None, &[]).await.unwrap();
+        store(&pool, &general, "1729000000002-0", &al_name, Some(al), "three", None, None, false, true, &[], None, &[]).await.unwrap();
+        store(&pool, &general, "1729000000003-0", &al_name, None, "nick", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &hidden, "1729000000004-0", &al_name, Some(al), "secret", None, None, false, true, &[], None, &[]).await.unwrap();
 
         let rooms = vec![general.clone(), clips.clone()];
         let all = by_account(&pool, &rooms, al, None, 50).await.unwrap();
@@ -907,23 +910,23 @@ mod tests {
         let oct29 = 1_793_232_000_000u64;
         let oct30 = 1_793_318_400_000u64;
         let line = |ms: u64, seq: u64| format!("{ms}-{seq}");
-        store(&pool, &room, &line(oct29, 0), &ann_name, Some(ann), "morning everyone", None, None, false, true, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct29, 1), "Bob", None, "look https://example.com/page.", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 0), &ann_name, Some(ann), "", Some("11111111-1111-1111-1111-111111111111"), None, false, true, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 1), "cy", None, "this one www.youtube.com/watch?v=abc", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 2), "cy", None, "or http://files.test/clip.mp4?x=1 later", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 3), "Bob", None, "example.com is a domain not a link", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 4), "cy", None, "watch this https://files.test/clip.mp4.", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 5), "cy", None, "clip (https://files.test/clip.mp4)", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 6), "cy", None, "lol https://x.test/a.webm!", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 7), "cy", None, "I saw a.mov yesterday https://example.com", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 8), "cy", None, "x.movie https://example.com", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 9), "cy", None, "the youtube.com/watch page is slow, see https://example.com/help", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 10), "cy", None, "see https://clip.mp4.example.com/a", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 11), "cy", None, "live now https://www.twitch.tv/somebody", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 12), "cy", None, "https://dai.ly/x8abc12 and https://www.dailymotion.com/video/x8abc12", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 13), "cy", None, "https://player.vimeo.com/video/76979871", None, None, false, false, &[], None).await.unwrap();
-        store(&pool, &room, &line(oct30, 14), &ann_name, Some(ann), "", None, Some("22222222-2222-2222-2222-222222222222,33333333-3333-3333-3333-333333333333"), false, true, &[], None).await.unwrap();
+        store(&pool, &room, &line(oct29, 0), &ann_name, Some(ann), "morning everyone", None, None, false, true, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct29, 1), "Bob", None, "look https://example.com/page.", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 0), &ann_name, Some(ann), "", Some("11111111-1111-1111-1111-111111111111"), None, false, true, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 1), "cy", None, "this one www.youtube.com/watch?v=abc", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 2), "cy", None, "or http://files.test/clip.mp4?x=1 later", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 3), "Bob", None, "example.com is a domain not a link", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 4), "cy", None, "watch this https://files.test/clip.mp4.", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 5), "cy", None, "clip (https://files.test/clip.mp4)", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 6), "cy", None, "lol https://x.test/a.webm!", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 7), "cy", None, "I saw a.mov yesterday https://example.com", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 8), "cy", None, "x.movie https://example.com", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 9), "cy", None, "the youtube.com/watch page is slow, see https://example.com/help", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 10), "cy", None, "see https://clip.mp4.example.com/a", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 11), "cy", None, "live now https://www.twitch.tv/somebody", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 12), "cy", None, "https://dai.ly/x8abc12 and https://www.dailymotion.com/video/x8abc12", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 13), "cy", None, "https://player.vimeo.com/video/76979871", None, None, false, false, &[], None, &[]).await.unwrap();
+        store(&pool, &room, &line(oct30, 14), &ann_name, Some(ann), "", None, Some("22222222-2222-2222-2222-222222222222,33333333-3333-3333-3333-333333333333"), false, true, &[], None, &[]).await.unwrap();
 
         assert_eq!(found(&pool, &room, "everyone").await, vec![line(oct29, 0)], "the words alone, as before");
         assert_eq!(found(&pool, &room, "has:image").await, vec![line(oct30, 0)]);
