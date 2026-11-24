@@ -155,6 +155,12 @@ export interface SearchHit extends OAuthVerified {
 }
 
 export const SEARCH_LIMIT = 20;
+
+export interface Mention extends OAuthVerified {
+  name: string;
+  verified: boolean;
+  avatar: number | null;
+}
 export const SEARCH_ANYWHERE_FROM = 3;
 
 export function cleanSearch(raw: string): string {
@@ -509,6 +515,7 @@ interface RequestOptions {
   report?: boolean;
   timeoutMs?: number;
   cache?: RequestCache;
+  signal?: AbortSignal;
 }
 
 async function request<T>(method: string, path: string, body?: unknown, options: RequestOptions = {}): Promise<T> {
@@ -517,7 +524,7 @@ async function request<T>(method: string, path: string, body?: unknown, options:
     method,
     headers: body === undefined ? {} : { 'content-type': raw ? body.type : 'application/json' },
     body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
-    signal: options.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs),
+    signal: options.signal ?? (options.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs)),
     cache: options.cache
   });
   return answerOf<T>(method, path, res, options);
@@ -735,6 +742,8 @@ export const api = {
   follow: (name: string) => request<null>('POST', `/api/streamers/${encodeURIComponent(name)}/follow`),
   unfollow: (name: string) => request<null>('POST', `/api/streamers/${encodeURIComponent(name)}/unfollow`),
   search: (q: string) => request<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
+  mentions: (ctx: string, q: string, limit: number, signal?: AbortSignal) =>
+    request<Mention[]>('GET', `/api/mentions?ctx=${encodeURIComponent(ctx)}&q=${encodeURIComponent(q)}&limit=${limit}`, undefined, { signal }),
   uploadChatImage: (picture: Blob) => request<{ id: string }>('POST', '/api/chat-images', picture),
   uploadChatVideo: (video: Blob, onProgress?: (sent: number) => void) =>
     new Promise<{ id: string; poster: string; duration_ms: number }>((resolve, reject) => {

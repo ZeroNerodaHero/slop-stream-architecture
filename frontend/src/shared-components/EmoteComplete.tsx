@@ -24,7 +24,7 @@ export function useEmoteComplete({
   onChange: (next: string) => void;
   input: RefObject<HTMLInputElement | null>;
   id?: string;
-}): { box: EmoteCompleteBox; list: ReactNode; open: boolean } {
+}): { box: EmoteCompleteBox; list: ReactNode; open: boolean; caret: number | null; setCaret: (caret: number | null) => void } {
   const mine = useMyEmotes();
   const own = useId();
   const listId = id ?? `emote-complete-${own.replace(/:/g, '')}`;
@@ -122,5 +122,5 @@ export function useEmoteComplete({
     </div>
   ) : null;
 
-  return { box, list, open };
+  return { box, list, open, caret, setCaret };
 }
