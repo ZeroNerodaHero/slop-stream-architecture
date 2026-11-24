@@ -2,6 +2,7 @@ mod dummy;
 mod limits;
 mod media;
 mod thumbs;
+mod timings;
 mod voice;
 
 use std::collections::HashMap;
@@ -283,6 +284,7 @@ async fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("dummy") {
         return dummy::run().await;
     }
+    timings::serve();
     if std::env::args().nth(1).as_deref() == Some("voice") {
         return voice::run().await;
     }
@@ -345,7 +347,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/thumb/{file}", get(thumb))
         .route("/ws", get(ws))
         .route_layer(axum::middleware::from_fn_with_state(limits::Limits::default(), limits::layer))
-        .with_state(app.clone());
+        .with_state(app.clone())
+        .layer(axum::middleware::from_fn(timings::http));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], ws_port));
     log::info!("websocket on {addr}/ws");
@@ -522,7 +525,7 @@ async fn owns_stream(app: &App, name: &str, session: Option<i64>, token: Option<
         return Err("not your stream");
     };
     let url = format!("{}/api/streams/{name}/heartbeat?session={session}&token={token}", app.api_url);
-    match app.http.post(url).send().await {
+    match timings::call("POST", "/api/streams/{name}/heartbeat", app.http.post(url)).await {
         Ok(res) if res.status().is_success() => Ok(()),
         Ok(res) if res.status().is_client_error() => Err("not your stream"),
         Ok(res) => {
@@ -543,9 +546,11 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
         return;
     };
     log::info!("publish {name}: start, {count} slot(s)");
+    let session = timings::Session::open("webrtc", "publish");
+    let setup = Arc::new(timings::Setup::start("webrtc", "publish"));
 
     let dead = Arc::new(Notify::new());
-    let peer = match new_peer(&app, Role::Publish, &name, dead.clone(), Arc::new(Notify::new()), Vec::new()).await {
+    let peer = match new_peer(&app, Role::Publish, &name, dead.clone(), Arc::new(Notify::new()), Vec::new(), setup.clone()).await {
         Ok(peer) => Arc::new(peer),
         Err(e) => {
             log::error!("publish {name}: peer setup: {e}");
@@ -559,9 +564,12 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
     let hub = app.hub.clone();
     let room = name.clone();
     let thumbs_on = app.thumbs;
+    let ingest = timings::line("session", "webrtc", "publish", timings::Dir::In);
+    let delivery = timings::line("session", "webrtc", "watch", timings::Dir::Out);
     peer.on_track(Box::new(move |track, _, transceiver| {
         let hub = hub.clone();
         let room = room.clone();
+        let (ingest, delivery) = (ingest.clone(), delivery.clone());
         tokio::spawn(async move {
             let kind = track.kind();
             let codec = track.codec();
@@ -627,7 +635,11 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
                 if let Some(tap) = &mut tap {
                     tap.feed(&packet);
                 }
-                let _ = local.write_rtp(&packet).await;
+                let size = timings::packet_bytes(packet.payload.len());
+                ingest.count(1, size);
+                if let Ok(written) = local.write_rtp(&packet).await {
+                    timings::delivered(&delivery, written, size);
+                }
             }
             drop(tap);
             log::info!("publish {room}: slot {slot} done ({kind})");
@@ -685,6 +697,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
                 },
                 _ = dead.notified() => {
                     log::info!("publish {name}: peer gone");
+                    session.fail();
                     break;
                 }
                 _ = async { let _ = shutdown.wait_for(|s| *s).await; } => {
@@ -695,6 +708,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
         }
     }
 
+    setup.done(false);
     let _ = peer.close().await;
     app.hub.clear(&name).await;
     end_session(&app, &name, grant, by).await;
@@ -705,7 +719,7 @@ async fn tell_attached(app: App, name: String, grant: (Option<i64>, Option<i64>)
     let (Some(session), Some(token)) = grant else { return };
     let url = format!("{}/api/streams/{name}/attached?session={session}&token={token}", app.api_url);
     for attempt in 1..=3 {
-        match app.http.post(&url).send().await {
+        match timings::call("POST", "/api/streams/{name}/attached", app.http.post(&url)).await {
             Ok(res) if res.status().is_success() => {
                 log::info!("publish {name}: told the api the publisher is here");
                 return;
@@ -724,7 +738,7 @@ async fn tell_attached(app: App, name: String, grant: (Option<i64>, Option<i64>)
 async fn end_session(app: &App, name: &str, grant: (Option<i64>, Option<i64>), by: &str) {
     let (Some(session), Some(token)) = grant else { return };
     let url = format!("{}/api/streams/{name}/stop?session={session}&token={token}&by={by}", app.api_url);
-    match app.http.post(url).send().await {
+    match timings::call("POST", "/api/streams/{name}/stop", app.http.post(url)).await {
         Ok(res) if res.status().is_success() => log::info!("publish {name}: told the api to stop session {session}"),
         Ok(res) if res.status().is_client_error() => {}
         Ok(res) => log::warn!("publish {name}: api answered {} to stop", res.status()),
@@ -738,10 +752,13 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
         return;
     };
 
+    let what = if preview { "preview" } else { "watch" };
+    let session = timings::Session::open("webrtc", what);
+    let setup = Arc::new(timings::Setup::start("webrtc", what));
     let dead = Arc::new(Notify::new());
     let connected = Arc::new(Notify::new());
     let watched = tracks.iter().map(|(slot, _, keyframes)| (*slot, Arc::clone(keyframes))).collect();
-    let peer = match new_peer(&app, Role::Watch, &name, dead.clone(), connected.clone(), watched).await {
+    let peer = match new_peer(&app, Role::Watch, &name, dead.clone(), connected.clone(), watched, setup.clone()).await {
         Ok(peer) => Arc::new(peer),
         Err(e) => {
             log::error!("watch {name}: peer setup: {e}");
@@ -844,6 +861,7 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
                 }
                 _ = dead.notified() => {
                     log::info!("watch {name}: peer gone");
+                    session.fail();
                     break;
                 }
                 changed = slots.changed() => {
@@ -869,7 +887,9 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
             app.hub.remove_viewer(&name, id).await;
         }
     }
+    setup.done(false);
     let _ = peer.close().await;
+    drop(session);
 }
 
 async fn send_pli(peer: &RTCPeerConnection, ssrc: u32) {
@@ -900,7 +920,7 @@ async fn tell_viewers(socket: &mut WebSocket, viewers: Option<&watch::Receiver<u
 async fn tell_api_viewers(app: App, name: String, grant: (Option<i64>, Option<i64>), count: usize) {
     let (Some(session), Some(token)) = grant else { return };
     let url = format!("{}/api/streams/{name}/viewers?session={session}&token={token}&viewers={count}", app.api_url);
-    match app.http.post(url).send().await {
+    match timings::call("POST", "/api/streams/{name}/viewers", app.http.post(url)).await {
         Ok(res) if res.status().is_success() => {}
         Ok(res) => log::debug!("publish {name}: api answered {} to viewers", res.status()),
         Err(e) => log::debug!("publish {name}: api unreachable for viewers: {e}"),
@@ -932,6 +952,7 @@ async fn new_peer(
     dead: Arc<Notify>,
     connected: Arc<Notify>,
     watched: Vec<(usize, Arc<AtomicU64>)>,
+    setup: Arc<timings::Setup>,
 ) -> anyhow::Result<RTCPeerConnection> {
     let (media, registry) = media_setup(role == Role::Publish)?;
 
@@ -983,7 +1004,11 @@ async fn new_peer(
     peer.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
         log::info!("{tag}: peer {state}");
         if state == RTCPeerConnectionState::Connected {
+            setup.done(true);
             connected.notify_one();
+        }
+        if matches!(state, RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed) {
+            setup.done(false);
         }
         match state {
             RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => dead.notify_one(),
