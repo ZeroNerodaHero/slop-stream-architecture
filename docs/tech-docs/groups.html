@@ -44,7 +44,9 @@
         <tr><td><b>2</b></td><td>groups one login may own. <code>GROUPS_PER_OWNER</code> in <code>.env</code> changes it. 8 at most.</td></tr>
         <tr><td><b>8</b></td><td>groups one login may be in. a line wears one group badge only (the primary, else the first joined).</td></tr>
         <tr><td><b>20</b></td><td>roles a group may have.</td></tr>
-        <tr><td><b>20</b></td><td>channels a server may have.</td></tr>
+        <tr><td><b>20</b></td><td>text channels a server may have.</td></tr>
+        <tr><td><b>4</b></td><td>voice channels a server may have.</td></tr>
+        <tr><td><b>50</b></td><td>emotes a group may have. pins a channel may have.</td></tr>
         <tr><td><b>100</b></td><td>lines of every channel that come with the page.</td></tr>
       </table>
     </section>
@@ -53,14 +55,17 @@
       <h2>owners and roles</h2>
       <p>the maker is an owner. an owner has every power. an owner can name another owner, and take it back. nobody else can. not a site admin.</p>
       <p>a group keeps one owner while anyone else is in it. the last owner cannot leave until they name another. the last person out deletes the group.</p>
-      <p>a role: a name, a colour, and any of five powers.</p>
+      <p>a role: a name, a colour, and any of seven powers.</p>
       <ul>
         <li><b>appearance</b>. the about line. public or private. the member order.</li>
         <li><b>roles</b>. make roles and hand them out. never owner.</li>
         <li><b>channels</b>. add, rename, order, delete.</li>
         <li><b>kick</b>.</li>
         <li><b>ban</b>. a ban stops a join until it is lifted.</li>
+        <li><b>voice</b>. mute someone, or take them out of voice.</li>
+        <li><b>emotes</b>. add, rename, delete the group's emotes.</li>
       </ul>
+      <p>a role can carry a cooldown. up to an hour between lines. a channel can be kept to some roles. the kick power can also time someone out. 10 s up to a week.</p>
       <p>joining and leaving are your own choice. no invitations. no approval.</p>
     </section>
 
@@ -69,15 +74,42 @@
       <p><code>/groups</code> is where you find them: yours, and ones to discover. and where you make one, while you are under the cap.</p>
       <p><code>/groups/&lt;name&gt;</code> is the room. a banner. the picture. the channel list. the chat. the roster on the right, with a search.</p>
       <ol class="steps">
-        <li>a server starts with one channel, <code>general</code>. it stays.</li>
+        <li>a server starts with two channels. <code>general</code>, which stays. and <code>voice</code>. a server always keeps one voice channel.</li>
         <li>add another, rename it, drag the order, delete it. the channels power.</li>
         <li>the room loads once. after that it is pushed to. a new channel, a new line, a rename: it arrives.</li>
         <li>mute a channel and the bell hears nothing from it.</li>
         <li>look at a channel and it is read, on every device of yours.</li>
       </ol>
       <p>home lists servers under recently offline. a chat line in a channel is a block, not a stream's line.</p>
+      <p>a line worth keeping can be pinned. 50 a channel.</p>
+    </section>
+
+    <section>
+      <h2>voice</h2>
+      <p>a voice channel is a call. talk. show a camera or a screen. click the channel and the call takes the chat's place.</p>
+      <div class="pic">
+        <div class="box">you</div>
+        <div class="flow" data-say="ask to join"><i></i></div>
+        <div class="box">api<small>a 30 s pass, once</small></div>
+        <div class="flow" data-say="the pass"><i></i></div>
+        <div class="box hot">voice</div>
+      </div>
+      <ul>
+        <li>16 seats a call. 4 people from one address.</li>
+        <li>the sound goes on udp 7883. no relay for strict networks.</li>
+        <li>the bar says <code>connecting to &lt;channel&gt;…</code>, then <code>in &lt;channel&gt;</code>.</li>
+        <li>rename a channel and the call stays whole.</li>
+      </ul>
+      <p>built. off on the live box. set <code>VOICE_SECRET</code> in <code>.env</code>. then deploy voice.</p>
+    </section>
+
+    <section>
+      <h2>emotes</h2>
+      <p>a group's own small pictures. a name, <code>a-z 0-9 _</code>, 2 to 32 letters.</p>
+      <p>upload a png, jpeg or webp. 512 kb at most. the api cuts the middle square. it saves a new 128×128 webp. nothing of the old file stays.</p>
+      <p>a member writes <code>:name:</code> in any chat. a reaction can be an emote too. leave the group and you cannot use them.</p>
     </section>
   </main>
-  <footer>long version: <code>docs/groups.md</code></footer>
+  <footer>long version: <code>docs/groups.md</code>, <code>docs/voice.md</code>, <code>docs/chat.md</code> (emotes)</footer>
 </body>
 </html>

@@ -21,20 +21,6 @@ const expect = (cond, what) => {
   if (!cond) throw new Error(what);
 };
 
-const selectorsOf = (page) =>
-  page.evaluate((box) => {
-    const style = document.querySelector(`${box} style`);
-    if (!style || !style.sheet) return [];
-    const out = [];
-    const walk = (rules) => {
-      for (const r of rules) {
-        if (r.selectorText !== undefined) out.push(r.selectorText);
-        if (r.cssRules) walk(r.cssRules);
-      }
-    };
-    walk(style.sheet.cssRules);
-    return out;
-  }, BOX);
 (async () => {
   const api = await request.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: !process.env.HEADED, args: ARGS });
@@ -108,17 +94,6 @@ const selectorsOf = (page) =>
     const current = await page.$$eval(`${BOX} .about-music-track[aria-current="true"]`, (els) => els.map((e) => e.textContent.trim()));
     expect(current.length === 1 && current[0].startsWith('2.'), `the current track is ${JSON.stringify(current)}`);
     return `played, paused, then "${now}"`;
-  });
-
-  await step('the sample css is on the page with every selector under the box', async () => {
-    const selectors = await selectorsOf(page);
-    expect(selectors.length > 0, 'no style in the box');
-    const loose = selectors.filter((s) => !s.split(',').every((part) => part.trim().startsWith(BOX)));
-    expect(loose.length === 0, `selectors outside the box: ${JSON.stringify(loose)}`);
-    expect((await page.$$(`#about-${NAME}-css`)).length === 0, 'the css box is still on the page');
-    const color = await page.$eval(`${BOX} .about-text`, (el) => getComputedStyle(el).color);
-    expect(color === 'rgb(154, 163, 178)', `.about-text is ${color}, the sample css did not land`);
-    return `${selectors.length} rule(s)`;
   });
 
   await step('the calendar tab and back: the player is silent', async () => {

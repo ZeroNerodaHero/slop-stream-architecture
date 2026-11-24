@@ -10,7 +10,7 @@
   <nav><a href="index.html">← all pages</a></nav>
   <main>
     <h1>boxes</h1>
-    <p class="lead">deploy start twelve programs on one computer. each one has one job. these are the boxes.</p>
+    <p class="lead">deploy start twelve programs on one computer. a thirteenth when voice is on. each one has one job.</p>
 
     <section>
       <h2>the front door</h2>
@@ -25,9 +25,10 @@
           <div class="pic"><div class="flow" data-say="/events"><i></i></div><div class="box">events</div></div>
           <div class="pic"><div class="flow" data-say="/api/streams"><i></i></div><div class="box">home</div></div>
           <div class="pic"><div class="flow" data-say="/ws /thumb"><i></i></div><div class="box">video</div></div>
+          <div class="pic"><div class="flow" data-say="/voice"><i></i></div><div class="box ghost">voice</div></div>
         </div>
       </div>
-      <p>one thing skips the door. the video packets go straight to <code>video</code> on udp 7882.</p>
+      <p>one thing skips the door. the video packets go straight to <code>video</code> on udp 7882. voice packets go to <code>voice</code> on udp 7883.</p>
       <div class="pic">
         <div class="box">browser</div>
         <div class="flow fast" data-say="udp 7882"><i></i><i></i><i></i></div>
@@ -59,11 +60,12 @@
         <tr><td><code>chat</code></td><td>the text chat. one socket per viewer. same program as api, run as <code>api chat</code>. see <a href="chat.html">chat</a>.</td><td>nothing itself</td></tr>
         <tr><td><code>events</code></td><td>the data wire. one socket per browser, on every page. who is here, who went live, who ended. run as <code>api events</code>.</td><td>nothing. a restart: browsers come back in 3 s, it replays the last 10 s</td></tr>
         <tr><td><code>home</code></td><td>the home list. every live stream and how many watch it. in memory. checked against video every 30 s. run as <code>api home</code>.</td><td>in memory only</td></tr>
-        <tr><td><code>database</code></td><td><code>postgres</code>. the accounts, the status, the about me, the log, follows, messages, the inbox. not the video. a second database, <code>debug</code>, for the pages' error reports.</td><td>everything that must last</td></tr>
+        <tr><td><code>database</code></td><td><code>postgres</code>. the accounts, the status, the about page, the log, follows, messages, the inbox, the stream stats. not the video. a second database, <code>debug</code>, for the pages' error reports.</td><td>everything that must last</td></tr>
         <tr><td><code>redis</code></td><td>fast memory. who is live now. who is here now. the chat's last 500 lines a room. the stream of facts the pushes come from.</td><td>until it restarts. no save file</td></tr>
-        <tr><td><code>s3</code></td><td>a bucket on this computer (<code>seaweedfs</code>). profile pictures, banners, thumbnails. <code>S3_ENDPOINT=off</code> uses it. a url uses a real bucket instead.</td><td>the pictures</td></tr>
-        <tr><td><code>video</code></td><td>rust. one upload in, copies out. a jpeg of every live stream every 5 s. room for about 25 streams.</td><td>nothing</td></tr>
-        <tr><td><code>dummy</code></td><td>fake streams. gifs bouncing around with a name on top. off unless <code>DUMMY_STREAMS</code> says a number.</td><td>nothing</td></tr>
+        <tr><td><code>s3</code></td><td>a bucket on this computer (<code>seaweedfs</code>). profile pictures, banners, thumbnails, chat pictures and clips, emotes. <code>S3_ENDPOINT=off</code> uses it. a url uses a real bucket instead.</td><td>the pictures</td></tr>
+        <tr><td><code>video</code></td><td>rust. one upload in, copies out. a jpeg of every live stream every 5 s. it reads only keyframes for that.</td><td>nothing</td></tr>
+        <tr><td><code>dummy</code></td><td>fake streams. gifs bouncing around with a name on top. 240p. lowest cpu turn on the box. off unless <code>DUMMY_STREAMS</code> says a number.</td><td>nothing</td></tr>
+        <tr><td><code>voice</code></td><td>talk in a group's voice channel. same program as video, run as <code>video voice</code>. 16 seats a room. off until <code>VOICE_SECRET</code> is set. see <a href="groups.html">groups</a>.</td><td>nothing</td></tr>
       </table>
     </section>
 
@@ -71,13 +73,13 @@
       <h2>small rules</h2>
       <ul>
         <li>every box logs to 3 files of 10 MB. then the oldest goes. a box left alone never fills the disk.</li>
-        <li>only three ports open: 80, 443, 7882/udp. database and redis have no door to the outside.</li>
+        <li>only three ports open: 80, 443, 7882/udp. 7883/udp too, when voice is on. database and redis have no door to the outside.</li>
         <li>peek inside: <code>docker compose exec database psql -U stream</code>. <code>docker compose exec redis redis-cli</code>.</li>
         <li>chat, events and home are the api program with a different first word. one image, no extra build.</li>
-        <li>a deploy of <code>video</code> ends every stream. a deploy of anything else does not.</li>
+        <li>a deploy of <code>video</code> ends every stream. a deploy of <code>voice</code> ends every call. a deploy of anything else does neither.</li>
       </ul>
     </section>
   </main>
-  <footer>long version: <code>docker-compose.yml</code> (the comments), <code>docs/architecture-picture.md</code>, <code>docs/overview.md</code></footer>
+  <footer>long version: <code>docker-compose.yml</code>, <code>docs/architecture-picture.md</code>, <code>docs/overview.md</code></footer>
 </body>
 </html>

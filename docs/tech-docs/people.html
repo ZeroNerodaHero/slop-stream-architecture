@@ -40,6 +40,25 @@
     </section>
 
     <section>
+      <h2>google and discord</h2>
+      <p>log in with google or discord. no password needed. it is built.</p>
+      <ol class="steps">
+        <li>you press the button. the site sends you to google or discord.</li>
+        <li>they send you back to <code>/api/oauth/&lt;provider&gt;/callback</code>.</li>
+        <li>known: you are in. new: <code>/oauth</code> asks for a name. then you are in.</li>
+      </ol>
+      <p>who you are is their id for you. never your email. an email that matches never links two accounts.</p>
+      <p>link one or both on the security tab. a blue badge then sits by your name: verified. the last way in cannot be unlinked.</p>
+      <p>it needs <code>PUBLIC_URL</code> and each provider's keys in <code>.env</code>. see <a href="ops.html">ops</a>.</p>
+    </section>
+
+    <section>
+      <h2>the robot check</h2>
+      <p><code>turnstile</code>. cloudflare's quiet box that says you are a person. it guards sign up and log in. and the name pick.</p>
+      <p>off unless <code>TURNSTILE_ENABLED</code> is on. on, and the check cannot be asked: refused, 403. it fails closed.</p>
+    </section>
+
+    <section>
       <h2>an id under the name</h2>
       <p>every name has an id that never changes. follows, groups, pictures and messages point at the id. not the name.</p>
       <p>so you can change your name. the profile tab. once a month. with your password. not while live. everything follows.</p>
@@ -70,7 +89,8 @@
       <h2>follows</h2>
       <p>you follow a name. one row: you, them. they follow you back: you are <b>friends</b>.</p>
       <p>the side column shows who you follow. friends apart from the rest. the ones streaming first. a search box to find more.</p>
-      <p>the watch page has the button, and <b class="count" style="--to: 48"></b> followers.</p>
+      <p>the watch page has the button, and <b class="count" style="--to: 48"></b> followers. so does a name's hover card.</p>
+      <p>home has a part for who you follow. live ones first.</p>
     </section>
 
     <section>
@@ -92,7 +112,13 @@
       <p>the last <b class="count" style="--to: 30"></b> things that happened to you. someone you follow went live. someone followed you. a friend wrote. someone wrote in a channel of a group you are in. clipped to 30 on every write.</p>
       <p>read on one device, read on all. which kinds go in: four switches on the <code>notifications</code> tab of the user modal. a channel too loud: mute it, and only it.</p>
     </section>
+
+    <section>
+      <h2>your numbers</h2>
+      <p>the <code>stats</code> tab of the user modal. for your own streams. a login only. a guest sees a button to make an account.</p>
+      <p>viewers over time. the peak and the average. time live. watch time. how many different people. follows while live. chat lines.</p>
+    </section>
   </main>
-  <footer>long version: <code>docs/accounts.md</code>, <code>docs/ids.md</code>, <code>docs/status.md</code>, <code>docs/follows.md</code>, <code>docs/dms.md</code>, <code>docs/notifications.md</code></footer>
+  <footer>long version: <code>docs/accounts.md</code>, <code>docs/ids.md</code>, <code>docs/status.md</code>, <code>docs/follows.md</code>, <code>docs/dms.md</code>, <code>docs/notifications.md</code>, <code>docs/cloudflare-turnstile.md</code>, <code>docs/analytics.md</code></footer>
 </body>
 </html>
