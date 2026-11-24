@@ -153,7 +153,7 @@ fn file_src(name: &str, id: i64) -> String {
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/api/streamers/{name}/about-page", get(get_page).put(put_page).layer(DefaultBodyLimit::max(MAX_PAGE)))
+        .route("/api/streamers/{name}/about-page", get(get_page).layer(axum::middleware::map_response(crate::media::public_cache(crate::media::ABOUT_PAGE_CACHE))).put(put_page).layer(DefaultBodyLimit::max(MAX_PAGE)))
         .route(
             "/api/streamers/{name}/about-file",
             put(put_file).layer(DefaultBodyLimit::max(MAX_VIDEO)),

@@ -766,7 +766,7 @@ async fn unlink_route(State(s): State<AppState>, Path(slug): Path<String>, Me(me
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/api/oauth/providers", get(providers))
+        .route("/api/oauth/providers", get(providers).layer(axum::middleware::map_response(crate::media::public_cache(crate::media::PROVIDERS_CACHE))))
         .route("/api/oauth/identities", get(identities))
         .route("/api/oauth/signup", get(signup_info).post(signup_finish))
         .route("/api/oauth/{provider}/start", get(start))

@@ -825,7 +825,7 @@ fn router(state: AppState) -> Router {
         .merge(analytics::routes())
         .route("/api/health", get(health))
         .route("/api/streamers/{name}", get(get_streamer).put(put_streamer))
-        .route("/api/streamers/{name}/sessions", get(list_sessions))
+        .route("/api/streamers/{name}/sessions", get(list_sessions).layer(axum::middleware::map_response(crate::media::public_cache(crate::media::SESSIONS_CACHE))))
         .route("/api/streams/{name}/go-live", post(go_live))
         .route("/api/streams/{name}/attached", post(attached))
         .route("/api/streams/{name}/viewers", post(viewers))
@@ -834,6 +834,7 @@ fn router(state: AppState) -> Router {
         .route("/api/streams/{name}/watch", post(watch))
         .route_layer(axum::middleware::from_fn_with_state(state.clone(), ratelimit::api))
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "no such route") })
+        .layer(axum::middleware::map_response(media::no_store_by_default))
         .with_state(state)
 }
 

@@ -42,7 +42,7 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/groups/{group}/emotes", get(list).post(upload).layer(DefaultBodyLimit::max(MAX_BYTES + FORM_SLACK)))
         .route("/api/groups/{group}/emotes/{id}", patch(rename).delete(remove))
-        .route("/api/emotes", get(lookup))
+        .route("/api/emotes", get(lookup).layer(axum::middleware::map_response(crate::media::public_cache(crate::media::EMOTE_LOOKUP_CACHE))))
         .route("/api/emotes/mine", get(mine))
         .route("/api/emotes/{id}", get(picture))
 }
