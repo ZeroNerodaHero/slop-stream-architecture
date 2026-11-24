@@ -1,7 +1,7 @@
 import { RiTimeLine, RiUserLine } from '@remixicon/react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, memo, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { hoverPreview } from '@/app/home/hover';
@@ -285,6 +285,38 @@ function Followed({
   );
 }
 
+const PersonTile = memo(function PersonTile({
+  name,
+  verified,
+  oauthVerified,
+  avatar,
+  bio,
+  presence
+}: {
+  name: string;
+  verified: boolean;
+  oauthVerified: boolean | undefined;
+  avatar: number | null;
+  bio: string;
+  presence: Person['presence'];
+}) {
+  return (
+    <article id={`person-${name}`} data-presence={presence} className={cn(CARD_LINK, 'flex items-center gap-2 p-3')}>
+      <PersonRow
+        id={`person-link-${name}`}
+        name={name}
+        verified={verified}
+        oauthVerified={oauthVerified}
+        avatar={avatar}
+        bio={bio}
+        presence={presence}
+        size="card"
+      />
+      <FollowButton id={`person-follow-${name}`} name={name} small className="self-start" />
+    </article>
+  );
+});
+
 function People() {
   const people = useQuery({ queryKey: ['people'], queryFn: homePeople, refetchInterval: PEOPLE_POLL_MS });
   const list: Person[] = people.data ?? [];
@@ -331,19 +363,15 @@ function People() {
     >
       <div className={PEOPLE_GRID}>
         {list.map((p) => (
-          <article key={p.name} id={`person-${p.name}`} data-presence={p.presence} className={cn(CARD_LINK, 'flex items-center gap-2 p-3')}>
-            <PersonRow
-              id={`person-link-${p.name}`}
-              name={p.name}
-              verified={p.verified}
-              oauthVerified={p.oauth_verified}
-              avatar={p.avatar}
-              bio={p.bio}
-              presence={p.presence}
-              size="card"
-            />
-            <FollowButton id={`person-follow-${p.name}`} name={p.name} small className="self-start" />
-          </article>
+          <PersonTile
+            key={p.name}
+            name={p.name}
+            verified={p.verified}
+            oauthVerified={p.oauth_verified}
+            avatar={p.avatar}
+            bio={p.bio}
+            presence={p.presence}
+          />
         ))}
       </div>
     </Part>
