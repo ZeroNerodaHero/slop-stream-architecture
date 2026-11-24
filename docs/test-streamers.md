@@ -50,7 +50,11 @@ not filtered, and why:
 - **a name's own sub-resources** (`/avatar`, `/thumbs`, `/assets`, `/offline`, `/about-page`, `/about-file`, `/sessions`) and **the chat** (`/chat/:name`, its history): only reachable by the name, which no list hands out while hiding is on.
 - **the events socket's `/online`**: who has the site open, by login or guest nick, and those refuse the prefix.
 
-the switch is read by two processes, `api` and `home`. `docker-compose.yml` passes `HIDE_TEST_STREAMERS` from `.env` to both; unset (the default) means off.
+the switch is read by three processes, `api`, `home` and `chat`. `docker-compose.yml` passes `HIDE_TEST_STREAMERS` from `.env` to all three; unset (the default) means off.
+
+## the chat
+
+a test stream's own grant chats faster in its own room: about one line a second (`TEST_OWNER_TIER` in `api/src/chat.rs`, 3 at once then 1/s) where a real streamer has 3 in ten seconds. the chat looks the room up once at hello: the name must start with `DUMMY_PREFIX` and its row must be `is_test`, and the speaker must be the room's owner by the go-live `session` and `token`, not a login and not a guest nick. with `HIDE_TEST_STREAMERS` on nobody gets it. bans, timeouts, the 500 characters and the rest of the say path are unchanged (`chat.md`, rate).
 
 ## the dummy box
 
@@ -61,3 +65,4 @@ the switch is read by two processes, `api` and `home`. `docker-compose.yml` pass
 - **the about page**, when `GET /api/streamers/:name/about-page` answers with no blocks: one text block of three short paragraphs saying it is a fake test stream for styling and debugging and not a real person, worded a little differently per stream (`ABOUT_OPENERS`, `ABOUT_MIDDLES`), `PUT /api/streamers/:name/about-page`.
 - every write carries `X-Dummy-Password`. a failure in the avatar or the about page is a warn line in the box's log and nothing more: the stream goes on. a read that failed writes nothing, so a box whose streams are hidden does not upload a picture on every try.
 - **go-live refused with a 403** (a wrong password, or hiding on) waits 60s before the next try instead of 5s (`REFUSED_RETRY`).
+- **chat**, while a stream is live and `DUMMY_CHAT` is not off: two sockets per stream in its own room. the stream itself, by its grant with `bot`, says a line every `DUMMY_CHAT_INTERVAL_MS` (default 1000) on the tier above, and a guest nick from `VIEWER_NICKS` says one about every 30s, the nick's rate (`video-source.md`).
