@@ -1,7 +1,3 @@
-//! Codec and interceptor setup shared by the server and the dummy publisher.
-//! Opus and VP8 only: every browser has both, so a publisher cannot pick a codec
-//! some watcher lacks, and all watchers get the same bytes.
-
 use webrtc::api::interceptor_registry::{configure_rtcp_reports, configure_twcc_receiver_only};
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_OPUS, MIME_TYPE_VP8};
 use webrtc::interceptor::nack::generator::Generator;
@@ -39,8 +35,6 @@ pub fn vp8_capability() -> RTCRtpCodecCapability {
     }
 }
 
-/// `twcc`: ask the remote side for transport-wide feedback. Only useful when the
-/// remote is a browser uploading to us; it adapts its bitrate to that feedback.
 pub fn media_setup(twcc: bool) -> anyhow::Result<(MediaEngine, Registry)> {
     let mut media = MediaEngine::default();
     media.register_codec(
@@ -61,8 +55,6 @@ pub fn media_setup(twcc: bool) -> anyhow::Result<(MediaEngine, Registry)> {
     )?;
 
     let mut registry = Registry::new();
-    // Re-send lost packets from a short history (2^9 packets, ~2s), and ask the
-    // other side to re-send what we lost.
     registry.add(Box::new(Responder::builder().with_log2_size(9)));
     registry.add(Box::new(Generator::builder()));
     registry = configure_rtcp_reports(registry);
@@ -72,8 +64,6 @@ pub fn media_setup(twcc: bool) -> anyhow::Result<(MediaEngine, Registry)> {
     Ok((media, registry))
 }
 
-/// Opus for voice only: mono speech at a low bitrate, with DTX so silence costs
-/// almost nothing. Never use it for the stream; music must not get DTX.
 pub fn opus_voice_capability() -> RTCRtpCodecCapability {
     RTCRtpCodecCapability {
         mime_type: MIME_TYPE_OPUS.to_owned(),
@@ -85,8 +75,6 @@ pub fn opus_voice_capability() -> RTCRtpCodecCapability {
     }
 }
 
-/// Like `media_setup`, but for voice: the voice Opus for the mics, and VP8 for the cameras and
-/// screens shown in a voice channel, with TWCC so a browser sending one adapts its bitrate.
 pub fn voice_media_setup() -> anyhow::Result<(MediaEngine, Registry)> {
     let mut media = MediaEngine::default();
     media.register_codec(
@@ -114,10 +102,6 @@ pub fn voice_media_setup() -> anyhow::Result<(MediaEngine, Registry)> {
     Ok((media, registry))
 }
 
-/// Whether a VP8 RTP payload starts a keyframe (RFC 7741): the first packet of
-/// partition 0 (S set, PID 0), past the payload descriptor, with the P bit of the
-/// VP8 frame tag clear. Only VP8 is registered above, so it is the one codec a
-/// publisher can send us. Anything short or malformed is not a keyframe.
 pub fn is_vp8_keyframe(payload: &[u8]) -> bool {
     let Some(&first) = payload.first() else { return false };
     if first & 0x10 == 0 || first & 0x07 != 0 {
@@ -127,16 +111,13 @@ pub fn is_vp8_keyframe(payload: &[u8]) -> bool {
     if first & 0x80 != 0 {
         let Some(&ext) = payload.get(at) else { return false };
         at += 1;
-        // I: a picture id, 7 bits or (M set) 15
         if ext & 0x80 != 0 {
             let Some(&id) = payload.get(at) else { return false };
             at += if id & 0x80 != 0 { 2 } else { 1 };
         }
-        // L: TL0PICIDX
         if ext & 0x40 != 0 {
             at += 1;
         }
-        // T or K: TID/Y/KEYIDX
         if ext & 0x30 != 0 {
             at += 1;
         }
@@ -150,24 +131,17 @@ mod tests {
 
     #[test]
     fn a_keyframe_start_with_and_without_the_extension() {
-        // S, PID 0, frame tag with P clear
         assert!(is_vp8_keyframe(&[0x10, 0x00, 0x9d]));
-        // X, S; I with a 15 bit picture id; L; T; then the tag
         assert!(is_vp8_keyframe(&[0x90, 0xe0, 0x81, 0x23, 0x05, 0x40, 0x50]));
-        // X, S; I with a 7 bit picture id
         assert!(is_vp8_keyframe(&[0x90, 0x80, 0x12, 0x00]));
     }
 
     #[test]
     fn not_a_keyframe() {
-        // a delta frame: P set
         assert!(!is_vp8_keyframe(&[0x10, 0x01]));
         assert!(!is_vp8_keyframe(&[0x90, 0x80, 0x12, 0x01]));
-        // a middle packet of a keyframe: S clear
         assert!(!is_vp8_keyframe(&[0x00, 0x00]));
-        // the start of a later partition: PID 1
         assert!(!is_vp8_keyframe(&[0x11, 0x00]));
-        // cut short anywhere
         assert!(!is_vp8_keyframe(&[]));
         assert!(!is_vp8_keyframe(&[0x10]));
         assert!(!is_vp8_keyframe(&[0x90]));

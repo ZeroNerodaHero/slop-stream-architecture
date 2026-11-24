@@ -1,10 +1,3 @@
-//! Requests per address per minute, in memory (this process has no redis). Only what came
-//! through caddy is counted: it sets X-Forwarded-For; the api and home asking `/live` and
-//! `/viewers` from inside the compose network do not. 429 with `Retry-After` past the count.
-//! The peer caps (`MAX_WATCHERS_PER_IP*`, `MAX_PREVIEWS_PER_IP`) still bound what an open
-//! socket may hold; this bounds how fast sockets and thumbnails are asked for.
-//! `RATE_LIMITS=off` turns it off, like the api's.
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -17,25 +10,20 @@ use axum::Json;
 
 const WINDOW: Duration = Duration::from_secs(60);
 
-/// The count a minute for a route, by the path as written in the router.
 pub(crate) fn per_minute(path: &str) -> u32 {
     match path {
-        // one per watch page, publish page and reconnect
         "/ws" => 60,
-        // every home card asks every 5s: 50 live streams on screen is 600 a minute
         "/thumb/{file}" => 3000,
         _ => 600,
     }
 }
 
-/// (address, route) to (window start, count)
 type Counts = HashMap<(String, &'static str), (Instant, u32)>;
 
 #[derive(Clone, Default)]
 pub(crate) struct Limits(Arc<Mutex<Counts>>);
 
 impl Limits {
-    /// One more for `ip` on `route`: Err(seconds left) past `max` this window.
     pub(crate) fn hit(&self, ip: &str, route: &'static str, max: u32, now: Instant) -> Result<(), u64> {
         let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if m.len() > 10_000 {
@@ -98,7 +86,6 @@ mod tests {
             assert!(l.hit("1.2.3.4", "/ws", 60, now).is_ok());
         }
         assert_eq!(l.hit("1.2.3.4", "/ws", 60, now + Duration::from_secs(15)), Err(45));
-        // another route and another address have their own counts
         assert!(l.hit("1.2.3.4", "/thumb/{file}", 3000, now).is_ok());
         assert!(l.hit("5.6.7.8", "/ws", 60, now).is_ok());
         assert!(l.hit("1.2.3.4", "/ws", 60, now + WINDOW).is_ok());
