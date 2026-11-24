@@ -435,7 +435,7 @@ async fn thumb(State(app): State<App>, axum::extract::Path(file): axum::extract:
     }
     match tokio::fs::read(thumbs::jpeg_path(&name)).await {
         Ok(bytes) if bytes.len() > 4 => (
-            [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "public, max-age=3, s-maxage=3")],
+            [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "public, max-age=0, s-maxage=5, stale-while-revalidate=10")],
             bytes,
         )
             .into_response(),
