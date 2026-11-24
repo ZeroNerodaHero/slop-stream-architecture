@@ -744,7 +744,7 @@
     const tr = el('tr', 'detail');
     const td = el('td');
     td.colSpan = span;
-    td.append(el('pre', 'mono', `${r.kind}${r.method ? ' ' + r.method : ''} ${r.name}\n${r.target} · ${r.src} · ${count(r.n)} over ${ep.data.range} · mean ${ms(r.mean)} · 4xx ${r.e4} · 5xx ${r.e5} · errors ${r.err}`));
+    td.append(el('pre', 'mono', `${r.kind}${r.method ? ' ' + r.method : ''} ${r.name}\n${r.target} · ${r.src} · ${count(r.n)} over ${ep.data.range} · ${rate(r.rate)}/s\nmean ${ms(r.mean)} · p50 ${ms(r.p50)} · p95 ${ms(r.p95)} · p99 ${ms(r.p99)} · max ${ms(r.max)} · 4xx ${r.e4} · 5xx ${r.e5} · all errors ${r.err}`));
     const D = ep.detail;
     const id = `${r.target}\u0000${r.key}`;
     if (!D || D.id !== id) td.append(el('div', 'empty', 'loading'));
@@ -753,11 +753,11 @@
       const src = { t: D.t, bucket_secs: D.bucket_secs };
       const tiles = el('div', 'tiles');
       tiles.append(
-        chart({ label: `latency per ${per(D.bucket_secs)}`, now, read: ms, src, store: epCharts, value: `p50 ${ms(r.p50)} · p95 ${ms(r.p95)} · p99 ${ms(r.p99)} · max ${ms(r.max)}`,
+        chart({ label: `latency per ${per(D.bucket_secs)}`, now, read: ms, src, store: epCharts, value: `p95 ${ms(r.p95)}`,
           lines: [{ name: 'p50', v: D.p50, color: COLORS.green }, { name: 'p95', v: D.p95, color: COLORS.blue }, { name: 'p99', v: D.p99, color: COLORS.violet }, { name: 'max', v: D.max, color: COLORS.red }] }),
-        chart({ label: `count per ${per(D.bucket_secs)}`, now, read: count, src, store: epCharts, value: `${count(r.n)} · ${rate(r.rate)}/s`,
+        chart({ label: `count per ${per(D.bucket_secs)}`, now, read: count, src, store: epCharts, value: count(r.n),
           lines: [{ name: 'count', v: D.n, color: COLORS.blue }] }),
-        chart({ label: `errors per ${per(D.bucket_secs)}`, now, read: count, src, store: epCharts, value: `4xx ${r.e4} · 5xx ${r.e5} · all errors ${r.err}`,
+        chart({ label: `errors per ${per(D.bucket_secs)}`, now, read: count, src, store: epCharts, value: `${r.err + r.e4}`,
           lines: [{ name: '4xx', v: D.e4, color: COLORS.yellow }, { name: '5xx', v: D.e5, color: COLORS.red }, { name: 'all errors', v: D.err, color: COLORS.violet }] })
       );
       td.append(tiles);
