@@ -10,6 +10,7 @@ import { type Presence, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { profilePopupAtom } from '@/infra/atoms/profile-popup-atoms';
 import type { PanelSide } from '@/infra/atoms/settings-atoms';
 import { Badge } from '@/shared-components/Badge';
+import { BlurredPicture } from '@/shared-components/BlurredPicture';
 import { Face } from '@/shared-components/Face';
 import { Who } from '@/shared-components/PersonRow';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
@@ -327,10 +328,7 @@ export function PersonCard({ id, person, at, side, actions, below, hold }: Perso
               <img src={api.streamThumbUrl(person.name, known.thumbs[0])} alt="" draggable={false} className="absolute inset-0 h-full w-full object-cover" />
             ) : (
               <>
-                <span aria-hidden className="absolute inset-0">
-                  <Face name={person.name} version={person.avatar} className="absolute inset-0 h-full w-full scale-125 object-cover text-6xl blur-xl" />
-                </span>
-                <span aria-hidden className="absolute inset-0 bg-black/40" />
+                <BlurredPicture name={person.name} version={person.avatar} />
                 <span className="relative text-sm font-semibold uppercase tracking-wider text-white">offline</span>
               </>
             )}

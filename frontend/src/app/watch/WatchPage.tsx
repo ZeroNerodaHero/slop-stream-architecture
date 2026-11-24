@@ -75,6 +75,7 @@ import { ModTab } from '@/shared-components/ModTab';
 import { PageFrame } from '@/shared-components/PageFrame';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { SceneView } from '@/shared-components/SceneView';
+import { BlurredPicture } from '@/shared-components/BlurredPicture';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SocialsTab } from '@/shared-components/SocialsEditor';
 import { StatusLine } from '@/shared-components/StatusLine';
@@ -210,6 +211,8 @@ export function WatchPage() {
   }, [name]);
   const offlineThumb = offline !== null ? api.offlineUrl(name, offline) : thumbs?.[0] !== undefined ? api.streamThumbUrl(name, thumbs[0]) : null;
   const shownThumb = offlineThumb !== brokenThumb ? offlineThumb : null;
+  const streamThumb = thumbs?.[0] !== undefined ? api.streamThumbUrl(name, thumbs[0]) : null;
+  const backdrop = name && (streamThumb !== null || avatar !== null) ? <BlurredPicture name={name} version={avatar} src={streamThumb} /> : null;
 
   useEffect(() => {
     const name = cleanName(params.name);
@@ -317,7 +320,7 @@ export function WatchPage() {
             className={cn(mobile ? strip.box : 'aspect-video', 'relative w-full border border-primaryStroke bg-backgroundSecondary max-md:border-t-0', videoCap)}
             style={mobile ? strip.style : undefined}
           >
-            <Bone className="absolute inset-0" />
+            {backdrop ?? <Bone className="absolute inset-0" />}
             {playerChip}
             {!mobile && !chatTab && (
               <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 p-3">
@@ -328,7 +331,7 @@ export function WatchPage() {
         ) : (
           <div id="profile" data-presence={presence} data-kbd-video={mobile || undefined} className={cn('relative', mobile && strip.box, videoCap)} style={mobile ? strip.style : undefined}>
             <div className={cn('relative aspect-video w-full overflow-hidden border border-primaryStroke bg-black max-md:border-x-0 max-md:border-t-0', mobile && strip.frame)}>
-              {shownThumb && (
+              {shownThumb ? (
                 <img
                   id={offline !== null ? 'offline-picture' : undefined}
                   src={shownThumb}
@@ -337,6 +340,8 @@ export function WatchPage() {
                   className="absolute inset-0 h-full w-full object-cover"
                   onError={() => setBrokenThumb(shownThumb)}
                 />
+              ) : (
+                name && avatar !== null && <BlurredPicture name={name} version={avatar} />
               )}
               {phase === 'waiting' && (
                 <span
@@ -387,7 +392,8 @@ export function WatchPage() {
             }}
             onPick={pickSlot}
           />
-          {(phase === 'connecting' || phase === 'connected') && <Bone className="pointer-events-none absolute inset-px" />}
+          {(phase === 'connecting' || phase === 'connected') &&
+            (backdrop ? <span className="pointer-events-none absolute inset-px">{backdrop}</span> : <Bone className="pointer-events-none absolute inset-px" />)}
           {playerChip}
           {needsTap && (
             <Button
