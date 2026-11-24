@@ -31,7 +31,7 @@ https://stats.nodentity.xyz {
 		Referrer-Policy no-referrer
 	}
 
-	@off expression `{env.STATS_BASIC_AUTH_USER} == "" || {env.STATS_BASIC_AUTH_HASH} == ""`
+	@off expression `{env.STATS_BASIC_AUTH_USER} in ["", "statsoff"] || {env.STATS_BASIC_AUTH_HASH} in ["", "statsoff"]`
 	handle @off {
 		respond "stats is off: STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH are not set on this box" 503
 	}

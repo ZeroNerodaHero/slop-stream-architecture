@@ -52,8 +52,8 @@ services:
     logging: *default-logging
     environment:
       PUBLIC_IP: ${PUBLIC_IP:-127.0.0.1}
-      STATS_BASIC_AUTH_USER: ${STATS_BASIC_AUTH_USER:-}
-      STATS_BASIC_AUTH_HASH: ${STATS_BASIC_AUTH_HASH:-}
+      STATS_BASIC_AUTH_USER: ${STATS_BASIC_AUTH_USER:-statsoff}
+      STATS_BASIC_AUTH_HASH: ${STATS_BASIC_AUTH_HASH:-statsoff}
     ports:
       - "80:80"
       - "443:443"
