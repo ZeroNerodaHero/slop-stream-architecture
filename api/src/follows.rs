@@ -204,7 +204,7 @@ struct SearchQuery {
     q: String,
 }
 
-fn clean_query(raw: &str) -> String {
+pub(crate) fn clean_query(raw: &str) -> String {
     raw.trim().to_lowercase().chars().filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_' || *c == '-').take(32).collect()
 }
 
