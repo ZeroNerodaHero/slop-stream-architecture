@@ -23,7 +23,7 @@ one component draws the square everywhere: `PresenceSquare` (`frontend/src/share
 
 - the square in the corner of your picture, bottom left (`UserPanel.tsx`): green for a login, grey for a guest. a colour that means "logged in", not "here". it becomes presence; the `✓` keeps meaning login.
 - `live:<name>` in redis and `video`'s `GET /live`: who is streaming. `is_live` (`api/src/main.rs`) is video when it answers, else `EXISTS live:`. that is `streaming`, already computed.
-- the chat service, `api chat` on `:4100` (`api/src/chat.rs`): one websocket per viewer per room, hello and identify (cookie, or the go-live grant, or a nick), a 30s ping with a 90s idle drop, 8 sockets per ip per room, redis streams for fan-out, a 2s drain on SIGTERM. that is four fifths of a gateway. the missing fifth is below.
+- the chat service, `api chat` on `:4100` (`api/src/chat.rs`): one websocket per viewer per room, hello and identify (cookie, or the go-live grant, or a nick), a 20s ping with a 45s idle drop, 8 sockets per ip per room and 32 chat sockets per ip in all, redis streams for fan-out, a 2s drain on SIGTERM. that is four fifths of a gateway. the missing fifth is below.
 - `logins.last_seen` moves at most once an hour, on purpose. an hour is not presence. guests have no row.
 - no ring buffer anywhere in the pages: the chat keeps its last 500 lines by slicing a fresh array per line (`chat-atoms.ts`). fine at one line a second, wrong at frame rates.
 
@@ -146,7 +146,7 @@ flowchart LR
     direction TB
     ev["/events sockets · one per browser"]
     reg["registry · name → its own sockets · name → its watchers · per socket: what it was last told"]
-    tick["per socket, on its 30s ping · ZADD seen:name now sid · EXPIRE 90"]
+    tick["per socket, on its 20s ping · ZADD seen:name now sid · EXPIRE 90"]
     tail["one tail task · XREAD BLOCK 5000 events · own connection"]
     re["recompute presence(name) · EXISTS live:name · ZCOUNT seen:name · status"]
     online["GET /online · names with sockets here"]

@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::body::Bytes;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -23,13 +22,14 @@ use uuid::Uuid;
 use crate::auth::{is_claimed, whoami, NICK_HAS_ACCOUNT};
 use crate::chat::{clean_nick, valid_nick};
 use crate::presence::{self, Presence, Status, EVENTS_KEEP, EVENTS_KEY, SEEN_TTL_SECS, SEEN_WINDOW_MS};
-use crate::socket::{first_text, send, DRAIN_LIMIT, IDLE_LIMIT, MAX_FRAME_BYTES, PING_EVERY, READ_BLOCK_MS, SEND_TIMEOUT};
+use crate::socket::{first_text, locked, ping, send, Beat, Heartbeat, IpSlots, DRAIN_LIMIT, MAX_FRAME_BYTES, READ_BLOCK_MS, SEND_TIMEOUT};
 use crate::{live_key, valid_name};
 
 const REPLAY_MS: i64 = 10_000;
 const RECHECK_EVERY: Duration = Duration::from_secs(30);
 const EVERYONE: &str = "*";
 const MAX_SOCKETS_PER_IP: usize = 20;
+pub(crate) const OUT_QUEUE: usize = 1024;
 const MAX_WATCHES: usize = 1000;
 const MAX_WATCH_FRAMES_PER_MIN: u32 = 2000;
 const GROUP_TOPIC: &str = "group:";
@@ -100,42 +100,33 @@ pub(crate) struct Gateway {
     next: Arc<AtomicU64>,
     registry: Registry,
     refresh: Arc<Notify>,
-    per_ip: Arc<std::sync::Mutex<HashMap<String, usize>>>,
+    per_ip: IpSlots,
     admins: Arc<[Uuid]>,
     gate: Arc<Mutex<()>>,
+    leaves: mpsc::UnboundedSender<Left>,
 }
 
-struct IpSlot {
-    per_ip: Arc<std::sync::Mutex<HashMap<String, usize>>>,
-    ip: String,
-}
-
-impl IpSlot {
-    fn take(per_ip: &Arc<std::sync::Mutex<HashMap<String, usize>>>, ip: String) -> Option<IpSlot> {
-        let mut m = per_ip.lock().unwrap_or_else(|e| e.into_inner());
-        let n = m.entry(ip.clone()).or_insert(0);
-        if *n >= MAX_SOCKETS_PER_IP {
-            return None;
-        }
-        *n += 1;
-        Some(IpSlot { per_ip: per_ip.clone(), ip })
-    }
-}
-
-impl Drop for IpSlot {
-    fn drop(&mut self) {
-        let mut m = self.per_ip.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(n) = m.get_mut(&self.ip) {
-            *n = n.saturating_sub(1);
-            if *n == 0 {
-                m.remove(&self.ip);
-            }
-        }
-    }
-}
+type Left = (String, String);
 
 #[derive(Clone, Default)]
-pub(crate) struct Registry(Arc<Mutex<Sockets>>);
+pub(crate) struct Registry(Arc<std::sync::Mutex<Sockets>>);
+
+pub(crate) struct Seat {
+    registry: Registry,
+    leaves: mpsc::UnboundedSender<Left>,
+    id: SocketId,
+    sid: String,
+    going: bool,
+}
+
+impl Drop for Seat {
+    fn drop(&mut self) {
+        let name = self.registry.remove(self.id);
+        if let (Some(name), false) = (name, self.going) {
+            let _ = self.leaves.send((std::mem::take(&mut self.sid), name));
+        }
+    }
+}
 
 #[derive(Default)]
 struct Sockets {
@@ -145,12 +136,21 @@ struct Sockets {
 }
 
 struct Entry {
-    tx: mpsc::UnboundedSender<Out>,
+    tx: mpsc::Sender<Out>,
+    kick: Arc<Notify>,
     name: Option<String>,
     account: Option<Uuid>,
     watching: HashSet<String>,
     told: HashMap<String, Presence>,
     me: Option<(Presence, Status)>,
+}
+
+impl Entry {
+    fn put(&self, out: Out) {
+        if let Err(mpsc::error::TrySendError::Full(_)) = self.tx.try_send(out) {
+            self.kick.notify_one();
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -232,8 +232,42 @@ enum Out {
 struct Refused(&'static str);
 
 impl Registry {
-    pub(crate) async fn is_empty(&self) -> bool {
-        self.0.lock().await.by_id.is_empty()
+    fn lock(&self) -> std::sync::MutexGuard<'_, Sockets> {
+        locked(&self.0)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.lock().by_id.is_empty()
+    }
+
+    fn insert(&self, id: SocketId, tx: mpsc::Sender<Out>, kick: Arc<Notify>, name: Option<String>, account: Option<Uuid>) {
+        let mut s = self.lock();
+        if let Some(n) = &name {
+            s.own.entry(n.clone()).or_default().insert(id);
+        }
+        s.by_id.insert(id, Entry { tx, kick, name, account, watching: HashSet::new(), told: HashMap::new(), me: None });
+    }
+
+    fn remove(&self, id: SocketId) -> Option<String> {
+        let mut s = self.lock();
+        let e = s.by_id.remove(&id)?;
+        if let Some(n) = &e.name {
+            if let Some(set) = s.own.get_mut(n) {
+                set.remove(&id);
+                if set.is_empty() {
+                    s.own.remove(n);
+                }
+            }
+        }
+        for n in &e.watching {
+            if let Some(set) = s.watchers.get_mut(n) {
+                set.remove(&id);
+                if set.is_empty() {
+                    s.watchers.remove(n);
+                }
+            }
+        }
+        e.name
     }
 }
 
@@ -270,7 +304,7 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Resul
         })
         .await?;
     let deadline = Instant::now() + DRAIN_LIMIT;
-    while !sockets.is_empty().await && Instant::now() < deadline {
+    while !sockets.is_empty() && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(())
@@ -279,6 +313,7 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Resul
 impl Gateway {
     pub(crate) fn new(db: PgPool, redis: Redis, client: redis::Client, shutdown: watch::Receiver<bool>, dummy_prefix: String, admins: Vec<Uuid>) -> Self {
         let host = std::env::var("HOSTNAME").ok().filter(|h| !h.trim().is_empty()).unwrap_or_else(|| "events".into());
+        let (leaves, left) = mpsc::unbounded_channel();
         let g = Gateway {
             db,
             redis,
@@ -289,13 +324,20 @@ impl Gateway {
             next: Arc::new(AtomicU64::new(1)),
             registry: Registry::default(),
             refresh: Arc::new(Notify::new()),
-            per_ip: Arc::default(),
+            per_ip: IpSlots::new(MAX_SOCKETS_PER_IP),
             admins: admins.into(),
             gate: Arc::default(),
+            leaves,
         };
         tokio::spawn(tail(g.clone()));
         tokio::spawn(recheck(g.clone()));
+        tokio::spawn(unmark(g.clone(), left));
         g
+    }
+
+    fn seat(&self, id: SocketId, sid: String, tx: mpsc::Sender<Out>, kick: Arc<Notify>, name: Option<String>, account: Option<Uuid>) -> Seat {
+        self.registry.insert(id, tx, kick, name, account);
+        Seat { registry: self.registry.clone(), leaves: self.leaves.clone(), id, sid, going: false }
     }
 
     pub(crate) fn registry(&self) -> Registry {
@@ -365,14 +407,14 @@ impl Gateway {
 
     async fn push(&self, name: &str) {
         let (word, status) = self.word(name, true).await;
-        let mut s = self.registry.0.lock().await;
+        let mut s = self.registry.lock();
         let watchers: Vec<SocketId> = s.watchers.get(name).into_iter().flatten().copied().collect();
         let own: Vec<SocketId> = s.own.get(name).into_iter().flatten().copied().collect();
         for id in watchers {
             if let Some(e) = s.by_id.get_mut(&id) {
                 if e.told.get(name) != Some(&word) {
                     e.told.insert(name.to_owned(), word);
-                    let _ = e.tx.send(Out::Presence { name: name.to_owned(), presence: word });
+                    e.put(Out::Presence { name: name.to_owned(), presence: word });
                 }
             }
         }
@@ -380,20 +422,20 @@ impl Gateway {
             if let Some(e) = s.by_id.get_mut(&id) {
                 if e.me != Some((word, status)) {
                     e.me = Some((word, status));
-                    let _ = e.tx.send(Out::Me { name: Some(name.to_owned()), presence: word, status });
+                    e.put(Out::Me { name: Some(name.to_owned()), presence: word, status });
                 }
             }
         }
     }
 
     async fn tell(&self, names: &[&str], out: Out) {
-        let s = self.registry.0.lock().await;
+        let s = self.registry.lock();
         let mut told: HashSet<SocketId> = HashSet::new();
         for name in names {
             for id in s.own.get(*name).into_iter().flatten() {
                 if told.insert(*id) {
                     if let Some(e) = s.by_id.get(id) {
-                        let _ = e.tx.send(out.clone());
+                        e.put(out.clone());
                     }
                 }
             }
@@ -401,28 +443,28 @@ impl Gateway {
     }
 
     async fn fan(&self, name: &str, out: Out) {
-        let s = self.registry.0.lock().await;
+        let s = self.registry.lock();
         let named = s.watchers.get(name).into_iter().flatten();
         let all = s.watchers.get(EVERYONE).into_iter().flatten().filter(|id| !s.watchers.get(name).is_some_and(|set| set.contains(id)));
         for id in named.chain(all) {
             if let Some(e) = s.by_id.get(id) {
-                let _ = e.tx.send(out.clone());
+                e.put(out.clone());
             }
         }
     }
 
     async fn tell_topic(&self, topic: &str, out: Out) {
-        let s = self.registry.0.lock().await;
+        let s = self.registry.lock();
         for id in s.watchers.get(topic).into_iter().flatten() {
             if let Some(e) = s.by_id.get(id) {
-                let _ = e.tx.send(out.clone());
+                e.put(out.clone());
             }
         }
     }
 
     async fn watched_groups_of(&self, name: &str) -> Vec<String> {
         let watched: Vec<String> = {
-            let s = self.registry.0.lock().await;
+            let s = self.registry.lock();
             s.watchers.keys().filter_map(|k| group_topic(k)).map(str::to_owned).collect()
         };
         if watched.is_empty() {
@@ -453,14 +495,6 @@ impl Gateway {
         }
     }
 
-    async fn insert(&self, id: SocketId, tx: mpsc::UnboundedSender<Out>, name: Option<String>, account: Option<Uuid>) {
-        let mut s = self.registry.0.lock().await;
-        if let Some(n) = &name {
-            s.own.entry(n.clone()).or_default().insert(id);
-        }
-        s.by_id.insert(id, Entry { tx, name, account, watching: HashSet::new(), told: HashMap::new(), me: None });
-    }
-
     async fn group_gate(&self, group: &str, accounts: &[Uuid]) -> Option<GroupGate> {
         let row: Result<Option<(bool, bool, Vec<Uuid>)>, sqlx::Error> = sqlx::query_as(
             "SELECT g.public, g.adult_content,
@@ -484,7 +518,7 @@ impl Gateway {
         let _gate = self.gate.lock().await;
         let topic = format!("{GROUP_TOPIC}{group}");
         let wanting: Vec<(SocketId, Option<Uuid>)> = {
-            let s = self.registry.0.lock().await;
+            let s = self.registry.lock();
             match only {
                 Some(id) => s.by_id.get(&id).filter(|e| e.watching.contains(&topic)).map(|e| (id, e.account)).into_iter().collect(),
                 None => s.by_id.iter().filter(|(_, e)| e.watching.contains(&topic)).map(|(id, e)| (*id, e.account)).collect(),
@@ -495,7 +529,7 @@ impl Gateway {
         }
         let accounts: Vec<Uuid> = wanting.iter().filter_map(|(_, a)| *a).collect::<HashSet<_>>().into_iter().collect();
         let gate = self.group_gate(group, &accounts).await;
-        let mut s = self.registry.0.lock().await;
+        let mut s = self.registry.lock();
         for (id, account) in wanting {
             let still = s.by_id.get(&id).is_some_and(|e| e.watching.contains(&topic));
             if still && may_watch(gate.as_ref(), account, &self.admins) {
@@ -509,42 +543,20 @@ impl Gateway {
         }
     }
 
-    async fn remove(&self, id: SocketId) -> Option<String> {
-        let mut s = self.registry.0.lock().await;
-        let e = s.by_id.remove(&id)?;
-        if let Some(n) = &e.name {
-            if let Some(set) = s.own.get_mut(n) {
-                set.remove(&id);
-                if set.is_empty() {
-                    s.own.remove(n);
-                }
-            }
-        }
-        for n in &e.watching {
-            if let Some(set) = s.watchers.get_mut(n) {
-                set.remove(&id);
-                if set.is_empty() {
-                    s.watchers.remove(n);
-                }
-            }
-        }
-        e.name
-    }
-
     async fn name_of(&self, id: SocketId) -> Option<String> {
-        self.registry.0.lock().await.by_id.get(&id).and_then(|e| e.name.clone())
+        self.registry.lock().by_id.get(&id).and_then(|e| e.name.clone())
     }
 
     async fn renamed(&self, old: &str, new: &str) {
         let frame = Out::Renamed { name: old.to_owned(), to: new.to_owned() };
         let moved: Vec<SocketId> = {
-            let mut s = self.registry.0.lock().await;
+            let mut s = self.registry.lock();
             let ids: Vec<SocketId> = s.own.remove(old).into_iter().flatten().collect();
             for id in &ids {
                 if let Some(e) = s.by_id.get_mut(id) {
                     e.name = Some(new.to_owned());
                     e.me = None;
-                    let _ = e.tx.send(frame.clone());
+                    e.put(frame.clone());
                 }
             }
             if !ids.is_empty() {
@@ -553,7 +565,7 @@ impl Gateway {
             let watchers: Vec<SocketId> = s.watchers.get(old).into_iter().flatten().copied().collect();
             for id in watchers.into_iter().filter(|id| !ids.contains(id)) {
                 if let Some(e) = s.by_id.get(&id) {
-                    let _ = e.tx.send(frame.clone());
+                    e.put(frame.clone());
                 }
             }
             ids
@@ -571,7 +583,7 @@ impl Gateway {
     async fn watch(&self, id: SocketId, name: &str) {
         let group = group_topic(name);
         {
-            let mut s = self.registry.0.lock().await;
+            let mut s = self.registry.lock();
             let Some(e) = s.by_id.get_mut(&id) else { return };
             if !e.watching.contains(name) && e.watching.len() >= MAX_WATCHES {
                 return;
@@ -591,17 +603,17 @@ impl Gateway {
             return;
         }
         let (word, _) = self.word(name, false).await;
-        let mut s = self.registry.0.lock().await;
+        let mut s = self.registry.lock();
         if let Some(e) = s.by_id.get_mut(&id) {
             if e.watching.contains(name) && e.told.get(name) != Some(&word) {
                 e.told.insert(name.to_owned(), word);
-                let _ = e.tx.send(Out::Presence { name: name.to_owned(), presence: word });
+                e.put(Out::Presence { name: name.to_owned(), presence: word });
             }
         }
     }
 
     async fn unwatch(&self, id: SocketId, name: &str) {
-        let mut s = self.registry.0.lock().await;
+        let mut s = self.registry.lock();
         let Some(e) = s.by_id.get_mut(&id) else { return };
         if !e.watching.remove(name) {
             return;
@@ -617,11 +629,11 @@ impl Gateway {
 
     async fn tell_me(&self, id: SocketId, name: &str) {
         let (word, status) = self.word(name, true).await;
-        let mut s = self.registry.0.lock().await;
+        let mut s = self.registry.lock();
         if let Some(e) = s.by_id.get_mut(&id) {
             if e.me != Some((word, status)) {
                 e.me = Some((word, status));
-                let _ = e.tx.send(Out::Me { name: Some(name.to_owned()), presence: word, status });
+                e.put(Out::Me { name: Some(name.to_owned()), presence: word, status });
             }
         }
     }
@@ -748,7 +760,7 @@ pub(crate) fn routes(g: Gateway) -> Router {
 
 async fn ws(State(g): State<Gateway>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> axum::response::Response {
     let slot = match crate::ratelimit::forwarded_ip(&headers) {
-        Some(ip) => match IpSlot::take(&g.per_ip, ip) {
+        Some(ip) => match g.per_ip.take(ip) {
             Some(slot) => Some(slot),
             None => return crate::ratelimit::too_many(30, "too many event sockets from here"),
         },
@@ -765,7 +777,7 @@ async fn ws(State(g): State<Gateway>, headers: HeaderMap, upgrade: WebSocketUpgr
 }
 
 async fn online(State(g): State<Gateway>) -> Json<Value> {
-    let s = g.registry.0.lock().await;
+    let s = g.registry.lock();
     let mut names: Vec<(&String, usize)> = s.own.iter().map(|(n, set)| (n, set.len())).collect();
     names.sort();
     Json(Value::Object(names.into_iter().map(|(n, count)| (n.clone(), json!(count))).collect()))
@@ -819,8 +831,9 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
 
     let id = g.next.fetch_add(1, Ordering::Relaxed);
     let sid = format!("{}:{id}", g.host);
-    let (tx, mut rx) = mpsc::unbounded_channel::<Out>();
-    g.insert(id, tx, name.clone(), account).await;
+    let (tx, mut rx) = mpsc::channel::<Out>(OUT_QUEUE);
+    let kick = Arc::new(Notify::new());
+    let mut seat = g.seat(id, sid.clone(), tx, kick.clone(), name.clone(), account);
     match &name {
         Some(n) => {
             g.mark_first(&sid, n).await;
@@ -828,7 +841,6 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
         }
         None => {
             if send(&mut socket, &Out::Me { name: None, presence: Presence::Offline, status: Status::default() }).await.is_err() {
-                g.remove(id).await;
                 return;
             }
         }
@@ -837,13 +849,9 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
     let named = name.is_some();
     drop(name);
 
-    let mut last_heard = Instant::now();
-    let mut ping = tokio::time::interval(PING_EVERY);
-    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    ping.tick().await;
+    let mut beat = Heartbeat::standard();
     let mut shutdown = g.shutdown.clone();
     let refresh = g.refresh.clone();
-    let mut going = false;
     let mut frames = (Instant::now(), 0u32);
     loop {
         tokio::select! {
@@ -851,8 +859,14 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
                 Some(out) => if send(&mut socket, &out).await.is_err() { break; },
                 None => break,
             },
+            _ = kick.notified() => {
+                log::info!("events: {} fell {OUT_QUEUE} frames behind, dropping", g.name_of(id).await.as_deref().unwrap_or("nobody"));
+                let behind = Message::Close(Some(CloseFrame { code: 1013, reason: "behind".into() }));
+                let _ = tokio::time::timeout(SEND_TIMEOUT, socket.send(behind)).await;
+                break;
+            }
             incoming = socket.recv() => {
-                last_heard = Instant::now();
+                beat.heard();
                 let text = match incoming {
                     Some(Ok(Message::Text(text))) => text.to_string(),
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
@@ -874,19 +888,19 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
                     _ => {}
                 }
             }
-            _ = ping.tick() => {
-                if last_heard.elapsed() > IDLE_LIMIT {
+            b = beat.next() => {
+                if b == Beat::Silent {
                     log::info!("events: {} went silent, dropping", g.name_of(id).await.as_deref().unwrap_or("nobody"));
                     break;
                 }
-                if !matches!(tokio::time::timeout(SEND_TIMEOUT, socket.send(Message::Ping(Bytes::new()))).await, Ok(Ok(()))) { break; }
+                if !ping(&mut socket).await { break; }
                 if named { if let Some(n) = g.name_of(id).await { g.touch(&sid, &n).await; } }
             }
             _ = refresh.notified() => {
                 if named { if let Some(n) = g.name_of(id).await { g.touch(&sid, &n).await; } }
             }
             _ = shutdown.changed() => {
-                going = true;
+                seat.going = true;
                 let goodbye = Message::Close(Some(CloseFrame { code: 1001, reason: "events restarting".into() }));
                 let _ = tokio::time::timeout(SEND_TIMEOUT, socket.send(goodbye)).await;
                 break;
@@ -894,13 +908,13 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
         }
     }
 
-    let name = g.remove(id).await;
-    if let Some(n) = &name {
-        if !going {
-            g.mark_last(&sid, n).await;
-        }
+    log::info!("events: {} left", g.name_of(id).await.as_deref().unwrap_or("nobody"));
+}
+
+async fn unmark(g: Gateway, mut left: mpsc::UnboundedReceiver<Left>) {
+    while let Some((sid, name)) = left.recv().await {
+        g.mark_last(&sid, &name).await;
     }
-    log::info!("events: {} left", name.as_deref().unwrap_or("nobody"));
 }
 
 async fn tail(g: Gateway) {
@@ -953,7 +967,7 @@ async fn recheck(g: Gateway) {
             return;
         }
         let names: Vec<String> = {
-            let s = g.registry.0.lock().await;
+            let s = g.registry.lock();
             s.watchers.keys().filter(|n| !is_topic(n)).chain(s.own.keys()).cloned().collect::<HashSet<_>>().into_iter().collect()
         };
         for name in names {
@@ -966,15 +980,122 @@ async fn recheck(g: Gateway) {
 mod tests {
     use super::*;
 
+    fn seated(registry: &Registry, leaves: &mpsc::UnboundedSender<Left>, id: SocketId, name: Option<&str>) -> (Seat, mpsc::Receiver<Out>, Arc<Notify>) {
+        let (tx, rx) = mpsc::channel(OUT_QUEUE);
+        let kick = Arc::new(Notify::new());
+        registry.insert(id, tx, kick.clone(), name.map(str::to_owned), None);
+        (Seat { registry: registry.clone(), leaves: leaves.clone(), id, sid: format!("h:{id}"), going: false }, rx, kick)
+    }
+
+    fn watch_raw(registry: &Registry, id: SocketId, topic: &str) {
+        let mut s = registry.lock();
+        s.by_id.get_mut(&id).unwrap().watching.insert(topic.to_owned());
+        s.watchers.entry(topic.to_owned()).or_default().insert(id);
+    }
+
     #[test]
-    fn an_address_holds_at_most_its_sockets_and_gets_them_back() {
-        let per_ip: Arc<std::sync::Mutex<HashMap<String, usize>>> = Arc::default();
-        let slots: Vec<IpSlot> = (0..MAX_SOCKETS_PER_IP).map(|_| IpSlot::take(&per_ip, "1.2.3.4".into()).unwrap()).collect();
-        assert!(IpSlot::take(&per_ip, "1.2.3.4".into()).is_none());
-        assert!(IpSlot::take(&per_ip, "5.6.7.8".into()).is_some());
-        drop(slots);
-        assert!(!per_ip.lock().unwrap().contains_key("1.2.3.4"));
-        assert!(IpSlot::take(&per_ip, "1.2.3.4".into()).is_some());
+    fn a_seat_gives_back_its_registry_entry_and_its_presence_when_dropped() {
+        let registry = Registry::default();
+        let (leaves, mut left) = mpsc::unbounded_channel();
+        let (seat, _rx, _) = seated(&registry, &leaves, 1, Some("ann"));
+        watch_raw(&registry, 1, "bob");
+        watch_raw(&registry, 1, EVERYONE);
+        drop(seat);
+        assert!(registry.is_empty());
+        let s = registry.lock();
+        assert!(s.own.is_empty() && s.watchers.is_empty(), "no index keeps a socket that is gone");
+        drop(s);
+        assert_eq!(left.try_recv().unwrap(), ("h:1".to_owned(), "ann".to_owned()));
+    }
+
+    #[test]
+    fn a_seat_left_by_a_restart_does_not_say_gone_and_a_nameless_one_says_nothing() {
+        let registry = Registry::default();
+        let (leaves, mut left) = mpsc::unbounded_channel();
+        let (mut seat, _rx, _) = seated(&registry, &leaves, 1, Some("ann"));
+        seat.going = true;
+        drop(seat);
+        let (seat, _rx, _) = seated(&registry, &leaves, 2, None);
+        drop(seat);
+        assert!(registry.is_empty());
+        assert!(left.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_handler_that_panics_or_is_killed_is_unseated() {
+        let registry = Registry::default();
+        let (leaves, mut left) = mpsc::unbounded_channel();
+        let (r, l) = (registry.clone(), leaves.clone());
+        let died = tokio::spawn(async move {
+            let _seat = seated(&r, &l, 1, Some("ann"));
+            watch_raw(&r, 1, "bob");
+            tokio::task::yield_now().await;
+            panic!("a handler fell over mid join");
+        })
+        .await;
+        assert!(died.is_err());
+        assert!(registry.is_empty());
+        assert_eq!(left.recv().await.unwrap().1, "ann");
+
+        let (r, l) = (registry.clone(), leaves.clone());
+        let (sat, told) = tokio::sync::oneshot::channel();
+        let killed = tokio::spawn(async move {
+            let _seat = seated(&r, &l, 2, Some("bob"));
+            let _ = sat.send(());
+            std::future::pending::<()>().await;
+        });
+        told.await.unwrap();
+        assert!(!registry.is_empty());
+        killed.abort();
+        let _ = killed.await;
+        assert!(registry.is_empty());
+        assert_eq!(left.recv().await.unwrap().1, "bob");
+    }
+
+    #[test]
+    fn a_thousand_sockets_flapping_leave_an_empty_registry() {
+        let registry = Registry::default();
+        let (leaves, mut left) = mpsc::unbounded_channel();
+        for id in 0..1000 {
+            let (seat, _rx, _) = seated(&registry, &leaves, id, Some(if id % 2 == 0 { "ann" } else { "bob" }));
+            watch_raw(&registry, id, "carol");
+            drop(seat);
+        }
+        assert!(registry.is_empty());
+        assert!(registry.lock().watchers.is_empty());
+        let mut n = 0;
+        while left.try_recv().is_ok() {
+            n += 1;
+        }
+        assert_eq!(n, 1000);
+    }
+
+    #[test]
+    fn a_socket_that_stops_reading_is_kicked_not_buffered_forever() {
+        let registry = Registry::default();
+        let (leaves, _left) = mpsc::unbounded_channel();
+        let (_seat, mut rx, kick) = seated(&registry, &leaves, 1, None);
+        let s = registry.lock();
+        let e = s.by_id.get(&1).unwrap();
+        for _ in 0..OUT_QUEUE {
+            e.put(Out::Ended { name: "ann".into() });
+        }
+        let kicked = kick.notified();
+        tokio::pin!(kicked);
+        assert!(futures_poll(kicked.as_mut()).is_pending(), "a full queue is not yet a kick");
+        e.put(Out::Ended { name: "ann".into() });
+        assert!(futures_poll(kicked.as_mut()).is_ready(), "one past the queue is");
+        drop(s);
+        let mut queued = 0;
+        while rx.try_recv().is_ok() {
+            queued += 1;
+        }
+        assert_eq!(queued, OUT_QUEUE, "the queue holds what it holds and no more");
+    }
+
+    fn futures_poll<F: std::future::Future>(f: std::pin::Pin<&mut F>) -> std::task::Poll<F::Output> {
+        let waker = std::task::Waker::noop();
+        f.poll(&mut std::task::Context::from_waker(waker))
     }
 
     fn named(nick: Option<&str>) -> Result<Option<String>, &'static str> {
