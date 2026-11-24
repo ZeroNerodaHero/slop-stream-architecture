@@ -13,8 +13,9 @@ bring the stream lab up on this machine, or redeploy part of it.
                                 what the github action pushed. nothing is compiled here
   ./scripts/deploy.sh --pull            git pull, then the images for the tree just pulled
   ./scripts/deploy.sh api               only the api (also: frontend, video, dummy, voice): get its image, swap it
-  ./scripts/deploy.sh stats             apply STATS_BASIC_AUTH_* from .env: caddy and the agent are recreated,
-                                the stats monitor comes up (https://stats.nodentity.xyz, docs/metrics.md)
+  ./scripts/deploy.sh stats             apply STATS_* from .env: caddy and the agent are recreated, the
+                                monitor (compose project monitor) is brought up to date. the only
+                                command that touches the monitor (https://stats.nodentity.xyz, docs/metrics.md)
   ./scripts/deploy.sh --images TAG      a tag of your choosing, e.g. the one ./scripts/ship.sh --to printed
   ./scripts/deploy.sh --build           compile the images here instead (a laptop with uncommitted changes,
                                 a box without a registry). goes with --pull and services
@@ -149,46 +150,40 @@ the `https://stats.nodentity.xyz` block (`docs/metrics.md`):
 - `header` sets `Cache-Control: private, no-store` (and noindex, `DENY` framing, `nosniff`, `no-referrer`) before anything else runs, so the 401s and 503s carry it too. the proxy drops the monitor's own `Cache-Control` (`header_down -Cache-Control`) so there is one.
 - `@public` (`STATS_PUBLIC` exactly `true`) comes first and proxies to the monitor with no `basic_auth`. the `header` above still applies.
 - `@off` is an `expression` on the runtime env: `STATS_BASIC_AUTH_USER` or `STATS_BASIC_AUTH_HASH` empty or `statsoff` answers 503 and proxies nothing. compose passes `statsoff` for a blank key, because `basic_auth` reads the two at parse time (`{$VAR:statsoff}`), caddy only uses that default for an unset variable, and an empty user or hash would stop caddy loading the file, the main site with it. `statsoff` is also valid base64, which caddy wants of any hash at load.
-- everything else goes through `basic_auth` to `stats:3002`, on the compose network `stats` that only caddy and the monitor are on.
+- everything else goes through `basic_auth` to `stats:3002`: the monitor, from its own compose project, on the network `stream_stats` with the alias `stats`. only caddy and the monitor are on it.
+
+`monitor/Caddyfile` is the same block for the monitor's own caddy (`monitor-caddy`, profile `tls`): the same headers, `@public`, `@off` and `basic_auth`, to `monitor:3002`, with `tls {$STATS_TLS:internal}` (caddy's own ca, which cloudflare's "full" accepts, or an acme email), `auto_https disable_redirects` (only 443 is published), `skip_install_trust`, and cloudflare's ranges as trusted proxies so the monitor's rate limit sees `CF-Connecting-IP`.
 
 `handle_errors`:
 
 - `/watch/*` with a 502, 503 or 504 (the api is down: `./scripts/deploy.sh api`, a crash) serves the plain `index.html` from the volume instead of a bare 502, so the spa boots and keeps checking on its own. that one fetch has no preview tags; a bot that unfurls right then gets the generic card. every other route keeps its error.
 - a missing `/assets/*` file (a tab on an old build asking for a chunk the new publish removed) is a `no-store` 404, so the next publish or a rollback is asked again. with the catch-all's fallback instead, that tab would cache `index.html` as immutable for a year.
 
-## the monitor box (`monitor/`)
+## the monitor (`monitor/`)
 
-a different box from the ones it watches: a dead box cannot say so itself. our own code, the api binary run as `api monitor` (`api/src/monitor.rs`): one container, one json file for its memory, one page built into the binary. no database, no redis, nothing pulled from anyone. see `docs/debugging.md`, "the monitor box".
+its own compose project, `monitor`, on test-machine beside the app or on a box of its own. app deploys never stop, restart or recreate it; only `./scripts/deploy.sh stats` does (`docs/metrics.md`, "the monitor and app deploys"). our own code, the api binary run as `api monitor` (`api/src/monitor.rs`): one container, one json file for its memory, one page built into the binary. see `docs/debugging.md`, "the monitor box".
 
-it asks every box's `/api/health` every 15s, pulls its `/api/errors` every minute, remembers up/down, restarts and new builds, posts down/up to a webhook, and serves the page on this box's loopback `:3002`.
+it asks every box's `/api/health` every 15s, pulls its `/api/errors` every minute and its agent's `/api/metrics` every 15s, remembers up/down, restarts and new builds, posts down/up to a webhook, and serves the page on the box's loopback `:3002`.
 
-it builds the rust image, so it needs 2 GB of ram, or 1 GB plus swap:
-
-```
-curl -fsSL https://get.docker.com | sudo sh
-git clone <repo> && cd slop-stream-architecture/monitor
-cp .env.example .env                                   # TARGETS, OPS_TOKENS, ALERT_WEBHOOK
-BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
-```
-
-update: `git pull && BUILD=$(git rev-parse --short HEAD) docker compose up -d --build`. the memory is in the volume, so a rebuild keeps the history.
-
-the page is on loopback only; nothing is published to the internet. from your laptop: `ssh -L 3002:127.0.0.1:3002 root@<monitor ip>`, then open http://localhost:3002. peek with `docker compose logs -f monitor` (every down and up is a warn line there too) or `docker compose exec monitor cat /data/monitor.json`.
-
-- `MONITOR_IMAGE` is `stream-api:latest` when built on the monitor box. `test.sh` runs the monitor beside a stack and sets it to the image that stack's api was started from (the registry's name and tag, or a local build), so the monitor under test is that checkout's.
-- the container's healthcheck looks at the monitor's port; the image's own check looks at the api port.
+- `monitor/docker-compose.yml`: `monitor` (`container_name` from `MONITOR_CONTAINER`, default `monitor`; `restart: unless-stopped`; `read_only`, every capability dropped, `no-new-privileges`; the volume `monitor-data`; a healthcheck on its own `/health`, since the image's looks at the api port) and `caddy` under the profile `tls` (`monitor-caddy`, `STATS_HTTPS_PORT`, default 443, published). the env takes the `STATS_*` names and falls back to the monitor's older `TARGETS`, `OPS_TOKENS` and `ALERT_WEBHOOK`.
+- `monitor/beside-app.yml`, on test-machine only: the image the app's api runs (`IMAGES`, `TAG`), `TARGETS` defaulting to `<ENV_NAME>=https://frontend`, and the external network `stream_stats` with the alias `stats`. `deploy.sh stats` runs `docker compose -p monitor --env-file .env -f monitor/docker-compose.yml -f monitor/beside-app.yml`, adding `--profile tls` when `STATS_HTTPS_PORT` is set.
+- on its own box: `cd monitor`, `cp .env.example .env`, `docker compose --profile tls pull && docker compose --profile tls up -d --no-build`. `docker compose logs -f monitor` (every down and up is a warn line) or `docker compose exec monitor cat /data/monitor.json` to peek.
+- `test.sh` runs the monitor's compose file as a throwaway project beside a stack and sets `MONITOR_IMAGE` to the image that stack's api was started from, so the monitor under test is that checkout's.
 
 ### `monitor/.env.example`
 
 | variable | what it is |
 |---|---|
-| `TARGETS` | the boxes to watch: `name=url`, comma separated. the name is what the page and the alerts call it |
-| `OPS_TOKENS` | each box's `OPS_TOKEN` (the one in its own `.env`), so the page can show its error reports. optional: a box without one still gets watched, just without that table |
-| `ALERT_WEBHOOK` | where down and up go: a url that takes json `{"content": "..."}` (a discord webhook does; so does anything that reads `"text"`). empty means nowhere; the page and the log still show them |
+| `STATS_TARGETS` | the boxes to watch: `name=url`, comma separated. the name is what the page and the alerts call it |
+| `STATS_TOKENS` | each box's `OPS_TOKEN` (the one in its own `.env`), `name=token`, for its error reports and agent numbers. a box without one is still watched, without those |
+| `STATS_ALERT_WEBHOOK` | where down and up go: a url that takes json `{"content": "..."}` (a discord webhook does; so does anything that reads `"text"`). empty means nowhere; the page and the log still show them |
+| `STATS_HOST`, `STATS_TLS`, `STATS_HTTPS_PORT` | the site's name (`stats.nodentity.xyz`), `internal` or an acme email for its cert, the port its caddy publishes (443) |
+| `STATS_BASIC_AUTH_USER`, `STATS_BASIC_AUTH_HASH`, `STATS_PUBLIC` | the same as in the root `.env`: a password, or `true` for none. neither: 503 |
+| `MONITOR_IMAGE` | the api image to run, `ghcr.io/<owner>/stream-api:<tag>`; `stream-api:latest` for one built here with `--build` |
+| `MONITOR_PORT` | the page, on this box's loopback. reach it over `ssh -L` |
 | `CHECK_EVERY_SECS`, `ERRORS_EVERY_SECS`, `METRICS_EVERY_SECS` | how often, in seconds, health, errors and each box's agent numbers are checked |
 | `DOWN_AFTER` | how many failed rounds in a row make "down" |
-| `MONITOR_PORT` | the page, on this box's loopback. reach it over `ssh -L` |
-| `CARGO_BUILD_JOBS` | how many cores the rust build may use. 1 is safe on a small box |
+| `CARGO_BUILD_JOBS` | how many cores the rust build may use with `--build`. 1 is safe on a small box |
 
 ## `docs/tech-docs/style.css`
 
@@ -218,9 +213,10 @@ every knob in the root `.env.example`, with what its comment said. `./scripts/de
 | `MODERATION_ENABLED`<br>`OPENAI_API_KEY` | `false`<br>(empty) |  |
 | `CHAT_PERSIST` | (empty) | keep chat lines in postgres, so a room can be scrolled past the last 500, searched, and jumped to. empty or 0: redis only (the last 500, gone a week after the last line). 1 turns it on. the chat process reads this. the api process does not. |
 | `GROUPS_PER_OWNER` | (empty) | how many groups one login may own: the ones it made plus the ones it was named owner of. empty: 2. at most 8, the groups a login may be in (its own included); more is read as 8. the pages offer create under it, and the api refuses at it. see docs/groups.md |
-| `STATS_BASIC_AUTH_USER`<br>`STATS_BASIC_AUTH_HASH` | (empty)<br>(empty) | https://stats.nodentity.xyz, the monitor page behind caddy's basic auth (docs/metrics.md). the hash from `docker compose exec frontend caddy hash-password`, in single quotes: `STATS_BASIC_AUTH_HASH='$2a$14$...'`. either empty: the site answers 503 and the stats container is not started. `deploy.sh` refuses a user with other than letters, digits and `. _ @ -`, and a hash that is not a quoted bcrypt hash, before it changes anything |
+| `STATS_BASIC_AUTH_USER`<br>`STATS_BASIC_AUTH_HASH` | (empty)<br>(empty) | https://stats.nodentity.xyz, the monitor page behind caddy's basic auth (docs/metrics.md). the hash from `docker compose exec frontend caddy hash-password`, in single quotes: `STATS_BASIC_AUTH_HASH='$2a$14$...'`. either empty: the site answers 503 and `deploy.sh stats` leaves the monitor as it is. `deploy.sh` refuses a user with other than letters, digits and `. _ @ -`, and a hash that is not a quoted bcrypt hash, before it changes anything |
 | `STATS_PUBLIC` | (empty) | `true`: https://stats.nodentity.xyz with no password (docs/metrics.md). the page and its read-only `/api/monitor*` only; the monitor leaves the pages' error reports out, the agent's `/api/metrics` keeps its token. anything else: the two values above decide, and blank is a 503 |
 | `STATS_TARGETS`<br>`STATS_TOKENS`<br>`STATS_ALERT_WEBHOOK` | (empty)<br>(empty)<br>(empty) | what the stats monitor watches: `name=url` pairs, comma separated (empty: this box alone, `<ENV_NAME>=https://frontend`); `name=token` for a box whose `OPS_TOKEN` differs from this one's; where down and up are posted. the monitor's `TARGETS`, `OPS_TOKENS` and `ALERT_WEBHOOK` under other names |
+| `STATS_HTTPS_PORT` | (empty) | a port (8443): `deploy.sh stats` also runs the monitor's own caddy on it, so the page answers while the app's caddy restarts, once a cloudflare origin rule sends `stats.nodentity.xyz` there (docs/metrics.md). empty: the app's caddy only |
 | `VOICE_SECRET` | (empty) | voice channels (the voice container, docker-compose.yml). the api signs grants with it and the voice container redeems them with it. make one: openssl rand -hex 32 stays empty until voice is turned on; empty, the api answers voice joins with a 503. |
 
 not in `.env.example`; `docker-compose.yml` passes it to the api, home and chat containers, unset means off:
@@ -295,7 +291,7 @@ not in `.env.example`; `docker-compose.yml` passes it to the api, home and chat 
 
 - `agent`: the api image as `api agent`, on every box, no profile. root (`user: "0:0"`) for the docker socket and the host's `/proc`, both read-only, with `read_only`, every capability dropped, `no-new-privileges` and 64 pids. `/proc` is bind-mounted at `/host/proc` rather than `pid: host`, which would let it signal host processes. the named volume `agent-disk` at `/disk` is there for its `statvfs`: a volume lives on docker's own filesystem, so its size is that disk's, on any host. no port; caddy reaches it at `agent:4300`. `TIMINGS_FROM` names the api processes whose endpoint timings it pulls each sample, at `<service>:9300/timings` on the default network (`docs/metrics.md`, "endpoint and call timings") (at `agent:`)
 - `api`, `chat`, `events`, `home` each also listen on `:9300` (`TIMINGS_PORT`) for the agent's `GET /timings`: unpublished, not in the Caddyfile
-- `stats`: the api image as `api monitor`, profile `stats`, `container_name: stats`. on the network `stats` alone, which caddy also joins, so neither the api containers nor a host port can reach it. its memory is the `stats-data` volume. the env maps the `STATS_*` keys onto the monitor's own names (at `stats:`)
+- the network `stats` (`stream_stats`): caddy's, and the monitor's from its own compose project (`monitor/beside-app.yml`). the monitor is not a service here, so no `up`, `down` or `restart` of the app reaches it; `down` leaves this network while the monitor is on it (at `networks:`)
 - caddy gets `STATS_BASIC_AUTH_USER` and `STATS_BASIC_AUTH_HASH` with `statsoff` for a blank value (see the Caddyfile's stats block), and `STATS_PUBLIC`; the monitor gets `STATS_PUBLIC` as `PUBLIC` (at `STATS_BASIC_AUTH_USER: ${STATS_BASIC_AUTH_USER:-statsoff}`)
 
 ## `Cargo.toml`
