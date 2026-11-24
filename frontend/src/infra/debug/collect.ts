@@ -27,12 +27,18 @@ export const quality = new QualityCollector({
   schedule
 });
 
-export function start(): void {
+export function startTimings(): void {
   timings.start();
+}
+
+export function stopTimings(): void {
+  timings.stop();
+}
+
+export function startQuality(): void {
   quality.start();
 }
 
-export function stop(): void {
-  timings.stop();
+export function stopQuality(): void {
   quality.stop();
 }

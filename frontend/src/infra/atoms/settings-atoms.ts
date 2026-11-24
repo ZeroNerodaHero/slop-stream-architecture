@@ -1,6 +1,7 @@
 import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
+import { DEBUG_KEYS, migrateDebugSettings } from '@/infra/debug-flag';
 import { store } from '@/infra/store';
 import {
   applyPalette,
@@ -160,11 +161,30 @@ export function setSidebarFolded(list: SidebarList, folded: boolean) {
 
 export const roomMembersOpenAtom = atomWithStorage('settings.roomMembersOpen', true, undefined, { getOnInit: true });
 
-const storedInspectorAtom = atomWithStorage<unknown>('settings.inspector', false, undefined, { getOnInit: true });
-export const inspectorEnabledAtom = atom((get) => get(storedInspectorAtom) === true);
+try {
+  migrateDebugSettings(localStorage);
+} catch {
+}
 
-export function setInspectorEnabled(on: boolean) {
-  store.set(storedInspectorAtom, on);
+const storedMessagesAtom = atomWithStorage<unknown>(DEBUG_KEYS.messages, false, undefined, { getOnInit: true });
+export const messagesEnabledAtom = atom((get) => get(storedMessagesAtom) === true);
+
+export function setMessagesEnabled(on: boolean) {
+  store.set(storedMessagesAtom, on);
+}
+
+const storedTimingsAtom = atomWithStorage<unknown>(DEBUG_KEYS.timings, false, undefined, { getOnInit: true });
+export const timingsEnabledAtom = atom((get) => get(storedTimingsAtom) === true);
+
+export function setTimingsEnabled(on: boolean) {
+  store.set(storedTimingsAtom, on);
+}
+
+const storedQualityAtom = atomWithStorage<unknown>(DEBUG_KEYS.quality, false, undefined, { getOnInit: true });
+export const qualityEnabledAtom = atom((get) => get(storedQualityAtom) === true);
+
+export function setQualityEnabled(on: boolean) {
+  store.set(storedQualityAtom, on);
 }
 
 const storedHideBotsAtom = atomWithStorage<unknown>('settings.hideBots', false, undefined, { getOnInit: true });

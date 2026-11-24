@@ -1,8 +1,8 @@
-import { atom } from 'jotai';
+import { type Atom, atom } from 'jotai';
 
 import { type FrameEntry, makeEntry, Ring } from '@/infra/frames';
-import { inspectorEnabledAtom } from '@/infra/atoms/settings-atoms';
-import { debug, onDebugChange, setDebug } from '@/infra/debug-flag';
+import { messagesEnabledAtom, qualityEnabledAtom, timingsEnabledAtom } from '@/infra/atoms/settings-atoms';
+import { debug, type DebugFeature, onDebugChange, setDebug } from '@/infra/debug-flag';
 import { store } from '@/infra/store';
 
 export const FRAME_DIRS = ['in', 'out', 'link'] as const;
@@ -34,7 +34,7 @@ function tick() {
 }
 
 export function record(source: string, dir: FrameEntry['dir'], frame: unknown): void {
-  if (!debug.inspector) return;
+  if (!debug.messages) return;
   const entry = makeEntry(source, dir, frame);
   if (forward) forward(entry);
   else keep(entry);
@@ -45,13 +45,13 @@ export function frameRing(): Ring | null {
 }
 
 export function keep(entry: FrameEntry): void {
-  if (!debug.inspector) return;
+  if (!debug.messages) return;
   (ring ??= new Ring()).push(entry);
   tick();
 }
 
 export function replaceEntries(entries: FrameEntry[]): void {
-  if (!debug.inspector) return;
+  if (!debug.messages) return;
   ring?.clear();
   for (const e of entries) (ring ??= new Ring()).push(e);
   tick();
@@ -131,36 +131,53 @@ function dropFrames() {
   ring = null;
   store.set(inspectorPausedAtom, false);
   store.set(inspectorFrozenAtom, null);
+  store.set(inspectorFilterAtom, '');
   store.set(inspectorOpenAtom, false);
-  store.set(timingsOpenAtom, false);
-  store.set(qualityOpenAtom, false);
   tick();
 }
 
-let collect: Promise<typeof import('@/infra/debug/collect')> | null = null;
+type Collect = typeof import('@/infra/debug/collect');
 
-onDebugChange((on) => {
-  if (!on) {
-    void collect?.then(
-      (m) => m.stop(),
-      () => undefined
-    );
-    return;
-  }
-  collect ??= import('@/infra/debug/collect');
-  void collect.then(
-    (m) => {
-      if (debug.on) m.start();
-    },
-    () => {
-      collect = null;
+let collect: Promise<Collect> | null = null;
+
+function collector(feature: 'timings' | 'quality', start: (m: Collect) => void, stop: (m: Collect) => void) {
+  onDebugChange(feature, (on) => {
+    if (!on) {
+      void collect?.then(stop, () => undefined);
+      return;
     }
-  );
-});
+    collect ??= import('@/infra/debug/collect');
+    void collect.then(
+      (m) => {
+        if (debug[feature]) start(m);
+      },
+      () => {
+        collect = null;
+      }
+    );
+  });
+}
 
-setDebug(store.get(inspectorEnabledAtom));
-store.sub(inspectorEnabledAtom, () => {
-  const on = store.get(inspectorEnabledAtom);
-  setDebug(on);
-  if (!on) dropFrames();
-});
+collector(
+  'timings',
+  (m) => m.startTimings(),
+  (m) => m.stopTimings()
+);
+collector(
+  'quality',
+  (m) => m.startQuality(),
+  (m) => m.stopQuality()
+);
+
+function follow(enabled: Atom<boolean>, feature: DebugFeature, off: () => void) {
+  setDebug(feature, store.get(enabled));
+  store.sub(enabled, () => {
+    const on = store.get(enabled);
+    setDebug(feature, on);
+    if (!on) off();
+  });
+}
+
+follow(messagesEnabledAtom, 'messages', dropFrames);
+follow(timingsEnabledAtom, 'timings', closeTimings);
+follow(qualityEnabledAtom, 'quality', closeQuality);

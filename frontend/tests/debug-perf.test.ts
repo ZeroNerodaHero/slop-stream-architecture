@@ -13,7 +13,7 @@ function ours(): string[] {
 }
 
 test('with debug off the perf calls make no marks and hold nothing', () => {
-  setDebug(false, false);
+  setDebug('timings', false, false);
   perfBegin('press', 'cats');
   perfMark('first-frame');
   rtPerfBegin('chat:cats', 'press');
@@ -27,8 +27,8 @@ test('with debug off the perf calls make no marks and hold nothing', () => {
 });
 
 test('with debug on the perf calls mark, and turning off clears every mark and map', () => {
-  setDebug(true, false);
-  assert.equal(debug.on, true);
+  setDebug('timings', true, false);
+  assert.equal(debug.timings, true);
   perfBegin('press', 'dogs', 1);
   perfMark('mounted', 2);
   rtPerfBegin('chat:dogs', 'press', 1);
@@ -36,15 +36,15 @@ test('with debug on the perf calls mark, and turning off clears every mark and m
   assert.ok(ours().length > 0);
   assert.equal(watchPerfHeld(), 2);
   assert.deepEqual(rtPerfHeld(), { runs: 1, says: 1 });
-  setDebug(false, false);
-  assert.equal(debug.on, false);
+  setDebug('timings', false, false);
+  assert.equal(debug.timings, false);
   assert.deepEqual(ours(), []);
   assert.equal(watchPerfHeld(), 0);
   assert.deepEqual(rtPerfHeld(), { runs: 0, says: 0 });
 });
 
 test('a finished run is forgotten and unfinished runs stay bounded', () => {
-  setDebug(true, false);
+  setDebug('timings', true, false);
   rtPerfBegin('chat:a', 'press', 1);
   rtPerfMark('chat:a', 'subbed', 2);
   rtPerfMark('chat:a', 'history', 3);
@@ -58,28 +58,28 @@ test('a finished run is forgotten and unfinished runs stay bounded', () => {
   assert.ok(rtPerfHeld().says <= 50);
   for (let i = 0; i < 500; i++) perfMark(`p${i}`, i);
   assert.ok(watchPerfHeld() <= 50);
-  setDebug(false, false);
+  setDebug('timings', false, false);
   assert.deepEqual(ours(), []);
 });
 
-test('the perf query keeps debug on while the inspector is off', () => {
-  setDebug(false, true);
-  assert.equal(debug.on, true);
-  assert.equal(debug.inspector, false);
-  setDebug(false, false);
+test('the perf query keeps timings on while its switch is off', () => {
+  setDebug('timings', false, true);
+  assert.equal(debug.timings, true);
+  assert.equal(debug.messages, false);
+  setDebug('timings', false, false);
 });
 
 test('listeners hear only real changes', () => {
-  setDebug(false, false);
+  setDebug('timings', false, false);
   const heard: boolean[] = [];
-  const stop = onDebugChange((on) => heard.push(on));
-  setDebug(true, false);
-  setDebug(true, true);
-  setDebug(false, false);
-  setDebug(false, false);
+  const stop = onDebugChange('timings', (on) => heard.push(on));
+  setDebug('timings', true, false);
+  setDebug('timings', true, true);
+  setDebug('timings', false, false);
+  setDebug('timings', false, false);
   stop();
-  setDebug(true, false);
-  setDebug(false, false);
+  setDebug('timings', true, false);
+  setDebug('timings', false, false);
   assert.deepEqual(heard, [true, false]);
 });
 

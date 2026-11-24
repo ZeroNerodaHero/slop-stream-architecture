@@ -15,7 +15,7 @@ const SETTLE_MS = 10_000;
 const runs = new Map<string, Run>();
 const says = new Map<string, [number, string]>();
 
-onDebugChange((on) => {
+onDebugChange('timings', (on) => {
   if (on) return;
   for (const run of runs.values()) clearTimeout(run.timer);
   runs.clear();
@@ -55,7 +55,7 @@ function finish(topic: string, run: Run): void {
 }
 
 export function rtPerfBegin(topic: string, phase: 'press' | 'mount', at = performance.now()): void {
-  if (!debug.on) return;
+  if (!debug.timings) return;
   const run = runs.get(topic);
   if (phase === 'mount' && run && !run.printed && at - run.at < PEEK_TTL_MS) {
     rtPerfMark(topic, 'mount', at);
@@ -67,7 +67,7 @@ export function rtPerfBegin(topic: string, phase: 'press' | 'mount', at = perfor
 }
 
 export function rtPerfMark(topic: string, phase: Exclude<Phase, 'press'>, at = performance.now()): void {
-  if (!debug.on) return;
+  if (!debug.timings) return;
   const run = runs.get(topic);
   if (!run || run.printed || run.phases.some(([p]) => p === phase)) return;
   run.phases.push([phase, at]);
@@ -77,13 +77,13 @@ export function rtPerfMark(topic: string, phase: Exclude<Phase, 'press'>, at = p
 }
 
 export function rtPerfSay(key: string, at = performance.now(), label = ''): void {
-  if (!debug.on) return;
+  if (!debug.timings) return;
   hold(says, key, [at, label]);
   mark(`rt:say:${key}`, at);
 }
 
 export function rtPerfAnswer(key: string, ok: boolean, at = performance.now()): void {
-  if (!debug.on) return;
+  if (!debug.timings) return;
   const said = says.get(key);
   says.delete(key);
   if (!said) return;
