@@ -12,6 +12,7 @@ import type { PanelSide } from '@/infra/atoms/settings-atoms';
 import { Badge } from '@/shared-components/Badge';
 import { BlurredPicture } from '@/shared-components/BlurredPicture';
 import { Face } from '@/shared-components/Face';
+import { FollowButton } from '@/shared-components/FollowButton';
 import { Who } from '@/shared-components/PersonRow';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { StreamStill } from '@/shared-components/StreamStill';
@@ -220,10 +221,11 @@ interface PersonCardProps {
   side?: PanelSide;
   actions?: CardAction[] | null;
   below?: ReactNode;
+  follow?: boolean;
   hold: PeekHold;
 }
 
-export function PersonCard({ id, person, at, side, actions, below, hold }: PersonCardProps) {
+export function PersonCard({ id, person, at, side, actions, below, follow, hold }: PersonCardProps) {
   const { setCard } = hold;
   const peek = useAtomValue(peeksAtom)[person.name]?.card;
   const covered = useAtomValue(profilePopupAtom) !== null;
@@ -316,6 +318,7 @@ export function PersonCard({ id, person, at, side, actions, below, hold }: Perso
               </span>
             )}
           </span>
+          {follow && <FollowButton id={`${id ?? `peek-${person.name}`}-follow`} name={person.name} icon />}
         </span>
         {presence === 'streaming' ? (
           <StreamStill name={person.name} className="w-full" />

@@ -13,13 +13,14 @@ interface FollowButtonProps {
   name: string;
   small?: boolean;
   compact?: boolean;
+  icon?: boolean;
   className?: string;
   onChange?: (following: boolean) => void;
 }
 
 const LABEL = 'inline-flex items-center justify-center';
 
-export function FollowButton({ id, name, small, compact, className, onChange }: FollowButtonProps) {
+export function FollowButton({ id, name, small, compact, icon, className, onChange }: FollowButtonProps) {
   const me = useAtomValue(meAtom);
   const following = useAtomValue(followingNamesAtom).has(name);
   const [busy, setBusy] = useState(false);
@@ -40,6 +41,29 @@ export function FollowButton({ id, name, small, compact, className, onChange }: 
   const size = compact ? 12 : small ? 14 : 16;
   const label = cn(LABEL, compact ? 'gap-1' : 'gap-1.5', 'col-start-1 row-start-1');
   const unfollowing = following && hover;
+  if (icon) {
+    const word = following ? 'unfollow' : 'follow';
+    const Glyph = unfollowing ? RiUserUnfollowLine : following ? RiUserFollowLine : RiUserAddLine;
+    return (
+      <Tooltip content={word}>
+        <Button
+          id={id}
+          variant={unfollowing ? 'secondary' : following ? 'success' : 'primary'}
+          aria-label={word}
+          aria-busy={busy}
+          aria-pressed={following}
+          data-following={following}
+          onClick={() => void toggle()}
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
+          onBlur={() => setHover(false)}
+          className={cn('h-7 w-7 shrink-0 p-0', unfollowing && 'border-decrease text-decrease hover:border-decrease', busy && 'opacity-40', className)}
+        >
+          <Glyph aria-hidden size={14} />
+        </Button>
+      </Tooltip>
+    );
+  }
   return (
     <Tooltip content={following ? `stop following ${name}` : `follow ${name}`}>
       <Button
