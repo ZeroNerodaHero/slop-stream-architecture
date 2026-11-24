@@ -47,7 +47,7 @@ let started = false;
 let nickOf: () => string | null = () => null;
 let held = new Set<string>();
 
-const refs = new TopicRefs((topics) => send?.({ kind: 'set', topics }));
+const refs = new TopicRefs((topics, peek) => send?.({ kind: 'set', topics, peek }));
 
 function deliver(msg: FromCore) {
   switch (msg.kind) {
@@ -88,7 +88,7 @@ function attachTab(why: string) {
   send = handle;
   store.set(rtTransportAtom, 'tab');
   handle({ kind: 'attach', build: __BUILD__, nick: nickOf() });
-  handle({ kind: 'set', topics: refs.topics() });
+  handle({ kind: 'set', topics: refs.topics(), peek: refs.peeked() });
 }
 
 function attachWorker(): boolean {
@@ -135,7 +135,7 @@ function attachWorker(): boolean {
   const bye = () => post({ kind: 'bye' });
   window.addEventListener('pagehide', bye);
   post({ kind: 'attach', build: __BUILD__, nick: nickOf() });
-  post({ kind: 'set', topics: refs.topics() });
+  post({ kind: 'set', topics: refs.topics(), peek: refs.peeked() });
   setTimeout(() => {
     if (!heard) fallBack(`the rt worker did not answer in ${WORKER_WAIT_MS}ms`);
   }, WORKER_WAIT_MS);
@@ -149,7 +149,7 @@ export function startRt(nick: () => string | null): void {
   if (!attachWorker()) attachTab('no SharedWorker here');
   const focus = () => {
     if (document.visibilityState !== 'visible') return;
-    send?.({ kind: 'set', topics: refs.topics() });
+    send?.({ kind: 'set', topics: refs.topics(), peek: refs.peeked() });
     send?.({ kind: 'focus' });
   };
   window.addEventListener('focus', focus);
@@ -158,6 +158,10 @@ export function startRt(nick: () => string | null): void {
 
 export function acquireTopic(topic: string): Release {
   return refs.acquire(topic);
+}
+
+export function pressTopic(topic: string): void {
+  refs.peek(topic);
 }
 
 export function rtHolds(topic: string): boolean {

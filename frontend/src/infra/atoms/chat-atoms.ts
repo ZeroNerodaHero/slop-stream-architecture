@@ -9,7 +9,8 @@ import { hideBotsAtom } from '@/infra/atoms/settings-atoms';
 import { type Attached, Attachments, idsOf, isPictureRefusal, MAX_CHAT_IMAGES, releaseAttached, wordsOf } from '@/infra/chat-attach';
 import { type ChatVideo, videoOf } from '@/infra/chat-video';
 import { relayUrl } from '@/infra/relay';
-import { acquireTopic, listenTopic, onRtFrame, onRtPhase, rtAsk, rtFill, rtFresh, rtHolds, rtIdentify, rtOn } from '@/infra/rt/client';
+import { acquireTopic, listenTopic, onRtFrame, onRtPhase, pressTopic, rtAsk, rtFill, rtFresh, rtHolds, rtIdentify, rtOn } from '@/infra/rt/client';
+import { rtPerfAnswer, rtPerfBegin, rtPerfMark, rtPerfSay } from '@/infra/rt/perf';
 import type { Release } from '@/infra/rt/refs';
 import { channelOf, chatTopicOf, type RtFrame, type Subbed } from '@/infra/rt/wire';
 import { store } from '@/infra/store';
@@ -180,6 +181,17 @@ export function setNick(raw: string) {
 
 const rooms = new Map<string, ChatRoom>();
 
+function pressChat(topic: string) {
+  if (rtHolds(topic)) return;
+  rtPerfBegin(topic, 'press');
+  pressTopic(topic);
+}
+
+export function warmServerChat(server: string) {
+  if (!rtOn || (!store.get(meAtom) && !isValidNick(store.get(nickAtom).trim()))) return;
+  pressChat(chatTopicOf(`${server}/${EVERY_CHANNEL}`));
+}
+
 const WARM_CHAT_MS = 5000;
 let warm: { name: string; ws: WebSocket; me: string | null | undefined; timer: ReturnType<typeof setTimeout> } | null = null;
 
@@ -191,7 +203,11 @@ function dropWarm() {
 }
 
 export function warmChat(name: string) {
-  if (rtOn || rooms.get(name)?.connected()) return;
+  if (rtOn) {
+    pressChat(chatTopicOf(name));
+    return;
+  }
+  if (rooms.get(name)?.connected()) return;
   if (warm?.name === name && warm.ws.readyState <= WebSocket.OPEN) {
     clearTimeout(warm.timer);
     warm.timer = setTimeout(dropWarm, WARM_CHAT_MS);
@@ -280,6 +296,7 @@ export class ChatRoom {
   private bucket: { tokens: number; at: number };
   private inFlight: ({ key: string; text: string; images: string[]; reply: ChatLine | null } & Attached)[] = [];
   private sent = 0;
+  private acked = new Map<string, string>();
   private retries = 0;
   private flashTimer: ReturnType<typeof setTimeout> | null = null;
   private wasOpen = false;
@@ -392,6 +409,7 @@ export class ChatRoom {
         this.scrollPlan = 'bottom';
         store.set(this.linesAtom, mergeLines(lines, store.get(this.linesAtom)));
         store.set(this.loadedAtom, true);
+        if (this.rt) rtPerfMark(this.rt.topic, 'history');
         this.rtSync();
       },
       (err: unknown) => {
@@ -440,6 +458,7 @@ export class ChatRoom {
     }
     this.ws = null;
     this.dropRt();
+    this.acked.clear();
     for (const lost of this.inFlight.splice(0)) this.restore(lost, null);
     this.resetHistory();
     this.clearResults();
@@ -645,8 +664,13 @@ export class ChatRoom {
     const key = `pending-${++this.sent}`;
     if (this.rt) {
       const topic = this.server ? chatTopicOf(`${this.server}/${this.channel}`) : this.rt.topic;
+      rtPerfSay(key);
       void rtAsk({ ...say, type: 'say', topic }).then((answer) => {
-        if (answer.type !== 'nack') return;
+        rtPerfAnswer(key, answer.type === 'ack');
+        if (answer.type === 'ack') {
+          if (typeof answer.id === 'string') this.onAck(key, answer.id);
+          return;
+        }
         const at = this.inFlight.findIndex((sent) => sent.key === key);
         const [lost] = at >= 0 ? this.inFlight.splice(at, 1) : [];
         if (lost) this.restore(lost, answer.error);
@@ -778,14 +802,31 @@ export class ChatRoom {
     };
   }
 
+  private onAck(key: string, id: string) {
+    const at = this.inFlight.findIndex((p) => p.key === key);
+    if (at < 0) return;
+    const seen = store.get(this.linesAtom).some((line) => line.id === id) || [...this.tails.values()].some((lines) => lines.some((line) => line.id === id));
+    if (!seen) {
+      this.acked.set(id, key);
+      return;
+    }
+    const echoed = this.inFlight.splice(at, 1)[0]!;
+    releaseAttached(echoed);
+    this.dropPending(echoed.key);
+  }
+
   private onWire(msg: Wire, tagged: string | null) {
     if (msg.type === 'ready') {
       store.set(this.readerAtom, msg.reader === true);
     } else if (msg.type === 'message' && msg.id) {
       const said = tokensAsTyped(msg.text ?? '');
-      const sent = this.inFlight.findIndex(
-        (p) => p.text === said && samePictures(p.images, picturesOf(msg)) && (p.video?.video?.id ?? null) === (videoOf(msg.video)?.id ?? null)
-      );
+      const ackedKey = this.acked.get(msg.id);
+      this.acked.delete(msg.id);
+      let sent = ackedKey === undefined ? -1 : this.inFlight.findIndex((p) => p.key === ackedKey);
+      if (sent < 0)
+        sent = this.inFlight.findIndex(
+          (p) => p.text === said && samePictures(p.images, picturesOf(msg)) && (p.video?.video?.id ?? null) === (videoOf(msg.video)?.id ?? null)
+        );
       if (sent >= 0) {
         const echoed = this.inFlight.splice(sent, 1)[0]!;
         releaseAttached(echoed);
@@ -821,6 +862,7 @@ export class ChatRoom {
     this.greeted = true;
     store.set(this.readerAtom, !this.server && typeof known !== 'string' && !isValidNick(nick));
     store.set(this.phaseAtom, 'connecting');
+    rtPerfBegin(topic, 'mount');
     const rt: RtHold = { topic, release: acquireTopic(topic), offs: [], synced: false };
     this.rt = rt;
     rt.offs.push(
@@ -868,6 +910,7 @@ export class ChatRoom {
   }
 
   private rtOpened(rt: RtHold) {
+    rtPerfMark(rt.topic, 'subbed');
     if (store.get(this.phaseAtom) !== 'open') {
       store.set(this.phaseAtom, 'open');
       store.set(this.asStreamerAtom, this.me === this.key);

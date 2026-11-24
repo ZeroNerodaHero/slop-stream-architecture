@@ -201,6 +201,8 @@ pub(crate) struct SubFrame {
     pub(crate) since: HashMap<String, String>,
     #[serde(default)]
     pub(crate) fresh: Vec<String>,
+    #[serde(default)]
+    pub(crate) peek: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -442,6 +444,10 @@ impl Topics {
         self.chat.values().flat_map(|e| e.rooms.iter()).map(|r| (r.room.clone(), r.clone())).collect()
     }
 
+    pub(crate) fn counted_rooms(&self, peeks: &HashSet<Topic>) -> HashSet<String> {
+        self.chat.iter().filter(|(t, _)| !peeks.contains(*t)).flat_map(|(_, e)| e.rooms.iter().map(|r| r.room.clone())).collect()
+    }
+
     pub(crate) fn covers(&self, room: &str) -> bool {
         self.chat.values().any(|e| e.rooms.iter().any(|r| r.room == room))
     }
@@ -513,7 +519,7 @@ fn forward(topic: Arc<str>, mut rx: broadcast::Receiver<Event>, out: Outbox) -> 
 
 struct Held {
     _forward: Forward,
-    _lease: Lease,
+    lease: Lease,
 }
 
 struct Speaking {
@@ -532,6 +538,7 @@ struct Conn {
     speaking: HashMap<String, Speaking>,
     topics: Topics,
     rooms: HashMap<String, Held>,
+    peeks: HashSet<Topic>,
     gate: SubGate,
 }
 
@@ -650,6 +657,7 @@ async fn handle(s: ChatState, ip: String, headers: HeaderMap, mut socket: WebSoc
         speaking: HashMap::new(),
         topics: Topics::new(now),
         rooms: HashMap::new(),
+        peeks: HashSet::new(),
         gate: SubGate::new(now),
     };
     let mut beat = Heartbeat::standard();
@@ -777,14 +785,14 @@ impl Conn {
         }
     }
 
-    async fn enter(&mut self, rooms: &[RoomRef]) -> Result<(), &'static str> {
+    async fn enter(&mut self, rooms: &[RoomRef], peek: bool) -> Result<(), &'static str> {
         for r in rooms {
             if self.rooms.contains_key(&r.room) {
                 continue;
             }
-            let Some(Joined { rx, lease }) = self.s.join(&r.room, &self.ip).await else { return Err(TOO_MANY_TABS) };
+            let Some(Joined { rx, lease }) = self.s.join_as(&r.room, &self.ip, peek).await else { return Err(TOO_MANY_TABS) };
             let topic: Arc<str> = chat_topic(&r.room).into();
-            self.rooms.insert(r.room.clone(), Held { _forward: forward(topic, rx, self.out.clone()), _lease: lease });
+            self.rooms.insert(r.room.clone(), Held { _forward: forward(topic, rx, self.out.clone()), lease });
         }
         Ok(())
     }
@@ -793,6 +801,10 @@ impl Conn {
         let needed = self.topics.rooms();
         self.rooms.retain(|room, _| needed.contains_key(room));
         self.speaking.retain(|room, _| needed.contains_key(room));
+        let counted = self.topics.counted_rooms(&self.peeks);
+        for (room, held) in &self.rooms {
+            held.lease.set_peek(!counted.contains(room));
+        }
     }
 
     async fn join(&mut self, t: Topic, refused: &mut Vec<Refusal>) {
@@ -807,7 +819,8 @@ impl Conn {
                 return;
             }
         };
-        if let Err(why) = self.enter(&rooms).await {
+        let peek = self.peeks.contains(&t);
+        if let Err(why) = self.enter(&rooms, peek).await {
             refused.push(Refusal::of(&t, why));
             self.prune();
             return;
@@ -824,7 +837,8 @@ impl Conn {
     async fn recheck(&mut self, t: Topic, refused: &mut Vec<Refusal>) {
         match self.resolve(&t).await {
             Ok(rooms) => {
-                if self.enter(&rooms).await.is_err() {
+                let peek = self.peeks.contains(&t);
+                if self.enter(&rooms, peek).await.is_err() {
                     self.topics.drop_chat(&t);
                     refused.push(Refusal::of(&t, TOO_MANY_TABS));
                 } else {
@@ -840,6 +854,7 @@ impl Conn {
     }
 
     async fn apply(&mut self, socket: &mut WebSocket, sub: SubFrame) -> Result<(), Broken> {
+        self.peeks = sub.peek.iter().filter_map(|raw| Topic::parse(raw)).filter(Topic::is_chat).collect();
         let plan = self.topics.plan(&sub.topics, Instant::now());
         let mut refused = plan.refused;
         for t in &plan.unwatch {
@@ -1150,7 +1165,7 @@ mod tests {
     }
 
     fn sub(rev: u64, raw: &[&str]) -> SubFrame {
-        SubFrame { rev, topics: topics(raw), since: HashMap::new(), fresh: Vec::new() }
+        SubFrame { rev, topics: topics(raw), since: HashMap::new(), fresh: Vec::new(), peek: Vec::new() }
     }
 
     #[test]
@@ -1245,7 +1260,7 @@ mod tests {
             let Joined { rx, lease } = rooms.enter_for_test(room, "1.1.1.1");
             let f = forward(chat_topic(room).into(), rx, out.clone());
             handles.push(f.0.abort_handle());
-            held.insert(room.to_owned(), Held { _forward: f, _lease: lease });
+            held.insert(room.to_owned(), Held { _forward: f, lease });
         }
         let task = tokio::spawn(async move {
             let _held = held;
@@ -1258,6 +1273,66 @@ mod tests {
         assert!(rooms.is_empty(), "every lease came back");
         tokio::task::yield_now().await;
         assert!(handles.iter().all(|h| h.is_finished()), "and no forwarder outlives its socket");
+    }
+
+    #[tokio::test]
+    async fn a_peek_is_not_counted_until_a_real_hold_takes_it_over() {
+        let rooms = chat::Rooms::default();
+        let watcher = rooms.enter_for_test("cats", "1.1.1.1");
+        let mut counts = watcher.rx.resubscribe();
+        let peek = rooms.peek_for_test("cats", "2.2.2.2").unwrap();
+        assert_eq!(rooms.viewers("cats"), 1, "a peek is not a viewer");
+        let Ok(Event::Count(n, _)) = counts.recv().await else { panic!("a count") };
+        assert_eq!(n, 1);
+        peek.lease.set_peek(false);
+        assert_eq!(rooms.viewers("cats"), 2, "taken over, it counts");
+        let Ok(Event::Count(n, _)) = counts.recv().await else { panic!("a count") };
+        assert_eq!(n, 2);
+        peek.lease.set_peek(false);
+        assert!(counts.try_recv().is_err(), "the same mark again says nothing");
+        peek.lease.set_peek(true);
+        assert_eq!(rooms.viewers("cats"), 1);
+        drop(peek);
+        assert_eq!(rooms.viewers("cats"), 1, "a peek that goes takes no viewer with it");
+        drop(watcher);
+        assert!(rooms.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_peek_alone_keeps_the_room_open_at_zero_and_takes_an_ip_slot() {
+        let rooms = chat::Rooms::default();
+        let mut held = vec![rooms.peek_for_test("cats", "1.1.1.1").unwrap()];
+        assert_eq!(rooms.viewers("cats"), 0);
+        assert!(!rooms.is_empty(), "the peek holds the room and its reader");
+        for _ in 1..chat::MAX_SOCKETS_PER_IP {
+            held.push(rooms.peek_for_test("cats", "1.1.1.1").unwrap());
+        }
+        assert_eq!(rooms.viewers("cats"), 0);
+        assert!(rooms.peek_for_test("cats", "1.1.1.1").is_none(), "peeks count toward the per-ip cap");
+        drop(held);
+        assert!(rooms.is_empty());
+    }
+
+    #[test]
+    fn a_peeked_room_is_counted_only_when_no_real_topic_covers_it() {
+        let now = Instant::now();
+        let mut t = Topics::new(now);
+        let plan = t.plan(&topics(&["chat:a", "chat:b", "chat:g/*"]), now);
+        for topic in plan.join {
+            let rooms = match &topic {
+                Topic::Every(server) => vec![RoomRef { room: format!("{server}/one"), server: Some(server.clone()) }],
+                _ => topic.room().into_iter().collect(),
+            };
+            t.admit(topic, rooms, now);
+        }
+        let peeks: HashSet<Topic> = ["chat:a"].iter().filter_map(|raw| Topic::parse(raw)).collect();
+        let counted = t.counted_rooms(&peeks);
+        assert!(!counted.contains("a"));
+        assert!(counted.contains("b"));
+        assert!(counted.contains("g/one"));
+        let both: HashSet<Topic> = ["chat:a", "chat:g/one"].iter().filter_map(|raw| Topic::parse(raw)).collect();
+        assert!(t.counted_rooms(&both).contains("g/one"), "the wildcard is a real hold of the channel");
+        assert_eq!(t.counted_rooms(&HashSet::new()).len(), 3);
     }
 
     #[tokio::test]
@@ -1291,6 +1366,8 @@ mod tests {
         }
         assert!(matches!(serde_json::from_str::<In>(r#"{"type":"say","rid":"r","topic":"chat:a","text":"hi"}"#).unwrap(), In::Say { .. }));
         assert!(matches!(serde_json::from_str::<In>(r#"{"type":"auth","ticket":"00"}"#).unwrap(), In::Auth { .. }));
+        let Ok(In::Sub(sub)) = serde_json::from_str::<In>(r#"{"type":"sub","rev":2,"topics":["chat:a","chat:b"],"peek":["chat:b"]}"#) else { panic!("a sub") };
+        assert_eq!(sub.peek, vec!["chat:b".to_owned()]);
         assert!(matches!(serde_json::from_str::<In>(r#"{"type":"hello","nick":"ann","v":1}"#).unwrap(), In::Hello(_)));
     }
 

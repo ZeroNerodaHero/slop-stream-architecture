@@ -106,6 +106,52 @@ function established(port) {
       await sees(b, /from a tab of its own/);
       await sees(a2, /from a tab of its own/);
     });
+
+    await step('a press peeks the room without counting, and the page it opens takes the peek over', async () => {
+      const three = await browser.newContext({ ignoreHTTPSErrors: true });
+      await three.addInitScript(() => localStorage.setItem('perfdebug', '1'));
+      const p = await three.newPage();
+      const perf = [];
+      p.on('console', (m) => {
+        if (m.text().startsWith('[rt perf]')) perf.push(m.text());
+      });
+      await p.goto(`${BASE}/?rt=1`);
+      await p.waitForFunction(() => document.readyState === 'complete', null, W);
+      await new Promise((r) => setTimeout(r, 1000));
+      const before = await b.textContent('#chat-count');
+      await p.evaluate((room) => {
+        const a = document.createElement('a');
+        a.id = 'rt-press';
+        a.href = `/watch/${room}`;
+        a.textContent = room;
+        a.style.cssText = 'position:fixed;top:40px;left:40px;z-index:99999;padding:20px;background:#fff';
+        a.addEventListener('click', (e) => {
+          e.preventDefault();
+          history.pushState({}, '', a.href);
+          dispatchEvent(new PopStateEvent('popstate'));
+        });
+        document.body.append(a);
+      }, ROOM);
+      const box = await p.locator('#rt-press').boundingBox();
+      await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await p.mouse.down();
+      await p.waitForFunction((room) => performance.getEntriesByName(`rt:chat:${room}:press`).length > 0, ROOM, W);
+      await new Promise((r) => setTimeout(r, 1500));
+      const during = await b.textContent('#chat-count');
+      expect(during === before, `the count went from "${before}" to "${during}" on a press`);
+      await p.mouse.up();
+      await p.waitForSelector('#chat-count', W);
+      const want = Number(before.split(' ')[0]) + 1;
+      await b.waitForFunction((n) => new RegExp(`^${n} here`).test(document.querySelector('#chat-count').textContent), want, W);
+      await p.waitForFunction(() => /live/.test(document.querySelector('#chat-count').textContent), null, W);
+      await new Promise((r) => setTimeout(r, 500));
+      const line = perf.find((t) => t.includes(`chat:${ROOM}`) && t.includes('press 0'));
+      expect(line, `no perf line from the press: ${JSON.stringify(perf)}`);
+      const at = (phase) => Number(new RegExp(`${phase} (\\d+)`).exec(line)[1]);
+      expect(at('subbed') - at('mount') < 100, `subbed ${at('subbed') - at('mount')}ms after the mount: the peek was not held`);
+      await three.close();
+      return `"${before}" while pressed, ${want} after; ${line.replace('[rt perf] ', '')}`;
+    });
   } finally {
     await browser.close();
   }

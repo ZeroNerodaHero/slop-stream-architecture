@@ -3,7 +3,7 @@ import { atom } from 'jotai';
 import { api, type Channel, type GroupMember, type GroupRoom, isVoice, messageOf, statusOf, type VoiceMember } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
 import { paletteAtom } from '@/infra/atoms/settings-atoms';
-import { type ChatLine, findServerChat, serverChat } from '@/infra/atoms/chat-atoms';
+import { type ChatLine, findServerChat, serverChat, warmServerChat } from '@/infra/atoms/chat-atoms';
 import { voiceCallAtom, voiceUidsAtom } from '@/infra/atoms/voice-state';
 import { holdPresence, onEvents, releasePresence, unwatchPresence, watchPresence } from '@/infra/events';
 import { type GroupChange, groupTopic } from '@/infra/frames';
@@ -70,6 +70,7 @@ onPrefetch('group', (server) => {
   const limit = pageFor(LINE_PX);
   prefetch(roomKey(server, roster), topic, 'drop', () => api.group(server, roster));
   prefetch(linesKey(server, limit), null, 'drop', () => api.groupMessages(server, limit));
+  warmServerChat(server);
 });
 
 export function leaveRoom(): void {

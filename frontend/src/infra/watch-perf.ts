@@ -2,7 +2,7 @@ let origin = 0;
 let phases: [string, number][] = [];
 let printed = false;
 
-function debugOn(): boolean {
+export function perfDebugOn(): boolean {
   try {
     return new URLSearchParams(location.search).get('perfdebug') === '1' || localStorage.getItem('perfdebug') === '1';
   } catch {
@@ -24,7 +24,7 @@ export function perfMark(phase: string, at = performance.now()): void {
     performance.measure(`watch:${phase}`, { start: origin, end: at });
   } catch {
   }
-  if (phase === 'first-frame' && !printed && debugOn()) {
+  if (phase === 'first-frame' && !printed && perfDebugOn()) {
     printed = true;
     console.debug(`[watch perf] ${phases.map(([p, t]) => `${p} ${Math.round(t - origin)}`).join(' · ')} ms`);
   }

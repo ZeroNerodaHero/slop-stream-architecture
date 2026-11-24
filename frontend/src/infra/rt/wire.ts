@@ -51,6 +51,7 @@ export interface SubOut {
   topics: string[];
   since?: Record<string, string>;
   fresh?: string[];
+  peek?: string[];
 }
 
 export interface HelloOut {

@@ -88,7 +88,7 @@ export class FakeSocket implements SocketLike {
   }
 
   subs() {
-    return this.sent.filter((f) => f.type === 'sub') as { type: 'sub'; rev: number; topics: string[]; since?: Record<string, string>; fresh?: string[] }[];
+    return this.sent.filter((f) => f.type === 'sub') as { type: 'sub'; rev: number; topics: string[]; since?: Record<string, string>; fresh?: string[]; peek?: string[] }[];
   }
 
   lastSub() {

@@ -39,7 +39,7 @@ const REACT_TIER: Tier = Tier { burst: 10.0, window: Duration::from_secs(10) };
 const TEST_OWNER_TIER: Tier = Tier { burst: 3.0, window: Duration::from_secs(3) };
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
 pub(crate) const SLOW_DOWN: &str = "slow down";
-const MAX_SOCKETS_PER_IP: usize = 8;
+pub(crate) const MAX_SOCKETS_PER_IP: usize = 8;
 const MAX_CHAT_SOCKETS_PER_IP: usize = 32;
 const EVERY_CHANNEL: &str = "*";
 pub(crate) const FILL_LIMIT: usize = 100;
@@ -87,7 +87,12 @@ pub(crate) struct Rooms(Arc<std::sync::Mutex<HashMap<String, Room>>>);
 
 struct Room {
     tx: broadcast::Sender<Event>,
-    subs: HashMap<u64, Arc<str>>,
+    subs: HashMap<u64, Sub>,
+}
+
+struct Sub {
+    ip: Arc<str>,
+    peek: bool,
 }
 
 static NEXT_SUB: AtomicU64 = AtomicU64::new(1);
@@ -96,6 +101,12 @@ pub(crate) struct Lease {
     rooms: Rooms,
     name: Arc<str>,
     id: u64,
+}
+
+impl Lease {
+    pub(crate) fn set_peek(&self, peek: bool) {
+        self.rooms.mark(&self.name, self.id, peek);
+    }
 }
 
 impl Drop for Lease {
@@ -111,11 +122,11 @@ pub(crate) struct Joined {
 
 impl Room {
     fn viewers(&self) -> usize {
-        self.subs.len()
+        self.subs.values().filter(|sub| !sub.peek).count()
     }
 
     fn from_ip(&self, ip: &str) -> usize {
-        self.subs.values().filter(|held| held.as_ref() == ip).count()
+        self.subs.values().filter(|sub| sub.ip.as_ref() == ip).count()
     }
 }
 
@@ -132,7 +143,12 @@ impl Rooms {
         locked(&self.0).get(name).map_or(0, Room::viewers)
     }
 
+    #[cfg(test)]
     fn enter(&self, name: &str, ip: &str, open: impl FnOnce(broadcast::Sender<Event>)) -> Option<Joined> {
+        self.enter_as(name, ip, false, open)
+    }
+
+    fn enter_as(&self, name: &str, ip: &str, peek: bool, open: impl FnOnce(broadcast::Sender<Event>)) -> Option<Joined> {
         let mut rooms = locked(&self.0);
         let fresh = !rooms.contains_key(name);
         let room = rooms.entry(name.to_owned()).or_insert_with(|| Room { tx: broadcast::channel(256).0, subs: HashMap::new() });
@@ -140,7 +156,7 @@ impl Rooms {
             return None;
         }
         let id = NEXT_SUB.fetch_add(1, Ordering::Relaxed);
-        room.subs.insert(id, ip.into());
+        room.subs.insert(id, Sub { ip: ip.into(), peek });
         let rx = room.tx.subscribe();
         if fresh {
             open(room.tx.clone());
@@ -152,6 +168,22 @@ impl Rooms {
     #[cfg(test)]
     pub(crate) fn enter_for_test(&self, name: &str, ip: &str) -> Joined {
         self.enter(name, ip, |_| {}).expect("room for one more")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn peek_for_test(&self, name: &str, ip: &str) -> Option<Joined> {
+        self.enter_as(name, ip, true, |_| {})
+    }
+
+    fn mark(&self, name: &str, id: u64, peek: bool) {
+        let mut rooms = locked(&self.0);
+        let Some(room) = rooms.get_mut(name) else { return };
+        let Some(sub) = room.subs.get_mut(&id) else { return };
+        if sub.peek == peek {
+            return;
+        }
+        sub.peek = peek;
+        let _ = room.tx.send(Event::count(room.viewers()));
     }
 
     fn release(&self, name: &str, id: u64) {
@@ -1646,13 +1678,17 @@ fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[
 
 impl ChatState {
     pub(crate) async fn join(&self, name: &str, ip: &str) -> Option<Joined> {
+        self.join_as(name, ip, false).await
+    }
+
+    pub(crate) async fn join_as(&self, name: &str, ip: &str, peek: bool) -> Option<Joined> {
         let (start, react_start) = if self.rooms.has(name) {
             (None, None)
         } else {
             (last_id(&mut self.redis.clone(), &room_key(name)).await, last_id(&mut self.redis.clone(), &react_key(name)).await)
         };
         let client = self.client.clone();
-        self.rooms.enter(name, ip, |tx| {
+        self.rooms.enter_as(name, ip, peek, |tx| {
             tokio::spawn(reader(client, name.to_owned(), start, react_start, tx));
         })
     }
