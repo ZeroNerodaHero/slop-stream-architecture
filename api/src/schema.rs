@@ -28,6 +28,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
     ("0012-chat-videos", include_str!("../migrations/0012-chat-videos.sql")),
     ("0013-media-context", include_str!("../migrations/0013-media-context.sql")),
     ("0014-stream-analytics", include_str!("../migrations/0014-stream-analytics.sql")),
+    ("0015-image-moderation", include_str!("../migrations/0015-image-moderation.sql")),
 ];
 
 /// Apply `schema.sql` when the database has no tables yet. The chat process does not call this.

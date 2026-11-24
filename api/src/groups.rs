@@ -116,16 +116,13 @@ impl From<BadgeRow> for Badge {
     }
 }
 
-/// The badges an account wears: one group's only, never more. Its primary group
-/// (`memberships.is_primary`) when it picked one, else the first it joined, the same one
-/// `badge_of` shows on its card; `bot` before it when the socket said so. One query. `None`
-/// (an anonymous nick) matches no membership.
 pub(crate) async fn badges_of(db: &PgPool, user: Option<Uuid>, bot: bool) -> Result<Vec<Badge>, sqlx::Error> {
     let rows: Vec<BadgeRow> = sqlx::query_as(&format!(
         "SELECT {BADGE_COLUMNS} FROM groups g
          LEFT JOIN memberships m ON m.group_name = g.name AND m.user_id = $1
          WHERE (g.name = $2 AND $3)
-            OR g.name = (SELECT p.group_name FROM memberships p WHERE p.user_id = $1
+            OR g.name = (SELECT p.group_name FROM memberships p JOIN groups pg ON pg.name = p.group_name
+                         WHERE p.user_id = $1 AND NOT pg.adult_content
                          ORDER BY p.is_primary DESC, p.joined_at LIMIT 1)
          ORDER BY g.name = $2 DESC"
     ))
@@ -137,21 +134,16 @@ pub(crate) async fn badges_of(db: &PgPool, user: Option<Uuid>, bot: bool) -> Res
     Ok(rows.into_iter().map(Badge::from).collect())
 }
 
-/// The one badge a name's card shows (`GET /api/streamers/:name`, `badge`): the account's
-/// primary group, else the first it joined, the first its chat lines wear. None for a name with
-/// no account or no group.
 pub(crate) async fn badge_of(db: &PgPool, name: &str) -> Result<Option<Badge>, sqlx::Error> {
     Ok(badges_by_name(db, &[name.to_owned()]).await?.remove(name))
 }
 
-/// `badge_of` for many names in one query: the home list's cards. A name with no account or
-/// no group is not in the map.
 pub(crate) async fn badges_by_name(db: &PgPool, names: &[String]) -> Result<HashMap<String, Badge>, sqlx::Error> {
     let rows: Vec<(String, String, String, String, Option<i64>, String, i64, Option<i64>)> = sqlx::query_as(&format!(
         "SELECT DISTINCT ON (st.name) st.name, {BADGE_COLUMNS} FROM streamers st
          JOIN memberships m ON m.user_id = st.id
          JOIN groups g ON g.name = m.group_name
-         WHERE st.name = ANY($1) AND st.password_hash IS NOT NULL
+         WHERE st.name = ANY($1) AND st.password_hash IS NOT NULL AND NOT g.adult_content
          ORDER BY st.name, m.is_primary DESC, m.joined_at"
     ))
     .bind(names)
@@ -335,7 +327,7 @@ async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
                 EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1 AND m.is_primary)
          FROM groups g
          LEFT JOIN streamers maker ON maker.id = g.created_by_id
-         WHERE g.public OR g.name = $2
+         WHERE (g.public AND NOT g.adult_content) OR g.name = $2
             OR EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1)
          ORDER BY g.name = $2 DESC, g.created_at, g.name",
     )
@@ -918,7 +910,7 @@ async fn explore(State(s): State<AppState>, Me(me): Me) -> ApiResult {
          LEFT JOIN channels c ON c.server = g.name AND {}
          LEFT JOIN streamers cm ON cm.id = c.created_by_id
          WHERE g.name <> $3
-           AND (g.public OR EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1))
+           AND ((g.public AND NOT g.adult_content) OR EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = g.name AND m.user_id = $1))
          ORDER BY g.created_at, g.name, c.position NULLS LAST, c.created_at, c.name",
         sees_sql("$1", "$2")
     );

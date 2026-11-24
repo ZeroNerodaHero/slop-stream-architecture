@@ -23,7 +23,7 @@ import { openProfilePopup } from '@/infra/atoms/profile-popup-atoms';
 import { roleColorsAtom } from '@/infra/atoms/room-atoms';
 import { type ChatStyle, chatStyleAtom, hideBotsAtom, profilePopupEnabledAtom } from '@/infra/atoms/settings-atoms';
 import { EQUES, showWelcomesAtom, type Welcome } from '@/infra/atoms/welcome-atoms';
-import { type MediaGone, whyGone } from '@/infra/chat-video';
+import { type MediaGone, shownSrc, whyGone } from '@/infra/chat-video';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingVideo, PICTURE_ACCEPT, splitFiles, STREAM_CHAT_VIDEO, STREAM_VIDEO_OFF, useVideoUpload, VideoProgress } from '@/shared-components/ChatAttach';
@@ -310,6 +310,13 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
   const [view, setView] = useState<{ at: number; host: HTMLElement } | null>(null);
   // pictures that would not load, and why (an admin took it down, or it is not this viewer's to see): the word stands in their place
   const [gone, setGone] = useState<Record<string, MediaGone>>({});
+  const [sensitive, setSensitive] = useState<Record<string, boolean>>({});
+  const srcOf = (id: string) => (id in sensitive ? shownSrc(pictureSrc(id)) : pictureSrc(id));
+  const failed = (id: string) =>
+    void whyGone(srcOf(id)).then((w) => {
+      if (w === 'sensitive') setSensitive((all) => (id in all ? all : { ...all, [id]: false }));
+      else if (w) setGone((all) => ({ ...all, [id]: w }));
+    });
 
   if (ids.length === 0) return null;
   const many = ids.length > 1;
@@ -325,6 +332,23 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
             const i = r * first + j;
             const why = gone[id];
             if (why) return <MediaGoneNote key={id} why={why} className={many ? 'min-w-0 flex-1 justify-center' : undefined} />;
+            if (sensitive[id] === false) {
+              return (
+                <span
+                  key={id}
+                  data-sensitive={id}
+                  className={cn(
+                    'relative flex flex-col items-center justify-center gap-1 overflow-hidden bg-backgroundTertiary',
+                    many ? 'min-w-0 flex-1' : small ? 'h-20 w-32 max-w-full' : 'h-[7.5rem] w-48 max-w-full'
+                  )}
+                >
+                  <span className="relative bg-background/70 px-1 text-xs text-textPrimary">sensitive</span>
+                  <Button size="sm" className="relative" aria-label="show sensitive picture" onClick={() => setSensitive((all) => ({ ...all, [id]: true }))}>
+                    show
+                  </Button>
+                </span>
+              );
+            }
             return (
               <button
                 key={id}
@@ -335,9 +359,9 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
                 onClick={(e) => setView({ at: i, host: e.currentTarget.ownerDocument.body })}
               >
                 <img
-                  src={pictureSrc(id)}
+                  src={srcOf(id)}
                   alt=""
-                  onError={() => void whyGone(pictureSrc(id)).then((w) => w && setGone((all) => ({ ...all, [id]: w })))}
+                  onError={() => failed(id)}
                   className={many ? 'h-full w-full object-cover' : cn('max-w-full object-contain', small ? 'max-h-20' : 'max-h-[7.5rem]')}
                 />
               </button>
@@ -349,6 +373,9 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
         createPortal(
           <PictureView
             ids={ids}
+            srcOf={srcOf}
+            blurred={(id) => sensitive[id] === false}
+            onShow={(id) => setSensitive((all) => ({ ...all, [id]: true }))}
             at={view.at}
             onStep={(by) => setView((cur) => (cur ? { ...cur, at: (cur.at + by + ids.length) % ids.length } : cur))}
             onClose={() => setView(null)}
@@ -361,6 +388,9 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
 
 interface PictureViewProps {
   ids: string[];
+  srcOf: (id: string) => string;
+  blurred: (id: string) => boolean;
+  onShow: (id: string) => void;
   /** Which of `ids` is up. */
   at: number;
   /** The arrows and the arrow keys: one on, or one back, round the end. */
@@ -379,7 +409,7 @@ const PICTURE_EDGE = 3;
  * closes it too, and so does a click on the grey beside the picture. Several on the line get
  * arrows at the edges, and the arrow keys.
  */
-function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
+function PictureView({ ids, srcOf, blurred, onShow, at, onStep, onClose }: PictureViewProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   /** The press that began this click was beside the picture too: a drag off the picture is not a close. */
   const pressedBeside = useRef(false);
@@ -403,7 +433,7 @@ function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
   // already the whole window, a phone's page over the page: the back button shuts it too (MobileSheet.tsx)
   useSheetBack(close);
   /** On the grey: not on a button, and not on the picture (the <img> is drawn at exactly the picture's size). */
-  const beside = (target: EventTarget) => target instanceof Element && !target.closest('button, img');
+  const beside = (target: EventTarget) => target instanceof Element && !target.closest('button, img, [data-sensitive]');
   const span = 100 - 2 * PICTURE_EDGE;
 
   return (
@@ -428,10 +458,18 @@ function PictureView({ ids, at, onStep, onClose }: PictureViewProps) {
       className="fixed inset-0 m-0 hidden h-auto w-auto max-h-none max-w-none flex-col overflow-hidden border-0 bg-neutral-700/85 p-0 backdrop:bg-transparent open:flex [container-type:size]"
     >
       <div className="flex-1" />
-      {shown && (
+      {shown && blurred(shown) && (
+        <span data-sensitive={shown} className="flex shrink-0 flex-col items-center gap-2 self-center bg-backgroundTertiary px-8 py-10 text-sm text-textPrimary">
+          sensitive
+          <Button size="sm" aria-label="show sensitive picture" onClick={() => onShow(shown)}>
+            show
+          </Button>
+        </span>
+      )}
+      {shown && !blurred(shown) && (
         <img
           key={shown}
-          src={pictureSrc(shown)}
+          src={srcOf(shown)}
           alt=""
           draggable={false}
           onLoad={(e) => {

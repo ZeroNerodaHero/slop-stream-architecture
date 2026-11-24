@@ -172,6 +172,8 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-}
       S3_PATH_STYLE: ${S3_PATH_STYLE:-}
+      MODERATION_ENABLED: ${MODERATION_ENABLED:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # the built pages. /watch/<name> is served from here with that name's preview tags
       PAGES_DIR: /srv
       RUST_LOG: info
@@ -252,6 +254,7 @@ services:
       DATABASE_URL: postgres://stream:stream@database:5432/stream
       REDIS_URL: redis://redis:6379/0
       PORT: "4100"
+      ADMIN_NAMES: ${ADMIN_NAMES:-}
       RUST_LOG: info
     depends_on:
       # healthy, not started: the api creates the tables (accounts included) on its way up,

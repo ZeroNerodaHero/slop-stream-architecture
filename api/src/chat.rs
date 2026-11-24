@@ -1149,6 +1149,7 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
     let uploader = w.user_id.filter(|_| w.verified);
     pictures_exist(&s.db, room, images, uploader).await?;
     let video = video_of(&s.db, room, video, uploader).await?;
+    pictures_allowed(&s.db, room, server, images, video.as_ref()).await?;
     // the emotes: each token the speaker may not use (not in its group, a nick) goes back to plain `:name:` (emotes.rs)
     let settled = crate::emotes::settle(&s.db, w.user_id.filter(|_| w.verified), text).await;
     let text = settled.as_str();
@@ -1932,6 +1933,32 @@ async fn pictures_exist(db: &sqlx::PgPool, name: &str, ids: &[String], who: Opti
         }
     }
     Ok(())
+}
+
+async fn pictures_allowed(db: &sqlx::PgPool, name: &str, server: Option<&str>, ids: &[String], video: Option<&Video>) -> Result<(), &'static str> {
+    use crate::moderate::{group_place, may_post, PlaceKind};
+    let mut all: Vec<&str> = ids.iter().map(String::as_str).collect();
+    if let Some(video) = video {
+        all.push(&video.poster);
+    }
+    if all.is_empty() {
+        return Ok(());
+    }
+    let place = match server {
+        Some(server) => group_place(db, server).await,
+        None => Ok(PlaceKind::Stream),
+    };
+    let verdict = match place {
+        Ok(place) => may_post(db, &all, place).await,
+        Err(e) => Err(e),
+    };
+    match verdict {
+        Ok(verdict) => verdict,
+        Err(e) => {
+            log::warn!("{name}: picture verdicts: {e}");
+            Err("chat is busy, try again")
+        }
+    }
 }
 
 /// Ids in a stored field: one id, or several joined by commas.

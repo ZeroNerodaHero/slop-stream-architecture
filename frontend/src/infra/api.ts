@@ -300,6 +300,8 @@ export interface GroupRoom {
   owner_role?: string;
   admin?: boolean;
   public?: boolean;
+  adult?: boolean;
+  adult_locked?: boolean;
   title?: string | null;
   tag?: number | null;
   member_order?: string;
@@ -639,6 +641,8 @@ export const api = {
   saveGroupAbout: (name: string, about: string) => request<{ about: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/about`, { about }),
   saveGroupColor: (name: string, color: string) => request<{ color: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/color`, { color }),
   setGroupPublic: (name: string, isPublic: boolean) => request<{ public: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/access`, { public: isPublic }),
+  setGroupAdult: (name: string, adult: boolean) => request<{ adult: boolean; locked: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/adult`, { adult }),
+  liftGroupAdultLock: (name: string) => request<{ adult: boolean; locked: boolean }>('DELETE', `/api/groups/${encodeURIComponent(name)}/adult/lock`),
   setMemberOrder: (name: string, order: 'name' | 'newest' | 'oldest') => request<{ order: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/order`, { order }),
   saveGroupIcon: (name: string, jpeg: Blob) => request<{ icon: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/icon`, jpeg),
   saveGroupBanner: (name: string, jpeg: Blob) => request<{ banner: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/banner`, jpeg),

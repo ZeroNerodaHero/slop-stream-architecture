@@ -2675,6 +2675,7 @@ function ManageDialog({ server, channel, room, me, onClose }: { server: string; 
                 <ColorSection server={server} room={room} run={run} />
                 <AboutSection server={server} room={room} run={run} />
                 <ListingSection server={server} room={room} run={run} />
+                {(room.owner || room.admin) && <AdultSection server={server} room={room} run={run} />}
               </div>
             )}
             {tab === 'channels' && <ChannelsSection server={server} channel={channel} room={room} run={run} />}
@@ -2829,6 +2830,43 @@ function ListingSection({ server, room, run }: ManageProps) {
   return (
     <Section title="listing" description="public is on the lists for anyone. private is off them: someone with the address can still open it and join.">
       <VisibilityToggle isPublic={isPublic} ids={['room-public', 'room-private']} onChange={(next) => void run(() => api.setGroupPublic(server, next))} />
+    </Section>
+  );
+}
+
+function AdultSection({ server, room, run }: ManageProps) {
+  const on = room.adult === true;
+  const why = on ? null : room.adult_locked ? 'a site admin turned adult content off here, so it stays off' : room.owner ? null : 'site admins can only turn adult content off';
+  return (
+    <Section
+      title="adult content"
+      description="on: sexual pictures are allowed in this group, blurred until clicked, and the group and its member list are off every list and search. only its address or an invite opens it. off: sexual pictures are refused, and those already posted are hidden."
+    >
+      <p className="flex flex-wrap items-center gap-2">
+        <span id="group-adult-state" className="text-textSecondary">
+          {on ? 'on' : room.adult_locked ? 'off, locked' : 'off'}
+        </span>
+        <Button
+          id="group-adult"
+          size="sm"
+          variant={on ? 'outline-danger' : 'secondary'}
+          disabled={why !== null}
+          aria-describedby={why ? 'group-adult-state group-adult-why' : 'group-adult-state'}
+          onClick={() => void run(() => api.setGroupAdult(server, !on))}
+        >
+          {on ? 'turn off' : 'turn on'}
+        </Button>
+        {room.admin && room.adult_locked && (
+          <Button id="group-adult-unlock" size="sm" variant="secondary" onClick={() => void run(() => api.liftGroupAdultLock(server))}>
+            lift lock
+          </Button>
+        )}
+      </p>
+      {why && (
+        <p id="group-adult-why" className="mt-1 text-xs text-textTertiary">
+          {why}
+        </p>
+      )}
     </Section>
   );
 }

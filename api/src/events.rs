@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use tokio::sync::{mpsc, watch, Mutex, Notify};
+use uuid::Uuid;
 
 use crate::auth::{is_claimed, whoami, NICK_HAS_ACCOUNT};
 use crate::chat::{clean_nick, valid_nick};
@@ -42,6 +43,28 @@ fn is_topic(watch: &str) -> bool {
 }
 
 type SocketId = u64;
+
+struct GroupGate {
+    public: bool,
+    adult: bool,
+    members: Vec<Uuid>,
+}
+
+fn may_watch(gate: Option<&GroupGate>, account: Option<Uuid>, admins: &[Uuid]) -> bool {
+    let Some(g) = gate else { return false };
+    match account {
+        Some(id) => crate::moderate::sees_group(g.public, g.adult, g.members.contains(&id), admins.contains(&id)),
+        None => crate::moderate::roster_public(g.public, g.adult),
+    }
+}
+
+fn regate_around(what: &str) -> (bool, bool) {
+    match what {
+        "access" | "adult" | "joined" => (true, false),
+        "left" | "banned" | "deleted" => (false, true),
+        _ => (false, false),
+    }
+}
 
 const FIRST_IN: &str = r#"
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', '(' .. (tonumber(ARGV[2]) - tonumber(ARGV[4])))
@@ -78,6 +101,8 @@ pub(crate) struct Gateway {
     registry: Registry,
     refresh: Arc<Notify>,
     per_ip: Arc<std::sync::Mutex<HashMap<String, usize>>>,
+    admins: Arc<[Uuid]>,
+    gate: Arc<Mutex<()>>,
 }
 
 struct IpSlot {
@@ -122,6 +147,7 @@ struct Sockets {
 struct Entry {
     tx: mpsc::UnboundedSender<Out>,
     name: Option<String>,
+    account: Option<Uuid>,
     watching: HashSet<String>,
     told: HashMap<String, Presence>,
     me: Option<(Presence, Status)>,
@@ -217,7 +243,14 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Resul
     let (stop, shutdown) = watch::channel(false);
     let dummy_prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
     let limits = crate::ratelimit::ByIp { redis: redis.clone(), rule: crate::ratelimit::events_rule };
-    let gateway = Gateway::new(db, redis, client, shutdown, dummy_prefix);
+    let admin_names: Vec<String> = std::env::var("ADMIN_NAMES")
+        .unwrap_or_default()
+        .split(',')
+        .map(|n| n.trim().to_lowercase())
+        .filter(|n| valid_name(n))
+        .collect();
+    let admins: Vec<Uuid> = crate::debug::admins_with_accounts(&db, admin_names).await?.into_iter().map(|a| a.id).collect();
+    let gateway = Gateway::new(db, redis, client, shutdown, dummy_prefix, admins);
     let sockets = gateway.registry();
 
     let router = Router::new()
@@ -242,7 +275,7 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Resul
 }
 
 impl Gateway {
-    pub(crate) fn new(db: PgPool, redis: ConnectionManager, client: redis::Client, shutdown: watch::Receiver<bool>, dummy_prefix: String) -> Self {
+    pub(crate) fn new(db: PgPool, redis: ConnectionManager, client: redis::Client, shutdown: watch::Receiver<bool>, dummy_prefix: String, admins: Vec<Uuid>) -> Self {
         let host = std::env::var("HOSTNAME").ok().filter(|h| !h.trim().is_empty()).unwrap_or_else(|| "events".into());
         let g = Gateway {
             db,
@@ -255,6 +288,8 @@ impl Gateway {
             registry: Registry::default(),
             refresh: Arc::new(Notify::new()),
             per_ip: Arc::default(),
+            admins: admins.into(),
+            gate: Arc::default(),
         };
         tokio::spawn(tail(g.clone()));
         tokio::spawn(recheck(g.clone()));
@@ -416,12 +451,60 @@ impl Gateway {
         }
     }
 
-    async fn insert(&self, id: SocketId, tx: mpsc::UnboundedSender<Out>, name: Option<String>) {
+    async fn insert(&self, id: SocketId, tx: mpsc::UnboundedSender<Out>, name: Option<String>, account: Option<Uuid>) {
         let mut s = self.registry.0.lock().await;
         if let Some(n) = &name {
             s.own.entry(n.clone()).or_default().insert(id);
         }
-        s.by_id.insert(id, Entry { tx, name, watching: HashSet::new(), told: HashMap::new(), me: None });
+        s.by_id.insert(id, Entry { tx, name, account, watching: HashSet::new(), told: HashMap::new(), me: None });
+    }
+
+    async fn group_gate(&self, group: &str, accounts: &[Uuid]) -> Option<GroupGate> {
+        let row: Result<Option<(bool, bool, Vec<Uuid>)>, sqlx::Error> = sqlx::query_as(
+            "SELECT g.public, g.adult_content,
+                    ARRAY(SELECT m.user_id FROM memberships m WHERE m.group_name = g.name AND m.user_id = ANY($2))
+             FROM groups g WHERE g.name = $1",
+        )
+        .bind(group)
+        .bind(accounts)
+        .fetch_optional(&self.db)
+        .await;
+        match row {
+            Ok(row) => row.map(|(public, adult, members)| GroupGate { public, adult, members }),
+            Err(e) => {
+                log::warn!("events: cannot read who may watch {group}: {e}");
+                None
+            }
+        }
+    }
+
+    async fn regate(&self, group: &str, only: Option<SocketId>) {
+        let _gate = self.gate.lock().await;
+        let topic = format!("{GROUP_TOPIC}{group}");
+        let wanting: Vec<(SocketId, Option<Uuid>)> = {
+            let s = self.registry.0.lock().await;
+            match only {
+                Some(id) => s.by_id.get(&id).filter(|e| e.watching.contains(&topic)).map(|e| (id, e.account)).into_iter().collect(),
+                None => s.by_id.iter().filter(|(_, e)| e.watching.contains(&topic)).map(|(id, e)| (*id, e.account)).collect(),
+            }
+        };
+        if wanting.is_empty() {
+            return;
+        }
+        let accounts: Vec<Uuid> = wanting.iter().filter_map(|(_, a)| *a).collect::<HashSet<_>>().into_iter().collect();
+        let gate = self.group_gate(group, &accounts).await;
+        let mut s = self.registry.0.lock().await;
+        for (id, account) in wanting {
+            let still = s.by_id.get(&id).is_some_and(|e| e.watching.contains(&topic));
+            if still && may_watch(gate.as_ref(), account, &self.admins) {
+                s.watchers.entry(topic.clone()).or_default().insert(id);
+            } else if let Some(set) = s.watchers.get_mut(&topic) {
+                set.remove(&id);
+                if set.is_empty() {
+                    s.watchers.remove(&topic);
+                }
+            }
+        }
     }
 
     async fn remove(&self, id: SocketId) -> Option<String> {
@@ -484,6 +567,7 @@ impl Gateway {
     }
 
     async fn watch(&self, id: SocketId, name: &str) {
+        let group = group_topic(name);
         {
             let mut s = self.registry.0.lock().await;
             let Some(e) = s.by_id.get_mut(&id) else { return };
@@ -493,7 +577,13 @@ impl Gateway {
             if !e.watching.insert(name.to_owned()) {
                 return;
             }
-            s.watchers.entry(name.to_owned()).or_default().insert(id);
+            if group.is_none() {
+                s.watchers.entry(name.to_owned()).or_default().insert(id);
+            }
+        }
+        if let Some(group) = group {
+            self.regate(group, Some(id)).await;
+            return;
         }
         if is_topic(name) {
             return;
@@ -636,7 +726,14 @@ impl Gateway {
                         _ => None,
                     })
                     .unwrap_or_default();
+                let (before, after) = regate_around(&what);
+                if before {
+                    self.regate(&name, None).await;
+                }
                 self.tell_topic(&format!("{GROUP_TOPIC}{name}"), Out::Group { group: name.clone(), what, data }).await;
+                if after {
+                    self.regate(&name, None).await;
+                }
             }
             other => log::debug!("events: unknown entry type {other}"),
         }
@@ -684,22 +781,22 @@ fn guest_name(nick: Option<&str>, dummy_prefix: &str) -> Result<Option<String>, 
     Ok(Some(name))
 }
 
-async fn identify(g: &Gateway, headers: &HeaderMap, nick: Option<&str>) -> Result<Option<String>, Refused> {
+async fn identify(g: &Gateway, headers: &HeaderMap, nick: Option<&str>) -> Result<(Option<String>, Option<Uuid>), Refused> {
     match whoami(&g.db, headers).await {
-        Ok(Some(me)) => return Ok(Some(me.name)),
+        Ok(Some(me)) => return Ok((Some(me.name), Some(me.id))),
         Ok(None) => {}
         Err(e) => {
             log::warn!("events: cannot read the login: {e}");
-            return Ok(None);
+            return Ok((None, None));
         }
     }
-    let Some(name) = guest_name(nick, &g.dummy_prefix)? else { return Ok(None) };
+    let Some(name) = guest_name(nick, &g.dummy_prefix)? else { return Ok((None, None)) };
     match is_claimed(&g.db, &name).await {
-        Ok(false) => Ok(Some(name)),
+        Ok(false) => Ok((Some(name), None)),
         Ok(true) => Err(Refused(NICK_HAS_ACCOUNT)),
         Err(e) => {
             log::warn!("events: cannot check whether {name} is claimed: {e}");
-            Ok(None)
+            Ok((None, None))
         }
     }
 }
@@ -710,8 +807,8 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
         let _ = send(&mut socket, &Out::Error { error: "say hello first" }).await;
         return;
     };
-    let name = match identify(&g, &headers, nick.as_deref()).await {
-        Ok(name) => name,
+    let (name, account) = match identify(&g, &headers, nick.as_deref()).await {
+        Ok(who) => who,
         Err(Refused(why)) => {
             let _ = send(&mut socket, &Out::Error { error: why }).await;
             return;
@@ -721,7 +818,7 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
     let id = g.next.fetch_add(1, Ordering::Relaxed);
     let sid = format!("{}:{id}", g.host);
     let (tx, mut rx) = mpsc::unbounded_channel::<Out>();
-    g.insert(id, tx, name.clone()).await;
+    g.insert(id, tx, name.clone(), account).await;
     match &name {
         Some(n) => {
             g.mark_first(&sid, n).await;
@@ -906,6 +1003,37 @@ mod tests {
         assert!(is_topic("group:gaming-0042"));
         assert!(!is_topic("billy"));
         assert!(!valid_name("group:gaming-0042"));
+    }
+
+    #[test]
+    fn only_members_and_site_admins_watch_a_closed_group() {
+        let (member, admin, stranger) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+        let admins = [admin];
+        let gate = |public, adult| GroupGate { public, adult, members: vec![member] };
+        let open = gate(true, false);
+        for who in [None, Some(member), Some(admin), Some(stranger)] {
+            assert!(may_watch(Some(&open), who, &admins), "{who:?}");
+        }
+        for (public, adult) in [(true, true), (false, false), (false, true)] {
+            let closed = gate(public, adult);
+            assert!(!may_watch(Some(&closed), None, &admins), "{public} {adult}");
+            assert!(!may_watch(Some(&closed), Some(stranger), &admins), "{public} {adult}");
+            assert!(may_watch(Some(&closed), Some(member), &admins), "{public} {adult}");
+            assert!(may_watch(Some(&closed), Some(admin), &admins), "{public} {adult}");
+        }
+        assert!(!may_watch(None, Some(admin), &admins), "a group that is gone or unreadable lets nobody watch");
+    }
+
+    #[test]
+    fn a_change_of_who_may_watch_is_checked_on_the_right_side_of_its_fact() {
+        assert_eq!(regate_around("adult"), (true, false));
+        assert_eq!(regate_around("access"), (true, false));
+        assert_eq!(regate_around("joined"), (true, false));
+        assert_eq!(regate_around("left"), (false, true));
+        assert_eq!(regate_around("banned"), (false, true));
+        assert_eq!(regate_around("deleted"), (false, true));
+        assert_eq!(regate_around("voice"), (false, false));
+        assert_eq!(regate_around("held"), (false, false));
     }
 
     #[test]

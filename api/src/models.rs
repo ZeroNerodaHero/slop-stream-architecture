@@ -441,6 +441,9 @@ pub(crate) async fn upload(args: &[String]) -> Result<(), String> {
             println!("  same  {}", describe(m));
             continue;
         }
+        if let Some((bytes, _)) = &m.thumb {
+            crate::moderate::check_offline(crate::moderate::UploadKind::ModelThumb, picture_mime(bytes).unwrap_or("application/octet-stream"), bytes).await?;
+        }
         s3::put(&store, &model_key(id), &m.file, MODEL_MIME).await?;
         match &m.thumb {
             Some((bytes, _)) => s3::put(&store, &thumb_key(id), bytes, picture_mime(bytes).unwrap_or("application/octet-stream")).await?,

@@ -402,6 +402,9 @@ function apply(change: GroupChange): void {
     case 'access':
       store.set(roomAtom, { ...room, public: change.public });
       return;
+    case 'adult':
+      store.set(roomAtom, { ...room, adult: change.adult, adult_locked: change.locked ?? room.adult_locked });
+      return;
     case 'order':
       store.set(roomAtom, { ...room, member_order: change.order, roster: room.roster ? sortMembers(room.roster, change.order) : room.roster });
       if (room.roster_next) void reloadRoster();

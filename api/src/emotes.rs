@@ -226,19 +226,9 @@ pub(crate) fn redraw(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
     Ok(out)
 }
 
-/// The one place an emote's picture is looked at before it is kept, after `redraw`: the single
-/// moderation hook for emotes, and every emote upload passes through it.
-///
-/// It must FAIL CLOSED once it is wired to anything: a check that errors, times out or cannot be
-/// reached refuses the upload (an `Err`, never a quiet `Ok`), so an outage of the checker is not
-/// a way past it. Only "checked, and fine" may return `Ok`.
-///
-/// TODO(moderation): group icons, banners and avatars go through no safety or moderation check
-/// today (group_mod.rs `put_icon`, profile.rs `put_avatar` keep the bytes as they come), so there
-/// is no shared path to call. When one exists (a hash match against a known-bad list, a
-/// classifier), call it here and refuse with its words. Nothing outside is wired yet.
-async fn screen(_group: &str, _who: &crate::auth::Account, _webp: &[u8]) -> Result<(), ApiError> {
-    Ok(())
+async fn screen(s: &AppState, who: &crate::auth::Account, headers: &HeaderMap, webp: &[u8], sha: &str) -> Result<crate::moderate::Passed, ApiError> {
+    let ip = crate::ratelimit::forwarded_ip(headers);
+    crate::moderate::check(s, crate::moderate::Upload { kind: crate::moderate::UploadKind::Emote, who: Some(who.id), ip: ip.as_deref(), mime: "image/webp", key: None, sha: Some(sha) }, webp).await
 }
 
 fn key_of(id: Uuid) -> String {
@@ -344,7 +334,8 @@ async fn upload(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
         .await
         .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not read the picture"))?
         .map_err(|why| ApiError::new(StatusCode::BAD_REQUEST, why))?;
-    screen(&group, &who, &webp).await?;
+    let sha = crate::media::sha256_hex(&webp);
+    let looked = screen(&s, &who, &headers, &webp, &sha).await?;
     // the row first, the cap and the name read in the insert under the group's lock; a failed save deletes it
     let mut tx = s.db.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(7311, hashtext($1))").bind(&group).execute(&mut *tx).await?;
@@ -359,7 +350,7 @@ async fn upload(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
     .bind(&group)
     .bind(&name)
     .bind(who.id)
-    .bind(crate::media::sha256_hex(&webp))
+    .bind(&sha)
     .bind(crate::ratelimit::forwarded_ip(&headers))
     .fetch_optional(&mut *tx)
     .await?;
@@ -372,6 +363,7 @@ async fn upload(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
         log::error!("s3 emote {group}/{name}: {e}");
         return Err(ApiError::new(StatusCode::BAD_GATEWAY, "could not save the picture"));
     }
+    crate::moderate::set_key(&s.db, looked.row, &key).await;
     log::info!("{}: new emote :{name}: in {group}, {} bytes", who.name, webp.len());
     let row = one(&s.db, &group, id).await?;
     Ok((StatusCode::CREATED, Json(emote_json(&row))))
