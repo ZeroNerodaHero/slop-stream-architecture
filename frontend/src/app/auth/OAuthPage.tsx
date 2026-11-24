@@ -10,6 +10,7 @@ import { cleanName, isDummyName, isValidName } from '@/infra/names';
 import { providerLabel, takeReturn } from '@/infra/oauth';
 import { Button, buttonClassName } from '@/shared-components/Button';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { useTurnstile } from '@/shared-components/Turnstile';
 import { INPUT } from '@/shared-components/input';
 import { BUTTON, Field, Status } from '@/shared-components/user-modal/parts';
 
@@ -94,6 +95,8 @@ function PickName() {
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [gone, setGone] = useState(false);
+  // the human check (Turnstile.tsx) is on this step, not the trip to the provider: no account exists before it
+  const human = useTurnstile('oauth-turnstile');
 
   useEffect(() => {
     api
@@ -109,15 +112,18 @@ function PickName() {
   }, []);
 
   const wanted = cleanName(name);
-  const ready = !busy && !gone && isValidName(wanted) && !isDummyName(wanted);
+  const ready = !busy && !gone && isValidName(wanted) && !isDummyName(wanted) && human.ready;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!ready) return;
     setBusy(true);
     setStatus('');
+    const token = human.token;
+    // the token is single-use, spent or not
+    human.spent();
     try {
-      await api.oauthSignup(wanted);
+      await api.oauthSignup(wanted, token);
       await reloadMe();
       identityChanged('login');
       const back = takeReturn();
@@ -159,6 +165,7 @@ function PickName() {
             className={INPUT}
           />
         </Field>
+        {!gone && human.widget}
         <div className="flex flex-wrap items-center gap-3">
           <Button id="oauth-submit" type="submit" variant="primary" className={BUTTON} disabled={!ready}>
             make the account

@@ -415,22 +415,25 @@ async fn remove(State(s): State<AppState>, Path((group, id)): Path<(String, Stri
     if let Err(e) = s3::delete(&s.s3, &key).await {
         log::warn!("s3 emote {key}: {e}");
     }
+    // `GET /api/emotes/:id` is public and cached, whoever's group it was (cf_purge.rs)
+    crate::cf_purge::purge(vec![format!("/api/emotes/{id}")]);
     log::info!("{}: deleted emote {id} from {group}", who.name);
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// A group on its way out: its emotes' pictures out of the bucket (the rows go with the group).
 pub(crate) async fn drop_group(s: &AppState, group: &str) {
-    let keys: Vec<String> = match sqlx::query_scalar("SELECT key FROM group_emotes WHERE group_name = $1").bind(group).fetch_all(&s.db).await {
-        Ok(keys) => keys,
+    let rows: Vec<(Uuid, String)> = match sqlx::query_as("SELECT id, key FROM group_emotes WHERE group_name = $1").bind(group).fetch_all(&s.db).await {
+        Ok(rows) => rows,
         Err(e) => {
             log::warn!("emotes of {group}: {e}");
             return;
         }
     };
-    for key in keys {
-        let _ = s3::delete(&s.s3, &key).await;
+    for (_, key) in &rows {
+        let _ = s3::delete(&s.s3, key).await;
     }
+    crate::cf_purge::purge(rows.iter().map(|(id, _)| format!("/api/emotes/{id}")).collect());
 }
 
 /// `GET /api/emotes/mine`: every emote of every group this login is in, by group then name: the

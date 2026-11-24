@@ -7,6 +7,7 @@ import { identityChanged } from '@/infra/atoms/profile-atoms';
 import { passwordChecks, passwordOk } from '@/infra/password';
 import { Button } from '@/shared-components/Button';
 import { OAuthButtons } from '@/shared-components/OAuthButtons';
+import { useTurnstile } from '@/shared-components/Turnstile';
 import { INPUT } from '@/shared-components/input';
 import { BUTTON } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
@@ -38,6 +39,8 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
   // a new password's rule, ticked off under the box as it is typed; logging in asks none of it
   const checks = signingUp ? passwordChecks(password) : null;
   const unmet = checks !== null && !passwordOk(checks);
+  // the human check (Turnstile.tsx): nothing while the api has it off
+  const human = useTurnstile('auth-turnstile');
 
   // Mount only: a stale error from a previous try should not greet you here.
   // The switch between the two modes clears it too (same component, no remount).
@@ -47,8 +50,10 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (unmet) return;
-    const ok = await (signingUp ? signup(name, password) : login(name, password));
+    if (unmet || !human.ready) return;
+    const ok = await (signingUp ? signup(name, password, human.token) : login(name, password, human.token));
+    // the token is single-use, spent or not
+    human.spent();
     if (ok) {
       // the events socket is who the browser is: say hello again as the login, so the name reads
       // online to everyone (the security tab's login does the same). without it the socket stays
@@ -140,8 +145,10 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
         )}
       </div>
 
+      {human.widget}
+
       <div className="grid grid-cols-2 gap-2">
-        <Button id="auth-submit" type="submit" variant="primary" className={BUTTON} disabled={busy || !name || !password || unmet}>
+        <Button id="auth-submit" type="submit" variant="primary" className={BUTTON} disabled={busy || !name || !password || unmet || !human.ready}>
           {signingUp ? 'make the account' : 'log in'}
         </Button>
         <Button
