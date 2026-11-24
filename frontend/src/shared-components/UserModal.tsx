@@ -35,6 +35,7 @@ import { StatsTab } from '@/shared-components/user-modal/StatsTab';
 import { VoiceTab } from '@/shared-components/user-modal/VoiceTab';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
+import { TAB_OFF, TAB_ON } from '@/utils/tabs';
 
 const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> = {
   profile: { label: 'profile', group: 'you', icon: <RiUserLine aria-hidden size={18} /> },
@@ -50,13 +51,11 @@ const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> =
 };
 
 const GROUP_LABEL = 'hidden px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wider text-textTertiary first:pt-0 sm:block';
-const TAB = cn(
+const SIDE_TAB = cn(
   'flex shrink-0 items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-sm font-semibold leading-tight transition-colors duration-150',
   'border-b-2 sm:w-full sm:border-b-0 sm:border-l-2',
   'focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue'
 );
-const TAB_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
-const TAB_OFF = 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary';
 
 const STEP: Record<string, number | undefined> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
 
@@ -243,7 +242,7 @@ function Rail({ tab, tabs, phone }: { tab: UserTab; tabs: readonly UserTab[]; ph
                 aria-controls={on ? `panel-${t}` : undefined}
                 tabIndex={on ? 0 : -1}
                 onClick={() => pickTab(t)}
-                className={cn(TAB, on ? TAB_ON : TAB_OFF)}
+                className={cn(SIDE_TAB, on ? TAB_ON : TAB_OFF)}
               >
                 {icon}
                 {label}

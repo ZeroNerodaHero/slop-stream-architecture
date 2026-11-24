@@ -87,7 +87,7 @@ import { IconButton, PipIcon, SoundControl, revealClassName } from '@/shared-com
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 import { streamNumbers } from '@/utils/count';
-import { roveTabs } from '@/utils/tabs';
+import { roveTabs, TAB, TAB_OFF, TAB_ON } from '@/utils/tabs';
 
 const NOT_LIVE_WORDS: Partial<Record<Presence, string>> = {
   dnd: 'do not disturb, not streaming.',
@@ -592,13 +592,7 @@ export function WatchPage() {
                     aria-controls={on || t === 'chat' ? `panel-${t}` : undefined}
                     tabIndex={on ? 0 : -1}
                     onClick={() => setTab(t)}
-                    className={cn(
-                      '-mb-px border-b-2 px-3 py-1.5 font-semibold leading-tight transition-colors duration-150',
-                      t === 'chat' && 'ml-auto',
-                      on
-                        ? 'border-primaryBlue bg-backgroundTertiary text-textPrimary'
-                        : 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary'
-                    )}
+                    className={cn(TAB, t === 'chat' && 'ml-auto', on ? TAB_ON : TAB_OFF)}
                   >
                     {t}
                   </button>
