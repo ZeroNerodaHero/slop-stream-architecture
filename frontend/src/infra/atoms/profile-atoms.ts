@@ -1,15 +1,3 @@
-/**
- * My profile, from anywhere: the status (one line beside the name; `bio` on the wire, since
- * `status` is the presence choice's word, docs/status.md), the picture, what my stream's page
- * shows while I am not live (the offline picture and the line under the word), and where
- * else to find me (the links, docs/socials.md), edited on my own page under the player. All saved under the name I am, which is the login, else the nick
- * lowercased (every valid nick is a valid name). The user modal's profile tab edits the
- * first three and the corner panel shows the picture. Its own atoms, not the go live page's
- * (that page keeps only the thumbnails and the picture library, under the name it streams as,
- * and resets them when it is left). The links are bridged to the watch page below, so my own
- * page follows a save.
- */
-
 import { atom } from 'jotai';
 
 import { api, messageOf } from '@/infra/api';
@@ -37,58 +25,38 @@ import {
 } from '@/infra/socials';
 import { store } from '@/infra/store';
 
-/** Who I am, as a name: the login, else the nick lowercased. '' for nobody yet. */
 export const myNameAtom = atom((get) => get(meAtom) ?? cleanName(get(nickAtom)));
 
-/** The name the status and picture below belong to. The panel shows the picture only while it is mine. */
 export const profileForAtom = atom('');
-/** The status as typed in the box: one line about me. `bio` on the wire. */
 export const profileBioAtom = atom('');
 export const profileBioStatusAtom = atom('');
-/** The picture's upload time (the `?v=` of its url). null: none. */
 export const profileAvatarAtom = atom<number | null>(null);
 export const profileAvatarStatusAtom = atom('');
-/** The name has an account. */
 export const profileVerifiedAtom = atom(false);
-/** The offline picture's upload time (its `?v=`): on my stream's page where the player would be while I am not live. null: none. */
 export const profileOfflineAtom = atom<number | null>(null);
 export const profileOfflineStatusAtom = atom('');
-/** The line under the word while I am not live, as typed in the box. */
 export const profileOfflineNoteAtom = atom('');
 export const profileOfflineNoteStatusAtom = atom('');
-/** The links as they are being edited (docs/socials.md): the whole document, the urls as typed. Saved with one press, like the status. */
 export const profileSocialsAtom = atom<Socials>(EMPTY_SOCIALS);
 export const profileSocialsStatusAtom = atom('');
-/** The document as the api last gave or took it, as a key: the draft differs from it while there is something to save. */
 const loadedSocialsAtom = atom(socialsKey(EMPTY_SOCIALS));
-/** Something in the links changed since the last load or save. */
 export const profileSocialsDirtyAtom = atom((get) => socialsKey(get(profileSocialsAtom)) !== get(loadedSocialsAtom));
 
-/** The api keeps this many characters of the line, one line. The box stops there too. */
 export const MAX_OFFLINE_NOTE_CHARS = 140;
 
-/** My chat welcome as the api last gave or took it (welcome-atoms.ts): what my own chat shows. null until loaded, or from an older api. */
 export const profileWelcomeAtom = atom<Welcome | null>(null);
-/** Its words as typed in the box. */
 export const profileWelcomeDraftAtom = atom('');
 export const profileWelcomeStatusAtom = atom('');
 
-/** The picture to show for me, if it has been loaded for the name I am now. */
 export const myAvatarVersionAtom = atom((get) => (get(profileForAtom) === get(myNameAtom) ? get(profileAvatarAtom) : null));
-/** The same for the offline picture. */
 export const myOfflineVersionAtom = atom((get) => (get(profileForAtom) === get(myNameAtom) ? get(profileOfflineAtom) : null));
 
-/**
- * The api's rule, as the page sees it: a free name is anyone's, a claimed name its login's, a
- * reserved one the fake streams'. Known before a save, so the boxes can say why instead of a 403.
- */
 export const canEditProfileAtom = atom((get) => {
   const name = get(myNameAtom);
   if (!isValidName(name) || isDummyName(name)) return false;
   return !get(profileVerifiedAtom) || get(meAtom) === name;
 });
 
-/** Why the boxes are off, in words, for `canEditProfileAtom` false. '' while they are on. The profile tab and the page's editors say it in their status. */
 export const whyNotEditAtom = atom((get) => {
   const name = get(myNameAtom);
   if (!isValidName(name)) return 'pick a name first.';
@@ -102,11 +70,6 @@ let loadedNote = '';
 let loadedWelcome = '';
 let generation = 0;
 
-/**
- * The status, pictures, offline line and links of the name I am now. Another name than last
- * time starts clean (its saved status, pictures, line and links go, so they cannot be saved
- * under the new one; text being typed stays); the same name again keeps what was loaded.
- */
 export async function loadMyProfile(): Promise<void> {
   const name = store.get(myNameAtom);
   const mine = ++generation;
@@ -132,7 +95,7 @@ export async function loadMyProfile(): Promise<void> {
   if (!isValidName(name)) return;
   try {
     const p = await api.streamer(name);
-    if (mine !== generation) return; // the name moved on while the api was answering
+    if (mine !== generation) return;
     loadedBio = p.bio ?? '';
     if (!store.get(profileBioAtom)) store.set(profileBioAtom, loadedBio);
     loadedNote = p.offline_note ?? '';
@@ -141,7 +104,6 @@ export async function loadMyProfile(): Promise<void> {
     store.set(profileWelcomeAtom, welcome);
     loadedWelcome = welcome?.message ?? '';
     if (!store.get(profileWelcomeDraftAtom)) store.set(profileWelcomeDraftAtom, loadedWelcome);
-    // the links: the api's, unless a row was added while it was answering (an untouched draft is the empty document)
     const socials = cleanSocials(p.socials);
     store.set(loadedSocialsAtom, socialsKey(socials));
     if (socialsKey(store.get(profileSocialsAtom)) === socialsKey(EMPTY_SOCIALS)) store.set(profileSocialsAtom, socials);
@@ -149,18 +111,15 @@ export async function loadMyProfile(): Promise<void> {
     store.set(profileOfflineAtom, p.offline ?? null);
     store.set(profileVerifiedAtom, p.verified === true);
   } catch {
-    // nothing saved yet, or the api is away: the boxes stay as they are
   }
 }
 
-/** My own page open in this tab shows the links from its grant: a save shows there at once, no reload. */
 function alsoOnWatchPage(name: string, saved: { socials?: Socials; welcome?: Welcome }) {
   if (store.get(watchNameAtom) !== name) return;
   if (saved.socials) store.set(socialsAtom, saved.socials);
   if (saved.welcome) store.set(watchWelcomeAtom, saved.welcome);
 }
 
-/** The status, as typed; the api keeps it as one line, and the box shows that if nothing was typed meanwhile. */
 export async function saveMyBio(): Promise<void> {
   const name = store.get(myNameAtom);
   if (!isValidName(name)) {
@@ -181,7 +140,6 @@ export async function saveMyBio(): Promise<void> {
   }
 }
 
-/** The picture: the square of the file picked in the crop dialog, as a 256x256 jpeg (infra/picture.ts). Closed without, nothing happens. */
 export async function saveMyAvatar(file: File): Promise<void> {
   const name = store.get(myNameAtom);
   if (!isValidName(name)) {
@@ -214,7 +172,6 @@ export async function removeMyAvatar(): Promise<void> {
   }
 }
 
-/** The offline picture: the 16:9 of the file picked in the crop dialog, as a 1920x1080 jpeg, softer until it is under the api's ceiling. */
 export async function saveMyOffline(file: File): Promise<void> {
   const name = store.get(myNameAtom);
   if (!isValidName(name)) {
@@ -245,7 +202,6 @@ export async function removeMyOffline(): Promise<void> {
   }
 }
 
-/** The box as typed goes up; the api keeps it as one line, and the box shows that if nothing was typed meanwhile. */
 export async function saveMyOfflineNote(): Promise<void> {
   const name = store.get(myNameAtom);
   if (!isValidName(name)) {
@@ -266,11 +222,6 @@ export async function saveMyOfflineNote(): Promise<void> {
   }
 }
 
-/**
- * The chat welcome: on or off, and the words. The switch goes up with the words as last saved,
- * the save button with the words as typed; the api keeps them cleaned (empty is the default
- * words), and the box shows that if nothing was typed meanwhile.
- */
 export async function saveMyWelcome(on: boolean, message: string): Promise<void> {
   const name = store.get(myNameAtom);
   if (!isValidName(name)) {
@@ -293,15 +244,11 @@ export async function saveMyWelcome(on: boolean, message: string): Promise<void>
   }
 }
 
-// ---- the links (docs/socials.md) ----------------------------------------------------------
-
-/** Every edit of the draft comes through here: the document changes, and a stale `saved` goes, the status box's onChange in one place. */
 function editSocials(change: (doc: Socials) => Socials) {
   store.set(profileSocialsAtom, change(store.get(profileSocialsAtom)));
   if (store.get(profileSocialsStatusAtom)) store.set(profileSocialsStatusAtom, '');
 }
 
-/** A row of that kind, with an empty url box, at the end. Nothing past the cap. Returns the row's index, for the box to take focus. */
 export function addSocial(kind: SocialKind): number {
   const at = store.get(profileSocialsAtom).links.length;
   if (at >= MAX_SOCIALS) return -1;
@@ -309,10 +256,6 @@ export function addSocial(kind: SocialKind): number {
   return at;
 }
 
-/**
- * The url or the words of row `i`, as typed. A `web` row whose url lands on a host from the
- * list takes that kind (a hint, the way the name box lowercases); a kind the owner picked stands.
- */
 export function editSocial(i: number, patch: Partial<Pick<SocialLink, 'url' | 'label'>>) {
   editSocials((doc) => ({
     ...doc,
@@ -329,7 +272,6 @@ export function removeSocial(i: number) {
   editSocials((doc) => ({ ...doc, links: doc.links.filter((_, n) => n !== i) }));
 }
 
-/** The row's drag handle: the link at `from` put at `to`, display order. Out of range, nothing. */
 export function moveSocial(from: number, to: number) {
   editSocials((doc) => {
     const link = doc.links[from];
@@ -348,14 +290,6 @@ export function setSocialsSize(size: SocialsSize) {
   editSocials((doc) => ({ ...doc, size }));
 }
 
-/**
- * The draft goes up whole, every url as the api takes it (`https://` put in front of a bare
- * host, the rest of about.md's rule): a row that is not a link stops the save here, named, so
- * the owner fixes that one instead of reading a 400. What comes back is what the api kept (a
- * url written the parser's way, a label cut) and the boxes show that, unless something was
- * typed meanwhile. My own page open in this tab follows at once.
- */
-/** true once the api kept the links: the editor folds away on it. */
 export async function saveMySocials(): Promise<boolean> {
   const name = store.get(myNameAtom);
   if (!isValidName(name)) {
@@ -389,25 +323,13 @@ export async function saveMySocials(): Promise<boolean> {
   }
 }
 
-/**
- * I am somebody else now. The profile reloads for the new name and the go live page's name
- * follows (it has no box of its own). After a login or a logout that is all: the chat panel
- * reconnects on its own when `me` changes. After a committed new nick, the chat is told once
- * here, never per keystroke: a reconnect replaces the history and blips the count for the
- * whole room.
- */
 export function identityChanged(change: 'login' | 'nick') {
   void loadMyProfile();
   if (change === 'nick') reconnectChat();
-  // the events socket is who the browser is: a login or logout changes that too, not only a nick
   reconnectEvents();
   followIdentityOnLivePage();
 }
 
-// my name changed on another device, or in another tab of this browser (the tab that did it
-// already knows: `renameMe` set `me` first, so the frame names a name that is not mine any
-// more and is ignored there). /api/me again, then everything an identity change brings.
-// see docs/ids.md
 onEvents((event) => {
   if (event.type !== 'renamed' || event.name !== store.get(meAtom)) return;
   void reloadMe().then(() => identityChanged('login'));

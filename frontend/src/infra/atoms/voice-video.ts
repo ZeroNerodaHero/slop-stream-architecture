@@ -1,19 +1,3 @@
-/**
- * Cameras and screens in a voice call (docs/voice.md, video/src/voice.rs). The call itself is
- * voice-atoms.ts's: it hands this module its peer and a way to send once the join is answered
- * (`startVideo`), every seats frame (`videoSeats`), an answer that is not the join's
- * (`takeVideoAnswer`), and the end (`stopVideo`).
- *
- * The page is always the one that offers, one offer at a time, so it never crosses one from
- * the voice server. Each offer names this page's sending video mids, `{sdp, video: {mid:
- * 'camera' | 'screen'}}`. A camera or a screen turned on is a sendonly VP8 line (a new one the
- * first time, the old one after), turned off the same line inactive, and both are offered. The
- * others' pictures come on recvonly lines: a seats frame lists what each seat shows and the mid
- * that carries it, and when it lists more pictures than there are lines, lines are added and
- * offered. Caps are on the sender: a camera 640x360 at 24fps and 600 kbps, a screen up to
- * 1920x1080 at 15fps and 1.5 Mbps.
- */
-
 import { atom } from 'jotai';
 
 import { store } from '@/infra/store';
@@ -23,7 +7,6 @@ import { openVoiceCamera, voiceCameraAtom, type VoiceSeat } from './voice-atoms'
 
 export type VideoKind = 'camera' | 'screen';
 
-/** A picture someone else in the call shows, by their seat. */
 export interface VoicePicture {
   seat: number;
   user: string;
@@ -31,14 +14,10 @@ export interface VoicePicture {
   stream: MediaStream;
 }
 
-/** The others' pictures, as the last seats frame put them on lines. */
 export const voicePicturesAtom = atom<VoicePicture[]>([]);
-/** This tab's own camera and screen while they are on, for its own tiles. */
 export const voiceLocalVideoAtom = atom<{ camera: MediaStream | null; screen: MediaStream | null }>({ camera: null, screen: null });
-/** Why the camera or the screen did not come on, '' for nothing to say. */
 export const voiceVideoErrorAtom = atom('');
 
-/** The browser can share a screen. Not a phone's, mostly. */
 export const SCREEN_SUPPORTED = typeof navigator !== 'undefined' && !!navigator.mediaDevices && 'getDisplayMedia' in navigator.mediaDevices;
 
 const CAMERA: MediaTrackConstraints = { width: { ideal: 640, max: 640 }, height: { ideal: 360, max: 360 }, frameRate: { ideal: 24, max: 24 } };
@@ -47,50 +26,38 @@ const ENCODING: Record<VideoKind, RTCRtpEncodingParameters> = {
   camera: { maxBitrate: 600_000, maxFramerate: 24 },
   screen: { maxBitrate: 1_500_000, maxFramerate: 15 }
 };
-/** How long an offer waits for its answer before the call is taken as broken. */
 const ANSWER_MS = 10_000;
 
 interface Wire {
   pc: RTCPeerConnection;
   send: (frame: object) => void;
-  /** Says the call is broken: the voice server never answered. */
   fail: (error: string) => void;
 }
 
 let wire: Wire | null = null;
-/** This page's sending lines, once made. */
 const sending: Record<VideoKind, RTCRtpTransceiver | null> = { camera: null, screen: null };
-/** The lines the others' pictures come on. */
 let seeing: RTCRtpTransceiver[] = [];
-/** One offer after the other. */
 let chain: Promise<void> = Promise.resolve();
-/** The offer out now, waiting for its answer. */
 let waiting: ((sdp: string) => void) | null = null;
-/** A stream per line, made once, so a tile keeps its element while the line changes hands. */
 const streams = new Map<string, MediaStream>();
-/** What is being turned on now: a second click waits for it. */
 const opening: Record<VideoKind, boolean> = { camera: false, screen: false };
 
-/** VP8 alone on a video line: the voice server has nothing else, and the offer stays small. */
 function vp8Only(t: RTCRtpTransceiver): void {
   const codecs = (RTCRtpReceiver.getCapabilities?.('video')?.codecs ?? []).filter((c) => /^video\/vp8$/i.test(c.mimeType));
   if (codecs.length && 'setCodecPreferences' in t) {
     try {
       t.setCodecPreferences(codecs);
     } catch {
-      // the browser's own order, then: the answer has VP8 alone either way
     }
   }
 }
 
-/** The call's answer is in: video can be offered on its peer. */
 export function startVideo(pc: RTCPeerConnection, send: (frame: object) => void, fail: (error: string) => void): void {
   wire = { pc, send, fail };
   chain = Promise.resolve();
   waiting = null;
 }
 
-/** The call ended: everything of this tab's put down. */
 export function stopVideo(): void {
   wire = null;
   waiting = null;
@@ -109,7 +76,6 @@ export function stopVideo(): void {
 
 const local = (kind: VideoKind) => store.get(voiceLocalVideoAtom)[kind];
 
-/** The answer to this module's offer, when one is out: true when it was. */
 export function takeVideoAnswer(sdp: string): boolean {
   if (!waiting) return false;
   const done = waiting;
@@ -118,7 +84,6 @@ export function takeVideoAnswer(sdp: string): boolean {
   return true;
 }
 
-/** This page's sending video mids, as the voice server wants them named. */
 function labels(): Record<string, VideoKind> {
   const out: Record<string, VideoKind> = {};
   for (const kind of ['camera', 'screen'] as const) {
@@ -128,7 +93,6 @@ function labels(): Record<string, VideoKind> {
   return out;
 }
 
-/** Offers again, after any offer still out. */
 function offer(): Promise<void> {
   const w = wire;
   chain = chain.then(async () => {
@@ -139,7 +103,6 @@ function offer(): Promise<void> {
         waiting = done;
         setTimeout(() => fail(new Error('no answer')), ANSWER_MS);
       });
-      // trimmed like the join's: a new line's own candidates are never used (voice-offer.ts)
       w.send({ sdp: trimOffer(w.pc.localDescription?.sdp ?? ''), video: labels() });
       const sdp = await answered;
       if (wire !== w) return;
@@ -151,7 +114,6 @@ function offer(): Promise<void> {
   return chain;
 }
 
-/** A seats frame: more lines when it lists more pictures than there are, and the pictures by their lines. */
 export function videoSeats(seats: readonly VoiceSeat[]): void {
   const w = wire;
   if (!w) return;
@@ -183,12 +145,10 @@ export function videoSeats(seats: readonly VoiceSeat[]): void {
   if (!same) store.set(voicePicturesAtom, pictures);
 }
 
-/** Tells the others' tiles this page's own mute and deafen. */
 export function sayVoiceState(mute: boolean, deaf: boolean): void {
   wire?.send({ state: { mute, deaf } });
 }
 
-/** The words for a camera or a screen that did not open. */
 function refusal(err: unknown, kind: VideoKind): string {
   const name = (err as { name?: string } | null)?.name;
   if (name === 'NotAllowedError') return kind === 'camera' ? 'camera not allowed: allow it in the browser' : 'screen share was cancelled';
@@ -201,7 +161,6 @@ async function open(kind: VideoKind): Promise<MediaStream> {
   return navigator.mediaDevices.getDisplayMedia({ video: SCREEN, audio: false });
 }
 
-/** The camera or the screen on or off. On: opened, then sent on its line and offered. */
 export async function setVoiceVideo(kind: VideoKind, on: boolean): Promise<void> {
   const w = wire;
   if (!w || opening[kind]) return;
@@ -236,7 +195,6 @@ export async function setVoiceVideo(kind: VideoKind, on: boolean): Promise<void>
     return;
   }
   if (kind === 'screen') track.contentHint = 'detail';
-  // the browser's own `stop sharing`, or a camera unplugged
   track.addEventListener('ended', () => {
     if (local(kind) === stream) void setVoiceVideo(kind, false);
   });
@@ -253,7 +211,6 @@ export async function setVoiceVideo(kind: VideoKind, on: boolean): Promise<void>
   await offer();
 }
 
-/** A new camera picked while it is on: the new one onto the same line, nothing offered. */
 export async function switchVoiceCamera(): Promise<void> {
   const w = wire;
   const t = sending.camera;
@@ -265,7 +222,7 @@ export async function switchVoiceCamera(): Promise<void> {
     stream = await open('camera');
   } catch {
     opening.camera = false;
-    return; // the old camera stays
+    return;
   }
   opening.camera = false;
   const [track] = stream.getVideoTracks();

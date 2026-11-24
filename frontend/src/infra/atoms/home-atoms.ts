@@ -1,15 +1,3 @@
-/**
- * The home list (docs/status.md). One `GET /api/streams` when the page arrives: the home
- * service's snapshot, in its order (first on, first shown). Then the facts over the events
- * socket, under `watch *`: `live` puts a card at the end, `ended` takes one out, `viewers`
- * moves a count. Nothing polls. The two pulls behind the push: the socket opening (or coming
- * back) while the page is up takes the snapshot again, since the facts of a gap are gone, and
- * an ask that failed is asked again, later each time, the watch page's shape. Frames that land
- * while a snapshot is in flight are held and applied on top of it, so a stream that started
- * in that window is neither lost nor doubled. Same shape as the other atom modules: atoms for
- * what renders, module handles, action functions.
- */
-
 import { atom } from 'jotai';
 
 import { api, type Explore, type LiveStream, messageOf, type Person } from '@/infra/api';
@@ -18,31 +6,22 @@ import type { ServerFrame } from '@/infra/frames';
 import { onPrefetch, prefetch, takePrefetched } from '@/infra/prefetch';
 import { store } from '@/infra/store';
 
-/** The streams, in the order the page shows them. `null` before the first answer. */
 export const homeStreamsAtom = atom<LiveStream[] | null>(null);
-/** Why there is no list: what the api said, or that it did not answer. '' while it has. */
 export const homeErrorAtom = atom('');
-/** The page's clock, once a second while it is open: "live for 52 min" moves without a poll. */
 export const homeNowAtom = atom(Date.now());
 
 const RETRY_FIRST_MS = 3000;
 const RETRY_MAX_MS = 60_000;
-/** The `watch` that is every name. */
 const EVERYONE = '*';
 
-/** Home pages mounted. One, but a strict-mode mount is two. */
 let open = 0;
-/** Which `load` is the current one: an answer to an older one, or to a page since left, is dropped. */
 let attempt = 0;
 let failures = 0;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let clock: ReturnType<typeof setInterval> | null = null;
-/** The frames that came while the snapshot was in flight, to apply on top of it. `null` when none is. */
 let inflight: ServerFrame[] | null = null;
-/** The socket opened while a snapshot was in flight: that snapshot may predate the subscription, so one more follows it. */
 let againWhenDone = false;
 
-/** The home page mounted: the feed on, the clock on, the snapshot asked. */
 export function enterHome(): void {
   open++;
   if (open > 1) return;
@@ -51,7 +30,6 @@ export function enterHome(): void {
   void load();
 }
 
-/** The home page left: the feed off, the clock off. The list is kept, so coming back shows it at once while it is asked again. */
 export function leaveHome(): void {
   open--;
   if (open > 0) return;
@@ -66,16 +44,11 @@ export function leaveHome(): void {
   retryTimer = null;
 }
 
-/** The snapshot's key in the press's cache (prefetch.ts). */
 const SNAPSHOT = 'home:streams';
 
-/** Home's other two lists (HomePage.tsx `People`, `Groups`): their `queryFn`, the press's answer the first time, if there was a press. */
 export const homePeople = () => takePrefetched<Person[]>('home:people')?.answer ?? api.people();
 export const homeGroups = () => takePrefetched<Explore>('home:explore')?.answer ?? api.explore();
 
-// a press on a way home: the snapshot, under `watch *` from the press on, the facts since held
-// for `load` to apply on top of it, as it does with the ones that land while its own ask is out.
-// and the people and the groups under it, which nothing pushes
 onPrefetch('home', () => {
   if (open > 0) return;
   prefetch(SNAPSHOT, EVERYONE, 'hold', () => api.streams());
@@ -118,7 +91,6 @@ async function load(): Promise<void> {
   }
 }
 
-/** One fact onto the list. A `live` for a name already there is that stream again (a restart): its card is refreshed where it stands. */
 function apply(frame: ServerFrame): void {
   const list = store.get(homeStreamsAtom);
   if (!list) return;
@@ -134,7 +106,6 @@ function apply(frame: ServerFrame): void {
       badge: frame.badge ?? null
     };
     const at = list.findIndex((s) => s.name === frame.name);
-    // first on, first shown: a new stream goes to the end
     store.set(homeStreamsAtom, at < 0 ? [...list, card] : list.map((s, i) => (i === at ? card : s)));
   } else if (frame.type === 'ended') {
     if (list.some((s) => s.name === frame.name)) store.set(homeStreamsAtom, list.filter((s) => s.name !== frame.name));
@@ -148,10 +119,6 @@ function apply(frame: ServerFrame): void {
   }
 }
 
-// the feed, while a home page is up: the three facts onto the list, held while a snapshot is in
-// flight. the socket opening under the page, first time or back after a gap, is a snapshot
-// again: facts before it opened never reached this browser (and one in flight as it opened
-// may have been served before the subscription, so it is followed by another)
 onEvents((event) => {
   if (open === 0) return;
   if (event.type === 'live' || event.type === 'ended' || event.type === 'viewers') {

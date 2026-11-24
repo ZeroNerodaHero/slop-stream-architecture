@@ -1,13 +1,3 @@
-/**
- * The events socket, from a tab's side (docs/status.md, docs/transition.md). One `/events`
- * socket per browser, held in the events worker (events.worker.ts) and reached over a
- * MessagePort; where there is no SharedWorker (chrome on android, samsung internet, the
- * android webview) a plain socket for this tab, same frames, same atoms. Either way this
- * module is the one place the pages touch it: `startEvents()` once per page load, the verbs
- * (`watchPresence`, `unwatchPresence`, `reconnectEvents`), and `onEvents` for a module that
- * wants the frames (watch-atoms for `live`). The frames themselves land in presence-atoms.
- */
-
 import { atom } from 'jotai';
 
 import { meAtom } from '@/infra/atoms/auth-atoms';
@@ -15,10 +5,6 @@ import { nickAtom } from '@/infra/atoms/chat-atoms';
 import { bindInspectorToWorker, keep, record, replaceEntries, unbindInspector } from '@/infra/atoms/inspector-atoms';
 import { identifiedAs, presenceChanged, presenceLost } from '@/infra/atoms/presence-atoms';
 import { inspectorEnabledAtom } from '@/infra/atoms/settings-atoms';
-// the worker as vite builds it: one hashed classic worker under /assets (the default `iife` format,
-// the widest support), named so every tab of the origin shares the same one. the lint strips the
-// query and finds no default export in the worker file; vite's own typing says there is one
-// oxlint-disable-next-line import/default
 import EventsWorker from '@/infra/events.worker?sharedworker';
 import { type ClientFrame, type FrameEntry, type FromWorker, type LinkPhase, parseServerFrame, type ServerFrame, TAB_PING_MS, type ToWorker } from '@/infra/frames';
 import { relayUrl } from '@/infra/relay';
@@ -28,15 +14,11 @@ import { store } from '@/infra/store';
 const SOURCE = '/events';
 const RECONNECT_MS = 3000;
 const BACKOFF_MAX_MS = 60_000;
-/** The worker has this long to answer the attach before this tab opens a socket of its own. */
 const WORKER_WAIT_MS = 2000;
 
-/** The socket as this tab knows it: `off` before `startEvents`, `open` when frames can flow. */
 export const eventsPhaseAtom = atom<LinkPhase>('off');
-/** Which link this tab ended up on. For the tests, and for a human wondering. */
 export const eventsTransportAtom = atom<'worker' | 'tab' | 'none'>('none');
 
-/** A frame, or the link changing phase, for modules that react to either (watch-atoms). */
 export type EventsListener = (event: ServerFrame | { type: 'link'; phase: LinkPhase }) => void;
 const listeners = new Set<EventsListener>();
 
@@ -49,33 +31,22 @@ interface Link {
   hello(): void;
   watch(name: string): void;
   unwatch(name: string): void;
-  /** The inspector setting flipped: the worker records (and hands over its ring) or stops. */
   inspector(on: boolean): void;
   close(): void;
 }
 
 let link: Link | null = null;
-/**
- * Names this tab watches, so a new link (a fallback, a re-hello) asks for them again. A page's
- * subject (`watchPresence`: the stream on the watch page, home's `*`, a room's topic) is in the
- * set once however often the page asks. A list's names (`holdPresence`: a room's roster) are
- * counted, one hold per list, so the roster letting go of a name does not take it from the
- * corner player, nor the other way round.
- */
 const watching = new Set<string>();
 const held = new Map<string, number>();
 
-/** Whether anything in this tab wants `name` on the socket. */
 function wanted(name: string): boolean {
   return watching.has(name) || held.has(name);
 }
 
-/** Every name this tab wants, for a link that has to ask again. */
 function allWanted(): Set<string> {
   return new Set([...watching, ...held.keys()]);
 }
 
-/** The nick for the hello: a login needs none (the cookie goes with the handshake); a guest's name box. */
 function nickForHello(): string | null {
   if (store.get(meAtom)) return null;
   const nick = store.get(nickAtom).trim();
@@ -98,8 +69,6 @@ function dispatch(frame: ServerFrame) {
       presenceChanged(frame.name, frame.presence);
       break;
     case 'error':
-      // the server refused who we said we were (somebody's name): the worker re-hellos nameless;
-      // the profile tab already says why the name is not ours
       break;
     default:
       break;
@@ -107,14 +76,10 @@ function dispatch(frame: ServerFrame) {
   for (const l of listeners) l(frame);
 }
 
-// ---- the worker link -----------------------------------------------------------------------
-
-/** One port into the events worker. The worker does the rest; this relays and keeps the port alive. */
 class WorkerLink implements Link {
   private readonly port: MessagePort;
   private readonly timer: ReturnType<typeof setInterval>;
   private readonly onHide = () => this.post({ kind: 'bye' });
-  /** Resolved by the first message from the worker: it is alive. */
   readonly ready: Promise<void>;
 
   constructor(worker: SharedWorker) {
@@ -147,10 +112,8 @@ class WorkerLink implements Link {
     this.port.start();
     const inspector = store.get(inspectorEnabledAtom);
     this.post({ kind: 'attach', nick: nickForHello(), inspector });
-    // the ring so far, when this tab keeps the messages: a tab opened late sees what came before it
     if (inspector) this.post({ kind: 'snapshot' });
     for (const name of allWanted()) this.post({ kind: 'watch', name });
-    // a port has no close event a worker can rely on: the tab says bye, and pings meanwhile
     this.timer = setInterval(() => this.post({ kind: 'ping' }), TAB_PING_MS);
     window.addEventListener('pagehide', this.onHide);
     bindInspectorToWorker(
@@ -190,9 +153,6 @@ class WorkerLink implements Link {
   }
 }
 
-// ---- the fallback: a socket for this tab -------------------------------------------------------
-
-/** A browser with no SharedWorker. The worker's logic in miniature, for one tab. */
 class TabLink implements Link {
   private ws: WebSocket | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -240,7 +200,6 @@ class TabLink implements Link {
       if (this.ws !== socket) return;
       this.ws = null;
       setPhase('closed');
-      // rule 2 of docs/transition.md: a dropped socket is back in 3s; one that never opened backs off
       let wait = RECONNECT_MS;
       if (!this.wasOpen) {
         this.failures++;
@@ -272,7 +231,6 @@ class TabLink implements Link {
   }
 
   inspector(on: boolean) {
-    // the ring is this tab's and `record` reads the setting itself; off empties it
     if (!on) replaceEntries([]);
   }
 
@@ -288,15 +246,8 @@ class TabLink implements Link {
   }
 }
 
-// ---- the verbs -------------------------------------------------------------------------------
-
 let started = false;
 
-/**
- * Once per page load (main.tsx). The worker where the browser has one and it answers within
- * WORKER_WAIT_MS; a socket of this tab's own otherwise. Idempotent: the Shell may remount after
- * a crash, the socket must not.
- */
 export function startEvents(): void {
   if (started) return;
   started = true;
@@ -332,12 +283,10 @@ function useTabLink(why: string) {
   store.set(eventsTransportAtom, 'tab');
 }
 
-/** Who this browser is changed (a log in, a log out, a new nick): hello again as the new one. */
 export function reconnectEvents(): void {
   link?.hello();
 }
 
-/** From now on, `name`'s word as it changes, and `live` / `ended` as they happen. */
 export function watchPresence(name: string): void {
   if (watching.has(name)) return;
   const before = wanted(name);
@@ -350,7 +299,6 @@ export function unwatchPresence(name: string): void {
   if (!wanted(name)) link?.unwatch(name);
 }
 
-/** One of a list's names (a room's roster), on the socket while any list holds it. Every hold is let go with `releasePresence`. */
 export function holdPresence(name: string): void {
   const before = wanted(name);
   held.set(name, (held.get(name) ?? 0) + 1);
@@ -365,16 +313,10 @@ export function releasePresence(name: string): void {
   if (!wanted(name)) link?.unwatch(name);
 }
 
-/**
- * Whether `name` is on the socket for this tab right now (a page watches it, a list holds it).
- * Then the word the atoms have for it is now's. A name that is not keeps whatever word it had
- * when it was last let go, which may be an old one: the profile popup asks before it trusts it.
- */
 export function wantsPresence(name: string): boolean {
   return wanted(name);
 }
 
-// the inspector setting is this browser's and the worker is the browser's: it follows at once
 store.sub(inspectorEnabledAtom, () => link?.inspector(store.get(inspectorEnabledAtom)));
 
 export function stopEvents(): void {

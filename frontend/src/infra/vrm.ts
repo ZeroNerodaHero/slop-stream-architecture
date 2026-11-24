@@ -1,42 +1,22 @@
-/**
- * A `.vrm` or a `.glb` before it is drawn (docs/vtuber.md). A vrm is a glb: a 12 byte header, a
- * json chunk, a binary chunk. This reads the header and the json chunk, never a mesh: does
- * everything it needs sit inside the file, is it a vrm, what does it call itself, who made it
- * and who may wear it; and for a glb that is no vrm, what its bones are called, which is all
- * that says where its head is. Pure: no dom, no three, so the page asks it before a file goes
- * anywhere (`model-file.ts`).
- *
- * The one thing it refuses that a loader would take: a buffer or a picture named by `uri`.
- * Whoever draws such a file fetches from wherever it points, and a model from a random download
- * should not get to call home from the streamer's browser.
- */
-
 import type { BoneNode } from '@/infra/model-bones';
 
 export interface GlbInfo {
-  /** `0` (vrm 0.x) or `1` (vrm 1.0). `null`: a glb with no vrm in it, a model by the names of its bones alone. */
   vrm: '0' | '1' | null;
-  /** The model's own name. '' when it has none. */
   name: string;
   author: string;
-  /** The licence it names, in a few words. '' when it does not say. */
   licence: string;
-  /** Who its meta says may wear it, in words. '' when it does not say. */
   wearer: string;
-  /** Its own thumbnail, when there is one inside the file: the picture's bytes as they are. */
   thumbnail: Blob | null;
-  /** What is in it by name, and which of those are bones: where a glb that is no vrm is looked over for a head. */
   nodes: BoneNode[];
 }
 
 const MAX_JSON_BYTES = 16 * 1024 * 1024;
 const MAX_WORDS = 80;
-const GLB_MAGIC = 0x46546c67; // 'glTF'
+const GLB_MAGIC = 0x46546c67;
 const CHUNK_JSON = 0x4e4f534a;
 const CHUNK_BIN = 0x004e4942;
 const UNREADABLE = 'that file does not read as a model';
 
-/** What a model may say it cannot be drawn without: the vrm set, and the plain gltf ones three reads on its own. */
 const KNOWN_EXTENSIONS: readonly string[] = [
   'VRM',
   'VRMC_vrm',
@@ -64,7 +44,6 @@ const KNOWN_EXTENSIONS: readonly string[] = [
   'EXT_texture_avif',
   'EXT_mesh_gpu_instancing'
 ];
-/** Each of these is a wasm decoder the page does not carry. */
 const PACKED: Record<string, string> = {
   KHR_draco_mesh_compression: 'draco',
   EXT_meshopt_compression: 'meshopt',
@@ -80,11 +59,9 @@ const indexAt = (v: unknown, key: string): number | null => {
   return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : null;
 };
 
-/** A string kept to one line and `MAX_WORDS` characters. */
 function words(v: unknown): string {
   return typeof v === 'string' ? v.split(/\s+/).filter(Boolean).join(' ').slice(0, MAX_WORDS) : '';
 }
-/** The same, without the address in brackets some tools put after a name: `CC-BY-4.0 (http://creativecommons.org/...)`. */
 const beforeAddress = (v: unknown) => words(v).replace(/\s*\(https?:\/\/[^)]*\)?$/, '');
 
 const WEARERS: Record<string, string> = {
@@ -100,12 +77,10 @@ function pictureType(bytes: Uint8Array, said: unknown): string {
   return typeof said === 'string' && said.startsWith('image/') ? said : '';
 }
 
-/** By its first bytes: the file is a glb, which a vrm is too. */
 export function isGlb(file: ArrayBuffer): boolean {
   return file.byteLength >= 20 && new DataView(file).getUint32(0, true) === GLB_MAGIC;
 }
 
-/** The file's nodes by name, each with its parent, and whether a skin moves by it. */
 function nodesOf(doc: Json): BoneNode[] {
   const joints = new Set(listAt(doc, 'skins').flatMap((skin) => listAt(skin, 'joints')));
   const list = listAt(doc, 'nodes');
@@ -116,10 +91,6 @@ function nodesOf(doc: Json): BoneNode[] {
   return nodes;
 }
 
-/**
- * What a glb says about itself. Throws an `Error` whose message is the reason, in words for
- * the person who picked it, when it is not a file this page will draw.
- */
 export function readGlb(file: ArrayBuffer): GlbInfo {
   const view = new DataView(file);
   if (!isGlb(file)) throw new Error(UNREADABLE);
@@ -136,7 +107,6 @@ export function readGlb(file: ArrayBuffer): GlbInfo {
   }
   if (!isObject(doc)) throw new Error(UNREADABLE);
 
-  // everything inside the file: a `uri` is a fetch from wherever it points, made by whoever draws it
   for (const list of ['buffers', 'images']) {
     if (listAt(doc, list).some((item) => isObject(item) && 'uri' in item)) throw new Error('that model points outside its own file. it is not drawn');
   }
@@ -166,7 +136,6 @@ export function readGlb(file: ArrayBuffer): GlbInfo {
     };
     image = indexAt(one, 'thumbnailImage');
   } else if (zero) {
-    // 0.x names a licence by a word (`CC0`, `Redistribution_Prohibited`); `Other` points at a url
     const named = words(zero.licenseName).replace(/_/g, ' ');
     info = {
       vrm: '0',
@@ -175,11 +144,9 @@ export function readGlb(file: ArrayBuffer): GlbInfo {
       licence: named.toLowerCase() === 'other' ? words(zero.otherLicenseUrl) : named,
       wearer: WEARERS[words(zero.allowedUserName).toLowerCase()] ?? ''
     };
-    // its thumbnail is a texture, whose `source` is the picture
     const texture = indexAt(zero, 'texture');
     image = texture === null ? null : indexAt(listAt(doc, 'textures')[texture], 'source');
   } else {
-    // a plain glb says little of itself: a line of copyright, and what a site it came down from wrote beside that
     const asset = objectAt(doc, 'asset');
     const extras = objectAt(asset, 'extras');
     info = {
@@ -194,7 +161,6 @@ export function readGlb(file: ArrayBuffer): GlbInfo {
   return { ...info, thumbnail: image === null ? null : thumbnailOf(file, doc, jsonEnd, image), nodes: nodesOf(doc) };
 }
 
-/** The bytes of picture `image`: its buffer view, inside the binary chunk. `null` when they are not all in the file. */
 function thumbnailOf(file: ArrayBuffer, doc: Json, jsonEnd: number, image: number): Blob | null {
   if (jsonEnd + 8 > file.byteLength) return null;
   const view = new DataView(file);
@@ -210,6 +176,5 @@ function thumbnailOf(file: ArrayBuffer, doc: Json, jsonEnd: number, image: numbe
   if (start + length > binStart + binLength) return null;
   const bytes = new Uint8Array(file, start, length);
   const type = pictureType(bytes, isObject(picture) ? picture.mimeType : null);
-  // a copy: the file's buffer is handed to the worker, and a view of it would go with it
   return type ? new Blob([bytes.slice()], { type }) : null;
 }
