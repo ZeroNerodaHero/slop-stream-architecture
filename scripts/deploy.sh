@@ -694,12 +694,19 @@ redeploy_service() {
   fi
 }
 
-image_moved() {
+image_current() {
   local running wanted
   running="$("${DOCKER[@]}" inspect -f '{{.Image}}' "$1" 2>/dev/null || true)"
-  [ -n "$running" ] || return 1
   wanted="$("${DOCKER[@]}" image inspect -f '{{.Id}}' "$(image_name "$1")" 2>/dev/null || true)"
-  [ -n "$wanted" ] && [ "$running" != "$wanted" ]
+  [ -n "$running" ] && [ "$running" = "$wanted" ]
+}
+
+dummy_password_stale() {
+  local env running wanted
+  env="$("${DOCKER[@]}" inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" 2>/dev/null)" || return 0
+  running="$(printf '%s\n' "$env" | sed -n 's/^DUMMY_PASSWORD=//p' | tail -n 1)"
+  wanted="${DUMMY_PASSWORD-$(env_file_value DUMMY_PASSWORD)}"
+  [ "$running" != "$wanted" ]
 }
 
 redeploy_dummy() {
@@ -707,13 +714,18 @@ redeploy_dummy() {
   local -a also=() moved=()
   local svc
   for svc in video api; do
-    if [ "${IMAGES_MODE:-0}" = 1 ] && image_moved "$svc"; then moved+=("$svc"); else also+=("$svc"); fi
+    dummy_password_stale "$svc" || continue
+    if [ "${IMAGES_MODE:-0}" = 1 ] && ! image_current "$svc"; then moved+=("$svc"); else also+=("$svc"); fi
   done
-  say "swapping the dummy container$([ ${#also[@]} -eq 0 ] || echo " (${also[*]} too, recreated only if DUMMY_PASSWORD changed; video ends every live stream then)")"
+  if [ ${#also[@]} -eq 0 ]; then
+    say "swapping the dummy container"
+  else
+    say "swapping the dummy container (${also[*]} too: their DUMMY_PASSWORD differs from $ENV_FILE$([[ " ${also[*]} " != *" video "* ]] || echo "; recreating video ends every live stream"))"
+  fi
   "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} dummy ${also[@]+"${also[@]}"}
   if [ ${#moved[@]} -gt 0 ]; then
-    warn "the images moved since ${moved[*]} started, so they were left alone.
-  a changed DUMMY_PASSWORD reaches them with:  ./scripts/deploy.sh ${moved[*]}   (video ends every live stream)"
+    warn "${moved[*]} run with a different DUMMY_PASSWORD than $ENV_FILE, but they do not run tag ${TAG:-latest} yet, so they were left alone.
+  the new DUMMY_PASSWORD reaches them with:  ./scripts/deploy.sh ${moved[*]}   (video ends every live stream)"
   fi
   note "dummy streams: $(env_file_value DUMMY_STREAMS)   (DUMMY_STREAMS in $ENV_FILE)"
 }

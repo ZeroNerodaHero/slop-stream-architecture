@@ -41,6 +41,13 @@ images, swaps only their containers. frontend = the pages; caddy keeps
 running, so live streams survive. api = a few seconds of 502, streams
 survive, and the s3 container is created first when it is missing (never
 recreated). video = every live stream ends (the script says so first).
+dummy = only the dummy container. video and api read DUMMY_PASSWORD too, so each is
+recreated alongside only when the DUMMY_PASSWORD its running container got (`docker
+inspect`, `dummy_password_stale`) differs from the shell's or .env's; the two are compared
+in bash and never printed. With `--images`, one whose running image is not the deploy's
+TAG yet (`image_current`; an image not pulled counts as not current) is left alone with a
+warning naming `./scripts/deploy.sh video api`, so a dummy deploy never moves video to a
+new version and ends every stream by surprise.
 Afterwards the swapped containers are checked: running, healthy where the
 image has a check, or the script exits non-zero (no rollback).
 

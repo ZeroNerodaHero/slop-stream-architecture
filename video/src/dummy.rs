@@ -30,6 +30,7 @@ const COLORS: [&str; 8] = [
 const HEARTBEAT: Duration = Duration::from_secs(15);
 const FPS: u32 = 15;
 const RETRY: Duration = Duration::from_secs(5);
+const GIF_FRAMES: u32 = 20 * FPS;
 
 const GIFS_PER_STREAM: usize = 3;
 const CORNERS: [(bool, bool); 4] = [(false, false), (true, true), (true, false), (false, true)];
@@ -439,7 +440,11 @@ fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, cfg: &Co
     let mut last = "[0:v]".to_owned();
     for (j, sprite) in sprites.iter().enumerate() {
         match sprite {
-            Sprite::Gif(_) => graph.push_str(&format!("[{}:v]scale=-2:{}[s{j}];", j + 1, HEIGHTS[(i + j) % HEIGHTS.len()])),
+            Sprite::Gif(_) => graph.push_str(&format!(
+                "[{}:v]scale=-2:{},format=yuva420p,loop=loop=-1:size={GIF_FRAMES},setpts=N/{FPS}/TB[s{j}];",
+                j + 1,
+                HEIGHTS[(i + j) % HEIGHTS.len()]
+            )),
             Sprite::Box(color) => graph.push_str(&format!("color=c={color}:s=98x54:r={FPS}[s{j}];")),
         }
         let (from_right, from_bottom) = CORNERS[(i + j) % CORNERS.len()];
@@ -458,7 +463,7 @@ fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, cfg: &Co
     cmd.args(["-n", "19", "ffmpeg"]).args(["-hide_banner", "-loglevel", "warning", "-nostdin"]).args(["-re", "-f", "lavfi", "-i", &base]);
     for sprite in &sprites {
         if let Sprite::Gif(path) = sprite {
-            cmd.args(["-stream_loop", "-1", "-i"]).arg(path);
+            cmd.arg("-i").arg(path);
         }
     }
     cmd.args(["-filter_threads", "1", "-filter_complex_threads", "1", "-threads", "1"])
@@ -466,7 +471,7 @@ fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, cfg: &Co
         .args(["-map", "[vout]", "-c:v", "libvpx", "-b:v", "180k", "-deadline", "realtime", "-cpu-used", "16"])
         .args(["-g", &FPS.to_string(), "-keyint_min", &FPS.to_string(), "-pix_fmt", "yuv420p"])
         .args(["-f", "rtp", "-rtpflags", "skip_rtcp", &format!("rtp://127.0.0.1:{video_port}?pkt_size=1200")])
-        .args(["-map", "0:1", "-c:a", "libopus", "-b:a", "48k", "-ar", "48000", "-ac", "2"])
+        .args(["-map", "0:1", "-c:a", "libopus", "-compression_level", "0", "-b:a", "48k", "-ar", "48000", "-ac", "2"])
         .args(["-f", "rtp", "-rtpflags", "skip_rtcp", &format!("rtp://127.0.0.1:{audio_port}?pkt_size=1200")])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

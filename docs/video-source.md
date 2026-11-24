@@ -61,11 +61,24 @@ per stream. Small (426×240, 180 kbps, `-cpu-used 16`) and `FPS` (15) on purpose
 real streams. ffmpeg runs under `nice -n 19` (nice execs it, so `kill` still reaches ffmpeg),
 and the container has `cpu_shares: 128`.
 
-The gifs are inputs of their own, looped forever, and `overlay` moves them: its `x`/`y` are
-evaluated per frame with `t` the time. (`drawbox`, which the box used to be, evaluates once,
-and its `t` is the thickness: it never moved.) The image shrank the gifs to the size and rate
-they are shown at, see Dockerfile.dummy; the originals cost more to decode than the stream
-costs to encode.
+The gifs are inputs of their own, read once (no `-stream_loop`), and `overlay` moves them:
+its `x`/`y` are evaluated per frame with `t` the time. (`drawbox`, which the box used to be,
+evaluates once, and its `t` is the thickness: it never moved.) Each gif goes through
+`scale=-2:<HEIGHTS>,format=yuva420p,loop=loop=-1:size=GIF_FRAMES,setpts=N/FPS/TB`: decode,
+scale and the pixel format conversion happen once per frame of the gif, and `loop` replays
+the converted frames from memory forever, `setpts` giving them a steady clock again.
+`GIF_FRAMES` is 20 s of `FPS` (300 frames). `loop` keeps only the frames the gif has (the bundled
+ones are at most 92, a few MB a gif; a full 300 at 106 tall is about 15 MB).
+Dockerfile.dummy cuts every gif to 20 s (`-t 20`) so none is longer than the cache. A longer
+one would replay only its first 20 s. The image also shrank the gifs to the size and rate
+they are shown at; the originals cost more to decode than the stream costs to encode.
+
+Audio is libopus at `-compression_level 0` (the default is 10): a sine tone needs none of the
+encoder's search. Measured with prod's static ffmpeg 7.1 and these exact args, 450 frames
+(30 s of video) to `-f null`, one core: 0.98 s of cpu before, 0.70 s with the cached gifs,
+0.45 s with the opus level too. On prod (2 vCPU e2-medium) four dummies took 52% of a core
+before. What is left is mostly vp8 itself and the overlays; the tiled backdrop and the clock
+cost nothing measurable.
 
 ## `video/src/limits.rs`
 
@@ -506,6 +519,6 @@ the peer connects, `dead` told when it fails or closes
 ### `video/Dockerfile.dummy`
 
 - the fake streams: the same `video` binary run as `video dummy`, plus ffmpeg, a font and the gifs. build context is the repo root (compose: context: ., dockerfile: video/Dockerfile.dummy). the build stage is byte-for-byte the one in video/Dockerfile, so docker reuses its layers. (at `FROM rust:1-bookworm AS build`)
-- the gifs that bounce around the fake streams (random-media/gifs), shrunk once here to the size and rate they are shown at: 128 tall (shown at 80 to 106), 15 fps, a palette of their own. the originals are up to 640px at 50 fps, and decoding three of those per stream cost more than encoding the stream. only the small ones go into the image (3 MB, not 24). (at `FROM debian:bookworm-slim AS gifs`)
+- the gifs that bounce around the fake streams (random-media/gifs), shrunk once here to the size and rate they are shown at: 128 tall (shown at 80 to 106), 15 fps, at most 20 s (`-t 20`, the most `GIF_FRAMES` in dummy.rs caches), a palette of their own. the originals are up to 640px at 50 fps, and decoding three of those per stream cost more than encoding the stream. only the small ones go into the image (3 MB, not 24). (at `FROM debian:bookworm-slim AS gifs`)
 - a font for the name on the picture. ffmpeg itself is a static build, no libs needed. (at `RUN apt-get update \`)
 - the commit this was built from, same as the video image. compose passes it; unused here, but docker warns about a build arg nobody declares. (at `ARG BUILD=dev`)
