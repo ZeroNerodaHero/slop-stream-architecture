@@ -895,7 +895,9 @@ monitor_compose() {
 monitor_line() {
   local started
   started="$("${DOCKER[@]}" inspect -f '{{.State.Status}} since {{.State.StartedAt}}' "$MONITOR_CONTAINER" 2>/dev/null || true)"
-  if [ -n "$started" ]; then echo "$MONITOR_CONTAINER $started, compose project $MONITOR_PROJECT. left alone by app deploys; ./scripts/deploy.sh stats deploys it"
+  if [ -n "$started" ]; then echo "$MONITOR_CONTAINER $started, compose project $MONITOR_PROJECT. left alone by app deploys; ./scripts/deploy.sh stats deploys it"; return 0; fi
+  started="$("${DOCKER[@]}" inspect -f '{{.State.Status}} since {{.State.StartedAt}}' stats 2>/dev/null || true)"
+  if [ -n "$started" ]; then echo "the old stats container, $started, left alone. ./scripts/deploy.sh stats moves it into its own compose project ($MONITOR_PROJECT), once, keeping its history"
   else echo "not running here. ./scripts/deploy.sh stats starts it (its own compose project, $MONITOR_PROJECT)"; fi
 }
 
