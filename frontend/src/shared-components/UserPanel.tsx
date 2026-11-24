@@ -1,4 +1,4 @@
-import { RiBarChart2Line, RiLoginBoxLine, RiLogoutBoxRLine, RiMenuLine, RiNotification3Line, RiSettings3Line, RiTerminalBoxLine, RiUserAddLine } from '@remixicon/react';
+import { RiLoginBoxLine, RiLogoutBoxRLine, RiMenuLine, RiNotification3Line, RiSettings3Line, RiUserAddLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import { lazy, Suspense, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
@@ -8,7 +8,6 @@ import { nickAtom, setNick } from '@/infra/atoms/chat-atoms';
 import { closeAllDms, loadDms } from '@/infra/atoms/dm-atoms';
 import { forgetFollowing, friendsOpenAtom, loadFollowing } from '@/infra/atoms/follow-atoms';
 import { forgetMyServers, loadGroups, loadMyServers, myGroupsAtom } from '@/infra/atoms/groups-atoms';
-import { openInspector, openProfiler } from '@/infra/atoms/inspector-atoms';
 import { forgetNotifications, loadNotifications, toggleNotifications, unreadNotificationsAtom } from '@/infra/atoms/notification-atoms';
 import { myPresenceAtom, type Presence, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { identityChanged, loadMyProfile, myAvatarVersionAtom, myNameAtom } from '@/infra/atoms/profile-atoms';
@@ -59,26 +58,7 @@ function Dot() {
 }
 
 const Friends = lazy(() => import('@/shared-components/Friends').then((m) => ({ default: m.Friends })));
-
-function InspectorOpener() {
-  return (
-    <Tooltip content="messages: the frames this browser gets">
-      <button id="inspector-open" type="button" aria-label="messages" onClick={openInspector} className={ACTION}>
-        <RiTerminalBoxLine aria-hidden size={ICON} />
-      </button>
-    </Tooltip>
-  );
-}
-
-function ProfilerOpener() {
-  return (
-    <Tooltip content="profiler: timings and stream quality">
-      <button id="profiler-open" type="button" aria-label="profiler" onClick={openProfiler} className={ACTION}>
-        <RiBarChart2Line aria-hidden size={ICON} />
-      </button>
-    </Tooltip>
-  );
-}
+const DebugOpeners = lazy(() => import('@/shared-components/debug/DebugOpeners').then((m) => ({ default: m.DebugOpeners })));
 
 function SettingsOpener() {
   return (
@@ -265,8 +245,11 @@ export function UserPanel() {
 
   const actions = (
     <span className={cn('flex shrink-0 items-center gap-1', mirrored && 'flex-row-reverse', !wide && 'invisible')}>
-      {inspectorOn && <InspectorOpener />}
-      {inspectorOn && <ProfilerOpener />}
+      {inspectorOn && (
+        <Suspense fallback={null}>
+          <DebugOpeners className={ACTION} size={ICON} />
+        </Suspense>
+      )}
       {mobile && <NotificationsOpener />}
       <SettingsOpener />
       {me && <LogoutButton />}
