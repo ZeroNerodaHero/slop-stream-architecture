@@ -213,13 +213,14 @@ async function stateWhen(api, ready, what, ms = 40000) {
       const up = (await page.textContent('[data-name="local"] .pill')).trim();
       const down = (await page.textContent('[data-name="dead"] .pill')).trim();
       const cards = await page.locator('.target[data-name]').count();
-      const meta = (await page.textContent('#meta')).trim();
+      const meta = ((await page.getAttribute('#status', 'title')) || '').trim();
       expect(up === 'up' && down === 'down', `pills: local "${up}", dead "${down}"`);
       expect(cards === 2, `${cards} cards`);
-      expect(/build/.test(meta), `header: "${meta}"`);
+      expect(/build/.test(meta), `status dot: "${meta}"`);
       const events = (await page.textContent('[data-name="dead"] ul')).trim();
       expect(/dead DOWN/.test(events), `dead's events on the page: "${events}"`);
-      await page.click('#tabs button:has-text("local")');
+      await page.click('#box > button');
+      await page.click('#box li[data-box="local"]');
       expect(/box=local/.test(page.url()), `the url does not name the box: ${page.url()}`);
       if (!OPS_TOKEN) return `"${meta}"`;
       await page.waitForSelector('.tile canvas', { timeout: 15000 });

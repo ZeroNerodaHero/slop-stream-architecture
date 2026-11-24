@@ -13,132 +13,147 @@
     --up: rgb(63 185 80); --down: rgb(248 81 73); --warn: rgb(242 204 96); --violet: rgb(188 140 255);
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--t1); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  main { max-width: 1280px; margin: 0 auto; padding: 24px 16px 64px; }
-  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; margin-bottom: 16px; }
-  header h1 { font-size: 20px; margin: 0; font-weight: 600; border-left: 4px solid var(--blue); padding-left: 10px; line-height: 1.1; }
+  html, body { height: 100%; }
+  body { margin: 0; overflow: hidden; background: var(--bg); color: var(--t1); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #app { display: flex; flex-direction: column; height: 100vh; }
   a { color: var(--blue); text-decoration: none; } a:hover { text-decoration: underline; }
   .muted { color: var(--t2); } .dim { color: var(--t3); } .note { color: var(--warn); }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   .yes { color: var(--up); } .no { color: var(--down); }
-  .bar-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
-  .tabs { display: flex; flex-wrap: wrap; gap: 8px; flex: 1 1 auto; }
+  [hidden] { display: none !important; }
   button { font: inherit; color: inherit; cursor: pointer; }
-  button:focus-visible, input:focus-visible { outline: 1px solid var(--blue); outline-offset: 1px; }
-  .tab { display: flex; align-items: center; gap: 8px; background: var(--bg2); border: 1px solid var(--stroke); padding: 6px 12px; text-align: left; }
-  .tab:hover { border-color: var(--t3); }
-  .tab[aria-pressed="true"] { border-color: var(--blue); background: var(--bg3); }
-  .tab small { color: var(--t2); font-size: 12px; }
-  .views { display: flex; gap: 0; border-bottom: 1px solid var(--stroke); margin-bottom: 20px; overflow-x: auto; }
-  .views button { background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 16px; color: var(--t2); font-weight: 500; white-space: nowrap; }
+  button:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 1px solid var(--blue); outline-offset: 1px; }
+  header.top { flex: none; display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border-bottom: 1px solid var(--stroke); background: var(--bg2); }
+  .brand { font-weight: 600; border-left: 3px solid var(--blue); padding-left: 8px; line-height: 1.1; }
+  .views { display: flex; align-self: stretch; }
+  .views button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 0 12px; color: var(--t2); font-weight: 500; white-space: nowrap; }
   .views button:hover { color: var(--t1); }
   .views button[aria-selected="true"] { color: var(--t1); border-bottom-color: var(--blue); }
-  .views button small { color: var(--t3); font-weight: 400; margin-left: 6px; font-size: 12px; }
-  .dot { width: 9px; height: 9px; flex: none; background: var(--t3); }
-  .dot.up { background: var(--up); } .dot.down { background: var(--down); }
-  [hidden] { display: none !important; }
-  .seg { display: flex; flex-wrap: wrap; border: 1px solid var(--stroke); }
-  .seg button { background: var(--bg2); border: 0; border-left: 1px solid var(--stroke); padding: 6px 12px; color: var(--t2); }
+  .views button small { color: var(--t3); font-weight: 400; margin-left: 5px; font-size: 11px; }
+  .spacer { flex: 1 1 auto; }
+  .dot { display: inline-block; width: 8px; height: 8px; flex: none; background: var(--t3); }
+  .dot.up, .dot.ok { background: var(--up); } .dot.down, .dot.bad { background: var(--down); }
+  #status { width: 10px; height: 10px; }
+  .seg { display: flex; border: 1px solid var(--stroke); }
+  .seg button { background: var(--bg2); border: 0; border-left: 1px solid var(--stroke); padding: 3px 10px; color: var(--t2); font-size: 13px; }
   .seg button:first-child { border-left: 0; }
   .seg button[aria-pressed="true"] { background: var(--bg3); color: var(--t1); }
   .seg button:hover { color: var(--t1); }
-  .target { background: var(--bg2); border: 1px solid var(--stroke); padding: 16px; margin-bottom: 24px; }
-  .top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
-  .name { font-size: 18px; font-weight: 600; }
+  #q { width: 190px; font: inherit; font-size: 13px; color: var(--t1); background: var(--bg); border: 1px solid var(--stroke); padding: 3px 8px; }
+  #q:focus { outline: none; border-color: var(--blue); }
+  .picker { position: relative; }
+  .picker > button, .picker > span { display: flex; align-items: center; gap: 6px; background: var(--bg); border: 1px solid var(--stroke); padding: 3px 8px; font-size: 13px; white-space: nowrap; }
+  .picker > button:hover, .picker > button[aria-expanded="true"] { border-color: var(--t3); }
+  .picker ul { position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; min-width: 100%; background: var(--bg2); border: 1px solid var(--t3); padding: 2px 0; }
+  .picker li { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border: 0; white-space: nowrap; cursor: pointer; font-size: 13px; }
+  .picker li small { color: var(--t3); font-size: 11px; }
+  .picker li[aria-selected="true"] { color: var(--blue); }
+  .picker li.active { background: var(--bg3); }
+  #main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; overflow: hidden; }
+  .grow { flex: 1 1 auto; min-height: 0; }
+  .pane { overflow: auto; min-height: 0; }
+  .row { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; flex: none; }
+  .side { background: var(--bg2); border: 1px solid var(--stroke); padding: 10px 12px; overflow: auto; min-height: 0; min-width: 0; }
+  .target { background: var(--bg2); border: 1px solid var(--stroke); padding: 12px; }
+  .top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+  .name { font-size: 16px; font-weight: 600; }
   button.name { background: none; border: 0; padding: 0; }
   button.name:hover { color: var(--blue); }
-  .pill { padding: 2px 10px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: rgb(15 17 21); }
-  .pill.up { background: var(--up); } .pill.down { background: var(--down); } .pill.unknown { background: var(--t3); }
-  .bar { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; margin: 12px 0 4px; }
+  .pill { padding: 1px 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: rgb(15 17 21); }
+  .pill.up, .pill.ok { background: var(--up); } .pill.down, .pill.bad { background: var(--down); } .pill.unknown, .pill.done, .pill.outside { background: var(--t3); } .pill.warn { background: var(--warn); }
+  .bar { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; margin: 10px 0 4px; }
   .bar i { display: block; height: 8px; background: var(--bg3); }
   .bar i.ok { background: var(--up); } .bar i.some { background: var(--warn); } .bar i.bad { background: var(--down); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px 12px; margin-top: 12px; }
-  .grid div { background: var(--bg3); border: 1px solid var(--stroke); padding: 6px 10px; }
-  .grid b { display: block; font-size: 11px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px 8px; margin-top: 10px; }
+  .grid div { background: var(--bg3); border: 1px solid var(--stroke); padding: 4px 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .grid b { display: block; font-size: 10px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; }
   .down .grid { opacity: .55; }
-  h2 { font-size: 13px; font-weight: 600; color: var(--t2); text-transform: uppercase; letter-spacing: .06em; margin: 0 0 10px; }
-  h3 { font-size: 12px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; margin: 18px 0 6px; }
-  .sec-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; margin-bottom: 10px; }
-  .sec-head h2 { margin: 0; }
+  h2 { font-size: 13px; font-weight: 600; color: var(--t2); margin: 0; }
+  h3 { font-size: 11px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; margin: 14px 0 4px; }
   ul { list-style: none; margin: 0; padding: 0; }
   li { padding: 3px 0; border-top: 1px solid var(--stroke); } li:first-child { border-top: 0; }
   .when { color: var(--t3); margin-right: 10px; }
   .ev-down, .ev-agent-down { color: var(--down); } .ev-up, .ev-agent-up { color: var(--up); } .ev-restart { color: var(--warn); } .ev-build { color: var(--blue); }
   table { width: 100%; border-collapse: collapse; }
-  td, th { padding: 4px 8px 4px 0; border-top: 1px solid var(--stroke); vertical-align: top; text-align: left; }
+  td, th { padding: 3px 8px 3px 0; border-top: 1px solid var(--stroke); vertical-align: top; text-align: left; }
   th { font-size: 11px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; border-top: 0; white-space: nowrap; vertical-align: bottom; }
-  tr.err, tr.ctr { cursor: pointer; } tr.err:hover td, tr.ctr:hover td { background: var(--bg3); }
+  .pane thead th { position: sticky; top: 0; z-index: 1; background: var(--bg); border-bottom: 1px solid var(--stroke); padding-top: 4px; }
+  tr.err { cursor: pointer; } tr.err:hover td { background: var(--bg3); }
   pre { white-space: pre-wrap; word-break: break-word; margin: 4px 0 8px; padding: 8px; background: var(--bg); border: 1px solid var(--stroke); color: var(--t2); }
   .empty { color: var(--t3); padding: 6px 0; }
-  .summary { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 10px; color: var(--t2); }
+  .summary { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 8px; color: var(--t2); }
   .summary b { color: var(--t1); font-weight: 600; }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
-  .tile { background: var(--bg3); border: 1px solid var(--stroke); padding: 8px 10px 6px; min-width: 0; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+  .tile { position: relative; background: var(--bg3); border: 1px solid var(--stroke); padding: 6px 10px; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
   .tile.wide { grid-column: 1 / -1; }
   .tile .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
   .tile .label { font-size: 11px; font-weight: 500; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
-  .tile .value { font-size: 13px; color: var(--t1); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile .value { font-size: 12px; color: var(--t1); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tile canvas { display: block; width: 100%; height: 72px; margin-top: 4px; }
-  .tile.wide canvas { height: 120px; }
+  .tile.wide canvas { height: 160px; }
+  .fit .tile canvas { flex: 1 1 0; height: 0; min-height: 24px; }
   .legend { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; color: var(--t3); }
   .legend i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; vertical-align: 0; }
+  .ctip { position: absolute; z-index: 3; pointer-events: none; background: var(--bg); border: 1px solid var(--t3); padding: 6px 8px; font-size: 12px; line-height: 1.5; white-space: nowrap; }
+  .ctip b { display: block; font-weight: 500; color: var(--t2); margin-bottom: 2px; }
+  .ctip i { display: inline-block; width: 8px; height: 8px; margin-right: 6px; }
+  .ctip span { display: flex; align-items: center; justify-content: space-between; gap: 14px; font-variant-numeric: tabular-nums; }
+  .host { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 10px; }
+  .host .charts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: auto repeat(2, minmax(0, 1fr)); gap: 8px; min-height: 0; }
+  .host .charts > .meta { grid-column: 1 / -1; }
+  .overview { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 10px; align-content: start; }
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 30%); gap: 10px; }
+  .cstack { display: grid; grid-template-rows: auto repeat(5, minmax(0, 1fr)); gap: 8px; min-height: 0; }
   .ctrs td { white-space: nowrap; }
+  .ctrs tr.ctr { cursor: pointer; } .ctrs tr.ctr:hover td, .ctrs tr.ctr.on td { background: var(--bg3); }
   .ctrs td.cell canvas { display: block; width: 72px; height: 18px; margin-top: 2px; }
-  .ctrs .detail td { background: var(--bg); padding: 10px; cursor: default; }
-  .scroll { overflow-x: auto; }
-  .ep-controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 10px; }
-  .ep-controls input { font: inherit; color: var(--t1); background: var(--bg); border: 1px solid var(--stroke); padding: 5px 10px; flex: 1 1 260px; min-width: 0; }
-  .ep-controls input:focus { outline: none; border-color: var(--blue); }
-  .seg.small button { padding: 4px 10px; font-size: 13px; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin-bottom: 16px; }
-  .card { display: block; width: 100%; background: var(--bg3); border: 1px solid var(--stroke); padding: 10px 12px; text-align: left; min-width: 0; }
-  button.card:hover { border-color: var(--t3); }
-  .card[aria-pressed="true"] { border-color: var(--blue); }
-  .card.lead { grid-column: span 2; }
-  .card .c-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-  .card .c-kind { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
-  .card .c-big { font-size: 22px; font-weight: 600; line-height: 1.25; margin-top: 4px; font-variant-numeric: tabular-nums; }
-  .card .c-big small { font-size: 12px; font-weight: 400; color: var(--t3); margin-left: 6px; }
-  .card .c-row { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; color: var(--t2); font-variant-numeric: tabular-nums; }
+  .strip { flex: none; display: flex; flex-wrap: wrap; gap: 6px 12px; }
+  .grp { display: flex; flex-direction: column; gap: 4px; flex: none; }
+  .grp-head { align-self: flex-start; background: none; border: 0; padding: 0; font-size: 11px; color: var(--t3); text-transform: uppercase; letter-spacing: .05em; }
+  .grp-head:hover, .grp-head[aria-pressed="true"] { color: var(--t1); }
+  .grp-cards { display: flex; gap: 6px; }
+  .card { flex: none; width: clamp(138px, 10.6vw, 190px); background: var(--bg3); border: 1px solid var(--stroke); padding: 6px 9px; text-align: left; min-width: 0; cursor: pointer; }
+  .card:hover { border-color: var(--t3); }
+  .card[aria-pressed="true"] { border-color: var(--blue); background: rgb(30 38 56); }
+  .card.allc { flex: none; min-width: 0; width: auto; display: flex; align-items: center; justify-content: center; padding: 6px 10px; align-self: stretch; margin-top: 20px; color: var(--t2); }
+  .card.allc[aria-pressed="true"] { color: var(--t1); }
+  .card .c-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .card .c-head .dim { flex: none; font-size: 11px; white-space: nowrap; }
+  .card .c-kind { min-width: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .c-big { font-size: 16px; font-weight: 600; line-height: 1.3; margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .card .c-big small { font-size: 11px; font-weight: 400; color: var(--t3); margin-left: 5px; }
+  .card .c-row { display: flex; flex-wrap: wrap; gap: 0 8px; font-size: 11px; color: var(--t2); font-variant-numeric: tabular-nums; }
   .card .c-row b { font-weight: 500; }
-  .card .lat { width: 100%; margin: 8px 0 6px; }
+  .card .c-row button { background: none; border: 1px solid transparent; padding: 0 3px; margin-left: -4px; font-size: 11px; color: inherit; }
+  .card .c-row button:hover { border-color: var(--t3); }
+  .card .c-row button[aria-pressed="true"] { border-color: var(--blue); color: var(--t1); }
+  .tbar { flex: none; font-size: 12px; color: var(--t3); display: flex; gap: 10px; align-items: baseline; }
   .eps td { white-space: nowrap; font-variant-numeric: tabular-nums; }
   .eps th.num, .eps td.num { text-align: right; padding-right: 10px; }
-  .eps td.ep-name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
-  .eps .ktag { display: inline-block; min-width: 64px; margin-right: 6px; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 12px; }
+  .eps td.ep-name { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+  .eps .ktag { display: inline-block; min-width: 76px; margin-right: 6px; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 12px; }
   .eps th button { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; white-space: nowrap; width: 100%; text-align: inherit; cursor: pointer; }
   .eps th button:hover, .eps th[aria-sort] button { color: var(--t1); }
   .eps tr.ep { cursor: pointer; } .eps tr.ep:hover td, .eps tr.ep.open td { background: var(--bg3); }
   .eps .detail td { background: var(--bg); padding: 10px; cursor: default; white-space: normal; }
   .eps .detail pre { margin-top: 0; }
-  .eps td.latc { padding-top: 7px; }
   .g-ok { color: var(--up); } .g-warn { color: var(--warn); } .g-bad { color: var(--down); }
-  .lat { position: relative; width: 170px; height: 12px; background: var(--bg); border: 1px solid var(--stroke); }
-  .lat i { position: absolute; display: block; }
-  .lat .z { top: 0; bottom: 0; opacity: .12; }
-  .lat .z.ok { background: var(--up); } .lat .z.warn { background: var(--warn); } .lat .z.bad { background: var(--down); }
-  .lat .w { top: 5px; height: 1px; background: var(--t3); }
-  .lat .b1 { top: 2px; height: 6px; }
-  .lat .b2 { top: 3px; height: 4px; opacity: .6; }
-  .lat .m50 { top: 0; bottom: 0; width: 2px; background: var(--t1); }
-  .lat .mx { top: 1px; height: 8px; width: 1px; background: var(--t2); }
-  .bg-ok { background: var(--up); } .bg-warn { background: var(--warn); } .bg-bad { background: var(--down); } .bg-none { background: var(--blue); }
-  .axis { position: relative; width: 170px; height: 14px; margin-top: 2px; }
-  .axis span { position: absolute; top: 0; transform: translateX(-50%); font-size: 10px; color: var(--t3); text-transform: none; letter-spacing: 0; }
-  .share { position: relative; display: inline-block; width: 44px; height: 6px; background: var(--bg); border: 1px solid var(--stroke); margin-right: 6px; vertical-align: 1px; }
+  .share { position: relative; display: inline-block; width: 40px; height: 6px; background: var(--bg); border: 1px solid var(--stroke); margin-right: 6px; vertical-align: 1px; }
   .share i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--blue); }
-  .keyline { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--t3); margin-top: 8px; align-items: center; }
-  .keyline .lat { width: 120px; }
-  .k-http { color: var(--blue); } .k-ws { color: var(--violet); } .k-db { color: var(--up); } .k-redis { color: var(--down); } .k-s3, .k-video, .k-voice { color: var(--warn); }
+  .k-http { color: var(--blue); } .k-ws, .k-session-ws { color: var(--violet); } .k-db { color: var(--up); } .k-redis { color: var(--down); }
+  .k-s3, .k-video, .k-voice, .k-api { color: var(--warn); } .k-session-webrtc, .k-setup { color: rgb(110 200 220); }
   .st-running { color: var(--up); } .st-exited, .st-dead { color: var(--down); } .st-restarting, .st-paused, .st-created { color: var(--warn); }
-  .arch-wrap { position: relative; width: max-content; }
-  .arch { display: block; }
+  .archv { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 10px; }
+  .archl { display: flex; flex-direction: column; gap: 6px; min-height: 0; min-width: 0; }
+  .arch-wrap { position: relative; flex: 1 1 auto; min-height: 0; overflow: auto; border: 1px solid var(--stroke); }
+  .arch { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; }
   .arch text { font: 12px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; fill: var(--t1); }
   .arch .lane-box { fill: none; stroke: var(--stroke); }
   .arch .lane-label { fill: var(--t3); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
   .arch .node { cursor: pointer; }
   .arch .node rect.box { fill: var(--bg3); stroke-width: 1; }
   .arch .node:hover rect.box, .arch .node.pinned rect.box { fill: rgb(40 45 58); }
+  .arch .node.pinned rect.box { stroke-width: 2; }
   .arch .node text.sub { fill: var(--t2); font-size: 11px; }
   .arch .s-ok rect.box { stroke: var(--up); } .arch .s-ok rect.st { fill: var(--up); }
   .arch .s-warn rect.box { stroke: var(--warn); } .arch .s-warn rect.st { fill: var(--warn); }
@@ -146,8 +161,9 @@
   .arch .s-done rect.box { stroke: var(--t3); stroke-dasharray: 3 3; } .arch .s-done rect.st { fill: var(--t3); } .arch .s-done text { fill: var(--t2); }
   .arch .s-outside rect.box { stroke: var(--blue); fill: var(--bg2); } .arch .s-outside rect.st { fill: var(--blue); }
   .arch .edge path { fill: none; stroke: var(--t3); stroke-width: 1.25; }
+  .arch .edge.d-in path { stroke: var(--blue); }
+  .arch .edge.d-out path { stroke: var(--violet); }
   .arch .edge.v-depends_on path { stroke-dasharray: 2 4; }
-  .arch .edge.v-published path { stroke: var(--blue); }
   .arch .edge.cut path { stroke: var(--down); stroke-dasharray: 6 3; }
   .arch .edge.off path { opacity: .35; }
   .arch .elabel { display: none; }
@@ -156,62 +172,79 @@
   .arch.labels .elabel, .arch .edge.hot .elabel { display: inline; }
   .arch.focus .edge:not(.hot) { opacity: .1; }
   .arch.focus .node:not(.hot) { opacity: .35; }
-  .arch .edge.hot path { stroke-width: 2; }
-  .arch .edge.hot.v-map path { stroke: var(--t1); }
+  .arch .edge.hot path { stroke-width: 2.25; }
+  .arch .edge.hot.d-inter path { stroke: var(--t1); }
   .arch .edge.hot .elabel text { fill: var(--t1); }
-  .tip { position: absolute; z-index: 2; pointer-events: none; background: var(--bg); border: 1px solid var(--t3); padding: 8px 10px; font-size: 12px; line-height: 1.45; max-width: 340px; white-space: normal; }
-  .tip b { display: block; font-size: 13px; margin-bottom: 2px; }
-  .tip .row { color: var(--t2); }
-  .nets { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 8px 0; font-size: 12px; }
-  .nets button { background: var(--bg3); border: 1px solid var(--stroke); padding: 2px 8px; color: var(--t2); }
+  .tip { position: absolute; z-index: 2; pointer-events: none; background: var(--bg); border: 1px solid var(--t3); padding: 4px 8px; font-size: 12px; white-space: nowrap; }
+  .tip b { font-weight: 600; margin-right: 6px; }
+  .nets { display: flex; flex-wrap: wrap; gap: 4px 6px; font-size: 12px; }
+  .nets button { background: var(--bg3); border: 1px solid var(--stroke); padding: 1px 7px; color: var(--t2); }
   .nets button:hover, .nets button[aria-pressed="true"] { color: var(--t1); border-color: var(--t3); }
-  .nets i { display: inline-block; width: 8px; height: 8px; margin-right: 6px; vertical-align: 0; }
-  details.edges { margin-top: 10px; }
-  details.edges summary { cursor: pointer; color: var(--t2); font-size: 13px; }
-  details.edges td { white-space: nowrap; font-size: 13px; }
+  .nets i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; vertical-align: 0; }
+  .keyline { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 11px; color: var(--t3); align-items: center; flex: none; }
+  .np-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+  .np-head .name { font-size: 17px; }
+  .desc { color: var(--t2); margin: 8px 0 0; font-size: 13px; }
+  .use { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 2px 8px; align-items: center; font-size: 12px; margin-top: 4px; }
+  .use .lbl { color: var(--t3); }
+  .use .track { position: relative; height: 10px; background: var(--bg); border: 1px solid var(--stroke); }
+  .use .track i { position: absolute; left: 0; top: 0; bottom: 0; }
+  .use .txt { grid-column: 2; color: var(--t2); font-variant-numeric: tabular-nums; }
+  .use canvas { grid-column: 2; display: block; width: 100%; height: 26px; }
+  .kv { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 3px 8px; font-size: 12px; }
+  .kv b { font-weight: 400; color: var(--t3); }
+  .kv span { overflow-wrap: anywhere; user-select: text; }
+  .links { display: flex; flex-direction: column; gap: 2px; }
+  .links button { display: flex; gap: 8px; align-items: baseline; text-align: left; background: none; border: 1px solid transparent; padding: 2px 6px; font-size: 12px; }
+  .links button:hover, .links button[aria-pressed="true"] { border-color: var(--t3); background: var(--bg3); }
+  .links button i { display: inline-block; width: 8px; height: 2px; flex: none; align-self: center; }
+  .links .what { color: var(--t3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <h1>stats</h1>
-    <span id="meta" class="muted"></span>
-    <span id="asof" class="note"></span>
-    <span id="drawn" class="note"></span>
-  </header>
-  <div class="bar-nav">
-    <nav id="tabs" class="tabs" aria-label="boxes"></nav>
+<div id="app">
+  <header class="top">
+    <span class="brand">stats</span>
+    <nav id="views" class="views" role="tablist" aria-label="what to show"></nav>
+    <span class="spacer"></span>
+    <div id="box" class="picker"></div>
     <div id="ranges" class="seg" role="group" aria-label="range"></div>
-  </div>
-  <div id="views" class="views" role="tablist" aria-label="what to show"></div>
-  <div id="main" role="tabpanel"></div>
-</main>
+    <input id="q" type="search" placeholder="search" spellcheck="false" autocomplete="off" aria-label="search this tab; every word must match; press / to focus">
+    <span id="status" class="dot" role="status" aria-label="refresh status"></span>
+  </header>
+  <main id="main" role="tabpanel"></main>
+</div>
 <script>
 (() => {
-  const $meta = document.getElementById('meta');
-  const $asof = document.getElementById('asof');
-  const $drawn = document.getElementById('drawn');
-  const $tabs = document.getElementById('tabs');
-  const $ranges = document.getElementById('ranges');
   const $views = document.getElementById('views');
+  const $box = document.getElementById('box');
+  const $ranges = document.getElementById('ranges');
+  const $q = document.getElementById('q');
+  const $status = document.getElementById('status');
   const $main = document.getElementById('main');
 
   const RANGES = { '1h': { secs: 3600, every: 15000 }, '24h': { secs: 86400, every: 60000 }, '7d': { secs: 604800, every: 300000 } };
   const ALL = '';
-  const COLORS = { blue: 'rgb(79 139 255)', green: 'rgb(63 185 80)', red: 'rgb(248 81 73)', yellow: 'rgb(242 204 96)', violet: 'rgb(188 140 255)', grid: 'rgb(42 47 58)', hover: 'rgb(110 118 132)', t2: 'rgb(154 163 178)', t3: 'rgb(110 118 132)' };
+  const COLORS = { blue: 'rgb(79 139 255)', green: 'rgb(63 185 80)', red: 'rgb(248 81 73)', yellow: 'rgb(242 204 96)', violet: 'rgb(188 140 255)', cyan: 'rgb(110 200 220)', white: 'rgb(242 243 245)', grid: 'rgb(42 47 58)', hover: 'rgb(110 118 132)', t2: 'rgb(154 163 178)', t3: 'rgb(110 118 132)' };
   const NET_COLORS = ['rgb(79 139 255)', 'rgb(63 185 80)', 'rgb(188 140 255)', 'rgb(242 204 96)', 'rgb(110 200 220)', 'rgb(240 140 90)', 'rgb(220 120 200)', 'rgb(160 200 90)'];
+  const DIR_COLORS = { in: COLORS.blue, out: COLORS.violet, inter: COLORS.t3 };
   const TABS = [
-    { id: 'host', label: 'host' },
-    { id: 'containers', label: 'containers' },
-    { id: 'endpoints', label: 'endpoints' },
-    { id: 'calls', label: 'calls' },
+    { id: 'host', label: 'Host' },
+    { id: 'containers', label: 'Containers' },
+    { id: 'endpoints', label: 'Endpoints' },
+    { id: 'calls', label: 'Calls' },
   ];
-  const KIND_LABEL = { http: 'http', db: 'postgres', redis: 'redis', s3: 's3', video: 'video', voice: 'voice', ws: 'websocket' };
-  const CALL_KINDS = ['db', 'redis', 's3', 'video', 'voice', 'ws'];
-  const LIMITS = { http: [100, 500], ws: [100, 500], db: [10, 100], redis: [2, 20], s3: [100, 1000], video: [100, 1000], voice: [100, 1000] };
+  const DIRS = [['in', 'client → backend'], ['out', 'backend → client'], ['inter', 'between services']];
+  const DIR_NAME = Object.fromEntries(DIRS);
+  const ENDPOINT_KINDS = ['http', 'ws', 'session', 'setup'];
+  const KIND_LABEL = { http: 'http', db: 'postgres', redis: 'redis', s3: 's3', video: 'video', voice: 'voice', api: 'api', ws: 'ws upgrade', setup: 'webrtc setup', session: 'stream', 'session-ws': 'websocket', 'session-webrtc': 'webrtc' };
+  const CARD_ORDER = ['http', 'ws', 'session-ws', 'session-webrtc', 'setup', 'db', 'redis', 's3', 'video', 'voice', 'api'];
+  const LIMITS = { http: [100, 500], ws: [100, 500], setup: [500, 2000], db: [10, 100], redis: [2, 20], s3: [100, 1000], video: [100, 1000], voice: [100, 1000], api: [100, 1000] };
   const DEFAULT_SORT = 'sum_ms';
   const LIMIT = 250;
   const ARCH_EVERY = 15000;
+  const SPARK_EVERY = 60000;
+  const CHICAGO = 'America/Chicago';
 
   const el = (tag, cls, text) => {
     const e = document.createElement(tag);
@@ -241,6 +274,7 @@
   const ago = (iso, now) => (iso ? `${human(secsSince(iso, now))} ago` : '—');
   const clock = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—');
   const stamp = (secs, range) => new Date(secs * 1000).toLocaleString(undefined, range === '1h' ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const chicago = (secs) => `${new Date(secs * 1000).toLocaleString('en-US', { timeZone: CHICAGO, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short' })}`;
   const has = (v) => v !== null && v !== undefined && !Number.isNaN(v);
   const pct = (v) => (has(v) ? `${v.toFixed(v >= 99.95 ? 2 : 1)}%` : '—');
   const pct1 = (v) => (has(v) ? `${v.toFixed(1)}%` : '—');
@@ -266,7 +300,6 @@
   const count = (v) => (!has(v) ? '—' : v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e4 ? `${Math.round(v / 1e3)}k` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v));
   const rate = (v) => (!has(v) ? '—' : v === 0 ? '0' : v < 0.01 ? '<0.01' : v < 10 ? v.toFixed(2) : String(Math.round(v)));
   const share = (v) => (!has(v) ? '—' : v >= 0.995 ? '100%' : v >= 0.1 ? `${Math.round(v * 100)}%` : v >= 0.001 ? `${(v * 100).toFixed(1)}%` : v > 0 ? '<0.1%' : '0%');
-  const decade = (d) => (d < -3 ? `${10 ** (d + 6)}ns`.replace('1000ns', '1µs') : d < 0 ? `${Math.round(10 ** (d + 3))}µs` : d < 3 ? `${10 ** d}ms` : `${10 ** (d - 3)}s`);
   const per = (secs) => ({ 60: 'minute', 900: '15 minutes', 3600: 'hour' })[secs] || `${secs}s`;
   const blocking = (r) => / BLOCK$/.test(r.name || '');
   const list = (v) => (Array.isArray(v) ? v : []);
@@ -274,6 +307,7 @@
   const str = (v) => (v === null || v === undefined ? '' : String(v));
   const numOr0 = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   const numOrNull = (v) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));
+  const defaultDir = (kind) => (ENDPOINT_KINDS.includes(kind) ? 'in' : 'inter');
   const normState = (d) => ({
     ...d,
     monitor: obj(d.monitor),
@@ -281,8 +315,10 @@
   });
   const TIMING_NUMS = ['mean', 'p50', 'p95', 'p99', 'max', 'rate'];
   const normTimingRow = (r) => {
-    const out = { ...r, kind: str(r.kind), method: str(r.method), name: str(r.name), src: str(r.src), key: str(r.key), target: r.target ?? null };
-    for (const k of ['n', 'e4', 'e5', 'err', 'sum_ms']) out[k] = numOr0(r[k]);
+    const kind = str(r.kind);
+    const dir = ['in', 'out', 'inter'].includes(r.dir) ? r.dir : defaultDir(kind);
+    const out = { ...r, kind, dir, method: str(r.method), name: str(r.name), src: str(r.src), key: str(r.key), target: r.target ?? null };
+    for (const k of ['n', 'e4', 'e5', 'err', 'sum_ms', 'msgs', 'bytes', 'open', 'open_peak', 'msgs_rate', 'bytes_rate']) out[k] = numOr0(r[k]);
     for (const k of TIMING_NUMS) out[k] = numOrNull(r[k]);
     return out;
   };
@@ -293,25 +329,29 @@
   });
   const normDetail = (d) => {
     const t = list(d.t);
-    const out = { ...d, t, hist: list(d.hist).filter((h) => Array.isArray(h) && h.length >= 3) };
-    for (const k of ['n', 'e4', 'e5', 'err', 'sum', 'p50', 'p95', 'p99', 'max']) {
+    const out = { ...d, t };
+    for (const k of ['n', 'e4', 'e5', 'err', 'sum', 'p50', 'p95', 'p99', 'max', 'msgs', 'bytes', 'open']) {
       const v = list(d[k]);
       out[k] = t.map((_, i) => numOrNull(v[i]));
     }
+    out.avg = t.map((_, i) => (out.n[i] > 0 && has(out.sum[i]) ? out.sum[i] / out.n[i] : null));
     return out;
   };
   const normArch = (d) => ({
     ...d,
-    nodes: list(d.nodes).filter((n) => n && typeof n === 'object' && n.id).map((n) => ({ ...n, name: str(n.name || n.id), networks: list(n.networks), ports: list(n.ports) })),
-    edges: list(d.edges).filter((e) => e && typeof e === 'object' && e.from && e.to),
+    host: obj(d.host),
+    nodes: list(d.nodes).filter((n) => n && typeof n === 'object' && n.id).map((n) => ({ ...n, name: str(n.name || n.id), description: str(n.description), networks: list(n.networks), ports: list(n.ports) })),
+    edges: list(d.edges).filter((e) => e && typeof e === 'object' && e.from && e.to).map((e) => ({ ...e, what: str(e.what), dir: ['in', 'out', 'inter'].includes(e.dir) ? e.dir : 'inter' })),
     networks: list(d.networks).filter((n) => n && n.name).map((n) => ({ ...n, members: list(n.members) })),
   });
   const normSeries = (d) => ({ ...d, t: list(d.t), host: obj(d.host), containers: obj(d.containers) });
+  const problems = new Map();
   const guard = (what, fn) => {
     try {
       return fn();
     } catch (e) {
       console.error(what, e);
+      problems.set(`draw ${what}`, `could not draw ${what}: ${e && e.message ? e.message : e}`);
       const sec = el('section', 'target');
       sec.append(el('h2', null, what), el('p', 'note', `could not draw this part: ${e && e.message ? e.message : e}. the rest of the page keeps refreshing`));
       return sec;
@@ -319,19 +359,23 @@
   };
   const limitsOf = (r) => (blocking(r) ? null : LIMITS[r.kind] || null);
   const grade = (v, lim) => (!has(v) || !lim ? '' : v < lim[0] ? 'ok' : v < lim[1] ? 'warn' : 'bad');
+  const cardKey = (r) => (r.kind === 'session' ? `session-${r.method || 'ws'}` : r.kind);
+  const cardId = (r) => `${r.dir}|${cardKey(r)}`;
+  const kindLabel = (k) => KIND_LABEL[k] || k;
 
-  const sel = { box: null, range: '1h', tab: 'host', cview: 'table', labels: false };
+  const sel = { box: null, range: '1h', tab: 'host', cview: 'table', labels: false, ctr: null, cq: '' };
   const views = {
-    endpoints: { name: 'endpoints', q: '', kind: '', target: '', sort: DEFAULT_SORT, dir: -1, open: null, detail: null, ui: null },
-    calls: { name: 'calls', q: '', kind: '', target: '', sort: DEFAULT_SORT, dir: -1, open: null, detail: null, ui: null },
+    endpoints: { name: 'endpoints', q: '', pick: new Set(), errs: '', sort: DEFAULT_SORT, dir: -1, open: null, detail: null, ui: null },
+    calls: { name: 'calls', q: '', pick: new Set(), errs: '', sort: DEFAULT_SORT, dir: -1, open: null, detail: null, ui: null },
   };
-  const expanded = new Set();
   const pinned = new Map();
+  const litEdge = new Map();
   const seriesCache = new Map();
+  const sparkCache = new Map();
   const archCache = new Map();
   const archBuilt = new Map();
   const tm = { data: null, error: null, at: 0, key: '' };
-  let state = null, lastOk = null, pageBuild = null;
+  let state = null, stateError = null, pageBuild = null;
   const charts = [];
   const tcharts = [];
 
@@ -346,15 +390,20 @@
     }
     sel.tab = tab;
     sel.cview = p.get('view') === 'arch' ? 'arch' : 'table';
+    if (tab === 'containers') sel.cq = p.get('q') || '';
     const v = views[tab];
     if (v) {
       v.q = p.get('q') || '';
-      v.kind = v.name === 'calls' && CALL_KINDS.includes(p.get('kind')) ? p.get('kind') : '';
+      const pick = (p.get('pick') || '').split(',').filter((x) => /^(in|out|inter)\|[\w-]+$/.test(x));
+      const kind = p.get('kind');
+      if (!pick.length && kind && kind !== 'http' && v.name === 'calls') pick.push(`inter|${kind}`);
+      v.pick = new Set(pick);
+      v.errs = ['e4', 'e5'].includes(p.get('err')) ? p.get('err') : '';
       const s = p.get('sort') || '';
       v.sort = s.replace(/^-/, '') || DEFAULT_SORT;
       v.dir = s && !s.startsWith('-') ? 1 : -1;
-      if (v.ui && v.ui.search.value !== v.q) v.ui.search.value = v.q;
     }
+    syncSearch();
   }
   function writeHash() {
     const p = new URLSearchParams();
@@ -362,18 +411,24 @@
     if (sel.tab !== 'host') p.set('tab', sel.tab);
     if (sel.range !== '1h') p.set('range', sel.range);
     if (sel.tab === 'containers' && sel.cview === 'arch') p.set('view', 'arch');
+    if (sel.tab === 'containers' && sel.cview === 'table' && sel.cq) p.set('q', sel.cq);
     const v = views[sel.tab];
     if (v) {
-      if (v.kind) p.set('kind', v.kind);
+      if (v.pick.size) p.set('pick', [...v.pick].join(','));
+      if (v.errs) p.set('err', v.errs);
       if (v.q) p.set('q', v.q);
       if (v.sort !== DEFAULT_SORT || v.dir !== -1) p.set('sort', `${v.dir < 0 ? '-' : ''}${v.sort}`);
     }
     history.replaceState(null, '', p.toString() ? `#${p}` : location.pathname);
   }
+  const allAllowed = () => !(sel.tab === 'containers' && sel.cview === 'arch');
   function boxShown() {
     if (!state || !state.targets.length) return ALL;
-    if (sel.box !== null && (sel.box === ALL || state.targets.some((t) => t.name === sel.box))) return sel.box;
-    return state.targets.length === 1 ? state.targets[0].name : ALL;
+    const known = (b) => state.targets.some((t) => t.name === b);
+    if (sel.box !== null && known(sel.box)) return sel.box;
+    if (state.targets.length === 1) return state.targets[0].name;
+    if (allAllowed()) return ALL;
+    return (state.targets.find((t) => t.status === 'up') || state.targets[0]).name;
   }
   function boxesShown() {
     const shown = boxShown();
@@ -382,9 +437,37 @@
   function choose(change) {
     Object.assign(sel, change);
     writeHash();
+    syncSearch();
     render();
     loadVisible(true);
   }
+  function searchable() {
+    return !!views[sel.tab] || (sel.tab === 'containers' && sel.cview === 'table');
+  }
+  function syncSearch() {
+    $q.hidden = !searchable();
+    const want = views[sel.tab] ? views[sel.tab].q : sel.tab === 'containers' ? sel.cq : '';
+    if ($q.value !== want) $q.value = want;
+  }
+  $q.addEventListener('input', () => {
+    const v = views[sel.tab];
+    if (v) { v.q = $q.value; writeHash(); timingRender(v); return; }
+    if (sel.tab === 'containers') { sel.cq = $q.value; writeHash(); render(); }
+  });
+  $q.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if ($q.value) { $q.value = ''; $q.dispatchEvent(new Event('input')); } else $q.blur();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if ($q.hidden) return;
+    e.preventDefault();
+    $q.focus();
+    $q.select();
+  });
 
   function draw(c) {
     const { canvas, t, lines, t0, t1, gap, max: fixed, hover } = c;
@@ -437,20 +520,31 @@
       g.stroke();
     }
     if (hover !== null && hover !== undefined && t[hover] !== undefined) {
+      const hx = Math.round(x(t[hover])) + 0.5;
       g.strokeStyle = COLORS.hover;
       g.beginPath();
-      g.moveTo(Math.round(x(t[hover])) + 0.5, 0); g.lineTo(Math.round(x(t[hover])) + 0.5, h);
+      g.moveTo(hx, 0); g.lineTo(hx, h);
       g.stroke();
+      if (c.dots) {
+        for (const l of lines) {
+          const v = (l.v || [])[hover];
+          if (!has(v) || (c.log && v <= 0)) continue;
+          g.fillStyle = l.color;
+          g.beginPath();
+          g.arc(hx, y(v), 3, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
     }
   }
 
-  function chart({ label, lines, max, now, value, read, thin, small, src, store, log }) {
+  function chart({ label, lines, max, now, value, read, thin, small, src, store, log, tip }) {
     const t = src ? src.t : [];
     const t1 = Math.floor(now / 1000), t0 = t1 - RANGES[sel.range].secs;
     const canvas = el('canvas');
     canvas.setAttribute('role', 'img');
     canvas.setAttribute('aria-label', label);
-    const c = { canvas, t, lines, t0, t1, gap: src ? src.bucket_secs : 15, max, hover: null, thin, log };
+    const c = { canvas, t, lines, t0, t1, gap: src ? src.bucket_secs : 15, max, hover: null, thin, log, dots: !!tip };
     (store || charts).push(c);
     if (small) return canvas;
     const tile = el('div', 'tile');
@@ -469,6 +563,8 @@
       }
       tile.append(legend);
     }
+    const box = tip ? el('div', 'ctip') : null;
+    if (box) { box.hidden = true; tile.append(box); }
     canvas.addEventListener('mousemove', (e) => {
       if (!t.length) return;
       const r = canvas.getBoundingClientRect();
@@ -477,9 +573,27 @@
       for (let i = 1; i < t.length; i++) if (Math.abs(t[i] - at) < Math.abs(t[best] - at)) best = i;
       c.hover = best;
       draw(c);
-      $value.textContent = `${stamp(t[best], sel.range)} · ${lines.map((l) => `${lines.length > 1 ? l.name + ' ' : ''}${read(l.v[best])}`).join(' · ')}`;
+      if (!box) {
+        $value.textContent = `${stamp(t[best], sel.range)} · ${lines.map((l) => `${lines.length > 1 ? l.name + ' ' : ''}${read(l.v[best])}`).join(' · ')}`;
+        return;
+      }
+      box.replaceChildren(el('b', null, chicago(t[best])));
+      for (const [name, color, text] of tip(best)) {
+        const s = el('span');
+        const left = el('span');
+        if (color) { const sw = el('i'); sw.style.background = color; left.append(sw); }
+        left.append(document.createTextNode(name));
+        s.append(left, el('span', 'mono', text));
+        box.append(s);
+      }
+      box.hidden = false;
+      const tr = tile.getBoundingClientRect();
+      const px = e.clientX - tr.left;
+      const left = px + 14 + box.offsetWidth > tr.width ? px - 14 - box.offsetWidth : px + 14;
+      box.style.left = `${Math.max(0, left)}px`;
+      box.style.top = `${Math.max(0, canvas.offsetTop + 4)}px`;
     });
-    canvas.addEventListener('mouseleave', () => { c.hover = null; draw(c); $value.textContent = value; });
+    canvas.addEventListener('mouseleave', () => { c.hover = null; draw(c); $value.textContent = value; if (box) box.hidden = true; });
     return tile;
   }
 
@@ -514,12 +628,11 @@
 
     const m = t.metrics || {};
     const host = m.host;
-    if (host) {
+    if (host && overview) {
       const sum = el('div', 'summary');
       const disk = (host.disk || [])[0];
       const part = (k, v) => { const s = el('span'); s.append(document.createTextNode(`${k} `), el('b', null, v)); sum.append(s); };
       part('cpu', pct1(host.cpu_pct));
-      part('steal', pct1(host.steal_pct));
       part('load', num(host.load1));
       part('mem', host.mem_total ? `${bytes(host.mem_used)} / ${bytes(host.mem_total)}` : '—');
       part('disk free', disk ? bytes(disk.avail) : '—');
@@ -545,7 +658,7 @@
     if (!t.events.length) card.append(el('div', 'empty', 'none yet'));
     else {
       const ul = el('ul');
-      for (const e of overview ? t.events.slice(0, 8) : t.events) {
+      for (const e of overview ? t.events.slice(0, 6) : t.events) {
         const li = el('li', `ev-${e.kind}`);
         li.append(el('span', 'when mono', clock(e.at)), el('span', null, e.text));
         ul.append(li);
@@ -558,7 +671,7 @@
     else if (!t.errors.length) card.append(el('div', 'empty', `none stored · checked ${ago(t.errors_at, now)}`));
     else {
       const table = el('table');
-      for (const r of overview ? t.errors.slice(0, 10) : t.errors) {
+      for (const r of overview ? t.errors.slice(0, 6) : t.errors) {
         const tr = el('tr', 'err');
         const where = r.page + (r.stream ? ` [${r.stream}${r.phase ? ' · ' + r.phase : ''}]` : '');
         tr.append(el('td', 'mono dim', clock(r.at)), el('td', 'mono', r.kind), el('td', 'mono', where), el('td', null, r.message));
@@ -582,118 +695,168 @@
     return c && c.data && c.data.range === sel.range ? c.data : null;
   }
 
-  function hostSection(t, now) {
-    const sec = el('section', 'target');
-    sec.append(el('h2', null, 'host'));
+  function hostTab(t, now) {
+    const wrap = el('div', 'host grow');
+    const charts2 = el('div', 'charts fit');
     const s = seriesFor(t.name);
     const latest = (s && s.latest) || null;
     const H = latest ? latest.host : (t.metrics && t.metrics.host) || null;
     const status = (s && s.status) || (t.metrics && t.metrics.status);
-    if (status) sec.append(el('p', 'note', status));
+    const side = el('aside', 'side');
+    side.dataset.scroll = `host-side-${t.name}`;
+    side.append(guard(`status · ${t.name}`, () => {
+      const card = statusCard(t, now, false);
+      card.className = t.status;
+      return card;
+    }));
+    wrap.append(charts2, side);
     if (!H) {
-      sec.append(el('p', 'empty', status ? 'no numbers from this box yet' : 'waiting for the first numbers from this box'));
-      return sec;
+      const m = el('div', 'meta');
+      m.append(el('p', status ? 'note' : 'empty', status ? `no numbers from this box yet: ${status}` : 'waiting for the first numbers from this box'));
+      charts2.append(m);
+      return wrap;
     }
-    const meta = [H.hostname && `host ${H.hostname}`, H.cpus && `${H.cpus} cpu${H.cpus > 1 ? 's' : ''}`, has(H.up_secs) && `up ${human(H.up_secs)}`, H.net && `net ${H.net.iface}`, latest && `sampled ${ago(latest.at, now)}`, s && s.agent && `agent ${s.agent.build}, every ${s.agent.every_secs}s`].filter(Boolean).join(' · ');
-    sec.append(el('div', 'dim', meta));
-    for (const p of (latest && latest.problems) || []) sec.append(el('div', 'note', p));
+    const meta = el('div', 'meta dim');
+    meta.textContent = [H.hostname && `host ${H.hostname}`, H.cpus && `${H.cpus} cpu${H.cpus > 1 ? 's' : ''}`, has(H.up_secs) && `up ${human(H.up_secs)}`, H.net && `net ${H.net.iface}`, latest && `sampled ${ago(latest.at, now)}`, s && s.agent && `agent ${s.agent.build}, every ${s.agent.every_secs}s`, status, ...((latest && latest.problems) || [])].filter(Boolean).join(' · ');
+    charts2.append(meta);
     const S = (s && s.host) || {};
     const disk = (H.disk || [])[0];
-    const tiles = el('div', 'tiles');
-    tiles.style.marginTop = '10px';
-    tiles.append(
+    charts2.append(
       chart({ label: 'cpu', now, src: s, max: 100, read: pct1, value: `${pct1(H.cpu_pct)} · steal ${pct1(H.steal_pct)} · iowait ${pct1(H.iowait_pct)}`,
         lines: [{ name: 'busy', v: S.cpu_pct, color: COLORS.blue }, { name: 'steal', v: S.steal_pct, color: COLORS.red }, { name: 'iowait', v: S.iowait_pct, color: COLORS.yellow }] }),
-      chart({ label: 'load', now, src: s, max: H.cpus || 1, read: num, value: `${num(H.load1)} / ${num(H.load5)} / ${num(H.load15)}${H.cpus ? ` · ${H.cpus} cpus` : ''}`,
+      chart({ label: 'load', now, src: s, max: H.cpus || 1, read: num, value: `${num(H.load1)} / ${num(H.load5)} / ${num(H.load15)}`,
         lines: [{ name: 'load1', v: S.load1, color: COLORS.blue }] }),
       chart({ label: 'memory', now, src: s, max: H.mem_total, read: bytes, value: H.mem_total ? `${bytes(H.mem_used)} of ${bytes(H.mem_total)} (${pct1((100 * H.mem_used) / H.mem_total)})` : '—',
         lines: [{ name: 'used', v: S.mem_used, color: COLORS.violet }] }),
       chart({ label: 'swap', now, src: s, max: H.swap_total || 0, read: bytes, value: H.swap_total ? `${bytes(H.swap_used)} of ${bytes(H.swap_total)}` : 'no swap',
         lines: [{ name: 'used', v: S.swap_used, color: COLORS.yellow }] }),
-      chart({ label: `disk ${disk ? disk.mount : ''}`, now, src: s, max: disk ? disk.total : 0, read: bytes, value: disk ? `${bytes(disk.avail)} free of ${bytes(disk.total)} (${pct1((100 * disk.used) / disk.total)} used)` : '—',
+      chart({ label: `disk ${disk ? disk.mount : ''}`, now, src: s, max: disk ? disk.total : 0, read: bytes, value: disk ? `${bytes(disk.avail)} free of ${bytes(disk.total)}` : '—',
         lines: [{ name: 'used', v: S.disk_used, color: COLORS.green }] }),
       chart({ label: `network ${H.net ? H.net.iface : ''}`, now, src: s, read: bps, value: H.net ? `↓ ${bps(H.net.rx_bps)} · ↑ ${bps(H.net.tx_bps)}` : '—',
         lines: [{ name: 'in', v: S.rx_bps, color: COLORS.green }, { name: 'out', v: S.tx_bps, color: COLORS.blue }] }),
-      chart({ label: 'pressure (time stalled)', now, src: s, max: 5, read: pct1, value: `cpu ${pct1(H.pressure && H.pressure.cpu)} · mem ${pct1(H.pressure && H.pressure.memory)} · io ${pct1(H.pressure && H.pressure.io)}`,
+      chart({ label: 'pressure', now, src: s, max: 5, read: pct1, value: `cpu ${pct1(H.pressure && H.pressure.cpu)} · mem ${pct1(H.pressure && H.pressure.memory)} · io ${pct1(H.pressure && H.pressure.io)}`,
         lines: [{ name: 'cpu', v: S.psi_cpu, color: COLORS.blue }, { name: 'memory', v: S.psi_memory, color: COLORS.violet }, { name: 'io', v: S.psi_io, color: COLORS.yellow }] })
     );
-    sec.append(tiles);
-    return sec;
+    return wrap;
   }
 
-  function containerSection(t, now, titled) {
-    const sec = el('section', 'target');
-    sec.append(el('h2', null, titled ? `containers · ${t.name}` : 'containers'));
-    const s = seriesFor(t.name);
-    const err = seriesCache.get(t.name) && seriesCache.get(t.name).error;
-    if (err) sec.append(el('p', 'note', err));
-    const list = (s && s.latest && s.latest.containers) || [];
-    if (!list.length) {
-      sec.append(el('p', 'empty', !s ? 'loading' : s.status || !s.latest ? `no numbers from this box yet${s.status ? `: ${s.status}` : ''}` : 'no containers reported (is the docker socket mounted?)'));
-      return sec;
+  function containersTab(shown, now) {
+    const bar = el('div', 'row');
+    const seg = el('div', 'seg');
+    seg.setAttribute('role', 'group');
+    seg.setAttribute('aria-label', 'containers view');
+    for (const [id, label] of [['table', 'table and graphs'], ['arch', 'architecture']]) {
+      const b = button(null, label, () => choose({ cview: id }));
+      b.setAttribute('aria-pressed', String(sel.cview === id));
+      seg.append(b);
     }
-    const C = s.containers || {};
-    const wrap = el('div', 'scroll');
+    bar.append(seg);
+    if (sel.cview === 'arch') {
+      const t = state.targets.find((x) => x.name === shown) || state.targets[0];
+      return [bar, guard(`architecture · ${t.name}`, () => archSection(t, now, bar))];
+    }
+    return [bar, guard('containers', () => containerTable(now))];
+  }
+
+  function containerTable(now) {
+    const boxes = boxesShown();
+    const multi = boxes.length > 1;
+    const words = sel.cq.toLowerCase().split(/\s+/).filter(Boolean);
+    const rows = [];
+    const notes = [];
+    for (const box of boxes) {
+      const s = seriesFor(box);
+      const c = seriesCache.get(box);
+      if (c && c.error) notes.push(`${box}: ${c.error}`);
+      if (s && s.status) notes.push(`${box}: ${s.status}`);
+      for (const ct of (s && s.latest && s.latest.containers) || []) {
+        if (words.every((w) => `${box} ${ct.name} ${ct.service || ''} ${ct.project || ''} ${ct.image || ''} ${ct.state}`.toLowerCase().includes(w))) rows.push({ box, c: ct, s });
+      }
+    }
+    const split = el('div', 'split grow');
+    const pane = el('div', 'pane');
+    pane.dataset.scroll = 'ctr-table';
+    const right = el('div', 'cstack fit');
+    split.append(pane, right);
+    const idOf = (r) => `${r.box}\u0000${r.c.name}`;
+    let picked = rows.find((r) => idOf(r) === sel.ctr);
+    if (!picked) {
+      picked = rows.filter((r) => r.c.state === 'running').sort((a, b) => (b.c.cpu_pct || 0) - (a.c.cpu_pct || 0))[0] || rows[0];
+    }
     const table = el('table', 'ctrs');
+    const thead = el('thead');
     const head = el('tr');
-    for (const h of ['container', 'state', 'up', 'restarts', 'cpu', 'memory', 'net ↓ / ↑', 'disk r / w', 'pids']) head.append(el('th', null, h));
-    table.append(head);
-    for (const c of list) {
-      const id = `${t.name}\u0000${c.name}`;
-      const cs = C[c.name] || {};
-      const tr = el('tr', 'ctr');
+    const heads = [...(multi ? ['box'] : []), 'container', 'state', 'up', 'cpu', 'memory', 'net ↓ / ↑', 'pids'];
+    for (const h of heads) head.append(el('th', null, h));
+    thead.append(head);
+    const tbody = el('tbody');
+    table.append(thead, tbody);
+    pane.append(table);
+    if (notes.length) {
+      const tr = el('tr');
+      const td = el('td', 'note', notes.join(' · '));
+      td.colSpan = heads.length;
+      tr.append(td);
+      tbody.append(tr);
+    }
+    if (!rows.length) {
+      const tr = el('tr');
+      const loading = boxes.some((b) => !seriesFor(b));
+      const td = el('td', 'empty', loading ? 'loading' : words.length ? 'nothing matches the search' : 'no containers reported (is the docker socket mounted?)');
+      td.colSpan = heads.length;
+      tr.append(td);
+      tbody.append(tr);
+    }
+    for (const r of rows) {
+      const { c, s } = r;
+      const cs = (s.containers || {})[c.name] || {};
+      const tr = el('tr', `ctr${picked === r ? ' on' : ''}`);
+      tr.tabIndex = 0;
       const name = el('td');
       name.append(el('span', null, c.name));
       if (c.service && c.service !== c.name) name.append(el('span', 'dim', ` ${c.service}`));
       if (c.project && c.project !== 'stream') name.append(el('span', 'dim', ` (${c.project})`));
-      name.title = c.image;
+      name.title = c.image || '';
       const st = el('td', c.state === 'exited' && c.exit_code === 0 ? 'dim' : `st-${c.state}`, c.state + (c.health && c.health !== 'healthy' ? ` · ${c.health}` : '') + (c.state === 'exited' && has(c.exit_code) ? ` (${c.exit_code})` : ''));
+      if (c.restarts > 0) st.append(el('span', 'note', ` · ${c.restarts} restart${c.restarts > 1 ? 's' : ''}`));
       const cell = (text, v, color, max) => {
         const td = el('td', 'cell mono');
         td.append(el('div', null, text));
         if (s.t.length) td.append(chart({ label: text, lines: [{ v, color }], now, src: s, max, small: true, thin: true }));
         return td;
       };
-      const restarts = el('td', c.restarts > 0 ? 'note mono' : 'mono', has(c.restarts) ? c.restarts : '—');
+      if (multi) tr.append(el('td', 'dim', r.box));
       tr.append(
         name, st,
         el('td', 'mono', c.up_since ? human(secsSince(c.up_since, now)) : '—'),
-        restarts,
         cell(pct1(c.cpu_pct), cs.cpu_pct, COLORS.blue),
         cell(`${bytes(c.mem_bytes)}${c.mem_limit ? ' / ' + bytes(c.mem_limit) : ''}`, cs.mem_bytes, COLORS.violet, c.mem_limit || 0),
         el('td', 'mono', `${bps(c.rx_bps)} / ${bps(c.tx_bps)}`),
-        el('td', 'mono', `${Bps(c.read_bps)} / ${Bps(c.write_bps)}`),
         el('td', 'mono', has(c.pids) ? c.pids : '—')
       );
-      table.append(tr);
-      if (c.state !== 'running') continue;
-      const detail = el('tr', 'detail');
-      detail.hidden = !expanded.has(id);
-      const td = el('td');
-      td.colSpan = 9;
-      if (!detail.hidden) td.append(containerCharts(c, cs, now, s));
-      detail.append(td);
-      tr.addEventListener('click', () => {
-        if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
-        render();
-      });
-      table.append(detail);
+      const pick = () => { sel.ctr = idOf(r); render(); };
+      tr.addEventListener('click', pick);
+      tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+      tbody.append(tr);
     }
-    wrap.append(table);
-    sec.append(wrap, el('div', 'dim', 'click a container for its graphs'));
-    return sec;
-  }
-
-  function containerCharts(c, cs, now, src) {
-    const tiles = el('div', 'tiles');
-    tiles.append(
+    if (!picked) {
+      right.append(el('div', 'empty', 'no container to show'));
+      return split;
+    }
+    const { c, s } = picked;
+    const cs = (s.containers || {})[c.name] || {};
+    const title = el('div', 'row');
+    title.append(el('h2', null, `${c.name}${multi ? ` · ${picked.box}` : ''}`), el('span', c.state === 'running' ? 'st-running' : `st-${c.state}`, c.state));
+    right.append(title);
+    const src = s;
+    right.append(
       chart({ label: 'cpu (% of one core)', now, src, read: pct1, value: pct1(c.cpu_pct), lines: [{ name: 'cpu', v: cs.cpu_pct, color: COLORS.blue }] }),
       chart({ label: 'memory', now, src, max: c.mem_limit || 0, read: bytes, value: `${bytes(c.mem_bytes)}${c.mem_limit ? ' of ' + bytes(c.mem_limit) : ''}`, lines: [{ name: 'memory', v: cs.mem_bytes, color: COLORS.violet }] }),
       chart({ label: 'network', now, src, read: bps, value: `↓ ${bps(c.rx_bps)} · ↑ ${bps(c.tx_bps)}`, lines: [{ name: 'in', v: cs.rx_bps, color: COLORS.green }, { name: 'out', v: cs.tx_bps, color: COLORS.blue }] }),
       chart({ label: 'disk io', now, src, read: Bps, value: `r ${Bps(c.read_bps)} · w ${Bps(c.write_bps)}`, lines: [{ name: 'read', v: cs.read_bps, color: COLORS.green }, { name: 'write', v: cs.write_bps, color: COLORS.yellow }] }),
       chart({ label: 'pids', now, src, read: num, value: has(c.pids) ? String(c.pids) : '—', lines: [{ name: 'pids', v: cs.pids, color: COLORS.violet }] })
     );
-    return tiles;
+    return split;
   }
 
   const nodeState = (n) => {
@@ -703,23 +866,30 @@
     return ['restarting', 'created', 'paused'].includes(n.state) ? 'warn' : 'bad';
   };
   const portText = (p) => (p.published ? `${p.loopback ? 'loopback ' : ''}${p.published}→${p.port}/${p.proto}` : `${p.port}/${p.proto}`);
+  const edgePort = (e) => (e.port ? `:${e.port}${e.proto && e.proto !== 'tcp' ? '/' + e.proto : ''}` : '');
 
-  function archSection(t, now, titled) {
+  function archSection(t, now, bar) {
     const A = archCache.get(t.name);
     const data = A && A.data;
-    const key = data ? `${data.at}|${sel.labels}|${pinned.get(t.name) || ''}|${titled}|${(data.edges || []).length}` : '';
+    const shell = el('div', 'archv grow');
+    if (!data) {
+      const left = el('div', 'archl');
+      if (A && A.error) left.append(el('p', 'note', A.error));
+      left.append(el('p', 'empty', 'loading'));
+      shell.append(left);
+      return shell;
+    }
+    const key = `${t.name}|${data.at}|${sel.labels}|${data.edges.length}`;
     const built = archBuilt.get(t.name);
-    if (built && key && built.key === key) return built.sec;
-    const sec = el('section', 'target');
-    const head = el('div', 'sec-head');
-    head.append(el('h2', null, titled ? `architecture · ${t.name}` : 'architecture'));
-    sec.append(head);
-    if (A && A.error) sec.append(el('p', 'note', A.error));
-    if (!data) { sec.append(el('p', 'empty', 'loading')); return sec; }
-    if (data.status) sec.append(el('p', 'note', data.status));
-    if (!data.nodes.length) { sec.append(el('p', 'empty', 'no containers from this box yet')); return sec; }
-    if (!data.nodes.some((n) => n.networks && n.networks.length)) sec.append(el('p', 'note', 'this box\u2019s agent sends no networks or ports yet, so only the known connections are drawn and none is checked. ./scripts/deploy.sh stats (or api) on that box brings the agent up to date'));
-    const labels = el('div', 'seg small');
+    if (built && built.key === key) {
+      built.error.textContent = (A && A.error) || '';
+      built.panel(now);
+      bar.append(...built.barParts);
+      return built.shell;
+    }
+    const containers = data.nodes.filter((n) => !n.outside).length;
+    const caption = el('h2', null, `Architecture (${containers} containers, ${data.edges.length} connections)`);
+    const labels = el('div', 'seg');
     labels.setAttribute('role', 'group');
     labels.setAttribute('aria-label', 'edge labels');
     for (const [id, text] of [[false, 'labels on hover'], [true, 'all labels']]) {
@@ -727,14 +897,24 @@
       b.setAttribute('aria-pressed', String(sel.labels === id));
       labels.append(b);
     }
-    head.append(labels);
-    sec.append(el('div', 'dim', `${data.nodes.filter((n) => !n.outside).length} containers, ${data.edges.length} connections · read ${ago(data.at, now)} · hover a container for its numbers, click to keep its connections lit`));
+    const left = el('div', 'archl');
+    const error = el('p', 'note');
+    error.textContent = (A && A.error) || '';
+    left.append(error);
+    if (data.status) left.append(el('p', 'note', data.status));
+    if (!data.nodes.length) {
+      left.append(el('p', 'empty', 'no containers from this box yet'));
+      shell.append(left);
+      return shell;
+    }
+    if (!data.nodes.some((n) => n.networks && n.networks.length)) left.append(el('p', 'note', 'this box\u2019s agent sends no networks or ports yet, so only the known connections are drawn and none is checked. ./scripts/deploy.sh stats (or api) on that box brings the agent up to date'));
 
     const netColor = new Map((data.networks || []).map((n, i) => [n.name, NET_COLORS[i % NET_COLORS.length]]));
-    const graph = archGraph(t, data, netColor, now);
+    const side = el('aside', 'side');
+    side.dataset.scroll = `arch-side-${t.name}`;
+    const graph = archGraph(t, data, netColor, now, () => panel(now));
 
     const nets = el('div', 'nets');
-    nets.append(el('span', 'dim', 'networks'));
     for (const n of data.networks || []) {
       const b = button(null, null, null);
       const sw = el('i');
@@ -747,56 +927,163 @@
       b.addEventListener('blur', () => graph.light(null));
       nets.append(b);
     }
-    sec.append(nets);
-
-    const scroll = el('div', 'scroll');
-    scroll.append(graph.wrap);
-    sec.append(scroll);
+    left.append(graph.wrap);
 
     const key2 = el('div', 'keyline');
     const sample = (cls, text) => {
       const s = el('span');
-      const svg = sv('svg', { width: 28, height: 8, class: 'arch', style: 'display: inline-block; vertical-align: 1px', 'aria-hidden': 'true' });
+      const svg = sv('svg', { width: 24, height: 8, class: 'arch', style: 'display: inline-block; vertical-align: 1px', 'aria-hidden': 'true' });
       const g = sv('g', { class: `edge ${cls}` });
-      g.append(sv('path', { d: 'M0 4 L28 4' }));
+      g.append(sv('path', { d: 'M0 4 L24 4' }));
       svg.append(g);
       s.append(svg, document.createTextNode(` ${text}`));
       return s;
     };
     key2.append(
-      sample('v-map', 'known connection'), sample('v-depends_on', 'compose depends_on'), sample('v-published', 'published port'),
-      sample('cut', 'no shared network'), el('span', 'g-ok', '■ running'), el('span', 'g-warn', '■ starting or unhealthy'), el('span', 'g-bad', '■ stopped'), el('span', 'dim', '■ finished (exit 0)')
+      sample('d-in', DIR_NAME.in), sample('d-out', DIR_NAME.out), sample('d-inter', DIR_NAME.inter), sample('d-inter v-depends_on', 'depends_on'),
+      sample('cut', 'no shared network'), el('span', 'g-ok', '■ running'), el('span', 'g-warn', '■ starting'), el('span', 'g-bad', '■ stopped'), el('span', 'dim', '■ exit 0')
     );
-    sec.append(key2);
+    left.append(key2);
+    shell.append(left, side);
 
-    const det = el('details', 'edges');
-    det.append(el('summary', null, 'every connection'));
-    const tw = el('div', 'scroll');
-    const table = el('table');
-    const hr = el('tr');
-    for (const h of ['from', 'to', 'port', 'what', 'how we know', 'over']) hr.append(el('th', null, h));
-    table.append(hr);
     const nameOf = (id) => (data.nodes.find((n) => n.id === id) || { name: id }).name;
-    for (const e of data.edges) {
-      const tr = el('tr');
-      tr.append(
-        el('td', 'mono', nameOf(e.from)), el('td', 'mono', nameOf(e.to)),
-        el('td', 'mono', e.port ? `${e.port}${e.proto ? '/' + e.proto : ''}` : '—'),
-        el('td', null, e.what),
-        el('td', 'dim', { map: 'architecture.json', depends_on: 'compose depends_on', published: 'docker ports' }[e.via] || e.via),
-        el('td', e.shared === false ? 'no' : 'dim', e.shared === false ? 'no shared network' : e.over && e.over.length ? e.over.join(', ') : '—')
-      );
-      table.append(tr);
+    const S = () => sparkCache.get(t.name) && sparkCache.get(t.name).data;
+    const linkButton = (e, other, arrow) => {
+      const b = button(null, null, null);
+      const sw = el('i');
+      sw.style.background = e.shared === false ? COLORS.red : DIR_COLORS[e.dir];
+      b.append(sw, el('span', null, `${arrow} ${other}${edgePort(e) ? ' ' + edgePort(e) : ''}`), el('span', 'what', e.what));
+      b.title = `${nameOf(e.from)} → ${nameOf(e.to)}${edgePort(e) ? ' ' + edgePort(e) : ''} · ${e.what} · ${DIR_NAME[e.dir]}${e.shared === false ? ' · no shared docker network' : ''}`;
+      b.setAttribute('aria-pressed', String(litEdge.get(t.name) === e));
+      b.addEventListener('mouseenter', () => graph.edge(e));
+      b.addEventListener('mouseleave', () => graph.edge(null));
+      b.addEventListener('focus', () => graph.edge(e));
+      b.addEventListener('blur', () => graph.edge(null));
+      b.addEventListener('click', () => {
+        litEdge.set(t.name, litEdge.get(t.name) === e ? null : e);
+        graph.edge(null);
+        panel(now);
+      });
+      return b;
+    };
+    const usage = (label, value, max, text, sparks) => {
+      const box = el('div', 'use');
+      box.append(el('span', 'lbl', label));
+      const track = el('div', 'track');
+      const fill = el('i');
+      const p = has(value) && max ? Math.max(0, Math.min(100, (100 * value) / max)) : 0;
+      fill.style.width = `${p}%`;
+      fill.style.background = p < 60 ? COLORS.green : p < 85 ? COLORS.yellow : COLORS.red;
+      track.append(fill);
+      track.setAttribute('role', 'img');
+      track.setAttribute('aria-label', text);
+      box.append(track, el('span', 'txt', text));
+      for (const s of sparks || []) box.append(s);
+      return box;
+    };
+    const spark = (n, field, color, max) => {
+      const s = S();
+      const series = s && s.containers && s.containers[n.name];
+      if (!s || !series || !list(series[field]).length) return null;
+      const canvas = el('canvas');
+      canvas.setAttribute('role', 'img');
+      canvas.setAttribute('aria-label', `${field} over the last hour`);
+      const t1 = Math.floor(Date.now() / 1000);
+      charts.push({ canvas, t: s.t, lines: [{ v: series[field], color }], t0: t1 - 3600, t1, gap: s.bucket_secs || 15, max, hover: null, thin: true });
+      return canvas;
+    };
+    function panel(when) {
+      const p = pinned.get(t.name);
+      const n = p && data.nodes.find((x) => x.id === p);
+      side.replaceChildren();
+      const lit = litEdge.get(t.name);
+      if (lit && !data.edges.includes(lit)) litEdge.set(t.name, null);
+      if (!n) {
+        side.append(el('h3', null, 'connections'));
+        for (const [dir, label] of DIRS) {
+          const es = data.edges.filter((e) => e.dir === dir);
+          if (!es.length) continue;
+          side.append(el('h3', null, `${label} (${es.length})`));
+          const box = el('div', 'links');
+          for (const e of es) box.append(linkButton(e, `${nameOf(e.from)} → ${nameOf(e.to)}`, ''));
+          side.append(box);
+        }
+        graph.rest();
+        drawSparks();
+        return;
+      }
+      const head = el('div', 'np-head');
+      const st = nodeState(n);
+      head.append(el('span', 'name', n.name));
+      head.append(el('span', `pill ${st}`, n.outside ? 'outside' : n.state === 'running' ? (n.health || 'running') : n.state));
+      if (n.up_since && n.state === 'running') head.append(el('span', 'muted', `up ${human(secsSince(n.up_since, when))}`));
+      const close = button('dim', '✕', () => { pinned.set(t.name, null); graph.pin(null); panel(when); });
+      close.style.cssText = 'margin-left: auto; background: none; border: 0;';
+      close.setAttribute('aria-label', 'close');
+      head.append(close);
+      side.append(head);
+      if (n.description) side.append(el('p', 'desc', n.description));
+      if (!n.outside) {
+        side.append(el('h3', null, 'usage'));
+        if (n.state === 'running') {
+          const cpus = data.host.cpus, total = data.host.mem_total;
+          const cpuText = `${pct1(n.cpu_pct)} of a core${cpus ? ` · ${pct1((n.cpu_pct || 0) / cpus)} of ${cpus} cpus` : ''}`;
+          side.append(usage('cpu', n.cpu_pct, (cpus || 1) * 100, cpuText, [spark(n, 'cpu_pct', COLORS.blue)].filter(Boolean)));
+          const cap = n.mem_limit || total;
+          const memText = `${bytes(n.mem_bytes)}${cap ? ` of ${bytes(cap)}${n.mem_limit ? ' limit' : ''} · ${pct1((100 * (n.mem_bytes || 0)) / cap)}` : ''}`;
+          side.append(usage('memory', n.mem_bytes, cap, memText, [spark(n, 'mem_bytes', COLORS.violet, cap)].filter(Boolean)));
+          const net = el('div', 'use');
+          net.append(el('span', 'lbl', 'network'), el('span', 'txt', `↓ ${bps(n.rx_bps)} · ↑ ${bps(n.tx_bps)}`));
+          net.lastChild.style.gridColumn = '2';
+          for (const s of [spark(n, 'rx_bps', COLORS.green), spark(n, 'tx_bps', COLORS.blue)]) if (s) net.append(s);
+          side.append(net);
+          if (!S()) side.append(el('div', 'dim', 'the last hour is loading'));
+        } else {
+          side.append(el('div', 'dim', n.state === 'exited' && has(n.exit_code) ? `exited (${n.exit_code})` : n.state));
+        }
+        side.append(el('h3', null, 'details'));
+        const kv = el('div', 'kv');
+        const row = (k, v, cls) => { kv.append(el('b', null, k), v instanceof Node ? v : el('span', cls, v || '—')); };
+        row('project', n.project);
+        row('service', n.service);
+        row('image', n.image, 'mono');
+        const nets2 = el('span');
+        for (const name of n.networks) {
+          const sw = el('i');
+          sw.style.cssText = `display: inline-block; width: 8px; height: 8px; margin-right: 4px; background: ${netColor.get(name) || COLORS.t3}`;
+          const s = el('span');
+          s.style.marginRight = '10px';
+          s.append(sw, document.createTextNode(name));
+          nets2.append(s);
+        }
+        row('networks', n.networks.length ? nets2 : '—');
+        row('ports', n.ports.map(portText).join(', '), 'mono');
+        row('restarts', has(n.restarts) ? String(n.restarts) : '—');
+        side.append(kv);
+      }
+      const outs = data.edges.filter((e) => e.from === n.id), ins = data.edges.filter((e) => e.to === n.id);
+      side.append(el('h3', null, `out (${outs.length})`));
+      const ob = el('div', 'links');
+      for (const e of outs) ob.append(linkButton(e, nameOf(e.to), '→'));
+      if (!outs.length) ob.append(el('span', 'dim', 'none'));
+      side.append(ob, el('h3', null, `in (${ins.length})`));
+      const ib = el('div', 'links');
+      for (const e of ins) ib.append(linkButton(e, nameOf(e.from), '←'));
+      if (!ins.length) ib.append(el('span', 'dim', 'none'));
+      side.append(ib);
+      graph.rest();
+      drawSparks();
     }
-    tw.append(table);
-    det.append(tw);
-    sec.append(det);
-    archBuilt.set(t.name, { key, sec });
-    return sec;
+    const drawSparks = () => requestAnimationFrame(() => { for (const c of charts) if (side.contains(c.canvas)) draw(c); });
+    panel(now);
+    const barParts = [caption, nets, labels];
+    bar.append(...barParts);
+    archBuilt.set(t.name, { key, shell, panel, error, barParts });
+    return shell;
   }
 
-  function archGraph(t, data, netColor, now) {
-    const COLW = 210, NODEW = 156, NODEH = 42, GAPY = 12, PADX = 16, LANEHEAD = 24, LANEPAD = 12;
+  function archGraph(t, data, netColor, now, onPin) {
+    const COLW = 196, NODEW = 148, NODEH = 40, GAPY = 10, PADX = 14, LANEHEAD = 22, LANEPAD = 10;
     const nodes = data.nodes.map((n) => ({ ...n }));
     const byId = new Map(nodes.map((n) => [n.id, n]));
     const tiers = [...new Set(nodes.map((n) => n.tier))].sort((a, b) => a - b);
@@ -806,7 +1093,7 @@
     const laneSize = (l) => nodes.filter((n) => laneOf(n) === l).length;
     laneNames.sort((a, b) => (a === '' ? -1 : b === '' ? 1 : laneSize(b) - laneSize(a) || a.localeCompare(b)));
     const rank = (n) => ({ ok: 0, warn: 0, bad: 0, outside: 0, done: 1 })[nodeState(n)];
-    let y = 8;
+    let y = 6;
     const lanes = [];
     for (const l of laneNames) {
       const members = nodes.filter((n) => laneOf(n) === l);
@@ -817,21 +1104,21 @@
         cols.get(c).push(n);
       }
       let rows = 0;
-      for (const list of cols.values()) {
-        list.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-        list.forEach((n, i) => { n.x = PADX + col.get(n.tier) * COLW; n.y = y + LANEHEAD + i * (NODEH + GAPY); });
-        rows = Math.max(rows, list.length);
+      for (const ns of cols.values()) {
+        ns.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+        ns.forEach((n, i) => { n.x = PADX + col.get(n.tier) * COLW; n.y = y + LANEHEAD + i * (NODEH + GAPY); });
+        rows = Math.max(rows, ns.length);
       }
       const h = LANEHEAD + rows * (NODEH + GAPY) - GAPY + LANEPAD;
       lanes.push({ name: l, y, h });
-      y += h + 14;
+      y += h + 10;
     }
-    const W = PADX * 2 + tiers.length * COLW + 40;
+    const W = PADX * 2 + tiers.length * COLW + 30;
     const H = y;
     const mid = `m-${t.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
     const svg = sv('svg', { class: `arch${sel.labels ? ' labels' : ''}`, width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `containers of ${t.name} and how they connect` });
     const defs = sv('defs');
-    for (const [id, color] of [['a-dim', COLORS.t3], ['a-hot', 'rgb(242 243 245)'], ['a-pub', COLORS.blue], ['a-cut', COLORS.red]]) {
+    for (const [id, color] of [['a-inter', COLORS.t3], ['a-in', COLORS.blue], ['a-out', COLORS.violet], ['a-hot', COLORS.white], ['a-cut', COLORS.red]]) {
       const m = sv('marker', { id: `${mid}-${id}`, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
       m.append(sv('path', { d: 'M0 0 L8 4 L0 8 z', fill: color }));
       defs.append(m);
@@ -839,7 +1126,7 @@
     svg.append(defs);
     for (const l of lanes) {
       svg.append(sv('rect', { class: 'lane-box', x: 4.5, y: l.y + 0.5, width: W - 9, height: l.h }));
-      svg.append(sv('text', { class: 'lane-label', x: 12, y: l.y + 16 }, l.name === '' ? 'outside docker' : `compose project ${l.name}`));
+      svg.append(sv('text', { class: 'lane-label', x: 12, y: l.y + 15 }, l.name === '' ? 'outside docker' : `compose project ${l.name}`));
     }
     const edgeLayer = sv('g');
     const nodeLayer = sv('g');
@@ -870,12 +1157,12 @@
       }
       const d = `M${p0[0]} ${p0[1]} C${p1[0]} ${p1[1]} ${p2[0]} ${p2[1]} ${p3[0]} ${p3[1]}`;
       const off = (!a.outside && a.state !== 'running') || (!b.outside && b.state !== 'running');
-      const g = sv('g', { class: `edge v-${e.via}${e.shared === false ? ' cut' : ''}${off ? ' off' : ''}` });
-      const arrow = e.shared === false ? 'a-cut' : e.via === 'published' ? 'a-pub' : 'a-dim';
+      const g = sv('g', { class: `edge d-${e.dir} v-${e.via}${e.shared === false ? ' cut' : ''}${off ? ' off' : ''}` });
+      const arrow = e.shared === false ? 'a-cut' : `a-${e.dir}`;
       const path = sv('path', { d, 'marker-end': `url(#${mid}-${arrow})` });
-      const tip = sv('title', null, `${a.name} → ${b.name}${e.port ? ` :${e.port}${e.proto ? '/' + e.proto : ''}` : ''} · ${e.what}${e.shared === false ? ' · no shared docker network' : ''}`);
+      const tip = sv('title', null, `${a.name} → ${b.name}${edgePort(e) ? ' ' + edgePort(e) : ''} · ${e.what} · ${DIR_NAME[e.dir]}${e.shared === false ? ' · no shared docker network' : ''}`);
       g.append(path, tip);
-      const text = e.port ? `:${e.port}${e.proto && e.proto !== 'tcp' ? '/' + e.proto : ''}` : e.via === 'depends_on' ? 'after' : '';
+      const text = edgePort(e) || (e.via === 'depends_on' ? 'after' : '');
       if (text) {
         const mx = (p0[0] + 3 * p1[0] + 3 * p2[0] + p3[0]) / 8, my = (p0[1] + 3 * p1[1] + 3 * p2[1] + p3[1]) / 8;
         const lab = sv('g', { class: 'elabel' });
@@ -888,198 +1175,105 @@
     }
     const nodeEls = new Map();
     const wrap = el('div', 'arch-wrap');
+    wrap.dataset.scroll = `arch-graph-${t.name}`;
     const tipBox = el('div', 'tip');
     tipBox.hidden = true;
-    const showTip = (n) => {
-      tipBox.replaceChildren();
-      tipBox.append(el('b', null, n.name));
-      const row = (text) => tipBox.append(el('div', 'row', text));
-      if (n.outside) {
-        row(n.id === '(internet)' ? 'anything that reaches a published port' : 'the docker engine on this box, through its socket');
-      } else {
-        row(`${n.state}${n.health ? ` · ${n.health}` : ''}${n.state === 'exited' && has(n.exit_code) ? ` · exit ${n.exit_code}` : ''}${n.up_since ? ` · up ${human(secsSince(n.up_since, now))}` : ''}${n.restarts ? ` · ${n.restarts} restarts` : ''}`);
-        if (n.state === 'running') {
-          row(`cpu ${pct1(n.cpu_pct)} of a core · memory ${bytes(n.mem_bytes)}${n.mem_limit ? ` of ${bytes(n.mem_limit)}` : ''}`);
-          row(`network ↓ ${bps(n.rx_bps)} · ↑ ${bps(n.tx_bps)}`);
-        }
-        row(`${n.project ? `project ${n.project} · ` : ''}service ${n.service || '—'}`);
-        row(`image ${n.image || '—'}`);
-        if (n.networks && n.networks.length) row(`networks ${n.networks.join(', ')}`);
-        if (n.ports && n.ports.length) row(`ports ${n.ports.map(portText).join(', ')}`);
-      }
-      const ins = data.edges.filter((e) => e.to === n.id).length, outs = data.edges.filter((e) => e.from === n.id).length;
-      row(`${outs} out, ${ins} in`);
+    const showTip = (n, g) => {
+      tipBox.replaceChildren(el('b', null, n.name));
+      const line = n.outside ? (n.id === '(internet)' ? 'published ports' : 'docker socket') : n.state === 'running' ? `${n.health || 'running'} · cpu ${pct1(n.cpu_pct)} · ${bytes(n.mem_bytes)}` : n.state;
+      tipBox.append(el('span', 'muted', line));
       tipBox.hidden = false;
-      tipBox.style.left = `${Math.max(0, Math.min(W - tipBox.offsetWidth, n.x + NODEW / 2 - tipBox.offsetWidth / 2))}px`;
-      tipBox.style.top = `${n.y + NODEH + 8 + tipBox.offsetHeight < H || n.y < tipBox.offsetHeight + 8 ? n.y + NODEH + 8 : n.y - tipBox.offsetHeight - 8}px`;
+      const wr = wrap.getBoundingClientRect(), gr = g.getBoundingClientRect();
+      const x = gr.left - wr.left + wrap.scrollLeft, yb = gr.bottom - wr.top + wrap.scrollTop;
+      tipBox.style.left = `${Math.max(0, Math.min(wrap.scrollWidth - tipBox.offsetWidth, x))}px`;
+      tipBox.style.top = `${yb + 4 + tipBox.offsetHeight < wrap.scrollHeight ? yb + 4 : gr.top - wr.top + wrap.scrollTop - tipBox.offsetHeight - 4}px`;
     };
-    const light = (ids, center) => {
+    const paint = (ids, hotEdge) => {
       const on = ids && ids.length;
       svg.classList.toggle('focus', !!on);
       const set = new Set(ids || []);
       for (const [id, g] of nodeEls) g.classList.toggle('hot', set.has(id));
       for (const x of edgeEls) {
-        const hot = !!on && center !== undefined && (x.e.from === center || x.e.to === center);
+        const hot = !!on && hotEdge(x.e);
         x.g.classList.toggle('hot', hot);
-        x.path.setAttribute('marker-end', `url(#${mid}-${hot && x.arrow === 'a-dim' ? 'a-hot' : x.arrow})`);
+        x.path.setAttribute('marker-end', `url(#${mid}-${hot && x.arrow === 'a-inter' ? 'a-hot' : x.arrow})`);
       }
     };
     const neighbours = (id) => [id, ...data.edges.filter((e) => e.from === id || e.to === id).map((e) => (e.from === id ? e.to : e.from))];
+    const around = (id) => paint(neighbours(id), (e) => e.from === id || e.to === id);
+    const just = (e) => paint([e.from, e.to], (x) => x === e);
     const rest = () => {
+      const lit = litEdge.get(t.name);
+      if (lit) return just(lit);
       const p = pinned.get(t.name);
-      if (p && byId.has(p)) light(neighbours(p), p); else light(null);
+      if (p && byId.has(p)) around(p); else paint(null);
+    };
+    const pin = (id) => {
+      for (const [nid, g] of nodeEls) g.classList.toggle('pinned', id === nid);
     };
     for (const n of nodes) {
       const s = nodeState(n);
       const g = sv('g', { class: `node s-${s}${pinned.get(t.name) === n.id ? ' pinned' : ''}`, transform: `translate(${n.x} ${n.y})`, tabindex: 0, role: 'button', 'aria-label': `${n.name}, ${n.outside ? 'outside docker' : n.state}` });
       g.append(sv('rect', { class: 'box', x: 0.5, y: 0.5, width: NODEW, height: NODEH }));
       g.append(sv('rect', { class: 'st', x: 8, y: 9, width: 8, height: 8 }));
-      g.append(sv('text', { x: 22, y: 17 }, n.name.length > 20 ? `${n.name.slice(0, 19)}…` : n.name));
+      g.append(sv('text', { x: 22, y: 17 }, n.name.length > 19 ? `${n.name.slice(0, 18)}…` : n.name));
       const sub = n.outside ? (n.id === '(internet)' ? 'published ports' : 'socket') : n.state === 'running' ? `${pct1(n.cpu_pct)} · ${bytes(n.mem_bytes)}` : n.state === 'exited' && has(n.exit_code) ? `exited (${n.exit_code})` : n.state;
-      g.append(sv('text', { class: 'sub', x: 22, y: 33 }, sub));
+      g.append(sv('text', { class: 'sub', x: 22, y: 32 }, sub));
       (n.networks || []).forEach((name, i) => {
         g.append(sv('rect', { x: NODEW - 10 - i * 9, y: NODEH - 10, width: 6, height: 6, fill: netColor.get(name) || COLORS.t3 }));
       });
-      g.addEventListener('mouseenter', () => { light(neighbours(n.id), n.id); showTip(n); });
+      g.addEventListener('mouseenter', () => { around(n.id); showTip(n, g); });
       g.addEventListener('mouseleave', () => { tipBox.hidden = true; rest(); });
-      g.addEventListener('focus', () => { light(neighbours(n.id), n.id); showTip(n); });
+      g.addEventListener('focus', () => { around(n.id); showTip(n, g); });
       g.addEventListener('blur', () => { tipBox.hidden = true; rest(); });
-      const pin = () => {
-        pinned.set(t.name, pinned.get(t.name) === n.id ? null : n.id);
-        for (const [id, el2] of nodeEls) el2.classList.toggle('pinned', pinned.get(t.name) === id);
-        archBuilt.delete(t.name);
+      const toggle = () => {
+        const next = pinned.get(t.name) === n.id ? null : n.id;
+        pinned.set(t.name, next);
+        litEdge.set(t.name, null);
+        pin(next);
+        onPin();
       };
-      g.addEventListener('click', pin);
-      g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pin(); } });
+      g.addEventListener('click', toggle);
+      g.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
       nodeLayer.append(g);
       nodeEls.set(n.id, g);
     }
     wrap.append(svg, tipBox);
     rest();
-    return { wrap, light: (ids) => (ids ? light(ids) : rest()) };
-  }
-
-  function scaleOf(values) {
-    const pos = values.filter((v) => has(v) && v > 0);
-    if (!pos.length) return { a: -1, b: 3 };
-    let a = Math.floor(Math.log10(Math.min(...pos)));
-    let b = Math.ceil(Math.log10(Math.max(...pos)));
-    if (b - a < 2) { a = Math.min(a, b - 2); }
-    if (b === a) b = a + 1;
-    return { a, b };
-  }
-  const at = (sc, v) => Math.max(0, Math.min(100, ((Math.log10(Math.max(v, 10 ** sc.a)) - sc.a) / (sc.b - sc.a)) * 100));
-
-  function latBar(r, sc) {
-    const box = el('div', 'lat');
-    const lim = limitsOf(r);
-    box.setAttribute('role', 'img');
-    box.setAttribute('aria-label', `p50 ${ms(r.p50)}, p95 ${ms(r.p95)}, p99 ${ms(r.p99)}, max ${ms(r.max)}`);
-    box.title = `p50 ${ms(r.p50)} · p95 ${ms(r.p95)} · p99 ${ms(r.p99)} · max ${ms(r.max)}${lim ? `\ngreen under ${ms(lim[0])}, red from ${ms(lim[1])}` : ''}`;
-    const span = (cls, from, to) => {
-      const i = el('i', cls);
-      i.style.left = `${from}%`;
-      i.style.width = `${Math.max(0, to - from)}%`;
-      box.append(i);
-      return i;
+    return {
+      wrap,
+      rest,
+      pin,
+      light: (ids) => (ids ? paint(ids, (e) => ids.includes(e.from) && ids.includes(e.to)) : rest()),
+      edge: (e) => (e ? just(e) : rest()),
     };
-    if (lim) {
-      span('z ok', 0, at(sc, lim[0]));
-      span('z warn', at(sc, lim[0]), at(sc, lim[1]));
-      span('z bad', at(sc, lim[1]), 100);
-    }
-    if (!has(r.p50)) return box;
-    const p50 = at(sc, r.p50), p95 = at(sc, r.p95 ?? r.p50), p99 = at(sc, r.p99 ?? r.p95 ?? r.p50), mx = at(sc, r.max ?? r.p99 ?? r.p50);
-    span('w', p99, mx);
-    span(`b1 bg-${grade(r.p95, lim) || 'none'}`, p50, Math.max(p95, p50 + 1));
-    span(`b2 bg-${grade(r.p99, lim) || 'none'}`, p95, Math.max(p99, p95 + 0.5));
-    const m = el('i', 'm50');
-    m.style.left = `calc(${p50}% - 1px)`;
-    box.append(m);
-    const x = el('i', 'mx');
-    x.style.left = `calc(${mx}% - 1px)`;
-    box.append(x);
-    return box;
-  }
-
-  function axis(sc, width) {
-    const ax = el('div', 'axis');
-    if (width) ax.style.width = width;
-    const step = Math.max(1, Math.ceil((sc.b - sc.a) / 4));
-    for (let d = sc.a; d <= sc.b; d += step) {
-      const s = el('span', null, decade(d));
-      s.style.left = `${at(sc, 10 ** d)}%`;
-      if (d === sc.a) s.style.transform = 'none';
-      if (d === sc.b) s.style.transform = 'translateX(-100%)';
-      ax.append(s);
-    }
-    return ax;
-  }
-
-  function segFill(box, items, current, pick) {
-    const sig = items.map((i) => `${i.id}:${i.label}`).join('|');
-    if (box.dataset.sig !== sig) {
-      box.dataset.sig = sig;
-      box.replaceChildren(...items.map((i) => {
-        const b = button(null, i.label, () => pick(i.id));
-        b.dataset.id = i.id;
-        return b;
-      }));
-    }
-    for (const b of box.children) b.setAttribute('aria-pressed', String(b.dataset.id === current));
   }
 
   function timingBuild(v) {
-    const sec = el('section', 'target');
-    const head = el('div', 'sec-head');
-    head.append(el('h2', null, v.name === 'endpoints' ? 'endpoints' : 'calls: postgres, redis, s3, video, voice, websocket'));
-    sec.append(head);
-    const cards = el('div', 'cards');
-    const controls = el('div', 'ep-controls');
-    const search = el('input');
-    search.type = 'search';
-    search.placeholder = 'filter';
-    search.spellcheck = false;
-    search.autocomplete = 'off';
-    search.setAttribute('aria-label', v.name === 'endpoints' ? 'filter endpoints by route, method, where or box; every word must match' : 'filter calls by query, command, path, where or box; every word must match');
-    search.value = v.q;
-    search.addEventListener('input', () => { v.q = search.value; writeHash(); timingRender(v); });
-    const kinds = el('div', 'seg small');
-    kinds.setAttribute('role', 'group');
-    kinds.setAttribute('aria-label', 'kind');
-    kinds.hidden = v.name !== 'calls';
-    const boxes = el('div', 'seg small');
-    boxes.setAttribute('role', 'group');
-    boxes.setAttribute('aria-label', 'box');
-    controls.append(search, kinds, boxes);
-    const info = el('div', 'dim');
-    info.style.marginBottom = '6px';
-    const wrap = el('div', 'scroll');
+    const sec = el('section', 'grow');
+    sec.style.cssText = 'display: flex; flex-direction: column; gap: 6px; min-height: 0;';
+    const strip = el('div', 'strip');
+    const info = el('div', 'tbar');
+    const pane = el('div', 'pane grow');
     const table = el('table', 'eps');
     const thead = el('thead');
     const tbody = el('tbody');
     table.append(thead, tbody);
-    wrap.append(table);
-    const foot = el('div', 'keyline');
-    const demo = latBar({ kind: 'http', name: '', p50: 3, p95: 40, p99: 180, max: 900 }, { a: 0, b: 3 });
-    foot.append(
-      el('span', null, 'latency bar, log scale:'), demo,
-      el('span', null, 'white tick p50 · thick bar p50 to p95 · thin bar p95 to p99 · line to max · bar colour by p95 and p99 against the kind\u2019s limits, the tint behind it'),
-    );
-    const foot2 = el('div', 'dim', v.name === 'endpoints'
-      ? 'latency: to the response headers. share: of all http time in the view. click a row for its percentiles over time and its distribution'
-      : 'latency: the statement (postgres), the command (redis), the request (s3, video, voice), the upgrade (websocket). a blocking XREAD is as long as it waited, so it has no limits and stays out of the redis totals. share: of its kind\u2019s time. click a row for its percentiles over time and its distribution');
-    foot2.style.marginTop = '6px';
-    sec.append(cards, controls, info, wrap, foot, foot2);
-    v.ui = { sec, search, kinds, boxes, info, thead, tbody, cards };
+    pane.append(table);
+    sec.append(strip, info, pane);
+    v.ui = { sec, info, thead, tbody, strip };
   }
 
   function timingNow() {
     return tm.data ? Date.parse(tm.data.now) + (Date.now() - tm.data.received) : Date.now();
   }
 
-  function colsFor(v, multi) {
+  const inView = (v, kind) => (v.name === 'endpoints' ? ENDPOINT_KINDS.includes(kind) : !ENDPOINT_KINDS.includes(kind));
+
+  function colsFor(v, multi, rows) {
     const E = v.name === 'endpoints';
+    const streams = rows.some((r) => r.kind === 'session');
+    const other = rows.some((r) => r.kind !== 'http');
     const all = [
       { id: 'target', label: 'box', show: multi },
       { id: 'method', label: 'method', show: E },
@@ -1087,17 +1281,16 @@
       { id: 'src', label: 'where' },
       { id: 'n', label: 'count', num: true, fmt: count },
       { id: 'rate', label: '/s', num: true, fmt: rate },
+      { id: 'open', label: 'open', num: true, fmt: count, show: streams, stream: true },
+      { id: 'msgs_rate', label: 'msg/s', num: true, fmt: rate, show: streams, stream: true },
+      { id: 'bytes_rate', label: 'bytes/s', num: true, fmt: Bps, show: streams, stream: true },
       { id: 'sum_ms', label: 'total time', num: true, fmt: spent },
       { id: 'share', label: 'share', num: true },
-      { id: 'mean', label: 'avg', num: true, fmt: ms, graded: true },
-      { id: 'p50', label: 'p50', num: true, fmt: ms, graded: true },
-      { id: 'p95', label: 'p95', num: true, fmt: ms, graded: true },
       { id: 'p99', label: 'p99', num: true, fmt: ms, graded: true },
       { id: 'max', label: 'max', num: true, fmt: ms, graded: true },
-      { id: 'lat', label: 'latency', fixed: true },
       { id: 'e4', label: '4xx', num: true, fmt: count, bad: 'note', show: E },
       { id: 'e5', label: '5xx', num: true, fmt: count, bad: 'no', show: E },
-      { id: 'err', label: 'errors', num: true, fmt: count, bad: 'no', show: !E },
+      { id: 'err', label: 'errors', num: true, fmt: count, bad: 'no', show: !E || other },
     ];
     return all.filter((c) => c.show !== false);
   }
@@ -1106,48 +1299,139 @@
     return ((tm.data && tm.data.totals) || []).filter((r) => (target ? r.target === target : r.target === null));
   }
 
-  function card(r, sc, opts) {
-    const c = opts.onClick ? button(`card${opts.lead ? ' lead' : ''}`, null, opts.onClick) : el('div', `card${opts.lead ? ' lead' : ''}`);
-    if (opts.onClick) c.setAttribute('aria-pressed', String(!!opts.pressed));
-    const lim = limitsOf(r);
-    const head = el('div', 'c-head');
-    head.append(el('span', `c-kind k-${r.kind}`, KIND_LABEL[r.kind] || r.kind), el('span', 'dim', `${count(r.n)} ${r.kind === 'http' ? 'requests' : 'calls'} · ${rate(r.rate)}/s`));
-    const big = el('div', 'c-big', spent(r.sum_ms));
-    big.append(el('small', null, 'time spent'));
-    const row = el('div', 'c-row');
-    const errs = el('div', 'c-row');
-    const part = (into, k, v, g) => { const s = el('span'); s.append(document.createTextNode(`${k} `), el('b', g ? `g-${g}` : null, v)); into.append(s); };
-    part(row, 'p50', ms(r.p50), grade(r.p50, lim));
-    part(row, 'p95', ms(r.p95), grade(r.p95, lim));
-    part(row, 'p99', ms(r.p99), grade(r.p99, lim));
-    part(row, 'max', ms(r.max), grade(r.max, lim));
-    part(errs, 'avg', ms(r.mean), grade(r.mean, lim));
-    if (opts.shareOf) part(errs, 'share', share(r.sum_ms / opts.shareOf));
-    if (r.kind === 'http') {
-      errs.append(el('span', r.e5 ? 'no' : null, `5xx ${count(r.e5)}${r.n ? ` (${share(r.e5 / r.n)})` : ''}`), el('span', r.e4 ? 'note' : null, `4xx ${count(r.e4)}`));
-    } else {
-      errs.append(el('span', r.err ? 'no' : null, `errors ${count(r.err)}${r.n ? ` (${share(r.err / r.n)})` : ''}`));
+  function cardsFor(v, target, rows) {
+    const out = new Map();
+    for (const r of totalsFor(target)) {
+      if (!inView(v, r.kind) || r.kind === 'session') continue;
+      out.set(`${r.dir}|${r.kind}`, { id: `${r.dir}|${r.kind}`, dir: r.dir, key: r.kind, r });
     }
-    c.append(head, big, latBar(r, sc), row, errs);
-    return c;
+    for (const r of rows) {
+      if (r.kind !== 'session' || (target && r.target !== target)) continue;
+      const id = cardId(r);
+      if (!out.has(id)) out.set(id, { id, dir: r.dir, key: cardKey(r), r: { kind: 'session', method: r.method, dir: r.dir, n: 0, err: 0, open: 0, msgs_rate: 0, bytes_rate: 0, max: null, sum_ms: 0 } });
+      const a = out.get(id).r;
+      a.n += r.n; a.err += r.err; a.open += r.open; a.msgs_rate += r.msgs_rate; a.bytes_rate += r.bytes_rate; a.sum_ms += r.sum_ms;
+      if (has(r.max)) a.max = Math.max(a.max || 0, r.max);
+    }
+    for (const id of v.pick) {
+      if (out.has(id)) continue;
+      const [dir, key] = id.split('|');
+      if (!inView(v, key.replace(/^session-.*/, 'session'))) continue;
+      out.set(id, { id, dir, key, r: { kind: key.startsWith('session-') ? 'session' : key, dir, n: 0, err: 0, e4: 0, e5: 0, open: 0, msgs_rate: 0, bytes_rate: 0, sum_ms: 0, rate: 0 } });
+    }
+    const order = (k) => { const i = CARD_ORDER.indexOf(k); return i < 0 ? CARD_ORDER.length : i; };
+    return [...out.values()].sort((a, b) => order(a.key) - order(b.key) || b.r.sum_ms - a.r.sum_ms || a.key.localeCompare(b.key));
   }
 
-  function timingCards(v, target) {
-    const ui = v.ui;
-    const tot = totalsFor(target);
-    const list = v.name === 'endpoints' ? tot.filter((r) => r.kind === 'http') : tot.filter((r) => r.kind !== 'http').sort((a, b) => b.sum_ms - a.sum_ms);
-    if (!list.length) { ui.cards.replaceChildren(); ui.cards.hidden = true; return; }
-    ui.cards.hidden = false;
-    const sc = scaleOf(list.flatMap((r) => [r.p50, r.max]));
-    if (v.name === 'endpoints') {
-      ui.cards.replaceChildren(...list.map((r) => card(r, sc, { lead: true })));
-      return;
+  function pickCard(v, ids, e) {
+    const many = e && (e.shiftKey || e.metaKey || e.ctrlKey);
+    if (many) {
+      for (const id of ids) if (v.pick.has(id) && ids.length === 1) v.pick.delete(id); else v.pick.add(id);
+    } else {
+      const same = v.pick.size === ids.length && ids.every((id) => v.pick.has(id));
+      v.pick = same ? new Set() : new Set(ids);
     }
-    const all = list.reduce((s, r) => s + r.sum_ms, 0);
-    ui.cards.replaceChildren(...list.map((r) => card(r, sc, {
-      shareOf: all, pressed: v.kind === r.kind,
-      onClick: () => { v.kind = v.kind === r.kind ? '' : r.kind; writeHash(); timingRender(v); },
-    })));
+    if (!v.pick.size) v.errs = '';
+    v.open = null;
+    writeHash();
+    timingRender(v);
+  }
+
+  function card(v, c) {
+    const r = c.r;
+    const box = el('div', 'card');
+    box.tabIndex = 0;
+    box.setAttribute('role', 'button');
+    box.setAttribute('aria-pressed', String(v.pick.has(c.id)));
+    box.dataset.card = c.id;
+    box.addEventListener('click', (e) => pickCard(v, [c.id], e));
+    box.addEventListener('keydown', (e) => { if (e.target === box && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); pickCard(v, [c.id], e); } });
+    const lim = limitsOf(r);
+    const head = el('div', 'c-head');
+    const label = kindLabel(c.key);
+    const row = el('div', 'c-row');
+    const part = (k, val, g) => { const s = el('span'); s.append(document.createTextNode(`${k} `), el('b', g ? `g-${g}` : null, val)); row.append(s); };
+    const errs = el('div', 'c-row');
+    if (r.kind === 'session') {
+      if (c.dir === 'out') {
+        head.append(el('span', `c-kind k-${c.key}`, label), el('span', 'dim', 'sent'));
+        const big = el('div', 'c-big', `${rate(r.msgs_rate)}`);
+        big.append(el('small', null, 'msg/s'));
+        box.append(head, big);
+        part('', Bps(r.bytes_rate));
+        box.append(row);
+        return box;
+      }
+      head.append(el('span', `c-kind k-${c.key}`, label), el('span', 'dim', `${count(r.n)} ended`));
+      const big = el('div', 'c-big', count(r.open));
+      big.append(el('small', null, 'open now'));
+      part('in', `${rate(r.msgs_rate)}/s`);
+      part('', Bps(r.bytes_rate));
+      errs.append(el('span', r.err ? 'no' : null, `dropped ${count(r.err)}`));
+      if (has(r.max)) errs.append(el('span', null, `max ${spent(r.max)}`));
+      box.append(head, big, row, errs);
+      return box;
+    }
+    head.append(el('span', `c-kind k-${c.key}`, label), el('span', 'dim', count(r.n)));
+    head.title = `${count(r.n)} over the range, ${rate(r.rate)}/s`;
+    const big = el('div', 'c-big', spent(r.sum_ms));
+    big.append(el('small', null, 'time spent'));
+    part('p99', ms(r.p99), grade(r.p99, lim));
+    part('max', ms(r.max), grade(r.max, lim));
+    errs.append(el('span', null, `${rate(r.rate)}/s`));
+    if (r.kind === 'http') {
+      for (const [k, cls] of [['e5', 'no'], ['e4', 'note']]) {
+        const b = button(r[k] ? cls : null, `${k === 'e5' ? '5xx' : '4xx'} ${count(r[k])}`, (e) => {
+          e.stopPropagation();
+          if (v.errs === k && v.pick.has(c.id)) v.errs = '';
+          else { v.errs = k; if (!v.pick.has(c.id)) v.pick = new Set([c.id]); }
+          v.open = null;
+          writeHash();
+          timingRender(v);
+        });
+        b.title = `only rows with ${k === 'e5' ? '5xx' : '4xx'} answers`;
+        b.setAttribute('aria-pressed', String(v.errs === k && v.pick.has(c.id)));
+        errs.append(b);
+      }
+    } else {
+      const e = el('span', r.err ? 'no' : null, `${c.key === 'setup' ? 'failed' : 'errors'} ${count(r.err)}`);
+      if (c.key === 'setup') e.title = 'never connected';
+      errs.append(e);
+    }
+    box.append(head, big, row, errs);
+    return box;
+  }
+
+  function timingCards(v, target, rows) {
+    const ui = v.ui;
+    const cards = cardsFor(v, target, rows);
+    if (!cards.length) { ui.strip.replaceChildren(); ui.strip.hidden = true; return; }
+    ui.strip.hidden = false;
+    const all = button('card allc', 'all', () => { v.pick = new Set(); v.errs = ''; v.open = null; writeHash(); timingRender(v); });
+    all.setAttribute('aria-pressed', String(!v.pick.size && !v.errs));
+    all.title = 'every kind and direction';
+    const parts = [all];
+    for (const [dir, label] of DIRS) {
+      const mine = cards.filter((c) => c.dir === dir);
+      if (!mine.length) continue;
+      const grp = el('div', 'grp');
+      const ids = mine.map((c) => c.id);
+      const head = button('grp-head', label, (e) => pickCard(v, ids, e));
+      head.setAttribute('aria-pressed', String(v.pick.size === ids.length && ids.every((id) => v.pick.has(id))));
+      head.title = `only ${label}`;
+      const row = el('div', 'grp-cards');
+      row.append(...mine.map((c) => card(v, c)));
+      grp.append(head, row);
+      parts.push(grp);
+    }
+    const scroll = ui.strip.scrollLeft;
+    ui.strip.replaceChildren(...parts);
+    ui.strip.scrollLeft = scroll;
+  }
+
+  function rowTag(r) {
+    const k = cardKey(r);
+    return `${kindLabel(k)}${r.kind === 'session' || r.dir !== defaultDir(r.kind) ? ` ${r.dir}` : ''}`;
   }
 
   function timingRender(v) {
@@ -1157,29 +1441,24 @@
     tcharts.length = 0;
     const shown = boxShown();
     const multi = shown === ALL && state.targets.length > 1;
-    if (!multi) v.target = '';
-    const target = shown === ALL ? v.target : shown;
-    const rows = ((tm.data && tm.data.rows) || []).filter((r) => (v.name === 'endpoints' ? r.kind === 'http' : r.kind !== 'http'));
-    if (v.name === 'calls') {
-      const present = [...new Set(rows.map((r) => r.kind))];
-      const kinds = CALL_KINDS.filter((k) => present.includes(k) || k === v.kind).concat(present.filter((k) => !CALL_KINDS.includes(k)).sort());
-      segFill(ui.kinds, [{ id: '', label: 'all' }, ...kinds.map((k) => ({ id: k, label: KIND_LABEL[k] || k }))], v.kind, (k) => { v.kind = k; writeHash(); timingRender(v); });
-    }
-    ui.boxes.hidden = !multi;
-    segFill(ui.boxes, multi ? [{ id: '', label: 'all boxes' }, ...state.targets.map((t) => ({ id: t.name, label: t.name }))] : [], v.target, (b) => { v.target = b; timingRender(v); });
-    timingCards(v, target);
+    const target = shown === ALL ? null : shown;
+    const rows = ((tm.data && tm.data.rows) || []).filter((r) => inView(v, r.kind) && (!target || r.target === target));
+    timingCards(v, target, rows);
 
-    const totals = new Map(totalsFor(target).map((r) => [r.kind, r]));
+    const totals = new Map(totalsFor(target).map((r) => [`${r.dir}|${r.kind}`, r]));
     const words = v.q.toLowerCase().split(/\s+/).filter(Boolean);
-    const list = rows.filter((r) => (!target || r.target === target) && (!v.kind || r.kind === v.kind)
-      && words.every((w) => `${r.target} ${r.kind} ${KIND_LABEL[r.kind] || ''} ${r.method} ${r.name} ${r.src}`.toLowerCase().includes(w)));
-    for (const r of list) {
-      const k = totals.get(r.kind);
-      r.share = k && k.sum_ms > 0 && !blocking(r) ? r.sum_ms / k.sum_ms : null;
+    const list2 = rows.filter((r) => (!v.pick.size || v.pick.has(cardId(r))) && (!v.errs || r[v.errs] > 0)
+      && words.every((w) => `${r.target} ${r.kind} ${rowTag(r)} ${DIR_NAME[r.dir]} ${r.method} ${r.name} ${r.src}`.toLowerCase().includes(w)));
+    for (const r of list2) {
+      const k = totals.get(`${r.dir}|${r.kind}`);
+      r.share = r.kind !== 'session' && k && k.sum_ms > 0 && !blocking(r) ? r.sum_ms / k.sum_ms : null;
     }
-    const cols = colsFor(v, multi);
-    const col = cols.find((c) => c.id === v.sort && !c.fixed) || cols.find((c) => c.id === DEFAULT_SORT);
-    list.sort((a, b) => {
+    const cols = colsFor(v, multi, list2.length ? list2 : rows);
+    const col = cols.find((c) => c.id === v.sort) || cols.find((c) => c.id === DEFAULT_SORT);
+    const sess = (r) => r.kind === 'session';
+    list2.sort((a, b) => {
+      if (col.id === 'sum_ms' && sess(a) !== sess(b)) return sess(a) ? -1 : 1;
+      if (col.id === 'sum_ms' && sess(a)) return b.open - a.open || b.msgs_rate - a.msgs_rate || b.n - a.n;
       if (col.id === 'sum_ms' && blocking(a) !== blocking(b)) return blocking(a) ? 1 : -1;
       const x = a[col.id], y = b[col.id];
       const nx = !has(x) || x === '', ny = !has(y) || y === '';
@@ -1187,35 +1466,30 @@
       const d = typeof x === 'number' ? x - y : String(x).localeCompare(String(y));
       return d * v.dir || b.sum_ms - a.sum_ms;
     });
-    const shownRows = list.slice(0, LIMIT);
-    const sc = scaleOf(shownRows.flatMap((r) => [r.p50, r.max]));
+    const shownRows = list2.slice(0, LIMIT);
     const notes = [];
-    if (tm.error) notes.push(`could not refresh: ${tm.error}`);
     if (tm.data) {
-      notes.push(`${list.length} of ${rows.length} lines over ${tm.data.range}${list.length > LIMIT ? `, showing the first ${LIMIT}` : ''}`);
+      notes.push(`${list2.length} of ${rows.length} lines over ${tm.data.range}${list2.length > LIMIT ? `, the first ${LIMIT} shown` : ''}`);
+      if (v.errs) notes.push(`only ${v.errs === 'e5' ? '5xx' : '4xx'}`);
       for (const [box, n] of Object.entries(tm.data.dropped || {})) notes.push(`${box}: ${n} new lines dropped, the table holds 400 per box`);
     }
+    if (tm.error) notes.push(`could not refresh: ${tm.error}`);
     ui.info.textContent = notes.join(' · ');
 
     const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.col : null;
     const head = el('tr');
     for (const c of cols) {
       const th = el('th', c.num ? 'num' : null);
-      if (c.id === 'lat') {
-        th.append(el('div', null, 'latency'), axis(sc));
-      } else if (c.fixed) th.textContent = c.label;
-      else {
-        const b = button(null, c.label + (c.id === col.id ? (v.dir < 0 ? ' ▼' : ' ▲') : ''), () => {
-          if (col.id === c.id) v.dir = -v.dir;
-          else { v.sort = c.id; v.dir = c.num ? -1 : 1; }
-          writeHash();
-          timingRender(v);
-        });
-        b.dataset.col = c.id;
-        b.title = `sort by ${c.label}`;
-        if (c.id === col.id) th.setAttribute('aria-sort', v.dir < 0 ? 'descending' : 'ascending');
-        th.append(b);
-      }
+      const b = button(null, c.label + (c.id === col.id ? (v.dir < 0 ? ' ▼' : ' ▲') : ''), () => {
+        if (col.id === c.id) v.dir = -v.dir;
+        else { v.sort = c.id; v.dir = c.num ? -1 : 1; }
+        writeHash();
+        timingRender(v);
+      });
+      b.dataset.col = c.id;
+      b.title = `sort by ${c.label}`;
+      if (c.id === col.id) th.setAttribute('aria-sort', v.dir < 0 ? 'descending' : 'ascending');
+      th.append(b);
       head.append(th);
     }
     ui.thead.replaceChildren(head);
@@ -1233,8 +1507,9 @@
       body.push(tr);
     };
     if (!rows.length) empty(!tm.data ? (tm.error ? tm.error : 'loading') : 'no timings yet. each box sends them through its agent (TIMINGS_FROM in docker-compose.yml) once it runs this build');
-    else if (!list.length) empty('nothing matches the filter');
+    else if (!list2.length) empty('nothing matches');
     const now = timingNow();
+    const tagged = new Set(list2.map(cardId)).size > 1;
     for (const r of shownRows) {
       const id = `${r.target}\u0000${r.key}`;
       const lim = limitsOf(r);
@@ -1242,30 +1517,30 @@
       tr.tabIndex = 0;
       tr.setAttribute('aria-expanded', String(v.open === id));
       for (const c of cols) {
-        if (c.id === 'lat') {
-          const td = el('td', 'latc');
-          td.append(latBar(r, sc));
-          tr.append(td);
-          continue;
-        }
         if (c.id === 'share') {
           const td = el('td', 'num mono');
-          const bar = el('span', 'share');
-          const fill = el('i');
-          fill.style.width = `${Math.round((r.share || 0) * 100)}%`;
-          bar.append(fill);
-          td.append(bar, document.createTextNode(share(r.share)));
+          if (has(r.share)) {
+            const bar = el('span', 'share');
+            const fill = el('i');
+            fill.style.width = `${Math.round((r.share || 0) * 100)}%`;
+            bar.append(fill);
+            td.append(bar);
+          }
+          td.append(document.createTextNode(share(r.share)));
           tr.append(td);
           continue;
         }
         const val = r[c.id];
         const g = c.graded ? grade(val, lim) : '';
-        const cls = [c.num ? 'num mono' : '', c.id === 'name' ? 'ep-name mono' : '', c.bad && val > 0 ? c.bad : '', g ? `g-${g}` : '', c.id === 'src' || c.id === 'method' ? 'dim' : ''].filter(Boolean).join(' ');
-        const td = el('td', cls, c.fmt ? c.fmt(val) : val || '—');
+        const blank = (c.stream && r.kind !== 'session') || (c.id === 'sum_ms' && r.kind === 'session');
+        const cls = [c.num ? 'num mono' : '', c.id === 'name' ? 'ep-name mono' : '', !blank && c.bad && val > 0 ? c.bad : '', g ? `g-${g}` : '', c.id === 'src' || c.id === 'method' ? 'dim' : ''].filter(Boolean).join(' ');
+        const fmt = r.kind === 'session' && c.fmt === ms ? spent : c.fmt;
+        const td = el('td', cls, blank ? '—' : fmt ? fmt(val) : val || '—');
         if (c.id === 'name') {
-          td.title = `${KIND_LABEL[r.kind] || r.kind} ${r.name}`;
-          if (v.name === 'calls' && !v.kind) td.prepend(el('span', `ktag k-${r.kind}`, KIND_LABEL[r.kind] || r.kind));
+          td.title = `${rowTag(r)} ${r.name} · ${DIR_NAME[r.dir]}`;
+          if (tagged) td.prepend(el('span', `ktag k-${cardKey(r)}`, rowTag(r)));
         }
+        if (r.kind === 'session' && (c.id === 'n' || c.graded)) td.title = c.id === 'n' ? 'sessions ended' : 'how long a session lasted';
         tr.append(td);
       }
       const toggle = () => {
@@ -1280,14 +1555,24 @@
       if (v.open === id) body.push(timingDetail(v, r, cols.length, now));
     }
     ui.tbody.replaceChildren(...body);
-    for (const c of tcharts) (c.hist ? drawHist : draw)(c);
+    for (const c of tcharts) draw(c);
+    ui.sig = timingSig(v);
+  }
+
+  function timingSig(v) {
+    return `${tm.data ? tm.data.received : 0}|${tm.error}|${boxShown()}|${v.open}|${v.detail ? `${v.detail.id}|${v.detail.received || v.detail.error}` : ''}`;
   }
 
   function timingDetail(v, r, span, now) {
     const tr = el('tr', 'detail');
     const td = el('td');
     td.colSpan = span;
-    td.append(el('pre', 'mono', `${KIND_LABEL[r.kind] || r.kind}${r.method ? ' ' + r.method : ''} ${r.name}\n${r.target} · ${r.src} · ${count(r.n)} over ${tm.data.range} · ${rate(r.rate)}/s · ${spent(r.sum_ms)} in all, ${share(r.share)} of its kind\navg ${ms(r.mean)} · p50 ${ms(r.p50)} · p95 ${ms(r.p95)} · p99 ${ms(r.p99)} · max ${ms(r.max)} · ${r.kind === 'http' ? `4xx ${r.e4} · 5xx ${r.e5} · ` : ''}all errors ${r.err}`));
+    const S = r.kind === 'session';
+    const head = `${rowTag(r)}${r.method && !S ? ' ' + r.method : ''} ${r.name} · ${DIR_NAME[r.dir]}\n${r.target} · ${r.src}`;
+    const body = S
+      ? `${count(r.n)} ended over ${tm.data.range} · ${count(r.open)} open now · ${count(r.open_peak)} at most · ${count(r.msgs)} messages · ${bytes(r.bytes)} · dropped ${r.err}\nlasted: avg ${spent(r.mean)} · p50 ${spent(r.p50)} · p95 ${spent(r.p95)} · p99 ${spent(r.p99)} · longest ${spent(r.max)}`
+      : `${count(r.n)} over ${tm.data.range} · ${rate(r.rate)}/s · ${spent(r.sum_ms)} in all, ${share(r.share)} of its kind\navg ${ms(r.mean)} · p50 ${ms(r.p50)} · p95 ${ms(r.p95)} · p99 ${ms(r.p99)} · max ${ms(r.max)} · ${r.kind === 'http' ? `4xx ${r.e4} · 5xx ${r.e5} · ` : ''}all errors ${r.err}`;
+    td.append(el('pre', 'mono', `${head}\n${body}`));
     const D = v.detail;
     const id = `${r.target}\u0000${r.key}`;
     if (!D || D.id !== id) td.append(el('div', 'empty', 'loading'));
@@ -1295,140 +1580,118 @@
     else {
       const src = { t: D.t, bucket_secs: D.bucket_secs };
       const tiles = el('div', 'tiles');
-      tiles.append(
-        histTile(D, r),
-        chart({ label: `latency per ${per(D.bucket_secs)}, log scale`, now, read: ms, src, store: tcharts, value: `p95 ${ms(r.p95)}`, log: true,
-          lines: [{ name: 'p50', v: D.p50, color: COLORS.green }, { name: 'p95', v: D.p95, color: COLORS.blue }, { name: 'p99', v: D.p99, color: COLORS.violet }, { name: 'max', v: D.max, color: COLORS.red }] }),
-        chart({ label: `count per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: count(r.n),
-          lines: [{ name: 'count', v: D.n, color: COLORS.blue }] }),
-        chart({ label: `time spent per ${per(D.bucket_secs)}`, now, read: spent, src, store: tcharts, value: spent(r.sum_ms),
-          lines: [{ name: 'time', v: D.sum, color: COLORS.violet }] }),
-        chart({ label: `errors per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: `${r.err + r.e4}`,
-          lines: [{ name: '4xx', v: D.e4, color: COLORS.yellow }, { name: '5xx', v: D.e5, color: COLORS.red }, { name: 'all errors', v: D.err, color: COLORS.violet }] })
-      );
+      const fmt = S ? spent : ms;
+      const lat = [
+        { name: 'avg', v: D.avg, color: COLORS.white },
+        { name: 'p50', v: D.p50, color: COLORS.green },
+        { name: 'p95', v: D.p95, color: COLORS.blue },
+        { name: 'p99', v: D.p99, color: COLORS.violet },
+        { name: 'max', v: D.max, color: COLORS.red },
+      ];
+      const big = chart({ label: `${S ? 'session length' : 'latency'} per ${per(D.bucket_secs)}, ms, log scale`, now, read: fmt, src, store: tcharts, value: `p99 ${fmt(r.p99)} · max ${fmt(r.max)}`, log: true, lines: lat,
+        tip: (i) => [...lat.map((l) => [l.name, l.color, fmt(l.v[i])]), ['count', null, has(D.n[i]) ? count(D.n[i]) : '—']] });
+      big.classList.add('wide');
+      tiles.append(big);
+      if (S) {
+        tiles.append(
+          chart({ label: `open, per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: `${count(r.open)} now`, lines: [{ name: 'open', v: D.open, color: COLORS.blue }] }),
+          chart({ label: `messages per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: count(r.msgs), lines: [{ name: 'messages', v: D.msgs, color: COLORS.violet }] }),
+          chart({ label: `bytes per ${per(D.bucket_secs)}`, now, read: bytes, src, store: tcharts, value: bytes(r.bytes), lines: [{ name: 'bytes', v: D.bytes, color: COLORS.green }] }),
+          chart({ label: `ended and dropped per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: `${count(r.n)} · ${count(r.err)}`, lines: [{ name: 'ended', v: D.n, color: COLORS.blue }, { name: 'dropped', v: D.err, color: COLORS.red }] })
+        );
+      } else {
+        tiles.append(
+          chart({ label: `count per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: count(r.n), lines: [{ name: 'count', v: D.n, color: COLORS.blue }] }),
+          chart({ label: `time spent per ${per(D.bucket_secs)}`, now, read: spent, src, store: tcharts, value: spent(r.sum_ms), lines: [{ name: 'time', v: D.sum, color: COLORS.violet }] }),
+          chart({ label: `errors per ${per(D.bucket_secs)}`, now, read: count, src, store: tcharts, value: `${r.err + r.e4}`,
+            lines: [{ name: '4xx', v: D.e4, color: COLORS.yellow }, { name: '5xx', v: D.e5, color: COLORS.red }, { name: 'all errors', v: D.err, color: COLORS.violet }] })
+        );
+      }
       td.append(tiles);
     }
     tr.append(td);
     return tr;
   }
 
-  function histTile(D, r) {
-    const tile = el('div', 'tile wide');
-    const head = el('div', 'head');
-    const hist = D.hist || [];
-    const total = hist.reduce((s, b) => s + b[2], 0);
-    const value = `${count(total)} calls over the range`;
-    const $value = el('span', 'value mono', value);
-    head.append(el('span', 'label', 'distribution, log scale'), $value);
-    const canvas = el('canvas');
-    canvas.setAttribute('role', 'img');
-    canvas.setAttribute('aria-label', `how ${count(total)} calls spread over latency, with p50 ${ms(r.p50)}, p95 ${ms(r.p95)} and p99 ${ms(r.p99)} marked`);
-    tile.append(head, canvas);
-    if (!hist.length) { tile.append(el('div', 'empty', 'no calls in the range')); return tile; }
-    const c = { hist: true, canvas, bars: hist, total, lim: limitsOf(r), marks: [['p50', r.p50, COLORS.green], ['p95', r.p95, COLORS.blue], ['p99', r.p99, COLORS.violet], ['max', r.max, COLORS.red]], hover: null };
-    tcharts.push(c);
-    canvas.addEventListener('mousemove', (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const i = c.pick ? c.pick(e.clientX - rect.left) : -1;
-      if (i < 0) return;
-      c.hover = i;
-      drawHist(c);
-      const below = hist.slice(0, i + 1).reduce((s, b) => s + b[2], 0);
-      $value.textContent = `${ms(hist[i][0])} – ${ms(hist[i][1])} · ${count(hist[i][2])} calls · ${share(below / total)} at or under`;
-    });
-    canvas.addEventListener('mouseleave', () => { c.hover = null; drawHist(c); $value.textContent = value; });
-    return tile;
-  }
-
-  function drawHist(c) {
-    const { canvas, bars, marks, lim } = c;
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.clientWidth, h = canvas.clientHeight;
-    if (!w || !h) return;
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h * dpr);
-    const g = canvas.getContext('2d');
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.clearRect(0, 0, w, h);
-    const lo = Math.max(bars[0][0], 0.0005);
-    const sc = scaleOf([lo, bars[bars.length - 1][1]]);
-    const bottom = h - 14, top = 14;
-    const x = (v) => (at(sc, v) / 100) * w;
-    const peak = Math.max(...bars.map((b) => b[2]));
-    g.strokeStyle = COLORS.grid;
-    g.fillStyle = COLORS.t3;
-    g.font = '10px system-ui, sans-serif';
-    g.lineWidth = 1;
-    g.beginPath();
-    for (let d = sc.a; d <= sc.b; d++) {
-      const px = Math.round(x(10 ** d)) + 0.5;
-      g.moveTo(px, top); g.lineTo(px, bottom);
-      const label = ms(10 ** d);
-      const tw = g.measureText(label).width;
-      g.fillText(label, Math.min(Math.max(0, px - tw / 2), w - tw), h - 2);
+  function renderPicker(shown) {
+    const targets = state.targets;
+    if (targets.length <= 1) {
+      const t = targets[0];
+      const sig = t ? `one|${t.name}|${t.status}` : 'none';
+      if ($box.dataset.sig === sig) return;
+      $box.dataset.sig = sig;
+      $box.replaceChildren();
+      if (t) {
+        const s = el('span');
+        s.title = `${t.name} is ${t.status}`;
+        s.append(el('span', `dot ${t.status}`), document.createTextNode(t.name));
+        $box.append(s);
+      }
+      return;
     }
-    g.moveTo(0, bottom + 0.5); g.lineTo(w, bottom + 0.5);
-    g.stroke();
-    const tone = { ok: COLORS.green, warn: COLORS.yellow, bad: COLORS.red, '': COLORS.blue };
-    c.pick = (px) => {
-      for (let i = 0; i < bars.length; i++) if (px >= x(Math.max(bars[i][0], lo)) - 1 && px <= x(bars[i][1]) + 1) return i;
-      return -1;
-    };
-    bars.forEach((b, i) => {
-      const x0 = x(Math.max(b[0], lo)), x1 = Math.max(x0 + 1.5, x(b[1]) - 0.5);
-      const bh = Math.max(1, (b[2] / peak) * (bottom - top));
-      g.globalAlpha = c.hover === null || c.hover === i ? 0.85 : 0.45;
-      g.fillStyle = tone[grade((b[0] + b[1]) / 2, lim)];
-      g.fillRect(x0, bottom - bh, x1 - x0, bh);
+    const items = [...(allAllowed() ? [{ id: ALL, label: 'all', note: `${targets.filter((t) => t.status === 'up').length}/${targets.length} up` }] : []), ...targets.map((t) => ({ id: t.name, label: t.name, status: t.status }))];
+    const sig = `${items.map((i) => `${i.id}:${i.status || i.note}`).join('|')}|${shown}`;
+    if ($box.dataset.sig === sig && $box.firstChild) return;
+    $box.dataset.sig = sig;
+    const cur = items.find((i) => i.id === shown) || items[0];
+    const open = button(null, null, null);
+    open.setAttribute('aria-haspopup', 'listbox');
+    open.setAttribute('aria-expanded', 'false');
+    open.setAttribute('aria-label', `box: ${cur.label}`);
+    open.append(...(cur.status ? [el('span', `dot ${cur.status}`)] : []), document.createTextNode(cur.label), el('span', 'dim', '▾'));
+    const ul = el('ul');
+    ul.setAttribute('role', 'listbox');
+    ul.tabIndex = -1;
+    ul.hidden = true;
+    let active = items.indexOf(cur);
+    const lis = items.map((i, k) => {
+      const li = el('li');
+      li.setAttribute('role', 'option');
+      li.setAttribute('aria-selected', String(i.id === shown));
+      li.dataset.box = i.id;
+      li.append(...(i.status ? [el('span', `dot ${i.status}`)] : []), el('span', null, i.label));
+      if (i.note) li.append(el('small', null, i.note));
+      li.addEventListener('mousedown', (e) => e.preventDefault());
+      li.addEventListener('click', () => { close(); choose({ box: i.id }); });
+      li.addEventListener('mouseenter', () => { active = k; mark(); });
+      return li;
     });
-    g.globalAlpha = 1;
-    let lastX = -100;
-    for (const [name, v, color] of marks) {
-      if (!has(v) || v <= 0) continue;
-      const px = Math.round(x(v)) + 0.5;
-      g.strokeStyle = color;
-      g.setLineDash([3, 3]);
-      g.beginPath(); g.moveTo(px, top - 2); g.lineTo(px, bottom); g.stroke();
-      g.setLineDash([]);
-      g.fillStyle = color;
-      const tw = g.measureText(name).width;
-      const lx = Math.max(lastX + 4, Math.min(px - tw / 2, w - tw));
-      g.fillText(name, lx, 10);
-      lastX = lx + tw;
-    }
+    ul.append(...lis);
+    const mark = () => lis.forEach((li, k) => li.classList.toggle('active', k === active));
+    const close = () => { ul.hidden = true; open.setAttribute('aria-expanded', 'false'); document.removeEventListener('mousedown', outside); };
+    const outside = (e) => { if (!$box.contains(e.target)) close(); };
+    const show = () => { ul.hidden = false; open.setAttribute('aria-expanded', 'true'); active = Math.max(0, items.findIndex((i) => i.id === shown)); mark(); document.addEventListener('mousedown', outside); };
+    open.addEventListener('click', () => (ul.hidden ? show() : close()));
+    open.addEventListener('keydown', (e) => {
+      if (ul.hidden) {
+        if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(e.key)) { e.preventDefault(); show(); }
+        return;
+      }
+      if (e.key === 'ArrowDown') { e.preventDefault(); active = (active + 1) % items.length; mark(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); active = (active + items.length - 1) % items.length; mark(); }
+      else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const i = items[active]; close(); choose({ box: i.id }); }
+      else if (e.key === 'Escape' || e.key === 'Tab') close();
+    });
+    open.addEventListener('blur', () => setTimeout(() => { if (!$box.contains(document.activeElement)) close(); }, 0));
+    $box.replaceChildren(open, ul);
   }
 
   function renderNav(shown) {
-    $tabs.replaceChildren();
-    if (state.targets.length > 1) {
-      const all = button('tab', null, () => choose({ box: ALL }));
-      all.setAttribute('aria-pressed', String(shown === ALL));
-      const up = state.targets.filter((t) => t.status === 'up').length;
-      all.append(el('span', null, 'all boxes'), el('small', null, `${up}/${state.targets.length} up`));
-      $tabs.append(all);
-    }
-    for (const t of state.targets) {
-      const b = button('tab', null, () => choose({ box: t.name }));
-      b.setAttribute('aria-pressed', String(shown === t.name));
-      const H = t.metrics && t.metrics.host;
-      const disk = H && (H.disk || [])[0];
-      const mini = H ? `cpu ${pct1(H.cpu_pct)} · mem ${H.mem_total ? pct1((100 * H.mem_used) / H.mem_total) : '—'} · disk ${disk ? pct1((100 * disk.used) / disk.total) : '—'}` : '';
-      b.append(el('span', `dot ${t.status}`), el('span', null, t.name));
-      if (mini) b.append(el('small', null, mini));
-      $tabs.append(b);
-    }
-    $ranges.replaceChildren();
+    renderPicker(shown);
     $ranges.hidden = sel.tab === 'containers' && sel.cview === 'arch';
-    for (const r of Object.keys(RANGES)) {
-      const b = button(null, r, () => choose({ range: r }));
-      b.setAttribute('aria-pressed', String(sel.range === r));
-      $ranges.append(b);
+    if ($ranges.dataset.sig !== sel.range) {
+      $ranges.dataset.sig = sel.range;
+      $ranges.replaceChildren(...Object.keys(RANGES).map((r) => {
+        const b = button(null, r, () => choose({ range: r }));
+        b.setAttribute('aria-pressed', String(sel.range === r));
+        return b;
+      }));
     }
     const target = shown === ALL ? null : shown;
     const tot = totalsFor(target);
-    const badge = (kinds) => {
-      const rows = tot.filter((r) => kinds(r.kind));
-      return rows.length ? `${count(rows.reduce((s, r) => s + r.n, 0))}` : '';
+    const badge = (pred) => {
+      const rows = tot.filter((r) => pred(r.kind) && r.kind !== 'session');
+      return rows.length ? count(rows.reduce((s, r) => s + r.n, 0)) : '';
     };
     const sig = TABS.map((t) => t.id).join('|');
     if ($views.dataset.sig !== sig) {
@@ -1455,79 +1718,90 @@
       const on = id === sel.tab;
       b.setAttribute('aria-selected', String(on));
       b.tabIndex = on ? 0 : -1;
-      const extra = id === 'endpoints' ? badge((k) => k === 'http') : id === 'calls' ? badge((k) => k !== 'http') : '';
+      const extra = id === 'endpoints' ? badge((k) => ENDPOINT_KINDS.includes(k)) : id === 'calls' ? badge((k) => !ENDPOINT_KINDS.includes(k)) : '';
       b.replaceChildren(document.createTextNode(TABS.find((x) => x.id === id).label));
       if (extra) b.append(el('small', null, extra));
     }
     $main.setAttribute('aria-labelledby', `view-${sel.tab}`);
   }
 
-  function containersTab(shown, now) {
-    const out = [];
-    const bar = el('div', 'sec-head');
-    const seg = el('div', 'seg');
-    seg.setAttribute('role', 'group');
-    seg.setAttribute('aria-label', 'containers view');
-    for (const [id, label] of [['table', 'table and graphs'], ['arch', 'architecture']]) {
-      const b = button(null, label, () => choose({ cview: id }));
-      b.setAttribute('aria-pressed', String(sel.cview === id));
-      seg.append(b);
+  function renderStatus() {
+    const errs = [...problems.values()];
+    if (stateError) errs.unshift(stateError);
+    if (views[sel.tab] && tm.error) errs.push(`timings: ${tm.error}`);
+    const ok = !errs.length && !!state;
+    $status.className = `dot ${ok ? 'ok' : state || stateError ? 'bad' : ''}`;
+    $status.dataset.ok = String(ok);
+    const m = (state && state.monitor) || {};
+    const about = state ? `build ${m.build} · up ${human(m.up_secs || 0)} · every ${m.check_every_secs}s · down after ${m.down_after} misses · ${m.webhook ? 'webhook on' : 'no webhook'}${m.public ? ' · public' : ''}` : 'loading';
+    $status.title = ok ? `refreshed · ${about}` : `${errs.join('\n') || 'loading'}\n${about}`;
+    $status.setAttribute('aria-label', ok ? 'refreshed' : `refresh problem: ${errs.join('; ')}`);
+  }
+
+  function mount(nodes) {
+    const keep = new Map();
+    for (const e of $main.querySelectorAll('[data-scroll]')) keep.set(e.dataset.scroll, [e.scrollTop, e.scrollLeft]);
+    const same = nodes.length === $main.childNodes.length && nodes.every((n, i) => $main.childNodes[i] === n);
+    if (!same) $main.replaceChildren(...nodes);
+    for (const e of $main.querySelectorAll('[data-scroll]')) {
+      const k = keep.get(e.dataset.scroll);
+      if (k) { e.scrollTop = k[0]; e.scrollLeft = k[1]; }
     }
-    bar.append(seg, el('span', 'dim', sel.cview === 'arch' ? 'live from each box\u2019s docker engine (networks, ports, depends_on) and api/src/architecture.json' : ''));
-    bar.style.marginBottom = '16px';
-    out.push(bar);
-    const titled = shown === ALL;
-    for (const t of state.targets.filter((x) => shown === ALL || x.name === shown)) {
-      out.push(guard(`containers · ${t.name}`, () => (sel.cview === 'arch' ? archSection(t, now, titled) : containerSection(t, now, titled))));
-    }
-    return out;
   }
 
   function render() {
+    for (const k of [...problems.keys()]) if (k.startsWith('draw ')) problems.delete(k);
     try {
       renderPage();
-      $drawn.textContent = '';
     } catch (e) {
       console.error('render', e);
-      $drawn.textContent = `could not draw the page: ${e && e.message ? e.message : e}`;
+      problems.set('draw page', `could not draw the page: ${e && e.message ? e.message : e}`);
     }
+    renderStatus();
   }
 
   function renderPage() {
     if (!state) return;
     charts.length = 0;
     const now = Date.parse(state.now) + (Date.now() - state.received);
-    const m = state.monitor;
-    $meta.textContent = `build ${m.build} · up ${human(m.up_secs)} · every ${m.check_every_secs}s · down after ${m.down_after} misses · ${m.webhook ? 'webhook on' : 'no webhook'}${m.public ? ' · public' : ''}`;
     if (!state.targets.length) {
-      $tabs.replaceChildren();
+      $box.replaceChildren();
+      $box.dataset.sig = '';
       $ranges.hidden = true;
       $views.hidden = true;
-      $main.replaceChildren(el('p', 'empty', 'nothing to watch. STATS_TARGETS in .env (or TARGETS in monitor/.env), then deploy'));
+      $q.hidden = true;
+      mount([el('p', 'empty', 'nothing to watch. STATS_TARGETS in .env (or TARGETS in monitor/.env), then deploy')]);
       return;
     }
     $views.hidden = false;
+    syncSearch();
     const shown = boxShown();
     renderNav(shown);
     const v = views[sel.tab];
     if (v) {
       if (!v.ui) timingBuild(v);
-      if ($main.firstChild !== v.ui.sec || $main.childNodes.length !== 1) $main.replaceChildren(v.ui.sec);
+      mount([v.ui.sec]);
+      if (v.ui.sig === timingSig(v)) return;
       const failed = guard(v.name, () => { timingRender(v); return null; });
-      if (failed) $main.replaceChildren(v.ui.sec, failed);
+      if (failed) mount([v.ui.sec, failed]);
       return;
     }
     if (sel.tab === 'containers') {
-      $main.replaceChildren(...containersTab(shown, now));
+      mount(containersTab(shown, now));
     } else if (shown === ALL) {
-      $main.replaceChildren(...state.targets.map((t) => guard(t.name, () => statusCard(t, now, true))));
+      const pane = el('div', 'pane grow overview');
+      pane.dataset.scroll = 'overview';
+      pane.append(...state.targets.map((t) => guard(t.name, () => statusCard(t, now, true))));
+      mount([pane]);
     } else {
       const t = state.targets.find((x) => x.name === shown);
-      $main.replaceChildren(guard(`host · ${t.name}`, () => hostSection(t, now)), guard(`status · ${t.name}`, () => statusCard(t, now, false)));
+      mount([guard(`host · ${t.name}`, () => hostTab(t, now))]);
     }
-    for (const c of charts) {
-      try { draw(c); } catch (e) { console.error('chart', e); }
-    }
+    requestAnimationFrame(() => {
+      for (const c of charts) {
+        try { draw(c); } catch (e) { console.error('chart', e); }
+      }
+    });
   }
 
   async function getJson(url) {
@@ -1547,10 +1821,25 @@
       const s = await getJson(`/api/monitor/metrics?target=${encodeURIComponent(box)}&range=${sel.range}`);
       const cur = seriesCache.get(box);
       if (cur.key === key) { cur.data = normSeries(s); cur.error = null; }
+      problems.delete(`series ${box}`);
     } catch (e) {
       const cur = seriesCache.get(box);
       cur.at = 0;
       cur.error = `could not load the graphs: ${e.message}`;
+      problems.set(`series ${box}`, `${box}: ${cur.error}`);
+    }
+    return true;
+  }
+
+  async function loadSpark(box, force) {
+    const c = sparkCache.get(box) || {};
+    if (!force && Date.now() - (c.at || 0) < SPARK_EVERY) return false;
+    sparkCache.set(box, { ...c, at: Date.now() });
+    try {
+      const s = await getJson(`/api/monitor/metrics?target=${encodeURIComponent(box)}&range=1h`);
+      sparkCache.get(box).data = normSeries(s);
+    } catch (e) {
+      sparkCache.get(box).at = 0;
     }
     return true;
   }
@@ -1562,8 +1851,10 @@
     try {
       const d = await getJson(`/api/monitor/architecture?target=${encodeURIComponent(box)}`);
       Object.assign(archCache.get(box), { data: normArch(d), error: null });
+      problems.delete(`arch ${box}`);
     } catch (e) {
       Object.assign(archCache.get(box), { at: 0, error: `could not load the architecture: ${e.message}` });
+      problems.set(`arch ${box}`, `${box}: could not load the architecture: ${e.message}`);
     }
     return true;
   }
@@ -1601,7 +1892,10 @@
     const shown = boxShown();
     const jobs = [];
     if (sel.tab === 'host' && shown !== ALL) jobs.push(loadSeries(shown, force));
-    if (sel.tab === 'containers') for (const b of boxesShown()) jobs.push(sel.cview === 'arch' ? loadArch(b, force) : loadSeries(b, force));
+    if (sel.tab === 'containers') {
+      if (sel.cview === 'arch') jobs.push(loadArch(shown, force), loadSpark(shown, false));
+      else for (const b of boxesShown()) jobs.push(loadSeries(b, force));
+    }
     const v = views[sel.tab];
     if (v) jobs.push(loadTimings(force).then(async (changed) => { if (changed && v.open) await loadDetail(v); return changed; }));
     if (!jobs.length) return;
@@ -1614,7 +1908,8 @@
     try {
       next = normState(await getJson('/api/monitor'));
     } catch (e) {
-      $asof.textContent = lastOk ? `could not refresh (${e.message}). as of ${clock(new Date(lastOk).toISOString())}` : `could not load: ${e.message}`;
+      stateError = state ? `could not refresh (${e.message}). as of ${clock(new Date(state.received).toISOString())}` : `could not load: ${e.message}`;
+      renderStatus();
       return;
     }
     const build = next.monitor.build;
@@ -1624,8 +1919,7 @@
     }
     pageBuild = pageBuild || build;
     state = next;
-    lastOk = Date.now();
-    $asof.textContent = '';
+    stateError = null;
     render();
   }
 
@@ -1635,11 +1929,12 @@
   }
 
   readHash();
+  renderStatus();
   window.addEventListener('hashchange', () => { readHash(); render(); loadVisible(true); });
   let resizeTimer = null;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { for (const c of charts) draw(c); const v = views[sel.tab]; if (v) timingRender(v); }, 100);
+    resizeTimer = setTimeout(() => { for (const c of charts) draw(c); for (const c of tcharts) draw(c); }, 100);
   });
   tick();
   setInterval(tick, 5000);

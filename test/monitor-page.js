@@ -51,9 +51,9 @@ async function pageSurvivesOddAnswers(browser, MON) {
     await page.goto(`${MON}/#tab=host`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.target', { timeout: 10000 });
     await page.waitForTimeout(6000);
-    const asof = ((await page.textContent('#asof')) || '').trim();
-    const drawn = ((await page.textContent('#drawn')) || '').trim();
-    expect(!asof && !drawn, `the header says "${asof}" "${drawn}"`);
+    const ok = await page.getAttribute('#status', 'data-ok');
+    const said = (await page.getAttribute('#status', 'title')) || '';
+    expect(ok === 'true', `the status dot is not ok: "${said}"`);
     expect(!errors.length, `page errors: ${errors.join(' | ')}`);
     const before = loads;
     flip = true;

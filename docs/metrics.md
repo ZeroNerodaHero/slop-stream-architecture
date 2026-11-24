@@ -1,6 +1,6 @@
 # metrics
 
-cpu, memory, disk and network for every container and every box, and the latency and error count of every api route, sql statement, redis command and s3, video and voice call, in our own code, on a page at https://stats.nodentity.xyz, behind a password or, with an explicit `STATS_PUBLIC=true`, open to anyone. built: the agent, the endpoint timings, the monitor's history, the page, the stats site, the deploy target. not built yet: alerts on the numbers, `/admin`'s "this box now" panel, video's own per-stream numbers (end of this page).
+cpu, memory, disk and network for every container and every box, and the latency and error count of every api route, sql statement, redis command and s3, video and voice call, in our own code, on a page at https://stats.nodentity.xyz, behind a password or, with an explicit `STATS_PUBLIC=true`, open to anyone. built: the agent, the endpoint timings, the monitor's history, the page, the stats site, the deploy target. not built yet: alerts on the numbers, `/admin`'s "this box now" panel, video's per-room numbers (end of this page).
 
 ## the shape
 
@@ -106,17 +106,18 @@ a box with a token whose agent misses `DOWN_AFTER` pulls in a row (3, 45 s) gets
 
 - `GET /api/monitor` (what the page polls) carries each box's newest sample as `metrics`, or `metrics.status` saying why there is none: `no OPS_TOKEN for this box`, `401: ...` (the token is wrong), `404: that box has no OPS_TOKEN for its agent, or its Caddyfile predates /api/metrics`, `no answer in 5s`.
 - `GET /api/monitor/metrics?target=<name>&range=1h|24h|7d`: one range of one box as columns, `{ "t": [...], "host": { "cpu_pct": [...], ... }, "containers": { "api": { "cpu_pct": [...], ... } }, "latest": {...} }`.
-- `GET /api/monitor/architecture?target=<name>`: that box's containers as a graph, from its newest sample (below).
+- `GET /api/monitor/architecture?target=<name>`: that box's containers as a graph, from its newest sample (below), with the box's `host: { cpus, mem_total }` for the page's percentages.
 
 ## the architecture
 
 `api/src/architecture.rs` turns one box's newest sample into `{ nodes, edges, networks }`; the page draws it. no new request to docker and nothing kept: it is worked out on each call.
 
-- a node per container, with its project, service, image, state, health, exit code, networks, ports, cpu, memory and network now. two outside nodes, `(internet)` and `(docker)` (the engine's socket).
+- a node per container, with its project, service, image, state, health, exit code, networks, ports, cpu, memory and network now, and `description`, what the service does, from the map. two outside nodes, `(internet)` and `(docker)` (the engine's socket).
 - the edges, three kinds (`via`):
-  - `map`: the connections the code makes, which docker cannot see, from `api/src/architecture.json`: `from`, `to`, `port` and what it is for (`frontend` to `api:4000`, `api` to `database:5432`, the agent to every process's `:9300`). a name there is a container name, or a service name when no container has that name. an edge to a container the box does not run is left out. `tiers` there says which column a container stands in (0 internet, 1 the edge, 2 the processes, 3 media, 4 storage; 2 when unnamed).
+  - `map`: the connections the code makes, which docker cannot see, from `api/src/architecture.json`: `from`, `to`, `port`, `proto` when not tcp, what it is for and `dir` (`frontend` to `api:4000`, `api` to `database:5432`, the agent to every process's `:9300`, video and voice out to their viewers over udp). a name there is a container name, or a service name when no container has that name. an edge to a container the box does not run is left out. `services` there gives each name its `tier`, the column it stands in (0 internet, 1 the edge, 2 the processes, 3 media, 4 storage; 2 when unnamed), and its `description`, a sentence or two the page shows in the node's panel. edit them there; a test checks every edge names a service and every service has a description.
   - `depends_on`: compose's start order inside one project, when the map has no edge between the two.
   - `published`: a port published on the host, not on loopback only, from `(internet)`.
+- `dir` on every edge: `in` carries what browsers send toward the backend (caddy to the processes, the published ports, the fake streamers), `out` what the backend sends to browsers (video and voice copying packets out to every viewer), `inter` one service to another. compose's start order is `inter`.
 - `shared` on an edge between two containers says whether they share a docker network (`over` names them). `false` is drawn red: that connection cannot work. with an agent from before this change there are no networks, `shared` is left out and the page says so.
 - `networks`: each docker network and the containers on it.
 
@@ -124,19 +125,23 @@ the edges in the map are the ones the code makes today. a new service, or one th
 
 ## the page
 
-- a button per box, with its up/down dot and cpu, memory and disk right now. with more than one box an "all boxes" button first. with one box it opens that box.
-- under it four tabs (arrow keys move between them):
-  - **host**: the status card the monitor always had (up/down, the 24-hour bar, the health grid, events, error reports), then the host graphs (cpu with steal and iowait, load, memory, swap, disk, network in and out, pressure), hover for the value at a time. on "all boxes" the status cards side by side.
-  - **containers**: "table and graphs", a table of containers (state, up since, restarts, cpu, memory, network, disk io, pids, each with a sparkline; an exit 0 is grey, not red), a click opens that container's graphs. or "architecture", the graph above: a lane per compose project, a column per tier, a node per container coloured by its state, the edges with their ports. hover a container for its numbers and to light its connections, click it to keep them lit, hover or click a network to light its members, "all labels" shows every port. a table of every connection under it. on "all boxes", one per box.
-  - **endpoints**: the `http` and `ws` lines. **calls**: `db`, `redis`, `s3`, `video`, `voice`. below.
-- the box, the tab, the range, the containers view and the timings filter, kind and sort are in the url (`#box=test-machine&tab=calls&kind=db&sort=-p99&range=24h`), so a link opens the same view. an old `#q=` or `#kind=` link opens endpoints or calls.
-- 1h, 24h, 7d, on every tab but the architecture. the status polls every 5 s, the graphs and the tables every 15 s, 60 s and 5 min. a tab only fetches what it shows.
+one screen high on every tab: the page itself never scrolls, only a long table or list scrolls in its own pane, with its header row stuck on top. checked at 1280x800, 1440x900 and 1512x982.
+
+- one slim bar on top: the tabs **Host**, **Containers**, **Endpoints**, **Calls** on the left (arrow keys move between them), and on the right the box, the range (1h, 24h, 7d; not on the architecture, which is live), the search and a status dot.
+  - the box: a dropdown drawn by the page (not the browser's), each box with its up/down dot. "all" first where adding up makes sense: the host overview, the container table, endpoints and calls. not on the architecture, which is one box at a time. with one box just its name.
+  - the search: on endpoints, calls and the container table, every word must match. `/` focuses it from anywhere, escape clears it.
+  - the dot: green while every refresh works, its tooltip the monitor's build, uptime, check interval and webhook. red when a refresh or a part of the page fails, its tooltip says what.
+- **Host**: the host graphs (cpu with steal and iowait, load, memory, swap, disk, network in and out, pressure) in a grid that fills the screen, hover for the value at a time, and beside them the status the monitor always had (up/down, the 24-hour bar, the health grid, events, error reports). on "all" the status cards side by side.
+- **Containers**: "table and graphs", the containers (state and restarts, up since, cpu, memory, network, pids, each with a sparkline; an exit 0 is grey, not red) and beside it the graphs of the one picked (the busiest at first; a click picks another). or "architecture": the graph fills the screen, a lane per compose project, a column per tier, a node per container coloured by its state, the edges coloured by direction (blue client → backend, violet backend → client, grey between services, red dashed with no shared network). hover a container for a one-line preview and to light its connections; a click pins it in the side panel: its health and uptime, what it does (`description`), cpu as a share of a core and of the box's cores and memory against its limit or the box's memory as bars (green under 60%, yellow to 85%, red past), the last hour of cpu, memory and network in and out as sparklines (from the monitor's history, `range=1h`, every minute), its project, service, image, networks and ports, and its connections out and in, each a button: hover lights that edge, a click keeps it lit. with nothing pinned the panel lists every connection by direction. hover a network to light its members, "all labels" shows every port.
+- **Endpoints** and **Calls**: below.
+- the box, the tab, the range, the containers view, the search, the picked cards and the sort are in the url (`#box=test-machine&tab=calls&pick=inter%7Cdb&sort=-p99&range=24h`), so a link opens the same view. an old `#q=` or `#kind=` link opens endpoints or calls.
+- the status polls every 5 s, the graphs and the tables every 15 s, 60 s and 5 min. a tab only fetches what it shows.
 - every string through `textContent`: container names, images and error reports are not trusted.
 - a tab left open across a deploy reloads itself when the monitor's build changes, so an old page never reads a new answer. every answer is checked as it comes in (a missing list is empty, a missing number is `—`), and a part of the page that still cannot draw says so in its own box while the rest keeps refreshing (`test/monitor-page.js`).
 
 ## endpoint and call timings
 
-every api process (`api`, `chat`, `events`, `home`) times what it does and keeps a histogram per line, `api/src/timings.rs`:
+every api process (`api`, `chat`, `events`, `home`) times what it does and keeps a histogram per line, `api/src/timings.rs`, and so do `video` and `voice` (`video/src/timings.rs`, the same buckets and answer; a test in each crate pins the bucket of the same values):
 
 | kind | one line per | timed |
 |---|---|---|
@@ -146,16 +151,29 @@ every api process (`api`, `chat`, `events`, `home`) times what it does and keeps
 | `redis` | command (`GET`, `ZCOUNT`, `XREAD BLOCK`), a pipeline as `PIPELINE` or `MULTI` and its first four commands | the round trip, through a wrapper round the connection manager (`timings::Redis`). an error answer counts as an error. a blocking `XREAD` is as long as it blocked |
 | `s3` | method and `object`, `object range` or `bucket` | the request to seaweedfs (`s3::send_with`). 404 counts as 4xx |
 | `video`, `voice` | method and path of the internal call: `/live`, `/viewers`, `/health`, `/thumb/{name}.jpg`, `/internal/voice` | the request. no answer counts as an error |
+| `api` | from video and voice: the call to the api, `POST /api/streams/{name}/heartbeat`, `/attached`, `/stop`, `/viewers`, `/api/voice/redeem`, `/api/voice/beat`, `/api/voice/attached` | the request. no answer or a 5xx counts as an error |
+| `session` | a live connection: `method` is `ws` or `webrtc`, `name` the route (`/chat/{name}`, `/chat/{server}/{channel}`, `/rt`, `/events`) or the role (`publish`, `watch`, `preview`, `call`, `screen`). two lines, one each way (below) | how long it stayed open, from the upgrade or the first offer to the close. `n` is sessions ended, `err` the ones that ended badly: a socket error, a peer that failed or vanished |
+| `setup` | a webrtc connection being set up, by role | from the offer to connected. `err` is one that never connected |
+
+every line also carries:
+
+- **`dir`**, its direction, one of three: `in`, client → backend (what browsers send: requests, websocket messages in, a streamer's packets, a voice mic); `out`, backend → client (websocket pushes, the packets video and voice copy out to every viewer); `inter`, one service to another (the db, redis, s3, video and voice calls, video and voice to the api, the agent's reads). an `http` line is `in` when caddy forwarded it (it has `X-Forwarded-For`) and `inter` when another container called the process straight (the agent, `home` to video's `/live`, video to the api). `http`, `ws`, `session` and `setup` are `in` unless set; everything else `inter`. a line's key only gains `|<dir>` when it is not its kind's own, so the keys from before stay the same lines.
+- **`msgs`** and **`bytes`**, counts since the process started, for sessions: the `in` line counts what came in, the `out` line what went out. a websocket counts its frames and their bytes; video and voice count rtp packets and their bytes (payload plus the 12-byte header), out once per viewer, from what webrtc-rs says it wrote to every viewer of a track.
+- **`open`**, sessions open now, on the `in` line, a gauge rather than a count.
+
+all of it is a few atomics per line and a fixed set of names, so a busy box cannot make more lines: the names are route templates and roles, never a stream, a user or an address.
 
 the histogram: 240 counters per line, 8 per doubling, so a percentile is within about 6% of the real one, from 1 µs to 71 minutes. recording is a read lock on the map, then atomic adds; the write lock only for a line's first call. 500 lines per process at most, more go to one `(other)` line per kind. about 2 KB a line.
 
 each process serves its lines on `:9300` (`TIMINGS_PORT`), `GET /timings`, inside docker only: no port published, not in the Caddyfile. counts since the process started, plus the slowest call since the last read.
 
-the agent asks each of `TIMINGS_FROM` (set in compose: `api=http://api:9300,chat=http://chat:9300,events=http://events:9300,home=http://home:9300`) every sample, keeps the last answer, and puts the difference in the sample as `timings`: only the lines with calls since the last sample, buckets sparse. the first answer is a baseline; a process that restarted (its start time changed) gives its whole count. one that does not answer is a `problems` line, `timings from chat: ...`. so `/api/metrics` carries the timings with the host numbers, behind the same `OPS_TOKEN`, and a box needs nothing new.
+the agent asks each of `TIMINGS_FROM` (set in compose: `api=http://api:9300,chat=http://chat:9300,events=http://events:9300,home=http://home:9300,video=http://video:9300,voice=http://voice:9300`) every sample, keeps the last answer, and puts the difference in the sample as `timings`: only the lines with calls, messages or open sessions since the last sample, buckets sparse, `msgs` and `bytes` as the difference, `open` as it is. a source whose container is not running (voice is a compose profile) is skipped, not reported as a problem. the first answer is a baseline; a process that restarted (its start time changed) gives its whole count. one that does not answer is a `problems` line, `timings from chat: ...`. so `/api/metrics` carries the timings with the host numbers, behind the same `OPS_TOKEN`, and a box needs nothing new.
 
 ```json
 "timings": [ { "kind": "http", "method": "GET", "name": "/api/streamers/{name}", "src": "api",
-               "n": 12, "e4": 0, "e5": 0, "err": 0, "sum_us": 64100, "max_us": 11100, "b": [[170, 3], [171, 6], [172, 3]] } ]
+               "n": 12, "e4": 0, "e5": 0, "err": 0, "sum_us": 64100, "max_us": 11100, "b": [[170, 3], [171, 6], [172, 3]] },
+             { "kind": "session", "method": "webrtc", "name": "watch", "src": "video", "dir": "out",
+               "n": 0, "e4": 0, "e5": 0, "err": 0, "sum_us": 0, "max_us": 0, "b": [], "msgs": 138000, "bytes": 151800000 } ]
 ```
 
 the monitor adds each sample's timings into three rings per line and box, coarser than the host numbers so a week of a few hundred lines stays small:
@@ -168,15 +186,15 @@ the monitor adds each sample's timings into three rings per line and box, coarse
 
 400 lines a box; a new line past that is dropped and counted (the page says so). a line with no calls for a week goes. kept in `/data/metrics.json` with the rest.
 
-- `GET /api/monitor/timings?range=1h|24h|7d[&target=<name>]`: `rows`, one per line and box over the range: `target, key, kind, method, name, src, n, rate` (per second), `e4, e5, err, mean, p50, p95, p99, max, sum_ms` (ms; `sum_ms` is the time spent in that line). and `totals`, one per kind and box (`target` null: every box), the lines' histograms added up, so its p95 is the p95 of every call of that kind, not an average of p95s. a blocking redis read (`XREAD BLOCK`) is left out of the totals: it is as long as it waited, and would be most of redis's time.
-- `GET /api/monitor/timings/series?target=<name>&key=<key>&range=...`: one line's points, `t, n, e4, e5, err, sum, p50, p95, p99, max`, and `hist`, the range's calls as `[from_ms, to_ms, count]` per bucket.
+- `GET /api/monitor/timings?range=1h|24h|7d[&target=<name>]`: `rows`, one per line and box over the range: `target, key, kind, dir, method, name, src, n, rate` (per second), `e4, e5, err, mean, p50, p95, p99, max, sum_ms` (ms; `sum_ms` is the time spent in that line), `msgs, bytes, msgs_rate, bytes_rate`, `open` (the newest point's, 0 once it is older than two points) and `open_peak` (the most at once over the range). and `totals`, one per direction, kind and box (`target` null: every box), the lines' histograms added up, so its p95 is the p95 of every call of that kind, not an average of p95s. a blocking redis read (`XREAD BLOCK`) is left out of the totals: it is as long as it waited, and would be most of redis's time.
+- `GET /api/monitor/timings/series?target=<name>&key=<key>&range=...`: one line's points, `t, n, e4, e5, err, sum, p50, p95, p99, max, msgs, bytes, open`, and `hist`, the range's calls as `[from_ms, to_ms, count]` per bucket.
 
-the endpoints and calls tabs:
+the tabs: **Endpoints** has what the processes serve, `http`, `ws` (the upgrade), `session` (the live connections, websocket and webrtc) and `setup`; **Calls** has what they ask of others, `db`, `redis`, `s3`, `video`, `voice` and `api`.
 
-- a card per kind on top (calls: one per kind, a click filters to it): calls and calls a second, time spent, p50, p95, p99 and max, the share of the tab's time, errors.
-- the table: method or kind, name, where, count, a second, total time, share (of its kind's time), avg, p50, p95, p99, max, a latency bar, 4xx and 5xx or errors. a header click sorts by that column, again the other way; total time first. a search box (every word must match the box, kind, method, name or where), a kind filter on calls, a box filter on "all boxes". 250 rows at most; the filter narrows it.
-- the latency bar: every row on one log scale (the axis is in the header), a thin line from p50 to max, thicker from p50 to p95 and p95 to p99, a tick at p50. its colour, and the p95, p99 and max numbers', is against the kind's limits: http and ws 100 and 500 ms, db 10 and 100 ms, redis 2 and 20 ms, s3, video and voice 100 ms and 1 s. green under the first, yellow to the second, red past it. a blocking read has none.
-- a row click opens it: the distribution (a bar per bucket on a log scale, p50, p95, p99 and max marked, hover for the range, the count and the share up to it), then p50, p95, p99 and max over time (log scale), the count, the time spent and the errors.
+- the cards on top are the filter. one per direction and kind, under its direction (client → backend, backend → client, between services); websocket and webrtc sessions are a card each way. a click shows only that card's rows, a click again or "all" shows every row; shift, cmd or ctrl adds and removes cards; a direction's heading picks all its cards. a request card: how many, time spent, p99 and max, a second, and 4xx and 5xx (http) or errors; the 4xx and 5xx are buttons too, they keep only the rows with that kind of answer. a session card: open now, ended, messages a second and bytes a second in, dropped, the longest; its backend → client card what went out.
+- under the cards, small, how many lines of how many over the range.
+- the table: box (on "all"), method, name (with its kind and direction when more than one card shows), where, count, a second, open, msg/s and bytes/s (when sessions show), total time, share (of its kind's time), p99, max, 4xx and 5xx and errors. p99 and max are coloured against the kind's limits: http and ws 100 and 500 ms, webrtc setup 500 ms and 2 s, db 10 and 100 ms, redis 2 and 20 ms, s3, video, voice and api 100 ms and 1 s; green under the first, yellow to the second, red past it. a blocking read and a session have none; a session's p99 and max are how long it lasted. a header click sorts by that column, again the other way; total time first, with the sessions on top by how many are open. 250 rows at most; the search and the cards narrow it.
+- a row click opens it: avg, p50, p95, p99 and max over time, a line each with its colour and a legend, ms on a log scale; hover for a crosshair and a box with the time (America/Chicago), the five values and how many calls that point holds (avg is the point's time spent over its count). then the count, the time spent and the errors over time, or for a session, open, messages, bytes, and ended and dropped.
 
 `err` is every failure: a 5xx, an error from redis, no answer from s3, video or voice. `4xx` is apart, since a 404 on `/api/streamers/{name}` is a normal answer.
 
@@ -340,6 +358,6 @@ the agent: a few megabytes of memory, one docker round per container every 15 s,
 
 - **alerts on the numbers**, through the monitor's webhook and its "n in a row" rule: disk under 15% or 1 GB, memory over 90% for 5 min, cpu over 90% for 10 min, swap growing, more than 3 restarts in an hour, network out over a line you set (the bill: on gcp at $0.12/GiB, 10 mbit/s sustained is about $390 a month).
 - **`/admin` "this box now"** from the box's own agent, for a box with no monitor.
-- **video's own numbers**: rooms, watchers, bytes out per room, pli and nack, ffmpegs. that is mbit/s per stream, what a viewer costs (`kubernetes.md`, item 5).
+- **video's per-room numbers**: bytes out per room, pli and nack, ffmpegs. the sessions above give packets and bytes in and out per role for the whole process; per stream would need the stream name in a line, which the bounded names leave out on purpose.
 - **without the socket**: the cgroup files (`/sys/fs/cgroup/.../docker-<id>.scope/`) give the same numbers with no docker api, for more code and more mounts. the socket is root on the host whatever the `:ro` says (it is a file mode, not an api filter); the agent only ever sends `GET`, but a bug in it is a root bug. this is the trade if that ever stops being acceptable.
 - **prometheus, cadvisor, node-exporter, grafana**: the usual answer when there are many boxes or someone knows grafana. four pieces of other people's code and 400–500 MB on the box. the agent's json would be easy to also serve in prometheus text format then.

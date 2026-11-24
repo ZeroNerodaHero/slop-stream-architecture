@@ -882,10 +882,10 @@ async fn ws(State(g): State<Gateway>, headers: HeaderMap, upgrade: WebSocketUpgr
     upgrade
         .max_message_size(MAX_FRAME_BYTES)
         .max_frame_size(MAX_FRAME_BYTES)
-        .on_upgrade(move |socket| async move {
+        .on_upgrade(move |socket| crate::timings::session("ws", "/events", async move {
             let _slot = slot;
             handle(g, headers, socket).await
-        })
+        }))
         .into_response()
 }
 
@@ -988,6 +988,7 @@ async fn handle(g: Gateway, headers: HeaderMap, mut socket: WebSocket) {
             }
             incoming = socket.recv() => {
                 beat.heard();
+                crate::timings::heard(&incoming);
                 let text = match incoming {
                     Some(Ok(Message::Text(text))) => text.to_string(),
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
