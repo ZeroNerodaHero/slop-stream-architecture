@@ -21,6 +21,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::extract::State;
+use axum::http::header;
+use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use chrono::{DateTime, TimeZone, Utc};
@@ -34,7 +36,7 @@ use crate::groups;
 use crate::presence::{self, EVENTS_KEY};
 use crate::profile;
 use crate::socket::READ_BLOCK_MS;
-use crate::{video_viewers, ApiResult, OPTIONAL_PROBE};
+use crate::{video_viewers, ApiError, ApiResult, OPTIONAL_PROBE};
 
 /// How far back the tail starts after a (re)start: the facts of the gap, replayed onto a table
 /// that was just rebuilt from video, so a stream that started as the process did is not missed.
@@ -42,6 +44,8 @@ use crate::{video_viewers, ApiResult, OPTIONAL_PROBE};
 const REPLAY_MS: i64 = 10_000;
 /// Video's word against the table, this often. The facts are the fast lane; this is what makes them true.
 const HEAL_EVERY: Duration = Duration::from_secs(30);
+/// The list's answer, for the edge and the browser alike. Only this route's.
+const LIST_CACHE: &str = "public, max-age=5";
 
 #[derive(Clone)]
 struct Home {
@@ -99,7 +103,13 @@ pub(crate) async fn run(db: PgPool, redis_url: &str, video_url: &str, port: u16)
 
 /// The snapshot: every live stream, first on first, with what the streamer put on the card.
 /// `viewers` is null until video has said (a stream seconds old), as the pages expect.
-async fn list(State(h): State<Home>) -> ApiResult {
+/// Cloudflare and the browser may keep it 5s (docs/cloudflare-cache-rules.md): the facts on the
+/// events socket carry everything after.
+async fn list(State(h): State<Home>) -> Result<impl IntoResponse, ApiError> {
+    Ok(([(header::CACHE_CONTROL, LIST_CACHE)], snapshot(&h).await?))
+}
+
+async fn snapshot(h: &Home) -> ApiResult {
     let mut live: Vec<(String, Live)> = h.table.lock().await.iter().map(|(n, l)| (n.clone(), l.clone())).collect();
     if live.is_empty() {
         return Ok(Json(json!([])));
