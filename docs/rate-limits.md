@@ -86,7 +86,7 @@ load, per action), not a measurement.
 | ✅ | `POST /api/errors` | Page error reports | 60 / IP + global cap | same **+ 120 / IP** | IP | 10 min; 1 min | low (on page errors) |
 | ✅ | `GET /api/errors` | Read error reports | admin / ops token only | **600** | account / IP | 1 min | rare (admin) |
 | ✅ | `GET /api/streams` (home service) | Live list for the home page | none | **300 / IP** | IP | 1 min | high (every home load) |
-| ✅ | `GET /chat/{name}`, `GET /chat/{server}/{channel}` (WebSocket) | Open a chat room socket | 8 sockets / IP / room; lines: 2/60 s anon, 3/10 s logged in; reactions (login only): 10 at once, then 1/s | same **+ 60 opens / IP** | IP | 1 min | medium (per watch/room page) |
+| ✅ | `GET /chat/{name}`, `GET /chat/{server}/{channel}` (WebSocket) | Open a chat room socket | 8 sockets / IP / room; lines: 2/60 s anon, 3/10 s logged in, 3 at once then 1/s for a test stream's own grant in its own room (the dummy box, `chat.md`); reactions (login only): 10 at once, then 1/s | same **+ 60 opens / IP** | IP | 1 min | medium (per watch/room page) |
 | ✅ | `GET /chat/{name}/before`, `/by/{speaker}`, `/around/{id}` (+ `{server}/{channel}` forms) | Chat history | none | **300 / IP** | IP | 1 min | medium (scrollback) |
 | ✅ | `GET /chat/{name}/search`, `/chat/{server}/{channel}/search` | Search chat history | none | **60 / IP** | IP | 1 min | low |
 | ✅ | `GET /events` (WebSocket) | Presence & push socket | none | **60 opens / IP** and **20 open at once / IP** | IP | 1 min | medium (one per browser, reconnects) |

@@ -146,6 +146,7 @@ services:
       PORT: "4100"
       CHAT_PERSIST: ${CHAT_PERSIST:-}
       ADMIN_NAMES: ${ADMIN_NAMES:-}
+      HIDE_TEST_STREAMERS: ${HIDE_TEST_STREAMERS:-}
       RUST_LOG: info
     depends_on:
       api:
@@ -372,6 +373,8 @@ services:
       DUMMY_STREAMS: ${DUMMY_STREAMS:-0}
       DUMMY_PASSWORD: ${DUMMY_PASSWORD:-}
       DUMMY_NAMES: ${DUMMY_NAMES:-}
+      DUMMY_CHAT: ${DUMMY_CHAT:-}
+      DUMMY_CHAT_INTERVAL_MS: ${DUMMY_CHAT_INTERVAL_MS:-}
       VIDEO_WS_URL: ws://video:7880/ws
       API_URL: http://api:4000
       CHAT_WS_URL: ws://chat:4100

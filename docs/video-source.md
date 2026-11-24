@@ -20,7 +20,34 @@ next try (docs/test-streamers.md).
 
 Env: DUMMY_STREAMS (how many, 0 = idle), DUMMY_PASSWORD (must match the
 server), DUMMY_NAMES (optional comma list), VIDEO_WS_URL, API_URL, DUMMY_FONT,
-DUMMY_GIFS (a folder of .gif files; none there and a coloured box bounces instead).
+DUMMY_GIFS (a folder of .gif files; none there and a coloured box bounces instead),
+CHAT_WS_URL (empty: no chatter), DUMMY_CHAT, DUMMY_CHAT_INTERVAL_MS.
+
+DUMMY_STREAMS=0 (or unset, or not a number) returns from `run` before anything
+starts: no names, no go-live, no `dress`, no chatter, no ffmpeg; the process
+waits for a signal. `stream_count` and `stream_names` are pure and tested.
+
+Chat (`chatter`, `Script`): while a stream is live, two tokio tasks per stream
+talk in its own room, two sockets, so 4 streams fill chat's 8 sockets per ip.
+They start after go-live and are aborted when the stream ends.
+
+- the stream itself: hello with its own name, the go-live `session` and
+  `token`, and `bot`. It says a line every DUMMY_CHAT_INTERVAL_MS (default 1000,
+  clamped to 250..60000, `chat_every`), which chat allows because a test
+  stream's own grant has its own tier there (docs/test-streamers.md, chat.md).
+  Lines come from `OWNER_LINES` (short, long, one near the 500 character max,
+  emoji, questions, a reply-like `@pixelfan lol`, numbers, a link, two lines in
+  one, an unbroken long word, `{me}` for the stream's name), picked
+  pseudo-randomly per stream and never the same line twice in a row. After
+  a question it answers itself half the time from `OWNER_ANSWERS`. Every line is
+  cut to 500 characters.
+- one guest viewer: a nick from `VIEWER_NICKS` (none under the prefix), `bot`,
+  a line from `LINES` every 30 to 39 seconds, under the nick's 2 a minute.
+- the tasks read what chat sends; an error frame with a `wait` (`slow down`,
+  `timed out`) pushes the next line back by that much (`wait_of`). A refused
+  hello logs a warn and that chatter stops; a closed socket reconnects after 5s.
+- DUMMY_CHAT: on unless `0`, `off` or `false` (any case, `chat_on`); off, the
+  streams run with no chatter.
 
 `const FPS`: The frame rate, and the keyframe interval in frames: a keyframe every second. ffmpeg cannot
 be asked for one (the PLIs video forwards when a watcher joins are read and dropped in
