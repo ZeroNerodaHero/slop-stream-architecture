@@ -1,14 +1,3 @@
-//! The pages' error reports, and the debug database they land in. See docs/debugging.md.
-//!
-//! A page that breaks posts one json line to `POST /api/errors` (sendBeacon, so
-//! the body arrives as text/plain). It is written to a second postgres database,
-//! `debug`, made here when missing, through a lazy pool the api never waits for.
-//! Nothing in this file can stop the api: a dead debug database means the report
-//! is a warn line in the log and the browser still gets its 204.
-//!
-//! `GET /api/errors` reads them back, for a login in ADMIN_NAMES (the /admin
-//! page) or a machine holding OPS_TOKEN.
-
 use std::time::Duration;
 
 use axum::extract::rejection::QueryRejection;
@@ -32,18 +21,12 @@ const MAX_BODY_BYTES: usize = 16 * 1024;
 const MAX_MESSAGE_CHARS: usize = 500;
 const MAX_STACK_CHARS: usize = 8000;
 const MAX_FIELD_CHARS: usize = 300;
-/// `extra` as json, bytes. Bigger is replaced by {"clipped": true}: the message and stack are the report.
 const MAX_EXTRA_BYTES: usize = 2048;
-/// The five things a page reports. See frontend/src/infra/report.ts.
 const KINDS: [&str; 5] = ["crash", "error", "rejection", "soft", "api"];
-/// Rows go after this many days, and the table never holds more than this many rows.
 const KEEP_DAYS: i32 = 14;
 const KEEP_ROWS: i64 = 20_000;
-/// Housekeeping runs soon after boot (a box that was flooded while down gets trimmed), then hourly.
 const HOUSEKEEPING_FIRST: Duration = Duration::from_secs(60);
 const HOUSEKEEPING_EVERY: Duration = Duration::from_secs(3600);
-/// Reports per ip, and in total, per window. Over it they are dropped, quietly,
-/// counted in DROPPED_KEY for /api/health.
 const PER_IP: i64 = 60;
 const TOTAL: i64 = 2000;
 const WINDOW_SECS: i64 = 600;
@@ -71,13 +54,6 @@ CREATE TABLE IF NOT EXISTS client_errors (
 CREATE INDEX IF NOT EXISTS client_errors_at_idx ON client_errors (at DESC);
 ";
 
-// ---- the debug database ----------------------------------------------------------
-
-/// A lazy pool on `url`, with the database and its table made when missing.
-/// `None` only for an empty url or one that does not parse. A server that is
-/// down costs a few seconds here at boot (the pool's 1s, the main pool's 5s) and
-/// nothing after: a report just goes to the log, and housekeeping tries the
-/// database and the table again every hour.
 pub(crate) async fn connect(main: &PgPool, url: &str) -> Option<PgPool> {
     if url.trim().is_empty() {
         log::info!("no DEBUG_DATABASE_URL: error reports go to the log only");
@@ -96,7 +72,6 @@ pub(crate) async fn connect(main: &PgPool, url: &str) -> Option<PgPool> {
     Some(pool)
 }
 
-/// The table, and first the database when the server says there is none (3D000).
 async fn ensure_schema(main: &PgPool, pool: &PgPool, url: &str) -> Result<(), sqlx::Error> {
     match pool.execute(SCHEMA).await {
         Err(e) if is_missing_database(&e) => {
@@ -113,12 +88,10 @@ async fn ensure_schema(main: &PgPool, pool: &PgPool, url: &str) -> Result<(), sq
     Ok(())
 }
 
-/// postgres 3D000, invalid_catalog_name: the database in the url does not exist.
 fn is_missing_database(e: &sqlx::Error) -> bool {
     matches!(e, sqlx::Error::Database(d) if d.code().as_deref() == Some("3D000"))
 }
 
-/// The database name at the end of a postgres url, if it is a plain identifier.
 fn database_name(url: &str) -> Option<&str> {
     let name = url.rsplit('/').next()?.split('?').next()?;
     let plain = (1..=63).contains(&name.len())
@@ -126,26 +99,19 @@ fn database_name(url: &str) -> Option<&str> {
     plain.then_some(name)
 }
 
-/// `CREATE DATABASE` through the main pool. Works when both urls point at the
-/// same server, which is the compose setup. Elsewhere, make it by hand.
 async fn create_database(main: &PgPool, url: &str) -> anyhow::Result<String> {
     let name = database_name(url)
         .ok_or_else(|| anyhow::anyhow!("DEBUG_DATABASE_URL must end in a plain database name (a-z 0-9 _)"))?;
-    // no bind parameters in CREATE DATABASE. the name was checked to be a plain identifier.
     main.execute(format!("CREATE DATABASE \"{name}\"").as_str()).await?;
     Ok(name.to_string())
 }
 
-/// A minute after boot, then once an hour: drop rows older than KEEP_DAYS and
-/// everything past the newest KEEP_ROWS. When that fails the database or the
-/// table may not be there yet (it came up late, or was wiped), so make them.
 pub(crate) fn housekeeping(main: PgPool, pool: PgPool, url: String) {
     tokio::spawn(async move {
         let mut wait = HOUSEKEEPING_FIRST;
         loop {
             tokio::time::sleep(wait).await;
             wait = HOUSEKEEPING_EVERY;
-            // the schema only when the trim failed: on a table that exists it is two NOTICE lines in the log
             if let Err(e) = trim(&pool).await {
                 log::warn!("debug database: {e}");
                 if let Err(e) = ensure_schema(&main, &pool, &url).await {
@@ -179,19 +145,11 @@ async fn trim(pool: &PgPool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-/// Reports the limits dropped in the current window, for /api/health. 0 when none, or redis is not answering.
 pub(crate) async fn dropped(s: &AppState) -> i64 {
     let n: Option<i64> = s.redis.clone().get(DROPPED_KEY).await.ok().flatten();
     n.unwrap_or(0)
 }
 
-/// Of `names`, the accounts that are admins. Each name is pinned (`admin_pins`, schema.sql)
-/// to the account that had it the first time a boot saw it with an account, and from then on
-/// the admin is that account, by id, whatever it is called. So an admin who renames stays one
-/// across restarts, and whoever signs up as the released name later is not one: the pin points
-/// at the old id, not at the name. A name nobody has signed up as goes to whoever signs up as
-/// it first (auth.rs), so it is not pinned, and not an admin, until then. Moving a pin is by
-/// hand: `DELETE FROM admin_pins WHERE name = '...'`, then a restart pins it afresh.
 pub(crate) async fn admins_with_accounts(db: &PgPool, names: Vec<String>) -> Result<Vec<Account>, sqlx::Error> {
     sqlx::query(
         "INSERT INTO admin_pins (name, user_id)
@@ -226,9 +184,6 @@ pub(crate) async fn admins_with_accounts(db: &PgPool, names: Vec<String>) -> Res
     Ok(admins)
 }
 
-// ---- POST /api/errors ---------------------------------------------------------------
-
-/// What a page sends. Everything but kind and message is optional; see frontend/src/infra/report.ts.
 #[derive(Deserialize)]
 struct Report {
     kind: String,
@@ -249,9 +204,6 @@ struct Report {
     extra: Option<Value>,
 }
 
-/// Trimmed, at most `max` chars, and no control characters: none belongs in an
-/// error text, a \r or an escape code would forge or wipe lines in the log, and
-/// postgres refuses \u0000. The stack is the one field that keeps its \n and \t.
 fn clip(s: &str, max: usize) -> String {
     s.trim().chars().filter(|c| !c.is_control()).take(max).collect()
 }
@@ -267,7 +219,6 @@ fn clip_stack(s: &Option<String>) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Control characters out of every string and key in it: postgres jsonb refuses \u0000.
 fn scrub(v: Value) -> Value {
     let clean = |s: String| s.chars().filter(|c| !c.is_control()).collect::<String>();
     match v {
@@ -278,15 +229,11 @@ fn scrub(v: Value) -> Value {
     }
 }
 
-/// `extra` as stored: an object, scrubbed, and {"clipped": true} in place of one bigger than MAX_EXTRA_BYTES.
 fn clip_extra(v: Option<Value>) -> Option<Value> {
     let v = scrub(v.filter(Value::is_object)?);
     Some(if v.to_string().len() > MAX_EXTRA_BYTES { json!({ "clipped": true }) } else { v })
 }
 
-/// Where a report goes. Over a limit it is dropped and counted in DROPPED_KEY.
-/// With redis not answering nothing can be counted, so it goes to the log only:
-/// the log can take a flood, the table should not.
 enum Lane {
     Store,
     Drop,
@@ -294,8 +241,6 @@ enum Lane {
 }
 
 async fn lane(s: &AppState, ip: &str) -> Lane {
-    // the ip's own count first, the shared one only when that passes: one noisy
-    // ip must not use up everyone's share of the window
     let over = match auth::bump(s, &format!("rl:errors:ip:{ip}"), WINDOW_SECS).await {
         Err(_) => return Lane::LogOnly,
         Ok(n) if n > PER_IP => true,
@@ -311,7 +256,6 @@ async fn lane(s: &AppState, ip: &str) -> Lane {
     Lane::Drop
 }
 
-/// The body is read raw: sendBeacon sends text/plain, and the Json extractor would refuse it.
 async fn post_error(State(s): State<AppState>, headers: HeaderMap, body: String) -> Result<StatusCode, ApiError> {
     let Ok(r) = serde_json::from_str::<Report>(&body) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad report"));
@@ -327,15 +271,12 @@ async fn post_error(State(s): State<AppState>, headers: HeaderMap, body: String)
         return Ok(StatusCode::NO_CONTENT);
     }
     let page = clip_opt(&r.page, MAX_FIELD_CHARS).unwrap_or_else(|| "?".into());
-    // not the Me extractor, and no last_seen write: a main database that is down or
-    // slow must not turn a report into a 500 or hold it up. half a second, then nobody
     let me = tokio::time::timeout(Duration::from_millis(500), auth::whoami_readonly(&s.db, &headers))
         .await
         .ok()
         .and_then(|me| me.ok())
         .flatten()
         .map(|a| a.name);
-    // one line: clip() left no control character in page or message, and kind is from KINDS
     log::warn!(
         "client error [{}] {page} {kind} ({ip}{}): {message}",
         s.env_name,
@@ -368,18 +309,14 @@ async fn post_error(State(s): State<AppState>, headers: HeaderMap, body: String)
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ---- GET /api/errors -----------------------------------------------------------------
-
 #[derive(Deserialize, Default)]
 struct ListQuery {
     limit: Option<i64>,
-    /// Only rows after this instant (rfc3339).
     since: Option<DateTime<Utc>>,
     kind: Option<String>,
     page: Option<String>,
 }
 
-/// One stored report, as /api/errors returns it. Read as a tuple: the sqlx derive is not on.
 #[derive(Serialize)]
 struct ErrorRow {
     id: i64,
@@ -421,9 +358,6 @@ impl From<ErrorTuple> for ErrorRow {
     }
 }
 
-/// A login in ADMIN_NAMES, or `Authorization: Bearer <OPS_TOKEN>`. The bearer is
-/// compared as two sha256 digests, so the comparison time says nothing about the
-/// token. The cookie is looked up by its sha256 in auth.rs, like every login.
 async fn is_admin(s: &AppState, headers: &HeaderMap) -> Result<bool, ApiError> {
     if let Some(token) = &s.ops_token {
         let given = headers
@@ -442,9 +376,6 @@ async fn is_admin(s: &AppState, headers: &HeaderMap) -> Result<bool, ApiError> {
     Ok(me.is_some_and(|m| s.admins.iter().any(|a| a.id == m.id)))
 }
 
-/// A `kind` or `page` filter: empty is none. Matched exactly against what `clip` kept, so one
-/// longer than MAX_FIELD_CHARS or with a control character finds nothing anyway; it is a 400
-/// rather than a query (postgres refuses a \0).
 fn list_filter(raw: Option<String>) -> Result<Option<String>, ApiError> {
     let Some(raw) = raw.filter(|f| !f.is_empty()) else { return Ok(None) };
     if raw.chars().count() > MAX_FIELD_CHARS {
@@ -457,14 +388,12 @@ fn list_filter(raw: Option<String>) -> Result<Option<String>, ApiError> {
 }
 
 async fn list_errors(State(s): State<AppState>, headers: HeaderMap, q: Result<Query<ListQuery>, QueryRejection>) -> ApiResult<Vec<ErrorRow>> {
-    // nobody is an admin here, so for everyone the route does not exist
     if s.admins.is_empty() && s.ops_token.is_none() {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "no such route"));
     }
     if !is_admin(&s, &headers).await? {
         return Err(ApiError::new(StatusCode::UNAUTHORIZED, "admins only"));
     }
-    // the query only after the gate: a stranger's `?limit=abc` must get the same 404 or 401, not a 400
     let Query(q) = q?;
     let Some(db) = &s.debug else {
         return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "no debug database"));

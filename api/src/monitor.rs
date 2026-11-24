@@ -1,28 +1,3 @@
-//! `api monitor`: watches the other boxes from a box of its own. See docs/debugging.md.
-//!
-//! Every CHECK_EVERY_SECS it asks each target's /api/health and keeps what came
-//! back: up or down and since when, the build, the uptimes (they go backwards after
-//! a restart), an hourly tally for the uptime percentages, and a log of events
-//! (down, up, restart, new build). Every ERRORS_EVERY_SECS it pulls the newest rows
-//! from /api/errors with that box's OPS_TOKEN, so the page shows what broke in
-//! someone's browser without logging in to each box.
-//!
-//! One file is the whole store, DATA_DIR/monitor.json, rewritten after every round
-//! (temp file, then rename: a crash mid-write leaves the old one). No database, no
-//! redis. One page, built into the binary (monitor.html), polls GET /api/monitor
-//! every 10s.
-//!
-//! The targets' certificates are self-signed (an ip, no domain), so they are not
-//! checked. Health is public anyway and the media is encrypted on its own; what a
-//! man in the middle could read is OPS_TOKEN on the error pulls. The alert webhook
-//! is checked normally.
-//!
-//! Env: TARGETS=prod=https://1.2.3.4,dev=https://… (nothing to watch without it),
-//! OPS_TOKENS=prod=…,dev=… (or one OPS_TOKEN for all), ALERT_WEBHOOK (a url that
-//! takes json with "content", like discord; "text" is sent too), PORT (3002),
-//! DATA_DIR (/data), CHECK_EVERY_SECS (15), ERRORS_EVERY_SECS (60), DOWN_AFTER (3:
-//! failed rounds in a row before "down" and the alert).
-
 use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::net::SocketAddr;
@@ -43,10 +18,8 @@ use tokio::task::JoinSet;
 const PAGE: &str = include_str!("monitor.html");
 const STORE_FILE: &str = "monitor.json";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-/// Hours of tally kept: the 7-day uptime figure.
 const KEEP_HOURS: usize = 24 * 7;
 const KEEP_EVENTS: usize = 200;
-/// Error reports kept per target, and how many one pull asks for.
 const KEEP_ERRORS: usize = 100;
 const ERRORS_PULL: usize = 50;
 
@@ -73,13 +46,9 @@ struct App {
     cfg: Arc<Config>,
     store: Arc<Mutex<Store>>,
     started: Instant,
-    /// For the targets: self-signed certificates accepted.
     boxes: reqwest::Client,
-    /// For the webhook: certificates checked.
     hooks: reqwest::Client,
 }
-
-// ---- what is kept -------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Default)]
 struct Store {
@@ -101,21 +70,16 @@ struct TargetState {
     name: String,
     url: String,
     status: Status,
-    /// When the current status began.
     since: Option<DateTime<Utc>>,
-    /// Failed rounds in a row, and when the first of them was.
     failures: u32,
     failing_since: Option<DateTime<Utc>>,
     checked_at: Option<DateTime<Utc>>,
     latency_ms: Option<u64>,
     http_status: Option<u16>,
-    /// Why the last round failed. None when it passed.
     reason: Option<String>,
-    /// The last /api/health body that arrived, kept while the box is down.
     health: Option<Value>,
     hours: VecDeque<Hour>,
     events: VecDeque<Event>,
-    /// From /api/errors, newest first.
     errors: Vec<Value>,
     errors_status: Option<String>,
     errors_at: Option<DateTime<Utc>>,
@@ -131,12 +95,9 @@ struct Hour {
 #[derive(Serialize, Deserialize, Clone)]
 struct Event {
     at: DateTime<Utc>,
-    /// down, up, restart, build
     kind: String,
     text: String,
 }
-
-// ---- one round ----------------------------------------------------------------------
 
 struct Probe {
     ok: bool,
@@ -166,8 +127,6 @@ fn error_text(e: &reqwest::Error) -> String {
     if e.is_timeout() {
         return format!("no answer in {}s", PROBE_TIMEOUT.as_secs());
     }
-    // the cause, not the wrappers: "error sending request: client error (Connect): tcp connect
-    // error: Connection refused (os error 111): Connection refused (os error 111)" is one fact
     let mut parts: Vec<String> = vec![];
     let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
     while let Some(err) = cur {
@@ -183,7 +142,6 @@ fn error_text(e: &reqwest::Error) -> String {
         parts.push(e.to_string());
     }
     let text = parts.join(": ");
-    // reqwest puts the url in; the page already shows it
     let text = match e.url() {
         Some(u) => text.replace(&format!(" for url ({u})"), ""),
         None => text,
@@ -206,9 +164,7 @@ fn describe_failure(status: u16, body: Option<&Value>) -> String {
     }
 }
 
-/// Fold a round into the target. Returns the alerts to post (down, and up again).
 fn apply(t: &mut TargetState, p: Probe, now: DateTime<Utc>, down_after: u32) -> Vec<String> {
-    // the hourly tally
     let hour = now.duration_trunc(TimeDelta::hours(1)).unwrap_or(now);
     match t.hours.back_mut() {
         Some(h) if h.start == hour => {
@@ -221,7 +177,6 @@ fn apply(t: &mut TargetState, p: Probe, now: DateTime<Utc>, down_after: u32) -> 
         t.hours.pop_front();
     }
 
-    // a restart shows as an uptime going backwards, a deploy as a new build
     let mut changes: Vec<(&str, String)> = vec![];
     if let (Some(prev), Some(cur)) = (t.health.as_ref(), p.body.as_ref()) {
         for (field, what) in [("up_secs", "api"), ("video_up_secs", "video")] {
@@ -231,7 +186,6 @@ fn apply(t: &mut TargetState, p: Probe, now: DateTime<Utc>, down_after: u32) -> 
                 }
             }
         }
-        // `version` is the release deploy.sh recorded (v12 → v13); a build moves with it, or alone (a laptop's ship)
         for (field, what) in [("build", "api build"), ("video_build", "video build"), ("version", "release")] {
             if let (Some(a), Some(b)) = (prev.get(field).and_then(Value::as_str), cur.get(field).and_then(Value::as_str)) {
                 if a != b {
@@ -292,7 +246,6 @@ fn push_event(t: &mut TargetState, at: DateTime<Utc>, kind: &str, text: String) 
     }
 }
 
-/// "3d 4h", "4h 12m", "12m 05s", "42s"
 fn human(secs: u64) -> String {
     let (d, h, m, s) = (secs / 86400, secs % 86400 / 3600, secs % 3600 / 60, secs % 60);
     match (d, h, m) {
@@ -303,15 +256,11 @@ fn human(secs: u64) -> String {
     }
 }
 
-/// Percent of rounds that passed over the newest `hours` entries. None before the first round.
 fn uptime(hours: &VecDeque<Hour>, last: usize) -> Option<f64> {
     let (checks, failed) = hours.iter().rev().take(last).fold((0u64, 0u64), |(c, f), h| (c + h.checks as u64, f + h.failed as u64));
     (checks > 0).then(|| 100.0 * (checks - failed) as f64 / checks as f64)
 }
 
-// ---- the error reports ---------------------------------------------------------------
-
-/// The newest rows from a target's /api/errors, or what it answered instead.
 async fn pull_errors(client: &reqwest::Client, t: &Target) -> Result<Vec<Value>, String> {
     let Some(token) = &t.token else { return Err("no OPS_TOKEN for this box".into()) };
     let res = client
@@ -332,12 +281,9 @@ async fn pull_errors(client: &reqwest::Client, t: &Target) -> Result<Vec<Value>,
 fn merge_errors(t: &mut TargetState, rows: Vec<Value>) {
     let known: HashSet<i64> = t.errors.iter().filter_map(|r| r.get("id").and_then(Value::as_i64)).collect();
     t.errors.extend(rows.into_iter().filter(|r| r.get("id").and_then(Value::as_i64).is_some_and(|id| !known.contains(&id))));
-    // ids are a bigserial on that box, so newest first is highest first
     t.errors.sort_by_key(|r| std::cmp::Reverse(r.get("id").and_then(Value::as_i64).unwrap_or(0)));
     t.errors.truncate(KEEP_ERRORS);
 }
-
-// ---- the file -------------------------------------------------------------------------
 
 async fn load(dir: &Path) -> Store {
     let path = dir.join(STORE_FILE);
@@ -362,8 +308,6 @@ async fn save(store: &Store, dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The stored targets lined up with TARGETS: same name keeps its history (and takes the
-/// new url), a new name starts empty, a name no longer listed is dropped.
 fn reconcile(mut stored: Store, targets: &[Target]) -> Store {
     let mut out = Vec::with_capacity(targets.len());
     for t in targets {
@@ -383,15 +327,12 @@ fn reconcile(mut stored: Store, targets: &[Target]) -> Store {
     Store { targets: out }
 }
 
-// ---- the loops ------------------------------------------------------------------------
-
 async fn check_loop(app: App) {
     let mut tick = tokio::time::interval(app.cfg.check_every);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tick.tick().await;
         let now = Utc::now();
-        // all boxes at once: a round takes as long as the slowest, not the sum
         let mut set = JoinSet::new();
         for (i, t) in app.cfg.targets.iter().enumerate() {
             let (client, url) = (app.boxes.clone(), t.url.clone());
@@ -442,15 +383,12 @@ async fn errors_loop(app: App) {
 
 async fn alert(app: &App, text: &str) {
     let Some(url) = &app.cfg.webhook else { return };
-    // "content" is what discord reads, "text" what slack and most others do
     match app.hooks.post(url).json(&json!({ "content": text, "text": text })).send().await {
         Ok(res) if res.status().is_success() => {}
         Ok(res) => log::warn!("the webhook answered {}", res.status()),
         Err(e) => log::warn!("the webhook: {}", error_text(&e)),
     }
 }
-
-// ---- the page and its json ------------------------------------------------------------
 
 async fn page() -> Html<&'static str> {
     Html(PAGE)
@@ -499,9 +437,6 @@ fn view(t: &TargetState) -> Value {
     })
 }
 
-// ---- boot -------------------------------------------------------------------------------
-
-/// "a=1,b=2" → [(a, 1), (b, 2)]. Blank entries skipped, a bad one logged and skipped.
 fn parse_pairs(what: &str, s: &str) -> Vec<(String, String)> {
     s.split(',')
         .map(str::trim)
@@ -578,7 +513,6 @@ pub async fn run() -> anyhow::Result<()> {
         .route("/", get(page))
         .route("/health", get(monitor_health))
         .route("/api/monitor", get(state))
-        // per address, in memory: this box has no redis (ratelimit.rs)
         .route_layer(axum::middleware::from_fn_with_state(crate::ratelimit::Local::default(), crate::ratelimit::local))
         .with_state(app);
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
@@ -613,23 +547,18 @@ mod tests {
     #[test]
     fn up_down_up() {
         let mut t = TargetState { name: "prod".into(), ..Default::default() };
-        // first sight: up, an event, no alert
         assert!(apply(&mut t, ok(100, "aaa"), at(0), 3).is_empty());
         assert_eq!(t.status, Status::Up);
         assert_eq!(t.events.back().unwrap().kind, "up");
-        // two misses are not down yet
         assert!(apply(&mut t, dead(), at(15), 3).is_empty());
         assert!(apply(&mut t, dead(), at(30), 3).is_empty());
         assert_eq!((t.status, t.failures), (Status::Up, 2));
-        // the third is, since the first miss, with the reason, and it alerts
         let alerts = apply(&mut t, dead(), at(45), 3);
         assert_eq!(alerts, vec!["prod DOWN: no answer in 5s"]);
         assert_eq!((t.status, t.since), (Status::Down, Some(at(15))));
-        // back, with the downtime
         let alerts = apply(&mut t, ok(5, "aaa"), at(300), 3);
         assert_eq!(alerts, vec!["prod UP after 4m 45s"]);
         assert_eq!((t.status, t.since, t.failures), (Status::Up, Some(at(300)), 0));
-        // and the uptime that reset on the way says it restarted
         assert!(t.events.iter().any(|e| e.kind == "restart" && e.text.starts_with("api restarted")));
         let (c, f) = t.hours.iter().fold((0, 0), |(c, f), h| (c + h.checks, f + h.failed));
         assert_eq!((c, f), (5, 3));

@@ -1,33 +1,3 @@
-//! Log in with Google or Discord (or any provider in `PROVIDERS`), next to the password. See
-//! docs/accounts.md.
-//!
-//! The authorization-code flow with PKCE (S256) and a random `state`:
-//!
-//! 1. `GET /api/oauth/{provider}/start` (`?link=1` when logged in, to attach the provider to
-//!    this account). A fresh `state` and PKCE verifier go into redis for ten minutes, the state
-//!    also into a short HttpOnly cookie on `/api/oauth`, and the browser goes to the provider.
-//! 2. `GET /api/oauth/{provider}/callback?code&state`. The state in the query must equal the
-//!    cookie's (a callback started in somebody else's browser is refused: no login csrf), and is
-//!    taken out of redis in one GETDEL (used once). The code is traded for a token with the
-//!    verifier and the client secret, over https, and the provider's user endpoint says who it is.
-//! 3. Who it is, by the provider's stable user id (never the email, never the display name):
-//!    - linked already: logged in, the same login cookie as a password login (`auth::open_login`).
-//!    - `link` and still logged in as the account that started: linked to it.
-//!    - nobody's: a pending signup in redis (15 minutes, its own HttpOnly cookie), and the pages
-//!      ask for a name (`/oauth?pick=1`). `POST /api/oauth/signup {name}` makes the account under
-//!      the same name rules as a password signup, with no password (`auth::NO_PASSWORD`).
-//!
-//!    An email that matches another account's is never a reason to link: a provider's email is
-//!    whatever that provider let somebody type.
-//!
-//! An account with at least one provider linked is *oauth verified* (`linked_sql!`): the mark
-//! next to its name. Any provider counts, so a new entry in `PROVIDERS` counts with no change.
-//!
-//! Config is the environment: `<ENV>_CLIENT_ID` and `<ENV>_CLIENT_SECRET` for each provider in
-//! `PROVIDERS` (GOOGLE, DISCORD), and PUBLIC_URL (the callback is
-//! `{PUBLIC_URL}/api/oauth/{provider}/callback`). A provider without both, or every provider
-//! without PUBLIC_URL, is off; nothing crashes.
-
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -47,19 +17,12 @@ use uuid::Uuid;
 use crate::auth::{self, Account, Me};
 use crate::{unique_violation, valid_name, ApiError, ApiResult, AppState};
 
-/// How long a started login may take at the provider.
 const STATE_SECS: u64 = 600;
-/// How long a new identity may take to pick its name.
 const SIGNUP_SECS: u64 = 900;
 const STATE_COOKIE: &str = "oauth_state";
 const SIGNUP_COOKIE: &str = "oauth_signup";
-/// Where the pages pick up after the provider (frontend/src/app/auth/OAuthPage.tsx).
 const PAGE: &str = "/oauth";
 
-/// The oauth-verified mark as SQL, for the `streamers` row named by the alias: whether it has
-/// any outside login linked. An EXISTS rather than a kept column: it cannot drift from the
-/// links, and it is one probe of `oauth_identities`' unique (user_id, provider) index (user_id
-/// leads) per row, inside whatever query already reads the row. No N+1, no extra round trip.
 macro_rules! linked_sql {
     ($row:literal) => {
         concat!("EXISTS (SELECT 1 FROM oauth_identities oi WHERE oi.user_id = ", $row, ".id)")
@@ -67,27 +30,15 @@ macro_rules! linked_sql {
 }
 pub(crate) use linked_sql;
 
-// ---- providers and config ------------------------------------------------------------------
-
-/// Everything that differs between two providers. A new provider is one entry in `PROVIDERS`,
-/// its two env vars, and its callback url in the provider's console: the routes, the buttons,
-/// the security tab and the verified mark all go by this list. (The pages have an icon per
-/// slug, and a plain one for a slug they do not know: frontend/src/infra/oauth.ts.)
 pub(crate) struct Spec {
-    /// In the urls and the database: `[a-z0-9_]`, never changed once people have linked it.
     slug: &'static str,
-    /// `<env>_CLIENT_ID`, `<env>_CLIENT_SECRET`.
     env: &'static str,
-    /// For words a person reads.
     label: &'static str,
     authorize_url: &'static str,
     token_url: &'static str,
-    /// Who the token belongs to.
     user_url: &'static str,
     scope: &'static str,
-    /// More query pairs on the way to the provider.
     authorize_extra: &'static [(&'static str, &'static str)],
-    /// The user endpoint's answer, read. None when it has no stable id.
     parse: fn(&Value) -> Option<Profile>,
 }
 
@@ -97,8 +48,6 @@ const GOOGLE: Spec = Spec {
     label: "Google",
     authorize_url: "https://accounts.google.com/o/oauth2/v2/auth",
     token_url: "https://oauth2.googleapis.com/token",
-    // the OpenID userinfo endpoint: the answer comes straight from Google over tls for a token
-    // we just got from Google, so no ID token has to be verified by hand
     user_url: "https://openidconnect.googleapis.com/v1/userinfo",
     scope: "openid email profile",
     authorize_extra: &[("prompt", "select_account")],
@@ -117,10 +66,8 @@ const DISCORD: Spec = Spec {
     parse: parse_discord,
 };
 
-/// Every provider this api knows, in the order the buttons show them.
 const PROVIDERS: &[Spec] = &[GOOGLE, DISCORD];
 
-/// One of `PROVIDERS`. Equal by slug.
 #[derive(Clone, Copy)]
 pub(crate) struct Provider(&'static Spec);
 
@@ -170,10 +117,8 @@ struct Client {
     secret: String,
 }
 
-/// What the environment turned on. Read once at boot (`from_env`).
 #[derive(Clone, Default)]
 pub(crate) struct Config {
-    /// `https://example.org`, no trailing slash. None: every provider is off.
     public_url: Option<String>,
     clients: HashMap<Provider, Client>,
 }
@@ -232,7 +177,6 @@ impl Config {
     }
 }
 
-/// An http(s) url with a host, as the origin the browser types: no path, no trailing slash.
 fn clean_public_url(raw: &str) -> Option<String> {
     let url = url::Url::parse(raw).ok()?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
@@ -241,10 +185,6 @@ fn clean_public_url(raw: &str) -> Option<String> {
     Some(url.origin().ascii_serialization())
 }
 
-// ---- state and pkce --------------------------------------------------------------------------
-
-/// 32 random bytes, hex: the state, the verifier and the signup token are each one.
-/// 64 characters of [0-9a-f] is a valid PKCE verifier (43 to 128 unreserved characters).
 fn random_hex() -> String {
     use rand::RngCore;
     let mut bytes = [0u8; 32];
@@ -256,7 +196,6 @@ fn is_token(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// base64url without padding (RFC 4648 §5), for the S256 challenge.
 fn base64url(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -270,16 +209,13 @@ fn base64url(bytes: &[u8]) -> String {
     out
 }
 
-/// RFC 7636: BASE64URL(SHA256(verifier)).
 fn pkce_challenge(verifier: &str) -> String {
     base64url(&Sha256::digest(verifier.as_bytes()))
 }
 
-/// The callback's `state` against the cookie set at the start: both there, both ours, the same.
 fn check_state<'a>(query: Option<&'a str>, cookie: Option<&str>) -> Result<&'a str, &'static str> {
     let query = query.filter(|s| is_token(s)).ok_or("that login link is broken. try again")?;
     let cookie = cookie.filter(|s| is_token(s)).ok_or("that login started in another browser, or ran out. try again")?;
-    // both are ours and random, and the redis entry is the real check; still, no early exit
     let same = query.len() == cookie.len() && query.bytes().zip(cookie.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0;
     if same {
         Ok(query)
@@ -288,23 +224,19 @@ fn check_state<'a>(query: Option<&'a str>, cookie: Option<&str>) -> Result<&'a s
     }
 }
 
-/// A started login, in redis under its state.
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct Started {
     provider: String,
     verifier: String,
-    /// The account to attach to, for `?link=1`.
     link: Option<Uuid>,
 }
 
-/// Somebody the providers know and we do not, picking a name. In redis under its token.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 struct Newcomer {
     provider: String,
     provider_user_id: String,
     email: Option<String>,
     suggested: String,
-    /// What the provider shows (`Profile`), for the identity row. Absent in one saved before.
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
@@ -330,8 +262,6 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .find(|t| is_token(t))
 }
 
-/// HttpOnly, Secure, Lax (the provider's redirect back is a top-level GET, which Lax sends),
-/// and only on `/api/oauth`: no other route ever sees it.
 fn short_cookie(name: &str, value: &str, secs: u64) -> String {
     format!("{name}={value}; Path=/api/oauth; Max-Age={secs}; HttpOnly; Secure; SameSite=Lax")
 }
@@ -355,26 +285,16 @@ fn page_url(key: &str, value: &str) -> String {
     format!("{PAGE}?{q}")
 }
 
-/// Back to the pages with words a person can read; the state cookie goes either way.
 fn fail(words: &str) -> Response {
     redirect_with(&page_url("error", words), &[gone_cookie(STATE_COOKIE)])
 }
 
-// ---- the provider's side --------------------------------------------------------------------
-
-/// Who the provider says this is.
 #[derive(Debug, PartialEq, Clone)]
 struct Profile {
-    /// The provider's own id for the account: google's `sub`, discord's `id`.
     id: String,
-    /// Only when the provider says it is verified.
     email: Option<String>,
-    /// The provider's handle, made into a name we allow, for the pick-a-name box.
     suggested: String,
-    /// The name the provider shows, cleaned (`shown_name`). Only for the account's own
-    /// security tab: never who it is, never a reason to link.
     name: Option<String>,
-    /// The provider's picture, only on its own image host (`shown_avatar`).
     avatar: Option<String>,
 }
 
@@ -407,8 +327,6 @@ fn parse_discord(v: &Value) -> Option<Profile> {
     })
 }
 
-/// Discord's picture for the account: its own when it set one, else the default one its id
-/// picks (discord's newer rule, `(id >> 22) % 6`).
 fn discord_avatar(id: &str, hash: Option<&str>) -> Option<String> {
     let n: u64 = id.parse().ok()?;
     let url = match hash {
@@ -420,22 +338,16 @@ fn discord_avatar(id: &str, hash: Option<&str>) -> Option<String> {
     shown_avatar(&url)
 }
 
-/// The longest provider name kept, in characters.
 const SHOWN_NAME_MAX: usize = 64;
 
-/// A provider's display name as kept: no control characters, trimmed, at most
-/// `SHOWN_NAME_MAX` characters. None when nothing is left.
 fn shown_name(raw: Option<&str>) -> Option<String> {
     let clean: String = raw?.chars().filter(|c| !c.is_control()).collect();
     let capped: String = clean.trim().chars().take(SHOWN_NAME_MAX).collect();
     Some(capped.trim_end().to_owned()).filter(|n| !n.is_empty())
 }
 
-/// The only hosts a provider picture is kept from.
 const AVATAR_HOSTS: [&str; 2] = ["lh3.googleusercontent.com", "cdn.discordapp.com"];
 
-/// A provider picture as kept: https, exactly one of `AVATAR_HOSTS`, no port, no login part,
-/// 512 characters at most. Anything else is None, and the tab draws the provider's icon.
 fn shown_avatar(raw: &str) -> Option<String> {
     if raw.len() > 512 {
         return None;
@@ -449,13 +361,10 @@ fn shown_avatar(raw: &str) -> Option<String> {
     ok.then(|| u.to_string())
 }
 
-/// The provider's user answer, read. None when it has no stable id.
 fn parse_profile(p: Provider, v: &Value) -> Option<Profile> {
     (p.0.parse)(v)
 }
 
-/// A handle as a name we allow (a-z 0-9 _ -, 1 to 32), or empty. Only a suggestion: the
-/// person picks, and the pick goes through every signup rule.
 fn suggest_name(raw: &str) -> String {
     let mut out = String::new();
     for c in raw.trim().chars().flat_map(char::to_lowercase) {
@@ -479,7 +388,6 @@ fn http() -> &'static reqwest::Client {
     HTTP.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
-            // a token endpoint that redirects is not one to follow with a client secret
             .redirect(reqwest::redirect::Policy::none())
             .https_only(true)
             .build()
@@ -487,8 +395,6 @@ fn http() -> &'static reqwest::Client {
     })
 }
 
-/// The code for a token, then the token for a profile. Errors are logged and come back as one
-/// word for the person: what the provider said is for the log, not for the page.
 async fn who_is_it(config: &Config, p: Provider, code: &str, verifier: &str) -> Result<Profile, ()> {
     let client = config.client(p).ok_or(())?;
     let redirect_uri = config.redirect_uri(p).ok_or(())?;
@@ -527,9 +433,6 @@ async fn who_is_it(config: &Config, p: Provider, code: &str, verifier: &str) -> 
     parse_profile(p, &body).ok_or_else(|| log::warn!("oauth {}: user answer has no id", p.slug()))
 }
 
-// ---- the database ---------------------------------------------------------------------------
-
-/// The account a provider's user is linked to, if any.
 pub(crate) async fn linked_account(db: &sqlx::PgPool, p: Provider, provider_user_id: &str) -> Result<Option<Account>, sqlx::Error> {
     let row: Option<(Uuid, String)> = sqlx::query_as(
         "SELECT s.id, s.name FROM oauth_identities o JOIN streamers s ON s.id = o.user_id
@@ -542,8 +445,6 @@ pub(crate) async fn linked_account(db: &sqlx::PgPool, p: Provider, provider_user
     Ok(row.map(|(id, name)| Account { id, name }))
 }
 
-/// Whether this account is oauth verified: any provider linked (`linked_sql!`). The routes read
-/// the mark inside the queries that already read the row; this is the one-account form.
 #[cfg(test)]
 pub(crate) async fn is_verified(db: &sqlx::PgPool, user: Uuid) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar(concat!("SELECT ", linked_sql!("s"), " FROM streamers s WHERE s.id = $1"))
@@ -553,8 +454,6 @@ pub(crate) async fn is_verified(db: &sqlx::PgPool, user: Uuid) -> Result<bool, s
         .map(|v| v.unwrap_or(false))
 }
 
-/// What a link keeps beside the provider's id: the verified email, and the name and picture
-/// the provider shows. Each None when the provider gave none.
 #[derive(Default, Clone, Copy)]
 pub(crate) struct Shown<'a> {
     pub(crate) email: Option<&'a str>,
@@ -568,9 +467,6 @@ impl<'a> Shown<'a> {
     }
 }
 
-/// The provider's latest for a linked identity, on every login and link with it: a new verified
-/// email (an unverified or missing one keeps the old), and the name and picture as they are now.
-/// Best effort: a failure here never stops the login.
 async fn refresh(db: &sqlx::PgPool, p: Provider, profile: &Profile) {
     let _ = sqlx::query(
         "UPDATE oauth_identities SET email = COALESCE($3, email), display_name = $4, avatar_url = $5
@@ -586,8 +482,6 @@ async fn refresh(db: &sqlx::PgPool, p: Provider, profile: &Profile) {
     .await;
 }
 
-/// Attach. `Ok(false)`: that provider account is somebody's already, or this account has that
-/// provider already (the two unique keys); nothing changed.
 pub(crate) async fn link(conn: &mut sqlx::PgConnection, user: Uuid, p: Provider, provider_user_id: &str, shown: &Shown<'_>) -> Result<bool, sqlx::Error> {
     let done =
         sqlx::query("INSERT INTO oauth_identities (user_id, provider, provider_user_id, email, display_name, avatar_url) VALUES ($1, $2, $3, $4, $5, $6)")
@@ -606,8 +500,6 @@ pub(crate) async fn link(conn: &mut sqlx::PgConnection, user: Uuid, p: Provider,
     }
 }
 
-/// May this account let go of `p`? Not when it is not linked, and not when it is the last way
-/// in: no password and no other provider.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Unlink {
     Yes,
@@ -625,8 +517,6 @@ pub(crate) fn may_unlink(has_password: bool, linked: &[String], p: Provider) -> 
     }
 }
 
-/// The unlink, under a lock on the account's row: two unlinks at once (two tabs, one for each
-/// provider) cannot both pass the last-way-in check.
 pub(crate) async fn unlink(db: &sqlx::PgPool, user: Uuid, p: Provider) -> Result<Unlink, sqlx::Error> {
     let mut tx = db.begin().await?;
     let hash: Option<Option<String>> = sqlx::query_scalar("SELECT password_hash FROM streamers WHERE id = $1 FOR UPDATE")
@@ -643,10 +533,6 @@ pub(crate) async fn unlink(db: &sqlx::PgPool, user: Uuid, p: Provider) -> Result
     Ok(verdict)
 }
 
-/// A new account under `name` for a newcomer, with no password, and the provider linked, in
-/// one transaction. A free row under the name (somebody used it without an account) is claimed
-/// the way a password signup claims it. `name taken` when it is somebody's; a 409 with other
-/// words when the provider account got linked meanwhile (two tabs).
 pub(crate) async fn create_account(db: &sqlx::PgPool, name: &str, p: Provider, provider_user_id: &str, shown: &Shown<'_>) -> Result<Uuid, ApiError> {
     let mut tx = db.begin().await?;
     let id: Option<Uuid> = sqlx::query_scalar(
@@ -666,8 +552,6 @@ pub(crate) async fn create_account(db: &sqlx::PgPool, name: &str, p: Provider, p
     tx.commit().await?;
     Ok(id)
 }
-
-// ---- routes ---------------------------------------------------------------------------------
 
 #[derive(Deserialize)]
 struct StartQuery {
@@ -729,7 +613,6 @@ async fn callback(State(s): State<AppState>, Path(slug): Path<String>, Query(q):
         Ok(state) => state,
         Err(words) => return Ok(fail(words)),
     };
-    // used once: a replayed callback finds nothing
     let raw: Option<String> = redis::cmd("GETDEL").arg(state_key(state)).query_async(&mut s.redis.clone()).await?;
     let Some(started) = raw.and_then(|r| serde_json::from_str::<Started>(&r).ok()) else {
         return Ok(fail("that login ran out. try again"));
@@ -745,7 +628,6 @@ async fn callback(State(s): State<AppState>, Path(slug): Path<String>, Query(q):
     };
     let linked = linked_account(&s.db, p, &profile.id).await?;
 
-    // attach to the account that started it, if that is still who is logged in here
     if let Some(want) = started.link {
         let me = auth::whoami(&s.db, &headers).await?;
         if me.as_ref().map(|m| m.id) != Some(want) {
@@ -769,7 +651,6 @@ async fn callback(State(s): State<AppState>, Path(slug): Path<String>, Query(q):
         });
     }
 
-    // known: logged in, the same login a password makes
     if let Some(account) = linked {
         refresh(&s.db, p, &profile).await;
         let token = auth::open_login(&s.db, &account).await?;
@@ -777,7 +658,6 @@ async fn callback(State(s): State<AppState>, Path(slug): Path<String>, Query(q):
         return Ok(redirect_with(&page_url("done", p.slug()), &[gone_cookie(STATE_COOKIE), auth::set_cookie(&token)]));
     }
 
-    // new here: pick a name first
     let token = random_hex();
     let newcomer = Newcomer {
         provider: p.slug().to_owned(),
@@ -803,7 +683,6 @@ async fn newcomer(s: &AppState, headers: &HeaderMap) -> Result<Option<(String, N
     Ok(raw.and_then(|r| serde_json::from_str(&r).ok()).map(|n| (token, n)))
 }
 
-/// `GET /api/oauth/signup`: the pending newcomer's provider and suggested name. Never its email.
 async fn signup_info(State(s): State<AppState>, headers: HeaderMap) -> ApiResult {
     let Some((_, n)) = newcomer(&s, &headers).await? else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "nothing to finish. start the login again"));
@@ -814,19 +693,16 @@ async fn signup_info(State(s): State<AppState>, headers: HeaderMap) -> ApiResult
 #[derive(Deserialize)]
 struct Pick {
     name: String,
-    /// The widget's single-use token (turnstile.rs). Left out while the check is off.
     #[serde(default)]
     turnstile_token: Option<String>,
 }
 
-/// `POST /api/oauth/signup {name}`: the account, named, with the provider linked, and logged in.
 async fn signup_finish(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<Pick>, JsonRejection>) -> Result<Response, ApiError> {
     let Json(body) = body?;
     let Some((token, n)) = newcomer(&s, &headers).await? else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "nothing to finish. start the login again"));
     };
     let p = Provider::from_slug(&n.provider).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "nothing to finish. start the login again"))?;
-    // the same rules as a password signup (auth.rs `signup`)
     let name = body.name.trim().to_lowercase();
     if !valid_name(&name) {
         return Err(ApiError::bad_name());
@@ -834,9 +710,6 @@ async fn signup_finish(State(s): State<AppState>, headers: HeaderMap, body: Resu
     if name.starts_with(&s.dummy_prefix) {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "reserved name"));
     }
-    // the human check is here and only here: `start` and `callback` stay ungated, as they are
-    // GETs the browser is redirected through (to the provider and back), with no page to draw
-    // a widget on, and no account exists until this step
     crate::turnstile::verify(&s, body.turnstile_token.as_deref(), &auth::client_ip(&headers)).await?;
     auth::limit_signup(&s, &headers).await?;
     if auth::is_held(&s.db, &name, None).await? {
@@ -857,18 +730,12 @@ async fn signup_finish(State(s): State<AppState>, headers: HeaderMap, body: Resu
     Ok(res)
 }
 
-/// `GET /api/oauth/providers`: the ones turned on here, for the buttons. Public.
 async fn providers(State(s): State<AppState>) -> Json<Value> {
     Json(json!({ "providers": s.oauth.enabled().into_iter().map(Provider::slug).collect::<Vec<_>>() }))
 }
 
-/// An identity as the tab reads it: provider, linked at, and the name and picture it shows.
 type IdentityRow = (String, DateTime<Utc>, Option<String>, Option<String>);
 
-/// `GET /api/oauth/identities`: this login's linked providers, whether it has a password, and
-/// whether it is oauth verified. Each identity has the name and picture its provider shows
-/// (null for one linked before they were kept, until its next login). The provider emails stay
-/// in the database.
 async fn identities(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let me = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
     let rows: Vec<IdentityRow> = sqlx::query_as("SELECT provider, created_at, display_name, avatar_url FROM oauth_identities WHERE user_id = $1 ORDER BY created_at")
@@ -876,7 +743,6 @@ async fn identities(State(s): State<AppState>, Me(me): Me) -> ApiResult {
         .fetch_all(&s.db)
         .await?;
     let has_password = auth::has_password(&s.db, me.id).await?;
-    // oauth verified is exactly "anything linked" (`linked_sql!`), said here so the tab need not work it out
     let verified = !rows.is_empty();
     let list: Vec<Value> = rows
         .into_iter()
@@ -885,7 +751,6 @@ async fn identities(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     Ok(Json(json!({ "has_password": has_password, "oauth_verified": verified, "identities": list })))
 }
 
-/// `POST /api/oauth/{provider}/unlink`. Refused when it would leave no way in.
 async fn unlink_route(State(s): State<AppState>, Path(slug): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let me = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
     let p = Provider::from_slug(&slug).ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such login"))?;
@@ -920,7 +785,6 @@ mod tests {
 
     #[test]
     fn pkce_challenge_is_rfc7636s() {
-        // RFC 7636 appendix B
         assert_eq!(pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
         assert_eq!(base64url(b""), "");
         assert_eq!(base64url(b"f"), "Zg");
@@ -1027,7 +891,6 @@ mod tests {
         assert_eq!(d.avatar.as_deref(), Some("https://cdn.discordapp.com/avatars/80351110224678912/8342729096ea3675442027381ff50dfe.png?size=64"));
         let d = parse_profile(Provider::DISCORD, &json!({ "id": "80351110224678912", "username": "nelly", "global_name": null, "avatar": null })).unwrap();
         assert_eq!(d.name.as_deref(), Some("nelly"), "no global_name: the username");
-        // (80351110224678912 >> 22) % 6 == 19156530 % 6 == 0; this one is 1
         let d = parse_profile(Provider::DISCORD, &json!({ "id": "4194304", "username": "x" })).unwrap();
         assert_eq!(d.avatar.as_deref(), Some("https://cdn.discordapp.com/embed/avatars/1.png"), "no avatar: the default the id picks");
         let d = parse_profile(Provider::DISCORD, &json!({ "id": "42", "username": "x", "avatar": "../../evil?x=" })).unwrap();
@@ -1108,7 +971,6 @@ mod tests {
         let slugs: Vec<&str> = PROVIDERS.iter().map(|p| p.slug).collect();
         assert_eq!(slugs, ["google", "discord"]);
         for (i, p) in PROVIDERS.iter().enumerate() {
-            // the slug is a url segment and a database key (schema.sql's check)
             assert!(!p.slug.is_empty() && p.slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'), "{}", p.slug);
             assert!(p.env.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'), "{}", p.env);
             for url in [p.authorize_url, p.token_url, p.user_url] {
@@ -1117,8 +979,6 @@ mod tests {
             assert!(PROVIDERS[i + 1..].iter().all(|q| q.slug != p.slug && q.env != p.env), "{} twice", p.slug);
         }
     }
-
-    // ---- against a postgres (`auth::tests::test_db`): cargo test -- --ignored oauth
 
     #[tokio::test]
     #[ignore]
@@ -1131,12 +991,10 @@ mod tests {
         assert_eq!(found, Some(Account { id, name: name.clone() }));
         assert!(!auth::has_password(&pool, id).await.unwrap(), "no password");
         assert!(auth::is_claimed(&pool, &name).await.unwrap(), "but the name is claimed");
-        // the same provider account again (a second tab): refused, and no second account
         let again = create_account(&pool, &format!("oa-new2-{run}"), Provider::GOOGLE, &format!("g-{run}"), &Shown::default()).await;
         assert_eq!(again.expect_err("linked already").into_response().status(), StatusCode::CONFLICT);
         let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM streamers WHERE name = $1)").bind(format!("oa-new2-{run}")).fetch_one(&pool).await.unwrap();
         assert!(!exists, "the rolled back account is not left behind");
-        // a name with an account is taken
         let taken = create_account(&pool, &name, Provider::DISCORD, &format!("d-{run}"), &Shown::default()).await;
         assert_eq!(taken.expect_err("taken").into_response().status(), StatusCode::CONFLICT);
     }
@@ -1161,13 +1019,11 @@ mod tests {
         assert_eq!(unlink(&pool, with_pw, Provider::GOOGLE).await.unwrap(), Unlink::Yes, "the password is left");
         assert!(!is_verified(&pool, with_pw).await.unwrap(), "nothing linked: not verified");
         assert_eq!(unlink(&pool, with_pw, Provider::GOOGLE).await.unwrap(), Unlink::NotLinked);
-        // a no-password account with two providers may let go of one, never the second
         let mut conn = pool.acquire().await.unwrap();
         assert!(link(&mut conn, other, Provider::GOOGLE, &format!("lg3-{run}"), &Shown::default()).await.unwrap());
         drop(conn);
         assert_eq!(unlink(&pool, other, Provider::DISCORD).await.unwrap(), Unlink::Yes);
         assert_eq!(unlink(&pool, other, Provider::GOOGLE).await.unwrap(), Unlink::LastWayIn);
-        // the mark where the pages read it: the profile, and a free name never wears it
         let name: String = sqlx::query_scalar("SELECT name FROM streamers WHERE id = $1").bind(other).fetch_one(&pool).await.unwrap();
         assert!(crate::profile::load_profile(&pool, &name).await.unwrap().oauth_verified);
         assert!(!crate::profile::load_profile(&pool, &format!("oa-pw-{run}")).await.unwrap().oauth_verified);
@@ -1191,7 +1047,6 @@ mod tests {
         let shown = Shown { email: Some("a@b.c"), name: Some("Billy"), avatar: Some(pic) };
         create_account(&pool, &format!("oa-shown-{run}"), Provider::GOOGLE, &pid, &shown).await.unwrap();
         assert_eq!(shown_of(&pool, &pid).await, (Some("a@b.c".into()), Some("Billy".into()), Some(pic.into())), "kept on insert");
-        // the next login: a new name, no picture, no verified email (the old email stays)
         let next = Profile { id: pid.clone(), email: None, suggested: String::new(), name: Some("Billy B".into()), avatar: None };
         refresh(&pool, Provider::GOOGLE, &next).await;
         assert_eq!(shown_of(&pool, &pid).await, (Some("a@b.c".into()), Some("Billy B".into()), None));
