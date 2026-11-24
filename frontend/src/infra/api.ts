@@ -141,6 +141,7 @@ export interface Recent extends OAuthVerified {
   presence: Presence;
   following: boolean;
   ended_at: string;
+  followers: number;
 }
 
 export interface SearchHit extends OAuthVerified {

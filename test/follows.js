@@ -290,7 +290,8 @@ const find = (list, name) => (Array.isArray(list) ? list.find((f) => f.name === 
     await fanPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
     await fanPage.waitForSelector(`#recent-${RENAMED}`, { timeout: 15000 });
     const when = ((await fanPage.textContent(`#recent-when-${RENAMED}`)) || '').trim();
-    expect(/^last live /.test(when), `the card says "${when}"`);
+    expect(/^(just now|\d+ (min|hr|days?) ago)$/.test(when), `the card says "${when}"`);
+    expect(typeof r.followers === 'number', `recent has no followers count: ${JSON.stringify(r)}`);
     return `${recent.length} recently offline, ${RENAMED} ${recent[0].name === RENAMED ? 'first' : 'listed'}; the card says "${when}"`;
   });
 
