@@ -15,6 +15,7 @@ const ENV = {
   ALERT_WEBHOOK: '',
   CHECK_EVERY_SECS: '2',
   ERRORS_EVERY_SECS: '3',
+  METRICS_EVERY_SECS: '2',
   DOWN_AFTER: '2',
   MONITOR_PORT: String(PORT)
 };
@@ -115,6 +116,30 @@ async function stateWhen(api, ready, what, ms = 40000) {
     return `${l.errors.length} report(s) pulled`;
   });
 
+  await step("the local box's host and container numbers come through the agent, or the page says why not", async () => {
+    const metricsOf = (st) => st.targets.find((t) => t.name === 'local').metrics || {};
+    if (!OPS_TOKEN) {
+      const s = await stateWhen(api, (st) => metricsOf(st).status, 'a first /api/metrics pull', 15000);
+      expect(metricsOf(s).status === 'no OPS_TOKEN for this box', `metrics.status "${metricsOf(s).status}"`);
+      return { skip: 'no OPS_TOKEN in .env, so the agent is not asked and the page says so' };
+    }
+    const s = await stateWhen(api, (st) => metricsOf(st).host && metricsOf(st).host.cpu_pct !== null && metricsOf(st).containers > 0, 'host and container numbers for local', 45000);
+    const m = metricsOf(s);
+    const h = m.host;
+    expect(!m.status, `metrics.status "${m.status}" (a 404 means the agent has no OPS_TOKEN or the Caddyfile has no /api/metrics route)`);
+    expect(h.mem_used > 0 && h.mem_used < h.mem_total, `memory ${h.mem_used} of ${h.mem_total}`);
+    expect(h.disk.length === 1 && h.disk[0].used > 0 && h.disk[0].used < h.disk[0].total, `disk ${JSON.stringify(h.disk)}`);
+    expect(h.cpu_pct >= 0 && h.cpu_pct <= 100, `cpu ${h.cpu_pct}`);
+    const series = await (await api.get(`${MON}/api/monitor/metrics?target=local&range=1h`)).json();
+    expect(series.t.length >= 1 && series.host.cpu_pct.length === series.t.length, `series: ${series.t.length} points`);
+    const apiBox = series.latest.containers.find((c) => c.name === 'api');
+    expect(apiBox && apiBox.state === 'running' && apiBox.mem_bytes > 0, `the api container: ${JSON.stringify(apiBox)}`);
+    expect(series.containers.api && series.containers.api.cpu_pct.length === series.t.length, 'no cpu series for the api container');
+    const bad = await api.get(`${MON}/api/monitor/metrics?target=local&range=2y`);
+    expect(bad.status() === 400, `range=2y answered ${bad.status()}`);
+    return `cpu ${h.cpu_pct}% · mem ${Math.round(h.mem_used / 1048576)} of ${Math.round(h.mem_total / 1048576)} MiB · ${m.containers} containers · ${series.t.length} points`;
+  });
+
   await step('the page shows both boxes with their status', async () => {
     const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: true });
     try {
@@ -130,7 +155,13 @@ async function stateWhen(api, ready, what, ms = 40000) {
       expect(/build/.test(meta), `header: "${meta}"`);
       const events = (await page.textContent('[data-name="dead"] ul')).trim();
       expect(/dead DOWN/.test(events), `dead's events on the page: "${events}"`);
-      return `"${meta}"`;
+      await page.click('#tabs button:has-text("local")');
+      expect(/box=local/.test(page.url()), `the url does not name the box: ${page.url()}`);
+      if (!OPS_TOKEN) return `"${meta}"`;
+      await page.waitForSelector('.tile canvas', { timeout: 15000 });
+      const tiles = await page.locator('.tile').count();
+      expect(tiles >= 7, `${tiles} graphs on local's tab`);
+      return `"${meta}", ${tiles} graphs on local's tab`;
     } finally {
       await browser.close();
     }

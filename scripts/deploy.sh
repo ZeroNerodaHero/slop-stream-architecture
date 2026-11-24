@@ -540,6 +540,7 @@ compose_up() {
   say "${DOCKER[*]} compose up -d ${UP_FLAGS[*]:-}"
   "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"}
   up_voice
+  up_stats
   sync_caddy
 }
 
@@ -785,8 +786,8 @@ redeploy_service() {
   build_one "$1"
   if [ "$1" = api ]; then
     "${DOCKER[@]}" compose up -d --no-deps --no-recreate s3
-    say "swapping the api, chat, events and home containers"
-    "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} api chat events home
+    say "swapping the api, chat, events, home and agent containers"
+    "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} api chat events home agent
   else
     say "swapping the $1 container"
     "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} "$1"
@@ -837,20 +838,71 @@ up_voice() {
   "${DOCKER[@]}" compose --profile voice up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} voice
 }
 
+STATS_HOST="stats.nodentity.xyz"
+
+env_file_raw() {
+  [ -f "$ENV_FILE" ] || return 0
+  sed -n "s/^[[:space:]]*$1=//p" "$ENV_FILE" | tail -n 1 | tr -d '\r'
+}
+
+stats_on() { [ -n "$(env_file_value STATS_BASIC_AUTH_USER)" ] && [ -n "$(env_file_value STATS_BASIC_AUTH_HASH)" ]; }
+
+check_stats_env() {
+  local user hash raw re
+  user="$(env_file_value STATS_BASIC_AUTH_USER)"
+  hash="$(env_file_value STATS_BASIC_AUTH_HASH)"
+  raw="$(env_file_raw STATS_BASIC_AUTH_HASH)"
+  if [ -z "$user" ] && [ -z "$hash" ]; then
+    note "https://$STATS_HOST is off: no STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH in $ENV_FILE, so it answers 503 (docs/metrics.md)"
+    return 0
+  fi
+  if [ -z "$user" ] || [ -z "$hash" ]; then
+    warn "only one of STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH is set in $ENV_FILE. https://$STATS_HOST stays off (503) until both are"
+    return 0
+  fi
+  [[ "$(env_file_raw STATS_BASIC_AUTH_USER)" =~ ^[A-Za-z0-9._@-]{1,64}$ ]] \
+    || die "STATS_BASIC_AUTH_USER in $ENV_FILE: 1 to 64 of letters, digits and . _ @ -, no quotes. nothing was changed"
+  re="^'[\$]2[aby][\$][0-9]{2}[\$][./A-Za-z0-9]{53}'\$"
+  if ! [[ "$raw" =~ $re ]]; then
+    die "STATS_BASIC_AUTH_HASH in $ENV_FILE must be a bcrypt hash in single quotes, like
+    STATS_BASIC_AUTH_HASH='\$2a\$14\$...'
+  without the quotes docker compose reads each \$ as a variable and caddy gets a broken hash.
+  make one:  ${DOCKER[*]} compose exec frontend caddy hash-password   (docs/metrics.md). nothing was changed"
+  fi
+}
+
+up_stats() {
+  if ! stats_on; then
+    note "stats is off (no STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH in $ENV_FILE), so no stats container"
+    return 0
+  fi
+  say "bringing the stats monitor up to the api image (https://$STATS_HOST, behind the password)"
+  "${DOCKER[@]}" compose --profile stats up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} stats
+}
+
+redeploy_stats() {
+  say "applying the stats settings from $ENV_FILE: caddy (recreated when its password changed) and the agent"
+  "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} frontend agent
+  sync_caddy
+}
+
 redeploy_targets() {
-  local t voice=0
+  local t voice=0 stats=0
   for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
     case "$t" in
       frontend) redeploy_frontend; sync_caddy; purge_html_cache ;;
       api|video) redeploy_service "$t" ;;
       dummy) redeploy_dummy ;;
       voice) ! voice_on || build_one video ;;
+      stats) build_one api; redeploy_stats ;;
       caddy) say "Caddyfile changed, bringing caddy up to it"; sync_caddy ;;
       compose) say "docker-compose.yml changed, applying it"; "${DOCKER[@]}" compose up -d ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} ;;
     esac
     case "$t" in video|voice|compose) voice=1 ;; esac
+    case "$t" in api|stats|compose) stats=1 ;; esac
   done
   [ "$voice" = 0 ] || up_voice
+  [ "$stats" = 0 ] || up_stats
 }
 
 swapped_containers() {
@@ -858,13 +910,15 @@ swapped_containers() {
   for t in ${TARGETS[@]+"${TARGETS[@]}"}; do
     case "$t" in
       frontend) out="$out frontend" ;;
-      api) out="$out api chat events home" ;;
+      api) out="$out api chat events home agent" ;;
       video) out="$out video" ;;
       dummy) out="$out dummy video api" ;;
+      stats) out="$out frontend agent" ;;
       caddy) out="$out frontend" ;;
-      compose) out="$out frontend api chat events home database redis video dummy s3" ;;
+      compose) out="$out frontend api chat events home database redis video dummy s3 agent" ;;
     esac
     case "$t" in video|voice|compose) ! voice_on || out="$out voice" ;; esac
+    case "$t" in api|stats|compose) ! stats_on || out="$out stats" ;; esac
   done
   printf '%s\n' $out | awk 'NF && !seen[$0]++' | tr '\n' ' '
 }
@@ -973,15 +1027,18 @@ usage() {
     N="$(tput sgr0 2>/dev/null || printf '\033[0m')"
   fi
   cat <<EOF
-${B}usage:${N} ./scripts/deploy.sh [--pull] [--prune-deploy] [--build | --images [TAG]] [PUBLIC_IP] [frontend|api|video|dummy|voice ...]
+${B}usage:${N} ./scripts/deploy.sh [--pull] [--prune-deploy] [--build | --images [TAG]] [PUBLIC_IP] [frontend|api|video|dummy|voice|stats ...]
        ./scripts/deploy.sh passwd <name>
        ./scripts/deploy.sh prune
 
 ${B}what to deploy${N}
   ${B}(nothing named)${N}           full deploy: machine setup, every image, docker compose up
   ${B}frontend api video dummy voice${N}
-                            just these: get (or build) their image, swap their containers (chat, events and
-                            home move with api), then check them: running and healthy, or exit non-zero
+                            just these: get (or build) their image, swap their containers (chat, events,
+                            home and agent move with api), then check them: running and healthy, or exit non-zero
+  ${B}stats${N}                     apply STATS_BASIC_AUTH_USER / STATS_BASIC_AUTH_HASH from .env: caddy is recreated
+                            when they changed (open websockets drop, browsers reconnect), then the agent and
+                            the stats monitor come up. https://stats.nodentity.xyz (docs/metrics.md)
   ${B}PUBLIC_IP${N}                 use this ip (full deploy only). otherwise: \$PUBLIC_IP > .env > auto-detect
 
 ${B}where the images come from${N}
@@ -1019,6 +1076,9 @@ ${B}notes${N}
   voice = the voice channels: the video image under the compose profile voice, media on udp 7883. on only
   with VOICE_SECRET in .env (docs/voice.md); without it voice is skipped. whenever video is redeployed (a
   full deploy, video, a changed docker-compose.yml) voice is brought to the same image, which drops every voice call.
+  stats = https://stats.nodentity.xyz, the monitor page behind caddy's basic auth: the api image as the compose
+  service stats under the profile stats. on only with STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH in .env;
+  without them the site answers 503. the agent (the box's own numbers, /api/metrics) runs on every box.
   new knobs from .env.example are appended to .env with their defaults on every run
   (also a --pull that finds nothing to redeploy). passwd touches nothing.
   a full deploy restarts video when the images moved since the last one (a commit that
@@ -1038,7 +1098,7 @@ parse_args() {
     if [ "$want_tag" = 1 ]; then
       want_tag=0
       case "$a" in
-        -*|frontend|api|video|dummy|voice|pages|chat|events|home|passwd|prune) ;;
+        -*|frontend|api|video|dummy|voice|stats|pages|chat|events|home|agent|passwd|prune) ;;
         *) if ! is_ipv4 "$a" && [[ "$a" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then TAG="$a"; continue; fi ;;
       esac
     fi
@@ -1051,12 +1111,12 @@ parse_args() {
       --build) BUILD_MODE=1 ;;
       passwd) want_name=1 ;;
       prune) PRUNE_ONLY=1 ;;
-      frontend|api|video|dummy|voice) TARGETS+=("$a") ;;
+      frontend|api|video|dummy|voice|stats) TARGETS+=("$a") ;;
       pages) TARGETS+=("frontend") ;;
-      chat|events|home) TARGETS+=("api") ;;
+      chat|events|home|agent) TARGETS+=("api") ;;
       *)
         if is_ipv4 "$a"; then IP_ARG="$a"
-        else die "don't know what '$a' is. services are: frontend api video dummy voice. see ./scripts/deploy.sh --help"
+        else die "don't know what '$a' is. services are: frontend api video dummy voice stats. see ./scripts/deploy.sh --help"
         fi ;;
     esac
   done
@@ -1196,6 +1256,7 @@ show_result() {
 
   Watch logs:   ${DOCKER[*]} compose logs -f video api
   Health:       https://${PUBLIC_IP}/api/health     errors from the pages: https://${PUBLIC_IP}/admin  (ADMIN_NAMES in .env)
+  Stats:        $(if stats_on; then echo "https://$STATS_HOST   (user $(env_file_value STATS_BASIC_AUTH_USER); STATS_BASIC_AUTH_* in .env)"; else echo "off: https://$STATS_HOST answers 503 until STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH are in .env (docs/metrics.md)"; fi)
   Env name:     ${ENV_NAME:-unnamed}       (ENV_NAME in .env; in every health answer and stored error)   release: ${RELEASE:-none}   build: ${BUILD:-dev}
   Accounts:     optional, https://${PUBLIC_IP}/signup     forgot one: ./scripts/deploy.sh passwd <name>
   Stop:         ${DOCKER[*]} compose down        (add -v to also drop the database)
@@ -1222,6 +1283,7 @@ full_deploy() {
   open_firewall
   write_env
   pick_env_name
+  check_stats_env
   if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else setup_build_mode; fi
   compose_up
   purge_html_cache
@@ -1245,6 +1307,7 @@ partial_deploy() {
   ensure_swap
   pick_build_jobs
   refresh_env
+  check_stats_env
   if [ "$IMAGES_MODE" = 1 ]; then setup_images_mode; else setup_build_mode; fi
   say "redeploying: ${TARGETS[*]}   (PUBLIC_IP=$PUBLIC_IP from $ENV_FILE, $([ "$IMAGES_MODE" = 1 ] && echo "images $IMAGES tag $TAG" || echo "building, BUILD=$BUILD"))"
   redeploy_targets

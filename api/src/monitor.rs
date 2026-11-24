@@ -1,19 +1,22 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::extract::State;
-use axum::response::Html;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use chrono::{DateTime, DurationRound, TimeDelta, Utc};
+use chrono::{DateTime, DurationRound, SecondsFormat, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
+
+use crate::agent::{round, Container, Sample};
 
 const PAGE: &str = include_str!("monitor.html");
 const STORE_FILE: &str = "monitor.json";
@@ -22,6 +25,11 @@ const KEEP_HOURS: usize = 24 * 7;
 const KEEP_EVENTS: usize = 200;
 const KEEP_ERRORS: usize = 100;
 const ERRORS_PULL: usize = 50;
+const METRICS_FILE: &str = "metrics.json";
+const METRICS_SAVE_EVERY: Duration = Duration::from_secs(300);
+const TIERS: [(&str, i64, usize); 3] = [("1h", 15, 240), ("24h", 120, 720), ("7d", 900, 672)];
+const HOST_SERIES: [&str; 12] = ["cpu_pct", "steal_pct", "iowait_pct", "load1", "mem_used", "swap_used", "disk_used", "rx_bps", "tx_bps", "psi_cpu", "psi_memory", "psi_io"];
+const CONTAINER_SERIES: [&str; 7] = ["cpu_pct", "mem_bytes", "rx_bps", "tx_bps", "read_bps", "write_bps", "pids"];
 
 #[derive(Clone)]
 struct Target {
@@ -35,6 +43,7 @@ struct Config {
     webhook: Option<String>,
     check_every: Duration,
     errors_every: Duration,
+    metrics_every: Duration,
     down_after: u32,
     data_dir: PathBuf,
     port: u16,
@@ -45,6 +54,7 @@ struct Config {
 struct App {
     cfg: Arc<Config>,
     store: Arc<Mutex<Store>>,
+    metrics: Arc<Mutex<HashMap<String, History>>>,
     started: Instant,
     boxes: reqwest::Client,
     hooks: reqwest::Client,
@@ -97,6 +107,143 @@ struct Event {
     at: DateTime<Utc>,
     kind: String,
     text: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+struct Point {
+    t: i64,
+    n: u32,
+    h: Vec<Option<f64>>,
+    c: BTreeMap<String, Vec<Option<f64>>>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+struct History {
+    latest: Option<Sample>,
+    tiers: Vec<VecDeque<Point>>,
+    status: Option<String>,
+    checked_at: Option<DateTime<Utc>>,
+    agent: Option<Value>,
+}
+
+fn host_values(s: &Sample) -> Vec<Option<f64>> {
+    let h = &s.host;
+    let b = |v: Option<u64>| v.map(|x| x as f64);
+    let net = h.net.as_ref();
+    vec![
+        h.cpu_pct,
+        h.steal_pct,
+        h.iowait_pct,
+        h.load1,
+        b(h.mem_used),
+        b(h.swap_used),
+        h.disk.first().map(|d| d.used as f64),
+        net.and_then(|n| n.rx_bps),
+        net.and_then(|n| n.tx_bps),
+        h.pressure.cpu,
+        h.pressure.memory,
+        h.pressure.io,
+    ]
+}
+
+fn container_values(c: &Container) -> Vec<Option<f64>> {
+    let b = |v: Option<u64>| v.map(|x| x as f64);
+    vec![c.cpu_pct, b(c.mem_bytes), c.rx_bps, c.tx_bps, c.read_bps, c.write_bps, b(c.pids)]
+}
+
+fn compact(v: f64) -> f64 {
+    round(v, if v.abs() >= 1000.0 { 0 } else { 2 })
+}
+
+fn mix(into: &mut [Option<f64>], new: &[Option<f64>], n: u32) {
+    for (a, b) in into.iter_mut().zip(new) {
+        *a = match (*a, *b) {
+            (Some(x), Some(y)) => Some(compact((x * n as f64 + y) / (n as f64 + 1.0))),
+            (None, y) => y,
+            (x, None) => x,
+        };
+    }
+}
+
+fn fold(tier: &mut VecDeque<Point>, width: i64, keep: usize, t: i64, h: &[Option<f64>], c: &BTreeMap<String, Vec<Option<f64>>>) {
+    let start = t - t.rem_euclid(width);
+    match tier.back_mut() {
+        Some(p) if p.t == start => {
+            mix(&mut p.h, h, p.n);
+            for (name, vals) in c {
+                match p.c.get_mut(name) {
+                    Some(old) => mix(old, vals, p.n),
+                    None => {
+                        p.c.insert(name.clone(), vals.clone());
+                    }
+                }
+            }
+            p.n += 1;
+        }
+        Some(p) if p.t > start => {}
+        _ => tier.push_back(Point { t: start, n: 1, h: h.to_vec(), c: c.clone() }),
+    }
+    let oldest = start - width * keep as i64;
+    while tier.len() > keep || tier.front().is_some_and(|p| p.t <= oldest) {
+        tier.pop_front();
+    }
+}
+
+impl History {
+    fn add(&mut self, s: Sample) {
+        if self.latest.as_ref().is_some_and(|l| l.at >= s.at) {
+            return;
+        }
+        self.tiers.resize_with(TIERS.len(), VecDeque::new);
+        let h: Vec<Option<f64>> = host_values(&s).into_iter().map(|v| v.map(compact)).collect();
+        let c: BTreeMap<String, Vec<Option<f64>>> = s
+            .containers
+            .iter()
+            .filter(|c| c.state == "running")
+            .map(|c| (c.name.clone(), container_values(c).into_iter().map(|v| v.map(compact)).collect()))
+            .collect();
+        for (tier, (_, width, keep)) in self.tiers.iter_mut().zip(TIERS) {
+            fold(tier, width, keep, s.at.timestamp(), &h, &c);
+        }
+        self.latest = Some(s);
+    }
+
+    fn series(&self, tier: usize) -> Value {
+        let empty = VecDeque::new();
+        let pts = self.tiers.get(tier).unwrap_or(&empty);
+        let host: serde_json::Map<String, Value> =
+            HOST_SERIES.iter().enumerate().map(|(i, name)| (name.to_string(), json!(pts.iter().map(|p| p.h.get(i).copied().flatten()).collect::<Vec<_>>()))).collect();
+        let names: BTreeSet<&String> = pts.iter().flat_map(|p| p.c.keys()).collect();
+        let containers: serde_json::Map<String, Value> = names
+            .into_iter()
+            .map(|name| {
+                let per: serde_json::Map<String, Value> = CONTAINER_SERIES
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| (s.to_string(), json!(pts.iter().map(|p| p.c.get(name).and_then(|v| v.get(i).copied().flatten())).collect::<Vec<_>>())))
+                    .collect();
+                (name.clone(), Value::Object(per))
+            })
+            .collect();
+        json!({
+            "t": pts.iter().map(|p| p.t).collect::<Vec<_>>(),
+            "host": host,
+            "containers": containers,
+        })
+    }
+
+    fn summary(&self) -> Value {
+        let latest = self.latest.as_ref();
+        json!({
+            "status": self.status,
+            "checked_at": self.checked_at,
+            "at": latest.map(|s| s.at),
+            "host": latest.map(|s| &s.host),
+            "containers": latest.map(|s| s.containers.iter().filter(|c| c.state == "running").count()),
+            "problems": latest.map(|s| &s.problems),
+        })
+    }
 }
 
 struct Probe {
@@ -278,6 +425,27 @@ async fn pull_errors(client: &reqwest::Client, t: &Target) -> Result<Vec<Value>,
     }
 }
 
+#[derive(Deserialize)]
+struct MetricsAnswer {
+    #[serde(default)]
+    agent: Option<Value>,
+    #[serde(default)]
+    samples: Vec<Sample>,
+}
+
+async fn pull_metrics(client: &reqwest::Client, t: &Target, since: Option<DateTime<Utc>>) -> Result<MetricsAnswer, String> {
+    let Some(token) = &t.token else { return Err("no OPS_TOKEN for this box".into()) };
+    let since = since.unwrap_or(DateTime::UNIX_EPOCH).to_rfc3339_opts(SecondsFormat::Micros, true);
+    let res = client.get(format!("{}/api/metrics", t.url)).query(&[("since", since)]).bearer_auth(token).send().await.map_err(|e| error_text(&e))?;
+    match res.status().as_u16() {
+        200 => res.json::<MetricsAnswer>().await.map_err(|e| format!("bad json: {e}")),
+        401 => Err("401: token refused. OPS_TOKENS here and OPS_TOKEN in that box's .env must match".into()),
+        404 => Err("404: that box has no OPS_TOKEN for its agent, or its Caddyfile predates /api/metrics".into()),
+        code @ (502 | 503 | 504) => Err(format!("{code}: caddy answers, the agent behind it does not")),
+        code => Err(format!("{code}")),
+    }
+}
+
 fn merge_errors(t: &mut TargetState, rows: Vec<Value>) {
     let known: HashSet<i64> = t.errors.iter().filter_map(|r| r.get("id").and_then(Value::as_i64)).collect();
     t.errors.extend(rows.into_iter().filter(|r| r.get("id").and_then(Value::as_i64).is_some_and(|id| !known.contains(&id))));
@@ -306,6 +474,37 @@ async fn save(store: &Store, dir: &Path) -> anyhow::Result<()> {
     tokio::fs::write(&tmp, serde_json::to_vec(store)?).await?;
     tokio::fs::rename(&tmp, dir.join(STORE_FILE)).await?;
     Ok(())
+}
+
+async fn load_metrics(dir: &Path, targets: &[Target]) -> HashMap<String, History> {
+    let path = dir.join(METRICS_FILE);
+    let mut stored: HashMap<String, History> = match tokio::fs::read(&path).await {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+            log::warn!("{} is not readable ({e}); metrics history starts over", path.display());
+            HashMap::new()
+        }),
+        Err(_) => HashMap::new(),
+    };
+    targets.iter().map(|t| (t.name.clone(), stored.remove(&t.name).unwrap_or_default())).collect()
+}
+
+async fn save_metrics(app: &App) {
+    let bytes = {
+        let m = app.metrics.lock().await;
+        serde_json::to_vec(&*m)
+    };
+    let dir = &app.cfg.data_dir;
+    let tmp = dir.join(format!("{METRICS_FILE}.tmp"));
+    let result = match bytes {
+        Ok(b) => match tokio::fs::write(&tmp, b).await {
+            Ok(()) => tokio::fs::rename(&tmp, dir.join(METRICS_FILE)).await.map_err(anyhow::Error::from),
+            Err(e) => Err(e.into()),
+        },
+        Err(e) => Err(e.into()),
+    };
+    if let Err(e) = result {
+        log::error!("could not write {}: {e}", dir.join(METRICS_FILE).display());
+    }
 }
 
 fn reconcile(mut stored: Store, targets: &[Target]) -> Store {
@@ -381,6 +580,52 @@ async fn errors_loop(app: App) {
     }
 }
 
+async fn metrics_loop(app: App) {
+    let mut tick = tokio::time::interval(app.cfg.metrics_every);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut saved = Instant::now();
+    loop {
+        tick.tick().await;
+        let since: Vec<Option<DateTime<Utc>>> = {
+            let m = app.metrics.lock().await;
+            app.cfg.targets.iter().map(|t| m.get(&t.name).and_then(|h| h.latest.as_ref()).map(|s| s.at)).collect()
+        };
+        let mut set = JoinSet::new();
+        for (i, t) in app.cfg.targets.iter().enumerate() {
+            let (client, t, since) = (app.boxes.clone(), t.clone(), since[i]);
+            set.spawn(async move { (t.name.clone(), pull_metrics(&client, &t, since).await) });
+        }
+        let mut results = vec![];
+        while let Some(Ok(r)) = set.join_next().await {
+            results.push(r);
+        }
+        let now = Utc::now();
+        {
+            let mut m = app.metrics.lock().await;
+            for (name, result) in results {
+                let h = m.entry(name).or_default();
+                h.checked_at = Some(now);
+                match result {
+                    Ok(answer) => {
+                        let mut samples = answer.samples;
+                        samples.sort_by_key(|s| s.at);
+                        for s in samples {
+                            h.add(s);
+                        }
+                        h.agent = answer.agent;
+                        h.status = None;
+                    }
+                    Err(why) => h.status = Some(why),
+                }
+            }
+        }
+        if saved.elapsed() >= METRICS_SAVE_EVERY {
+            save_metrics(&app).await;
+            saved = Instant::now();
+        }
+    }
+}
+
 async fn alert(app: &App, text: &str) {
     let Some(url) = &app.cfg.webhook else { return };
     match app.hooks.post(url).json(&json!({ "content": text, "text": text })).send().await {
@@ -400,7 +645,16 @@ async fn monitor_health(State(app): State<App>) -> Json<Value> {
 
 async fn state(State(app): State<App>) -> Json<Value> {
     let store = app.store.lock().await;
-    let targets: Vec<Value> = store.targets.iter().map(view).collect();
+    let metrics = app.metrics.lock().await;
+    let targets: Vec<Value> = store
+        .targets
+        .iter()
+        .map(|t| {
+            let mut v = view(t);
+            v["metrics"] = metrics.get(&t.name).map(History::summary).unwrap_or(Value::Null);
+            v
+        })
+        .collect();
     Json(json!({
         "now": Utc::now(),
         "monitor": {
@@ -408,11 +662,39 @@ async fn state(State(app): State<App>) -> Json<Value> {
             "up_secs": app.started.elapsed().as_secs(),
             "check_every_secs": app.cfg.check_every.as_secs(),
             "errors_every_secs": app.cfg.errors_every.as_secs(),
+            "metrics_every_secs": app.cfg.metrics_every.as_secs(),
             "down_after": app.cfg.down_after,
             "webhook": app.cfg.webhook.is_some(),
         },
         "targets": targets,
     }))
+}
+
+#[derive(Deserialize)]
+struct SeriesQuery {
+    target: String,
+    range: Option<String>,
+}
+
+async fn series(State(app): State<App>, Query(q): Query<SeriesQuery>) -> Response {
+    let range = q.range.unwrap_or_else(|| "1h".into());
+    let Some(tier) = TIERS.iter().position(|(name, _, _)| *name == range) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "range: 1h, 24h or 7d" }))).into_response();
+    };
+    let m = app.metrics.lock().await;
+    let Some(h) = m.get(&q.target) else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such box" }))).into_response();
+    };
+    let mut out = h.series(tier);
+    out["target"] = json!(q.target);
+    out["range"] = json!(range);
+    out["bucket_secs"] = json!(TIERS[tier].1);
+    out["now"] = json!(Utc::now());
+    out["latest"] = json!(h.latest);
+    out["status"] = json!(h.status);
+    out["checked_at"] = json!(h.checked_at);
+    out["agent"] = json!(h.agent);
+    Json(out).into_response()
 }
 
 fn view(t: &TargetState) -> Value {
@@ -475,6 +757,7 @@ fn config() -> Config {
         webhook: env::var("ALERT_WEBHOOK").ok().map(|w| w.trim().to_owned()).filter(|w| !w.is_empty()),
         check_every: env_secs("CHECK_EVERY_SECS", 15),
         errors_every: env_secs("ERRORS_EVERY_SECS", 60),
+        metrics_every: env_secs("METRICS_EVERY_SECS", 15),
         down_after: env::var("DOWN_AFTER").ok().and_then(|v| v.parse().ok()).filter(|n| *n > 0).unwrap_or(3),
         data_dir: PathBuf::from(env::var("DATA_DIR").unwrap_or_else(|_| "/data".into())),
         port: env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(3002),
@@ -498,27 +781,33 @@ pub async fn run() -> anyhow::Result<()> {
     tokio::fs::create_dir_all(&cfg.data_dir).await?;
     let store = reconcile(load(&cfg.data_dir).await, &cfg.targets);
     save(&store, &cfg.data_dir).await?;
+    let metrics = load_metrics(&cfg.data_dir, &cfg.targets).await;
 
     let app = App {
         cfg: cfg.clone(),
         store: Arc::new(Mutex::new(store)),
+        metrics: Arc::new(Mutex::new(metrics)),
         started: Instant::now(),
         boxes: reqwest::Client::builder().timeout(PROBE_TIMEOUT).danger_accept_invalid_certs(true).build()?,
         hooks: reqwest::Client::builder().timeout(PROBE_TIMEOUT).build()?,
     };
     tokio::spawn(check_loop(app.clone()));
     tokio::spawn(errors_loop(app.clone()));
+    tokio::spawn(metrics_loop(app.clone()));
 
     let router = Router::new()
         .route("/", get(page))
         .route("/health", get(monitor_health))
         .route("/api/monitor", get(state))
+        .route("/api/monitor/metrics", get(series))
         .route_layer(axum::middleware::from_fn_with_state(crate::ratelimit::Local::default(), crate::ratelimit::local))
-        .with_state(app);
+        .layer(axum::middleware::map_response(crate::agent::no_store))
+        .with_state(app.clone());
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
     log::info!("monitor on {addr}, store {}", cfg.data_dir.join(STORE_FILE).display());
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(crate::wait_for_signal()).await?;
+    save_metrics(&app).await;
     Ok(())
 }
 
@@ -606,6 +895,64 @@ mod tests {
         assert_eq!(out.targets.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), vec!["dev", "prod"]);
         assert_eq!((out.targets[1].url.as_str(), out.targets[1].failures), ("https://new", 2));
         assert_eq!(out.targets[0].errors_status.as_deref(), Some("no OPS_TOKEN for this box"));
+    }
+
+    fn sample(secs: i64, cpu: f64, containers: &[(&str, f64)]) -> Sample {
+        let mut s = Sample { at: at(secs), ..Default::default() };
+        s.host.cpu_pct = Some(cpu);
+        s.host.mem_used = Some(1_000_000);
+        s.containers = containers
+            .iter()
+            .map(|(name, cpu)| Container { name: name.to_string(), state: "running".into(), cpu_pct: Some(*cpu), ..Default::default() })
+            .collect();
+        s.containers.push(Container { name: "stopped".into(), state: "exited".into(), ..Default::default() });
+        s
+    }
+
+    #[test]
+    fn samples_fold_into_the_three_ranges() {
+        let mut h = History::default();
+        for i in 0..8 {
+            h.add(sample(i * 15, (i * 10) as f64, &[("api", 1.0 + i as f64)]));
+        }
+        assert_eq!(h.tiers[0].len(), 8);
+        assert_eq!(h.tiers[1].len(), 1);
+        assert_eq!(h.tiers[1][0].n, 8);
+        assert_eq!(h.tiers[1][0].h[0], Some(35.0));
+        assert_eq!(h.tiers[1][0].c["api"][0], Some(4.5));
+        assert!(!h.tiers[1][0].c.contains_key("stopped"));
+        h.add(sample(120, 99.0, &[("api", 1.0), ("video", 50.0)]));
+        assert_eq!(h.tiers[1].len(), 2);
+        assert_eq!(h.tiers[1][1].c["video"][0], Some(50.0));
+        h.add(sample(60, 1.0, &[]));
+        assert_eq!(h.tiers[0].len(), 9, "an older sample than the newest is ignored");
+    }
+
+    #[test]
+    fn a_range_keeps_its_window() {
+        let mut tier = VecDeque::new();
+        for i in 0..300 {
+            fold(&mut tier, 15, 240, i * 15, &[Some(1.0)], &BTreeMap::new());
+        }
+        assert_eq!(tier.len(), 240);
+        fold(&mut tier, 15, 240, 300 * 15 + 3600 * 2, &[Some(1.0)], &BTreeMap::new());
+        assert_eq!(tier.len(), 1, "after a long gap the old points are past the window");
+    }
+
+    #[test]
+    fn series_are_columns_with_gaps() {
+        let mut h = History::default();
+        h.add(sample(0, 10.0, &[("api", 1.0)]));
+        h.add(sample(15, 20.0, &[("api", 2.0), ("video", 9.0)]));
+        let s = h.series(0);
+        assert_eq!(s["t"], json!([at(0).timestamp(), at(15).timestamp()]));
+        assert_eq!(s["host"]["cpu_pct"], json!([10.0, 20.0]));
+        assert_eq!(s["host"]["mem_used"], json!([1_000_000.0, 1_000_000.0]));
+        assert_eq!(s["containers"]["video"]["cpu_pct"], json!([null, 9.0]));
+        assert_eq!(s["containers"]["api"]["cpu_pct"], json!([1.0, 2.0]));
+        assert_eq!(h.summary()["containers"], json!(2));
+        let back: HashMap<String, History> = serde_json::from_slice(&serde_json::to_vec(&HashMap::from([("prod".to_string(), h)])).unwrap()).unwrap();
+        assert_eq!(back["prod"].tiers[0].len(), 2);
     }
 
     #[test]
