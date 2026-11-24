@@ -68,6 +68,19 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await page.click('#tab-profile');
     await page.waitForSelector('#panel-profile', { timeout: 5000 });
   };
+  const openInspectorFromSettings = async (page) => {
+    await page.hover('#user-panel');
+    await page.waitForSelector('#user-panel[data-open="true"]', { timeout: 10000 });
+    await page.click('#settings');
+    await page.waitForSelector('#user-modal[open]', { timeout: 5000 });
+    await page.click('#tab-advanced');
+    await page.waitForSelector('#inspector-open-settings:not([disabled])', { timeout: 15000 });
+    await page.click('#inspector-open-settings');
+    await page.waitForSelector('#inspector-panel[open]', { timeout: 5000 });
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#user-modal', { state: 'detached', timeout: 5000 });
+    await page.waitForSelector('#inspector-panel[open]', { timeout: 5000 });
+  };
 
   const browser = await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'chrome', headless: !process.env.HEADED, args: ARGS });
   const ctxA = await browser.newContext({ ignoreHTTPSErrors: true, permissions: ['camera', 'microphone'] });
@@ -143,10 +156,9 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     await a.waitForSelector('#inspector', { timeout: 5000 });
     await a.click('#inspector');
     expect(await a.isChecked('#inspector'), '#inspector is not checked');
+    await a.waitForSelector('#inspector-open-settings:not([disabled])', { timeout: 5000 });
     await a.keyboard.press('Escape');
     await a.waitForSelector('#user-modal', { state: 'detached', timeout: 5000 });
-    await a.hover('#user-panel');
-    await a.waitForSelector('#inspector-open', { timeout: 5000 });
   });
 
   await step('do not disturb: the api, the square, the watcher, all within 3s, no reload', async () => {
@@ -210,9 +222,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
   });
 
   await step('the inspector: a me frame, a presence frame, the filter narrows, the chat socket is in it too', async () => {
-    await a.hover('#user-panel');
-    await a.click('#inspector-open');
-    await a.waitForSelector('#inspector-panel[open]', { timeout: 5000 });
+    await openInspectorFromSettings(a);
     await a.waitForSelector('#inspector-frames li[data-source="/events"][data-type="me"], #inspector-frames li[data-source="/rt"][data-type="me"]', { timeout: 5000 });
     await a.fill('#inspector-filter', 'invisible');
     await a.waitForFunction(() => {
@@ -223,9 +233,7 @@ async function pollUntil(fn, until, { timeout, interval = 300, label }) {
     const count = await a.textContent('#inspector-count');
     expect(/\d+ of the last \d+/.test(count || ''), `count line: ${count}`);
     await a.goto(`${BASE}/watch/${CLAIMED}`, { waitUntil: 'domcontentloaded' });
-    await a.hover('#user-panel');
-    await a.waitForSelector('#inspector-open', { timeout: 15000 });
-    await a.click('#inspector-open');
+    await openInspectorFromSettings(a);
     await a.waitForSelector(`#inspector-frames li[data-source="/chat/${CLAIMED}"], #inspector-frames li[data-source="/rt"][data-type="count"]`, { timeout: 15000 });
     await a.click('#inspector-close');
     return count;

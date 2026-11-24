@@ -1,5 +1,5 @@
 export type RunKind = 'chat' | 'say' | 'watch';
-export type MetricGroup = 'chat' | 'watch';
+export type MetricGroup = 'chat' | 'watch' | 'api';
 
 export interface Metric {
   key: string;
@@ -22,6 +22,7 @@ export const METRICS: readonly Metric[] = [
 
 export const METRIC_GROUPS: readonly MetricGroup[] = ['chat', 'watch'];
 export const METRIC_SIZE = 100;
+export const ROUTE_MAX = 60;
 export const QUALITY_SIZE = 600;
 export const QUALITY_COLUMNS = ['t', 'session', 'width', 'height', 'fps', 'bitrate', 'lossPct', 'droppedPerSec', 'jitterMs', 'rttMs'] as const;
 
@@ -88,6 +89,60 @@ export class Timings {
   clear(): void {
     for (const ring of this.rings.values()) ring.clear();
     this.rings.clear();
+  }
+}
+
+export interface RouteRings {
+  ms: MetricRing;
+  status: MetricRing;
+}
+
+export class RouteTimings {
+  readonly routes = new Map<string, RouteRings>();
+  readonly max: number;
+
+  constructor(max = ROUTE_MAX) {
+    this.max = max;
+  }
+
+  add(key: string, status: number, ms: number): void {
+    let rings = this.routes.get(key);
+    if (rings) {
+      this.routes.delete(key);
+    } else {
+      rings = { ms: new MetricRing(), status: new MetricRing() };
+      if (this.routes.size >= this.max) {
+        const oldest = this.routes.keys().next().value;
+        if (oldest !== undefined) this.routes.delete(oldest);
+      }
+    }
+    this.routes.set(key, rings);
+    rings.ms.push(Math.max(0, ms));
+    rings.status.push(status);
+  }
+
+  values(key: string): number[] {
+    return this.routes.get(key)?.ms.values() ?? [];
+  }
+
+  errors(key: string): number {
+    let n = 0;
+    for (const s of this.routes.get(key)?.status.values() ?? []) if (s === 0 || s >= 400) n++;
+    return n;
+  }
+
+  size(): number {
+    let n = 0;
+    for (const rings of this.routes.values()) n += rings.ms.count;
+    return n;
+  }
+
+  clear(): void {
+    for (const rings of this.routes.values()) {
+      rings.ms.clear();
+      rings.status.clear();
+    }
+    this.routes.clear();
   }
 }
 

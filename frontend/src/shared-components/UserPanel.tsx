@@ -11,7 +11,7 @@ import { forgetMyServers, loadGroups, loadMyServers, myGroupsAtom } from '@/infr
 import { forgetNotifications, loadNotifications, toggleNotifications, unreadNotificationsAtom } from '@/infra/atoms/notification-atoms';
 import { myPresenceAtom, type Presence, PRESENCE_TEXT, PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { identityChanged, loadMyProfile, myAvatarVersionAtom, myNameAtom } from '@/infra/atoms/profile-atoms';
-import { inspectorEnabledAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
+import { panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import { useIsMobile } from '@/infra/mobile';
 import { isValidName } from '@/infra/names';
@@ -58,7 +58,6 @@ function Dot() {
 }
 
 const Friends = lazy(() => import('@/shared-components/Friends').then((m) => ({ default: m.Friends })));
-const DebugOpeners = lazy(() => import('@/shared-components/debug/DebugOpeners').then((m) => ({ default: m.DebugOpeners })));
 
 function SettingsOpener() {
   return (
@@ -155,7 +154,6 @@ export function UserPanel() {
   const myName = useAtomValue(myNameAtom);
   const avatar = useAtomValue(myAvatarVersionAtom);
   const presence = useAtomValue(myPresenceAtom);
-  const inspectorOn = useAtomValue(inspectorEnabledAtom);
   const side = useAtomValue(panelSideAtom);
   const myBadge = useAtomValue(myGroupsAtom).find((g) => g.primary) ?? null;
   const mobile = useIsMobile();
@@ -245,11 +243,6 @@ export function UserPanel() {
 
   const actions = (
     <span className={cn('flex shrink-0 items-center gap-1', mirrored && 'flex-row-reverse', !wide && 'invisible')}>
-      {inspectorOn && (
-        <Suspense fallback={null}>
-          <DebugOpeners className={ACTION} size={ICON} />
-        </Suspense>
-      )}
       {mobile && <NotificationsOpener />}
       <SettingsOpener />
       {me && <LogoutButton />}
