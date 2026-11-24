@@ -212,6 +212,7 @@ every knob in the root `.env.example`, with what its comment said. `./scripts/de
 | `CF_PURGE_TOKEN`<br>`CF_ZONE_ID` | (empty)<br>(empty) | cloudflare in front (docs/cloudflare-cache-rules.md): a takedown of a public picture or video purges its url (under PUBLIC_URL) from the edge. the token's only permission: Zone > Cache Purge, on this zone alone. either empty = no purge (the edge keeps it until its max-age runs out). `scripts/deploy.sh` reads the same two (and PUBLIC_URL) from .env to purge the html after publishing the pages; unset = skipped |
 | `DUMMY_STREAMS`<br>`DUMMY_PASSWORD` | `0`<br>(empty) | fake streams for styling and debugging: gifs bouncing around, named dummy-mango, dummy-pixel, ... set a count and any password, then: ./scripts/deploy.sh dummy the password is what lets the dummy box publish dummy-* names. nobody else can. the box sends it to the api as the `X-Dummy-Password` header (the api still takes `?password=` too), and every name it writes is flagged `is_test` (docs/test-streamers.md). |
 | `DUMMY_NAMES` | (empty) | optional: your own names instead, comma separated |
+| `DUMMY_CHAT`<br>`DUMMY_CHAT_INTERVAL_MS` | (empty)<br>(empty) | the dummy streams talk in their own chat: each stream says a line about once a second, and a pretend viewer one about every 30s. `0`, `off` or `false` turns it off (the streams still run). the interval is in ms, default 1000, clamped to 250..60000. not in `.env.example`; docker-compose.yml passes both, empty means the defaults. docs/video-source.md |
 | `S3_ENDPOINT`<br>`S3_BUCKET`<br>`S3_REGION`<br>`S3_ACCESS_KEY`<br>`S3_SECRET_KEY` | `off`<br>`stream`<br>`us-east-1`<br>(empty)<br>(empty) | where objects go. off (the default): the s3 container in docker-compose (seaweedfs), bucket "stream", no aws bill. set a url to use a real bucket instead, and then the key, the secret and the bucket name. the container still runs either way; a url only changes where the api sends.   https://s3.us-east-1.amazonaws.com   https://<account>.r2.cloudflarestorage.com |
 | `S3_PATH_STYLE` | (empty) | empty: path-style, except amazonaws.com which wants virtual-hosted. 1 or 0 forces it. the container always uses path-style, and this line does not apply to it. |
 | `MODERATION_ENABLED`<br>`OPENAI_API_KEY` | `false`<br>(empty) |  |
@@ -222,11 +223,11 @@ every knob in the root `.env.example`, with what its comment said. `./scripts/de
 | `STATS_TARGETS`<br>`STATS_TOKENS`<br>`STATS_ALERT_WEBHOOK` | (empty)<br>(empty)<br>(empty) | what the stats monitor watches: `name=url` pairs, comma separated (empty: this box alone, `<ENV_NAME>=https://frontend`); `name=token` for a box whose `OPS_TOKEN` differs from this one's; where down and up are posted. the monitor's `TARGETS`, `OPS_TOKENS` and `ALERT_WEBHOOK` under other names |
 | `VOICE_SECRET` | (empty) | voice channels (the voice container, docker-compose.yml). the api signs grants with it and the voice container redeems them with it. make one: openssl rand -hex 32 stays empty until voice is turned on; empty, the api answers voice joins with a 503. |
 
-not in `.env.example`; `docker-compose.yml` passes it to the api and home containers, unset means off:
+not in `.env.example`; `docker-compose.yml` passes it to the api, home and chat containers, unset means off:
 
 | variable | default | what it is |
 |---|---|---|
-| `HIDE_TEST_STREAMERS` | (empty) | `1` or `true`: the test streamers (`is_test`, the dummy box's names) are left out of every list, 404 on their profile, watch grant and `/watch` page, and refused go-live. empty or anything else: off, and every answer is as before. read once at boot by the api and by `api home`. docs/test-streamers.md |
+| `HIDE_TEST_STREAMERS` | (empty) | `1` or `true`: the test streamers (`is_test`, the dummy box's names) are left out of every list, 404 on their profile, watch grant and `/watch` page, and refused go-live. empty or anything else: off, and every answer is as before. read once at boot by the api, by `api home` and by `api chat` (a test stream's faster chat tier is off with it). docs/test-streamers.md |
 
 ## `docker-compose.yml`
 
@@ -281,7 +282,8 @@ not in `.env.example`; `docker-compose.yml` passes it to the api and home contai
 - one ffmpeg per fake stream, like video above: ~30 threads each on a many-core box (the lavfi source's pool grows with the cores). raise it before DUMMY_STREAMS goes past ~15 (at `pids_limit: 512`)
 - the dummies get the cpu last: a cgroup weight of 128 against everyone else's default 1024, so when the box is busy video, the api and the rest win and the fake streams stutter instead. inside the container ffmpeg also runs at nice 19, but nice only ranks processes within one cgroup; this is the lever between containers. it costs nothing on an idle box (at `cpu_shares: 128`)
 - optional: your own names, comma separated. default: dummy-mango, dummy-pixel, ... (at `DUMMY_NAMES: ${DUMMY_NAMES:-}`)
-- pretend viewers talk in each dummy room. leave empty to turn that off. (at `CHAT_WS_URL: ws://chat:4100`)
+- the dummy streams' chatter: on unless DUMMY_CHAT is 0, off or false; a line every DUMMY_CHAT_INTERVAL_MS (default 1000). empty means the defaults (at `DUMMY_CHAT: ${DUMMY_CHAT:-}`)
+- each dummy stream and a pretend viewer talk in its room. leave empty (or DUMMY_CHAT=off) to turn that off. (at `CHAT_WS_URL: ws://chat:4100`)
 - the voice sfu for the servers' voice channels: same image as video, run as `video voice` (video/src/voice.rs). a page brings a grant from the api, we redeem it with VOICE_SECRET (the api's own) for the person and the room, and tell the api who is in. off by default: the profile keeps a plain `up -d` and deploy.sh from creating it. turn it on with a VOICE_SECRET in .env, udp 7883 open in the firewall (docs/voice.md), then docker compose --profile voice up -d voice until then /voice is a 502 and the api answers voice joins with a 503. (at `image: ${IMAGES:-}stream-video:${TAG:-latest}`)
 - no ffmpeg here, only webrtc. the same cap as video (at `pids_limit: 256`)
 - off turns the per-route request limits off (docs/rate-limits.md). unset: on (at `RATE_LIMITS: ${RATE_LIMITS:-}`)

@@ -34,6 +34,7 @@ const ROOM_TTL_SECS: i64 = 7 * 24 * 3600;
 const ANON_TIER: Tier = Tier { burst: 2.0, window: Duration::from_secs(60) };
 const LOGIN_TIER: Tier = Tier { burst: 3.0, window: Duration::from_secs(10) };
 const REACT_TIER: Tier = Tier { burst: 10.0, window: Duration::from_secs(10) };
+const TEST_OWNER_TIER: Tier = Tier { burst: 3.0, window: Duration::from_secs(3) };
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
 const SLOW_DOWN: &str = "slow down";
 const MAX_SOCKETS_PER_IP: usize = 8;
@@ -51,6 +52,7 @@ pub(crate) struct ChatState {
     reacts: Arc<Limiter>,
     shutdown: watch::Receiver<bool>,
     dummy_prefix: String,
+    hide_test: bool,
     pub(crate) persist: bool,
     admins: Vec<Uuid>,
 }
@@ -271,6 +273,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         reacts: Arc::new(Limiter::for_reactions()),
         shutdown,
         dummy_prefix,
+        hide_test: crate::test_streamers::hide_from_env(),
         persist,
         admins,
     };
@@ -560,7 +563,8 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
     };
     log::info!("{name}: {} joined", shown(&who));
 
-    let mut speaker = Speaker::of(who.as_ref(), &hello, &ip);
+    let test_room = test_room_of(&s, &name, server.as_deref()).await;
+    let mut speaker = Speaker::of(who.as_ref(), &hello, &ip, test_room);
     let mut last_heard = Instant::now();
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -612,7 +616,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                 let (text, image, images, video, reply) = match serde_json::from_str::<In>(&text) {
                     Ok(In::Say { text, image, images, video, reply, .. }) => (text, image, images, video, reply),
                     Ok(In::React { id, emoji, on, .. }) => {
-                        let reacted = on_react(&s, &name, &name, server.as_deref(), &mut who, &mut speaker, (&headers, &hello, &ip), (&id, &emoji, on)).await;
+                        let reacted = on_react(&s, &name, &name, server.as_deref(), &mut who, &mut speaker, (&headers, &hello, &ip, test_room), (&id, &emoji, on)).await;
                         if let Err((error, wait)) = reacted {
                             let _ = send(&mut socket, &Out::ReactRefused { error, react: &id, wait }).await;
                         }
@@ -636,7 +640,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     match identify(&s, &name, &headers, &hello).await {
                         Ok(w) => {
                             who = Some(w);
-                            speaker = Speaker::of(who.as_ref(), &hello, &ip);
+                            speaker = Speaker::of(who.as_ref(), &hello, &ip, test_room);
                             log::info!("{name}: the reader is {}", shown(&who));
                         }
                         Err(Unknown::Refused(why)) => {
@@ -707,13 +711,32 @@ impl Bucket {
 enum Speaker {
     Account(Uuid),
     Streamer(String),
+    TestOwner(String),
     Nick(String, String),
 }
 
+fn is_test_room(prefix: &str, hide: bool, room: &str, is_test: bool) -> bool {
+    !hide && is_test && !prefix.is_empty() && room.starts_with(prefix)
+}
+
+async fn test_room_of(s: &ChatState, room: &str, server: Option<&str>) -> bool {
+    if server.is_some() || !is_test_room(&s.dummy_prefix, s.hide_test, room, true) {
+        return false;
+    }
+    match sqlx::query_scalar::<_, bool>("SELECT is_test FROM streamers WHERE name = $1").bind(room).fetch_optional(&s.db).await {
+        Ok(is_test) => is_test_room(&s.dummy_prefix, s.hide_test, room, is_test.unwrap_or(false)),
+        Err(e) => {
+            log::warn!("{room}: cannot read whether it is a test stream: {e}");
+            false
+        }
+    }
+}
+
 impl Speaker {
-    fn of(who: Option<&Who>, hello: &Hello, ip: &str) -> Speaker {
+    fn of(who: Option<&Who>, hello: &Hello, ip: &str, test_room: bool) -> Speaker {
         match who {
             Some(Who { user_id: Some(id), .. }) => Speaker::Account(*id),
+            Some(w) if w.streamer && test_room => Speaker::TestOwner(w.from.clone()),
             Some(w) if w.streamer => Speaker::Streamer(w.from.clone()),
             Some(w) => Speaker::Nick(ip.to_owned(), w.from.to_lowercase()),
             None => Speaker::Nick(ip.to_owned(), hello.nick.as_deref().map(clean_nick).unwrap_or_default().to_lowercase()),
@@ -723,6 +746,7 @@ impl Speaker {
     fn tier(&self) -> Tier {
         match self {
             Speaker::Account(_) | Speaker::Streamer(_) => LOGIN_TIER,
+            Speaker::TestOwner(_) => TEST_OWNER_TIER,
             Speaker::Nick(..) => ANON_TIER,
         }
     }
@@ -1052,7 +1076,7 @@ async fn on_react(
     server: Option<&str>,
     who: &mut Option<Who>,
     speaker: &mut Speaker,
-    (headers, hello, ip): (&HeaderMap, &Hello, &str),
+    (headers, hello, ip, test_room): (&HeaderMap, &Hello, &str, bool),
     (id, emoji, on): (&str, &str, bool),
 ) -> Result<(), (&'static str, Option<u64>)> {
     if !is_stream_id(id) {
@@ -1066,7 +1090,7 @@ async fn on_react(
     }
     if who.is_none() {
         if let Ok(w) = identify(s, at, headers, hello).await {
-            *speaker = Speaker::of(Some(&w), hello, ip);
+            *speaker = Speaker::of(Some(&w), hello, ip, test_room);
             *who = Some(w);
         }
     }
@@ -1251,7 +1275,8 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
     log::info!("{name}: {} joined, {} channels", shown(&who), joined.len());
 
     let mut last_seen: HashMap<Arc<str>, (u64, u64)> = HashMap::new();
-    let mut speaker = Speaker::of(who.as_ref(), &hello, &ip);
+    let test_room = false;
+    let mut speaker = Speaker::of(who.as_ref(), &hello, &ip, test_room);
     let mut last_heard = Instant::now();
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1339,7 +1364,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                             continue;
                         };
                         let room = format!("{server}/{channel}");
-                        let reacted = on_react(&s, &name, &room, Some(&server), &mut who, &mut speaker, (&headers, &hello, &ip), (&id, &emoji, on)).await;
+                        let reacted = on_react(&s, &name, &room, Some(&server), &mut who, &mut speaker, (&headers, &hello, &ip, test_room), (&id, &emoji, on)).await;
                         if let Err((error, wait)) = reacted {
                             let _ = send(&mut socket, &Out::ReactRefused { error, react: &id, wait }).await;
                         }
@@ -1365,7 +1390,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                             match identify(&s, &name, &headers, &hello).await {
                                 Ok(w) => {
                                     who = Some(w);
-                                    speaker = Speaker::of(who.as_ref(), &hello, &ip);
+                                    speaker = Speaker::of(who.as_ref(), &hello, &ip, test_room);
                                     log::info!("{name}: the reader is {}", shown(&who));
                                 }
                                 Err(Unknown::Refused(why)) => {
@@ -1891,7 +1916,7 @@ mod tests {
         let alice = Speaker::Nick("1.2.3.4".into(), "alice".into());
         assert!(limiter.take_at(&alice, "room", now).is_ok());
         assert!(limiter.take_at(&alice, "room", now).is_ok());
-        assert!(limiter.take_at(&Speaker::of(None, &Hello { nick: Some("Alice".into()), session: None, token: None, bot: None }, "1.2.3.4"), "room", now).is_err());
+        assert!(limiter.take_at(&Speaker::of(None, &Hello { nick: Some("Alice".into()), session: None, token: None, bot: None }, "1.2.3.4", false), "room", now).is_err());
         assert!(limiter.take_at(&alice, "other", now).is_ok());
         assert!(limiter.take_at(&Speaker::Nick("1.2.3.4".into(), "bob".into()), "room", now).is_ok());
         let bob = Speaker::Account(Uuid::nil());
@@ -1925,18 +1950,49 @@ mod tests {
         let hello = Hello { nick: Some(" Bob ".into()), session: None, token: None, bot: None };
         let id = Uuid::nil();
         let login = Who { from: "bob".into(), streamer: false, verified: true, groups: Vec::new(), user_id: Some(id) };
-        assert_eq!(Speaker::of(Some(&login), &hello, "1.2.3.4"), Speaker::Account(id));
+        assert_eq!(Speaker::of(Some(&login), &hello, "1.2.3.4", false), Speaker::Account(id));
         let streamer = Who { from: "room".into(), streamer: true, verified: false, groups: Vec::new(), user_id: None };
-        assert_eq!(Speaker::of(Some(&streamer), &hello, "1.2.3.4"), Speaker::Streamer("room".into()));
+        assert_eq!(Speaker::of(Some(&streamer), &hello, "1.2.3.4", false), Speaker::Streamer("room".into()));
         let own = Who { from: "room".into(), streamer: true, verified: true, groups: Vec::new(), user_id: Some(id) };
-        assert_eq!(Speaker::of(Some(&own), &hello, "1.2.3.4"), Speaker::Account(id));
+        assert_eq!(Speaker::of(Some(&own), &hello, "1.2.3.4", false), Speaker::Account(id));
         let nick = Who { from: "Bob".into(), streamer: false, verified: false, groups: Vec::new(), user_id: None };
-        assert_eq!(Speaker::of(Some(&nick), &hello, "1.2.3.4"), Speaker::Nick("1.2.3.4".into(), "bob".into()));
-        assert_eq!(Speaker::of(None, &hello, "1.2.3.4"), Speaker::Nick("1.2.3.4".into(), "bob".into()));
-        assert_eq!(Speaker::of(None, &Hello { nick: None, session: None, token: None, bot: None }, "1.2.3.4"), Speaker::Nick("1.2.3.4".into(), String::new()));
+        assert_eq!(Speaker::of(Some(&nick), &hello, "1.2.3.4", false), Speaker::Nick("1.2.3.4".into(), "bob".into()));
+        assert_eq!(Speaker::of(None, &hello, "1.2.3.4", false), Speaker::Nick("1.2.3.4".into(), "bob".into()));
+        assert_eq!(Speaker::of(None, &Hello { nick: None, session: None, token: None, bot: None }, "1.2.3.4", false), Speaker::Nick("1.2.3.4".into(), String::new()));
         assert_eq!(Speaker::Account(id).tier(), LOGIN_TIER);
         assert_eq!(Speaker::Streamer("room".into()).tier(), LOGIN_TIER);
         assert_eq!(Speaker::Nick("1.2.3.4".into(), "bob".into()).tier(), ANON_TIER);
+    }
+
+    #[test]
+    fn only_a_test_streams_own_session_chats_fast() {
+        let hello = Hello { nick: Some("pixelfan".into()), session: Some(1), token: Some(2), bot: Some(true) };
+        let id = Uuid::nil();
+        let owner = Who { from: "dummy-mango".into(), streamer: true, verified: false, groups: Vec::new(), user_id: None };
+        let guest = Who { from: "pixelfan".into(), streamer: false, verified: false, groups: Vec::new(), user_id: None };
+        let login = Who { from: "bob".into(), streamer: false, verified: true, groups: Vec::new(), user_id: Some(id) };
+        let room = is_test_room("dummy-", false, "dummy-mango", true);
+        assert!(room);
+        assert_eq!(Speaker::of(Some(&owner), &hello, "1.2.3.4", room).tier(), TEST_OWNER_TIER);
+        assert_eq!(Speaker::of(Some(&owner), &hello, "1.2.3.4", is_test_room("dummy-", false, "dummy-mango", false)).tier(), LOGIN_TIER);
+        assert_eq!(Speaker::of(Some(&guest), &hello, "1.2.3.4", room).tier(), ANON_TIER);
+        assert_eq!(Speaker::of(None, &hello, "1.2.3.4", room).tier(), ANON_TIER);
+        assert_eq!(Speaker::of(Some(&login), &hello, "1.2.3.4", room).tier(), LOGIN_TIER);
+        assert_eq!(Speaker::of(Some(&owner), &hello, "1.2.3.4", is_test_room("dummy-", true, "dummy-mango", true)).tier(), LOGIN_TIER);
+        assert!(!is_test_room("dummy-", false, "billy", true));
+        assert!(!is_test_room("", false, "dummy-mango", true));
+    }
+
+    #[test]
+    fn a_test_owner_has_three_lines_then_one_a_second() {
+        let now = Instant::now();
+        let mut b = Bucket::new(TEST_OWNER_TIER, now);
+        for _ in 0..3 {
+            assert!(b.take(TEST_OWNER_TIER, now).is_ok());
+        }
+        assert!(about(b.take(TEST_OWNER_TIER, now).unwrap_err(), 1.0));
+        assert!(b.take(TEST_OWNER_TIER, now + Duration::from_millis(1001)).is_ok());
+        assert!(b.take(TEST_OWNER_TIER, now + Duration::from_millis(1001)).is_err());
     }
 
     #[test]
