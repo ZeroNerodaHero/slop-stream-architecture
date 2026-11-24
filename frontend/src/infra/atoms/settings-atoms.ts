@@ -1,14 +1,3 @@
-/**
- * The preferences this browser keeps (localstorage, like the nick): where the chat sits on a
- * page, whether its window is see-through, where it sits on the corner player, which corner the you panel sits in, which lists
- * it shows in what order and which of them are folded, whether the bots' lines show, whether
- * the lines wear faces, the shape of the lines in a chat with a friend, whether a link asks
- * before it opens, whether a click on somebody shows them in a popup, the theme, and how big
- * the pages are. Not part of the account: a laptop and a phone can each have their own. Same
- * shape as the other atom modules: atoms for what renders, action functions to change it. The
- * modal that edits them is user-modal-atoms.ts.
- */
-
 import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
@@ -28,20 +17,11 @@ import {
   toCssVars
 } from '@/infra/theme';
 
-// ---- layout -------------------------------------------------------------------------------
-
-/**
- * Where the chat sits on the watch page and the go live page: a column on the left, a column
- * on the right (the default), or in a window over the page. `below` used to be a choice; a
- * browser that still has it stored reads as `right`. The corner player's chat is the setting
- * below this one.
- */
 export type ChatSide = 'left' | 'right' | 'modal';
 
 export const CHAT_SIDES: readonly ChatSide[] = ['left', 'right', 'modal'];
 
 const storedChatSideAtom = atomWithStorage<string>('settings.chatSide', 'right', undefined, { getOnInit: true });
-/** Read: always one of CHAT_SIDES, whatever localstorage holds. */
 export const chatSideAtom = atom((get) => {
   const side = get(storedChatSideAtom);
   return (CHAT_SIDES as readonly string[]).includes(side) ? (side as ChatSide) : 'right';
@@ -49,44 +29,27 @@ export const chatSideAtom = atom((get) => {
 
 export function setChatSide(side: ChatSide) {
   store.set(storedChatSideAtom, side);
-  // picking a place shows the chat there, so the page behind follows at once
   store.set(chatModalOpenAtom, true);
 }
 
-/**
- * The chat is showing, in whichever place the layout setting says. Not kept: a new visit starts
- * with it open, and closing it lasts the visit. A column slides shut; a window fades shut.
- */
 export const chatModalOpenAtom = atom(true);
 
 export function setChatModalOpen(open: boolean) {
   store.set(chatModalOpenAtom, open);
 }
 
-/**
- * The chat window (the `modal` side) is see-through: no fill behind the lines, the stream showing
- * between them, the words in a shadow (globals.css `.chat-clear`). On unless this browser turned
- * it off with the toggle in the window's bar (ChatSlot.tsx). The columns and a phone are solid.
- */
 const storedChatClearAtom = atomWithStorage<unknown>('settings.chatClear', true, undefined, { getOnInit: true });
-/** Read: a boolean, whatever localstorage holds. Anything but a stored `false` is on. */
 export const chatClearAtom = atom((get) => get(storedChatClearAtom) !== false);
 
 export function setChatClear(clear: boolean) {
   store.set(storedChatClearAtom, clear);
 }
 
-/**
- * Where the corner player's chat opens: under the picture (the default), or in a column on
- * its left or its right. The watch page's chat side is the setting above; this one is only
- * the picture in picture player.
- */
 export type PipChatPlace = 'bottom' | 'left' | 'right';
 
 export const PIP_CHAT_PLACES: readonly PipChatPlace[] = ['bottom', 'left', 'right'];
 
 const storedPipChatPlaceAtom = atomWithStorage<string>('settings.pipChatPlace', 'bottom', undefined, { getOnInit: true });
-/** Read: always one of PIP_CHAT_PLACES, whatever localstorage holds. */
 export const pipChatPlaceAtom = atom((get) => {
   const place = get(storedPipChatPlaceAtom);
   return (PIP_CHAT_PLACES as readonly string[]).includes(place) ? (place as PipChatPlace) : 'bottom';
@@ -96,16 +59,11 @@ export function setPipChatPlace(place: PipChatPlace) {
   store.set(storedPipChatPlaceAtom, place);
 }
 
-/**
- * Which bottom corner the you panel sits in. Left, unless this browser says right. The corner
- * players stay on the right and lift when the panel joins them there.
- */
 export type PanelSide = 'left' | 'right';
 
 export const PANEL_SIDES: readonly PanelSide[] = ['left', 'right'];
 
 const storedPanelSideAtom = atomWithStorage<string>('settings.panelSide', 'left', undefined, { getOnInit: true });
-/** Read: always one of PANEL_SIDES, whatever localstorage holds. */
 export const panelSideAtom = atom((get) => {
   const side = get(storedPanelSideAtom);
   return (PANEL_SIDES as readonly string[]).includes(side) ? (side as PanelSide) : 'left';
@@ -115,12 +73,6 @@ export function setPanelSide(side: PanelSide) {
   store.set(storedPanelSideAtom, side);
 }
 
-/**
- * The sidebar's lists (docs/follows.md): friends (they follow you back), the rest of who you
- * follow, and the groups you are in. Which of them the column shows, and in what order top to
- * bottom, is this browser's: the sidebar tab drags them into an order and switches each on or
- * off. One stays on, whatever is asked.
- */
 export type SidebarList = 'friends' | 'following' | 'groups';
 
 export const SIDEBAR_LISTS: readonly SidebarList[] = ['friends', 'following', 'groups'];
@@ -133,7 +85,6 @@ export interface SidebarListChoice {
 const DEFAULT_SIDEBAR_LISTS: readonly SidebarListChoice[] = SIDEBAR_LISTS.map((list) => ({ list, on: true }));
 
 const storedSidebarListsAtom = atomWithStorage<unknown>('settings.sidebarLists', DEFAULT_SIDEBAR_LISTS, undefined, { getOnInit: true });
-/** Read: every list once, in the kept order, each on or off, at least one on; whatever localstorage holds. */
 export const sidebarListsAtom = atom((get) => validSidebarLists(get(storedSidebarListsAtom)));
 
 function validSidebarLists(raw: unknown): SidebarListChoice[] {
@@ -146,13 +97,10 @@ function validSidebarLists(raw: unknown): SidebarListChoice[] {
     seen.add(list as SidebarList);
     out.push({ list: list as SidebarList, on: on !== false });
   }
-  // a list the kept order does not name (a browser from before it existed): at the end, on
   for (const list of SIDEBAR_LISTS) if (!seen.has(list)) out.push({ list, on: true });
-  // none on: the first is, so the column is never empty by setting
   return out.some((c) => c.on) ? out : out.map((c, i) => (i === 0 ? { ...c, on: true } : c));
 }
 
-/** The list named, moved to that place in the order (0 is the top). The others keep their order around it. */
 export function moveSidebarList(list: SidebarList, to: number) {
   const current = store.get(sidebarListsAtom);
   const from = current.findIndex((c) => c.list === list);
@@ -164,7 +112,6 @@ export function moveSidebarList(list: SidebarList, to: number) {
   store.set(storedSidebarListsAtom, next);
 }
 
-/** One list on or off. Off is refused for the last one on. */
 export function setSidebarListOn(list: SidebarList, on: boolean) {
   const current = store.get(sidebarListsAtom);
   if (!on && current.filter((c) => c.on).length <= 1 && current.some((c) => c.list === list && c.on)) return;
@@ -174,20 +121,11 @@ export function setSidebarListOn(list: SidebarList, on: boolean) {
   );
 }
 
-/**
- * How the sidebar's rows are shared when the lists shown are longer than the room together
- * (docs/follows.md): a weight per list, equal to start, so two lists split the rows half and
- * half (30 rows: 15 and 15) and three in thirds; a list shorter than its share takes what it
- * has, and the rows it leaves go to the others by the same weights. Dragging the line between
- * two lists moves a row from one to the other, and the weights are then kept as the rows
- * stood, as fractions of the room, so a taller window keeps the proportion.
- */
 export type SidebarShares = Record<SidebarList, number>;
 
 const DEFAULT_SIDEBAR_SHARES: SidebarShares = { friends: 1, following: 1, groups: 1 };
 
 const storedSidebarSharesAtom = atomWithStorage<unknown>('settings.sidebarShares', DEFAULT_SIDEBAR_SHARES, undefined, { getOnInit: true });
-/** Read: a positive number per list, whatever localstorage holds. */
 export const sidebarSharesAtom = atom((get): SidebarShares => {
   const raw = get(storedSidebarSharesAtom);
   const kept = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
@@ -199,23 +137,15 @@ export const sidebarSharesAtom = atom((get): SidebarShares => {
   return out;
 });
 
-/** The weights given, over the kept ones. */
 export function setSidebarShares(shares: Partial<SidebarShares>) {
   store.set(storedSidebarSharesAtom, { ...store.get(sidebarSharesAtom), ...shares });
 }
 
-/**
- * Which of the sidebar's lists are folded to their icon line (docs/follows.md): the caret before
- * each icon, while the panel is open, folds that list and unfolds it. Folded, the icon keeps its
- * place in the stack and the word its count, and the rows under it go to the other lists. This
- * browser's; none folded to start.
- */
 export type SidebarFolds = Record<SidebarList, boolean>;
 
 const DEFAULT_SIDEBAR_FOLDS: SidebarFolds = { friends: false, following: false, groups: false };
 
 const storedSidebarFoldsAtom = atomWithStorage<unknown>('settings.sidebarFolds', DEFAULT_SIDEBAR_FOLDS, undefined, { getOnInit: true });
-/** Read: a boolean per list, whatever localstorage holds. Anything but a stored `true` is unfolded. */
 export const sidebarFoldsAtom = atom((get): SidebarFolds => {
   const raw = get(storedSidebarFoldsAtom);
   const kept = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
@@ -224,58 +154,31 @@ export const sidebarFoldsAtom = atom((get): SidebarFolds => {
   return out;
 });
 
-/** One list folded or unfolded. */
 export function setSidebarFolded(list: SidebarList, folded: boolean) {
   store.set(storedSidebarFoldsAtom, { ...store.get(sidebarFoldsAtom), [list]: folded });
 }
 
-/**
- * A group's members column on a wide screen (ServerRoom.tsx): open, the roster with its search
- * box and the names; closed, a strip of faces a face wide. This browser's; open to start.
- */
 export const roomMembersOpenAtom = atomWithStorage('settings.roomMembersOpen', true, undefined, { getOnInit: true });
 
-// ---- debugging -------------------------------------------------------------------------------
-
-/** The messages inspector (docs/status.md): the frames this browser gets, in the browser. Off, it costs one boolean per frame. */
 const storedInspectorAtom = atomWithStorage<unknown>('settings.inspector', false, undefined, { getOnInit: true });
-/** Read: a boolean, whatever localstorage holds. */
 export const inspectorEnabledAtom = atom((get) => get(storedInspectorAtom) === true);
 
 export function setInspectorEnabled(on: boolean) {
   store.set(storedInspectorAtom, on);
 }
 
-// ---- chat ----------------------------------------------------------------------------------
-
-/**
- * Lines said by bots (the `bot` group: the fake streams' chatters, and any socket that says it
- * is one) are kept off the screen. The chat header has the switch too; both move this.
- */
 const storedHideBotsAtom = atomWithStorage<unknown>('settings.hideBots', false, undefined, { getOnInit: true });
-/** Read: a boolean, whatever localstorage holds. */
 export const hideBotsAtom = atom((get) => get(storedHideBotsAtom) === true);
 
 export function setHideBots(hide: boolean) {
   store.set(storedHideBotsAtom, hide);
 }
 
-/**
- * The shape of the lines in every chat: a stream's, a group channel's, and a chat with a
- * friend (ChatLine.tsx draws it for the panel and the window alike; docs/chat.md). `log`: one
- * line each, the time, the name, then the words, nothing offset, the most lines on screen.
- * `bubbles` (the default): each line in a box of its own, yours on the right and theirs on the
- * left (in a room, under their name; a thread's two sides say who). `blocks`: the face (the
- * picture of a login or the streamer, else the letter the name makes, GeneratedAvatar.tsx),
- * the name and the time over the words, and one person's lines in a row under one head. The
- * faces are the blocks': no shape has a switch of its own for them.
- */
 export type ChatStyle = 'log' | 'bubbles' | 'blocks';
 
 export const CHAT_STYLES: readonly ChatStyle[] = ['log', 'bubbles', 'blocks'];
 
 const storedChatStyleAtom = atomWithStorage<string>('settings.chatStyle', 'bubbles', undefined, { getOnInit: true });
-/** Read: always one of CHAT_STYLES, whatever localstorage holds. */
 export const chatStyleAtom = atom((get) => {
   const style = get(storedChatStyleAtom);
   return (CHAT_STYLES as readonly string[]).includes(style) ? (style as ChatStyle) : 'bubbles';
@@ -285,68 +188,40 @@ export function setChatStyle(style: ChatStyle) {
   store.set(storedChatStyleAtom, style);
 }
 
-/**
- * Every link that leaves this site (ExternalLink.tsx: a chat's line, a direct message, a page's
- * about, socials, the model sites) opens in a new tab; first, a word that you are leaving this
- * site for that one. On
- * unless this browser turned it off: the links block of the chat tab, or `don't ask again` on
- * the word itself, which is this same switch.
- */
 const storedLinkWarningAtom = atomWithStorage<unknown>('settings.linkWarning', true, undefined, { getOnInit: true });
-/** Read: a boolean, whatever localstorage holds. Anything but a stored `false` is on. */
 export const linkWarningAtom = atom((get) => get(storedLinkWarningAtom) !== false);
 
 export function setLinkWarning(on: boolean) {
   store.set(storedLinkWarningAtom, on);
 }
 
-/**
- * A video link in a line (a stream's chat, a group channel's, a direct message) gets a player
- * under the words (ChatEmbeds.tsx): a poster card first, the provider's player only on a click.
- * On unless this browser turned it off in the chat tab; off, the links are links and no more.
- */
 const storedShowEmbedsAtom = atomWithStorage<unknown>('settings.showEmbeds', true, undefined, { getOnInit: true });
-/** Read: a boolean, whatever localstorage holds. Anything but a stored `false` is on. */
 export const showEmbedsAtom = atom((get) => get(storedShowEmbedsAtom) !== false);
 
 export function setShowEmbeds(on: boolean) {
   store.set(storedShowEmbedsAtom, on);
 }
 
-/**
- * A click on somebody, in a group's roster or on their name in a chat, shows them in a popup
- * over the page (ProfilePopup.tsx, docs/follows.md): who they are, their stream while they
- * are live, their page, and a button to go there. On unless this browser turned it off: then
- * a member's row is the way to their page and a login's name in a chat lists that account's
- * lines there, what each did before there was a popup.
- */
 const storedProfilePopupAtom = atomWithStorage<unknown>('settings.profilePopup', true, undefined, { getOnInit: true });
-/** Read: a boolean, whatever localstorage holds. Anything but a stored `false` is on. */
 export const profilePopupEnabledAtom = atom((get) => get(storedProfilePopupAtom) !== false);
 
 export function setProfilePopupEnabled(on: boolean) {
   store.set(storedProfilePopupAtom, on);
 }
 
-// ---- theme ---------------------------------------------------------------------------------
-
-/** Three colours of their own (text null: derived from the background). */
 export interface CustomTheme {
   kind: 'custom';
   background: string;
   accent: string;
   text: string | null;
 }
-/** A preset by name, or colours of their own. */
 export type ThemeChoice = { kind: 'preset'; name: PresetName } | CustomTheme;
 
 const DEFAULT_THEME: ThemeChoice = { kind: 'preset', name: 'dark' };
-/** Where the derived variables are kept for the inline script in index.html, which applies them before first paint. */
 const THEME_VARS_KEY = 'settings.themeVars';
 
 const storedThemeAtom = atomWithStorage<unknown>('settings.theme', DEFAULT_THEME, undefined, { getOnInit: true });
 
-/** Read: always a well-formed choice, whatever localstorage holds. */
 export const themeAtom = atom<ThemeChoice>((get) => validTheme(get(storedThemeAtom)));
 
 function validTheme(raw: unknown): ThemeChoice {
@@ -361,7 +236,6 @@ function validTheme(raw: unknown): ThemeChoice {
   return DEFAULT_THEME;
 }
 
-/** The twelve colours the choice comes to. */
 export function paletteOf(choice: ThemeChoice): Palette {
   if (choice.kind === 'preset') return PRESETS[choice.name];
   return derivePalette({
@@ -371,14 +245,12 @@ export function paletteOf(choice: ThemeChoice): Palette {
   });
 }
 
-/** What is on screen now. */
 export const paletteAtom = atom((get) => paletteOf(get(themeAtom)));
 
 export function setTheme(choice: ThemeChoice) {
   store.set(storedThemeAtom, choice);
 }
 
-/** The custom colours, kept as they are typed; the page follows at once. */
 export function setCustomColor(slot: 'background' | 'accent' | 'text', value: string | null) {
   const current = store.get(themeAtom);
   const base: CustomTheme = current.kind === 'custom' ? current : customFrom(paletteOf(current));
@@ -386,23 +258,16 @@ export function setCustomColor(slot: 'background' | 'accent' | 'text', value: st
   else if (isHex(value)) setTheme({ ...base, [slot]: value });
 }
 
-/** A custom choice that starts where a palette is: its background and accent, the text left to derive. */
 export function customFrom(p: Palette): CustomTheme {
   return { kind: 'custom', background: hex(p.background), accent: hex(p.primaryColor), text: null };
 }
 
-/**
- * The choice onto the document. The dark preset is the stylesheet itself, so it clears the
- * inline variables and the kept copy; everything else is written inline and kept under
- * THEME_VARS_KEY for the inline script in index.html, so the next load paints right first time.
- */
 function applyTheme(choice: ThemeChoice) {
   applyThemeTo(document.documentElement);
   if (choice.kind === 'preset' && choice.name === 'dark') {
     try {
       localStorage.removeItem(THEME_VARS_KEY);
     } catch {
-      // private mode: the inline script has nothing to read either, which is fine
     }
     return;
   }
@@ -410,45 +275,26 @@ function applyTheme(choice: ThemeChoice) {
   try {
     localStorage.setItem(THEME_VARS_KEY, JSON.stringify({ vars: toCssVars(palette), scheme: schemeOf(palette) }));
   } catch {
-    // same
   }
 }
 
-/**
- * The choice onto a document's <html>: this page's, and the popped out player's window
- * (infra/popout.ts), which has a document of its own and is dressed as this one.
- */
 export function applyThemeTo(root: HTMLElement) {
   const choice = store.get(themeAtom);
   if (choice.kind === 'preset' && choice.name === 'dark') clearPalette(root);
   else applyPalette(paletteOf(choice), root);
 }
 
-// one subscriber for the life of the page: every change of the choice reaches the document,
-// this tab's and (through localstorage's `storage` event, which the subscription is what
-// installs) another tab's. main.tsx calls applyStoredTheme once before rendering.
 store.sub(themeAtom, () => applyTheme(store.get(themeAtom)));
 
 export function applyStoredTheme() {
   applyTheme(store.get(themeAtom));
 }
 
-// ---- size ----------------------------------------------------------------------------------
-
-/**
- * How big the pages are: the root font size, as a percentage of the browser's own. Every
- * measure in the stylesheet is in rems (the words, the padding, the gaps, the columns; the body's
- * 20px is 1.25rem in globals.css), so a step down here is a step down for the whole page, the way
- * the browser's zoom is, kept here and for this site alone. 100 is the browser's size, the
- * default, and sets nothing; the browser's own zoom works on top of any of them.
- */
 export type TextSize = 80 | 90 | 100 | 110 | 125;
 
-/** The inline script in index.html holds this list too (less 100) and paints a kept size before the bundle runs; change both together. */
 export const TEXT_SIZES: readonly TextSize[] = [80, 90, 100, 110, 125];
 
 const storedTextSizeAtom = atomWithStorage<unknown>('settings.textSize', 100, undefined, { getOnInit: true });
-/** Read: always one of TEXT_SIZES, whatever localstorage holds. */
 export const textSizeAtom = atom((get): TextSize => {
   const size = get(storedTextSizeAtom);
   return (TEXT_SIZES as readonly unknown[]).includes(size) ? (size as TextSize) : 100;
@@ -458,18 +304,12 @@ export function setTextSize(size: TextSize) {
   store.set(storedTextSizeAtom, size);
 }
 
-/**
- * The choice onto a document's <html>: this page's, and the popped out player's window
- * (infra/popout.ts), dressed as this one. 100 clears it: the stylesheet is the browser's size.
- * The inline script in index.html reads the same key and does the same before first paint.
- */
 export function applyTextSizeTo(root: HTMLElement) {
   const size = store.get(textSizeAtom);
   if (size === 100) root.style.removeProperty('font-size');
   else root.style.fontSize = `${size}%`;
 }
 
-// the theme's subscriber, for the size: this tab's changes and another tab's alike
 store.sub(textSizeAtom, () => applyTextSizeTo(document.documentElement));
 
 export function applyStoredTextSize() {

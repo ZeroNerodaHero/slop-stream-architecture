@@ -1,41 +1,14 @@
-/**
- * A model as a camera (docs/vtuber.md): a model file's bytes and a camera's track in, one video
- * track out, whose picture is the model moving with the face in front of that camera. The
- * track is what `publish-atoms.ts` puts where the camera's picture would go; the camera's own
- * track is handed to the face reader here. Its picture is shown in one place, the rigging panel
- * on the streamer's own page (`readerCameraAtom`), and sent nowhere.
- *
- * The work is the face worker's (`face.worker.ts`). This file starts it, and connects it to
- * the camera and to a track, one of two ways:
- *
- * - `worker`: the camera's frames go straight into the worker and its drawn frames straight
- *   into a track (chrome's and edge's insertable streams). The page is not in the loop, so a
- *   hidden tab changes nothing.
- * - `page`: this page reads each camera frame and posts it in, and paints each drawn frame the
- *   worker posts back onto a canvas whose capture is the track. Every browser can; it stops
- *   while the tab is hidden, because a hidden page gets no animation frames.
- *
- * `localStorage['settings.modelPath'] = 'page'` asks for the second on a browser that has the
- * first (to look at it, and for the test).
- */
-
 import weights from '@/assets/face_landmarker.task?url';
 import type { FaceLines, FaceMarks, FaceState, FromFaceWorker, LoadStep, ModelStats, RigInfo, ToFaceWorker } from '@/infra/face-wire';
-// the worker as vite builds it (see events.ts). the lint strips the query and finds no default
-// export in the worker file; vite's own typing says there is one
-// oxlint-disable-next-line import/default -- `?worker` is vite's: the default export is the worker's constructor
 import FaceWorker from '@/infra/face.worker?worker';
 
 export type { FaceLines, FaceMarks, FaceState, LoadStep, ModelStats, RigInfo, RigPart } from '@/infra/face-wire';
 
-/** The model's picture: the camera's own size (publish-atoms' `CAMERA_VIDEO`) and rate. */
 const WIDTH = 1280;
 const HEIGHT = 720;
 const FPS = 30;
-/** A model that has not drawn its first frame in this long is given up on: a file can be made so a loader waits forever. */
 const LOAD_TIMEOUT_MS = 30_000;
 
-// chrome's own early shape of insertable streams: both made on the page, their streams handed to a worker
 interface TrackProcessor {
   readonly readable: ReadableStream<VideoFrame>;
 }
@@ -48,51 +21,32 @@ declare global {
 }
 
 export interface ModelOptions {
-  /** The model file's bytes, already read by `infra/model-file.ts`. Handed to the worker: gone from the caller after this. */
   model: ArrayBuffer;
-  /** The camera the face is read from. `null`: none, and the model breathes and blinks on its own. Never sent anywhere. */
   camera: MediaStreamTrack | null;
   mirror: boolean;
-  /** The brows, the smile and the wide eyes move the model too, not only the mouth and the blinks. */
   expressions: boolean;
-  /** The flat colour behind the model, as css. */
   background: string;
-  /**
-   * How far along, inside the worker: the file being made a model of (`model`), then the face
-   * reader coming down and starting (`reader`, with `loaded` of `total` bytes; `total` 0 when
-   * the server does not say). The reader's goes on after the model is on, when it is the slower.
-   */
   onLoading: (step: LoadStep, loaded: number, total: number) => void;
   onState: (face: FaceState, why?: string) => void;
   onStats: (stats: ModelStats) => void;
-  /** Which of the reader's points join into what: once, the first time the marks are asked for (`setMarks`). */
   onLines: (lines: FaceLines) => void;
-  /** One reading's points and numbers, for as long as the marks are asked for. */
   onMarks: (marks: FaceMarks) => void;
-  /** The model stopped after it had started: the drawing was lost, the worker died. Nothing more comes from it. */
   onFailed: (why: string) => void;
 }
 
 export interface ModelSession {
-  /** The model's picture. The caller puts it in the camera's place, and `stop` ends it. */
   readonly track: MediaStreamTrack;
-  /** Which of the two ways this browser got. */
   readonly path: 'worker' | 'page';
-  /** What of this model's face the reader can move (`model-rig.ts`). */
   readonly rig: RigInfo;
-  /** Another camera to read the face from, or none. */
   setCamera(camera: MediaStreamTrack | null): void;
   setMirror(mirror: boolean): void;
   setBackground(css: string): void;
   setExpressions(on: boolean): void;
-  /** The reader's points come with every reading (`onMarks`), or stop coming: on while something draws them (the rigging panel). */
   setMarks(on: boolean): void;
-  /** Take the resting face again. */
   rest(): void;
   stop(): void;
 }
 
-/** This browser can keep a model moving while its tab is hidden. */
 export function modelSurvivesHiddenTab(): boolean {
   return pathHere() === 'worker';
 }
@@ -102,25 +56,18 @@ function pathHere(): 'worker' | 'page' {
   try {
     asked = localStorage.getItem('settings.modelPath');
   } catch {
-    // no storage here: the browser's own answer
   }
   const can = typeof window.MediaStreamTrackProcessor === 'function' && typeof window.MediaStreamTrackGenerator === 'function';
   return can && asked !== 'page' ? 'worker' : 'page';
 }
 
-/**
- * The model, started. Resolves once its first frame is drawn, with the track that carries it;
- * rejects with words when the file cannot be made a model of (or takes too long).
- */
 export async function startModel(options: ModelOptions): Promise<ModelSession> {
-  // a build's worker is a classic script and the dev server's a module: each wants its own loader, and only one is built
   const wasm = (import.meta.env.DEV ? await import('@/infra/face-wasm.module') : await import('@/infra/face-wasm.classic')).default;
   const path = pathHere();
   const worker = new FaceWorker();
   const send = (msg: ToFaceWorker, transfer: Transferable[] = []) => worker.postMessage(msg, transfer);
   let stopped = false;
 
-  // ---- the track the drawn frames become ------------------------------------------------
   let track: MediaStreamTrack;
   let sink: WritableStream<VideoFrame> | null = null;
   let paint: ((bitmap: ImageBitmap) => void) | null = null;
@@ -138,8 +85,6 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
     paint = (bitmap) => ctx.transferFromImageBitmap(bitmap);
   }
 
-  // ---- the camera's frames, into the worker ---------------------------------------------
-  /** The page's way: a <video> of the camera, read once per animation frame while the worker wants one. */
   let video: HTMLVideoElement | null = null;
   let wanted = false;
   let raf = 0;
@@ -148,7 +93,6 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
     raf = 0;
     if (stopped || !video) return;
     raf = requestAnimationFrame(feed);
-    // no faster than the camera: a screen paints twice for each of its frames, and the second look is the same picture
     if (!wanted || video.readyState < 2 || video.videoWidth === 0 || now - sentAt < 1000 / FPS - 4) return;
     sentAt = now;
     wanted = false;
@@ -160,7 +104,6 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
   };
   const framesOf = (camera: MediaStreamTrack | null): ReadableStream<VideoFrame> | null => {
     if (!camera) return null;
-    // one frame kept at most: the reader gets the newest, never a queue of old ones
     return path === 'worker' ? new window.MediaStreamTrackProcessor!({ track: camera, maxBufferSize: 1 }).readable : null;
   };
   const watch = (camera: MediaStreamTrack | null) => {
@@ -185,7 +128,6 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
     if (raf) cancelAnimationFrame(raf);
     if (video) video.srcObject = null;
     send({ type: 'stop' });
-    // the worker closes itself on `stop`; this is for one that is stuck in a frame
     setTimeout(() => worker.terminate(), 500);
     track.stop();
   };
@@ -193,7 +135,6 @@ export async function startModel(options: ModelOptions): Promise<ModelSession> {
   const session: ModelSession & { rig: RigInfo } = {
     track,
     path,
-    // the worker says what it found when the model is ready: nobody has the session before that
     rig: { kind: 'none', parts: [] },
     setCamera(camera) {
       if (stopped) return;

@@ -1,23 +1,12 @@
-/**
- * The profile popup (ProfilePopup.tsx, docs/follows.md): somebody's page over the page you are
- * on, opened by a click on them in a group's roster or on their name in a chat, while this
- * browser's setting says so (settings.profilePopup, on unless turned off). Who it is about
- * lives here: one person at a time, and nobody while it is closed. Same shape as the user
- * modal's atoms.
- */
-
 import { atom } from 'jotai';
 
 import { store } from '@/infra/store';
 
-/** Who the popup is about, with what the row that was clicked already holds: the head is drawn from it before the profile read lands. */
 export interface ProfilePopupTarget {
   name: string;
   verified: boolean;
-  /** The verified mark (a provider linked), when the row clicked knows it. */
   oauth_verified?: boolean;
   avatar: number | null;
-  /** Opened from a chat line of this account: the key of the room that line is in (chat-atoms.ts `ChatRoom.key`). The popup has the way to that account's lines in that room, which is what the click did before the popup. */
   lines?: string;
 }
 

@@ -1,25 +1,13 @@
-/**
- * Who is logged in. The cookie is httponly, so the page never sees it; it asks
- * /api/me once and remembers the answer. Nobody has to log in: without an
- * account you are the name in `nickAtom` (localstorage), see chat-atoms.
- */
-
 import { atom } from 'jotai';
 
 import { api, type MeInfo, messageOf, type OAuthProvider } from '@/infra/api';
 import { store } from '@/infra/store';
 
-/** `undefined` until /api/me has answered once, `null` for nobody. The name: what every page shows and sends. */
 export const meAtom = atom<string | null | undefined>(undefined);
-/** The account's id (docs/ids.md), for whoever wants it. No page does; the tests read it off /api/me. */
 export const myIdAtom = atom<string | null>(null);
-/** When the name last changed (rfc3339), null for never: the profile tab says when it may change again. */
 export const renamedAtAtom = atom<string | null>(null);
-/** false for an account made with a provider that has no password yet: no "current password" to ask for. */
 export const hasPasswordAtom = atom(true);
-/** This account's old names still held for it: going back onto one never waits (docs/ids.md). */
 export const heldNamesAtom = atom<string[]>([]);
-/** This account has an outside login linked: the verified mark. The security and profile tabs say so. */
 export const oauthVerifiedAtom = atom(false);
 
 function setMeInfo(r: MeInfo) {
@@ -34,11 +22,6 @@ export const authErrorAtom = atom('');
 
 let asked: Promise<void> | null = null;
 
-/**
- * Ask once per page load. Every caller after the first gets the same promise. A
- * failed ask (the api mid-deploy, a 502) is not an answer: the page runs as nobody
- * for now, and the next mount asks again, so a login is not lost until a hard reload.
- */
 export function loadMe(): Promise<void> {
   if (!asked) {
     asked = api
@@ -55,7 +38,6 @@ export function loadMe(): Promise<void> {
   return asked;
 }
 
-/** The cookie stopped working elsewhere (logged out of every device, password changed): nobody, and ask again next time. */
 export function forgetMe() {
   store.set(meAtom, null);
   store.set(myIdAtom, null);
@@ -65,21 +47,15 @@ export function forgetMe() {
   asked = null;
 }
 
-/** The name changed, here or on another device: ask /api/me again, now. The id is the same; the name is not. */
 export function reloadMe(): Promise<void> {
   asked = null;
   return loadMe();
 }
 
-/**
- * The id and `renamed_at` of whoever just logged in: /api/login answers with the name and
- * id only. Never touches `me`: a failed ask here is not a logout, the next page load asks again.
- */
 async function fillMeInfo(): Promise<void> {
   try {
     setMeInfo(await api.me());
   } catch {
-    // the name is known and shown; the rest comes with the next page load
   }
 }
 
@@ -99,7 +75,6 @@ async function attempt(call: () => Promise<{ name: string }>): Promise<boolean> 
   }
 }
 
-/** `turnstileToken`: the human check's (Turnstile.tsx), undefined while it is off. */
 export function login(name: string, password: string, turnstileToken?: string): Promise<boolean> {
   return attempt(() => api.login(name.trim().toLowerCase(), password, turnstileToken));
 }
@@ -112,7 +87,6 @@ export async function logout(): Promise<void> {
   try {
     await api.logout();
   } catch {
-    // the cookie is cleared by the response; a failed call still means "treat me as nobody"
   }
   store.set(meAtom, null);
   store.set(myIdAtom, null);
@@ -121,12 +95,10 @@ export async function logout(): Promise<void> {
   store.set(oauthVerifiedAtom, false);
 }
 
-/** Every device, this one too. The cookie is dead everywhere, so the next ask is a real one. */
 export async function logoutAll(): Promise<void> {
   try {
     await api.logoutAll();
   } catch {
-    // as above
   }
   forgetMe();
 }
@@ -135,14 +107,10 @@ export function clearAuthError() {
   store.set(authErrorAtom, '');
 }
 
-// ---- the log in / sign up dialog --------------------------------------------------------------
-
 export type AuthMode = 'login' | 'signup';
 
-/** Which form the auth dialog shows, null for closed. The Shell mounts it on this alone (AuthDialog.tsx). */
 export const authDialogAtom = atom<AuthMode | null>(null);
 
-/** Over the page you are on: the sidebar's sign up and log in, "log in to create", "log in to join", and /login and /signup. */
 export function openAuthDialog(mode: AuthMode) {
   store.set(authErrorAtom, '');
   store.set(authDialogAtom, mode);
@@ -152,16 +120,9 @@ export function closeAuthDialog() {
   store.set(authDialogAtom, null);
 }
 
-// ---- the password, from the security tab ------------------------------------------------------
-
 export const passwordBusyAtom = atom(false);
-/** What the last try did: `changed. every other login is out`, or `not changed: <why>`. */
 export const passwordStatusAtom = atom('');
 
-/**
- * `POST /api/password`. A 204: this login stays, every other one is out, and `me` is untouched.
- * Its own status, not `authErrorAtom`: the login form and this can be on screen together.
- */
 export async function changePassword(old: string, next: string): Promise<boolean> {
   store.set(passwordBusyAtom, true);
   store.set(passwordStatusAtom, '');
@@ -182,16 +143,11 @@ export function clearPasswordStatus() {
   store.set(passwordStatusAtom, '');
 }
 
-// ---- the name, from the profile tab (docs/ids.md) ---------------------------------------------
-
-/** How long after a change the name is fixed again. The api's number; the tab reads it off `renamed_at`. */
 export const RENAME_DAYS = 30;
 
 export const renameBusyAtom = atom(false);
-/** What the last try did: `changed`, or `not changed: <why>`. */
 export const renameStatusAtom = atom('');
 
-/** The day the name may change again, or null when it may now. */
 export const renameAgainAtom = atom((get) => {
   const at = get(renamedAtAtom);
   if (!at) return null;
@@ -199,10 +155,6 @@ export const renameAgainAtom = atom((get) => {
   return again > Date.now() ? new Date(again) : null;
 });
 
-/**
- * `POST /api/name`. A 200 is the new name: `me` changes under every page, and the caller
- * tells the rest (`identityChanged`). Its own status, like the password's.
- */
 export async function renameMe(name: string, password: string): Promise<boolean> {
   store.set(renameBusyAtom, true);
   store.set(renameStatusAtom, '');
@@ -210,7 +162,6 @@ export async function renameMe(name: string, password: string): Promise<boolean>
     const r = await api.rename(name.trim().toLowerCase(), password);
     store.set(renamedAtAtom, r.renamed_at);
     store.set(meAtom, r.name);
-    // the name I left is held for me now, the one I took is not
     void fillMeInfo();
     store.set(renameStatusAtom, `changed. you are ${r.name} now, everywhere you are logged in`);
     return true;
@@ -226,9 +177,6 @@ export function clearRenameStatus() {
   store.set(renameStatusAtom, '');
 }
 
-// ---- google, discord (docs/accounts.md; the words are infra/oauth.ts) ---------------------------
-
-/** The providers the api turned on, `undefined` until it answered. Asked once per page load. */
 export const oauthProvidersAtom = atom<OAuthProvider[] | undefined>(undefined);
 
 let providersAsked: Promise<void> | null = null;
@@ -239,7 +187,6 @@ export function loadOAuthProviders(): Promise<void> {
       .oauthProviders()
       .then((r) => store.set(oauthProvidersAtom, r.providers))
       .catch(() => {
-        // an older api, or a blip: no buttons for now, ask again next mount
         store.set(oauthProvidersAtom, []);
         providersAsked = null;
       });
@@ -247,12 +194,10 @@ export function loadOAuthProviders(): Promise<void> {
   return providersAsked;
 }
 
-/** Where the browser goes to log in (or, logged in, to link) with a provider: a full page load, the provider's page and back. */
 export function oauthStartUrl(provider: OAuthProvider, link = false): string {
   return `/api/oauth/${encodeURIComponent(provider)}/start${link ? '?link=1' : ''}`;
 }
 
-/** After a link or an unlink: whether this account is verified now, and the rest of who am i. */
 export function refreshMeInfo(): Promise<void> {
   return fillMeInfo();
 }
