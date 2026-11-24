@@ -1,5 +1,5 @@
 import { useAtomValue } from 'jotai';
-import { type KeyboardEvent, lazy, type ReactNode, type RefObject, Suspense, useRef, useState } from 'react';
+import { createElement, type KeyboardEvent, lazy, type ReactNode, type RefObject, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { api, type Mention } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
@@ -8,7 +8,9 @@ import type { MentionLine } from '@/infra/mentions';
 import { Avatar } from '@/shared-components/Avatar';
 import type { EmoteCompleteBox, useEmoteComplete } from '@/shared-components/EmoteComplete';
 
-const MentionList = lazy(() => import('@/shared-components/MentionList').then((m) => ({ default: m.MentionList })));
+const MentionList = lazy(() =>
+  import('@/shared-components/MentionList').then((m) => ({ default: m.mentionList({ h: createElement, useState, useEffect, useLayoutEffect }) }))
+);
 
 export type MentionKeys = ((e: KeyboardEvent<HTMLInputElement>) => boolean) | null;
 
