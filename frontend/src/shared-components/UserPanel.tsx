@@ -1,6 +1,6 @@
 import { RiLoginBoxLine, RiLogoutBoxRLine, RiMenuLine, RiNotification3Line, RiSettings3Line, RiTerminalBoxLine, RiUserAddLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef } from 'react';
+import { lazy, Suspense, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 import { loadMe, logout, meAtom, openAuthDialog } from '@/infra/atoms/auth-atoms';
@@ -20,7 +20,7 @@ import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
 import { Button } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
-import { Friends, RAIL_FACE } from '@/shared-components/Friends';
+import { FriendsSkeleton, RAIL_FACE } from '@/shared-components/FriendsSkeleton';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { SwipeDrawer } from '@/shared-components/SwipeDrawer';
@@ -57,6 +57,8 @@ function Dot() {
     </span>
   );
 }
+
+const Friends = lazy(() => import('@/shared-components/Friends').then((m) => ({ default: m.Friends })));
 
 function InspectorOpener() {
   return (
@@ -389,7 +391,9 @@ export function UserPanel() {
           <>
             {youRow}
             <div className="flex min-h-0 flex-1 flex-col">
-              <Friends open={shown} side="left" onPick={closeFriends} />
+              <Suspense fallback={<FriendsSkeleton side="left" open={shown} />}>
+                <Friends open={shown} side="left" onPick={closeFriends} />
+              </Suspense>
             </div>
           </>
         )}
@@ -426,7 +430,9 @@ export function UserPanel() {
     >
       <div className={cn(panelClass(side), WIDEN, friendsOpen ? EXPANDED : COLLAPSED)}>
         <div className="flex min-h-0 flex-1 flex-col">
-          <Friends open={friendsOpen} side={side} onPick={closeFriends} />
+          <Suspense fallback={<FriendsSkeleton side={side} open={friendsOpen} />}>
+            <Friends open={friendsOpen} side={side} onPick={closeFriends} />
+          </Suspense>
         </div>
         {youRow}
       </div>

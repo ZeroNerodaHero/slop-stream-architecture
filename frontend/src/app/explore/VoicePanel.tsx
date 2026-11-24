@@ -42,7 +42,8 @@ import {
 import { type VoiceCall, voiceCallAtom } from '@/infra/atoms/voice-state';
 import { Face } from '@/shared-components/Face';
 import { useCardMod } from '@/shared-components/GroupMod';
-import { PersonCard, usePeek } from '@/shared-components/PersonCard';
+import { PersonCard } from '@/shared-components/PersonCard';
+import { usePeek } from '@/shared-components/peek';
 import { ProfileLink } from '@/shared-components/ProfileLink';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { HeardMutedMark, useHeardUid, VoiceLevel } from '@/shared-components/VoiceLevel';

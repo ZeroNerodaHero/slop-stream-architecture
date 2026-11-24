@@ -14,9 +14,7 @@ import {
   loadNotifications,
   markNotificationsRead,
   notificationsAtom,
-  notificationsOpenAtom,
-  toggleNotifications,
-  unreadNotificationsAtom
+  notificationsOpenAtom
 } from '@/infra/atoms/notification-atoms';
 import { openUserModal } from '@/infra/atoms/user-modal-atoms';
 import type { NotificationKind } from '@/infra/frames';
@@ -24,7 +22,6 @@ import { useIsMobile } from '@/infra/mobile';
 import { plainEmotes } from '@/infra/emotes';
 import { store } from '@/infra/store';
 import { Badge } from '@/shared-components/Badge';
-import { buttonClassName } from '@/shared-components/Button';
 import { Face } from '@/shared-components/Face';
 import { SHEET_CLOSE, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { panelClassName } from '@/shared-components/Panel';
@@ -42,9 +39,6 @@ const TICK_MS = 30_000;
 
 const ICON_BUTTON =
   'flex h-7 w-7 shrink-0 items-center justify-center border border-transparent text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none';
-export const COUNT =
-  'absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background';
-
 const REMOVE_BUTTON = cn(
   ICON_BUTTON,
   'absolute right-2 top-2 bg-backgroundSecondary opacity-0 transition-opacity duration-150 focus-visible:opacity-100',
@@ -57,33 +51,6 @@ const KIND_WORDS: Record<NotificationKind, string> = { live: 'went live', follow
 function channelPath(at: { server: string; channel: string }): string {
   const server = encodeURIComponent(at.server);
   return at.channel === 'general' ? `/groups/${server}` : `/groups/${server}/${encodeURIComponent(at.channel)}`;
-}
-
-export function NotificationsBell() {
-  const open = useAtomValue(notificationsOpenAtom);
-  const unread = useAtomValue(unreadNotificationsAtom);
-  return (
-    <Tooltip content={open ? null : unread > 0 ? `notifications: ${unread} new` : 'notifications'}>
-      <button
-        id="notifications"
-        type="button"
-        aria-label={unread > 0 ? `notifications, ${unread} new` : 'notifications'}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-controls={open ? 'notifications-panel' : undefined}
-        data-unread={unread || undefined}
-        onClick={toggleNotifications}
-        className={cn(buttonClassName('secondary', 'relative p-1.5 max-md:h-11 max-md:w-11 max-md:p-0'), open && 'border-primaryBlue text-primaryBlue')}
-      >
-        <RiNotification3Line aria-hidden size={20} />
-        {unread > 0 && (
-          <span id="notifications-unread" aria-hidden className={COUNT}>
-            {unread > 99 ? '99+' : unread}
-          </span>
-        )}
-      </button>
-    </Tooltip>
-  );
 }
 
 export function Notifications() {

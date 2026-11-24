@@ -1,7 +1,7 @@
 import { RiTimeLine, RiUserLine } from '@remixicon/react';
 import { useQuery } from '@tanstack/react-query';
 import { useAtomValue } from 'jotai';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 
 import { hoverPreview } from '@/app/home/hover';
@@ -20,7 +20,7 @@ import { Button, buttonClassName } from '@/shared-components/Button';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { MakeGroupDialog } from '@/shared-components/MakeGroupDialog';
 import { PageFrame } from '@/shared-components/PageFrame';
-import { PersonCard, usePeek } from '@/shared-components/PersonCard';
+import { usePeek } from '@/shared-components/peek';
 import { PersonRow, Who } from '@/shared-components/PersonRow';
 import { PresenceSquare } from '@/shared-components/PresenceSquare';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
@@ -47,6 +47,8 @@ const OFFLINE_LINE = 'border-textTertiary';
 const SECTION_COUNT = 'text-textSecondary';
 const CARD = 'border border-primaryStroke bg-backgroundSecondary';
 const CARD_LINK = cn(CARD, 'group transition-[border-color] duration-150 hover:border-primaryBlue focus-within:border-primaryBlue');
+
+const PersonCard = lazy(() => import('@/shared-components/PersonCard').then((m) => ({ default: m.PersonCard })));
 
 const stills = stillPictures({ custom: api.streamThumbUrl, camera: api.thumbUrl });
 
@@ -397,7 +399,11 @@ function RecentCard({ person: p, now }: { person: Recent; now: number }) {
         </div>
       </div>
       <FollowButton id={`recent-follow-${p.name}`} name={p.name} compact className="relative z-10 shrink-0 self-center" />
-      {peek.at && <PersonCard id={`recent-peek-${p.name}`} person={p} at={peek.at} follow hold={peek.hold} />}
+      {peek.at && (
+        <Suspense fallback={null}>
+          <PersonCard id={`recent-peek-${p.name}`} person={p} at={peek.at} follow hold={peek.hold} />
+        </Suspense>
+      )}
     </article>
   );
 }

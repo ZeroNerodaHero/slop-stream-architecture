@@ -1,7 +1,7 @@
 import { atom, type PrimitiveAtom } from 'jotai';
 
 import { api, type SessionRow } from '@/infra/api';
-import { watchNameAtom, watchPhaseAtom, type WatchPhase } from '@/infra/atoms/watch-atoms';
+import { watchNameAtom, watchPhaseAtom, type WatchPhase } from '@/infra/atoms/watch-state';
 import { addDays, DAYS, mondayOf } from '@/infra/calendar';
 import { store } from '@/infra/store';
 

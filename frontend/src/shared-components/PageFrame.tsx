@@ -4,7 +4,7 @@ import { Link, useLocation } from 'react-router-dom';
 
 import { useIsMobile } from '@/infra/mobile';
 import { buttonClassName } from '@/shared-components/Button';
-import { NotificationsBell } from '@/shared-components/Notifications';
+import { NotificationsBell } from '@/shared-components/NotificationsBell';
 import { DrawerOpener } from '@/shared-components/UserPanel';
 import { cn } from '@/utils/cn';
 

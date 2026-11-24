@@ -27,7 +27,6 @@ import {
   sceneTileAtom,
   slotLabel,
   slotStreamAtom,
-  socialsAtom,
   startPip,
   tilesAtom,
   watchLayersAtom,
@@ -39,13 +38,11 @@ import {
   watchBadgeAtom,
   watchStatsAtom,
   watchMessageAtom,
-  watchNameAtom,
-  watchPhaseAtom,
   watchRenamedToAtom,
   watchToneAtom,
-  watchViewersAtom,
-  watchWelcomeAtom
+  watchViewersAtom
 } from '@/infra/atoms/watch-atoms';
+import { socialsAtom, watchNameAtom, watchPhaseAtom, watchWelcomeAtom } from '@/infra/atoms/watch-state';
 import { dmActiveAtom, dmOpenAtom, hideDms, openDm } from '@/infra/atoms/dm-atoms';
 import { followingAtom, loadPeek, peeksAtom } from '@/infra/atoms/follow-atoms';
 import { type Presence, presenceOfAtom } from '@/infra/atoms/presence-atoms';
