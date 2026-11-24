@@ -144,7 +144,9 @@ a site admin) refuses new ones and hides the old ones: `GET /api/chat-images/:id
 picture is hidden the same way on `GET /api/chat-videos/:id`. The page reads the 403's `error`
 (`whyGone` asks again with a `GET`, since a `HEAD` has no body) and draws `hidden: adult content is
 off in this group` in the picture's or the video's place (`MediaGoneNote`). The rule is
-`moderate::hidden`.
+`moderate::hidden`. The ignored DB test `the_adult_lock_holds_and_hides_old_pictures` (group_mod.rs) runs the
+real query (`chat_images::shown_facts`) and the lock's update against a throwaway postgres:
+`TEST_DATABASE_URL=... cargo test -- --ignored the_adult_lock_holds`.
 
 **Animated pictures.** While moderation is on, an animated picture is refused with 422 `animated
 images aren't allowed` on the public kinds that keep the bytes as sent: scene assets (profile.rs
@@ -216,9 +218,15 @@ Each group has `groups.adult_content` (migration 0015), false by default.
 - While `adult_locked_by` is set, turning it on is refused for everyone with 403 `a site admin
   turned adult content off for this group, so it can't be turned back on`. The update checks the
   lock in the same statement, so a race with the admin cannot slip past it. Owners can still
-  turn it off (it already is). Only the database lifts a lock:
-  `UPDATE groups SET adult_locked_by = NULL WHERE name = '<group>'`.
-- An owner who is also a site admin acts as the owner: turning it off does not lock.
+  turn it off (it already is). The answer's `locked` is read back from that same update
+  (`RETURNING`), so it is never a stale value read before it.
+- A site admin lifts a lock with `DELETE /api/groups/:group/adult/lock` (`lift_adult_lock`). It
+  answers `{"adult": ..., "locked": false}` and tells the room the `adult` fact. 403 `only a site
+  admin lifts the lock` for anyone else, owners included. It does not turn adult content on; an
+  owner can do that afterwards. The manage dialog shows a `lift lock` button to site admins while
+  the group is locked.
+- An owner who is also a site admin turns it on and off like an owner, but turning it off still
+  records the lock, like any site admin.
 - Anyone else: 403 `only an owner changes this`.
 
 Turning it off, by anyone, hides the sexual pictures already posted (see Hidden). The room's
@@ -239,11 +247,38 @@ While it is on:
 - the member list is not public, whatever `public` says (`moderate::roster_public`: public only
   when `public && !adult_content`). The room's `roster`, `GET /api/groups/:group/members` and
   `GET /api/groups/:group/members/:name` (`sees_roster`) answer it only to members and site admins.
+  The room's `live` (who in it is live) and `voice` (who is in which voice channel) follow the
+  same rule (`moderate::sees_group`): `[]` and `{}` for anyone else.
+- the group's events topic follows the same rule, below.
 - its badge is never worn on public surfaces. `groups::badges_of` (chat lines in every chat,
   chat.rs) and `groups::badges_by_name` / `badge_of` (the home list's cards, home.rs, and a
   name's card, main.rs) skip groups with adult content on: a member whose primary group is one
   wears their next group's badge (primary first, then by join date), or none. `badges_named`
   (the inbox's channel rows, notify.rs) is only shown to members and still includes it.
+
+### Who hears a group's facts
+
+The events socket's `group:<name>` topic carries the room's facts (`groups::tell`: joined, left,
+banned, held, unheld, owner, voice, the `adult` and `access` changes and the rest) and the
+go-live and stop `who` facts of its members (events.rs `fan_groups`). The gateway lets a socket
+hear it only while `moderate::sees_group` holds: the member list is public
+(`roster_public(public, adult)`), or the socket's login is a member or a site admin. A guest or
+logged-out socket only hears a public group without adult content. The events process reads
+`ADMIN_NAMES` for this, the same way the api and the chat do (docker-compose.yml passes it).
+
+A `watch` of the topic is always remembered, but the socket only joins the fan-out once the check
+passes (`Gateway::regate`). The check runs again for every socket that asked for the topic:
+
+- before the `access`, `adult` and `joined` facts are sent, so a socket that no longer qualifies
+  (adult content turned on, the group made private) does not hear the fact, and someone who just
+  joined does;
+- after the `left`, `banned` and `deleted` facts are sent, so the person leaving still hears
+  their own fact, and nothing after it.
+
+If postgres cannot answer, or the group is gone, nobody qualifies (fail closed) until the next
+check. A site admin lifting a lock sends the `adult` fact too, so the check runs then as well.
+The check and the fan-out changes are serialized by one lock, so a `watch` checked against the
+old state cannot be added after the change's own check ran.
 
 The group's own icon and banner are public kinds and stay blocked for sexual and graphic
 pictures either way.
@@ -266,7 +301,8 @@ count, the animated and about-video refusals, the `moderated` gate on stream cha
 `uploads` rows all stop, and every upload is kept as before. Flags already set
 stay: `nsfw` and `graphic` pictures are still blurred in DMs and groups, and the say still refuses flagged
 pictures in a stream's chat and in groups without adult content. A group's `adult_content` stays
-as its owner set it, so it stays off the lists, and an admin's lock (`adult_locked_by`) stays too. To clear the flags too:
+as its owner set it, so it stays off the lists, and an admin's lock (`adult_locked_by`) stays too
+until a site admin lifts it (`DELETE /api/groups/:group/adult/lock`). To clear the flags too:
 `UPDATE chat_images SET nsfw = false, graphic = false`. The migration is additive, so it can stay.
 
 ## Follow-ups (not in this PR)

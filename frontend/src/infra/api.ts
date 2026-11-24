@@ -642,6 +642,7 @@ export const api = {
   saveGroupColor: (name: string, color: string) => request<{ color: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/color`, { color }),
   setGroupPublic: (name: string, isPublic: boolean) => request<{ public: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/access`, { public: isPublic }),
   setGroupAdult: (name: string, adult: boolean) => request<{ adult: boolean; locked: boolean }>('PUT', `/api/groups/${encodeURIComponent(name)}/adult`, { adult }),
+  liftGroupAdultLock: (name: string) => request<{ adult: boolean; locked: boolean }>('DELETE', `/api/groups/${encodeURIComponent(name)}/adult/lock`),
   setMemberOrder: (name: string, order: 'name' | 'newest' | 'oldest') => request<{ order: string }>('PUT', `/api/groups/${encodeURIComponent(name)}/order`, { order }),
   saveGroupIcon: (name: string, jpeg: Blob) => request<{ icon: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/icon`, jpeg),
   saveGroupBanner: (name: string, jpeg: Blob) => request<{ banner: number }>('PUT', `/api/groups/${encodeURIComponent(name)}/banner`, jpeg),

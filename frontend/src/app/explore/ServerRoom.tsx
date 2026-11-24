@@ -2856,6 +2856,11 @@ function AdultSection({ server, room, run }: ManageProps) {
         >
           {on ? 'turn off' : 'turn on'}
         </Button>
+        {room.admin && room.adult_locked && (
+          <Button id="group-adult-unlock" size="sm" variant="secondary" onClick={() => void run(() => api.liftGroupAdultLock(server))}>
+            lift lock
+          </Button>
+        )}
       </p>
       {why && (
         <p id="group-adult-why" className="mt-1 text-xs text-textTertiary">

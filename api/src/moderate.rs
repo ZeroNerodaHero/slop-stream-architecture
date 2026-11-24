@@ -119,14 +119,19 @@ pub(crate) const fn roster_public(public: bool, adult: bool) -> bool {
     public && !adult
 }
 
+pub(crate) const fn sees_group(public: bool, adult: bool, member: bool, site_admin: bool) -> bool {
+    roster_public(public, adult) || member || site_admin
+}
+
 pub(crate) const ONLY_OWNER: &str = "only an owner changes this";
 pub(crate) const ADMIN_ONLY_OFF: &str = "site admins can only turn adult content off";
 pub(crate) const ADULT_LOCKED: &str = "a site admin turned adult content off for this group, so it can't be turned back on";
+pub(crate) const ONLY_ADMIN_UNLOCKS: &str = "only a site admin lifts the lock";
 
 pub(crate) fn adult_change(want: bool, owner: bool, site_admin: bool, locked: bool) -> Result<bool, &'static str> {
     match (want, owner, site_admin) {
-        (false, true, _) => Ok(false),
-        (false, false, true) => Ok(true),
+        (false, _, true) => Ok(true),
+        (false, true, false) => Ok(false),
         (true, true, _) if locked => Err(ADULT_LOCKED),
         (true, true, _) => Ok(false),
         (true, false, true) => Err(ADMIN_ONLY_OFF),
@@ -667,6 +672,16 @@ mod tests {
     }
 
     #[test]
+    fn a_closed_group_is_seen_by_its_members_and_site_admins_only() {
+        assert!(sees_group(true, false, false, false));
+        for (public, adult) in [(true, true), (false, false), (false, true)] {
+            assert!(!sees_group(public, adult, false, false), "{public} {adult}");
+            assert!(sees_group(public, adult, true, false), "{public} {adult}");
+            assert!(sees_group(public, adult, false, true), "{public} {adult}");
+        }
+    }
+
+    #[test]
     fn site_admins_turn_adult_content_off_and_lock_it() {
         assert_eq!(adult_change(false, false, true, false), Ok(true));
         assert_eq!(adult_change(false, false, true, true), Ok(true));
@@ -680,7 +695,8 @@ mod tests {
         assert_eq!(adult_change(false, true, false, false), Ok(false));
         assert_eq!(adult_change(true, true, false, true), Err(ADULT_LOCKED));
         assert_eq!(adult_change(false, true, false, true), Ok(false));
-        assert_eq!(adult_change(false, true, true, false), Ok(false), "an owner who is a site admin acts as the owner");
+        assert_eq!(adult_change(false, true, true, false), Ok(true), "an owner who is a site admin still locks it off");
+        assert_eq!(adult_change(true, true, true, false), Ok(false));
         assert_eq!(adult_change(true, true, true, true), Err(ADULT_LOCKED));
     }
 

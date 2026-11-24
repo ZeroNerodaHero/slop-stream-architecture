@@ -99,6 +99,19 @@ struct ShowQuery {
 
 const SENSITIVE: &str = "sensitive";
 
+pub(crate) type ShownFacts = (String, bool, bool, Option<Uuid>, bool, Option<bool>);
+
+pub(crate) async fn shown_facts(db: &sqlx::PgPool, id: Uuid) -> Result<Option<ShownFacts>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT i.mime, i.nsfw, i.graphic, i.created_by, i.posted_kind IS NOT DISTINCT FROM 'group',
+                (SELECT g.adult_content FROM groups g WHERE g.name = i.posted_group)
+         FROM chat_images i WHERE i.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await
+}
+
 async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, q: Result<Query<ShowQuery>, axum::extract::rejection::QueryRejection>) -> Result<Response, ApiError> {
     let Ok(id) = Uuid::parse_str(id.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
@@ -110,16 +123,7 @@ async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, q: 
     if let Some(no) = media::refused(&access) {
         return Err(no);
     }
-    #[allow(clippy::type_complexity)]
-    let row: Option<(String, bool, bool, Option<Uuid>, bool, Option<bool>)> = sqlx::query_as(
-        "SELECT i.mime, i.nsfw, i.graphic, i.created_by, i.posted_kind IS NOT DISTINCT FROM 'group',
-                (SELECT g.adult_content FROM groups g WHERE g.name = i.posted_group)
-         FROM chat_images i WHERE i.id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&s.db)
-    .await?;
-    let Some((mime, nsfw, graphic, by, in_group, adult_now)) = row else {
+    let Some((mime, nsfw, graphic, by, in_group, adult_now)) = shown_facts(&s.db, id).await? else {
         return Err(media::missing(&s.db, Kind::Image, id).await);
     };
     let uploader = viewer.is_some() && by == viewer;

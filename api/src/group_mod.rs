@@ -386,6 +386,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/groups/{group}/color", axum::routing::put(put_color))
         .route("/api/groups/{group}/access", axum::routing::put(set_access))
         .route("/api/groups/{group}/adult", axum::routing::put(set_adult))
+        .route("/api/groups/{group}/adult/lock", axum::routing::delete(lift_adult_lock))
         .route("/api/groups/{group}/order", axum::routing::put(set_order))
         .route("/api/groups/{group}/roles", get(list_roles).post(create_role))
         .route("/api/groups/{group}/roles/{id}", axum::routing::put(update_role).delete(delete_role))
@@ -445,16 +446,17 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
     let powers = if held.owner { ALL } else { held.perms | if admin { ALL } else { 0 } };
     let roles = roles_of(&s.db, &group).await?;
     let channels = groups::channels_of(&s, &group, user, admin).await?;
-    let live = groups::live_in(&s, &group).await?;
+    let sees = crate::moderate::sees_group(public, adult, mine, admin);
+    let live = if sees { groups::live_in(&s, &group).await? } else { Vec::new() };
     // the channels this login has muted (docs/notifications.md): its own, so the list can say so
     let muted = groups::muted_in(&s.db, user, &group).await?;
     // the lines pinned in each channel this login sees, by id (pins.rs): the header's count and the lines' marks
     let seen = groups::visible_channels(&s.db, &group, user, admin).await?;
     let pins = crate::pins::pinned_ids(&s.db, &group, &seen).await?;
     // who is in voice, in the channels this login sees (voice.rs). An extra and not the room: redis down reads as nobody
-    let voice = voice_in(&s, &group, &seen).await;
+    let voice = if sees { voice_in(&s, &group, &seen).await } else { json!({}) };
     let first = page_of(q.roster, None, None)?;
-    let (roster, roster_next, holders) = if crate::moderate::roster_public(public, adult) || mine || admin {
+    let (roster, roster_next, holders) = if sees {
         let (list, next) = members_of(&s.db, &group, &member_order, first.as_ref()).await?;
         (Some(list), next, Some(holders_of(&s.db, &group).await?))
     } else {
@@ -571,23 +573,41 @@ async fn set_adult(State(s): State<AppState>, Path(group): Path<String>, Me(me):
     let site_admin = s.admins.iter().any(|a| a.id == who.id);
     let locked: bool = sqlx::query_scalar("SELECT adult_locked_by IS NOT NULL FROM groups WHERE name = $1").bind(&group).fetch_one(&s.db).await?;
     let lock = crate::moderate::adult_change(body.adult, owner, site_admin, locked).map_err(|why| ApiError::new(StatusCode::FORBIDDEN, why))?;
-    let done = sqlx::query(
-        "UPDATE groups SET adult_content = $2, adult_locked_by = CASE WHEN $3 THEN $4 ELSE adult_locked_by END
-         WHERE name = $1 AND (NOT $2 OR adult_locked_by IS NULL)",
-    )
-    .bind(&group)
-    .bind(body.adult)
-    .bind(lock)
-    .bind(who.id)
-    .execute(&s.db)
-    .await?;
-    if done.rows_affected() == 0 {
+    let Some(locked) = write_adult(&s.db, &group, body.adult, lock.then_some(who.id)).await? else {
         return Err(ApiError::new(StatusCode::FORBIDDEN, crate::moderate::ADULT_LOCKED));
-    }
-    let locked = locked || lock;
+    };
     log::info!("{}: adult content {} in {group}{}", who.name, if body.adult { "on" } else { "off" }, if lock { " (site admin, locked)" } else { "" });
     groups::tell(&s, &group, "adult", json!({ "adult": body.adult, "locked": locked })).await;
     Ok(Json(json!({ "adult": body.adult, "locked": locked })))
+}
+
+async fn write_adult(db: &sqlx::PgPool, group: &str, adult: bool, lock_by: Option<uuid::Uuid>) -> Result<Option<bool>, sqlx::Error> {
+    sqlx::query_scalar(
+        "UPDATE groups SET adult_content = $2, adult_locked_by = COALESCE($3, adult_locked_by)
+         WHERE name = $1 AND (NOT $2 OR adult_locked_by IS NULL)
+         RETURNING adult_locked_by IS NOT NULL",
+    )
+    .bind(group)
+    .bind(adult)
+    .bind(lock_by)
+    .fetch_optional(db)
+    .await
+}
+
+async fn unlock_adult(db: &sqlx::PgPool, group: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("UPDATE groups SET adult_locked_by = NULL WHERE name = $1 RETURNING adult_content").bind(group).fetch_one(db).await
+}
+
+async fn lift_adult_lock(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me) -> ApiResult {
+    let who = me.ok_or_else(login)?;
+    let group = server(&s.db, &group).await?;
+    if !s.admins.iter().any(|a| a.id == who.id) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, crate::moderate::ONLY_ADMIN_UNLOCKS));
+    }
+    let adult = unlock_adult(&s.db, &group).await?;
+    log::info!("{}: lifted the adult content lock in {group}", who.name);
+    groups::tell(&s, &group, "adult", json!({ "adult": adult, "locked": false })).await;
+    Ok(Json(json!({ "adult": adult, "locked": false })))
 }
 
 /// `PUT /api/groups/:group/order` `{order}`: how the member list sorts after the owners. Appearance.
@@ -1999,5 +2019,58 @@ mod tests {
         assert_eq!(changed_roles(&[a], &[a]), Vec::<uuid::Uuid>::new());
         assert_eq!(changed_roles(&[], &[c, a]), vec![a, c]);
         assert_eq!(changed_roles(&[b], &[]), vec![b]);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn the_adult_lock_holds_and_hides_old_pictures() {
+        let pool = crate::auth::tests::test_db().await;
+        let run = std::process::id();
+        let owner = crate::auth::tests::row(&pool, &format!("adult-owner-{run}"), Some("hash")).await;
+        let admin = crate::auth::tests::row(&pool, &format!("adult-admin-{run}"), Some("hash")).await;
+        let group = format!("adult-{run}");
+        sqlx::query("INSERT INTO groups (name, badge, color, created_by_id) VALUES ($1, 'A', '#ffffff', $2)").bind(&group).bind(owner).execute(&pool).await.unwrap();
+        let picture: uuid::Uuid = sqlx::query_scalar("SELECT gen_random_uuid()").fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO chat_images (id, mime, created_by, nsfw, posted_kind, posted_group) VALUES ($1, 'image/png', $2, true, 'group', $3)")
+            .bind(picture)
+            .bind(owner)
+            .bind(&group)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let hidden_to = |facts: crate::chat_images::ShownFacts, viewer: uuid::Uuid| {
+            let (_, nsfw, _, by, in_group, adult_now) = facts;
+            crate::moderate::hidden(nsfw, in_group, adult_now.unwrap_or(false), by == Some(viewer) || viewer == admin)
+        };
+        let stranger = uuid::Uuid::from_u128(1);
+
+        assert_eq!(write_adult(&pool, &group, true, None).await.unwrap(), Some(false));
+        let facts = crate::chat_images::shown_facts(&pool, picture).await.unwrap().unwrap();
+        assert!(!hidden_to(facts, stranger));
+
+        assert_eq!(write_adult(&pool, &group, false, Some(admin)).await.unwrap(), Some(true));
+        let facts = crate::chat_images::shown_facts(&pool, picture).await.unwrap().unwrap();
+        assert!(hidden_to(facts.clone(), stranger));
+        assert!(!hidden_to(facts.clone(), owner));
+        assert!(!hidden_to(facts, admin));
+        let by: Option<uuid::Uuid> = sqlx::query_scalar("SELECT adult_locked_by FROM groups WHERE name = $1").bind(&group).fetch_one(&pool).await.unwrap();
+        assert_eq!(by, Some(admin));
+
+        assert_eq!(write_adult(&pool, &group, true, None).await.unwrap(), None);
+        assert_eq!(write_adult(&pool, &group, false, None).await.unwrap(), Some(true));
+        let adult: bool = sqlx::query_scalar("SELECT adult_content FROM groups WHERE name = $1").bind(&group).fetch_one(&pool).await.unwrap();
+        assert!(!adult);
+
+        assert!(!unlock_adult(&pool, &group).await.unwrap());
+        assert_eq!(write_adult(&pool, &group, true, None).await.unwrap(), Some(false));
+        let facts = crate::chat_images::shown_facts(&pool, picture).await.unwrap().unwrap();
+        assert!(!hidden_to(facts, stranger));
+
+        sqlx::query("DELETE FROM groups WHERE name = $1").bind(&group).execute(&pool).await.unwrap();
+        let facts = crate::chat_images::shown_facts(&pool, picture).await.unwrap().unwrap();
+        assert!(hidden_to(facts, stranger));
+
+        sqlx::query("DELETE FROM chat_images WHERE id = $1").bind(picture).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM streamers WHERE id = ANY($1)").bind(vec![owner, admin]).execute(&pool).await.unwrap();
     }
 }

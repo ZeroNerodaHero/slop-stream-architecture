@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { type ChatVideo, type MediaGone, posterSrc, shownSrc, videoSrc, whyGone } from '@/infra/chat-video';
 import { Button } from '@/shared-components/Button';
@@ -14,7 +14,6 @@ import { cn } from '@/utils/cn';
  * see says so.
  */
 export function ChatVideoPlayer({ video, small = false }: { video: ChatVideo; small?: boolean }) {
-  const ref = useRef<HTMLVideoElement | null>(null);
   const [gone, setGone] = useState<MediaGone | null>(null);
   const [sensitive, setSensitive] = useState<boolean | null>(null);
   // the poster is asked for at once, the video only on play: a poster that will not load is the word on the video too
@@ -36,14 +35,6 @@ export function ChatVideoPlayer({ video, small = false }: { video: ChatVideo; sm
       live = false;
     };
   }, [video.poster]);
-  // the poster arriving gives the player its shape, a little after the line is drawn: the list sitting at its newest line stays there (keyboard.ts `useBottomPin`)
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const seen = new ResizeObserver(() => el.dispatchEvent(new Event(MEDIA_SIZED)));
-    seen.observe(el);
-    return () => seen.disconnect();
-  }, [sensitive]);
   if (gone) return <MediaGoneNote why={gone} />;
   const poster = sensitive === null ? posterSrc(video.poster) : shownSrc(posterSrc(video.poster));
   if (sensitive === false) {
@@ -61,7 +52,7 @@ export function ChatVideoPlayer({ video, small = false }: { video: ChatVideo; sm
   }
   return (
     <video
-      ref={ref}
+      ref={reportSize}
       data-chat-video={video.id}
       src={videoSrc(video.id)}
       poster={poster}
@@ -72,6 +63,12 @@ export function ChatVideoPlayer({ video, small = false }: { video: ChatVideo; sm
       className={cn('mt-1 block max-w-full bg-black', small ? 'max-h-20' : 'max-h-[7.5rem]')}
     />
   );
+}
+
+function reportSize(el: HTMLVideoElement): () => void {
+  const seen = new ResizeObserver(() => el.dispatchEvent(new Event(MEDIA_SIZED)));
+  seen.observe(el);
+  return () => seen.disconnect();
 }
 
 const GONE_WORDS: Record<MediaGone, string> = {

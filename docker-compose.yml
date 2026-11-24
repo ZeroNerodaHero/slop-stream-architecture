@@ -254,6 +254,7 @@ services:
       DATABASE_URL: postgres://stream:stream@database:5432/stream
       REDIS_URL: redis://redis:6379/0
       PORT: "4100"
+      ADMIN_NAMES: ${ADMIN_NAMES:-}
       RUST_LOG: info
     depends_on:
       # healthy, not started: the api creates the tables (accounts included) on its way up,
