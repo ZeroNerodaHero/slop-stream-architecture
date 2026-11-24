@@ -1,10 +1,12 @@
 import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
 
-import { api, cleanSearch, type Followed, messageOf, nameMatches, SEARCH_ANYWHERE_FROM, SEARCH_LIMIT, type SearchHit, type Streamer } from '@/infra/api';
+import { api, cleanSearch, type Followed, messageOf, nameMatches, type Recent, SEARCH_ANYWHERE_FROM, SEARCH_LIMIT, type SearchHit, type Streamer } from '@/infra/api';
 import { loadMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { PRESENCE_RANK } from '@/infra/atoms/presence-atoms';
+import { recount } from '@/infra/follower-count';
 import { isValidName } from '@/infra/names';
+import { queryClient } from '@/infra/query-client';
 import { store } from '@/infra/store';
 
 const loginFollowingAtom = atom<Followed[] | undefined>(undefined);
@@ -97,6 +99,11 @@ function markPeek(name: string, following: boolean) {
   store.set(peeksAtom, { ...peeks, [name]: { ...had, card: { ...had.card, followers, following } } });
 }
 
+function markRecent(name: string, following: boolean) {
+  queryClient.setQueryData<Recent[]>(['recent'], (found) => found && recount(found, name, following));
+  void queryClient.invalidateQueries({ queryKey: ['recent'] });
+}
+
 export async function follow(name: string): Promise<boolean> {
   store.set(followNoteAtom, '');
   await loadMe();
@@ -116,6 +123,7 @@ export async function follow(name: string): Promise<boolean> {
   }
   markSearch(name, true);
   markPeek(name, true);
+  markRecent(name, true);
   void loadFollowing();
   return true;
 }
@@ -136,6 +144,7 @@ export async function unfollow(name: string): Promise<boolean> {
   );
   markSearch(name, false);
   markPeek(name, false);
+  markRecent(name, false);
   return true;
 }
 
