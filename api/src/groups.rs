@@ -1028,7 +1028,7 @@ async fn edit_channel(
         Err(e) => return Err(e.into()),
     }
     if renaming {
-        sqlx::query("UPDATE notifications SET room = $2 WHERE kind = 'chat' AND room = $1").bind(&old_room).bind(&new_room).execute(&mut *tx).await?;
+        sqlx::query("UPDATE notifications SET room = $2 WHERE kind IN ('chat', 'mention') AND room = $1").bind(&old_room).bind(&new_room).execute(&mut *tx).await?;
         sqlx::query("UPDATE chat_lines SET room = $2 WHERE room = $1").bind(&old_room).bind(&new_room).execute(&mut *tx).await?;
     }
     tx.commit().await?;

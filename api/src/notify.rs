@@ -18,6 +18,9 @@ use crate::{ApiError, ApiResult, AppState};
 
 pub(crate) const KEEP: i64 = 30;
 const TEXT_CHARS: usize = 140;
+const MENTION_CHARS: usize = 120;
+const MENTION_WINDOW_SECS: i64 = 30;
+const MENTIONS_PER_PAIR: i64 = 1;
 
 fn not_logged_in() -> ApiError {
     ApiError::new(StatusCode::UNAUTHORIZED, "not logged in")
@@ -29,6 +32,7 @@ pub(crate) enum Kind {
     Follow,
     Dm,
     Chat,
+    Mention,
 }
 
 impl Kind {
@@ -38,6 +42,7 @@ impl Kind {
             Kind::Follow => "follow",
             Kind::Dm => "dm",
             Kind::Chat => "chat",
+            Kind::Mention => "mention",
         }
     }
 }
@@ -48,23 +53,24 @@ pub(crate) struct Settings {
     pub(crate) follow: bool,
     pub(crate) dm: bool,
     pub(crate) chat: bool,
+    pub(crate) mention: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { live: true, follow: true, dm: true, chat: true }
+        Settings { live: true, follow: true, dm: true, chat: true, mention: true }
     }
 }
 
 impl Settings {
     pub(crate) fn from_doc(doc: &Value) -> Settings {
         let on = |key: &str| doc.get(key).and_then(Value::as_bool).unwrap_or(true);
-        Settings { live: on("live"), follow: on("follow"), dm: on("dm"), chat: on("chat") }
+        Settings { live: on("live"), follow: on("follow"), dm: on("dm"), chat: on("chat"), mention: on("mention") }
     }
 
     pub(crate) fn to_doc(self) -> Value {
         let mut doc = serde_json::Map::new();
-        for (kind, on) in [(Kind::Live, self.live), (Kind::Follow, self.follow), (Kind::Dm, self.dm), (Kind::Chat, self.chat)] {
+        for (kind, on) in [(Kind::Live, self.live), (Kind::Follow, self.follow), (Kind::Dm, self.dm), (Kind::Chat, self.chat), (Kind::Mention, self.mention)] {
             if !on {
                 doc.insert(kind.as_str().to_owned(), Value::Bool(false));
             }
@@ -272,13 +278,15 @@ pub(crate) fn room_of(server: &str, channel: &str) -> String {
     format!("{server}/{channel}")
 }
 
-pub(crate) async fn channel_line(db: &PgPool, redis: &Redis, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid]) {
-    if let Err(e) = chat_rows(db, redis, server, channel, actor, text, admins).await {
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn channel_line(db: &PgPool, redis: &Redis, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid], told: &[Uuid]) {
+    if let Err(e) = chat_rows(db, redis, server, channel, actor, text, admins, told).await {
         log::warn!("notify: a line in {}: {}", room_of(server, channel), e.message());
     }
 }
 
-async fn chat_rows(db: &PgPool, redis: &Redis, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid]) -> Result<(), ApiError> {
+#[allow(clippy::too_many_arguments)]
+async fn chat_rows(db: &PgPool, redis: &Redis, server: &str, channel: &str, actor: Uuid, text: &str, admins: &[Uuid], told: &[Uuid]) -> Result<(), ApiError> {
     let Some(actor) = actor_by_id(db, actor).await? else { return Ok(()) };
     let room = room_of(server, channel);
     let words: String = text.chars().take(TEXT_CHARS).collect();
@@ -290,7 +298,7 @@ async fn chat_rows(db: &PgPool, redis: &Redis, server: &str, channel: &str, acto
     let sql = format!(
         "WITH recipients AS (
             SELECT m.user_id FROM memberships m JOIN streamers u ON u.id = m.user_id
-            WHERE m.group_name = $1 AND m.user_id <> $3 AND u.password_hash IS NOT NULL
+            WHERE m.group_name = $1 AND m.user_id <> $3 AND m.user_id <> ALL($7) AND u.password_hash IS NOT NULL
               AND COALESCE((u.notify->>'chat')::boolean, true)
               AND NOT EXISTS (SELECT 1 FROM channel_mutes cm WHERE cm.user_id = m.user_id AND cm.server = $1 AND cm.channel = $2)
               AND EXISTS (SELECT 1 FROM channels c WHERE c.server = $1 AND c.name = $2 AND c.kind = 'text' AND {sees})
@@ -315,6 +323,7 @@ async fn chat_rows(db: &PgPool, redis: &Redis, server: &str, channel: &str, acto
         .bind(&room)
         .bind(&words)
         .bind(admins)
+        .bind(told)
         .fetch_all(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -334,8 +343,132 @@ async fn chat_rows(db: &PgPool, redis: &Redis, server: &str, channel: &str, acto
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Place<'a> {
+    Stream(&'a str),
+    Channel(&'a str, &'a str),
+}
+
+impl Place<'_> {
+    pub(crate) fn room(self) -> String {
+        match self {
+            Place::Stream(name) => name.to_owned(),
+            Place::Channel(server, channel) => room_of(server, channel),
+        }
+    }
+}
+
+fn mention_targets_sql(place: Place) -> String {
+    let fits = match place {
+        Place::Stream(_) => "NOT EXISTS (SELECT 1 FROM stream_bans b JOIN streamers r ON r.id = b.stream_id WHERE r.name = $3 AND b.user_id = u.id)".to_owned(),
+        Place::Channel(..) => format!(
+            "EXISTS (SELECT 1 FROM memberships m WHERE m.group_name = $3 AND m.user_id = u.id)
+              AND NOT EXISTS (SELECT 1 FROM bans b WHERE b.group_name = $3 AND b.user_id = u.id)
+              AND NOT EXISTS (SELECT 1 FROM channel_mutes cm WHERE cm.user_id = u.id AND cm.server = $3 AND cm.channel = $4)
+              AND EXISTS (SELECT 1 FROM channels c WHERE c.server = $3 AND c.name = $4 AND c.kind = 'text' AND {sees})",
+            sees = crate::groups::sees_sql("u.id", "u.id = ANY($5)")
+        ),
+    };
+    format!(
+        "SELECT u.id FROM streamers u
+         WHERE u.name = ANY($1) AND u.id <> $2 AND u.password_hash IS NOT NULL AND NOT u.is_test
+           AND COALESCE((u.notify->>'mention')::boolean, true)
+           AND NOT EXISTS (SELECT 1 FROM streamers a WHERE a.id = $2 AND a.is_test)
+           AND {fits}
+         ORDER BY u.id"
+    )
+}
+
+async fn mention_targets(db: &PgPool, place: Place<'_>, actor: Uuid, names: &[String], admins: &[Uuid]) -> Result<Vec<Uuid>, sqlx::Error> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = mention_targets_sql(place);
+    let query = sqlx::query_scalar(&sql).bind(names).bind(actor);
+    match place {
+        Place::Stream(name) => query.bind(name).fetch_all(db).await,
+        Place::Channel(server, channel) => query.bind(server).bind(channel).bind(admins).fetch_all(db).await,
+    }
+}
+
+async fn mention_rows(db: &PgPool, room: &str, actor: Uuid, words: &str, targets: &[Uuid]) -> Result<Vec<LiveRow>, sqlx::Error> {
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut tx = db.begin().await?;
+    let _held: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM streamers WHERE id = ANY($1) ORDER BY id FOR UPDATE").bind(targets).fetch_all(&mut *tx).await?;
+    let rows: Vec<LiveRow> = sqlx::query_as(
+        "WITH gone AS (
+            DELETE FROM notifications WHERE user_id = ANY($1) AND kind = 'mention' AND room = $2 AND read_at IS NULL
+         ),
+         made AS (
+            INSERT INTO notifications (user_id, kind, actor_id, text, room)
+            SELECT t.id, 'mention', $3, $4, $2 FROM unnest($1::uuid[]) AS t(id)
+            RETURNING id, user_id, at
+         )
+         SELECT m.id, u.name, m.user_id, (EXTRACT(EPOCH FROM m.at) * 1000)::bigint
+         FROM made m JOIN streamers u ON u.id = m.user_id",
+    )
+    .bind(targets)
+    .bind(room)
+    .bind(actor)
+    .bind(words)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
+}
+
+async fn unthrottled(redis: &Redis, actor: Uuid, targets: Vec<Uuid>) -> Vec<Uuid> {
+    let mut kept = Vec::with_capacity(targets.len());
+    for target in targets {
+        match crate::ratelimit::hit(redis, &format!("rl:mention:{actor}:{target}"), MENTION_WINDOW_SECS).await {
+            Ok((n, _)) if n <= MENTIONS_PER_PAIR => kept.push(target),
+            Ok(_) => {}
+            Err(e) => log::warn!("notify: mention throttle: {e}"),
+        }
+    }
+    kept
+}
+
+pub(crate) async fn mentioned(db: &PgPool, redis: &Redis, place: Place<'_>, actor: Uuid, text: &str, names: &[String], admins: &[Uuid]) -> Vec<Uuid> {
+    match mention_notes(db, redis, place, actor, text, names, admins).await {
+        Ok(told) => told,
+        Err(e) => {
+            log::warn!("notify: a mention in {}: {}", place.room(), e.message());
+            Vec::new()
+        }
+    }
+}
+
+async fn mention_notes(db: &PgPool, redis: &Redis, place: Place<'_>, actor: Uuid, text: &str, names: &[String], admins: &[Uuid]) -> Result<Vec<Uuid>, ApiError> {
+    let targets = mention_targets(db, place, actor, names, admins).await?;
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(actor) = actor_by_id(db, actor).await? else { return Ok(Vec::new()) };
+    let targets = unthrottled(redis, actor.id, targets).await;
+    let room = place.room();
+    let words: String = text.chars().take(MENTION_CHARS).collect();
+    let rows = mention_rows(db, &room, actor.id, &words, &targets).await?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let users: Vec<Uuid> = rows.iter().map(|r| r.2).collect();
+    clip(db, &users).await?;
+    let made = Made {
+        to: rows.iter().map(|(id, login, _, _)| (login.clone(), *id)).collect(),
+        at_ms: rows.first().map_or_else(presence::now_ms, |r| r.3),
+        text: words,
+        session: None,
+        room: Some(room),
+    };
+    tell(redis, Kind::Mention, &actor, &made).await;
+    Ok(users)
+}
+
 pub(crate) async fn channel_read(db: &PgPool, reader: Uuid, room: &str) -> Result<bool, sqlx::Error> {
-    let done = sqlx::query("UPDATE notifications SET read_at = now() WHERE user_id = $1 AND kind = 'chat' AND room = $2 AND read_at IS NULL")
+    let done = sqlx::query("UPDATE notifications SET read_at = now() WHERE user_id = $1 AND kind IN ('chat', 'mention') AND room = $2 AND read_at IS NULL")
         .bind(reader)
         .bind(room)
         .execute(db)
@@ -426,6 +559,8 @@ struct SettingsBody {
     dm: bool,
     #[serde(default = "on")]
     chat: bool,
+    #[serde(default = "on")]
+    mention: bool,
 }
 
 fn on() -> bool {
@@ -435,7 +570,7 @@ fn on() -> bool {
 async fn settings(State(s): State<AppState>, Me(me): Me, body: Result<Json<SettingsBody>, JsonRejection>) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let Json(body) = body?;
-    let wanted = Settings { live: body.live, follow: body.follow, dm: body.dm, chat: body.chat };
+    let wanted = Settings { live: body.live, follow: body.follow, dm: body.dm, chat: body.chat, mention: body.mention };
     sqlx::query("UPDATE streamers SET notify = $2 WHERE id = $1").bind(me.id).bind(wanted.to_doc()).execute(&s.db).await?;
     log::info!("{}: notifications {}", me.name, wanted.to_doc());
     Ok(Json(json!(wanted)))
@@ -461,7 +596,7 @@ mod tests {
 
     #[test]
     fn only_what_is_off_is_written() {
-        let s = Settings { live: true, follow: false, dm: false, chat: true };
+        let s = Settings { live: true, follow: false, dm: false, chat: true, mention: true };
         assert_eq!(s.to_doc(), json!({ "follow": false, "dm": false }));
         assert_eq!(Settings::from_doc(&s.to_doc()), s);
         assert_eq!(Settings::from_doc(&json!({ "live": "no", "dm": 0 })), Settings::default());
@@ -471,7 +606,41 @@ mod tests {
 
     #[test]
     fn the_json_names_every_kind() {
-        assert_eq!(serde_json::to_value(Settings::default()).unwrap(), json!({ "live": true, "follow": true, "dm": true, "chat": true }));
+        assert_eq!(serde_json::to_value(Settings::default()).unwrap(), json!({ "live": true, "follow": true, "dm": true, "chat": true, "mention": true }));
+    }
+
+    #[test]
+    fn a_mention_is_on_unless_turned_off() {
+        assert!(Settings::default().mention);
+        assert!(Settings::from_doc(&json!({ "chat": false })).mention);
+        assert!(Settings::from_doc(&json!({ "mention": "no" })).mention);
+        let off = Settings { mention: false, ..Settings::default() };
+        assert_eq!(off.to_doc(), json!({ "mention": false }));
+        assert_eq!(Settings::from_doc(&off.to_doc()), off);
+        let both = Settings { chat: false, mention: false, ..Settings::default() };
+        assert_eq!(Settings::from_doc(&both.to_doc()), both);
+        assert_eq!(serde_json::from_value::<Settings>(serde_json::to_value(off).unwrap()).unwrap(), off);
+    }
+
+    #[test]
+    fn a_mentions_room_is_the_stream_or_the_channel() {
+        assert_eq!(Place::Stream("alice").room(), "alice");
+        assert_eq!(Place::Channel("gaming-0042", "clips").room(), "gaming-0042/clips");
+        assert_eq!(Kind::Mention.as_str(), "mention");
+    }
+
+    #[test]
+    fn the_mention_queries_bind_what_they_use() {
+        let stream = mention_targets_sql(Place::Stream("alice"));
+        for n in 1..=3 {
+            assert!(stream.contains(&format!("${n}")), "${n} in {stream}");
+        }
+        assert!(!stream.contains("$4"));
+        let channel = mention_targets_sql(Place::Channel("vip", "general"));
+        for n in 1..=5 {
+            assert!(channel.contains(&format!("${n}")), "${n} in {channel}");
+        }
+        assert!(!channel.contains("$6"));
     }
 
     #[test]
@@ -483,6 +652,147 @@ mod tests {
     #[test]
     fn a_dismiss_is_a_write() {
         assert_eq!(crate::ratelimit::api_rule(&axum::http::Method::DELETE, "/api/notifications/{id}"), crate::ratelimit::WRITE);
+    }
+
+    async fn mention_count(pool: &PgPool, user: Uuid, room: &str) -> (i64, i64) {
+        sqlx::query_as("SELECT count(*), count(*) FILTER (WHERE read_at IS NULL) FROM notifications WHERE user_id = $1 AND kind = 'mention' AND room = $2")
+            .bind(user)
+            .bind(room)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn says(pool: &PgPool, place: Place<'_>, actor: Uuid, names: &[String], text: &str) -> Vec<Uuid> {
+        let targets = mention_targets(pool, place, actor, names, &[]).await.unwrap();
+        mention_rows(pool, &place.room(), actor, &text.chars().take(MENTION_CHARS).collect::<String>(), &targets).await.unwrap();
+        targets
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn a_stream_line_naming_someone_leaves_them_one_unread_mention() {
+        use crate::auth::tests::{row, test_db};
+        let pool = test_db().await;
+        let run = std::process::id();
+        let n = |x: &str| format!("mn{run}-{x}");
+        let streamer = row(&pool, &n("s"), Some("h")).await;
+        let sender = row(&pool, &n("a"), Some("h")).await;
+        let other = row(&pool, &n("b"), Some("h")).await;
+        let target = row(&pool, &n("t"), Some("h")).await;
+        let room = n("s");
+        let place = Place::Stream(&room);
+        let long = format!("hey @{} {}", n("t"), "x".repeat(300));
+
+        assert_eq!(says(&pool, place, sender, &[n("t")], &long).await, vec![target]);
+        assert_eq!(mention_count(&pool, target, &room).await, (1, 1));
+        let (text, actor): (String, Uuid) = sqlx::query_as("SELECT text, actor_id FROM notifications WHERE user_id = $1 AND kind = 'mention'").bind(target).fetch_one(&pool).await.unwrap();
+        assert_eq!(text.chars().count(), MENTION_CHARS);
+        assert!(text.starts_with("hey @"));
+        assert_eq!(actor, sender);
+
+        says(&pool, place, other, &[n("t")], "second").await;
+        assert_eq!(mention_count(&pool, target, &room).await, (1, 1), "the unread one is replaced");
+        let (text, actor): (String, Uuid) = sqlx::query_as("SELECT text, actor_id FROM notifications WHERE user_id = $1 AND kind = 'mention'").bind(target).fetch_one(&pool).await.unwrap();
+        assert_eq!((text.as_str(), actor), ("second", other));
+
+        sqlx::query("UPDATE notifications SET read_at = now() WHERE user_id = $1").bind(target).execute(&pool).await.unwrap();
+        says(&pool, place, sender, &[n("t")], "third").await;
+        assert_eq!(mention_count(&pool, target, &room).await, (2, 1), "a read one stays and a new one comes");
+
+        let elsewhere = n("b");
+        says(&pool, Place::Stream(&elsewhere), sender, &[n("t")], "fourth").await;
+        assert_eq!(mention_count(&pool, target, &room).await, (2, 1), "another room is its own");
+        assert_eq!(mention_count(&pool, target, &elsewhere).await, (1, 1));
+
+        sqlx::query("DELETE FROM streamers WHERE id = ANY($1)").bind(vec![streamer, sender, other, target]).execute(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn no_mention_for_oneself_a_test_streamer_a_guest_a_banned_name_or_one_who_turned_it_off() {
+        use crate::auth::tests::{row, test_db};
+        let pool = test_db().await;
+        let run = std::process::id();
+        let n = |x: &str| format!("mx{run}-{x}");
+        let streamer = row(&pool, &n("s"), Some("h")).await;
+        let sender = row(&pool, &n("a"), Some("h")).await;
+        let fine = row(&pool, &n("f"), Some("h")).await;
+        let guest = row(&pool, &n("u"), None).await;
+        let banned = row(&pool, &n("b"), Some("h")).await;
+        let quiet = row(&pool, &n("q"), Some("h")).await;
+        let dummy = row(&pool, &n("t"), Some("h")).await;
+        sqlx::query("UPDATE streamers SET is_test = true WHERE id = $1").bind(dummy).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO stream_bans (stream_id, user_id) VALUES ($1, $2)").bind(streamer).bind(banned).execute(&pool).await.unwrap();
+        let room = n("s");
+        let place = Place::Stream(&room);
+
+        sqlx::query("UPDATE streamers SET notify = $2 WHERE id = $1").bind(quiet).bind(Settings { mention: false, ..Settings::default() }.to_doc()).execute(&pool).await.unwrap();
+        assert!(says(&pool, place, sender, &[n("q")], "hi").await.is_empty(), "the setting off");
+        assert_eq!(mention_count(&pool, quiet, &room).await, (0, 0));
+        sqlx::query("UPDATE streamers SET notify = $2 WHERE id = $1").bind(quiet).bind(Settings { chat: false, ..Settings::default() }.to_doc()).execute(&pool).await.unwrap();
+        assert_eq!(says(&pool, place, sender, &[n("q")], "hi").await, vec![quiet], "another kind off leaves mentions on");
+
+        assert!(says(&pool, place, sender, &[n("a")], "me").await.is_empty(), "never oneself");
+        assert!(says(&pool, place, sender, &[n("t")], "hi").await.is_empty(), "never a test streamer");
+        assert!(says(&pool, place, dummy, &[n("f")], "hi").await.is_empty(), "never from a test streamer");
+        assert!(says(&pool, place, sender, &[n("u")], "hi").await.is_empty(), "never a name without an account");
+        assert!(says(&pool, place, sender, &[n("b")], "hi").await.is_empty(), "never one banned from the chat");
+        assert_eq!(says(&pool, place, sender, &[n("a"), n("t"), n("f"), n("nobody")], "hi").await, vec![fine]);
+        let made: i64 = sqlx::query_scalar("SELECT count(*) FROM notifications WHERE kind = 'mention' AND user_id = ANY($1)").bind(vec![sender, guest, banned, dummy]).fetch_one(&pool).await.unwrap();
+        assert_eq!(made, 0);
+
+        sqlx::query("DELETE FROM streamers WHERE id = ANY($1)").bind(vec![streamer, sender, fine, guest, banned, quiet, dummy]).execute(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn a_channel_mention_reaches_only_members_who_see_it_and_did_not_mute_it() {
+        use crate::auth::tests::{row, test_db};
+        let pool = test_db().await;
+        let run = std::process::id();
+        let n = |x: &str| format!("mg{run}-{x}");
+        let group = format!("mgg{run}");
+        sqlx::query("INSERT INTO groups (name, badge, color) VALUES ($1, 'MEN', '#5865f2')").bind(&group).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO channels (server, name) VALUES ($1, 'secret')").bind(&group).execute(&pool).await.unwrap();
+        let role: Uuid = sqlx::query_scalar("INSERT INTO roles (group_name, name, color) VALUES ($1, 'inner', '#ffffff') RETURNING id")
+            .bind(&group)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO channel_roles (server, channel, role_id) VALUES ($1, 'secret', $2)").bind(&group).bind(role).execute(&pool).await.unwrap();
+        let sender = row(&pool, &n("a"), Some("h")).await;
+        let sees = row(&pool, &n("s"), Some("h")).await;
+        let blind = row(&pool, &n("x"), Some("h")).await;
+        let muted = row(&pool, &n("m"), Some("h")).await;
+        let banned = row(&pool, &n("b"), Some("h")).await;
+        let outside = row(&pool, &n("o"), Some("h")).await;
+        for user in [sender, sees, blind, muted, banned] {
+            sqlx::query("INSERT INTO memberships (name, group_name, user_id) SELECT name, $1, id FROM streamers WHERE id = $2").bind(&group).bind(user).execute(&pool).await.unwrap();
+        }
+        for user in [sender, sees, muted, banned, outside] {
+            sqlx::query("INSERT INTO role_members (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING").bind(user).bind(role).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO channel_mutes (user_id, server, channel) VALUES ($1, $2, 'secret')").bind(muted).bind(&group).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO bans (group_name, user_id) VALUES ($1, $2)").bind(&group).bind(banned).execute(&pool).await.unwrap();
+        let place = Place::Channel(&group, "secret");
+        let room = place.room();
+        let everyone: Vec<String> = ["s", "x", "m", "b", "o"].iter().map(|x| n(x)).collect();
+
+        assert_eq!(says(&pool, place, sender, &everyone, "hi all").await, vec![sees]);
+        for user in [blind, muted, banned, outside] {
+            assert_eq!(mention_count(&pool, user, &room).await, (0, 0));
+        }
+        assert_eq!(mention_count(&pool, sees, &room).await, (1, 1));
+        let admitted = mention_targets(&pool, place, sender, &[n("x")], &[blind]).await.unwrap();
+        assert_eq!(admitted, vec![blind], "a site admin sees every channel");
+        assert!(mention_targets(&pool, Place::Channel(&group, "nowhere"), sender, &[n("s")], &[]).await.unwrap().is_empty());
+
+        assert!(channel_read(&pool, sees, &room).await.unwrap(), "reading the channel reads its mention");
+        assert_eq!(mention_count(&pool, sees, &room).await, (1, 0));
+
+        sqlx::query("DELETE FROM groups WHERE name = $1").bind(&group).execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM streamers WHERE id = ANY($1)").bind(vec![sender, sees, blind, muted, banned, outside]).execute(&pool).await.unwrap();
     }
 
     #[tokio::test]

@@ -1243,13 +1243,14 @@ pub(crate) async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &
             return Err("chat is down, try again".into());
         }
     };
+    let named = if w.verified { mentions.clone() } else { Vec::new() };
     if s.persist {
         if let Some(id) = &id {
             remember(s, room, id, w, text, images, vid.as_deref(), reply, mentions);
         }
     }
-    if let (Some(server), Some(actor)) = (server, w.user_id) {
-        notify_members(s, server, room, actor, text);
+    if let Some(actor) = w.user_id {
+        notify_line(s, server, room, actor, text, named);
     }
     Ok(id)
 }
@@ -1402,17 +1403,42 @@ pub(crate) async fn react(s: &ChatState, room: &str, server: Option<&str>, w: &W
 
 const NOTIFY_LIMIT: Duration = Duration::from_secs(5);
 
-fn notify_members(s: &ChatState, server: &str, room: &str, actor: Uuid, text: &str) {
-    let Some(channel) = room.strip_prefix(server).and_then(|rest| rest.strip_prefix('/')) else { return };
+fn notify_line(s: &ChatState, server: Option<&str>, room: &str, actor: Uuid, text: &str, mentions: Vec<String>) {
+    let channel = match server {
+        Some(server) => match room.strip_prefix(server).and_then(|rest| rest.strip_prefix('/')) {
+            Some(channel) => Some((server.to_owned(), channel.to_owned())),
+            None => return,
+        },
+        None => None,
+    };
+    if channel.is_none() && mentions.is_empty() {
+        return;
+    }
     let db = s.db.clone();
     let redis = s.redis.clone();
     let admins = s.admins.clone();
-    let server = server.to_owned();
-    let channel = channel.to_owned();
+    let room = room.to_owned();
     let text = text.to_owned();
     tokio::spawn(async move {
-        if tokio::time::timeout(NOTIFY_LIMIT, crate::notify::channel_line(&db, &redis, &server, &channel, actor, &text, &admins)).await.is_err() {
-            log::warn!("{server}/{channel}: the inbox rows for a line timed out");
+        let place = match &channel {
+            Some((server, channel)) => crate::notify::Place::Channel(server, channel),
+            None => crate::notify::Place::Stream(&room),
+        };
+        let told = if mentions.is_empty() {
+            Vec::new()
+        } else {
+            match tokio::time::timeout(NOTIFY_LIMIT, crate::notify::mentioned(&db, &redis, place, actor, &text, &mentions, &admins)).await {
+                Ok(told) => told,
+                Err(_) => {
+                    log::warn!("{room}: the mention rows for a line timed out");
+                    Vec::new()
+                }
+            }
+        };
+        if let Some((server, channel)) = &channel {
+            if tokio::time::timeout(NOTIFY_LIMIT, crate::notify::channel_line(&db, &redis, server, channel, actor, &text, &admins, &told)).await.is_err() {
+                log::warn!("{server}/{channel}: the inbox rows for a line timed out");
+            }
         }
     });
 }
