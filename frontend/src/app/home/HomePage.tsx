@@ -18,6 +18,7 @@ import { Button, buttonClassName } from '@/shared-components/Button';
 import { FollowButton } from '@/shared-components/FollowButton';
 import { MakeGroupDialog } from '@/shared-components/MakeGroupDialog';
 import { PageFrame } from '@/shared-components/PageFrame';
+import { PersonCard, usePeek } from '@/shared-components/PersonCard';
 import { PersonRow } from '@/shared-components/PersonRow';
 import { Bone, Skeleton } from '@/shared-components/Skeleton';
 import { TestBadge } from '@/shared-components/TestBadge';
@@ -28,6 +29,7 @@ import { ago, since } from '@/utils/since';
 
 const PEOPLE_POLL_MS = 10_000;
 const FEATURED = 2;
+const PEEK_MS = 200;
 
 const GRID = 'grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4';
 const PEOPLE_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3';
@@ -328,6 +330,45 @@ function People() {
   );
 }
 
+function RecentCard({ person: p, now }: { person: Recent; now: number }) {
+  const peek = usePeek(PEEK_MS);
+  return (
+    <article
+      id={`recent-${p.name}`}
+      data-presence={p.presence}
+      className={cn(CARD_LINK, 'flex items-center gap-2 p-3')}
+      onPointerEnter={(e) => peek.show(e, e.currentTarget)}
+      onPointerLeave={(e) => peek.leave(e.currentTarget)}
+      onPointerDown={(e) => {
+        if (e.target instanceof Element && e.target.closest('button')) peek.close();
+      }}
+      onFocus={(e) => {
+        if (!e.target.closest('button')) peek.focus(e, e.currentTarget);
+      }}
+      onBlur={peek.blur}
+      onKeyDown={peek.keyDown}
+    >
+      <PersonRow
+        id={`recent-link-${p.name}`}
+        name={p.name}
+        verified={p.verified}
+        oauthVerified={p.oauth_verified}
+        avatar={p.avatar}
+        bio={p.bio}
+        presence={p.presence}
+        size="card"
+        note={
+          <span id={`recent-when-${p.name}`} title={new Date(p.ended_at).toLocaleString()}>
+            last live {ago(p.ended_at, now)}
+          </span>
+        }
+      />
+      <FollowButton id={`recent-follow-${p.name}`} name={p.name} small className="self-start" />
+      {peek.at && <PersonCard id={`recent-peek-${p.name}`} person={p} at={peek.at} hold={peek.hold} />}
+    </article>
+  );
+}
+
 function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
   const recent = useQuery({
     queryKey: ['recent', liveKey],
@@ -354,24 +395,7 @@ function RecentlyOffline({ liveKey, now }: { liveKey: string; now: number }) {
     >
       <div className={RECENT_GRID}>
         {list.map((p) => (
-          <article key={p.name} id={`recent-${p.name}`} data-presence={p.presence} className={cn(CARD_LINK, 'flex items-center gap-2 p-3')}>
-            <PersonRow
-              id={`recent-link-${p.name}`}
-              name={p.name}
-              verified={p.verified}
-              oauthVerified={p.oauth_verified}
-              avatar={p.avatar}
-              bio={p.bio}
-              presence={p.presence}
-              size="card"
-              note={
-                <span id={`recent-when-${p.name}`} title={new Date(p.ended_at).toLocaleString()}>
-                  last live {ago(p.ended_at, now)}
-                </span>
-              }
-            />
-            <FollowButton id={`recent-follow-${p.name}`} name={p.name} small className="self-start" />
-          </article>
+          <RecentCard key={p.name} person={p} now={now} />
         ))}
       </div>
     </Part>
