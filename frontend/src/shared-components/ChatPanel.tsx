@@ -669,6 +669,7 @@ export function ChatPanel({
   const shape = useAtomValue(chatStyleAtom);
   const count = useAtomValue(room.countAtom);
   const phase = useAtomValue(room.phaseAtom);
+  const reader = useAtomValue(room.readerAtom);
   const draft = useAtomValue(room.draftAtom);
   const pictures = useAtomValue(room.picturesAtom);
   const video = useAtomValue(room.videoAtom);
@@ -694,10 +695,7 @@ export function ChatPanel({
   const aside = useAtomValue(room.guestAtom) && !guest;
   const emotes = useEmoteComplete({ value: draft, onChange: (next) => room.setDraft(next), input: textRef, id: 'chat-emotes' });
 
-  useEffect(() => {
-    if (me === undefined) return;
-    return room.join(owner);
-  }, [room, owner?.session, owner?.token, me]);
+  useEffect(() => room.join(owner), [room, owner?.session, owner?.token, me]);
 
   useEffect(() => {
     if (!guest) return;
@@ -763,8 +761,8 @@ export function ChatPanel({
     room.addPictures(pictures);
   }
 
-  const needsNick = !owner && !me && phase === 'off';
-  const waiting = !loaded && total === 0 && (server || me === undefined || phase !== 'off');
+  const needsNick = !owner && !me && (me === null || server) && (phase === 'off' || reader);
+  const waiting = !loaded && total === 0;
 
   if (aside) {
     return (

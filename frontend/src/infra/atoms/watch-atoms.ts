@@ -1,6 +1,7 @@
 import { atom } from 'jotai';
 
 import { api, type GroupBadge, messageOf, type WatchGrant } from '@/infra/api';
+import { askLatest, type ChatLine, takeHistoryFrom } from '@/infra/atoms/chat-atoms';
 import { presenceChanged, presencesAtom } from '@/infra/atoms/presence-atoms';
 import { type Welcome, welcomeOf } from '@/infra/atoms/welcome-atoms';
 import { eventsPhaseAtom, onEvents, unwatchPresence, watchPresence } from '@/infra/events';
@@ -312,8 +313,13 @@ function keptInCorner(name: string): boolean {
 
 const grantKey = (name: string) => `watch:${name}`;
 
+const chatKey = (name: string) => `chat:${name}`;
+
+takeHistoryFrom((name) => takePrefetched<ChatLine[]>(chatKey(name))?.answer ?? null);
+
 onPrefetch('watch', (name) => {
   if (keptInCorner(name)) return;
+  prefetch(chatKey(name), null, 'drop', () => askLatest(name));
   prefetch(grantKey(name), name, 'drop', () => api.watch(name));
   if (!knownNotLive(name)) warmOnPress(name);
 });
