@@ -23,6 +23,7 @@
         <div class="box">watchers</div>
       </div>
       <p>the streamer upload once. the computer copy it to every watcher. that is the one trick everything else sits on.</p>
+      <p>the live site has a name too: <code>https://nodentity.xyz/</code>. <code>cloudflare</code> sits in front of it. a helper that keeps copies of pages close to people.</p>
     </section>
 
     <section>
@@ -34,7 +35,7 @@
         <li>it check the box. ports 80 and 443 must be free.</li>
         <li>it write <code>.env</code>. your ip goes in.</li>
         <li>it pull the images. nothing is compiled here.</li>
-        <li>it start twelve boxes. see <a href="boxes.html">boxes</a>.</li>
+        <li>it start twelve boxes. a thirteenth, voice, when it is on. see <a href="boxes.html">boxes</a>.</li>
         <li>it print a url. open it. click through the warning.</li>
       </ol>
       <p>the warning is the https cert. it is self made, for your ip. camera only works on https. the warning is enough.</p>
@@ -48,7 +49,8 @@
         <tr><td><code>./scripts/deploy.sh --pull</code></td><td>pull the repo. then the images for it. new knobs land in <code>.env</code> with defaults.</td></tr>
         <tr><td><code>./scripts/deploy.sh api</code></td><td>only the api. streams stay up.</td></tr>
         <tr><td><code>./scripts/deploy.sh frontend</code></td><td>only the pages. streams stay up.</td></tr>
-        <tr><td><code>./scripts/deploy.sh video</code></td><td>ends every stream. it warns first.</td></tr>
+        <tr><td><code>./scripts/deploy.sh video</code></td><td>ends every stream. it warns first. voice follows it, when voice is on.</td></tr>
+        <tr><td><code>./scripts/deploy.sh voice</code></td><td>only voice. drops every voice call. skipped while <code>VOICE_SECRET</code> is empty.</td></tr>
         <tr><td><code>./scripts/deploy.sh</code></td><td>everything again.</td></tr>
         <tr><td><code>./scripts/deploy.sh --prune-deploy</code></td><td>disk full of old builds. drop them. then deploy.</td></tr>
       </table>
@@ -58,8 +60,10 @@
       <h2>build it yourself</h2>
       <p><code>./scripts/deploy.sh --build</code> compiles on the machine it runs on. an hour and 4 GB of ram on a small box. a few minutes on a laptop.</p>
       <p>changes not pushed yet, but you want them on the box:</p>
-      <pre><code>./scripts/ship.sh --to gcloud:test-machine   # laptop: build, send over ssh, print a tag
-./scripts/deploy.sh --images &lt;that tag&gt;      # box: start them. pull nothing</code></pre>
+      <p>on the laptop: build, send over ssh, print a tag.</p>
+      <pre><code>./scripts/ship.sh --to gcloud:test-machine</code></pre>
+      <p>on the box: start them. pull nothing.</p>
+      <pre><code>./scripts/deploy.sh --images &lt;that tag&gt;</code></pre>
       <p><code>--to billy@1.2.3.4</code> for any other box.</p>
     </section>
 
@@ -81,7 +85,8 @@
 
     <section>
       <h2>this test skips</h2>
-      <p>email. password reset. two factor. oauth. more than one video size. a cdn. more than one streamer in a room.</p>
+      <p>email. password reset. two factor. more than one video size. more than one streamer in a room.</p>
+      <p>log in with google or discord is built. see <a href="people.html">people</a>.</p>
     </section>
   </main>
   <footer>long version: <code>docs/overview.md</code></footer>

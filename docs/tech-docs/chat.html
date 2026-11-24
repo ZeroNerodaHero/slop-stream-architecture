@@ -61,6 +61,46 @@
     </section>
 
     <section>
+      <h2>more on a line</h2>
+      <p>these work in all three chats, unless it says.</p>
+      <ul>
+        <li><b>replies.</b> a line can answer another line of the same room. discord style. a reply costs what a line costs.</li>
+        <li><b>reactions.</b> 32 emoji to pick from. a login only. 20 kinds on a line at most. ten at once, then one a second. a bucket apart from the lines.</li>
+        <li><b>emotes.</b> a group's own pictures, by name. 50 a group. a member may use them anywhere. see <a href="groups.html">groups</a>.</li>
+        <li><b>videos.</b> one short clip a line. 10 mb, 30 s at most. mp4 or webm. a channel and a dm only. off in a stream's room for now.</li>
+        <li><b>embeds.</b> a line's first 2 video links get a player. youtube, vimeo, twitch and more. nothing loads before a click.</li>
+      </ul>
+      <p>a site admin can take down a picture or clip. the line then says <code>removed</code>.</p>
+    </section>
+
+    <section>
+      <h2>the welcome</h2>
+      <p>open a stream's chat. the bot <code>Eques</code> says the streamer's welcome on top. up to 300 letters. it is drawn on your screen only. never sent. never kept.</p>
+    </section>
+
+    <section>
+      <h2>jannies</h2>
+      <p>a stream's room has cleaners. the ranks, top down:</p>
+      <div class="pic stack">
+        <div class="box hot">admin</div>
+        <div class="flow"><i></i></div>
+        <div class="box">the streamer</div>
+        <div class="flow"><i></i></div>
+        <div class="box">site janny</div>
+        <div class="flow"><i></i></div>
+        <div class="box">stream janny. up to 20 a stream.</div>
+      </div>
+      <p>one may only act on someone below.</p>
+      <ul>
+        <li>delete a line. it leaves redis, the database, and every screen.</li>
+        <li>time someone out. 10 s up to a week.</li>
+        <li>ban a login from the room.</li>
+      </ul>
+      <p>a janny gets 30 actions a minute. the streamer runs it from the <code>mod</code> tab. on their own page. see <a href="pages.html">pages</a>.</p>
+      <p>a group's channels have none of this. owners and roles do it there.</p>
+    </section>
+
+    <section>
       <h2>why redis streams</h2>
       <p>every line gets an id. a viewer who drops and comes back says the last id it saw. it gets what it missed. no gap. no double.</p>
       <p>one structure does the memory and the fan-out. not a list plus pub/sub, which can disagree. not kafka, which is a cluster for a problem this small.</p>
@@ -98,6 +138,6 @@
       <p>every socket gets a close. up to 2 s to leave. the panel comes back in 3 s. the last lines reload from memory. nothing is lost.</p>
     </section>
   </main>
-  <footer>long version: <code>docs/chat.md</code>, <code>docs/chats.md</code></footer>
+  <footer>long version: <code>docs/chat.md</code>, <code>docs/chats.md</code>, <code>docs/jannies.md</code></footer>
 </body>
 </html>

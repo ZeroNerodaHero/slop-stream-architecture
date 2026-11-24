@@ -16,21 +16,24 @@
       <h2>the map</h2>
       <table>
         <tr><th>url</th><th>what</th></tr>
-        <tr><td><code>/</code></td><td>home. who is live. then servers and recently offline. then everyone else.</td></tr>
+        <tr><td><code>/</code></td><td>home. who is live. who you follow. recently offline. groups. then everyone else.</td></tr>
         <tr><td><code>/live</code></td><td>go live. your camera, your sources, start.</td></tr>
         <tr><td><code>/watch/&lt;name&gt;</code></td><td>their stream. or their profile while they are off.</td></tr>
         <tr><td><code>/groups</code></td><td>your groups, and ones to discover. make one.</td></tr>
         <tr><td><code>/groups/&lt;name&gt;/&lt;channel&gt;</code></td><td>a server's room. channels, chat, roster.</td></tr>
-        <tr><td><code>/login</code> <code>/signup</code></td><td>a name and a password.</td></tr>
-        <tr><td><code>/admin</code></td><td>the error reports. for the names in <code>ADMIN_NAMES</code>.</td></tr>
+        <tr><td><code>/login</code> <code>/signup</code></td><td>a name and a password. or google or discord.</td></tr>
+        <tr><td><code>/oauth</code></td><td>pick a name, after google or discord, the first time.</td></tr>
+        <tr><td><code>/admin</code></td><td>the error reports. the site jannies. for the names in <code>ADMIN_NAMES</code>.</td></tr>
       </table>
       <p>every page but one is the same html, drawn by the browser. <code>/watch/&lt;name&gt;</code> comes from the api with that name's title and preview tags filled in. so a shared link gets a card.</p>
     </section>
 
     <section>
       <h2>home</h2>
-      <p>every live stream, with a picture of it a few seconds old. click one to watch.</p>
-      <p>under them, everyone else. a rectangle each: their picture, the square on its corner, the name, the word. online first.</p>
+      <p>every live stream, with a picture of it a few seconds old. hold the mouse on one and it plays. click one to watch.</p>
+      <p>then, in parts: who you follow. recently offline, small cards with follower counts. groups. everyone else, a rectangle each. online first.</p>
+      <p>hold the mouse on a name and a card opens. a follow button on it.</p>
+      <p>the list is asked for while the page still loads. a picture shows blurred until it arrives.</p>
       <p>the page asks the home box once. then it listens on the wire. a stream starting appears without a reload.</p>
     </section>
 
@@ -43,11 +46,12 @@
     <section>
       <h2>watch</h2>
       <p>the player. their name, the square, the word, their status line under the name. the chat beside it. <code>N watching</code>. the follow button and <code>N followers</code>.</p>
-      <p>three tabs under the player:</p>
+      <p>tabs under the player:</p>
       <ul>
-        <li><b>about</b>. their about me, a few paragraphs. then a page of their own, in blocks: words, pictures, a clip, a music player, links. their own css over it, cleaned first. no html. media from this site only. an owner writes it in place.</li>
+        <li><b>about</b>. a page of their own, in blocks on a canvas: words, a picture, a clip, a sound, a line, a box, a border. 40 blocks at most. the words are a small cleaned html. no css of their own. no scripts. an owner places blocks by hand, in place. a name that saved nothing shows a sample.</li>
         <li><b>calendar</b>. when they stream. one block per session.</li>
         <li><b>socials</b>. where else to find them. links as icons. tiktok, youtube, twitch, discord, x, a globe for anything else. a row or a grid. twenty at most.</li>
+        <li><b>mod</b>. on your own page only. your jannies, the banned, the timeouts with a live countdown, the log. see <a href="chat.html">chat</a>.</li>
       </ul>
       <p>they are not live: the page is their profile. the picture big. the word. the tabs. the chat. a streamer can set an offline picture where the player would be, and a line like <code>back tuesday at 8</code>. the camera appears the moment they start.</p>
     </section>
@@ -71,21 +75,23 @@
 
     <section>
       <h2>settings</h2>
-      <p>the gear opens the user modal. eight tabs in two groups.</p>
+      <p>the gear opens the user modal. ten tabs in two groups.</p>
       <table>
         <tr><th>you</th><th>this browser</th></tr>
         <tr>
           <td>
             <b>profile</b>: picture, status, presence, offline picture, the name change.<br>
+            <b>stats</b>: your streams in numbers. see <a href="people.html">people</a>.<br>
             <b>groups</b>: the ones you are in.<br>
-            <b>security</b>: password, log out everywhere.<br>
+            <b>security</b>: password, google and discord, log out everywhere.<br>
             <b>notifications</b>: the four switches.
           </td>
           <td>
-            <b>appearance</b>: the theme, the text size.<br>
-            <b>chat</b>: where the panel sits.<br>
+            <b>appearance</b>: the theme, the text size. themes like <code>bsod</code>, <code>yotsuba</code>, <code>stawbury</code>.<br>
+            <b>chat</b>: where the panel sits. embeds on or off.<br>
+            <b>voice</b>: the mic, the speakers, the camera for calls.<br>
             <b>sidebar</b>: left or right.<br>
-            <b>advanced</b>: the messages inspector.
+            <b>advanced</b>: the messages inspector. a computer only.
           </td>
         </tr>
       </table>
@@ -102,6 +108,6 @@
       <p>dark. hard edges. a box is a 1px stroke. no shadows anywhere. a hover is a colour or a border change. a small action is words, not a button.</p>
     </section>
   </main>
-  <footer>long version: <code>docs/overview.md</code>, <code>docs/about.md</code>, <code>docs/socials.md</code>, <code>docs/follows.md</code></footer>
+  <footer>long version: <code>docs/overview.md</code>, <code>docs/about.md</code>, <code>docs/socials.md</code>, <code>docs/follows.md</code>, <code>docs/jannies.md</code></footer>
 </body>
 </html>

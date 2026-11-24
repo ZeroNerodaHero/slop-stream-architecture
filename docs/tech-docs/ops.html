@@ -57,6 +57,45 @@
     </section>
 
     <section>
+      <h2>limits</h2>
+      <p>every route has one. past it: 429, and <code>Retry-After</code> says how many seconds.</p>
+      <p>a limit counts your account. no login: your address.</p>
+      <p>20 new names an hour, per account or address. so a script cannot make endless names.</p>
+      <p>a janny gets 120 cleanups per 10 minutes. and 30 a minute on top.</p>
+      <p><code>RATE_LIMITS=off</code> in <code>.env</code> turns them off. for load tests and seeding.</p>
+    </section>
+
+    <section>
+      <h2>the picture check</h2>
+      <p>every upload can be checked for bad pictures first. <code>openai</code>'s moderation model does the looking.</p>
+      <div class="pic">
+        <div class="box">upload</div>
+        <div class="flow"><i></i></div>
+        <div class="box hot">api</div>
+        <div class="flow both" data-say="is this ok"><i></i><i></i></div>
+        <div class="box">openai</div>
+      </div>
+      <ul>
+        <li>off unless <code>MODERATION_ENABLED</code> is on. it needs <code>OPENAI_API_KEY</code>.</li>
+        <li>a picture over 20 MB: refused, 413.</li>
+        <li>the check is down: refused, 503. it fails closed.</li>
+        <li>a gif it cannot read: refused.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>cloudflare</h2>
+      <p>the live site, <code>nodentity.xyz</code>, sits behind cloudflare. its cache rules are set by hand. no code touches them.</p>
+      <p>every answer says how long it may be kept. the default: <code>private, no-store</code>. a thumbnail: 5 s, shared.</p>
+      <p>with <code>CF_PURGE_TOKEN</code> and <code>CF_ZONE_ID</code> set, two things clear the copies:</p>
+      <ul>
+        <li>a deploy of the pages. the page shell is cleared.</li>
+        <li>a takedown. the removed picture is cleared.</li>
+      </ul>
+      <p>empty, and nothing is cleared. the copies age out.</p>
+    </section>
+
+    <section>
       <h2>look inside</h2>
       <table>
         <tr><th>you type</th><th>you see</th></tr>
@@ -77,10 +116,17 @@
         <tr><td><code>ENV_NAME</code></td><td>what this box calls itself in health and in errors. empty: the hostname.</td></tr>
         <tr><td><code>ADMIN_NAMES</code></td><td>who may open <code>/admin</code>. empty: nobody.</td></tr>
         <tr><td><code>OPS_TOKEN</code></td><td>a machine's key for the errors. empty: off.</td></tr>
+        <tr><td><code>PUBLIC_URL</code></td><td>the site's own address. google and discord send people back here.</td></tr>
+        <tr><td><code>GOOGLE_CLIENT_ID</code> <code>GOOGLE_CLIENT_SECRET</code></td><td>log in with google. empty: no button.</td></tr>
+        <tr><td><code>DISCORD_CLIENT_ID</code> <code>DISCORD_CLIENT_SECRET</code></td><td>log in with discord. empty: no button.</td></tr>
+        <tr><td><code>TURNSTILE_ENABLED</code> <code>TURNSTILE_SITE_KEY</code> <code>TURNSTILE_SECRET</code></td><td>the robot check. off by default.</td></tr>
+        <tr><td><code>CF_PURGE_TOKEN</code> <code>CF_ZONE_ID</code></td><td>let the box clear cloudflare's copies.</td></tr>
         <tr><td><code>DUMMY_STREAMS</code> <code>DUMMY_PASSWORD</code> <code>DUMMY_NAMES</code></td><td>the fake streams. how many, the key, your own names.</td></tr>
         <tr><td><code>S3_ENDPOINT</code> and friends</td><td><code>off</code>: the bucket on this box. a url: a real bucket.</td></tr>
         <tr><td><code>CHAT_PERSIST</code></td><td><code>1</code>: every chat line kept in the database. search and scroll back.</td></tr>
         <tr><td><code>GROUPS_PER_OWNER</code></td><td>groups one login may own. empty: 2. 8 at most.</td></tr>
+        <tr><td><code>MODERATION_ENABLED</code> <code>OPENAI_API_KEY</code></td><td>the picture check. off by default.</td></tr>
+        <tr><td><code>VOICE_SECRET</code></td><td>turns voice on. empty: no voice box.</td></tr>
         <tr><td><code>CARGO_BUILD_JOBS</code></td><td>cores a rust build may use. deploy sets it from the ram.</td></tr>
         <tr><td><code>IMAGES</code> <code>TAG</code></td><td>where the images come from and which ran last. deploy writes them.</td></tr>
         <tr><td><code>SHOW_DOCS</code></td><td><code>1</code>: these pages on the dev server. the box ignores it.</td></tr>
@@ -92,6 +138,6 @@
       <p>every box logs to 3 files of 10 MB. a full disk is old builds and images: <code>./scripts/deploy.sh --prune-deploy</code>.</p>
     </section>
   </main>
-  <footer>long version: <code>docs/overview.md</code>, <code>docs/debugging.md</code>, <code>.env.example</code></footer>
+  <footer>long version: <code>docs/overview.md</code>, <code>docs/debugging.md</code>, <code>docs/rate-limits.md</code>, <code>docs/image-moderation.md</code>, <code>docs/cloudflare-cache-rules.md</code>, <code>.env.example</code></footer>
 </body>
 </html>

@@ -24,7 +24,7 @@
       </ol>
       <div class="pic">
         <div class="box">you</div>
-        <div class="flow" data-say="1080p · 30 fps · vp8 · ~3 Mbps"><i></i></div>
+        <div class="flow" data-say="720p · vp8 · up to 2.5 Mbps"><i></i></div>
         <div class="box hot pulse">video</div>
         <div class="col">
           <div class="pic"><div class="flow"><i></i></div><div class="box">watcher</div></div>
@@ -33,14 +33,24 @@
         </div>
       </div>
       <p>you send one copy. video send one copy to each watcher. your upload never grows with the crowd.</p>
+      <p>a camera goes up at 720p, up to 2.5 Mbps. a screen goes up to 1080p, 30 fps, 3 Mbps.</p>
       <p>camera only works on https. the warning you click through is enough.</p>
     </section>
 
     <section>
       <h2>sources and layers</h2>
-      <p>beside the preview, your sources. the camera. a screen or a window. pictures and gifs you put up. your avatar. add one with the <code>+</code>, before start or while live.</p>
+      <p>beside the preview, your sources. the camera. a screen or a window. pictures and gifs you put up. your avatar. a 3d model. add one with the <code>+</code>, before start or while live.</p>
       <p>each source is a layer over the preview. drag it. pull a corner. order them. hide one. what you see is what watchers see.</p>
       <p>every watcher's player draws the same frame from the scene. nothing is mixed on the server. sharp text at the same 3 Mbps.</p>
+    </section>
+
+    <section>
+      <h2>a 3d model</h2>
+      <p>a face cam without the face. <code>+</code>, then <code>model</code>. a demo model, or your own file. a <code>.vrm</code>, <code>.glb</code> or <code>.fbx</code>.</p>
+      <p>your browser reads your face from the camera. the model moves with it. the drawing goes where the camera would.</p>
+      <p>your real camera picture never leaves. only you see it, under the preview.</p>
+      <p>a model downloads once. the browser keeps it. to video and watchers, it is just a camera.</p>
+      <aside class="plan">not built yet. plan only. the rest of a face. the model cut out over the screen.</aside>
     </section>
 
     <section>
@@ -55,10 +65,30 @@
       <ul>
         <li>you get a watch link to copy. paste it in a chat and it unfurls: your name, live or not, your status, the picture.</li>
         <li>leave the page and the stream keeps going. it sits in a corner of every other page. your chat with it. <code>×</code> on the corner is stop.</li>
-        <li>video make a jpeg of your stream every 5 s. home shows it. <code>/thumb/&lt;name&gt;.jpg</code>. no cdn. no bucket.</li>
+        <li>video make a jpeg of your stream every 5 s. home shows it. <code>/thumb/&lt;name&gt;.jpg</code>. no bucket. cloudflare may share one copy for 5 s.</li>
         <li><b>N watching</b>: video count connected watchers. one per ip. capped per ip. hard to spam.</li>
       </ul>
       <p>right now: <b class="count" style="--to: 12"></b> watching. the number climbs as they arrive.</p>
+    </section>
+
+    <section>
+      <h2>the first picture</h2>
+      <p>a watcher sees nothing until a keyframe. a keyframe is a whole picture. the rest only say what changed.</p>
+      <p>so video asks the streamer for one. early, as the watcher's connection forms. again, as a backup, when it is done.</p>
+      <p>joins that come close together share one keyframe. the page also sends its setup beside the watch call. no waiting in line.</p>
+      <div class="pic">
+        <div class="box">new watcher</div>
+        <div class="flow back" data-say="keyframe please"><i></i></div>
+        <div class="box hot">video</div>
+        <div class="flow back" data-say="asks"><i></i></div>
+        <div class="box">streamer</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>hover a card</h2>
+      <p>hold the mouse on a home card for 300 ms. it plays the stream, muted. let go and it stops. never on touch.</p>
+      <aside class="plan">not built yet. plan only. a click hands that same connection to the watch page. the first frame shows at once.</aside>
     </section>
 
     <section>
@@ -90,12 +120,12 @@
       <p>for styling without a camera. in <code>.env</code>:</p>
       <pre><code>DUMMY_STREAMS=3
 DUMMY_PASSWORD=anyword</code></pre>
-      <p>then <code>./scripts/deploy.sh dummy</code>. home fills with <code>dummy-mango</code>, <code>dummy-pixel</code>, <code>dummy-disco</code>. three gifs each, bouncing like the dvd logo. a clock. a quiet tone. about a tenth of a core each.</p>
+      <p>then <code>./scripts/deploy.sh dummy</code>. home fills with <code>dummy-mango</code>, <code>dummy-pixel</code>, <code>dummy-disco</code>. three gifs each, bouncing like the dvd logo. a clock. a quiet tone. 240p, 15 fps, 180 kbps. a few percent of a core each. lowest cpu turn on the box. real streams go first.</p>
       <p>the password is what lets the dummy box use <code>dummy-</code> names. nobody else can. set it back to 0 and run it again to turn them off.</p>
     </section>
 
-    <aside class="plan">not built yet. plan only. more than one video size (720, 360 copies made on the box). hold the mouse on a card and it plays. up to 4 people on the watch page coming on with a mic.</aside>
+    <aside class="plan">not built yet. plan only. more than one video size (720, 360 copies made on the box). up to 4 people on the watch page coming on with a mic.</aside>
   </main>
-  <footer>long version: <code>docs/status.md</code>, <code>docs/screen.md</code>, <code>docs/viewers.md</code>, <code>docs/calendar.md</code>, <code>docs/audio.md</code></footer>
+  <footer>long version: <code>docs/status.md</code>, <code>docs/screen.md</code>, <code>docs/viewers.md</code>, <code>docs/calendar.md</code>, <code>docs/audio.md</code>, <code>docs/vtuber.md</code>, <code>docs/keyframes.md</code>, <code>docs/hover-preview.md</code></footer>
 </body>
 </html>
