@@ -7,6 +7,7 @@ import {
   type ReactNode,
   type SyntheticEvent,
   type UIEvent,
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -523,6 +524,134 @@ function ChatSkeleton({ shape }: { shape: ChatStyle }) {
   );
 }
 
+interface ChatRowProps {
+  line: ChatLine;
+  room: ChatRoom;
+  shape: ChatStyle;
+  mine: boolean;
+  me: string | null | undefined;
+  first: boolean;
+  bucket: boolean;
+  flashed: boolean;
+  replyColor: string | undefined;
+  replies: boolean;
+  reacts: boolean;
+  jumps: boolean;
+  lineMark?: (line: ChatLine) => ReactNode;
+  lineActions?: (line: ChatLine) => ReactNode;
+  lineMenu?: (line: ChatLine) => LineMenuItem[];
+  lineSide?: (line: ChatLine) => ReactNode;
+}
+
+const ChatRow = memo(function ChatRow({
+  line,
+  room,
+  shape,
+  mine,
+  me,
+  first,
+  bucket,
+  flashed,
+  replyColor,
+  replies,
+  reacts,
+  jumps,
+  lineMark,
+  lineActions,
+  lineMenu,
+  lineSide
+}: ChatRowProps) {
+  return (
+    <ChatLineShape
+      shape={shape}
+      mine={mine}
+      at={line.at}
+      name={line.from}
+      crowd
+      who={
+        <>
+          <Speaker line={line} room={room} />
+          <span className="ml-1 inline-flex items-center gap-1 align-middle">
+            <Marks line={line} mine={mine} small={shape === 'bubbles'} />
+          </span>
+        </>
+      }
+      face={<SpeakerFace line={line} room={room} />}
+      words={
+        line.text || line.pending === 'failed' ? (
+          <>
+            {line.text && (
+              <span className="whitespace-pre-wrap">
+                <LinkedText text={line.text} />
+              </span>
+            )}
+            {line.pending === 'failed' && (
+              <span data-not-sent className="ml-1.5 text-xs text-decrease">
+                not sent
+              </span>
+            )}
+          </>
+        ) : null
+      }
+      pending={line.pending}
+      pictures={
+        <>
+          <ChatImages ids={line.images} />
+          {line.video && <ChatVideoPlayer video={line.video} />}
+          <ChatEmbeds text={line.text} />
+        </>
+      }
+      mark={line.pending ? undefined : lineMark?.(line)}
+      actions={
+        line.pending ? undefined : (
+          <LineActions
+            onReact={reacts && me ? (emoji) => room.react(line, emoji) : undefined}
+            reactions={line.reactions ?? []}
+            me={me}
+            reactOff={reacts && !me ? 'log in to react' : undefined}
+            onReply={replies ? () => room.setReply(line) : undefined}
+            extra={lineActions?.(line)}
+            text={line.text}
+            menu={lineMenu?.(line)}
+          />
+        )
+      }
+      reactions={
+        <ReactionChips
+          reactions={line.reactions ?? []}
+          me={me}
+          onReact={reacts && me ? (emoji) => room.react(line, emoji) : undefined}
+          onBlocked={reacts ? () => room.showNotice('log in to react') : undefined}
+        />
+      }
+      quote={
+        line.reply && (
+          <ReplyQuote
+            shape={shape}
+            quote={{ from: line.reply.from, text: line.reply.text, avatar: line.reply.avatar ?? null, images: line.reply.images ?? 0, video: line.reply.video }}
+            color={replyColor}
+            onJump={jumps ? () => void room.jumpToReply(line.reply!.id) : undefined}
+          />
+        )
+      }
+      flash={flashed}
+      side={line.pending ? undefined : lineSide?.(line)}
+      attrs={{
+        'data-id': line.id,
+        'data-pending': line.pending,
+        'data-reply-to': line.reply?.id,
+        'data-streamer': line.streamer || undefined,
+        'data-verified': line.verified || undefined,
+        'data-bot': isBotLine(line) || undefined,
+        'data-groups': line.groups.length ? line.groups.map((g) => g.name).join(' ') : undefined,
+        'data-mine': mine || undefined
+      }}
+      first={first}
+      bucket={bucket}
+    />
+  );
+});
+
 export function RoomLines({
   name,
   room,
@@ -559,93 +688,26 @@ export function RoomLines({
         const mine = line.from === myName && (asStreamer ? line.streamer : me ? line.verified : !line.verified && !line.streamer);
         const prev = lines[i - 1];
         const same = prev !== undefined && prev.from === line.from && prev.verified === line.verified && prev.streamer === line.streamer;
+        const place = placeOf(line.at, prev?.at, same);
         return (
-          <ChatLineShape
+          <ChatRow
             key={line.id}
+            line={line}
+            room={room}
             shape={shape}
             mine={mine}
-            at={line.at}
-            name={line.from}
-            crowd
-            who={
-              <>
-                <Speaker line={line} room={room} />
-                <span className="ml-1 inline-flex items-center gap-1 align-middle">
-                  <Marks line={line} mine={mine} small={shape === 'bubbles'} />
-                </span>
-              </>
-            }
-            face={<SpeakerFace line={line} room={room} />}
-            words={
-              line.text || line.pending === 'failed' ? (
-                <>
-                  {line.text && (
-                    <span className="whitespace-pre-wrap">
-                      <LinkedText text={line.text} />
-                    </span>
-                  )}
-                  {line.pending === 'failed' && (
-                    <span data-not-sent className="ml-1.5 text-xs text-decrease">
-                      not sent
-                    </span>
-                  )}
-                </>
-              ) : null
-            }
-            pending={line.pending}
-            pictures={
-              <>
-                <ChatImages ids={line.images} />
-                {line.video && <ChatVideoPlayer video={line.video} />}
-                <ChatEmbeds text={line.text} />
-              </>
-            }
-            mark={line.pending ? undefined : lineMark?.(line)}
-            actions={
-              line.pending ? undefined : (
-                <LineActions
-                  onReact={reacts && me ? (emoji) => room.react(line, emoji) : undefined}
-                  reactions={line.reactions ?? []}
-                  me={me}
-                  reactOff={reacts && !me ? 'log in to react' : undefined}
-                  onReply={replies ? () => room.setReply(line) : undefined}
-                  extra={lineActions?.(line)}
-                  text={line.text}
-                  menu={lineMenu?.(line)}
-                />
-              )
-            }
-            reactions={
-              <ReactionChips
-                reactions={line.reactions ?? []}
-                me={me}
-                onReact={reacts && me ? (emoji) => room.react(line, emoji) : undefined}
-                onBlocked={reacts ? () => room.showNotice('log in to react') : undefined}
-              />
-            }
-            quote={
-              line.reply && (
-                <ReplyQuote
-                  shape={shape}
-                  quote={{ from: line.reply.from, text: line.reply.text, avatar: line.reply.avatar ?? null, images: line.reply.images ?? 0, video: line.reply.video }}
-                  color={line.reply.verified ? roleColor(line.reply.from) : undefined}
-                  onJump={jumps ? () => void room.jumpToReply(line.reply!.id) : undefined}
-                />
-              )
-            }
-            flash={flash === line.id}
-            side={line.pending ? undefined : lineSide?.(line)}
-            attrs={{
-              'data-id': line.id,
-              'data-pending': line.pending,
-              'data-reply-to': line.reply?.id,
-              'data-streamer': line.streamer || undefined,
-              'data-verified': line.verified || undefined,
-              'data-bot': isBotLine(line) || undefined,
-              'data-groups': line.groups.length ? line.groups.map((g) => g.name).join(' ') : undefined,
-              'data-mine': mine || undefined
-            }}
-            {...placeOf(line.at, prev?.at, same)}
+            me={me}
+            first={place.first}
+            bucket={place.bucket}
+            flashed={flash === line.id}
+            replyColor={line.reply?.verified ? roleColor(line.reply.from) : undefined}
+            replies={replies}
+            reacts={reacts}
+            jumps={jumps}
+            lineMark={lineMark}
+            lineActions={lineActions}
+            lineMenu={lineMenu}
+            lineSide={lineSide}
           />
         );
       })}
