@@ -282,6 +282,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         .route("/chat/{server}/{channel}", get(ws_channel))
         .merge(history::routes())
         .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip))
+        .layer(axum::middleware::map_response(crate::media::no_store_by_default))
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));

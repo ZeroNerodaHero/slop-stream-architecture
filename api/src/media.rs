@@ -1,4 +1,5 @@
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::Response;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -7,6 +8,39 @@ use crate::ApiError;
 
 pub(crate) const PUBLIC_CACHE: &str = "public, max-age=86400";
 pub(crate) const PRIVATE_CACHE: &str = "private, no-store";
+pub(crate) const VERSIONED_CACHE: &str = "public, max-age=31536000, immutable";
+
+pub(crate) fn is_versioned(query: Option<&str>) -> bool {
+    query.is_some_and(|q| q.split('&').any(|pair| pair.strip_prefix("v=").is_some_and(|v| !v.is_empty())))
+}
+
+pub(crate) fn versioned_cache(res: Result<Response, ApiError>, query: Option<&str>) -> Result<Response, ApiError> {
+    let mut res = res?;
+    if is_versioned(query) {
+        res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(VERSIONED_CACHE));
+    }
+    Ok(res)
+}
+
+pub(crate) const HOME_CACHE: &str = "public, max-age=0, s-maxage=3, stale-while-revalidate=10";
+pub(crate) const SESSIONS_CACHE: &str = "public, max-age=30, s-maxage=60";
+pub(crate) const ABOUT_PAGE_CACHE: &str = "public, max-age=0, s-maxage=30";
+pub(crate) const PROVIDERS_CACHE: &str = "public, max-age=300";
+pub(crate) const EMOTE_LOOKUP_CACHE: &str = "public, max-age=60";
+
+pub(crate) fn public_cache(value: &'static str) -> impl FnMut(Response) -> std::future::Ready<Response> + Clone + Send + 'static {
+    move |mut res: Response| {
+        if res.status().is_success() {
+            res.headers_mut().entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static(value));
+        }
+        std::future::ready(res)
+    }
+}
+
+pub(crate) async fn no_store_by_default(mut res: Response) -> Response {
+    res.headers_mut().entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static(PRIVATE_CACHE));
+    res
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Kind {
@@ -154,6 +188,7 @@ pub(crate) async fn remember_removed(db: &PgPool, kind: Kind, id: Uuid, by: Uuid
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::response::IntoResponse;
 
     #[test]
     fn a_thread_is_the_same_either_way_round() {
@@ -283,5 +318,52 @@ mod tests {
         assert_eq!(missing(&pool, Kind::Image, poster).await.0, StatusCode::GONE);
         assert_eq!(missing(&pool, Kind::Image, Uuid::from_u128(rand::random())).await.0, StatusCode::NOT_FOUND);
         assert_eq!(crate::chat_videos::poster_of(&pool, &video.to_string()).await.unwrap(), None, "a video with no poster cannot go on a line");
+    }
+    #[test]
+    fn only_a_nonempty_v_is_a_version() {
+        assert!(is_versioned(Some("v=1795128838")));
+        assert!(is_versioned(Some("x=1&v=7")));
+        assert!(!is_versioned(Some("v=")));
+        assert!(!is_versioned(Some("vv=1")));
+        assert!(!is_versioned(None));
+    }
+
+    #[test]
+    fn a_versioned_picture_is_immutable_and_an_unversioned_one_keeps_a_day() {
+        let picture = || Ok(([(header::CACHE_CONTROL, PUBLIC_CACHE)], "jpeg").into_response());
+        assert_eq!(versioned_cache(picture(), Some("v=3")).unwrap().headers()[header::CACHE_CONTROL], VERSIONED_CACHE);
+        assert_eq!(versioned_cache(picture(), None).unwrap().headers()[header::CACHE_CONTROL], PUBLIC_CACHE);
+        let missing = versioned_cache(Err(ApiError::new(StatusCode::NOT_FOUND, "no picture")), Some("v=3")).unwrap_err().into_response();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert!(missing.headers().get(header::CACHE_CONTROL).is_none());
+    }
+
+    #[tokio::test]
+    async fn private_is_the_default_and_public_is_said_by_the_route() {
+        use axum::middleware::map_response;
+        use axum::routing::get;
+        let app = axum::Router::new()
+            .route("/private", get(|| async { "mine" }))
+            .route("/public", get(|| async { "everyone's" }).layer(map_response(public_cache(HOME_CACHE))))
+            .route("/public-fails", get(|| async { StatusCode::BAD_REQUEST }).layer(map_response(public_cache(HOME_CACHE))))
+            .route("/picture", get(|| async { ([(header::CACHE_CONTROL, PUBLIC_CACHE)], "jpeg") }))
+            .fallback(|| async { StatusCode::NOT_FOUND })
+            .layer(map_response(no_store_by_default));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let http = reqwest::Client::new();
+        for (path, want) in [
+            ("/private", PRIVATE_CACHE),
+            ("/public", HOME_CACHE),
+            ("/public-fails", PRIVATE_CACHE),
+            ("/picture", PUBLIC_CACHE),
+            ("/nowhere", PRIVATE_CACHE),
+        ] {
+            let res = http.get(format!("http://{addr}{path}")).send().await.unwrap();
+            assert_eq!(res.headers()[header::CACHE_CONTROL], want, "{path}");
+        }
+        let posted = http.post(format!("http://{addr}/private")).send().await.unwrap();
+        assert_eq!(posted.headers()[header::CACHE_CONTROL], PRIVATE_CACHE);
     }
 }

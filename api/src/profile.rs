@@ -3,7 +3,7 @@ use std::env;
 
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody, JsonRejection, QueryRejection};
-use axum::extract::{DefaultBodyLimit, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, RawQuery, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, put};
@@ -129,7 +129,11 @@ async fn look(s: &AppState, me: &Me, row: Uuid, headers: &HeaderMap, kind: Uploa
     moderate::check(s, moderate::Upload { kind, who: Some(who), ip: ip.as_deref(), mime, key, sha: None }, body).await
 }
 
-async fn get_avatar(State(s): State<AppState>, Name(name): Name) -> Result<Response, ApiError> {
+async fn get_avatar(State(s): State<AppState>, Name(name): Name, RawQuery(q): RawQuery) -> Result<Response, ApiError> {
+    crate::media::versioned_cache(avatar(&s, name).await, q.as_deref())
+}
+
+async fn avatar(s: &AppState, name: String) -> Result<Response, ApiError> {
     let name = auth::renamed_to(&s.db, &name).await?.unwrap_or(name);
     let row: Option<(Uuid, Option<Vec<u8>>)> = sqlx::query_as(
         "SELECT id, avatar FROM streamers WHERE name = $1 AND (avatar IS NOT NULL OR avatar_at IS NOT NULL)",
@@ -143,11 +147,11 @@ async fn get_avatar(State(s): State<AppState>, Name(name): Name) -> Result<Respo
     let key = avatar_key(id);
     match s3::get(&s.s3, &key).await {
         Ok(Some(bytes)) => Ok(jpeg(bytes)),
-        Ok(None) => match lift_object(&s, &legacy_avatar_key(&name), &key).await {
+        Ok(None) => match lift_object(s, &legacy_avatar_key(&name), &key).await {
             Ok(Some(bytes)) => Ok(jpeg(bytes)),
             Ok(None) => match legacy {
                 Some(bytes) => {
-                    lift_legacy(&s, id, &name, &bytes).await;
+                    lift_legacy(s, id, &name, &bytes).await;
                     Ok(jpeg(bytes))
                 }
                 None => Err(no_picture()),
@@ -690,9 +694,13 @@ fn offline_too_big() -> ApiError {
     ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "picture too big. 1 mb at most")
 }
 
-async fn get_offline(State(s): State<AppState>, Name(name): Name) -> Result<Response, ApiError> {
+async fn get_offline(State(s): State<AppState>, Name(name): Name, RawQuery(q): RawQuery) -> Result<Response, ApiError> {
+    crate::media::versioned_cache(offline(&s, &name).await, q.as_deref())
+}
+
+async fn offline(s: &AppState, name: &str) -> Result<Response, ApiError> {
     let id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM streamers WHERE name = $1 AND offline_at IS NOT NULL")
-        .bind(&name)
+        .bind(name)
         .fetch_optional(&s.db)
         .await?;
     let Some(id) = id else {
@@ -701,7 +709,7 @@ async fn get_offline(State(s): State<AppState>, Name(name): Name) -> Result<Resp
     match s3::get(&s.s3, &offline_key(id)).await {
         Ok(Some(bytes)) => Ok(jpeg(bytes)),
         Ok(None) => Err(no_picture()),
-        Err(e) => Err(offline_failed(&name, "could not load the picture", e)),
+        Err(e) => Err(offline_failed(name, "could not load the picture", e)),
     }
 }
 

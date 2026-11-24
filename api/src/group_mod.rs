@@ -1,6 +1,6 @@
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody, JsonRejection};
-use axum::extract::{DefaultBodyLimit, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, RawQuery, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -1565,7 +1565,7 @@ fn jpeg_in(body: Result<Bytes, BytesRejection>, max: usize) -> Result<Bytes, Api
 }
 
 fn jpeg_out(bytes: Vec<u8>) -> Response {
-    ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "public, max-age=86400")], bytes).into_response()
+    ([(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, crate::media::PUBLIC_CACHE)], bytes).into_response()
 }
 
 async fn read_picture(s: &AppState, group: &str, key: &str, column: &str) -> Result<Response, ApiError> {
@@ -1600,9 +1600,9 @@ async fn write_picture(s: &AppState, who: crate::auth::Account, headers: &Header
     Ok(version)
 }
 
-async fn get_icon(State(s): State<AppState>, Path(group): Path<String>) -> Result<Response, ApiError> {
+async fn get_icon(State(s): State<AppState>, Path(group): Path<String>, RawQuery(q): RawQuery) -> Result<Response, ApiError> {
     let group = server(&s.db, &group).await?;
-    read_picture(&s, &group, &icon_key(&group), "icon_at").await
+    crate::media::versioned_cache(read_picture(&s, &group, &icon_key(&group), "icon_at").await, q.as_deref())
 }
 
 async fn put_icon(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, headers: HeaderMap, body: Result<Bytes, BytesRejection>) -> ApiResult {
@@ -1615,9 +1615,9 @@ async fn put_icon(State(s): State<AppState>, Path(group): Path<String>, Me(me): 
     Ok(Json(json!({ "icon": version })))
 }
 
-async fn get_banner(State(s): State<AppState>, Path(group): Path<String>) -> Result<Response, ApiError> {
+async fn get_banner(State(s): State<AppState>, Path(group): Path<String>, RawQuery(q): RawQuery) -> Result<Response, ApiError> {
     let group = server(&s.db, &group).await?;
-    read_picture(&s, &group, &banner_key(&group), "banner_at").await
+    crate::media::versioned_cache(read_picture(&s, &group, &banner_key(&group), "banner_at").await, q.as_deref())
 }
 
 async fn put_banner(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me, headers: HeaderMap, body: Result<Bytes, BytesRejection>) -> ApiResult {
