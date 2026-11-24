@@ -74,6 +74,7 @@ export type ServerFrame =
       images?: string[];
       video?: { id: string; poster: string };
       reply?: { id: number; from?: string; text?: string; avatar?: number | null; images?: number; video?: boolean; gone?: boolean } | null;
+      mentions?: string[];
     }
   | { type: 'dm_react'; id: number; from: string; to: string; emoji: string; on: boolean }
   | { type: 'dm_read'; name: string; peer: string; peer_id: string; id: number }

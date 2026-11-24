@@ -59,6 +59,7 @@ export interface DmLine {
   images: string[];
   video?: ChatVideo | null;
   reply?: DmReply | null;
+  mentions?: string[];
   reactions?: Reaction[];
 }
 

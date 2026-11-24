@@ -535,7 +535,7 @@ const DmRow = memo(function DmRow({ line, peer, me, shape, mobile, myAvatar, dmV
       words={
         line.text ? (
           <span className="whitespace-pre-wrap">
-            <LinkedText text={line.text} />
+            <LinkedText text={line.text} mentions={line.mentions} />
           </span>
         ) : null
       }

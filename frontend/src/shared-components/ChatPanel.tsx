@@ -583,7 +583,7 @@ const ChatRow = memo(function ChatRow({
           <>
             {line.text && (
               <span className="whitespace-pre-wrap">
-                <LinkedText text={line.text} />
+                <LinkedText text={line.text} mentions={line.mentions} />
               </span>
             )}
             {line.pending === 'failed' && (
