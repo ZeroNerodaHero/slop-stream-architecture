@@ -194,7 +194,7 @@ function Card({
             <h2 className="flex min-w-0 items-center text-base font-semibold leading-5">
               <span className="truncate">{stream.name}</span>
               {stream.verified && (
-                <Tooltip content="has an account: this really is them">
+                <Tooltip content="verified">
                   <span role="img" aria-label="has an account" className="ml-1.5 shrink-0 text-increase">
                     ✓
                   </span>
@@ -574,7 +574,7 @@ export function HomePage() {
         {!error && !streams && <StreamsSkeleton />}
         {list?.length === 0 && (
           <div id="empty" className="border border-dashed border-secondaryStroke px-6 py-16 text-center" aria-live="polite">
-            <p className="text-textSecondary">nobody is live. you could be.</p>
+            <p className="text-textSecondary">nobody is live</p>
             <Link to="/live" className={buttonClassName('primary', 'mt-5')}>
               go live
             </Link>

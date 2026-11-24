@@ -425,7 +425,7 @@ function handshake(name: string, warm: Warm): Shake {
       if (played) setPhase('watching', 'watching');
       else setPhase('connected', 'connected, waiting for video');
     } else if (state === 'disconnected') setPhase('reconnecting', 'reconnecting');
-    else if (state === 'failed') fail('connection failed. udp blocked?', myPc);
+    else if (state === 'failed') fail('connection failed', myPc);
   };
   const onMessage = (msg: RelayReply) => {
     if (pc !== myPc) return;
@@ -520,7 +520,7 @@ async function settle(shake: Shake) {
   startWatchStats();
 
   connectTimer = setTimeout(() => {
-    if (pc === myPc && myPc.connectionState !== 'connected') fail('no video. udp blocked?', myPc);
+    if (pc === myPc && myPc.connectionState !== 'connected') fail('no video', myPc);
   }, NO_VIDEO_AFTER_MS);
 }
 

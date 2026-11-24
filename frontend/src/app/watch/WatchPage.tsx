@@ -256,7 +256,7 @@ export function WatchPage() {
       )}
       {badge && <Badge id="watch-badge" group={badge} card className="shrink-0" />}
       {verified && (
-        <Tooltip content="has an account: this really is them">
+        <Tooltip content="verified">
           <span role="img" aria-label="has an account" className="shrink-0 text-increase">
             ✓
           </span>
@@ -406,7 +406,7 @@ export function WatchPage() {
             <div className={cn('absolute inset-x-0 bottom-0 flex items-center gap-3 p-3', revealClassName(muted || (!mobile && !chatTab && !chatOpen)), mobile && strip.overlay)}>
               {canHear && <SoundControl videoRef={videoRef} buttonId="unmute" dialId="volume" />}
               {mobile || chatTab ? <span className="ml-auto" /> : <ChatOpenButton className="ml-auto" />}
-              <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'picture in picture'} disabled={cornerTaken} {...homePress} onClick={toCorner}>
+              <IconButton id="pip" label={cornerTaken ? 'your stream is in the corner' : 'pic in pic'} disabled={cornerTaken} {...homePress} onClick={toCorner}>
                 <PipIcon />
               </IconButton>
             </div>

@@ -13,7 +13,7 @@ export function Who({ name, verified, oauthVerified, className }: { name: string
     <span className={cn('flex min-w-0 items-center gap-1.5', className)}>
       <span className="truncate font-semibold">{name}</span>
       {verified && (
-        <Tooltip content="has an account: this really is them">
+        <Tooltip content="verified">
           <span role="img" aria-label="has an account" className="shrink-0 text-increase">
             ✓
           </span>

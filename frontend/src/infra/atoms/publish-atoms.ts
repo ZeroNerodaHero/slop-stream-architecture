@@ -995,7 +995,7 @@ function sendHeartbeat() {
 function onConnection(state: RTCPeerConnectionState) {
   if (state === 'connected') setPhase('live', 'live');
   else if (state === 'disconnected') setPhase('reconnecting', 'reconnecting');
-  else if (state === 'failed') stopLive('connection failed. udp blocked?', 'failed');
+  else if (state === 'failed') stopLive('connection failed', 'failed');
 }
 
 async function pickDisplay(): Promise<MediaStream | null> {
