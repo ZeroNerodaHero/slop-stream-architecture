@@ -1,23 +1,3 @@
-//! Jannies: who may clean a stream's chat (docs/jannies.md).
-//!
-//! A site janny (added by an admin on /admin) may delete lines, ban and time out in every
-//! stream's chat. A stream janny (added by the streamer on their own page's mod tab) may do the
-//! same in that one stream's chat. Chat only: no janny touches a stream's pictures, its about
-//! page, socials or calendar, nor dms or group channels (a group's owners have their own powers,
-//! group_mod.rs).
-//!
-//! Who outranks whom, on one stream (`Rank`): an admin (ADMIN_NAMES) over the streamer over a
-//! site janny over a stream janny over everybody else. One may act on someone only when one is a
-//! janny there at least and outranks them (`may_act`): a janny never touches the streamer's lines
-//! or the streamer, nor anyone of their own rank or above. The streamer is a janny of their own
-//! stream with every power, the only one besides an admin who names its jannies.
-//!
-//! A stream is its `streamers` row, people are accounts: a rename keeps the jannies, the bans
-//! and the log (0007-jannies.sql). Only a login can be banned or timed out; a nick's line can be
-//! deleted. The chat (chat.rs `stream_refusal`) refuses a line or a reaction from someone banned
-//! or timed out; a deleted line goes from redis and postgres, its copy into `mod_log`, and every
-//! socket in the room hears a `delete` frame (through the room's reactions stream, chat.rs).
-
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -31,32 +11,24 @@ use uuid::Uuid;
 use crate::auth::{Account, Me};
 use crate::{ApiError, ApiResult, AppState};
 
-/// Stream jannies one stream may have.
 const MAX_STREAM_JANNIES: i64 = 20;
-/// Site jannies the site may have.
 const MAX_SITE_JANNIES: i64 = 50;
-/// Moderation actions one login may take a minute (delete, ban, timeout, and their undoing), on
-/// top of the route's tier (ratelimit.rs `MODERATE`): a janny's hijacked login cannot wipe a chat.
 const ACTIONS_PER_MINUTE: i64 = 30;
 const MIN_TIMEOUT_SECS: i64 = 10;
 const MAX_TIMEOUT_SECS: i64 = 7 * 86400;
-/// The log's page, newest first.
 const LOG_ROWS: i64 = 100;
 const MAX_REASON_CHARS: usize = 200;
 
-/// Someone's standing in one stream's chat, lowest first: the order is the outranking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Rank {
     Nobody,
     StreamJanny,
     SiteJanny,
-    /// The streamer: the account the stream's name is, or a line said with the go-live grant.
     Owner,
     Admin,
 }
 
 impl Rank {
-    /// The highest of what someone is.
     pub(crate) fn of(admin: bool, owner: bool, site: bool, stream: bool) -> Rank {
         if admin {
             Rank::Admin
@@ -71,7 +43,6 @@ impl Rank {
         }
     }
 
-    /// May clean this stream's chat at all.
     pub(crate) fn moderates(self) -> bool {
         self >= Rank::StreamJanny
     }
@@ -87,18 +58,13 @@ impl Rank {
     }
 }
 
-/// May `actor` delete a line of `target`'s, ban or time them out: a janny here at least, and
-/// above them. Nobody acts on their own rank, so a stream janny never on another, a site janny
-/// never on another, and nobody but an admin on the streamer.
 pub(crate) fn may_act(actor: Rank, target: Rank) -> bool {
     actor.moderates() && actor > target
 }
 
-/// A stream by its name now: its row, and the account it is when the name is claimed.
 pub(crate) struct Stream {
     pub(crate) id: Uuid,
     pub(crate) name: String,
-    /// The streamer's account: the row itself, when it has a password (or a linked login).
     pub(crate) owner: Option<Uuid>,
 }
 
@@ -107,7 +73,6 @@ pub(crate) async fn stream(db: &PgPool, name: &str) -> Result<Option<Stream>, sq
     Ok(row.map(|(id, claimed)| Stream { id, name: name.to_owned(), owner: claimed.then_some(id) }))
 }
 
-/// `user`'s rank on `stream`. `admins` are the ADMIN_NAMES accounts.
 pub(crate) async fn rank_on(db: &PgPool, admins: &[Uuid], stream: &Stream, user: Uuid) -> Result<Rank, sqlx::Error> {
     if admins.contains(&user) {
         return Ok(Rank::Admin);
@@ -126,8 +91,6 @@ pub(crate) async fn rank_on(db: &PgPool, admins: &[Uuid], stream: &Stream, user:
     Ok(Rank::of(false, false, site, mine))
 }
 
-/// For the watch grant's `can_moderate`: may this login clean `name`'s chat. A hint for the page
-/// (which buttons to draw); every action asks again.
 pub(crate) async fn can_moderate(s: &AppState, name: &str, me: Option<&Account>) -> Result<bool, sqlx::Error> {
     let Some(me) = me else { return Ok(false) };
     let Some(stream) = stream(&s.db, name).await? else { return Ok(s.admins.iter().any(|a| a.id == me.id)) };
@@ -166,13 +129,11 @@ fn stream_name(raw: &str) -> Result<String, ApiError> {
     }
 }
 
-/// The stream in the path, 404 when no row has that name.
 async fn the_stream(db: &PgPool, raw: &str) -> Result<Stream, ApiError> {
     let name = stream_name(raw)?;
     stream(db, &name).await?.ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "no such stream"))
 }
 
-/// A login, and its rank on the stream: one that moderates it, or 401 / 403.
 async fn moderator(s: &AppState, me: Option<Account>, stream: &Stream) -> Result<(Account, Rank), ApiError> {
     let me = me.ok_or_else(login)?;
     let rank = rank_on(&s.db, &admin_ids(s), stream, me.id).await?;
@@ -182,7 +143,6 @@ async fn moderator(s: &AppState, me: Option<Account>, stream: &Stream) -> Result
     Ok((me, rank))
 }
 
-/// The streamer or an admin: who names a stream's jannies.
 async fn owner_or_admin(s: &AppState, me: Option<Account>, stream: &Stream) -> Result<Account, ApiError> {
     let me = me.ok_or_else(login)?;
     if stream.owner == Some(me.id) || is_admin(s, &me) {
@@ -195,7 +155,6 @@ async fn paced(s: &AppState, me: &Account) -> Result<(), ApiError> {
     crate::auth::limit(s, &format!("rl:janny:{}", me.id), 60, ACTIONS_PER_MINUTE, "slow down: too many moderation actions").await
 }
 
-/// An account by its name now: 404 for a free name or a dummy's.
 async fn account(s: &AppState, raw: &str) -> Result<Account, ApiError> {
     let name = stream_name(raw)?;
     if name.starts_with(&s.dummy_prefix) {
@@ -224,12 +183,6 @@ async fn log_action(db: &PgPool, stream: &Stream, actor: &Account, action: &str,
     Ok(())
 }
 
-// ---- deleting a line ------------------------------------------------------------------------
-
-/// `DELETE /api/streams/:name/chat/:id`: the line goes, from redis and postgres, with its
-/// reactions; its pictures stay in the bucket. Its copy is the log's. Every socket in the room
-/// hears `{"type":"delete","id"}`. The streamer's lines stay (`may_act`), but for the streamer
-/// themselves (and an admin); a janny may delete their own. 204.
 async fn delete_line(State(s): State<AppState>, Path((name, id)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let stream = the_stream(&s.db, &name).await?;
     let (me, rank) = moderator(&s, me, &stream).await?;
@@ -238,8 +191,6 @@ async fn delete_line(State(s): State<AppState>, Path((name, id)): Path<(String, 
     let Some(line) = crate::history::line_at(&s.db, &mut r, &stream.name, &id).await? else {
         return Err(ApiError::new(StatusCode::NOT_FOUND, crate::chat::NO_SUCH_LINE));
     };
-    // a line of my own: the streamer's in their own chat (said as the room, logged in or with the
-    // grant), or a janny's own. deleting it outranks nobody
     let speaker = line.user_id.filter(|_| line.verified);
     let own = speaker == Some(me.id) || (line.streamer && stream.owner == Some(me.id));
     let target = if own {
@@ -262,8 +213,6 @@ async fn delete_line(State(s): State<AppState>, Path((name, id)): Path<(String, 
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ---- bans and timeouts ----------------------------------------------------------------------
-
 #[derive(Deserialize)]
 struct BanIn {
     name: String,
@@ -277,7 +226,6 @@ struct TimeoutIn {
     seconds: i64,
 }
 
-/// The target of a ban or a timeout: an account, not the actor, outranked by them.
 async fn target(s: &AppState, stream: &Stream, me: &Account, rank: Rank, raw: &str) -> Result<Account, ApiError> {
     let target = account(s, raw).await?;
     if target.id == me.id {
@@ -290,8 +238,6 @@ async fn target(s: &AppState, stream: &Stream, me: &Account, rank: Rank, raw: &s
     Ok(target)
 }
 
-/// `POST /api/streams/:name/bans` `{ name, reason? }`: no line or reaction of theirs in the
-/// stream's chat until lifted. 204.
 async fn ban(State(s): State<AppState>, Path(name): Path<String>, Me(me): Me, body: Result<Json<BanIn>, JsonRejection>) -> Result<StatusCode, ApiError> {
     let Json(body) = body?;
     let stream = the_stream(&s.db, &name).await?;
@@ -314,7 +260,6 @@ async fn ban(State(s): State<AppState>, Path(name): Path<String>, Me(me): Me, bo
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/streams/:name/bans/:user`: lifted. Any janny of the stream. 204, also when there was none.
 async fn unban(State(s): State<AppState>, Path((name, user)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let stream = the_stream(&s.db, &name).await?;
     let (me, _) = moderator(&s, me, &stream).await?;
@@ -328,8 +273,6 @@ async fn unban(State(s): State<AppState>, Path((name, user)): Path<(String, Stri
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/streams/:name/timeouts` `{ name, seconds }`: ten seconds to a week. Set again, the
-/// new end stands. The chat refuses them with `timed out` and the wait. 204.
 async fn timeout(State(s): State<AppState>, Path(name): Path<String>, Me(me): Me, body: Result<Json<TimeoutIn>, JsonRejection>) -> Result<StatusCode, ApiError> {
     let Json(body) = body?;
     if !(MIN_TIMEOUT_SECS..=MAX_TIMEOUT_SECS).contains(&body.seconds) {
@@ -355,7 +298,6 @@ async fn timeout(State(s): State<AppState>, Path(name): Path<String>, Me(me): Me
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/streams/:name/timeouts/:user`: lifted early. 204, also when there was none.
 async fn lift_timeout(State(s): State<AppState>, Path((name, user)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let stream = the_stream(&s.db, &name).await?;
     let (me, _) = moderator(&s, me, &stream).await?;
@@ -373,8 +315,6 @@ async fn lift_timeout(State(s): State<AppState>, Path((name, user)): Path<(Strin
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /api/streams/:name/bans`: `{ bans: [{ name, by, reason, at }], timeouts: [{ name, by, until }] }`,
-/// the running timeouts only, newest first. Any janny of the stream.
 async fn list_bans(State(s): State<AppState>, Path(name): Path<String>, Me(me): Me) -> ApiResult {
     let stream = the_stream(&s.db, &name).await?;
     moderator(&s, me, &stream).await?;
@@ -400,8 +340,6 @@ async fn list_bans(State(s): State<AppState>, Path(name): Path<String>, Me(me): 
     })))
 }
 
-/// `GET /api/streams/:name/mod-log`: the last 100 things done in the stream's chat, newest first:
-/// `[{ at, actor, action, target, line_id, snapshot }]`. Any janny of the stream.
 async fn mod_log(State(s): State<AppState>, Path(name): Path<String>, Me(me): Me) -> ApiResult {
     let stream = the_stream(&s.db, &name).await?;
     moderator(&s, me, &stream).await?;
@@ -422,8 +360,6 @@ async fn mod_log(State(s): State<AppState>, Path(name): Path<String>, Me(me): Me
     )))
 }
 
-// ---- naming jannies -------------------------------------------------------------------------
-
 #[derive(Deserialize)]
 struct NameIn {
     name: String,
@@ -435,7 +371,6 @@ fn jannies_json(rows: Vec<JannyRow>) -> Value {
     Value::Array(rows.into_iter().map(|(name, at)| json!({ "name": name, "added_at": at })).collect())
 }
 
-/// `GET /api/streams/:name/jannies`: `[{ name, added_at }]`. The streamer or an admin.
 async fn list_stream_jannies(State(s): State<AppState>, Path(name): Path<String>, Me(me): Me) -> ApiResult {
     let stream = the_stream(&s.db, &name).await?;
     owner_or_admin(&s, me, &stream).await?;
@@ -448,8 +383,6 @@ async fn list_stream_jannies(State(s): State<AppState>, Path(name): Path<String>
     Ok(Json(jannies_json(rows)))
 }
 
-/// `POST /api/streams/:name/jannies` `{ name }`: one more stream janny, an account. Not the
-/// streamer, not a dummy, twenty at most. 204, also when they were one already.
 async fn add_stream_janny(State(s): State<AppState>, Path(name): Path<String>, Me(me): Me, body: Result<Json<NameIn>, JsonRejection>) -> Result<StatusCode, ApiError> {
     let Json(body) = body?;
     let stream = the_stream(&s.db, &name).await?;
@@ -475,7 +408,6 @@ async fn add_stream_janny(State(s): State<AppState>, Path(name): Path<String>, M
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/streams/:name/jannies/:user`: one fewer. 204, also when they were not one.
 async fn remove_stream_janny(State(s): State<AppState>, Path((name, user)): Path<(String, String)>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let stream = the_stream(&s.db, &name).await?;
     let me = owner_or_admin(&s, me, &stream).await?;
@@ -496,7 +428,6 @@ fn admin_only(s: &AppState, me: Option<Account>) -> Result<Account, ApiError> {
     Ok(me)
 }
 
-/// `GET /api/jannies`: the site jannies, `[{ name, added_at }]`. Admins only.
 async fn list_site_jannies(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     admin_only(&s, me)?;
     let rows: Vec<JannyRow> = sqlx::query_as("SELECT u.name, j.added_at FROM site_jannies j JOIN streamers u ON u.id = j.user_id ORDER BY j.added_at")
@@ -505,7 +436,6 @@ async fn list_site_jannies(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     Ok(Json(jannies_json(rows)))
 }
 
-/// `POST /api/jannies` `{ name }`: one more site janny. Admins only. 204, also when they were one.
 async fn add_site_janny(State(s): State<AppState>, Me(me): Me, body: Result<Json<NameIn>, JsonRejection>) -> Result<StatusCode, ApiError> {
     let Json(body) = body?;
     let me = admin_only(&s, me)?;
@@ -519,7 +449,6 @@ async fn add_site_janny(State(s): State<AppState>, Me(me): Me, body: Result<Json
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/jannies/:user`: one fewer site janny. Admins only. 204.
 async fn remove_site_janny(State(s): State<AppState>, Path(user): Path<String>, Me(me): Me) -> Result<StatusCode, ApiError> {
     let me = admin_only(&s, me)?;
     let janny = account(&s, &user).await?;
@@ -577,24 +506,19 @@ mod tests {
 
     #[test]
     fn the_ladder() {
-        // a viewer moderates nobody, not even another viewer
         assert!(!may_act(Rank::Nobody, Rank::Nobody));
-        // a stream janny: viewers only
         assert!(may_act(Rank::StreamJanny, Rank::Nobody));
         assert!(!may_act(Rank::StreamJanny, Rank::StreamJanny));
         assert!(!may_act(Rank::StreamJanny, Rank::SiteJanny));
         assert!(!may_act(Rank::StreamJanny, Rank::Owner));
-        // a site janny: viewers and stream jannies, never the streamer or an admin
         assert!(may_act(Rank::SiteJanny, Rank::Nobody));
         assert!(may_act(Rank::SiteJanny, Rank::StreamJanny));
         assert!(!may_act(Rank::SiteJanny, Rank::SiteJanny));
         assert!(!may_act(Rank::SiteJanny, Rank::Owner));
         assert!(!may_act(Rank::SiteJanny, Rank::Admin));
-        // the streamer: everyone in their chat but an admin
         assert!(may_act(Rank::Owner, Rank::SiteJanny));
         assert!(may_act(Rank::Owner, Rank::StreamJanny));
         assert!(!may_act(Rank::Owner, Rank::Admin));
-        // an admin: everyone but another admin
         assert!(may_act(Rank::Admin, Rank::Owner));
         assert!(!may_act(Rank::Admin, Rank::Admin));
     }
