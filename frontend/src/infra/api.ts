@@ -366,6 +366,19 @@ export function groupImage(name: string, kind: 'icon' | 'banner', version?: numb
   return `/api/groups/${encodeURIComponent(name)}/${kind}?v=${version}`;
 }
 
+const BANNER_WIDTHS = [640, 1280, 1920] as const;
+const BANNER_FULL_WIDTH = 2560;
+
+export function groupBanner(name: string, version: number | null | undefined, cut: 'wide' | 'square'): { src: string; srcSet: string } | null {
+  const full = groupImage(name, 'banner', version);
+  if (!full) return null;
+  if (cut === 'square') {
+    return { src: `${full}&sq=320`, srcSet: `${full}&sq=320 1x, ${full}&sq=640 2x` };
+  }
+  const sized = BANNER_WIDTHS.map((w) => `${full}&w=${w} ${w}w`);
+  return { src: `${full}&w=${BANNER_WIDTHS[1]}`, srcSet: [...sized, `${full} ${BANNER_FULL_WIDTH}w`].join(', ') };
+}
+
 export interface Explore {
   yours: Server[];
   discover: Server[];
