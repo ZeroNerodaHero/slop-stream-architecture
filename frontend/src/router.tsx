@@ -5,7 +5,7 @@ import { Navigate, Outlet, createBrowserRouter, useParams } from 'react-router-d
 import { CrashPage } from '@/app/CrashPage';
 import { NotFoundPage } from '@/app/NotFoundPage';
 import { dmOpenAtom } from '@/infra/atoms/dm-atoms';
-import { inspectorOpenAtom, profilerOpenAtom } from '@/infra/atoms/inspector-atoms';
+import { inspectorOpenAtom, qualityOpenAtom, timingsOpenAtom } from '@/infra/atoms/inspector-atoms';
 import { notificationsOpenAtom } from '@/infra/atoms/notification-atoms';
 import { inspectorEnabledAtom, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { loadHomePage, loadServerPage, loadWatchPage } from '@/infra/prefetch';
@@ -21,7 +21,8 @@ import { cn } from '@/utils/cn';
 const FriendChat = lazy(() => import('@/shared-components/FriendChat').then((m) => ({ default: m.FriendChat })));
 const Notifications = lazy(() => import('@/shared-components/Notifications').then((m) => ({ default: m.Notifications })));
 const Inspector = lazy(() => import('@/shared-components/Inspector').then((m) => ({ default: m.Inspector })));
-const Profiler = lazy(() => import('@/shared-components/debug/Profiler').then((m) => ({ default: m.Profiler })));
+const TimingsWindow = lazy(() => import('@/shared-components/debug/TimingsWindow').then((m) => ({ default: m.TimingsWindow })));
+const QualityWindow = lazy(() => import('@/shared-components/debug/QualityWindow').then((m) => ({ default: m.QualityWindow })));
 
 function FriendChatWhenUsed() {
   const open = useAtomValue(dmOpenAtom);
@@ -52,13 +53,24 @@ function InspectorWhenUsed() {
   );
 }
 
-function ProfilerWhenUsed() {
+function TimingsWhenUsed() {
   const on = useAtomValue(inspectorEnabledAtom);
-  const open = useAtomValue(profilerOpenAtom);
+  const open = useAtomValue(timingsOpenAtom);
   if (!on) return null;
   return (
     <WhenUsed on={open}>
-      <Profiler />
+      <TimingsWindow />
+    </WhenUsed>
+  );
+}
+
+function QualityWhenUsed() {
+  const on = useAtomValue(inspectorEnabledAtom);
+  const open = useAtomValue(qualityOpenAtom);
+  if (!on) return null;
+  return (
+    <WhenUsed on={open}>
+      <QualityWindow />
     </WhenUsed>
   );
 }
@@ -81,7 +93,8 @@ function Shell() {
       <ProfilePopup />
       <CropDialog />
       <InspectorWhenUsed />
-      <ProfilerWhenUsed />
+      <TimingsWhenUsed />
+      <QualityWhenUsed />
     </div>
   );
 }

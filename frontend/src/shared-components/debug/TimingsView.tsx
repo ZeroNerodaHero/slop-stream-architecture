@@ -7,6 +7,7 @@ export interface MetricRow {
   label: string;
   summary: Summary;
   recent: readonly number[];
+  errors?: number;
 }
 
 export interface MetricGroupRows {
@@ -16,7 +17,8 @@ export interface MetricGroupRows {
 
 const GROUP_WORD: Record<MetricGroup, string> = {
   chat: 'chat: ms from the press or the mount, and a say to its ack',
-  watch: 'watch: ms from the press'
+  watch: 'watch: ms from the press',
+  api: 'api: ms from the request to the answer, by route, most asked first'
 };
 
 const LABEL_W = 120;
@@ -34,7 +36,10 @@ const COLUMNS: [string, keyof Summary][] = [
   ['max', 'max']
 ];
 
+const LABEL_CHARS = 20;
+
 const ms = (v: number) => (Number.isFinite(v) ? String(Math.round(v)) : '-');
+const short = (label: string) => (label.length > LABEL_CHARS ? `…${label.slice(-(LABEL_CHARS - 1))}` : label);
 
 function BoxPlot({ rows }: { rows: readonly MetricRow[] }) {
   const [ref, width] = useWidth<HTMLDivElement>();
@@ -57,7 +62,7 @@ function BoxPlot({ rows }: { rows: readonly MetricRow[] }) {
             return (
               <g key={r.key} data-metric={r.key}>
                 <text x={0} y={mid + 3} className="fill-current font-sans text-textSecondary">
-                  {r.label}
+                  {short(r.label)}
                 </text>
                 <line x1={x(s.min)} x2={x(s.max)} y1={mid} y2={mid} className="stroke-current text-textTertiary" />
                 <line x1={x(s.min)} x2={x(s.min)} y1={mid - 4} y2={mid + 4} className="stroke-current text-textTertiary" />
@@ -93,7 +98,7 @@ export function TimingsView({ groups }: { groups: readonly MetricGroupRows[] }) 
   const shown = groups.filter((g) => g.rows.length > 0);
   return (
     <div id="profiler-timings" className="min-h-0 flex-1 overflow-y-auto px-3 py-1 text-xs leading-5">
-      {shown.length === 0 && <p className="py-2 text-textTertiary">nothing yet. a chat, a say or a watch shows up here when it finishes.</p>}
+      {shown.length === 0 && <p className="py-2 text-textTertiary">nothing yet. a chat, a say, a watch or an api call shows up here when it finishes.</p>}
       {shown.map((g) => (
         <section key={g.group} data-group={g.group} className="pb-3">
           <div className="py-2 text-textTertiary">{GROUP_WORD[g.group]}</div>
@@ -107,6 +112,7 @@ export function TimingsView({ groups }: { groups: readonly MetricGroupRows[] }) 
                     {word}
                   </th>
                 ))}
+                {g.group === 'api' && <th className="py-1 pl-2 text-right font-normal">err</th>}
               </tr>
             </thead>
             <tbody>
@@ -118,6 +124,9 @@ export function TimingsView({ groups }: { groups: readonly MetricGroupRows[] }) 
                       {field === 'n' ? r.summary.n : ms(r.summary[field])}
                     </td>
                   ))}
+                  {g.group === 'api' && (
+                    <td className={r.errors ? 'py-1 pl-2 text-right text-textPrimary' : 'py-1 pl-2 text-right text-textSecondary'}>{r.errors ?? 0}</td>
+                  )}
                 </tr>
               ))}
             </tbody>

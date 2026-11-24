@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import type { DebugSink } from '../src/infra/debug-flag.ts';
-import { Collector } from '../src/infra/debug/collector.ts';
+import { QualityCollector, TimingsCollector } from '../src/infra/debug/collector.ts';
 import { METRIC_SIZE, QUALITY_SIZE, QualityRing, Timings } from '../src/infra/debug/rings.ts';
 import { MAX_SESSIONS } from '../src/infra/debug/timeline.ts';
 import type { StreamStats, VideoLine } from '../src/infra/stream-stats.ts';
@@ -34,8 +34,10 @@ function rig() {
   const slot: { sink: DebugSink | null } = { sink: null };
   const queue: (() => void)[] = [];
   const clock = { now: 0, name: 'dummy-a' };
-  const collector = new Collector({
-    slot,
+  const host = { fetch: (async () => new Response(null)) as typeof fetch };
+  const fetchBefore = host.fetch;
+  const timings = new TimingsCollector({ slot, host, origin: () => 'http://app.test', clock: () => clock.now, schedule: (fn) => queue.push(fn) });
+  const collector = new QualityCollector({
     watch: (fn) => {
       listeners.add(fn);
       return () => {
@@ -49,7 +51,7 @@ function rig() {
   const emit = (s: StreamStats | null) => {
     for (const fn of listeners) fn(s);
   };
-  return { collector, slot, listeners, emit, queue, clock };
+  return { collector, timings, slot, listeners, emit, queue, clock, host, fetchBefore };
 }
 
 test('the quality ring caps at 600 samples and wraps keeping the session of each sample', () => {
@@ -106,7 +108,7 @@ test('timings keep the last 100 samples per metric as ms from the run start', ()
 });
 
 test('a finished watch run reaches its metrics through the sink', () => {
-  const { collector, slot } = rig();
+  const { timings: collector, slot } = rig();
   collector.start();
   slot.sink!('watch', 'cats', 100, [
     ['press', 100],
@@ -183,50 +185,77 @@ test('the session list keeps the last 50', () => {
 });
 
 test('stop clears everything, lets go of the source and is idempotent', () => {
-  const { collector, slot, listeners, emit } = rig();
+  const { collector, timings: t, slot, listeners, emit, host, fetchBefore } = rig();
   collector.start();
+  t.start();
   emit(stats(1));
   slot.sink!('chat', 'room', 0, [
     ['press', 0],
     ['subbed', 5]
   ]);
-  const timings = collector.timings!;
+  const timings = t.timings!;
   const quality = collector.quality!;
   const sessions = collector.sessions!;
   assert.equal(timings.size(), 1);
   collector.stop();
+  t.stop();
   assert.equal(listeners.size, 0);
   assert.equal(slot.sink, null);
-  assert.equal(collector.timings, null);
+  assert.equal(host.fetch, fetchBefore);
+  assert.equal(t.timings, null);
+  assert.equal(t.api, null);
   assert.equal(collector.quality, null);
   assert.equal(collector.sessions, null);
   assert.equal(collector.stats, null);
   assert.equal(collector.running, false);
+  assert.equal(t.running, false);
   assert.equal(timings.size(), 0);
   assert.equal(quality.count, 0);
   assert.equal(sessions.list.length, 0);
   collector.stop();
-  collector.stop();
+  t.stop();
   assert.equal(listeners.size, 0);
   assert.equal(slot.sink, null);
 });
 
-test('start twice subscribes once', () => {
-  const { collector, listeners } = rig();
+test('timings and quality start and stop on their own', () => {
+  const { collector, timings, slot, listeners, host, fetchBefore } = rig();
+  timings.start();
+  assert.equal(listeners.size, 0);
+  assert.notEqual(slot.sink, null);
+  assert.notEqual(host.fetch, fetchBefore);
   collector.start();
-  collector.start();
+  timings.stop();
   assert.equal(listeners.size, 1);
+  assert.equal(slot.sink, null);
+  assert.equal(host.fetch, fetchBefore);
   collector.stop();
   assert.equal(listeners.size, 0);
 });
 
+test('start twice subscribes once', () => {
+  const { collector, timings, listeners, host, fetchBefore } = rig();
+  collector.start();
+  collector.start();
+  timings.start();
+  const wrapper = host.fetch;
+  timings.start();
+  assert.equal(host.fetch, wrapper);
+  assert.equal(listeners.size, 1);
+  collector.stop();
+  timings.stop();
+  assert.equal(listeners.size, 0);
+  assert.equal(host.fetch, fetchBefore);
+});
+
 test('twenty start and stop cycles leave nothing behind', () => {
-  const { collector, slot, listeners, emit, queue, clock } = rig();
+  const { collector, timings, slot, listeners, emit, queue, clock } = rig();
   for (let i = 0; i < 20; i++) {
     collector.start();
+    timings.start();
     assert.equal(collector.sessions!.list.length, 0);
     assert.equal(collector.quality!.count, 0);
-    assert.equal(collector.timings!.size(), 0);
+    assert.equal(timings.timings!.size(), 0);
     clock.name = `s${i}`;
     emit(stats(i));
     emit(null);
@@ -235,13 +264,14 @@ test('twenty start and stop cycles leave nothing behind', () => {
       ['ack', 5]
     ]);
     collector.stop();
+    timings.stop();
     assert.equal(listeners.size, 0);
     assert.equal(slot.sink, null);
-    assert.equal(collector.timings, null);
+    assert.equal(timings.timings, null);
     assert.equal(collector.quality, null);
     assert.equal(collector.sessions, null);
   }
-  assert.ok(queue.length <= 1);
+  assert.ok(queue.length <= 2);
 });
 
 test('updates for the view are batched until the scheduled flush', () => {
@@ -254,6 +284,7 @@ test('updates for the view are batched until the scheduled flush', () => {
   assert.equal(queue.length, 1);
   queue.shift()!();
   assert.equal(heard, 1);
+  assert.equal(collector.snapshot(), collector.version);
   off();
   collector.stop();
 });

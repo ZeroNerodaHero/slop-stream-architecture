@@ -1,27 +1,38 @@
 import { watchStatsAtom } from '@/infra/atoms/watch-atoms';
 import { watchNameAtom } from '@/infra/atoms/watch-state';
 import { debug } from '@/infra/debug-flag';
-import { Collector } from '@/infra/debug/collector';
+import { QualityCollector, TimingsCollector } from '@/infra/debug/collector';
 import { store } from '@/infra/store';
 
-export const collector = new Collector({
+const schedule = (fn: () => void) => {
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fn);
+  else setTimeout(fn, 16);
+};
+
+export const timings = new TimingsCollector({
   slot: debug,
+  host: globalThis,
+  origin: () => location.origin,
+  clock: () => performance.now(),
+  schedule
+});
+
+export const quality = new QualityCollector({
   watch: (fn) => {
     fn(store.get(watchStatsAtom));
     return store.sub(watchStatsAtom, () => fn(store.get(watchStatsAtom)));
   },
   name: () => store.get(watchNameAtom),
   now: () => Date.now(),
-  schedule: (fn) => {
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fn);
-    else setTimeout(fn, 16);
-  }
+  schedule
 });
 
 export function start(): void {
-  collector.start();
+  timings.start();
+  quality.start();
 }
 
 export function stop(): void {
-  collector.stop();
+  timings.stop();
+  quality.stop();
 }
