@@ -81,8 +81,15 @@ async fn before_channel(
     Query(q): Query<IdQuery>,
 ) -> Result<JsonLines, ApiError> {
     let (room, me) = room_of_channel(&s, &headers, &server, &channel).await?;
-    let id = stream_id(&q.id)?;
-    Ok(json_lines(&s, &room, me, older(&s, &room, &id).await?).await)
+    let lines = page(&s, &room, q.id.as_deref()).await?;
+    Ok(json_lines(&s, &room, me, lines).await)
+}
+
+async fn page(s: &ChatState, room: &str, id: Option<&str>) -> Result<Vec<Line>, ApiError> {
+    match id {
+        Some(id) => older(s, room, &stream_id(id)?).await,
+        None => Ok(crate::chat::latest(s, room).await?),
+    }
 }
 
 async fn search_channel(
@@ -178,7 +185,7 @@ pub(crate) async fn store(
 
 #[derive(Deserialize)]
 struct IdQuery {
-    id: String,
+    id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -187,8 +194,7 @@ struct SearchQuery {
 }
 
 async fn before(State(s): State<ChatState>, Name(room): Name, headers: HeaderMap, Query(q): Query<IdQuery>) -> Result<JsonLines, ApiError> {
-    let id = stream_id(&q.id)?;
-    let lines = older(&s, &room, &id).await?;
+    let lines = page(&s, &room, q.id.as_deref()).await?;
     Ok(json_lines(&s, &room, reader(&s, &headers).await, lines).await)
 }
 
