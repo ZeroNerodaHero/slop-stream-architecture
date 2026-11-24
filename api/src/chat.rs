@@ -253,6 +253,8 @@ pub(crate) struct Line {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reply: Option<Reply>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) mentions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) reactions: Vec<Reaction>,
 }
 
@@ -1160,7 +1162,7 @@ pub(crate) async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &
         Some(id) => Some(reply_to(s, room, id).await?),
         None => None,
     };
-    let face = face_now(&s.db, room, w).await;
+    let (face, mentions) = tokio::join!(face_now(&s.db, room, w), crate::mentions::resolve(&s.db, s.hide_test, text));
     let avatar = face.avatar.map(|v| v.to_string());
     let mut r = s.redis.clone();
     if !cooldowns.is_empty() {
@@ -1223,6 +1225,10 @@ pub(crate) async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &
     if let Some(quoted) = &quoted {
         fields.push(("r", quoted.as_str()));
     }
+    let named = mentions.join(",");
+    if !named.is_empty() {
+        fields.push(("m", named.as_str()));
+    }
     let key = room_key(room);
     let added: Result<(Option<String>, bool), _> = redis::pipe()
         .atomic()
@@ -1239,7 +1245,7 @@ pub(crate) async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &
     };
     if s.persist {
         if let Some(id) = &id {
-            remember(s, room, id, w, text, images, vid.as_deref(), reply);
+            remember(s, room, id, w, text, images, vid.as_deref(), reply, mentions);
         }
     }
     if let (Some(server), Some(actor)) = (server, w.user_id) {
@@ -1654,7 +1660,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
 }
 
 #[allow(clippy::too_many_arguments)]
-fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[String], video: Option<&str>, reply: Option<Reply>) {
+fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[String], video: Option<&str>, reply: Option<Reply>, mentions: Vec<String>) {
     let db = s.db.clone();
     let room = room.to_owned();
     let id = id.to_owned();
@@ -1669,7 +1675,7 @@ fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[
     tokio::spawn(async move {
         let inserted = tokio::time::timeout(
             Duration::from_secs(2),
-            history::store(&db, &room, &id, &speaker, user_id, &text, image.as_deref(), video.as_deref(), streamer, verified, &groups, reply.as_ref()),
+            history::store(&db, &room, &id, &speaker, user_id, &text, image.as_deref(), video.as_deref(), streamer, verified, &groups, reply.as_ref(), &mentions),
         )
         .await;
         match inserted {
@@ -1863,6 +1869,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
     let image = images.first().cloned();
     let video = Video::parse(entry.get::<String>("vid").as_deref());
     let reply: Option<Reply> = entry.get::<String>("r").and_then(|r| serde_json::from_str(&r).ok());
+    let mentions = crate::mentions::from_field(entry.get::<String>("m"));
     Some(Line {
         at: id_parts(&entry.id).0,
         id: entry.id,
@@ -1878,6 +1885,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         images,
         video,
         reply,
+        mentions,
         reactions: Vec::new(),
     })
 }
@@ -1978,6 +1986,7 @@ mod tests {
             images: Vec::new(),
             video: None,
             reply: None,
+            mentions: Vec::new(),
             reactions: Vec::new(),
         };
         let text = serde_json::to_string(&Out::ChannelMessage { channel: "general", line: &line }).unwrap();
@@ -2010,6 +2019,7 @@ mod tests {
             images: vec!["6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e".into()],
             video: None,
             reply: None,
+            mentions: Vec::new(),
             reactions: Vec::new(),
         };
         let quote = Reply::of(&line);
@@ -2351,6 +2361,34 @@ mod tests {
     }
 
     #[test]
+    fn a_lines_mentions_ride_the_frame_and_are_left_out_when_none() {
+        let entry = |fields: &[(&str, &str)]| {
+            let mut entry = StreamId { id: "5-0".into(), ..StreamId::default() };
+            for (k, v) in fields {
+                entry.map.insert((*k).into(), redis::Value::BulkString(v.as_bytes().to_vec()));
+            }
+            entry
+        };
+        let named = line_from(entry(&[("from", "al"), ("text", "hi @bob @carol"), ("v", "1"), ("m", "bob,carol")])).unwrap();
+        assert_eq!(named.mentions, vec!["bob", "carol"]);
+        let json = serde_json::to_value(&named).unwrap();
+        assert_eq!(json["mentions"], serde_json::json!(["bob", "carol"]));
+        assert_eq!(json["text"], "hi @bob @carol", "the text is kept as said");
+        let Event::Line(_, legacy, rt) = Event::line(named, "chat:al") else { panic!("not a line") };
+        assert!(legacy.as_str().contains(r#""mentions":["bob","carol"]"#), "{}", legacy.as_str());
+        assert!(rt.as_str().contains(r#""mentions":["bob","carol"]"#), "{}", rt.as_str());
+        let plain = line_from(entry(&[("from", "al"), ("text", "hi"), ("v", "1")])).unwrap();
+        assert!(plain.mentions.is_empty());
+        assert!(!serde_json::to_string(&plain).unwrap().contains("mentions"));
+        let pinned: Line = serde_json::from_value(serde_json::json!({
+            "id": "5-0", "from": "al", "text": "hi", "streamer": false, "verified": true, "groups": [],
+            "avatar": null, "oauth_verified": false, "at": 0
+        }))
+        .unwrap();
+        assert!(pinned.mentions.is_empty(), "a line kept before mentions still reads");
+    }
+
+    #[test]
     fn a_delete_frame_names_the_line() {
         assert_eq!(serde_json::to_string(&Out::Delete { id: "1-0" }).unwrap(), r#"{"type":"delete","id":"1-0"}"#);
         assert_eq!(
@@ -2490,6 +2528,7 @@ mod tests {
             images: Vec::new(),
             video: None,
             reply: None,
+            mentions: Vec::new(),
             reactions: Vec::new(),
         }];
         let started = Instant::now();
@@ -2525,6 +2564,7 @@ mod tests {
             images: Vec::new(),
             video: None,
             reply: None,
+            mentions: Vec::new(),
             reactions: Vec::new(),
         }];
         with_faces(&pool, &mut lines).await;
@@ -2595,6 +2635,7 @@ mod tests {
             images: Vec::new(),
             video: None,
             reply: None,
+            mentions: Vec::new(),
             reactions: Vec::new(),
         };
         let written = serde_json::to_string(&Out::Message(&line)).unwrap();
