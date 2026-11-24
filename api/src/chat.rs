@@ -21,7 +21,9 @@ use uuid::Uuid;
 
 use crate::auth::{client_ip, is_claimed, whoami, NICK_HAS_ACCOUNT};
 use crate::groups::{badges_of, Badge, BOT_GROUP};
+use crate::events::{frame, Frame};
 use crate::history;
+use crate::rt::RtOut;
 use crate::reactions::{self, Reaction};
 use crate::socket::{first_text, id_parts, locked, ping, send, send_within, Beat, Heartbeat, IpSlot, IpSlots, DRAIN_LIMIT, MAX_FRAME_BYTES, READ_BLOCK_MS, SEND_TIMEOUT};
 use crate::{owns_session, Name, Owner};
@@ -36,12 +38,12 @@ const LOGIN_TIER: Tier = Tier { burst: 3.0, window: Duration::from_secs(10) };
 const REACT_TIER: Tier = Tier { burst: 10.0, window: Duration::from_secs(10) };
 const TEST_OWNER_TIER: Tier = Tier { burst: 3.0, window: Duration::from_secs(3) };
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
-const SLOW_DOWN: &str = "slow down";
+pub(crate) const SLOW_DOWN: &str = "slow down";
 const MAX_SOCKETS_PER_IP: usize = 8;
 const MAX_CHAT_SOCKETS_PER_IP: usize = 32;
 const HISTORY_TIMEOUT: Duration = Duration::from_secs(60);
 const EVERY_CHANNEL: &str = "*";
-const FILL_LIMIT: usize = 100;
+pub(crate) const FILL_LIMIT: usize = 100;
 
 #[derive(Clone)]
 pub(crate) struct ChatState {
@@ -50,9 +52,11 @@ pub(crate) struct ChatState {
     client: redis::Client,
     rooms: Rooms,
     sockets: IpSlots,
-    limiter: Arc<Limiter>,
-    reacts: Arc<Limiter>,
-    shutdown: watch::Receiver<bool>,
+    pub(crate) rt_sockets: IpSlots,
+    pub(crate) gateway: crate::events::Gateway,
+    pub(crate) limiter: Arc<Limiter>,
+    pub(crate) reacts: Arc<Limiter>,
+    pub(crate) shutdown: watch::Receiver<bool>,
     dummy_prefix: String,
     hide_test: bool,
     pub(crate) persist: bool,
@@ -60,12 +64,16 @@ pub(crate) struct ChatState {
 }
 
 impl ChatState {
-    fn is_admin(&self, who: Option<&Who>) -> bool {
+    pub(crate) fn is_admin(&self, who: Option<&Who>) -> bool {
         who.and_then(|w| w.user_id).is_some_and(|id| self.is_admin_id(id))
     }
 
     pub(crate) fn is_admin_id(&self, id: Uuid) -> bool {
         self.admins.contains(&id)
+    }
+
+    pub(crate) fn rooms_viewers(&self, room: &str) -> usize {
+        self.rooms.viewers(room)
     }
 }
 
@@ -98,8 +106,8 @@ impl Drop for Lease {
 }
 
 pub(crate) struct Joined {
-    rx: broadcast::Receiver<Event>,
-    lease: Lease,
+    pub(crate) rx: broadcast::Receiver<Event>,
+    pub(crate) lease: Lease,
 }
 
 impl Room {
@@ -142,6 +150,11 @@ impl Rooms {
         Some(Joined { rx, lease: Lease { rooms: self.clone(), name: name.into(), id } })
     }
 
+    #[cfg(test)]
+    pub(crate) fn enter_for_test(&self, name: &str, ip: &str) -> Joined {
+        self.enter(name, ip, |_| {}).expect("room for one more")
+    }
+
     fn release(&self, name: &str, id: u64) {
         let mut rooms = locked(&self.0);
         let Some(room) = rooms.get_mut(name) else { return };
@@ -157,11 +170,11 @@ impl Rooms {
 }
 
 #[derive(Clone)]
-enum Event {
-    Line(Arc<Line>),
+pub(crate) enum Event {
+    Line(Arc<Line>, Frame),
     Count(usize),
-    React(Arc<React>),
-    Delete(Arc<str>),
+    React(Arc<React>, Frame),
+    Delete(Arc<str>, Frame),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -278,12 +291,12 @@ enum In {
     },
 }
 
-#[derive(Deserialize)]
-struct Hello {
-    nick: Option<String>,
-    session: Option<i64>,
-    token: Option<i64>,
-    bot: Option<bool>,
+#[derive(Deserialize, Default, Clone)]
+pub(crate) struct Hello {
+    pub(crate) nick: Option<String>,
+    pub(crate) session: Option<i64>,
+    pub(crate) token: Option<i64>,
+    pub(crate) bot: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -341,12 +354,16 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         .collect();
     let admins: Vec<Uuid> = crate::debug::admins_with_accounts(&db, admin_names).await?.into_iter().map(|a| a.id).collect();
     let limits = crate::ratelimit::ByIp { redis: redis.clone(), rule: crate::ratelimit::chat_rule };
+    let gateway = crate::events::Gateway::new(db.clone(), redis.clone(), client.clone(), shutdown.clone(), dummy_prefix.clone(), admins.clone());
+    let sockets = gateway.registry();
     let state = ChatState {
         db,
         redis,
         client,
         rooms: Rooms::default(),
         sockets: IpSlots::new(MAX_CHAT_SOCKETS_PER_IP),
+        rt_sockets: IpSlots::new(crate::rt::MAX_SOCKETS_PER_IP),
+        gateway,
         limiter: Arc::new(Limiter::new()),
         reacts: Arc::new(Limiter::for_reactions()),
         shutdown,
@@ -361,6 +378,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         .route("/health", get(|| async { "ok" }))
         .route("/chat/{name}", get(ws))
         .route("/chat/{server}/{channel}", get(ws_channel))
+        .merge(crate::rt::routes())
         .merge(history::routes())
         .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip))
         .layer(axum::middleware::map_response(crate::media::no_store_by_default))
@@ -378,7 +396,7 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
         })
         .await?;
     let deadline = Instant::now() + DRAIN_LIMIT;
-    while !rooms.is_empty() && Instant::now() < deadline {
+    while !(rooms.is_empty() && sockets.is_empty()) && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(())
@@ -388,7 +406,7 @@ pub(crate) fn socket_slot(slots: &IpSlots, headers: &HeaderMap) -> Result<Option
     match crate::ratelimit::forwarded_ip(headers) {
         Some(ip) => match slots.take(ip) {
             Some(slot) => Ok(Some(slot)),
-            None => Err(crate::ratelimit::too_many(30, "too many chat sockets from here")),
+            None => Err(crate::ratelimit::too_many(30, "too many sockets from here")),
         },
         None => Ok(None),
     }
@@ -442,7 +460,7 @@ fn refuse(upgrade: WebSocketUpgrade, err: crate::ApiError) -> Response {
     })
 }
 
-async fn server_of(db: &PgPool, raw: &str) -> Result<String, crate::ApiError> {
+pub(crate) async fn server_of(db: &PgPool, raw: &str) -> Result<String, crate::ApiError> {
     let (server, _) = crate::groups::channel_names(raw, "general")?;
     let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM groups WHERE name = $1)").bind(&server).fetch_one(db).await?;
     if !exists {
@@ -451,12 +469,12 @@ async fn server_of(db: &PgPool, raw: &str) -> Result<String, crate::ApiError> {
     Ok(server)
 }
 
-struct Who {
-    from: String,
+pub(crate) struct Who {
+    pub(crate) from: String,
     streamer: bool,
-    verified: bool,
+    pub(crate) verified: bool,
     groups: Vec<Badge>,
-    user_id: Option<Uuid>,
+    pub(crate) user_id: Option<Uuid>,
 }
 
 impl Who {
@@ -465,13 +483,17 @@ impl Who {
     }
 }
 
-enum Unknown {
+pub(crate) enum Unknown {
     Refused(&'static str),
     Busy,
 }
 
 async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello) -> Result<Who, Unknown> {
-    let me = match whoami(&s.db, headers).await {
+    identify_as(s, room, whoami(&s.db, headers).await, hello).await
+}
+
+pub(crate) async fn identify_as(s: &ChatState, room: &str, me: Result<Option<crate::auth::Account>, sqlx::Error>, hello: &Hello) -> Result<Who, Unknown> {
+    let me = match me {
         Ok(me) => me,
         Err(e) => {
             log::warn!("{room}: cannot read the login: {e}");
@@ -677,7 +699,7 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
     loop {
         tokio::select! {
             event = rx.recv() => match event {
-                Ok(Event::Line(line)) => {
+                Ok(Event::Line(line, _)) => {
                     let id = id_parts(&line.id);
                     if id <= last_seen { continue; }
                     last_seen = id;
@@ -686,10 +708,10 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                 Ok(Event::Count(count)) => {
                     if send(&mut socket, &Out::Count { count }).await.is_err() { break; }
                 }
-                Ok(Event::React(react)) => {
+                Ok(Event::React(react, _)) => {
                     if send(&mut socket, &Out::React(&react)).await.is_err() { break; }
                 }
-                Ok(Event::Delete(id)) => {
+                Ok(Event::Delete(id, _)) => {
                     if send(&mut socket, &Out::Delete { id: &id }).await.is_err() { break; }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -811,7 +833,7 @@ impl Bucket {
 }
 
 #[derive(Hash, PartialEq, Eq, Clone, Debug)]
-enum Speaker {
+pub(crate) enum Speaker {
     Account(Uuid),
     Streamer(String),
     TestOwner(String),
@@ -822,7 +844,7 @@ fn is_test_room(prefix: &str, hide: bool, room: &str, is_test: bool) -> bool {
     !hide && is_test && !prefix.is_empty() && room.starts_with(prefix)
 }
 
-async fn test_room_of(s: &ChatState, room: &str, server: Option<&str>) -> bool {
+pub(crate) async fn test_room_of(s: &ChatState, room: &str, server: Option<&str>) -> bool {
     if server.is_some() || !is_test_room(&s.dummy_prefix, s.hide_test, room, true) {
         return false;
     }
@@ -836,7 +858,7 @@ async fn test_room_of(s: &ChatState, room: &str, server: Option<&str>) -> bool {
 }
 
 impl Speaker {
-    fn of(who: Option<&Who>, hello: &Hello, ip: &str, test_room: bool) -> Speaker {
+    pub(crate) fn of(who: Option<&Who>, hello: &Hello, ip: &str, test_room: bool) -> Speaker {
         match who {
             Some(Who { user_id: Some(id), .. }) => Speaker::Account(*id),
             Some(w) if w.streamer && test_room => Speaker::TestOwner(w.from.clone()),
@@ -855,7 +877,7 @@ impl Speaker {
     }
 }
 
-struct Limiter {
+pub(crate) struct Limiter {
     inner: std::sync::Mutex<Buckets>,
     tier: fn(&Speaker) -> Tier,
 }
@@ -874,7 +896,7 @@ impl Limiter {
         Limiter { tier: |_| REACT_TIER, ..Limiter::new() }
     }
 
-    fn take(&self, speaker: &Speaker, room: &str) -> Result<(), Duration> {
+    pub(crate) fn take(&self, speaker: &Speaker, room: &str) -> Result<(), Duration> {
         self.take_at(speaker, room, Instant::now())
     }
 
@@ -891,7 +913,7 @@ impl Limiter {
 }
 
 #[allow(clippy::type_complexity)]
-fn parse_say(text: String, image: Option<String>, images: Vec<String>, video: Option<String>) -> Result<Option<(String, Vec<String>, Option<String>)>, &'static str> {
+pub(crate) fn parse_say(text: String, image: Option<String>, images: Vec<String>, video: Option<String>) -> Result<Option<(String, Vec<String>, Option<String>)>, &'static str> {
     let text = clean_text(&text);
     let images = picture_ids(image, images)?;
     let video = video_id(video)?;
@@ -949,12 +971,19 @@ pub(crate) async fn mark_posted(db: &sqlx::PgPool, place: &crate::media::Place, 
     mark_posted(db, Kind::Image, &pictures, place).await
 }
 
-enum Refused {
+pub(crate) enum Refused {
     Words(&'static str),
     Wait(&'static str, u64),
 }
 
 impl Refused {
+    pub(crate) fn parts(&self) -> (&'static str, Option<u64>) {
+        match self {
+            Refused::Words(error) => (error, None),
+            Refused::Wait(error, wait) => (error, Some(*wait)),
+        }
+    }
+
     fn frame(&self) -> Out<'static> {
         match self {
             Refused::Words(error) => Out::Error { error },
@@ -976,7 +1005,7 @@ const CHANNEL_COOLDOWN: &str = "channel cooldown";
 type Standing = (bool, bool, Option<i64>, i32, i32);
 
 #[allow(clippy::too_many_arguments)]
-async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: &str, images: &[String], video: Option<&str>, reply: Option<&str>) -> Result<(), Refused> {
+pub(crate) async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: &str, images: &[String], video: Option<&str>, reply: Option<&str>) -> Result<Option<String>, Refused> {
     let mut cooldowns: Vec<(String, i64, &'static str)> = Vec::new();
     if let Some(server) = server {
         let Some(id) = w.user_id else { return Err("join the server first".into()) };
@@ -1112,14 +1141,14 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
         }
     };
     if s.persist {
-        if let Some(id) = id {
-            remember(s, room, &id, w, text, images, vid.as_deref(), reply);
+        if let Some(id) = &id {
+            remember(s, room, id, w, text, images, vid.as_deref(), reply);
         }
     }
     if let (Some(server), Some(actor)) = (server, w.user_id) {
         notify_members(s, server, room, actor, text);
     }
-    Ok(())
+    Ok(id)
 }
 
 const BANNED: &str = "you are banned from this chat";
@@ -1201,7 +1230,7 @@ async fn on_react(
     react(s, room, server, w, id, &emoji, on).await.map_err(|why| (why, None))
 }
 
-async fn react(s: &ChatState, room: &str, server: Option<&str>, w: &Who, id: &str, emoji: &str, on: bool) -> Result<(), &'static str> {
+pub(crate) async fn react(s: &ChatState, room: &str, server: Option<&str>, w: &Who, id: &str, emoji: &str, on: bool) -> Result<(), &'static str> {
     let Some(user) = w.user_id.filter(|_| w.verified) else { return Err(reactions::LOG_IN) };
     if let Some(server) = server {
         let timed_out: Result<Option<bool>, sqlx::Error> = sqlx::query_scalar(
@@ -1314,13 +1343,13 @@ async fn follow(s: &ChatState, server: &str, channel: &str, ip: &str, tx: &mpsc:
     true
 }
 
-fn is_stream_id(id: &str) -> bool {
+pub(crate) fn is_stream_id(id: &str) -> bool {
     let mut parts = id.split('-');
     let (Some(ms), Some(seq), None) = (parts.next(), parts.next(), parts.next()) else { return false };
     !ms.is_empty() && !seq.is_empty() && ms.bytes().all(|b| b.is_ascii_digit()) && seq.bytes().all(|b| b.is_ascii_digit())
 }
 
-async fn after(s: &ChatState, room: &str, id: &str, viewer: Option<Uuid>) -> Vec<Line> {
+pub(crate) async fn after(s: &ChatState, room: &str, id: &str, viewer: Option<Uuid>) -> Vec<Line> {
     let mut r = s.redis.clone();
     let reply: Result<StreamRangeReply, _> = r.xrange_count(room_key(room), format!("({id}"), "+", FILL_LIMIT).await;
     match reply {
@@ -1384,7 +1413,7 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
     loop {
         tokio::select! {
             tagged = rx.recv() => match tagged {
-                Some((channel, Ok(Event::Line(line)))) => {
+                Some((channel, Ok(Event::Line(line, _)))) => {
                     let id = id_parts(&line.id);
                     if last_seen.get(&channel).is_some_and(|seen| id <= *seen) { continue; }
                     last_seen.insert(channel.clone(), id);
@@ -1393,10 +1422,10 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                 Some((channel, Ok(Event::Count(count)))) => {
                     if send(&mut socket, &Out::ChannelCount { channel: &channel, count }).await.is_err() { break; }
                 }
-                Some((channel, Ok(Event::React(react)))) => {
+                Some((channel, Ok(Event::React(react, _)))) => {
                     if send(&mut socket, &Out::ChannelReact { channel: &channel, react: &react }).await.is_err() { break; }
                 }
-                Some((channel, Ok(Event::Delete(id)))) => {
+                Some((channel, Ok(Event::Delete(id, _)))) => {
                     if send(&mut socket, &Out::ChannelDelete { channel: &channel, id: &id }).await.is_err() { break; }
                 }
                 Some((_, Err(n))) => {
@@ -1546,7 +1575,7 @@ fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[
 }
 
 impl ChatState {
-    async fn join(&self, name: &str, ip: &str) -> Option<Joined> {
+    pub(crate) async fn join(&self, name: &str, ip: &str) -> Option<Joined> {
         let (start, react_start) = if self.rooms.has(name) {
             (None, None)
         } else {
@@ -1567,6 +1596,7 @@ async fn last_id<C: AsyncCommands>(r: &mut C, key: &str) -> Option<String> {
 async fn reader(client: redis::Client, name: String, start: Option<String>, react_start: Option<String>, tx: broadcast::Sender<Event>) {
     let key = room_key(&name);
     let rkey = react_key(&name);
+    let topic = crate::rt::chat_topic(&name);
     let config = crate::socket::blocking_config(READ_BLOCK_MS);
     let mut con = loop {
         match client.get_multiplexed_async_connection_with_config(&config).await {
@@ -1609,15 +1639,18 @@ async fn reader(client: redis::Client, name: String, start: Option<String>, reac
                 if reactions {
                     rlast = entry.id.clone();
                     if let Some(id) = entry.get::<String>("del") {
-                        let _ = tx.send(Event::Delete(id.into()));
+                        let f = frame(&RtOut::Delete { topic: &topic, id: &id });
+                        let _ = tx.send(Event::Delete(id.into(), f));
                     } else if let Some(react) = react_from(&entry) {
-                        let _ = tx.send(Event::React(Arc::new(react)));
+                        let f = frame(&RtOut::React { topic: &topic, react: &react });
+                        let _ = tx.send(Event::React(Arc::new(react), f));
                     }
                     continue;
                 }
                 last = entry.id.clone();
                 if let Some(line) = line_from(entry) {
-                    let _ = tx.send(Event::Line(Arc::new(line)));
+                    let f = frame(&RtOut::Message { topic: &topic, line: &line });
+                    let _ = tx.send(Event::Line(Arc::new(line), f));
                 }
             }
         }
@@ -1625,7 +1658,7 @@ async fn reader(client: redis::Client, name: String, start: Option<String>, reac
     log::info!("{name}: room empty, reader done");
 }
 
-fn viewer_of(who: &Option<Who>) -> Option<Uuid> {
+pub(crate) fn viewer_of(who: &Option<Who>) -> Option<Uuid> {
     who.as_ref().and_then(|w| w.user_id.filter(|_| w.verified))
 }
 
