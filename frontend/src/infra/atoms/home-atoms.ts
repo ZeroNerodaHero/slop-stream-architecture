@@ -22,11 +22,29 @@ let clock: ReturnType<typeof setInterval> | null = null;
 let inflight: ServerFrame[] | null = null;
 let againWhenDone = false;
 
+function startClock(): void {
+  if (clock) return;
+  store.set(homeNowAtom, Date.now());
+  clock = setInterval(() => store.set(homeNowAtom, Date.now()), 1000);
+}
+
+function stopClock(): void {
+  if (clock) clearInterval(clock);
+  clock = null;
+}
+
+function onVisibility(): void {
+  if (open === 0) return;
+  if (document.hidden) stopClock();
+  else startClock();
+}
+
 export function enterHome(): void {
   open++;
   if (open > 1) return;
   watchPresence(EVERYONE);
-  clock = setInterval(() => store.set(homeNowAtom, Date.now()), 1000);
+  if (!document.hidden) startClock();
+  document.addEventListener('visibilitychange', onVisibility);
   void load();
 }
 
@@ -38,8 +56,8 @@ export function leaveHome(): void {
   againWhenDone = false;
   failures = 0;
   unwatchPresence(EVERYONE);
-  if (clock) clearInterval(clock);
-  clock = null;
+  document.removeEventListener('visibilitychange', onVisibility);
+  stopClock();
   if (retryTimer) clearTimeout(retryTimer);
   retryTimer = null;
 }
