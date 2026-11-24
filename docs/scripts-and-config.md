@@ -13,6 +13,8 @@ bring the stream lab up on this machine, or redeploy part of it.
                                 what the github action pushed. nothing is compiled here
   ./scripts/deploy.sh --pull            git pull, then the images for the tree just pulled
   ./scripts/deploy.sh api               only the api (also: frontend, video, dummy, voice): get its image, swap it
+  ./scripts/deploy.sh stats             apply STATS_BASIC_AUTH_* from .env: caddy and the agent are recreated,
+                                the stats monitor comes up (https://stats.nodentity.xyz, docs/metrics.md)
   ./scripts/deploy.sh --images TAG      a tag of your choosing, e.g. the one ./scripts/ship.sh --to printed
   ./scripts/deploy.sh --build           compile the images here instead (a laptop with uncommitted changes,
                                 a box without a registry). goes with --pull and services
@@ -118,7 +120,7 @@ what the four images (pages, api, video, dummy) are built from, as git pathspecs
 
 ## `frontend/Caddyfile`
 
-- `auto_https off`: there are no hostnames in the file, so nothing to get certs for. the cert is ours (`/certs/cert.pem`, `/certs/key.pem`).
+- `auto_https off`: no acme, nothing to get certs for. the cert is ours (`/certs/cert.pem`, `/certs/key.pem`); the one block with a hostname, `stats.nodentity.xyz`, names it by hand.
 - `protocols h1 h2`: compose publishes 443/tcp only, so http/3 is not advertised.
 - `trusted_proxies static ...` is cloudflare's ranges, from cloudflare.com/ips-v4 and /ips-v6; refresh it when they change. only a request from one of them gets its `CF-Connecting-IP` trusted as the client ip; a direct request cannot spoof it, the header is ignored. `trusted_proxies_strict` reads the header right to left, stopping at the first ip that is not a trusted proxy.
 - the `(real_ip)` snippet overwrites `X-Forwarded-For` with the client ip caddy resolved. without it caddy keeps a trusted proxy's own `X-Forwarded-For` and appends, so a visitor could prepend a fake first entry, and `api/src/ratelimit.rs` and `auth.rs` read the first one. every `reverse_proxy` imports it.
@@ -128,6 +130,7 @@ routes on `:443`:
 
 | path | goes to | notes |
 |---|---|---|
+| `/api/metrics` | `agent:4300` | this box's host and container numbers (`api/src/agent.rs`, `docs/metrics.md`). an exact path, before `/api/*`. the agent answers 404 without an `OPS_TOKEN` on the box and 401 without the right bearer token |
 | `/api/streams` | `home:4100` | the home list, served by the home container from its table (`api/src/home.rs`). an exact path: `/api/streams/<name>/...` stays the api's. caddy puts the longer path matcher first |
 | `/api/*` | `api:4000` | json api, path kept: `/api/x` -> `api:4000/api/x` |
 | `/ws` | `video:7880` | video setup websocket. `reverse_proxy` does the upgrade on its own |
@@ -139,6 +142,13 @@ routes on `:443`:
 | `/assets/*` | `/srv` | hashed vite assets, `immutable` for a year, but only on a hit (`@hit file`). brotli 11 is built beside each asset (`frontend/scripts/precompress.mjs`, `precompressed br`), the rest compressed on the fly: ~23% fewer bytes for the main bundle, which a cold load gets in tcp slow start (`docs/debugging.md`, "Watch startup timings") |
 | `/`, `/groups`, `/groups/*`, `/live`, `/login`, `/signup` | `/srv/index.html` | always the shell. `Cache-Control: public, max-age=0, s-maxage=60, must-revalidate`: the browser asks every time, cloudflare may answer for a minute (docs/cloudflare-cache-rules.md, "Cache HTML shell"), and `deploy.sh` purges it on every publish |
 | everything else | the file, or `/srv/index.html` | `Cache-Control: no-cache`, so a deploy never leaves someone running old js against a new api. `/oauth`, `/admin`, `/explore*`, unknown paths (the spa's 404) and real files like `/favicon.ico` stay here |
+
+the `https://stats.nodentity.xyz` block (`docs/metrics.md`):
+
+- the same self-signed cert as `:443`, named by hand (`tls /certs/cert.pem /certs/key.pem`): with `auto_https off` a host block would otherwise have none. cloudflare's "full" mode accepts it.
+- `header` sets `Cache-Control: private, no-store` (and noindex, `DENY` framing, `nosniff`, `no-referrer`) before anything else runs, so the 401s and 503s carry it too. the proxy drops the monitor's own `Cache-Control` (`header_down -Cache-Control`) so there is one.
+- `@off` is an `expression` on the runtime env: `STATS_BASIC_AUTH_USER` or `STATS_BASIC_AUTH_HASH` empty or `statsoff` answers 503 and proxies nothing. compose passes `statsoff` for a blank key, because `basic_auth` reads the two at parse time (`{$VAR:statsoff}`), caddy only uses that default for an unset variable, and an empty user or hash would stop caddy loading the file, the main site with it. `statsoff` is also valid base64, which caddy wants of any hash at load.
+- everything else goes through `basic_auth` to `stats:3002`, on the compose network `stats` that only caddy and the monitor are on.
 
 `handle_errors`:
 
@@ -174,7 +184,7 @@ the page is on loopback only; nothing is published to the internet. from your la
 | `TARGETS` | the boxes to watch: `name=url`, comma separated. the name is what the page and the alerts call it |
 | `OPS_TOKENS` | each box's `OPS_TOKEN` (the one in its own `.env`), so the page can show its error reports. optional: a box without one still gets watched, just without that table |
 | `ALERT_WEBHOOK` | where down and up go: a url that takes json `{"content": "..."}` (a discord webhook does; so does anything that reads `"text"`). empty means nowhere; the page and the log still show them |
-| `CHECK_EVERY_SECS`, `ERRORS_EVERY_SECS` | how often, in seconds, health and errors are checked |
+| `CHECK_EVERY_SECS`, `ERRORS_EVERY_SECS`, `METRICS_EVERY_SECS` | how often, in seconds, health, errors and each box's agent numbers are checked |
 | `DOWN_AFTER` | how many failed rounds in a row make "down" |
 | `MONITOR_PORT` | the page, on this box's loopback. reach it over `ssh -L` |
 | `CARGO_BUILD_JOBS` | how many cores the rust build may use. 1 is safe on a small box |
@@ -195,7 +205,7 @@ every knob in the root `.env.example`, with what its comment said. `./scripts/de
 | `IMAGES`<br>`TAG` | (empty)<br>(empty) | where ./scripts/deploy.sh gets the images. empty IMAGES: the registry the git remote implies (github.com/<you>/… → ghcr.io/<you>/), where the github action pushes them on every push to main. set it for another registry. TAG is what the last deploy ran (a commit, or a release like v12: the action tags every image with its v<n>); deploy.sh writes it. `./scripts/deploy.sh --build` compiles the images here instead and ignores both. |
 | `ENV_NAME` | (empty) | what this box is called in /api/health and in every stored error. empty: deploy.sh fills in this machine's hostname. use prod, dev, ... if you prefer.  see docs/debugging.md |
 | `ADMIN_NAMES` | (empty) | who may read /api/errors and open /admin: account names, comma separated. empty = nobody. each name needs an account on this box (sign up, or ./scripts/deploy.sh passwd <name>), else the api drops it at boot |
-| `OPS_TOKEN` | (empty) | a machine's key for /api/errors (Authorization: Bearer ...). empty = off.  make one: openssl rand -hex 32 16 characters at least: a shorter one is ignored, with a warn line in the api log |
+| `OPS_TOKEN` | (empty) | a machine's key for /api/errors and the agent's /api/metrics (Authorization: Bearer ...). empty = off.  make one: openssl rand -hex 32 16 characters at least: a shorter one is ignored, with a warn line in the api log |
 | `PUBLIC_URL`<br>`GOOGLE_CLIENT_ID`<br>`GOOGLE_CLIENT_SECRET`<br>`DISCORD_CLIENT_ID`<br>`DISCORD_CLIENT_SECRET` | (empty)<br>(empty)<br>(empty)<br>(empty)<br>(empty) | log in with google, discord (docs/accounts.md). empty = that provider is off, no button. PUBLIC_URL is the https origin people type, no trailing slash. each provider's console needs the redirect uri {PUBLIC_URL}/api/oauth/<google\|discord>/callback, exactly (https://nodentity.xyz/api/oauth/google/callback, .../discord/callback). google refuses a bare ip and plain http (except localhost): this needs a real domain + cert. |
 | `TURNSTILE_ENABLED`<br>`TURNSTILE_SITE_KEY`<br>`TURNSTILE_SECRET` | `false`<br>(empty)<br>(empty) | cloudflare turnstile, a human check on signup and login (docs/cloudflare-turnstile.md). on only with TURNSTILE_ENABLED=true and both keys; the flag on with a key missing logs an error and stays off. the site key is public (the pages draw the widget with it); the secret never leaves the api. |
 | `CF_PURGE_TOKEN`<br>`CF_ZONE_ID` | (empty)<br>(empty) | cloudflare in front (docs/cloudflare-cache-rules.md): a takedown of a public picture or video purges its url (under PUBLIC_URL) from the edge. the token's only permission: Zone > Cache Purge, on this zone alone. either empty = no purge (the edge keeps it until its max-age runs out). `scripts/deploy.sh` reads the same two (and PUBLIC_URL) from .env to purge the html after publishing the pages; unset = skipped |
@@ -206,6 +216,8 @@ every knob in the root `.env.example`, with what its comment said. `./scripts/de
 | `MODERATION_ENABLED`<br>`OPENAI_API_KEY` | `false`<br>(empty) |  |
 | `CHAT_PERSIST` | (empty) | keep chat lines in postgres, so a room can be scrolled past the last 500, searched, and jumped to. empty or 0: redis only (the last 500, gone a week after the last line). 1 turns it on. the chat process reads this. the api process does not. |
 | `GROUPS_PER_OWNER` | (empty) | how many groups one login may own: the ones it made plus the ones it was named owner of. empty: 2. at most 8, the groups a login may be in (its own included); more is read as 8. the pages offer create under it, and the api refuses at it. see docs/groups.md |
+| `STATS_BASIC_AUTH_USER`<br>`STATS_BASIC_AUTH_HASH` | (empty)<br>(empty) | https://stats.nodentity.xyz, the monitor page behind caddy's basic auth (docs/metrics.md). the hash from `docker compose exec frontend caddy hash-password`, in single quotes: `STATS_BASIC_AUTH_HASH='$2a$14$...'`. either empty: the site answers 503 and the stats container is not started. `deploy.sh` refuses a user with other than letters, digits and `. _ @ -`, and a hash that is not a quoted bcrypt hash, before it changes anything |
+| `STATS_TARGETS`<br>`STATS_TOKENS`<br>`STATS_ALERT_WEBHOOK` | (empty)<br>(empty)<br>(empty) | what the stats monitor watches: `name=url` pairs, comma separated (empty: this box alone, `<ENV_NAME>=https://frontend`); `name=token` for a box whose `OPS_TOKEN` differs from this one's; where down and up are posted. the monitor's `TARGETS`, `OPS_TOKENS` and `ALERT_WEBHOOK` under other names |
 | `VOICE_SECRET` | (empty) | voice channels (the voice container, docker-compose.yml). the api signs grants with it and the voice container redeems them with it. make one: openssl rand -hex 32 stays empty until voice is turned on; empty, the api answers voice joins with a 503. |
 
 ## `docker-compose.yml`
@@ -270,6 +282,10 @@ every knob in the root `.env.example`, with what its comment said. `./scripts/de
 - the image's own check looks at video's port; this one looks at ours (at `healthcheck:`)
 - all the voice packets, one port. host port must equal container port. (at `- "7883:7883/udp"`)
 - 7881 (the voice websocket) stays inside. browsers reach it through the frontend, at /voice (at `volumes:`)
+
+- `agent`: the api image as `api agent`, on every box, no profile. root (`user: "0:0"`) for the docker socket and the host's `/proc`, both read-only, with `read_only`, every capability dropped, `no-new-privileges` and 64 pids. `/proc` is bind-mounted at `/host/proc` rather than `pid: host`, which would let it signal host processes. the named volume `agent-disk` at `/disk` is there for its `statvfs`: a volume lives on docker's own filesystem, so its size is that disk's, on any host. no port; caddy reaches it at `agent:4300` (at `agent:`)
+- `stats`: the api image as `api monitor`, profile `stats`, `container_name: stats`. on the network `stats` alone, which caddy also joins, so neither the api containers nor a host port can reach it. its memory is the `stats-data` volume. the env maps the `STATS_*` keys onto the monitor's own names (at `stats:`)
+- caddy gets `STATS_BASIC_AUTH_USER` and `STATS_BASIC_AUTH_HASH` with `statsoff` for a blank value (see the Caddyfile's stats block) (at `STATS_BASIC_AUTH_USER: ${STATS_BASIC_AUTH_USER:-statsoff}`)
 
 ## `Cargo.toml`
 
