@@ -73,3 +73,33 @@ async function run(tab: (nick: string | null) => FakePort, ports: FakePort[]) {
   const authed = await until(() => b.frames('authed')[0]);
   assert.equal(authed.ok, true, JSON.stringify(authed));
 }
+
+test('a peek is not counted against a real server until the page takes it over', { skip }, async () => {
+  const watcher = live();
+  const peeker = live();
+  try {
+    const room = `rtpeek${Date.now() % 100000}`;
+    const topic = `chat:${room}`;
+    const w = watcher.tab(null);
+    const p = peeker.tab(null);
+    const count = () => w.frames('count').filter((f) => f.topic === topic).at(-1)?.count as number | undefined;
+    await until(() => (w.phases().includes('open') && p.phases().includes('open') ? true : undefined));
+    w.send({ kind: 'set', topics: [topic] });
+    await until(() => (count() === 1 ? true : undefined));
+    p.send({ kind: 'set', topics: [topic], peek: [topic] });
+    await until(() => p.frames('subbed').find((f) => (f.topics as string[]).includes(topic)));
+    await until(() => p.frames('count').find((f) => f.topic === topic));
+    await new Promise((done) => setTimeout(done, 300));
+    assert.equal(count(), 1, 'the peek is not a viewer');
+    p.send({ kind: 'set', topics: [topic] });
+    await until(() => (count() === 2 ? true : undefined));
+    p.send({ kind: 'set', topics: [topic], peek: [topic] });
+    await until(() => (count() === 1 ? true : undefined));
+    p.send({ kind: 'set', topics: [] });
+    await new Promise((done) => setTimeout(done, 300));
+    assert.equal(count(), 1);
+  } finally {
+    watcher.core.stop();
+    peeker.core.stop();
+  }
+});
