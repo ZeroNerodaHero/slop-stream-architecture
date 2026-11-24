@@ -494,6 +494,7 @@ export interface ClientError {
 interface RequestOptions {
   report?: boolean;
   timeoutMs?: number;
+  cache?: RequestCache;
 }
 
 async function request<T>(method: string, path: string, body?: unknown, options: RequestOptions = {}): Promise<T> {
@@ -502,7 +503,8 @@ async function request<T>(method: string, path: string, body?: unknown, options:
     method,
     headers: body === undefined ? {} : { 'content-type': raw ? body.type : 'application/json' },
     body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
-    signal: options.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs)
+    signal: options.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs),
+    cache: options.cache
   });
   return answerOf<T>(method, path, res, options);
 }
@@ -706,7 +708,7 @@ export const api = {
   siteJannies: () => request<Janny[]>('GET', '/api/jannies'),
   addSiteJanny: (who: string) => request<null>('POST', '/api/jannies', { name: who }),
   removeSiteJanny: (who: string) => request<null>('DELETE', `/api/jannies/${encodeURIComponent(who)}`),
-  streams: () => request<LiveStream[]>('GET', '/api/streams'),
+  streams: () => request<LiveStream[]>('GET', '/api/streams', undefined, { cache: 'no-store' }),
   streamer: (name: string) => request<Streamer>('GET', `/api/streamers/${name}`),
   sessions: (name: string, from: Date, to: Date) =>
     request<SessionRow[]>(
