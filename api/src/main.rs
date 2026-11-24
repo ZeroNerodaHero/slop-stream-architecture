@@ -40,6 +40,7 @@
 mod about_page;
 mod analytics;
 mod auth;
+mod cf_purge;
 mod chat;
 mod chat_images;
 mod chat_videos;
