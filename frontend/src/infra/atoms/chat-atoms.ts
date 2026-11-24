@@ -6,6 +6,7 @@ import { forgetMe, meAtom } from '@/infra/atoms/auth-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { encodeEmotes, tokensAsTyped } from '@/infra/emotes';
 import { hideBotsAtom } from '@/infra/atoms/settings-atoms';
+import { type Attached, Attachments, idsOf, isPictureRefusal, MAX_CHAT_IMAGES, releaseAttached, wordsOf } from '@/infra/chat-attach';
 import { type ChatVideo, videoOf } from '@/infra/chat-video';
 import { relayUrl } from '@/infra/relay';
 import { store } from '@/infra/store';
@@ -49,7 +50,7 @@ export function isBotLine(line: ChatLine): boolean {
 export type ChatPhase = 'off' | 'connecting' | 'open' | 'closed';
 
 export const MAX_CHAT_CHARS = 500;
-export const MAX_CHAT_IMAGES = 10;
+export { MAX_CHAT_IMAGES };
 const KEEP_LINES = 500;
 const RECONNECT_MS = 3000;
 const OLDER_PAGE = 50;
@@ -86,8 +87,6 @@ const TIERS: { anon: ChatTier; login: ChatTier } = {
   login: { burst: 3, window: 10_000, words: '3 lines in 10 seconds' }
 };
 
-const MODERATION_REJECTED = 'image rejected by moderation';
-const MODERATION_WORDS = 'have sex incel?';
 const NOTICE_WORDS: Record<string, string> = {
   cooldown: 'your role has a cooldown between lines',
   'channel cooldown': 'this channel has a cooldown between lines',
@@ -143,8 +142,11 @@ export class ChatRoom {
   readonly loadedAtom: PrimitiveAtom<boolean> = atom(false);
   readonly countAtom: PrimitiveAtom<number> = atom(0);
   readonly draftAtom: PrimitiveAtom<string> = atom('');
-  readonly imagesAtom: PrimitiveAtom<string[]> = atom<string[]>([]);
-  readonly videoAtom: PrimitiveAtom<ChatVideo | null> = atom<ChatVideo | null>(null);
+  readonly attach: Attachments = new Attachments((text) => this.showNotice(text));
+  readonly picturesAtom = this.attach.picturesAtom;
+  readonly videoAtom = this.attach.videoAtom;
+  readonly readyIdsAtom = this.attach.readyIdsAtom;
+  readonly sendingAtom: PrimitiveAtom<boolean> = atom(false);
   readonly noticeAtom: PrimitiveAtom<string> = atom('');
   readonly asStreamerAtom: PrimitiveAtom<boolean> = atom(false);
   readonly waitAtom: PrimitiveAtom<number> = atom(0);
@@ -172,7 +174,7 @@ export class ChatRoom {
   private leaving: ReturnType<typeof setTimeout> | null = null;
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
   private bucket: { tokens: number; at: number };
-  private inFlight: { text: string; images: string[]; video: ChatVideo | null; reply: ChatLine | null }[] = [];
+  private inFlight: ({ text: string; images: string[]; reply: ChatLine | null } & Attached)[] = [];
   private flashTimer: ReturnType<typeof setTimeout> | null = null;
   private wasOpen = false;
 
@@ -202,13 +204,12 @@ export class ChatRoom {
     this.hiddenBotLinesAtom = atom((get) => (get(hideBotsAtom) ? get(lines).filter(isBotLine).length : 0));
     this.tierAtom = atom((get) => (get(meAtom) || get(asStreamer) ? TIERS.login : TIERS.anon));
     const draft = this.draftAtom;
-    const images = this.imagesAtom;
-    const video = this.videoAtom;
+    const attached = this.attach.anyAtom;
+    const sending = this.sendingAtom;
     const phase = this.phaseAtom;
     this.canSendAtom = atom((get) => {
       const length = chars(get(draft).trim());
-      const picture = get(images).length > 0 || get(video) !== null;
-      return get(phase) === 'open' && length <= MAX_CHAT_CHARS && (length > 0 || picture);
+      return !get(sending) && get(phase) === 'open' && length <= MAX_CHAT_CHARS && (length > 0 || get(attached));
     });
   }
 
@@ -271,7 +272,7 @@ export class ChatRoom {
       this.ws.close();
     }
     this.ws = null;
-    this.inFlight.length = 0;
+    for (const lost of this.inFlight.splice(0)) this.restore(lost, null);
     this.resetHistory();
     this.clearResults();
     store.set(this.phaseAtom, 'off');
@@ -284,8 +285,8 @@ export class ChatRoom {
     store.set(this.countAtom, 0);
     store.set(this.asStreamerAtom, false);
     store.set(this.draftAtom, '');
-    store.set(this.imagesAtom, []);
-    store.set(this.videoAtom, null);
+    this.attach.clear();
+    store.set(this.sendingAtom, false);
     store.set(this.replyAtom, null);
     store.set(this.flashAtom, null);
     store.set(this.noticeAtom, '');
@@ -309,21 +310,20 @@ export class ChatRoom {
     store.set(this.draftAtom, [...raw].slice(0, MAX_CHAT_CHARS + 50).join(''));
   }
 
-  addImage(id: string) {
-    const now = store.get(this.imagesAtom);
-    if (!id || now.includes(id) || now.length >= MAX_CHAT_IMAGES) return;
-    store.set(this.imagesAtom, [...now, id]);
+  addPictures(files: File[]) {
+    this.attach.addPictures(files);
   }
 
-  setVideo(video: ChatVideo | null) {
-    store.set(this.videoAtom, video);
+  removePicture(key: string) {
+    this.attach.removePicture(key);
   }
 
-  removeImage(id: string) {
-    store.set(
-      this.imagesAtom,
-      store.get(this.imagesAtom).filter((have) => have !== id)
-    );
+  addVideo(file: File, many = false) {
+    this.attach.addVideo(file, many);
+  }
+
+  removeVideo() {
+    this.attach.removeVideo();
   }
 
   setReply(line: ChatLine | null) {
@@ -408,16 +408,31 @@ export class ChatRoom {
   }
 
   showNotice(text: string, ms = 4000) {
-    store.set(this.noticeAtom, text === MODERATION_REJECTED ? MODERATION_WORDS : text);
+    store.set(this.noticeAtom, wordsOf(text));
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
     this.noticeTimer = setTimeout(() => store.set(this.noticeAtom, ''), ms);
   }
 
-  send() {
+  async send() {
+    if (store.get(this.sendingAtom)) return;
+    if (!store.get(this.draftAtom).trim() && !this.attach.any()) return;
+    store.set(this.sendingAtom, true);
+    try {
+      await this.attach.settle();
+    } finally {
+      store.set(this.sendingAtom, false);
+    }
+    const error = this.attach.errorOf();
+    if (error) {
+      this.showNotice(error, 4000);
+      return;
+    }
     const ws = this.ws;
     const text = store.get(this.draftAtom).trim();
-    const images = store.get(this.imagesAtom);
-    const video = store.get(this.videoAtom);
+    const pictures = this.attach.pictures();
+    const images = idsOf(pictures);
+    const clip = this.attach.video();
+    const video = clip?.video ?? null;
     if (!ws || ws.readyState !== WebSocket.OPEN || (!text && images.length === 0 && !video)) return;
     if (chars(text) > MAX_CHAT_CHARS) {
       this.showNotice('too long');
@@ -442,10 +457,8 @@ export class ChatRoom {
     if (reply) say.reply = reply.id;
     record(`/chat/${this.key}`, 'out', say);
     ws.send(JSON.stringify(say));
-    this.inFlight.push({ text, images, video, reply });
+    this.inFlight.push({ text, images, reply, ...this.attach.take() });
     store.set(this.draftAtom, '');
-    store.set(this.imagesAtom, []);
-    store.set(this.videoAtom, null);
     store.set(this.replyAtom, null);
     this.toLatest();
   }
@@ -525,8 +538,10 @@ export class ChatRoom {
         store.set(this.loadedAtom, true);
       } else if (msg.type === 'message' && msg.id) {
         const said = tokensAsTyped(msg.text ?? '');
-        const sent = this.inFlight.findIndex((p) => p.text === said && samePictures(p.images, picturesOf(msg)) && (p.video?.id ?? null) === (videoOf(msg.video)?.id ?? null));
-        if (sent >= 0) this.inFlight.splice(sent, 1);
+        const sent = this.inFlight.findIndex(
+          (p) => p.text === said && samePictures(p.images, picturesOf(msg)) && (p.video?.video?.id ?? null) === (videoOf(msg.video)?.id ?? null)
+        );
+        if (sent >= 0) releaseAttached(this.inFlight.splice(sent, 1)[0]!);
         const line = fromWire(msg as ChatLine);
         if (tagged !== null && tagged !== this.channel) this.shelfAppend(tagged, line);
         else {
@@ -573,17 +588,20 @@ export class ChatRoom {
       this.refuse(ms);
     }
     if (error in NOTICE_WORDS && typeof wait === 'number' && wait > 0) this.refuse(wait);
-    if (/slow down|cooldown|timed out|banned|chat is (busy|down)|no such line/.test(error)) {
+    if (/slow down|cooldown|timed out|banned|chat is (busy|down)|no such line|image rejected|never checked|picture/.test(error)) {
       const lost = this.inFlight.shift();
-      if (lost?.text && !store.get(this.draftAtom)) store.set(this.draftAtom, lost.text);
-      if (lost && lost.images.length > 0 && store.get(this.imagesAtom).length === 0) store.set(this.imagesAtom, lost.images);
-      if (lost?.video && !store.get(this.videoAtom)) store.set(this.videoAtom, lost.video);
-      if (lost?.reply && error !== 'no such line' && !store.get(this.replyAtom)) store.set(this.replyAtom, lost.reply);
+      if (lost) this.restore(lost, error);
     }
     if (refused || gone) {
       this.hangUp();
       if (me) forgetMe();
     }
+  }
+
+  private restore(lost: { text: string; reply: ChatLine | null } & Attached, error: string | null) {
+    if (lost.text && !store.get(this.draftAtom)) store.set(this.draftAtom, lost.text);
+    this.attach.restore(lost, error && isPictureRefusal(error) ? error : null);
+    if (lost.reply && error !== 'no such line' && !store.get(this.replyAtom)) store.set(this.replyAtom, lost.reply);
   }
 
   showChannel(next: string) {

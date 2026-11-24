@@ -1,4 +1,4 @@
-import { RiAddLine, RiArrowLeftSLine, RiCloseLine, RiImageAddLine, RiSearchLine } from '@remixicon/react';
+import { RiAddLine, RiArrowLeftSLine, RiCloseLine, RiImageAddLine, RiLoader4Line, RiSearchLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
 import {
   type CSSProperties,
@@ -16,15 +16,15 @@ import {
 import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 
-import { api, type DmLine, messageOf } from '@/infra/api';
+import { type DmLine } from '@/infra/api';
 import { meAtom } from '@/infra/atoms/auth-atoms';
-import { MAX_CHAT_IMAGES } from '@/infra/atoms/chat-atoms';
-import type { ChatVideo } from '@/infra/chat-video';
+import { idsOf, isPictureRefusal, MAX_CHAT_IMAGES } from '@/infra/chat-attach';
 import { type ChatBox as Box, keepDmBox, keptDmBox } from '@/infra/atoms/chat-layout-atoms';
 import {
   clearDmResults,
   type Dm,
   dmActiveAtom,
+  dmAttach,
   dmJumpAtom,
   dmNoticeAtom,
   dmOpenAtom,
@@ -49,16 +49,15 @@ import { myAvatarVersionAtom } from '@/infra/atoms/profile-atoms';
 import { chatStyleAtom, type PanelSide, panelSideAtom } from '@/infra/atoms/settings-atoms';
 import { keepFocus, stuckAfterScroll, useBottomPin, useKeyboard } from '@/infra/keyboard';
 import { useIsMobile } from '@/infra/mobile';
-import { compressChatImage } from '@/infra/picture';
 import { usePrefetchOnPointerDown } from '@/infra/prefetch';
 import { plainEmotes } from '@/infra/emotes';
 import { store } from '@/infra/store';
 import { Button } from '@/shared-components/Button';
-import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingVideo, splitFiles, useVideoUpload, VideoProgress } from '@/shared-components/ChatAttach';
+import { ATTACH_ACCEPT, dragFiles, dropFiles, pasteFiles, PendingThumb, PendingVideo, splitFiles } from '@/shared-components/ChatAttach';
 import { ChatLineShape, LineActions, placeOf, quoteWords, ReplyQuote } from '@/shared-components/ChatLine';
 import { ChatEmbeds } from '@/shared-components/ChatEmbeds';
 import { ChatVideoPlayer } from '@/shared-components/ChatVideoPlayer';
-import { ChatImages, pictureSrc } from '@/shared-components/ChatPanel';
+import { ChatImages } from '@/shared-components/ChatPanel';
 import { SearchField, SearchFilters, SearchHit, SearchResults, useChatSearch } from '@/shared-components/ChatSearch';
 import { Face } from '@/shared-components/Face';
 import { useEmoteComplete } from '@/shared-components/EmoteComplete';
@@ -512,14 +511,10 @@ export function FriendChat() {
   const { pathname } = useLocation();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [searching, setSearching] = useState(false);
-  const [pending, setPending] = useState<Record<string, string[]>>({});
-  const [pendingVideo, setPendingVideo] = useState<Record<string, ChatVideo | null>>({});
-  const videoUp = useVideoUpload();
   const [replies, setReplies] = useState<Record<string, DmLine | null>>({});
   const [flash, setFlash] = useState<number | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [sending, setSending] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [sendingFor, setSendingFor] = useState<string | null>(null);
   const [box, setBox] = useState<Box | null>(() => {
     const kept = keptDmBox();
     return kept && fitted(kept);
@@ -546,9 +541,15 @@ export function FriendChat() {
   const thread = name ? threads[name] : undefined;
   const lines = thread?.lines ?? [];
   const draft = (name && drafts[name]) || '';
-  const pictures = (name && pending[name]) || [];
-  const video = (name && pendingVideo[name]) || null;
+  const attach = dmAttach(name ?? '');
+  const pictures = useAtomValue(attach.picturesAtom);
+  const video = useAtomValue(attach.videoAtom);
+  const sending = sendingFor !== null && sendingFor === name;
   const replyTo = (name && replies[name]) || null;
+  const latest = useRef({ drafts, replies });
+  useEffect(() => {
+    latest.current = { drafts, replies };
+  }, [drafts, replies]);
   const emotes = useEmoteComplete({ value: draft, onChange: (next) => setDraft(next), input, id: 'friend-chat-emotes' });
   const hits = results?.name === name ? results : null;
   const search = useChatSearch(
@@ -674,10 +675,6 @@ export function FriendChat() {
     if (name) setDrafts((prev) => ({ ...prev, [name]: text }));
   }
 
-  function setPictures(ids: string[]) {
-    if (name) setPending((prev) => ({ ...prev, [name]: ids }));
-  }
-
   function setReply(line: DmLine | null) {
     if (name) setReplies((prev) => ({ ...prev, [name]: line }));
   }
@@ -703,56 +700,42 @@ export function FriendChat() {
   function pickFiles(list: FileList | File[] | null) {
     const { pictures: still, videos } = splitFiles(list ? [...list] : []);
     if (fileRef.current) fileRef.current.value = '';
+    if (!name) return;
+    const into = dmAttach(name);
     const [first] = videos;
-    if (name && first) {
-      const forThread = name;
-      if (video || videos.length > 1 || videoUp.progress !== null) showDmNotice('one video at a time');
-      if (!video && videoUp.progress === null) {
-        void videoUp.upload(first, (v) => setPendingVideo((prev) => ({ ...prev, [forThread]: v })), showDmNotice);
-      }
-    }
-    void pickPictures(still);
-  }
-
-  async function pickPictures(files: File[]) {
-    if (!name || files.length === 0 || uploading) return;
-    const forThread = name;
-    const room = MAX_CHAT_IMAGES - pictures.length;
-    const batch = files.slice(0, Math.max(0, room));
-    if (files.length > room) showDmNotice(`${MAX_CHAT_IMAGES} pictures at most`);
-    if (batch.length === 0) return;
-    setUploading(true);
-    try {
-      for (const file of batch) {
-        const blob = await compressChatImage(file);
-        const saved = await api.uploadChatImage(blob);
-        setPending((prev) => {
-          const have = prev[forThread] ?? [];
-          return have.includes(saved.id) || have.length >= MAX_CHAT_IMAGES ? prev : { ...prev, [forThread]: [...have, saved.id] };
-        });
-      }
-    } catch (err) {
-      showDmNotice(messageOf(err));
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = '';
-      input.current?.focus();
-    }
+    if (first) into.addVideo(first, videos.length > 1);
+    into.addPictures(still);
+    if (still.length > 0 || first) input.current?.focus();
   }
 
   async function send(e?: FormEvent) {
     e?.preventDefault();
-    if (!name || (!draft.trim() && pictures.length === 0 && !video) || sending || uploading || videoUp.progress !== null) return;
-    setSending(true);
-    sentJump.current = name;
-    const sent = await sendDm(name, draft, pictures, replyTo?.id ?? null, video?.id ?? null);
-    setSending(false);
-    if (!sent) sentJump.current = null;
-    if (sent) {
-      setDraft('');
-      setPictures([]);
-      setPendingVideo((prev) => ({ ...prev, [name]: null }));
-      setReply(null);
+    if (!name || sendingFor !== null) return;
+    const forThread = name;
+    const into = dmAttach(forThread);
+    if (!draft.trim() && !into.any()) return;
+    setSendingFor(forThread);
+    await into.settle();
+    const error = into.errorOf();
+    if (error) {
+      setSendingFor(null);
+      showDmNotice(error);
+      input.current?.focus();
+      return;
+    }
+    const text = latest.current.drafts[forThread] ?? '';
+    const reply = latest.current.replies[forThread] ?? null;
+    const taken = { pictures: into.pictures(), video: into.video() };
+    sentJump.current = forThread;
+    const failed = await sendDm(forThread, text, idsOf(taken.pictures), reply?.id ?? null, taken.video?.video?.id ?? null);
+    setSendingFor(null);
+    if (failed) {
+      sentJump.current = null;
+      if (isPictureRefusal(failed)) into.markPictures(failed);
+    } else {
+      setDrafts((prev) => (prev[forThread] === text ? { ...prev, [forThread]: '' } : prev));
+      into.drop(taken);
+      setReplies((prev) => ({ ...prev, [forThread]: null }));
     }
     input.current?.focus();
   }
@@ -1044,24 +1027,11 @@ export function FriendChat() {
                   </Tooltip>
                 </div>
               )}
-              {videoUp.progress !== null && <VideoProgress progress={videoUp.progress} idPrefix="friend-chat" />}
               {(pictures.length > 0 || video) && (
                 <div id="friend-chat-picture-preview" className="mb-2 flex flex-wrap gap-2">
-                  {video && <PendingVideo video={video} idPrefix="friend-chat" onRemove={() => setPendingVideo((prev) => ({ ...prev, [name]: null }))} />}
-                  {pictures.map((id) => (
-                    <span key={id} className="relative">
-                      <img src={pictureSrc(id)} alt="" className="h-16 w-16 object-cover" />
-                      <Tooltip content="remove">
-                        <button
-                          type="button"
-                          aria-label="remove picture"
-                          className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center bg-black/70 text-white"
-                          onClick={() => setPictures(pictures.filter((have) => have !== id))}
-                        >
-                          <RiCloseLine aria-hidden size={14} />
-                        </button>
-                      </Tooltip>
-                    </span>
+                  {video && <PendingVideo clip={video} sending={sending} idPrefix="friend-chat" size="h-16 w-16" onRemove={() => attach.removeVideo()} />}
+                  {pictures.map((picture) => (
+                    <PendingThumb key={picture.key} picture={picture} sending={sending} size="h-16 w-16" onRemove={() => attach.removePicture(picture.key)} />
                   ))}
                 </div>
               )}
@@ -1078,7 +1048,7 @@ export function FriendChat() {
                       'flex h-8 w-8 shrink-0 items-center justify-center text-textTertiary hover:text-textPrimary disabled:opacity-40',
                       mobile && 'h-11 w-11'
                     )}
-                    disabled={uploading || pictures.length >= MAX_CHAT_IMAGES}
+                    disabled={pictures.length >= MAX_CHAT_IMAGES}
                     onClick={() => fileRef.current?.click()}
                   >
                     <RiImageAddLine size={18} aria-hidden />
@@ -1123,9 +1093,17 @@ export function FriendChat() {
                   onPointerDown={keepFocus}
                   variant="primary"
                   className={cn(INPUT_BUTTON, mobile ? 'h-11 min-w-[44px] shrink-0 py-0' : 'h-[1.875rem] text-sm')}
-                  disabled={(!draft.trim() && pictures.length === 0 && !video) || left < 0 || sending || uploading || videoUp.progress !== null}
+                  disabled={(!draft.trim() && pictures.length === 0 && !video) || left < 0 || sending}
+                  aria-busy={sending || undefined}
                 >
-                  send
+                  {sending ? (
+                    <span className="relative flex items-center">
+                      <RiLoader4Line aria-hidden size={16} className="motion-safe:animate-spin" />
+                      <span className="sr-only">sending</span>
+                    </span>
+                  ) : (
+                    'send'
+                  )}
                 </Button>
               </div>
               <div className={cn('flex items-center justify-between gap-2 text-xs', (notice || left < 50) && 'mt-1')}>
