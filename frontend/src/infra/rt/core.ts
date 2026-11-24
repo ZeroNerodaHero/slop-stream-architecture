@@ -60,7 +60,7 @@ export function openBrowserSocket(url: string): SocketLike {
 
 export type ToCore =
   | { kind: 'attach'; build: string; nick: string | null }
-  | { kind: 'set'; topics: string[] }
+  | { kind: 'set'; topics: string[]; peek?: string[] }
   | { kind: 'ping' }
   | { kind: 'focus' }
   | { kind: 'bye' }
@@ -91,6 +91,7 @@ export interface CoreOptions {
 interface Tab {
   port: Port;
   topics: Set<string>;
+  peek: Set<string>;
   heard: number;
 }
 
@@ -122,6 +123,7 @@ export class RtCore {
   private nick: string | null = null;
   private rev = 0;
   private union: string[] = [];
+  private peek: string[] = [];
   private subbed: Subbed | null = null;
   private readonly latest = new Map<string, string>();
   private readonly fresh = new Set<string>();
@@ -148,7 +150,7 @@ export class RtCore {
           port.post({ kind: 'stale', build: this.build });
           return;
         }
-        tab = { port, topics: new Set(), heard: this.clock.now() };
+        tab = { port, topics: new Set(), peek: new Set(), heard: this.clock.now() };
         this.tabs.set(port, tab);
         this.nick = msg.nick;
         port.post({ kind: 'phase', phase: this.phase });
@@ -163,10 +165,13 @@ export class RtCore {
       if (!tab || !this.tabs.has(port)) return;
       tab.heard = this.clock.now();
       switch (msg.kind) {
-        case 'set':
-          tab.topics = new Set(msg.topics.map(normalTopic));
+        case 'set': {
+          const topics = new Set(msg.topics.map(normalTopic));
+          tab.topics = topics;
+          tab.peek = new Set((msg.peek ?? []).map(normalTopic).filter((t) => topics.has(t)));
           if (!this.changed() && this.subbed && this.ready) tab.port.post({ kind: 'frame', frame: this.subbed as unknown as RtFrame });
           break;
+        }
         case 'ping':
           break;
         case 'focus':
@@ -201,6 +206,10 @@ export class RtCore {
     return this.union.slice();
   }
 
+  peeked(): string[] {
+    return this.peek.slice();
+  }
+
   sinceFor(topic: string): string | undefined {
     return this.latest.get(topic);
   }
@@ -219,17 +228,25 @@ export class RtCore {
     for (const tab of this.tabs.values()) tab.port.post({ kind: 'phase', phase: next });
   }
 
-  private computeUnion(): string[] {
+  private computeUnion(): { topics: string[]; peek: string[] } {
     const all = new Set<string>();
-    for (const tab of this.tabs.values()) for (const t of tab.topics) all.add(t);
-    return [...all].sort();
+    const real = new Set<string>();
+    for (const tab of this.tabs.values()) {
+      for (const t of tab.topics) {
+        all.add(t);
+        if (!tab.peek.has(t)) real.add(t);
+      }
+    }
+    const topics = [...all].sort();
+    return { topics, peek: topics.filter((t) => !real.has(t)) };
   }
 
   private changed(): boolean {
-    const next = this.computeUnion();
-    const same = next.length === this.union.length && next.every((t, i) => t === this.union[i]);
+    const { topics: next, peek } = this.computeUnion();
+    const same = sameList(next, this.union) && sameList(peek, this.peek);
     if (same) return false;
     this.union = next;
+    this.peek = peek;
     const held = new Set(next);
     for (const topic of this.latest.keys()) if (!covers(held, topic)) this.latest.delete(topic);
     for (const topic of this.fresh) if (!held.has(topic)) this.fresh.delete(topic);
@@ -418,6 +435,7 @@ export class RtCore {
     if (!socket || !this.ready || socket.readyState !== OPEN) return;
     this.rev += 1;
     const frame: SubOut = { type: 'sub', rev: this.rev, topics: this.union.slice() };
+    if (this.peek.length > 0) frame.peek = this.peek.slice();
     const since: Record<string, string> = allSince ? Object.fromEntries(this.latest) : {};
     Object.assign(since, asked);
     if (Object.keys(since).length > 0) frame.since = since;
@@ -488,4 +506,8 @@ export class RtCore {
       }
     );
   }
+}
+
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((t, i) => t === b[i]);
 }
