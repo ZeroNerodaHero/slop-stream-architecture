@@ -13,6 +13,7 @@ import { isDummyName } from '@/infra/names';
 import { previewStreamsAtom, setHomePreviews } from '@/infra/preview';
 import { Avatar } from '@/shared-components/Avatar';
 import { Badge } from '@/shared-components/Badge';
+import { BlurredPicture } from '@/shared-components/BlurredPicture';
 import { GroupSquare } from '@/shared-components/GroupSquare';
 import { Button, buttonClassName } from '@/shared-components/Button';
 import { FollowButton } from '@/shared-components/FollowButton';
@@ -45,8 +46,8 @@ const CARD_LINK = cn(CARD, 'group transition-[border-color] duration-150 hover:b
 
 const stills = stillPictures({ custom: api.streamThumbUrl, camera: api.thumbUrl });
 
-function Thumb({ name, thumbs }: { name: string; thumbs: number[] }) {
-  const [src, setSrc] = useState(() => stills.src(name, thumbs));
+function Thumb({ name }: { name: string }) {
+  const [src, setSrc] = useState(() => stills.src(name, []));
   const [missing, setMissing] = useState(false);
   const wait = useRef<number | null>(null);
 
@@ -66,14 +67,11 @@ function Thumb({ name, thumbs }: { name: string; thumbs: number[] }) {
       className={cn('absolute inset-0 h-full w-full object-cover', missing && 'opacity-0')}
       onError={() => {
         if (wait.current !== null) return;
+        setMissing(true);
         const next = stills.missed(name, src);
-        if (!next) {
-          setMissing(true);
-          return;
-        }
+        if (!next) return;
         wait.current = window.setTimeout(() => {
           wait.current = null;
-          setMissing(false);
           setSrc(next);
         }, 2000);
       }}
@@ -142,6 +140,7 @@ function Card({
   idPrefix?: string;
 }) {
   const age = since(stream.since, now);
+  const thumbs = stream.thumbs ?? [];
   return (
     <article className={CARD_LINK} data-featured={featured ? stream.name : undefined} onPointerEnter={(event) => onEnter(event.pointerType)} onPointerLeave={onLeave}>
       <Link
@@ -154,7 +153,14 @@ function Card({
       >
         <div className="relative aspect-video overflow-hidden border-b border-primaryStroke bg-black">
           <div className="absolute inset-0 transition-transform duration-300 ease-out group-hover:scale-105">
-            <Thumb name={stream.name} thumbs={stream.thumbs ?? []} />
+            {thumbs.length > 0 ? (
+              <BlurredPicture name={stream.name} version={stream.avatar} src={stills.src(stream.name, thumbs)} />
+            ) : (
+              <>
+                {stream.avatar !== null && <BlurredPicture name={stream.name} version={stream.avatar} />}
+                <Thumb name={stream.name} />
+              </>
+            )}
             {playing && <PreviewVideo name={stream.name} />}
           </div>
           <span className="absolute right-3 top-3 z-10 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
