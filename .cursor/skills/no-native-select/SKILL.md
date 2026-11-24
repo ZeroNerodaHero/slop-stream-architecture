@@ -54,7 +54,7 @@ In a test: `page.click('#face-camera')`, then `page.click('#face-camera-list [da
 | one of a list that is long, or as long as the data makes it (the cameras a face can be read from) | `Select` |
 | one of a few fixed things, each worth seeing | all of them on show: `OptionCard`, a radio as a card (`user-modal/parts.tsx`), or words pressed (`aria-pressed`, the role editor's cooldown) |
 | something to do, off a list (give a role, add a source) | a menu, `role="menu"`: `HoverMenu` in `ServerRoom.tsx`, `AddMenu` in `Sources.tsx` |
-| words typed, finished from a list | `comboProps` and `SearchSuggestions` in `ChatSearch.tsx`. That is what a datalist would have been |
+| words typed, finished from a list | `SearchField` and `SearchSuggestions` in `ChatSearch.tsx`. That is what a datalist would have been |
 
 ## Replace one
 

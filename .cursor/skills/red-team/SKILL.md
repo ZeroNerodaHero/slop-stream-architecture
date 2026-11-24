@@ -60,10 +60,10 @@ it before hunting. The short version of where the meat is:
   `format!`-into-SQL sites (`group_mod.rs`, `notify.rs`, `history.rs`) interpolate *hardcoded
   constants*; user values are bound params. The rule to apply, not a bug to report: an
   interpolated identifier is a vuln **only if its value can come from a request**. Trace it.
-- **Frontend / XSS** (`frontend/src/infra/about.ts`) — the hand-rolled CSS/media/link sanitizer
-  (`safeCss`, `mediaPath`, `linkHref`, `splitSelectors`) is the juiciest client target. There is
-  no `dangerouslySetInnerHTML` in the tree, so React escaping is holding the line — attack the
-  sanitizer's parser-vs-render gaps instead.
+- **Frontend / XSS** (`frontend/src/infra/about.ts`, `About.tsx`, `api/src/about_page.rs`) — the
+  hand-rolled html fragment sanitizer (`sanitizeHtml` in the page, `sanitize_html` in the api) and
+  `linkHref` are the juiciest client target. The about editor writes `innerHTML` from cleaned
+  html; attack the gaps between the api's cleaning, the browser's parser and what renders.
 - **Data layer** (`api/src/s3.rs`, uploads in `group_mod.rs` / `profile.rs`, api→video calls) —
   key path traversal (`check_key`), magic-byte-only "is it a jpeg" checks, content-type confusion,
   SSRF through operator-config endpoints.

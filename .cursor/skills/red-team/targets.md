@@ -71,31 +71,31 @@ Stream control is by session **token**, not id: `heartbeat` in `main.rs` only up
   are passed as a vec (no shell), and inputs are names/paths the server controls. Check whether any
   arg can carry a request-controlled stream name or path, and whether `valid_name` gates it first.
 
-## 4. Frontend / XSS — `frontend/src/infra/about.ts` (+ `socials.ts`, `About.tsx`)
+## 4. Frontend / XSS — `frontend/src/infra/about.ts`, `About.tsx`, `api/src/about_page.rs` (+ `socials.ts`)
 
-Intended (docs/about.md): a page of fixed React blocks, "never html from a string"; media from
-this origin only; links http(s) only; CSS parsed by the browser, scoped under the box, with
-anything that loads/runs/leaves stripped. **This is the hardened showcase — break the sanitizer.**
+Intended (docs/about.md): a canvas of fixed block kinds; text is a fragment of a few html tags,
+cleaned by the api (`sanitize_html`) and again by the page (`sanitizeHtml`); media is the owner's
+own uploads, kind sniffed from the bytes; links http(s) only; no css of the person's own.
 
-- **`safeCss`**: parses with a constructed `CSSStyleSheet`, re-emits from the parsed form, scopes
-  every selector under `#<scope>`, drops at-rules except `@media`/`@supports`, rewrites
-  `position:fixed`→`absolute`, applies `BAD_VALUE` / `BAD_PROPERTY` regexes. Attack ideas:
-  - **Parser differential** — a value the `CSSStyleSheet` parser keeps but that renders as a
-    load/escape the regex missed; a declaration that round-trips differently than `BAD_VALUE`
-    expects.
-  - **`url()` smuggling** past `BAD_VALUE = /url|image-set|.../` (it is broad — try to find a
-    loader it doesn't name, or a CSS function that fetches).
-  - **Selector escape** in `scopeSelectors` / `splitSelectors` — break out of `#scope` so a rule
-    hits the real page chrome (depth/quote tracking in `splitSelectors` is the place to probe).
-  - **Scope-name injection** — `safeCss` only accepts `^[a-z][a-z0-9_-]*$` scopes; confirm callers
-    can't pass a hostile scope.
-- **`mediaPath`**: allowlist `/api/streamers/`, `/thumb/`, `/about-demo/`; rejects schemes, `//`,
-  `\`, `..`, control chars. Try a request-splitting or redirect path that still starts with an
-  allowed prefix and reaches something unexpected.
+- **`sanitizeHtml` / `sanitize_html`**: an allowlist of tags (`p`, `br`, `b`, `strong`, `i`, `em`,
+  `u`, `s`, `a`, `ul`, `ol`, `li`, `h2`, `h3`, `blockquote`), a drop list whose contents go too
+  (`script`, `style`, `iframe`, `svg`, `form`, ...), no attributes but an `a`'s `href`. Attack
+  ideas: a parser differential between the api's cleaning and the browser's `DOMParser` (what
+  survives one and not the other), entity and encoding tricks in `href`, a tag the drop list
+  forgets that still runs or loads, the 10 000-character cut landing inside an entity.
+- **The editor** (`TextEditor` in `About.tsx`) writes `innerHTML` on the owner's own page from the
+  stored html and re-cleans on every input. Check that nothing un-cleaned reaches `innerHTML`, and
+  that the viewer's path (`Rich`, which builds React nodes from the parsed fragment) cannot be
+  given an element it renders as markup.
+- **Uploads** (`PUT /api/streamers/:name/about-file`): the kind comes from magic bytes. Try a
+  polyglot (a valid png head on something a browser sniffs as html), and check the served
+  `Content-Type` and `nosniff` on `GET .../about-file/:id`.
+- **Look fields**: `clean_font` is a fixed list, `clean_color` takes `#rrggbb` only. Confirm no
+  other field reaches a `style` unchecked.
 - **`linkHref`**: http/https only, resolved against origin. Try `javascript:`/`data:` variants and
   whitespace/control tricks that `new URL()` tolerates.
-- **Where the doc is the oracle**: the `test/about.js` suite already fires hostile CSS at it. Read
-  what it tests, then try what it *doesn't*.
+- **No oracle yet**: `test/about.js` covers the about me route, the sample page and its media,
+  not hostile pages, so there is no test of either sanitizer to compare against.
 
 ## 5. Data layer — `api/src/s3.rs`, uploads, api→video
 
@@ -118,7 +118,7 @@ anything that loads/runs/leaves stripped. **This is the hardened showcase — br
 - **argon2 `HASH_SLOTS = 4`** (auth.rs): only 4 hashes at once, process-wide; the rest queue. A
   flood of logins/signups queues behind the semaphore — measure whether it can stall real logins
   (the per-ip caps are the intended backstop; see if XFF evasion removes it).
-- **Caps to test for off-by-one or bypass**: signup/login windows, `GROUPS_PER_MAKER`, follow
+- **Caps to test for off-by-one or bypass**: signup/login windows, groups owned (`groups_per_owner`, `DEFAULT_GROUPS_PER_OWNER`) and joined (`GROUPS_PER_MEMBER`), follow
   churn (429), dm `slow down`, chat token bucket (nick 2 then 1/30s by ip+nick, login 3 then 1/3.3s by
   account; per room, in-process: does a nick rotation or a reconnect refill it?) / 500 chars, calendar `RANGE_MAX_DAYS=93` /
   `RANGE_LIMIT=1000`, upload sizes (`MAX_ICON`, asset 2 MB).

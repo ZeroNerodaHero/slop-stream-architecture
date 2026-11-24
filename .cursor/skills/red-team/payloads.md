@@ -91,25 +91,23 @@ curl -b "$J" -I "$BASE/api/streamers/redteam-a/avatar?v=<version>"
 # to sneak svg or text/html past the allowlist in profile.rs.
 ```
 
-## About-page CSS sanitizer — the client showcase
+## About-page html sanitizer — the client showcase
 
-`safeCss(css, scope)` runs in the browser. Test it where it lives, not with curl:
+`sanitizeHtml(raw)` (`frontend/src/infra/about.ts`) runs in the browser and `sanitize_html`
+(`api/src/about_page.rs`) on the api. Test both:
 
-- In devtools on a page that imports it, or a tiny `/tmp/redteam/css.html` that imports the same
-  logic, feed candidate payloads and inspect the returned `css` string + what actually renders.
-- Payload families to try (goal: a declaration/selector that survives AND loads, runs, or escapes
-  the box):
-  - loaders the `BAD_VALUE` regex may miss: CSS functions other than `url/image-set/image/src/
-    element/cross-fade/paint/expression` that fetch or compute from a resource.
-  - escapes: backslash tricks that `BAD_VALUE` flags, but check the *parsed* re-emitted form for a
-    decode the regex ran before the browser did (or after).
-  - selector breakout: craft `selectorText` so `splitSelectors` + `#scope ` prefixing lets a rule
-    match outside `#scope` (play with commas inside `()`/`[]`/quotes, stray `{`/`}`).
-  - at-rules: anything other than `@media`/`@supports` should be dropped — confirm `@import`,
-    `@font-face`, `@keyframes`, nested rules all die.
-  - `position: fixed` is rewritten to `absolute` — check you cannot restore `fixed` via a longhand,
-    a var, or `!important` ordering.
-- Compare against `test/about.js`: whatever it already blocks is known-good; find the gap it misses.
+- On the api: `PUT /api/streamers/<a name you own>/about-page` with a text block, then read the
+  object back and see what was kept.
+- In the browser: devtools on a page that imports `about.ts`, or a tiny `/tmp/redteam/html.html`
+  with the same logic; feed candidate payloads and inspect the returned string and what renders.
+- Payload families (goal: markup that survives AND loads, runs, or escapes the block):
+  - tags the drop list forgets, and namespaced or malformed tags the two parsers read differently.
+  - `href` values: `javascript:` with entities, tabs or newlines inside the scheme, protocol-relative
+    `//host`, credentials in the url.
+  - nesting and unclosed tags that make the api's cleaned output parse differently in the browser.
+  - the 10 000-character cut: does it ever split an entity or a tag into something new?
+- `test/about.js` does not fire hostile html at either sanitizer, so there is no known-good list
+  to start from: a payload that survives is a finding to prove, not a gap in a test.
 
 ## Links
 
