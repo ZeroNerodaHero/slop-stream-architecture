@@ -8,6 +8,7 @@ import { store } from '@/infra/store';
 export const FRAME_DIRS = ['in', 'out', 'link'] as const;
 
 export const inspectorOpenAtom = atom(false);
+export const profilerOpenAtom = atom(false);
 export const inspectorPausedAtom = atom(false);
 export const inspectorFrozenAtom = atom<{ rows: FrameEntry[]; count: number } | null>(null);
 export const inspectorFilterAtom = atom('');
@@ -79,6 +80,14 @@ export function closeInspector() {
   store.set(inspectorOpenAtom, false);
 }
 
+export function openProfiler() {
+  store.set(profilerOpenAtom, true);
+}
+
+export function closeProfiler() {
+  store.set(profilerOpenAtom, false);
+}
+
 export function toggleInspectorPaused() {
   const paused = !store.get(inspectorPausedAtom);
   store.set(inspectorPausedAtom, paused);
@@ -114,6 +123,7 @@ function dropFrames() {
   store.set(inspectorPausedAtom, false);
   store.set(inspectorFrozenAtom, null);
   store.set(inspectorOpenAtom, false);
+  store.set(profilerOpenAtom, false);
   tick();
 }
 

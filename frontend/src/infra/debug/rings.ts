@@ -1,40 +1,94 @@
 export type RunKind = 'chat' | 'say' | 'watch';
+export type MetricGroup = 'chat' | 'watch';
 
-export interface TimedRun {
+export interface Metric {
+  key: string;
+  group: MetricGroup;
   label: string;
-  at: number;
-  phases: [string, number][];
+  kind: RunKind;
+  phase: string;
 }
 
-export const RUN_KINDS: readonly RunKind[] = ['chat', 'say', 'watch'];
-export const MAX_RUNS = 20;
-export const QUALITY_SIZE = 300;
-export const QUALITY_COLUMNS = ['t', 'width', 'height', 'fps', 'bitrate', 'lossPct', 'droppedPerSec', 'jitterMs', 'rttMs'] as const;
+export const METRICS: readonly Metric[] = [
+  { key: 'chat-history', group: 'chat', label: 'first lines', kind: 'chat', phase: 'history' },
+  { key: 'chat-subbed', group: 'chat', label: 'chat live', kind: 'chat', phase: 'subbed' },
+  { key: 'chat-first-line', group: 'chat', label: 'first chat line', kind: 'chat', phase: 'first-line' },
+  { key: 'say-ack', group: 'chat', label: 'say ack', kind: 'say', phase: 'ack' },
+  { key: 'watch-ws-open', group: 'watch', label: 'ws open', kind: 'watch', phase: 'ws-open' },
+  { key: 'watch-ice', group: 'watch', label: 'ice connected', kind: 'watch', phase: 'ice-connected' },
+  { key: 'watch-first-frame', group: 'watch', label: 'first frame', kind: 'watch', phase: 'first-frame' },
+  { key: 'watch-decoded', group: 'watch', label: 'first frame decoded', kind: 'watch', phase: 'first-frame-decoded' }
+];
+
+export const METRIC_GROUPS: readonly MetricGroup[] = ['chat', 'watch'];
+export const METRIC_SIZE = 100;
+export const QUALITY_SIZE = 600;
+export const QUALITY_COLUMNS = ['t', 'session', 'width', 'height', 'fps', 'bitrate', 'lossPct', 'droppedPerSec', 'jitterMs', 'rttMs'] as const;
 
 export type QualityColumn = (typeof QUALITY_COLUMNS)[number];
 export type QualitySample = Record<QualityColumn, number>;
 export type Path = 'direct' | 'relay' | null;
 
-export class Timings {
-  readonly runs: Record<RunKind, TimedRun[]> = { chat: [], say: [], watch: [] };
+export class MetricRing {
+  readonly buf: Float64Array;
+  head = 0;
+  count = 0;
 
-  add(kind: RunKind, run: TimedRun): void {
-    const list = this.runs[kind];
-    list.push(run);
-    if (list.length > MAX_RUNS) list.splice(0, list.length - MAX_RUNS);
+  constructor(size = METRIC_SIZE) {
+    this.buf = new Float64Array(size);
   }
 
-  size(): number {
-    return this.runs.chat.length + this.runs.say.length + this.runs.watch.length;
+  push(v: number): void {
+    this.buf[this.head] = v;
+    this.head = (this.head + 1) % this.buf.length;
+    if (this.count < this.buf.length) this.count++;
+  }
+
+  values(): number[] {
+    const size = this.buf.length;
+    const out: number[] = [];
+    for (let i = 0; i < this.count; i++) out.push(this.buf[(this.head - this.count + i + size) % size]!);
+    return out;
   }
 
   clear(): void {
-    for (const kind of RUN_KINDS) this.runs[kind].length = 0;
+    this.buf.fill(0);
+    this.head = 0;
+    this.count = 0;
   }
 }
 
-export function timedRun(label: string, start: number, phases: readonly (readonly [string, number])[], origin: number): TimedRun {
-  return { label, at: origin + start, phases: phases.map(([name, t]) => [name, Math.round(t - start)]) };
+export class Timings {
+  readonly rings = new Map<string, MetricRing>();
+
+  add(kind: RunKind, start: number, phases: readonly (readonly [string, number])[]): void {
+    for (const m of METRICS) {
+      if (m.kind !== kind) continue;
+      const hit = phases.find(([name]) => name === m.phase);
+      if (!hit) continue;
+      let ring = this.rings.get(m.key);
+      if (!ring) {
+        ring = new MetricRing();
+        this.rings.set(m.key, ring);
+      }
+      ring.push(Math.max(0, hit[1] - start));
+    }
+  }
+
+  values(key: string): number[] {
+    return this.rings.get(key)?.values() ?? [];
+  }
+
+  size(): number {
+    let n = 0;
+    for (const ring of this.rings.values()) n += ring.count;
+    return n;
+  }
+
+  clear(): void {
+    for (const ring of this.rings.values()) ring.clear();
+    this.rings.clear();
+  }
 }
 
 export class QualityRing {
@@ -75,14 +129,4 @@ export class QualityRing {
     this.count = 0;
     this.path = null;
   }
-}
-
-const BARS = '▁▂▃▄▅▆▇█';
-
-export function sparkline(values: readonly number[], width = 40): string {
-  const tail = values.slice(-width).map((v) => (Number.isFinite(v) ? v : 0));
-  if (tail.length === 0) return '';
-  const lo = Math.min(...tail);
-  const span = Math.max(...tail) - lo;
-  return tail.map((v) => BARS[span > 0 ? Math.min(7, Math.floor(((v - lo) / span) * 8)) : 0]).join('');
 }
