@@ -121,8 +121,6 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/voice/beat", post(beat))
 }
 
-/// What a grant stands for: who, and where they may talk. `tab` is the page's own id for itself
-/// (`tab_of`), handed on to the voice server: a join from the same tab takes that tab's old seat.
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct Grant {
     user_id: Uuid,
@@ -133,15 +131,12 @@ struct Grant {
     tab: Option<String>,
 }
 
-/// The join's body, all of it optional: `tab`, the page's id for itself.
 #[derive(Deserialize, Default)]
 struct JoinBody {
     #[serde(default)]
     tab: Option<String>,
 }
 
-/// A page's id for itself, kept while it is 1 to 64 of a-z A-Z 0-9 _ -: one random per page
-/// load, so a second tab is a second id. 400 `bad tab` for anything else; none is fine.
 fn tab_of(tab: Option<String>) -> Result<Option<String>, ApiError> {
     match tab {
         None => Ok(None),
@@ -289,13 +284,6 @@ fn new_grant() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// `POST /api/groups/:group/voice/:channel/join`: a grant to take to the voice server,
-/// `{url: "/voice", grant, ttl: 30}`. 401 nobody; 403 not a member; 404 `no such channel` (or
-/// one this login does not see); 400 `not a voice channel`; 409 `already in voice` while in
-/// another channel; 409 `channel full` at its `user_limit` (16 when 0); then 503 `voice is off`
-/// with VOICE_SECRET unset or empty, since no voice server could redeem the grant. An owner, the
-/// channels power and a site admin are never kept out by the limit. The body `{tab}` is optional
-/// (`tab_of`).
 async fn join(
     State(s): State<AppState>,
     Path((group, channel)): Path<(String, String)>,
@@ -338,12 +326,6 @@ async fn join(
     Ok(Json(json!({ "url": "/voice", "grant": grant, "ttl": GRANT_TTL })))
 }
 
-/// Whether `voiceof` naming `now` (`server/channel`) is no other call of the person's: the voice
-/// server holds no seat of theirs in that server but the ones of this page's `tab`, which its join
-/// takes over. A voice server that restarted or crashed said no `left`, and a tab that moves or
-/// joins again asks before its old socket's `left` is through; a second tab that is really in a
-/// call is still `already in voice`. A voice server that does not answer, or does not know the
-/// question (an older one), is no answer: the call stands.
 async fn stale_voiceof(s: &AppState, user: Uuid, now: &str, tab: Option<&str>) -> bool {
     let Some((server, _)) = now.split_once('/') else { return false };
     tell_voice(s, Order::Count, user, server, tab).await == Some(0)
@@ -354,10 +336,6 @@ struct RedeemBody {
     grant: String,
 }
 
-/// `POST /api/voice/redeem {grant}`: the voice server's, inside only (`inside`). Takes the grant
-/// out of redis (GETDEL, so a second redeem of it is a 403 `bad grant`, as is one past its half
-/// minute), asks `may_talk` again, and → `{user_id, name, server, channel, muted}`, and `tab`
-/// when the join named one.
 async fn redeem(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<RedeemBody>, JsonRejection>) -> ApiResult {
     inside(&headers, secret())?;
     let Json(body) = body?;
@@ -380,9 +358,6 @@ async fn is_muted(s: &AppState, server: &str, user: Uuid) -> Result<bool, redis:
 
 // ---- moderating voice -----------------------------------------------------------------------
 
-/// What the api tells the voice server about someone (`tell_voice`): a moderator's mic off or on
-/// again, or their seat taken; or only how many seats they hold (join, `stale_voiceof`). The
-/// voice server's `POST /internal/voice` (video/src/voice.rs).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Order {
     Mute,
@@ -415,8 +390,6 @@ fn voice_url() -> &'static str {
     })
 }
 
-/// The voice server's body for an order about `user` in `server`; `tab`, for a count, is the
-/// page whose own seats are not counted.
 fn order_body(order: Order, user: Uuid, server: &str, tab: Option<&str>) -> Value {
     let mut body = json!({ "action": order.word(), "user_id": user, "server": server });
     if let Some(tab) = tab {
@@ -425,10 +398,6 @@ fn order_body(order: Order, user: Uuid, server: &str, tab: Option<&str>) -> Valu
     body
 }
 
-/// Tells the voice server an order about `user` in `server`, with VOICE_SECRET (never logged).
-/// → how many seats it touched (or counted), None when it could not be told (voice off, the box
-/// down): the api's side stands anyway (`muted_key` is read again at the next redeem; a
-/// disconnect takes the seat out of the room here too).
 async fn tell_voice(s: &AppState, order: Order, user: Uuid, server: &str, tab: Option<&str>) -> Option<u64> {
     let secret = secret()?;
     let res = s
@@ -670,11 +639,6 @@ struct BeatBody {
     peers: Vec<Peer>,
 }
 
-/// `POST /api/voice/beat {peers: [{user_id, server}]}`: the voice server's, inside only, every
-/// 15s for everyone it has seated. Sets each one's `beat` to now; someone not in voice (swept,
-/// left) stays out. → `{beat, missing}`: how many it found, and the peers it had no field for
-/// (an `attached` that never got here, a redis that lost them), which the voice server attaches
-/// again: an `attached` is how anyone comes back, never a beat.
 async fn beat(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<BeatBody>, JsonRejection>) -> ApiResult {
     inside(&headers, secret())?;
     let Json(body) = body?;
@@ -695,8 +659,6 @@ async fn beat(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<B
     Ok(Json(json!({ "beat": found.iter().sum::<i64>(), "missing": missing(&body.peers, &found) })))
 }
 
-/// The peers a beat found no field for (`found` is BEAT's answer for each, in order), as
-/// `[{user_id, server}]`.
 fn missing(peers: &[Peer], found: &[i64]) -> Vec<Value> {
     peers
         .iter()
@@ -853,7 +815,6 @@ mod tests {
         assert!(!json!(g).to_string().contains("tab"), "no tab, none said");
         let g = Grant { tab: Some("t1".into()), ..g };
         assert_eq!(json!(g)["tab"], "t1");
-        // a grant kept before tabs were
         let old: Grant = serde_json::from_str(r#"{"user_id":"00000000-0000-0000-0000-000000000007","name":"a","server":"s","channel":"c"}"#).unwrap();
         assert_eq!(old.tab, None);
     }
