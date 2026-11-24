@@ -1,6 +1,6 @@
 # frontend/src/shared-components
 
-the header comment of each file in `frontend/src/shared-components` and the doc comment of each export, moved here when the source lost its comments (`.cursor/rules/no-comments.mdc`). the code is the truth; these say what a file was written for at the time of the move, so check a detail against the code before trusting it. `ChatPanel.tsx` and `ChatVideoPlayer.tsx` were left out of that sweep (#180 touches them) and still carry their own.
+the header comment of each file in `frontend/src/shared-components` and the doc comment of each export, moved here when the source lost its comments (`.cursor/rules/no-comments.mdc`). the code is the truth; these say what a file was written for at the time of the move, so check a detail against the code before trusting it.
 
 ## `frontend/src/shared-components/About.tsx`
 
@@ -1345,3 +1345,37 @@ floats, so it no longer sits on the rule `divide-y` draws above the block and cu
 input's containing block is the pane wrapper outside the scrolling tabpanel: a card low in the
 pane puts its 1px input past the dialog's bottom edge, and the click that focuses it scrolls
 the overflow-hidden dialog down to it, taking the rail and the pane out of view.
+
+## `frontend/src/shared-components/ChatPanel.tsx`
+
+`export function pictureSrc`: Where a chat picture is fetched from, by the id `POST /api/chat-images` handed back.
+
+`export function ChatImages`: The pictures on a line, under the words. One is drawn as it is, at most five lines tall. Two
+sit side by side. More make two rows, the first with the odd one out, and the pictures of a
+row share its width, cropped to fill their cells: three are two over one across the whole row,
+five are three over two, eight are four over four. A click on any puts it over the whole page
+(`PictureView`), in the window the chat is in: the page's, or the popped-out player's own.
+A direct message's pictures are drawn by the same (FriendChat.tsx), and so are a pinned line's in
+a group channel's pins list (ServerRoom.tsx), `small` there: rows 4rem tall, one picture at most
+5rem, to sit in the narrow list.
+
+`export function EquesLine`: Eques's line itself, in the lines' shape, whatever the switches say: the chat's welcome, and its preview in the welcome editor (WelcomeEditor.tsx).
+
+`export function RoomLines`: A room's lines in the shape this browser picked, each as the panel draws it: the panel's
+list, and a group channel's pinned lines in a phone's sheet (PinSheet.tsx). `name` is the
+panel's: whose lines are `mine` is said against it. Each line has the action bar (ChatLine.tsx
+`LineActions`): react where `reacts` (the panel's own list, not a pin's copy: a login picks an
+emoji, a nick is told to log in), reply where `replies` (the panel's own list once it can speak),
+the caller's own buttons (`lineActions`), and `more`; `lineSide` puts buttons in a column of
+their own at the line's right (the sheet's jump and unpin). A reply wears the quote of its line, a
+click on which goes there where `jumps` (`ChatRoom.jumpToReply`); a line's reactions stand under
+it as chips (Reactions.tsx `ReactionChips`), a click on one putting yours on or off.
+
+## `frontend/src/shared-components/ChatVideoPlayer.tsx`
+
+`export function ChatVideoPlayer`: The video on a line (docs/chat.md "videos"): the browser's own player, its poster the frame the
+sender's page grabbed, no bytes asked for until a press on play (`preload="none"`), never
+playing on its own. As tall as a picture is at most, five lines (`max-h-[7.5rem]`), or the
+pins list's `small` row. Every chat draws it: a stream's, a group channel's, a direct message.
+One an admin took down (its poster goes with it) says "removed" instead; one this viewer may not
+see says so.
