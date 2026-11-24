@@ -102,6 +102,13 @@ https://stats.nodentity.xyz {
 		}
 	}
 
+	@rt path /rt /rt/*
+	handle @rt {
+		reverse_proxy chat:4100 {
+			import real_ip
+		}
+	}
+
 	handle /thumb/* {
 		reverse_proxy video:7880 {
 			import real_ip

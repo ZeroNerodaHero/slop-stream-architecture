@@ -132,6 +132,7 @@ impl IpSlots {
         Some(IpSlot { held: self.held.clone(), ip })
     }
 
+    #[cfg(test)]
     pub(crate) fn held(&self, ip: &str) -> usize {
         locked(&self.held).get(ip).copied().unwrap_or(0)
     }

@@ -187,6 +187,7 @@ run calendar
 run about
 run socials
 run prefetch
+run rt
 run voice
 if [ "$LOCAL" = 1 ]; then
   run regress

@@ -12,6 +12,7 @@ the database is one file, `api/schema.sql`, applied by the api at boot to an emp
 - `idea.md` — the product, not a build. open groups where people show their face and talk, a person's own stream they can decorate, and one person sharing audio for everyone else to hear. `overview.md` is what runs.
 - `spec.md` — the long one. every port, route, env, timeout and rule, for a person or an llm building on it.
 - `chat.md` — the text chat: why redis streams and a websocket, the protocol, the limits, the panel.
+- `rt.md` — built, server side. one always-on websocket per browser for chat and events topics (`/rt` in the chat process): full-set `sub` frames with a rising `rev`, the caps, `say` and `react` with an ack, ticket auth for a login without a reconnect.
 - `chats.md` — the map of the three chats. a stream's room, a group's channel, and a direct message: where each one is, who may write, what is kept. the rules stay in `chat.md`, `groups.md` and `dms.md`.
 - `architecture.md` — background from before the build. the big picture of calls vs broadcasts, not the repo layout.
 - `architecture-picture.md` — the repo as pictures. what runs, what talks to what, what builds into what. no new rules, just diagrams of what is already here.

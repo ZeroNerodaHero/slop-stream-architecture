@@ -50,6 +50,8 @@ pub(crate) const NEW_NAMES: Rule = rule("new-names", 20, 3600, Key::Who);
 pub(crate) const CHAT_SOCKET: Rule = rule("chat-socket", 60, 60, Key::Ip);
 pub(crate) const HISTORY: Rule = rule("history", 300, 60, Key::Ip);
 pub(crate) const EVENTS_SOCKET: Rule = rule("events-socket", 60, 60, Key::Ip);
+pub(crate) const RT_SOCKET: Rule = rule("rt-socket", 60, 60, Key::Ip);
+pub(crate) const RT_TICKET: Rule = rule("rt-ticket", 30, 60, Key::Ip);
 pub(crate) const HOME: Rule = rule("home", 300, 60, Key::Ip);
 pub(crate) const PING: Rule = rule("ping", 600, 60, Key::Ip);
 
@@ -291,6 +293,8 @@ pub(crate) fn chat_rule(_: &Method, path: &str) -> Rule {
     match path {
         "/health" => PING,
         "/chat/{name}" | "/chat/{server}/{channel}" => CHAT_SOCKET,
+        "/rt" => RT_SOCKET,
+        "/rt/ticket" => RT_TICKET,
         p if p.ends_with("/search") => Rule { key: Key::Ip, ..SEARCH },
         _ => HISTORY,
     }
@@ -439,6 +443,8 @@ mod tests {
         assert_eq!(chat_rule(&Method::GET, "/chat/{name}/before").tier, "history");
         assert_eq!(chat_rule(&Method::GET, "/chat/{server}/{channel}/search").key, Key::Ip);
         assert_eq!(events_rule(&Method::GET, "/events"), EVENTS_SOCKET);
+        assert_eq!(chat_rule(&Method::GET, "/rt"), RT_SOCKET);
+        assert_eq!(chat_rule(&Method::POST, "/rt/ticket"), RT_TICKET);
         assert_eq!(home_rule(&Method::GET, "/api/streams"), HOME);
         assert_eq!(home_rule(&Method::GET, "/health"), PING);
     }
