@@ -17,8 +17,17 @@
     </script>
     <script>
       try {
+        window.__bootMe = fetch('/api/me', { cache: 'no-store' });
+        window.__bootMe.catch(function () {});
+      } catch (e) {}
+      try {
         var watchPath = /^\/watch\/([^/]+)\/?$/.exec(location.pathname);
         var watchName = watchPath && decodeURIComponent(watchPath[1]).trim().toLowerCase();
+        if (watchName && /^[a-z0-9_-]{1,32}$/.test(watchName)) {
+          var bootChat = { name: watchName, born: performance.now(), lines: fetch('/chat/' + watchName + '/before', { cache: 'no-store' }) };
+          bootChat.lines.catch(function () {});
+          window.__bootChat = bootChat;
+        }
         if (watchName && /^[a-z0-9_-]{1,32}$/.test(watchName) && window.RTCPeerConnection) {
           var boot = { name: watchName, born: performance.now() };
           boot.grant = fetch('/api/streams/' + watchName + '/watch', { method: 'POST', signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined });

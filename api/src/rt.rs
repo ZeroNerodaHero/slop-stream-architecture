@@ -921,6 +921,7 @@ impl Conn {
             Ok(who) => who,
             Err(Unknown::Refused(why)) => return Err((why, None)),
             Err(Unknown::Busy) => return Err((BUSY, None)),
+            Err(Unknown::Reader) => return Err((chat::READING_ONLY, None)),
         };
         let test_room = chat::test_room_of(&self.s, &r.room, r.server.as_deref()).await;
         let speaker = Speaker::of(Some(&who), &self.hello, &self.ip, test_room);

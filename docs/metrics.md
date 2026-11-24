@@ -10,23 +10,28 @@ flowchart LR
     docker[("docker engine")]
     proc[("/proc · docker's disk")]
     agent["agent · api agent · :4300<br/>a sample every 15s · keeps the last hour"]
-    caddy["frontend · caddy :443"]
-    stats["stats · api monitor · :3002<br/>pulls every box · keeps 7 days"]
+    caddy["frontend · caddy :443<br/>compose project stream"]
+    subgraph mon["compose project monitor"]
+      stats["monitor · api monitor · :3002<br/>pulls every box · keeps 7 days"]
+      mcaddy["monitor-caddy :8443<br/>optional (STATS_HTTPS_PORT)"]
+    end
     agent -->|"socket, read-only, GET only"| docker
     agent --> proc
     caddy -->|"/api/metrics + OPS_TOKEN"| agent
-    caddy -->|"stats.nodentity.xyz + basic auth<br/>private network 'stats'"| stats
+    caddy -->|"stats.nodentity.xyz<br/>network stream_stats, alias stats"| stats
+    mcaddy --> stats
     stats -->|"https://frontend/api/health · /api/errors · /api/metrics"| caddy
   end
   vm2["another box<br/>same stack, its own agent"]
   stats -->|"https://&lt;its ip&gt;/api/metrics + its OPS_TOKEN"| vm2
   you["you"] -->|"cloudflare → https://stats.nodentity.xyz"| caddy
+  you -.->|"with an origin rule to :8443"| mcaddy
 ```
 
 three pieces, all the api binary, all the api image, nothing new to build or pull:
 
 - **`agent`** (`api agent`, `api/src/agent.rs`) on every box, in the main `docker-compose.yml`, no profile. reads its own box and nothing else.
-- **`stats`** (`api monitor`, `api/src/monitor.rs`) on test-machine only, under the compose profile `stats`. the same monitor as `monitor/` (`docs/debugging.md`), started beside the stack and reached through caddy instead of `ssh -L`.
+- **`monitor`** (`api monitor`, `api/src/monitor.rs`) on test-machine only, in a compose project of its own, `monitor` (`monitor/docker-compose.yml`, plus `monitor/beside-app.yml` on a box that also runs the app). app deploys never touch it (below). the same compose file runs it on a box of its own.
 - **the page** (`api/src/monitor.html`, built into the binary): plain html and js, canvas for the lines, no library, no build step.
 
 ## the agent
@@ -93,6 +98,8 @@ the monitor pulls `/api/metrics` from every box in its `TARGETS` every 15 s (`ME
 
 12 host numbers and 7 per container, averaged into each point. that is a few hundred kilobytes a box, kept in `/data/metrics.json` beside `monitor.json`, written every 5 minutes and when the monitor stops. after a restart it asks each agent for everything since its last point, so the last hour comes back whole even after a crash; the 24h and 7d rings lose at most the 5 minutes since the last write.
 
+a box with a token whose agent misses `DOWN_AFTER` pulls in a row (3, 45 s) gets an `agent-down` event, `<name> agent DOWN: <why>`, and an `agent-up` when it answers again; both go to `STATS_ALERT_WEBHOOK` too, unless the box is already down (its own down alert said it).
+
 - `GET /api/monitor` (what the page polls) carries each box's newest sample as `metrics`, or `metrics.status` saying why there is none: `no OPS_TOKEN for this box`, `401: ...` (the token is wrong), `404: that box has no OPS_TOKEN for its agent, or its Caddyfile predates /api/metrics`, `no answer in 5s`.
 - `GET /api/monitor/metrics?target=<name>&range=1h|24h|7d`: one range of one box as columns, `{ "t": [...], "host": { "cpu_pct": [...], ... }, "containers": { "api": { "cpu_pct": [...], ... } }, "latest": {...} }`.
 
@@ -158,7 +165,7 @@ dns: a proxied cloudflare cname to `nodentity.xyz`, ssl mode full. the request r
 
 | | how | without the password or token |
 |---|---|---|
-| the page and `/api/monitor*` | `https://stats.nodentity.xyz` only. the `stats` container publishes no port and sits on its own compose network, `stats`, with caddy and nothing else: not the api, not the database, not a host port | 401 (or 503 while off); anyone, with `STATS_PUBLIC=true` |
+| the page and `/api/monitor*` | `https://stats.nodentity.xyz`, and `https://stats.nodentity.xyz:8443` with `STATS_HTTPS_PORT=8443`. the `monitor` container publishes `:3002` on the box's loopback only (`MONITOR_PORT`), and shares one network with the app, `stream_stats`, on which only caddy is: not the api, not the database | 401 (or 503 while off); anyone, with `STATS_PUBLIC=true` |
 | the agent's numbers | `https://<any host>/api/metrics` on the main site. the agent publishes no port | 404 with no `OPS_TOKEN` on the box, 401 with a wrong one |
 | the agent and the monitor's `/health`, each api process's `:9300/timings` | inside docker only | — |
 
@@ -174,7 +181,7 @@ an explicit opt-in for while the numbers are fine for anyone to see. in `.env` o
 STATS_PUBLIC=true
 ```
 
-then `./scripts/deploy.sh stats`. caddy is recreated (a second or two), and the `stats` container is started if it was not running.
+then `./scripts/deploy.sh stats`. caddy is recreated (a second or two), and the monitor is brought up to date.
 
 - exactly `true`, lowercase. anything else (`TRUE`, `yes`, `1`) is not public: the site goes by the password settings as before, and with those blank it is still a 503. `deploy.sh` warns about any other value.
 - what goes public: the page, `GET /api/monitor`, `GET /api/monitor/metrics` and `GET /api/monitor/timings*`. they only read; any other method is a 405. the box names, their urls in `STATS_TARGETS`, builds, uptimes, events, the host and container numbers, and every route template and sql statement (values taken out) with its timings are on it.
@@ -203,7 +210,7 @@ then:
 ./scripts/deploy.sh stats
 ```
 
-caddy is recreated with the new values (a second or two where the main site does not answer either; open websockets reconnect, live video keeps flowing), the agent too, and the `stats` container is started. a new password is the same three steps. to turn the site off: empty both values, `./scripts/deploy.sh stats` (it answers 503), and `docker compose --profile stats stop stats`.
+caddy is recreated with the new values (a second or two where the main site does not answer either; open websockets reconnect, live video keeps flowing), the agent too, and the monitor is brought up to date. a new password is the same three steps. to turn the site off: empty both values, `./scripts/deploy.sh stats` (it answers 503), and `docker compose -p monitor stop`.
 
 ### add a vm
 
@@ -222,7 +229,54 @@ a config change on two boxes, no code:
 
 removing a box is the same edit the other way; its history is forgotten.
 
-the stats site lives on test-machine, so it cannot tell you test-machine is dead: the page simply does not load, and the webhook (`STATS_ALERT_WEBHOOK`) cannot fire. for that, `monitor/` on a box of its own still watches every box from outside (`docs/debugging.md`, "the monitor box"); its page shows the same graphs.
+the monitor lives on test-machine, so it cannot tell you test-machine itself is dead: the page does not load, and the webhook (`STATS_ALERT_WEBHOOK`) cannot fire. it does tell you when the app on it is down, caddy, api or database: that is what moving it to a box of its own (below) fixes for the box too.
+
+## the monitor and app deploys
+
+**the rule: app deploys never stop, restart or recreate the monitor.** not a full `./scripts/deploy.sh`, not `--pull`, not `api`, `frontend`, `video`, `dummy`, `voice`, not `--prune-deploy`, not `docker compose down` or `up` of the app. only `./scripts/deploy.sh stats` touches it. a monitor that restarts with what it watches misses the outage it is there to see.
+
+how that holds:
+
+- **its own compose project.** `monitor/docker-compose.yml` is project `monitor`; the app's `docker-compose.yml` is project `stream` and has no monitor in it. `docker compose up`, `down` and `restart` in the repo root only see project `stream`.
+- **one shared network, owned by the app.** on test-machine `monitor/beside-app.yml` joins the monitor to `stream_stats` (the app's `stats` network) with the alias `stats`, so the app caddy's `reverse_proxy stats:3002` reaches it and it reaches the app at `https://frontend`. `docker compose down` of the app removes everything else and leaves that network, since the monitor is on it ("Resource is still in use", exit 0); the next `up` uses it as it is.
+- **`restart: unless-stopped`**, and its image is never pruned while it runs (the prune only drops images no container has).
+- **it reports instead of crashing.** every check has a 5 s timeout and is a result, not a panic: caddy gone is `dns error` or `connection refused`, the api gone is `502: caddy answers, the api behind it does not`, postgres gone is `503: postgres down`, the agent gone is an `agent-down` event. each is a down event and a webhook post, and the up comes after.
+- **`deploy.sh` says so.** its first lines carry the rule (`MONITOR_RULE`, printed in `--help`), the summary prints a `Monitor:` line with how long it has run, and `--pull` says when the api or `monitor/` changed and the monitor kept its image: `./scripts/deploy.sh stats` moves it, when you choose.
+
+tested on a copy of the stack: the monitor's start time, restart count and container id were the same after a full deploy with a new api image, `--pull`, `--prune-deploy api`, `api`, `frontend`, `voice`, and `docker compose down` then a full deploy; the page showed the box down, then up after 1m 15s.
+
+### the page while the app's caddy restarts
+
+`https://stats.nodentity.xyz` comes in through the app's caddy, so a caddy recreate (a deploy of `frontend` or `stats`, a full deploy that changed the Caddyfile) or `docker compose down` takes the page away for that long; the monitor keeps watching and keeps its history, the page is just not reachable. to close that gap the monitor has a caddy of its own, `monitor-caddy`, off until you give it a port:
+
+1. in `.env` on test-machine: `STATS_HTTPS_PORT=8443`, then `./scripts/deploy.sh stats`. `https://stats.nodentity.xyz:8443` now answers from the monitor's project, with the same password or `STATS_PUBLIC`, the same headers and `Cache-Control: private, no-store` (`monitor/Caddyfile`), and a cert of its own (`tls internal`, which cloudflare's "full" accepts).
+2. gcp: a firewall rule for tcp 8443 to test-machine, from cloudflare's ranges only (https://www.cloudflare.com/ips/) or from anywhere.
+3. cloudflare, nodentity.xyz, rules, origin rules: when hostname equals `stats.nodentity.xyz`, destination port 8443. the dns record stays as it is.
+
+after that the app's caddy is out of the path of the page, and a deploy of the app does not blink it. until those three are done, the gap is there: a few seconds per caddy recreate.
+
+## the monitor on a box of its own
+
+it runs on test-machine for now. to move it to a small box that rarely changes (an e2-micro is plenty), the same `monitor/docker-compose.yml`, without `beside-app.yml`, with its own caddy on 443:
+
+1. on the new box: docker, `git clone` this repo, `cd monitor`, `cp .env.example .env`, and in it:
+
+   ```
+   STATS_TARGETS=test-machine=https://<test-machine's internal ip>,vm2=https://<vm2's internal ip>
+   STATS_TOKENS=test-machine=<its OPS_TOKEN>,vm2=<its OPS_TOKEN>
+   STATS_ALERT_WEBHOOK=<the webhook, if any>
+   STATS_PUBLIC=true
+   MONITOR_IMAGE=ghcr.io/<owner>/stream-api:<tag>
+   ```
+
+   or `STATS_BASIC_AUTH_USER` and `STATS_BASIC_AUTH_HASH` (single quotes) instead of `STATS_PUBLIC`. `STATS_HTTPS_PORT` defaults to 443, `STATS_TLS` to `internal` (an email there gets a let's encrypt cert, for a host not behind cloudflare).
+2. `docker compose --profile tls pull && docker compose --profile tls up -d --no-build` (or `up -d --build` to compile the image there instead, `CARGO_BUILD_JOBS=1`, slow on a small box). it checks `/api/health` on every target, pulls each agent's `/api/metrics`, `/api/errors` and timings with its token, and keeps the up/down history in its own volume.
+3. firewall: tcp 443 in on the new box; each vm's 443 from the new box (internal ips keep the tokens off the internet).
+4. history, if wanted: on test-machine `docker compose -p monitor stop`, copy the volume `monitor_monitor-data` across (`docker run --rm -v monitor_monitor-data:/d alpine tar -C /d -c . > history.tar`, the other way on the new box), before step 2.
+5. cloudflare: point the `stats` cname at the new box (proxied, ssl full), and drop the origin rule if one was made.
+6. on test-machine: `docker compose -p monitor down` (keeps its volume) and empty `STATS_BASIC_AUTH_*` and `STATS_PUBLIC` there, so its `stats.nodentity.xyz` block answers 503.
+
+the box then watches test-machine from outside: a dead test-machine is a down event and a webhook post. to update it: `git pull`, set the new tag in `MONITOR_IMAGE`, the two commands of step 2.
 
 ### env
 
@@ -236,13 +290,19 @@ in the root `.env` (`.env.example` has them all, empty):
 | `STATS_TARGETS` | the boxes to watch, `name=url` comma separated. empty: this box alone, `<ENV_NAME>=https://frontend` |
 | `STATS_TOKENS` | `name=token` for boxes whose `OPS_TOKEN` is not this box's |
 | `STATS_ALERT_WEBHOOK` | where the monitor posts down and up (discord or slack style). empty: the page and the log only |
+| `STATS_HTTPS_PORT` | empty: the page only through the app's caddy. a port (8443): the monitor's own caddy on it too, for an origin rule (above) |
 | `OPS_TOKEN` | already there for `/api/errors`; now also the key to this box's `/api/metrics`. empty: the agent's numbers are off, and the page says so |
 
-compose sets the rest on the services: `SAMPLE_EVERY_SECS` 15, `KEEP_SAMPLES` 240 and `TIMINGS_FROM` on the agent, `METRICS_EVERY_SECS` 15 on the monitor (and in `monitor/.env.example` for the standalone one). `TIMINGS_PORT` (9300; 0 turns it off) is not set anywhere: the default is the one `TIMINGS_FROM` names.
+compose sets the rest on the services: `SAMPLE_EVERY_SECS` 15, `KEEP_SAMPLES` 240 and `TIMINGS_FROM` on the agent, `CHECK_EVERY_SECS` 15, `METRICS_EVERY_SECS` 15 and `DOWN_AFTER` 3 on the monitor. `TIMINGS_PORT` (9300; 0 turns it off) is not set anywhere: the default is the one `TIMINGS_FROM` names.
+
+on a box of its own, `monitor/.env` (`monitor/.env.example`) takes the same `STATS_*` names, plus `MONITOR_IMAGE` (the api image to run), `STATS_HOST` (the site's name, `stats.nodentity.xyz`), `STATS_TLS` (`internal` or an acme email), `MONITOR_PORT` (the loopback port, 3002) and the `*_EVERY_SECS` and `DOWN_AFTER` above. the old names (`TARGETS`, `OPS_TOKENS`, `ALERT_WEBHOOK`) still work there.
 
 ## deploy
 
-`./scripts/deploy.sh` knows both services: a full deploy and `--pull` bring up `agent` with the stack, and `stats` when both `STATS_BASIC_AUTH_*` are set, and swap both with the api image (`./scripts/deploy.sh api`). `./scripts/deploy.sh stats` checks the two values, recreates caddy and the agent, and starts or updates `stats`. the summary at the end prints a `Stats:` line, on with the user name or off and why.
+- a full `./scripts/deploy.sh`, `--pull` and `api` bring up and swap `agent` with the stack and the api image. none of them touch the monitor (the rule above).
+- `./scripts/deploy.sh stats` checks the `STATS_*` values, recreates caddy and the agent, then brings the monitor (project `monitor`) to the api image and the `.env`, with `monitor-caddy` when `STATS_HTTPS_PORT` is set, and waits for it to be healthy. stats off: the monitor is left as it is.
+- the first `./scripts/deploy.sh stats` after this change moves the monitor out of the app's project, once: the old `stats` container stops (writing its history), the history is copied from `stream_stats-data` to `monitor_monitor-data`, the old container goes, the new one starts. `stream_stats-data` is left as it was; `docker volume rm stream_stats-data` once the page looks right. until then the old `stats` container keeps running beside the app, untouched by app deploys too (compose calls it an orphan and leaves it).
+- the summary prints a `Stats:` line (public, the user, or off and why) and a `Monitor:` line (running since when, or not here).
 
 ## cost
 

@@ -2,12 +2,14 @@
 
 how you find out something broke, and what. three layers, each cheap.
 
-- **is the box up** — a monitor polls every box and tells you. our own code: `api monitor`, one container, one json file, one page. it runs beside the stack on test-machine as the stats site, https://stats.nodentity.xyz behind a password, and can run on a machine of its own (`monitor/`), which is the only place that sees test-machine itself die.
+- **is the box up** — a monitor polls every box and tells you. our own code: `api monitor`, one container, one json file, one page. it runs on test-machine as the stats site, https://stats.nodentity.xyz, in a compose project of its own (`monitor/`), and the same compose file runs it on a machine of its own, which is the only place that sees test-machine itself die.
+
+**never restart the monitor during app deploys.** a full `./scripts/deploy.sh`, `--pull`, `api`, `frontend`, any named service, `docker compose down` or `up` of the app: none of them stop, restart or recreate it, and nothing you add to them should. only `./scripts/deploy.sh stats` deploys it. a monitor that goes down with the app sees nothing of the outage it is for. how that holds: `docs/metrics.md`, "the monitor and app deploys".
 - **what broke for a person** — the pages report their own failures to `/api/errors`. the api keeps them in a separate `debug` database. `/admin` shows them, and so does the monitor, for every box at once.
 - **what is the box doing** — `api agent` on every box: cpu, steal, load, memory, swap, disk, network, pressure, and every container's cpu, memory, network, disk io, restarts and uptime, every 15 s. the monitor keeps an hour, a day and a week of it and the stats page graphs it (`docs/metrics.md`). the same pull brings each route's, sql statement's, redis command's and s3, video and voice call's count, errors and p50/p95/p99/max, in a table on the box's tab: where a slow page spends its time.
 - **what is the browser being told** — the messages inspector (`status.md`): a setting in the user modal keeps the frames this browser sends and gets on its three sockets (the events socket, which lives in a shared worker and so never shows in a tab's devtools; the chat; the video setup), the last 1000, with a filter, in a panel that floats over the page. tokens are taken out before anything is kept. nothing leaves the browser: frames are not failures, and the report budget below would go in seconds.
 
-built: the health answer, the error reports, the debug database, `/admin`, the monitor (`api monitor`, its page, its compose file), the agent and its graphs, the stats site. not built: a monitor box of its own (you make it, ten minutes), a shell script for a one-off look at a box (there is no `status.sh` in the repo), the watcher bot, grafana. see the end.
+built: the health answer, the error reports, the debug database, `/admin`, the monitor (`api monitor`, its page, its compose project with its own caddy), the agent and its graphs, the stats site. not built: a monitor box of its own (the compose file is ready; the machine is not, `docs/metrics.md` says how to move it), a shell script for a one-off look at a box (there is no `status.sh` in the repo), the watcher bot, grafana. see the end.
 
 ## the shape
 
@@ -15,7 +17,7 @@ built: the health answer, the error reports, the debug database, `/admin`, the m
 flowchart LR
   subgraph prod["test-machine"]
     pfe[pages] -->|"POST /api/errors<br/>same origin · sendBeacon"| papi[api]
-    pstats["stats · api monitor<br/>stats.nodentity.xyz · password"] -->|"health · errors · metrics"| papi
+    pstats["monitor · api monitor · own compose project<br/>stats.nodentity.xyz · password"] -->|"health · errors · metrics"| papi
     pstats -->|"/api/metrics"| pagent["agent<br/>docker + /proc"]
     papi --> pdb[(stream db)]
     papi --> pdbg[(debug db)]
@@ -148,38 +150,43 @@ in the pages, for a name in `ADMIN_NAMES`. the droplet's own `/api/health` at th
 
 ## the monitor box
 
-the smallest box that can build the rust image: 2 GB, or 1 GB plus swap. `monitor/docker-compose.yml` runs the api binary as `api monitor` (`api/src/monitor.rs`): one container, one volume, nothing pulled from anyone but debian and rust.
+`monitor/docker-compose.yml` runs the api image as `api monitor` (`api/src/monitor.rs`), compose project `monitor`: one container, one volume, `restart: unless-stopped`, and a caddy in front under the profile `tls`. on test-machine `./scripts/deploy.sh stats` runs it with `monitor/beside-app.yml`, which puts it on the app's `stream_stats` network as `stats`. on a box of its own (an e2-micro does: it pulls the image, nothing to compile):
 
 ```
 git clone <repo> && cd slop-stream-architecture/monitor
-cp .env.example .env            # TARGETS=prod=https://1.2.3.4,dev=https://5.6.7.8   OPS_TOKENS=prod=…,dev=…   ALERT_WEBHOOK=…
-BUILD=$(git rev-parse --short HEAD) docker compose up -d --build
-ssh -L 3002:127.0.0.1:3002 root@<monitor ip>      # from your laptop. then http://localhost:3002
+cp .env.example .env
+docker compose --profile tls pull && docker compose --profile tls up -d --no-build
 ```
 
-per box in `TARGETS`:
+with `STATS_TARGETS=prod=https://1.2.3.4,dev=https://5.6.7.8`, `STATS_TOKENS=prod=…,dev=…`, `STATS_ALERT_WEBHOOK=…`, `MONITOR_IMAGE` and `STATS_PUBLIC=true` or the `STATS_BASIC_AUTH_*` pair in that `.env`. the page is then `https://<its name>` through its caddy, or `ssh -L 3002:127.0.0.1:3002` and http://localhost:3002 without the `tls` profile. moving it off test-machine, step by step: `docs/metrics.md`, "the monitor on a box of its own".
+
+- **stop it**: `docker compose -p monitor stop` (on test-machine, from the repo). `docker compose -p monitor down` removes the containers and keeps the history volume. never with `-v` unless the history should go.
+- **logs**: `docker logs -f monitor`. a box going down is a `warn` line with the reason; the monitor itself carries on.
+
+per box in `STATS_TARGETS`:
 
 | every | asks | keeps |
 |---|---|---|
 | 15s (`CHECK_EVERY_SECS`) | `GET /api/health`, 5s to answer. the self-signed cert is not checked: an ip has no name to check against | up or down and since when; the last answer (build, env, live, video, postgres, redis, debug db, both uptimes); the latency; an hourly tally for the 24h and 7d percentages |
-| 60s (`ERRORS_EVERY_SECS`) | `GET /api/errors?limit=50` with that box's token (`OPS_TOKENS=prod=…,dev=…`, or one `OPS_TOKEN` for all) | the newest 100 reports, with stack and extras. a box without a token says so on the page instead |
+| 60s (`ERRORS_EVERY_SECS`) | `GET /api/errors?limit=50` with that box's token (`STATS_TOKENS=prod=…,dev=…`, or one `OPS_TOKEN` for all) | the newest 100 reports, with stack and extras. a box without a token says so on the page instead |
 | 15s (`METRICS_EVERY_SECS`) | `GET /api/metrics` with the same token: that box's agent (`docs/metrics.md`) | the newest sample, and an hour at 15 s, a day at 2 min and a week at 15 min of host and container numbers in `/data/metrics.json` |
 
-- **down** is `DOWN_AFTER` (3) failed rounds in a row, dated from the first miss, so one lost packet is not a page. a miss while up shows as "1 missed check: <why>" on the page and nowhere else. **up** again comes with the downtime. both go to the log, the page's event list, and `ALERT_WEBHOOK` when set, as json `{"content": …, "text": …}`: a discord webhook reads the first, slack and most others the second. that webhook is the one thing a monitor cannot keep in-house; leave it empty and the page and the log are the alert.
+- **down** is `DOWN_AFTER` (3) failed rounds in a row, dated from the first miss, so one lost packet is not a page. a miss while up shows as "1 missed check: <why>" on the page and nowhere else. **up** again comes with the downtime. an agent that misses as many pulls is an `agent-down` event, and `agent-up` when it is back. all of them go to the log, the page's event list, and `STATS_ALERT_WEBHOOK` when set (an agent going down with its box is left to the box's own alert), as json `{"content": …, "text": …}`: a discord webhook reads the first, slack and most others the second. that webhook is the one thing a monitor cannot keep in-house; leave it empty and the page and the log are the alert.
 - the reason is the api's own words when it answered (`503: postgres down`), caddy's code when the api behind it is gone (`502: caddy answers, the api behind it does not`), or the connect error (`tcp connect error: Connection refused`, `no answer in 5s`).
 - `up_secs` going backwards is an event too, "api restarted (had been up 3h 12m)", same for video. a new `build` is "api build d668007 → 5ba44d7"; a new `version` is "release v12 → v13". so a deploy reads as two lines and a crash loop as a column of restarts, with no docker access to the box.
-- its memory is one file, `/data/monitor.json` in the volume, rewritten after every round as a temp file and a rename. a restart or a rebuild keeps everything; a name removed from `TARGETS` is forgotten, a renamed one starts over. `docker compose exec monitor cat /data/monitor.json` is the whole database.
+- its memory is one file, `/data/monitor.json` in the volume, rewritten after every round as a temp file and a rename. a restart or a rebuild keeps everything; a name removed from `STATS_TARGETS` is forgotten, a renamed one starts over. `docker exec monitor cat /data/monitor.json` is the whole database.
 - the page (`api/src/monitor.html`, built into the binary; no node, no vite) polls `GET /api/monitor` every 5s: a tab per box and, with more than one, an "all boxes" tab of cards. a card has the pill, the 24-hour bar, the health grid (greyed while down, showing the last answer), the events, the error table, a row opening on click. a box's tab adds the host graphs and the container table over 1h, 24h or 7d (`docs/metrics.md`). plain html and js, every string through `textContent`: the reports come from strangers' browsers.
-- on its own box it is loopback only, so no login of its own: `ssh -L` is the door. on test-machine it is the stats site, behind caddy's password (below). `GET /health` on it answers `{ ok, up_secs, targets, build }` for whoever watches the watcher.
+- the monitor has no login of its own: a caddy in front holds the password (the app's on test-machine, its own `monitor-caddy` elsewhere), or `ssh -L` is the door to its loopback port. `GET /health` on it answers `{ ok, up_secs, targets, build }` for whoever watches the watcher.
 - what it is not: proof from outside that video packets flow (the watcher bot, below), or alerts on cpu, memory or disk (the graphs are there, the thresholds are not yet: `docs/metrics.md`).
 
 ## the stats site
 
-https://stats.nodentity.xyz is the monitor beside the stack on test-machine: the `stats` service in `docker-compose.yml` (profile `stats`, the api image run as `api monitor`), on a compose network of its own that only caddy shares, no port published. caddy's `https://stats.nodentity.xyz` block puts basic auth in front of all of it and `Cache-Control: private, no-store` on every answer. it watches `STATS_TARGETS` (empty: this box alone, as `https://frontend`) with `STATS_TOKENS` or this box's `OPS_TOKEN`, and posts down and up to `STATS_ALERT_WEBHOOK`. every box runs an `agent` for its numbers, reached at `/api/metrics` with that box's `OPS_TOKEN`.
+https://stats.nodentity.xyz is the monitor beside the stack on test-machine: compose project `monitor`, on the app's `stats` network (`stream_stats`) that only caddy shares, its port on loopback only. caddy's `https://stats.nodentity.xyz` block puts basic auth in front of all of it and `Cache-Control: private, no-store` on every answer. it watches `STATS_TARGETS` (empty: this box alone, as `https://frontend`) with `STATS_TOKENS` or this box's `OPS_TOKEN`, and posts down and up to `STATS_ALERT_WEBHOOK`. every box runs an `agent` for its numbers, reached at `/api/metrics` with that box's `OPS_TOKEN`.
 
 - **the password**: `docker compose exec frontend caddy hash-password`, then in `.env` `STATS_BASIC_AUTH_USER=<name>` and `STATS_BASIC_AUTH_HASH='<the hash>'` (single quotes: the hash is full of `$`), then `./scripts/deploy.sh stats`. either one empty or missing and the site answers 503 to everyone. the one way to serve it without the password is the explicit `STATS_PUBLIC=true` in `.env` (`docs/metrics.md`), which also leaves the error reports off the page.
 - **another vm**: deploy the stack on it with an `OPS_TOKEN` in its `.env`; on test-machine add it to `STATS_TARGETS` (`test-machine=https://frontend,vm2=https://<its ip>`) and its token to `STATS_TOKENS` (`vm2=<token>`); `./scripts/deploy.sh stats`.
-- the stats site cannot report test-machine itself down: it is on it. `monitor/` on a box of its own still can.
+- the stats site cannot report test-machine itself down: it is on it. it does report the app on it down (caddy, api, database), since app deploys and outages leave it running. `monitor/` on a box of its own also sees the box die.
+- the page goes through the app's caddy, so it is away for the seconds caddy is recreated, unless `STATS_HTTPS_PORT` and a cloudflare origin rule send it to the monitor's own caddy (`docs/metrics.md`, "the page while the app's caddy restarts").
 
 the whole story, what each number means, who can reach what, and the cert: `docs/metrics.md`.
 
@@ -247,7 +254,7 @@ the rest of a cold load is the box's: the document's ~180ms of tls and ~170ms to
 - `frontend/src/main.tsx`, `router.tsx`, `app/CrashPage.tsx`, `app/admin/AdminPage.tsx`, the two atoms files, `infra/api.ts`.
 - `docker-compose.yml`, `deploy.sh`, the four dockerfiles (`api/`, `video/`, `video/Dockerfile.dummy`, `frontend/`), `.env.example` — `BUILD`, `ENV_NAME`, `ADMIN_NAMES`, `OPS_TOKEN`, `DEBUG_DATABASE_URL`.
 - `api/src/monitor.rs` — `api monitor`: the rounds, the events, the file, the webhook, the metrics history, `GET /api/monitor`, `GET /api/monitor/metrics`. `api/src/monitor.html` — its page.
-- `api/src/agent.rs` — `api agent`: the host and container numbers, `GET /api/metrics`. `docker-compose.yml` (`agent`, `stats`, the `stats` network), the Caddyfile's stats block, `deploy.sh stats`. `api/Cargo.toml` gives reqwest a tls stack for it (rustls with ring, which the tree already had).
-- `monitor/docker-compose.yml`, `monitor/.env.example` — the monitor box.
+- `api/src/agent.rs` — `api agent`: the host and container numbers, `GET /api/metrics`. `docker-compose.yml` (`agent`, the `stats` network), the Caddyfile's stats block, `deploy.sh stats`. `api/Cargo.toml` gives reqwest a tls stack for it (rustls with ring, which the tree already had).
+- `monitor/docker-compose.yml`, `monitor/Caddyfile`, `monitor/.env.example` — the monitor's own compose project and caddy, on test-machine or a box of its own. `monitor/beside-app.yml` — the overlay that puts it on the app's `stream_stats` network on test-machine.
 - `test/errors.js` — a report lands, a bad body is 400, the route hides without an admin, health has the new fields, a thrown error in the page shows up in the api log, `/admin` renders. a step it cannot check off-box (no `OPS_TOKEN`) is `SKIP`, not `PASS`; locally it deletes the rows it inserted afterwards.
 - `test/monitor.js` — local only: runs the monitor's compose file as a throwaway project on the stack's network, watching this stack and a dead address. up with the stack's own build, down with a reason after `DOWN_AFTER` rounds, error reports pulled when there is a token (`SKIP` otherwise), the local box's host and container numbers through its agent (`SKIP` without a token), the page shows both and draws a box's graphs, a restart keeps the events. removes everything it made.

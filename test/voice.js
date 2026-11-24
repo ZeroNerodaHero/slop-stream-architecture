@@ -184,7 +184,7 @@ window.packets = async (n) => {
           ws.onopen = () => ws.send(JSON.stringify({ type: 'hello' }));
           ws.onmessage = (e) => {
             const msg = JSON.parse(e.data);
-            if (msg.type === 'history') ws.send(JSON.stringify({ type: 'say', text: 'hello lounge' }));
+            if (msg.type === 'ready') ws.send(JSON.stringify({ type: 'say', text: 'hello lounge' }));
             if (msg.type === 'message') resolve({ said: msg.text });
             if (msg.type === 'error') resolve({ error: msg.error });
           };

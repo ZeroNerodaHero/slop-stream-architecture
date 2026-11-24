@@ -7,17 +7,20 @@ const REPO = path.join(__dirname, '..');
 const PORT = 3012;
 const MON = `http://127.0.0.1:${PORT}`;
 const PROJECT = 'monitor-test';
+const CONTAINER = 'monitor-test';
 const STACK_NETWORK = 'stream_default';
 const ENV = {
   ...process.env,
-  TARGETS: 'local=https://frontend,dead=https://127.0.0.1:9',
-  OPS_TOKENS: OPS_TOKEN ? `local=${OPS_TOKEN}` : '',
-  ALERT_WEBHOOK: '',
+  STATS_TARGETS: 'local=https://frontend,dead=https://127.0.0.1:9',
+  STATS_TOKENS: OPS_TOKEN ? `local=${OPS_TOKEN}` : '',
+  STATS_ALERT_WEBHOOK: '',
+  STATS_PUBLIC: '',
   CHECK_EVERY_SECS: '2',
   ERRORS_EVERY_SECS: '3',
   METRICS_EVERY_SECS: '2',
   DOWN_AFTER: '2',
-  MONITOR_PORT: String(PORT)
+  MONITOR_PORT: String(PORT),
+  MONITOR_CONTAINER: CONTAINER
 };
 const compose = (cmd) => execSync(`docker compose -f monitor/docker-compose.yml -p ${PROJECT} ${cmd}`, { cwd: REPO, env: ENV, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const results = [];
@@ -75,7 +78,7 @@ async function stateWhen(api, ready, what, ms = 40000) {
     }
     cleanup = true;
     try {
-      execSync(`docker network connect ${STACK_NETWORK} monitor`, { stdio: ['ignore', 'pipe', 'pipe'] });
+      execSync(`docker network connect ${STACK_NETWORK} ${CONTAINER}`, { stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e) {
       throw new Error(`docker network connect ${STACK_NETWORK}: ${String(e.stderr || e.message).trim().split('\n').pop()} (is the stack up?)`);
     }

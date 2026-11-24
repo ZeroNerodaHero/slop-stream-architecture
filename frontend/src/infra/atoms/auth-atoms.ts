@@ -22,10 +22,21 @@ export const authErrorAtom = atom('');
 
 let asked: Promise<void> | null = null;
 
+declare global {
+  interface Window {
+    __bootMe?: Promise<Response>;
+  }
+}
+
+function askMe(): Promise<MeInfo> {
+  const boot = window.__bootMe;
+  delete window.__bootMe;
+  return boot ? api.meAsked(boot) : api.me();
+}
+
 export function loadMe(): Promise<void> {
   if (!asked) {
-    asked = api
-      .me()
+    asked = askMe()
       .then((r) => {
         setMeInfo(r);
         store.set(meAtom, r.name);

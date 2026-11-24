@@ -128,6 +128,29 @@ struct History {
     checked_at: Option<DateTime<Utc>>,
     agent: Option<Value>,
     timings: timings::History,
+    agent_failures: u32,
+    agent_down: bool,
+}
+
+fn agent_check(h: &mut History, name: &str, result: Result<(), &str>, down_after: u32) -> Option<(&'static str, String)> {
+    match result {
+        Ok(()) => {
+            h.agent_failures = 0;
+            if !h.agent_down {
+                return None;
+            }
+            h.agent_down = false;
+            Some(("agent-up", format!("{name} agent UP")))
+        }
+        Err(why) => {
+            h.agent_failures += 1;
+            if h.agent_down || h.agent_failures < down_after {
+                return None;
+            }
+            h.agent_down = true;
+            Some(("agent-down", format!("{name} agent DOWN: {why}")))
+        }
+    }
 }
 
 fn host_values(s: &Sample) -> Vec<Option<f64>> {
@@ -605,11 +628,18 @@ async fn metrics_loop(app: App) {
             results.push(r);
         }
         let now = Utc::now();
+        let mut changes = vec![];
         {
             let mut m = app.metrics.lock().await;
             for (name, result) in results {
-                let h = m.entry(name).or_default();
+                let has_token = app.cfg.targets.iter().any(|t| t.name == name && t.token.is_some());
+                let h = m.entry(name.clone()).or_default();
                 h.checked_at = Some(now);
+                if has_token {
+                    if let Some(change) = agent_check(h, &name, result.as_ref().map(|_| ()).map_err(String::as_str), app.cfg.down_after) {
+                        changes.push((name, change));
+                    }
+                }
                 match result {
                     Ok(answer) => {
                         let mut samples = answer.samples;
@@ -623,6 +653,21 @@ async fn metrics_loop(app: App) {
                     Err(why) => h.status = Some(why),
                 }
             }
+        }
+        let mut alerts = vec![];
+        if !changes.is_empty() {
+            let mut store = app.store.lock().await;
+            for (name, (kind, text)) in changes {
+                let Some(t) = store.targets.iter_mut().find(|t| t.name == name) else { continue };
+                push_event(t, now, kind, text.clone());
+                if t.status != Status::Down {
+                    alerts.push(text);
+                }
+            }
+        }
+        for text in alerts {
+            log::warn!("{text}");
+            alert(&app, &text).await;
         }
         if saved.elapsed() >= METRICS_SAVE_EVERY {
             save_metrics(&app).await;
@@ -985,6 +1030,20 @@ mod tests {
         assert_eq!(out.targets.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), vec!["dev", "prod"]);
         assert_eq!((out.targets[1].url.as_str(), out.targets[1].failures), ("https://new", 2));
         assert_eq!(out.targets[0].errors_status.as_deref(), Some("no OPS_TOKEN for this box"));
+    }
+
+    #[test]
+    fn agent_down_after_misses_and_up_once() {
+        let mut h = History::default();
+        assert_eq!(agent_check(&mut h, "prod", Ok(()), 3), None);
+        assert_eq!(agent_check(&mut h, "prod", Err("no answer in 5s"), 3), None);
+        assert_eq!(agent_check(&mut h, "prod", Err("no answer in 5s"), 3), None);
+        assert_eq!(agent_check(&mut h, "prod", Err("502: caddy answers, the agent behind it does not"), 3), Some(("agent-down", "prod agent DOWN: 502: caddy answers, the agent behind it does not".into())));
+        assert_eq!(agent_check(&mut h, "prod", Err("no answer in 5s"), 3), None);
+        assert_eq!(agent_check(&mut h, "prod", Ok(()), 3), Some(("agent-up", "prod agent UP".into())));
+        assert_eq!(agent_check(&mut h, "prod", Ok(()), 3), None);
+        assert_eq!(agent_check(&mut h, "prod", Err("x"), 3), None);
+        assert_eq!(h.agent_failures, 1);
     }
 
     fn sample(secs: i64, cpu: f64, containers: &[(&str, f64)]) -> Sample {
