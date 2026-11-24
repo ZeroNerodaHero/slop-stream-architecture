@@ -26,6 +26,7 @@ use webrtc::ice::network_type::NetworkType;
 use webrtc::ice::udp_mux::{UDPMuxDefault, UDPMuxParams};
 use webrtc::ice::udp_network::UDPNetwork;
 use webrtc::ice_transport::ice_candidate_type::RTCIceCandidateType;
+use webrtc::ice_transport::ice_connection_state::RTCIceConnectionState;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
@@ -116,6 +117,7 @@ struct Slot {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Ask {
     Join,
+    Backup(u64),
     Lost,
     Thumb,
     Trailing,
@@ -134,6 +136,7 @@ struct KeyframeAsks {
     asked_seen: u64,
     join_asked: Option<Instant>,
     trailing: bool,
+    reask: bool,
 }
 
 impl KeyframeAsks {
@@ -144,8 +147,15 @@ impl KeyframeAsks {
         let send = match ask {
             Ask::Lost => since(self.asked).is_none_or(|d| d >= KEYFRAME_GAP),
             Ask::Thumb => since(self.asked).is_none_or(|d| d >= FORCED_KEYFRAME_GAP),
-            Ask::Join if in_flight => false,
-            Ask::Join => match join_recent {
+            Ask::Backup(connected) if seen != connected => false,
+            Ask::Join | Ask::Backup(_) if in_flight => false,
+            Ask::Backup(_) if join_recent.is_some() && self.reask => {
+                self.reask = false;
+                self.asked = Some(now);
+                self.asked_seen = seen;
+                return Plan::Send;
+            }
+            Ask::Join | Ask::Backup(_) => match join_recent {
                 Some(_) if self.trailing => false,
                 Some(d) => {
                     self.trailing = true;
@@ -163,8 +173,9 @@ impl KeyframeAsks {
         }
         self.asked = Some(now);
         self.asked_seen = seen;
-        if matches!(ask, Ask::Join | Ask::Trailing) {
+        if !matches!(ask, Ask::Lost | Ask::Thumb) {
             self.join_asked = Some(now);
+            self.reask = ask == Ask::Join;
         }
         Plan::Send
     }
@@ -534,7 +545,7 @@ async fn publish(app: App, mut socket: WebSocket, name: String, sdp: String, slo
     log::info!("publish {name}: start, {count} slot(s)");
 
     let dead = Arc::new(Notify::new());
-    let peer = match new_peer(&app, Role::Publish, &name, dead.clone(), Arc::new(Notify::new())).await {
+    let peer = match new_peer(&app, Role::Publish, &name, dead.clone(), Arc::new(Notify::new()), Vec::new()).await {
         Ok(peer) => Arc::new(peer),
         Err(e) => {
             log::error!("publish {name}: peer setup: {e}");
@@ -727,7 +738,8 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
 
     let dead = Arc::new(Notify::new());
     let connected = Arc::new(Notify::new());
-    let peer = match new_peer(&app, Role::Watch, &name, dead.clone(), connected.clone()).await {
+    let watched = tracks.iter().map(|(slot, _, keyframes)| (*slot, Arc::clone(keyframes))).collect();
+    let peer = match new_peer(&app, Role::Watch, &name, dead.clone(), connected.clone(), watched).await {
         Ok(peer) => Arc::new(peer),
         Err(e) => {
             log::error!("watch {name}: peer setup: {e}");
@@ -736,7 +748,7 @@ async fn watch_stream(app: App, mut socket: WebSocket, name: String, sdp: String
         }
     };
 
-    for (slot, track) in tracks {
+    for (slot, track, _) in tracks {
         let sender = match peer
             .add_track(track as Arc<dyn TrackLocal + Send + Sync>)
             .await
@@ -917,6 +929,7 @@ async fn new_peer(
     name: &str,
     dead: Arc<Notify>,
     connected: Arc<Notify>,
+    watched: Vec<(usize, Arc<AtomicU64>)>,
 ) -> anyhow::Result<RTCPeerConnection> {
     let (media, registry) = media_setup(role == Role::Publish)?;
 
@@ -946,8 +959,25 @@ async fn new_peer(
     let tag = format!("{} {name}", role.as_str());
     let hub = app.hub.clone();
     let room = name.to_owned();
-    let is_watcher = role == Role::Watch;
-    let asked_keyframe = Arc::new(AtomicBool::new(false));
+    let watched: Arc<[(usize, Arc<AtomicU64>)]> = watched.into();
+    let early_hub = hub.clone();
+    let early_room = room.clone();
+    let early_watched = Arc::clone(&watched);
+    let asked_early = AtomicBool::new(false);
+    peer.on_ice_connection_state_change(Box::new(move |state: RTCIceConnectionState| {
+        if matches!(state, RTCIceConnectionState::Connected | RTCIceConnectionState::Completed)
+            && !early_watched.is_empty()
+            && !asked_early.swap(true, Ordering::SeqCst)
+        {
+            let asks = early_watched.iter().map(|(slot, _)| (*slot, Ask::Join)).collect();
+            let hub = early_hub.clone();
+            let room = early_room.clone();
+            tokio::spawn(async move { hub.request_keyframes(&room, asks).await });
+        }
+        Box::pin(async {})
+    }));
+
+    let asked_backup = AtomicBool::new(false);
     peer.on_peer_connection_state_change(Box::new(move |state: RTCPeerConnectionState| {
         log::info!("{tag}: peer {state}");
         if state == RTCPeerConnectionState::Connected {
@@ -956,11 +986,12 @@ async fn new_peer(
         match state {
             RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => dead.notify_one(),
             RTCPeerConnectionState::Connected
-                if is_watcher && !asked_keyframe.swap(true, Ordering::SeqCst) =>
+                if !watched.is_empty() && !asked_backup.swap(true, Ordering::SeqCst) =>
             {
+                let asks = watched.iter().map(|(slot, seen)| (*slot, Ask::Backup(seen.load(Ordering::Relaxed)))).collect();
                 let hub = hub.clone();
                 let room = room.clone();
-                tokio::spawn(async move { hub.request_keyframes(&room).await });
+                tokio::spawn(async move { hub.request_keyframes(&room, asks).await });
             }
             _ => {}
         }
@@ -1005,7 +1036,7 @@ impl Hub {
         &self,
         name: &str,
         wants: (usize, usize),
-    ) -> Option<(Vec<(usize, Arc<TrackLocalStaticRTP>)>, watch::Receiver<u64>, u64, watch::Receiver<Showing>)> {
+    ) -> Option<(Vec<(usize, Arc<TrackLocalStaticRTP>, Arc<AtomicU64>)>, watch::Receiver<u64>, u64, watch::Receiver<Showing>)> {
         let rooms = self.rooms.lock().await;
         let room = rooms.get(name)?;
         let (mut audio, mut video) = wants;
@@ -1022,7 +1053,7 @@ impl Hub {
                 *left = left.saturating_sub(1);
                 fits
             })
-            .map(|(index, slot)| (index, Arc::clone(&slot.track)))
+            .map(|(index, slot)| (index, Arc::clone(&slot.track), Arc::clone(&slot.keyframes)))
             .collect();
         Some((tracks, room.generation_tx.subscribe(), room.generation, room.slots_tx.subscribe()))
     }
@@ -1081,10 +1112,9 @@ impl Hub {
         Some((plan, peer, ssrc, generation))
     }
 
-    async fn request_keyframes(&self, name: &str) {
-        let count = self.rooms.lock().await.get(name).map_or(0, |room| room.slots.len());
-        for slot in 0..count {
-            self.request_keyframe(name, slot, Ask::Join).await;
+    async fn request_keyframes(&self, name: &str, asks: Vec<(usize, Ask)>) {
+        for (slot, ask) in asks {
+            self.request_keyframe(name, slot, ask).await;
         }
     }
 
@@ -1455,6 +1485,106 @@ mod tests {
         }
         assert!(sent <= 3000 / FORCED_KEYFRAME_GAP.as_millis() as usize + 1, "{sent} join requests in 3s");
         assert!(sent >= 5, "joins kept getting keyframes: {sent}");
+    }
+
+    #[test]
+    fn a_backup_asks_again_when_the_early_keyframe_went_before_connect() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        assert_eq!(asks.decide(Ask::Join, t, 0), Plan::Send);
+        assert_eq!(asks.decide(Ask::Backup(1), t + ms(150), 1), Plan::Send);
+        assert_eq!(asks.decide(Ask::Backup(1), t + ms(160), 1), Plan::Skip);
+    }
+
+    #[test]
+    fn a_backup_waits_for_a_keyframe_on_its_way() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        assert_eq!(asks.decide(Ask::Join, t, 0), Plan::Send);
+        assert_eq!(asks.decide(Ask::Backup(0), t + ms(150), 0), Plan::Skip);
+        assert_eq!(asks.decide(Ask::Backup(1), t + ms(150), 1), Plan::Send);
+    }
+
+    #[test]
+    fn a_backup_skips_when_a_keyframe_went_after_connect() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        assert_eq!(asks.decide(Ask::Join, t, 0), Plan::Send);
+        assert_eq!(asks.decide(Ask::Backup(0), t + ms(200), 1), Plan::Skip);
+        assert_eq!(asks.decide(Ask::Backup(0), t + ms(900), 1), Plan::Skip);
+    }
+
+    #[test]
+    fn a_backup_with_no_join_lately_asks_at_once() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        assert_eq!(asks.decide(Ask::Backup(0), t, 0), Plan::Send);
+        assert!(!asks.reask);
+        assert_eq!(asks.decide(Ask::Backup(1), t + ms(100), 1), Plan::Trail(ms(200)));
+    }
+
+    #[test]
+    fn one_early_ask_gets_one_reask_and_later_backups_trail() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        assert_eq!(asks.decide(Ask::Join, t, 0), Plan::Send);
+        assert_eq!(asks.decide(Ask::Backup(1), t + ms(100), 1), Plan::Send);
+        assert_eq!(asks.decide(Ask::Backup(2), t + ms(200), 2), Plan::Trail(ms(100)));
+        assert_eq!(asks.decide(Ask::Backup(2), t + ms(250), 2), Plan::Skip);
+        assert_eq!(asks.decide(Ask::Trailing, t + ms(300), 2), Plan::Send);
+        assert!(!asks.reask);
+        assert_eq!(asks.decide(Ask::Backup(3), t + ms(400), 3), Plan::Trail(ms(200)));
+    }
+
+    #[test]
+    fn a_burst_of_early_asks_and_backups_stays_bounded_and_every_watcher_gets_a_keyframe() {
+        let t = Instant::now();
+        let mut asks = KeyframeAsks::default();
+        let connect_after = 12;
+        let answer_after = 5;
+        let mut sent = 0;
+        let mut seen = 0;
+        let mut forwarded = Vec::new();
+        let mut answers: Vec<u64> = Vec::new();
+        let mut trails: Vec<u64> = Vec::new();
+        let mut connects: Vec<(u64, u64)> = Vec::new();
+        for step in 0..300u64 {
+            let now = t + ms(step * 10);
+            let due = answers.iter().filter(|a| **a <= step).count();
+            answers.retain(|a| *a > step);
+            for _ in 0..due {
+                seen += 1;
+                forwarded.push(step);
+            }
+            let mut plans = Vec::new();
+            if trails.contains(&step) {
+                trails.retain(|a| *a != step);
+                plans.push(asks.decide(Ask::Trailing, now, seen));
+            }
+            if step >= connect_after && step < 200 + connect_after {
+                connects.push((step - connect_after, step));
+                plans.push(asks.decide(Ask::Backup(seen), now, seen));
+            }
+            if step < 200 {
+                plans.push(asks.decide(Ask::Join, now, seen));
+            }
+            for plan in plans {
+                match plan {
+                    Plan::Send => {
+                        sent += 1;
+                        answers.push(step + answer_after);
+                    }
+                    Plan::Trail(wait) => trails.push(step + (wait.as_millis() as u64).div_ceil(10)),
+                    Plan::Skip => {}
+                }
+            }
+        }
+        assert!(sent <= 2 * (3000 / FORCED_KEYFRAME_GAP.as_millis() as usize) + 1, "{sent} join requests in 3s");
+        for (joined, connected) in connects {
+            let first = forwarded.iter().find(|f| **f > connected).unwrap_or_else(|| panic!("watcher {joined} got no keyframe"));
+            let wait = (first - connected) * 10;
+            assert!(wait <= FORCED_KEYFRAME_GAP.as_millis() as u64 + answer_after * 10 + 10, "watcher {joined} waited {wait}ms");
+        }
     }
 
     #[test]
