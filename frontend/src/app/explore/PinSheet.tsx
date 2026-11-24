@@ -9,7 +9,7 @@ import { pinsTickAtom } from '@/infra/atoms/room-atoms';
 import { chatStyleAtom } from '@/infra/atoms/settings-atoms';
 import { RoomLines } from '@/shared-components/ChatPanel';
 import { SHEET_FLICK, SHEET_MS, SHEET_SNAP, useSheetBack } from '@/shared-components/MobileSheet';
-import { COUNT } from '@/shared-components/Notifications';
+import { COUNT } from '@/shared-components/NotificationsBell';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 

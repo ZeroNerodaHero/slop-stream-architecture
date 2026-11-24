@@ -1,6 +1,6 @@
 import { RiArrowRightLine, RiCloseLine } from '@remixicon/react';
 import { useAtomValue } from 'jotai';
-import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, type ReactNode, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 import { api } from '@/infra/api';
@@ -16,7 +16,6 @@ import { useIsMobile } from '@/infra/mobile';
 import { previewStreamsAtom, setPopupPreview } from '@/infra/preview';
 import { cleanSocials } from '@/infra/socials';
 import { store } from '@/infra/store';
-import { About } from '@/shared-components/About';
 import { Badge } from '@/shared-components/Badge';
 import { BlurredPicture } from '@/shared-components/BlurredPicture';
 import { buttonClassName } from '@/shared-components/Button';
@@ -40,6 +39,8 @@ type PopupTab = 'about' | 'calendar' | 'socials';
 const POPUP_TABS: readonly PopupTab[] = ['about', 'calendar', 'socials'];
 const WORDS = 'text-sm font-semibold text-primaryBlue underline-offset-2 hover:underline';
 const SMALL = 'px-3 py-1.5 text-sm max-md:min-h-11';
+
+const About = lazy(() => import('@/shared-components/About').then((m) => ({ default: m.About })));
 
 export function ProfilePopup() {
   const target = useAtomValue(profilePopupAtom);
@@ -334,7 +335,9 @@ function ProfileDialog({ target }: { target: ProfilePopupTarget }) {
               </div>
               <div id={`profile-popup-panel-${tab}`} role="tabpanel" aria-labelledby={`profile-popup-tab-${tab}`} className="pt-4">
                 {tab === 'about' ? (
-                  <About key={name} name={name} id="profile-popup-about" />
+                  <Suspense fallback={null}>
+                    <About key={name} name={name} id="profile-popup-about" />
+                  </Suspense>
                 ) : tab === 'calendar' ? (
                   <Calendar name={name} scope="popup" live={live} id="profile-popup-calendar" />
                 ) : (
