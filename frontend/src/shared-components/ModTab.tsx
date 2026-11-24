@@ -1,8 +1,8 @@
 import { RiIndeterminateCircleLine, RiSearchLine } from '@remixicon/react';
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { type UseQueryResult, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 
-import { type ModLogRow, type SearchHit, api, messageOf } from '@/infra/api';
+import { type Janny, type ModLogRow, type SearchHit, type StreamBans, api, messageOf } from '@/infra/api';
 import { PRESENCE_WORD } from '@/infra/atoms/presence-atoms';
 import { loadMyProfile } from '@/infra/atoms/profile-atoms';
 import { usePeopleSearch } from '@/infra/people-search';
@@ -24,12 +24,29 @@ function ago(iso: string): string {
   return `${Math.floor(secs / 86400)}d ago`;
 }
 
-function left(iso: string): string {
-  const secs = Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 1000));
-  if (secs < 60) return `${secs}s left`;
-  if (secs < 3600) return `${Math.ceil(secs / 60)}m left`;
-  if (secs < 86400) return `${Math.round(secs / 3600)}h left`;
-  return `${Math.round(secs / 86400)}d left`;
+function countdown(secs: number): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (secs < 3600) return `${Math.floor(secs / 60)}:${pad(secs % 60)}`;
+  return `${Math.floor(secs / 3600)}h ${pad(Math.floor((secs % 3600) / 60))}m`;
+}
+
+function secsLeft(iso: string, now: number): number {
+  return Math.ceil((new Date(iso).getTime() - now) / 1000);
+}
+
+function useNow(ticking: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!ticking) return;
+    const tick = () => setNow(Date.now());
+    const first = window.setTimeout(tick, 0);
+    const id = window.setInterval(tick, 1000);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(id);
+    };
+  }, [ticking]);
+  return now;
 }
 
 function length(secs: number): string {
@@ -195,13 +212,36 @@ function JannySearch({ skip, busy, onPick }: { skip: Set<string>; busy: boolean;
   );
 }
 
-const JANNIES_TIP = 'jannies can delete lines, time out and ban. not you, not each other';
-const BANS_TIP = 'who cannot talk in your chat. a ban lasts until you lift it, a timeout ends on its own';
+const LIST_TIPS = {
+  jannies: 'jannies can delete lines, time out and ban. not you, not each other',
+  banned: 'who cannot talk in your chat until you lift their ban',
+  timeouts: 'who cannot talk in your chat for now. a timeout ends on its own'
+} as const;
+type List = keyof typeof LIST_TIPS;
 const LOG_TIP = 'what you and your jannies did in your chat, newest first';
+
+const PICKED = 'border-primaryBlue bg-primaryBlue/10 text-primaryBlue';
+
+function FilterChip({ word, picked, onPick, className, children }: { word: string; picked: boolean; onPick: () => void; className?: string; children?: ReactNode }) {
+  return (
+    <Button size="sm" data-filter={word} aria-pressed={picked} onClick={onPick} className={cn('shrink-0', picked && PICKED, className)}>
+      {children ?? word}
+    </Button>
+  );
+}
+
+function Empty({ id, children }: { id: string; children: ReactNode }) {
+  return (
+    <p id={id} className="flex items-center justify-center gap-2 border border-dashed border-primaryStroke px-3 py-6 text-sm text-textSecondary">
+      <RiIndeterminateCircleLine aria-hidden size={16} className="shrink-0 text-textTertiary" />
+      {children}
+    </p>
+  );
+}
 
 function Card({ id, title, tip, count, children }: { id?: string; title: string; tip: string; count?: number; children: ReactNode }) {
   return (
-    <section id={id} className="flex min-w-0 flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3 md:p-4">
+    <section id={id} className="flex h-full min-w-0 flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3 md:p-4">
       <div className="flex items-center gap-1.5">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-textSecondary">{title}</h3>
         <Info tip={tip} />
@@ -271,6 +311,146 @@ function Detail({ text }: { text: string }) {
   );
 }
 
+type Run = (what: () => Promise<unknown>, done?: string) => Promise<void>;
+
+function ListsCard({
+  name,
+  jannies,
+  bans,
+  faces,
+  busy,
+  run
+}: {
+  name: string;
+  jannies: UseQueryResult<Janny[]>;
+  bans: UseQueryResult<StreamBans>;
+  faces: Map<string, number | null>;
+  busy: boolean;
+  run: Run;
+}) {
+  const [list, setList] = useState<List>('jannies');
+  const now = useNow((bans.data?.timeouts.length ?? 0) > 0);
+  const skip = new Set([name, ...(jannies.data ?? []).map((j) => j.name)]);
+  const timeouts = (bans.data?.timeouts ?? []).map((t) => ({ ...t, left: secsLeft(t.until, now) })).filter((t) => t.left > 0);
+  const counts: Record<List, number | undefined> = {
+    jannies: jannies.data?.length,
+    banned: bans.data?.bans.length,
+    timeouts: bans.data ? timeouts.length : undefined
+  };
+  const words = Object.keys(LIST_TIPS) as List[];
+
+  return (
+    <section id="mod-lists-card" className="relative flex h-full min-w-0 flex-col gap-3 border border-primaryStroke bg-backgroundSecondary p-3 md:p-4">
+      <h3 className="sr-only">jannies, bans and timeouts</h3>
+      <div className="flex items-center gap-2">
+        <div id="mod-lists-tabs" role="group" aria-label="show" className="flex min-w-0 flex-1 flex-nowrap gap-2 overflow-x-auto">
+          {words.map((word) => (
+            <FilterChip key={word} word={word} picked={list === word} onPick={() => setList(word)}>
+              {word}
+              {counts[word] !== undefined && <span className="ml-1.5 tabular-nums">{counts[word]}</span>}
+            </FilterChip>
+          ))}
+        </div>
+        <Info tip={LIST_TIPS[list]} />
+      </div>
+
+      {list === 'jannies' && <JannySearch skip={skip} busy={busy} onPick={(who) => run(() => api.addStreamJanny(name, who), `${who} is a janny now`)} />}
+
+      <div className="min-h-0 flex-1 overflow-y-auto md:basis-0">
+        {list === 'jannies' &&
+          (jannies.isError ? (
+            <p className="text-sm text-decrease">{messageOf(jannies.error)}</p>
+          ) : jannies.data && jannies.data.length === 0 ? (
+            <Empty id="mod-jannies-none">no jannies yet.</Empty>
+          ) : (
+            <ul id="mod-jannies" aria-label="jannies" className={cn(ROWS, !jannies.data && 'hidden')}>
+              {(jannies.data ?? []).map((j) => (
+                <li key={j.name} className={ROW}>
+                  <Face name={j.name} version={faces.get(j.name) ?? null} className={ROW_FACE} />
+                  <div className={ROW_TEXT}>
+                    <span className={ROW_NAME}>{j.name}</span>
+                    <span className={ROW_WHAT}>added {ago(j.added_at)}</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline-danger"
+                    disabled={busy}
+                    onClick={() => void run(() => api.removeStreamJanny(name, j.name), `${j.name} is not a janny any more`)}
+                    className="shrink-0"
+                  >
+                    remove
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ))}
+
+        {list === 'banned' &&
+          (bans.isError ? (
+            <p className="text-sm text-decrease">{messageOf(bans.error)}</p>
+          ) : bans.data && bans.data.bans.length === 0 ? (
+            <Empty id="mod-bans-none">no bans.</Empty>
+          ) : (
+            <ul id="mod-bans" aria-label="banned" className={cn(ROWS, !bans.data && 'hidden')}>
+              {(bans.data?.bans ?? []).map((b) => (
+                <li key={b.name} className={ROW}>
+                  <Face name={b.name} version={faces.get(b.name) ?? null} className={ROW_FACE} />
+                  <div className={ROW_TEXT}>
+                    <span className={ROW_NAME}>{b.name}</span>
+                    <span className={ROW_WHAT}>
+                      banned{b.by ? ` by ${b.by}` : ''}
+                      {b.reason && <span className="text-textTertiary"> · {b.reason}</span>}
+                    </span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => void run(() => api.unbanFromChat(name, b.name), `${b.name}'s ban is lifted`)}
+                    className="shrink-0"
+                  >
+                    unban
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ))}
+
+        {list === 'timeouts' &&
+          (bans.isError ? (
+            <p className="text-sm text-decrease">{messageOf(bans.error)}</p>
+          ) : bans.data && timeouts.length === 0 ? (
+            <Empty id="mod-timeouts-none">no timeouts.</Empty>
+          ) : (
+            <ul id="mod-timeouts" aria-label="timed out" className={cn(ROWS, !bans.data && 'hidden')}>
+              {timeouts.map((t) => (
+                <li key={t.name} className={ROW}>
+                  <Face name={t.name} version={faces.get(t.name) ?? null} className={ROW_FACE} />
+                  <span className={cn(ROW_NAME, 'flex-1')}>{t.name}</span>
+                  <Tooltip content={`timed out${t.by ? ` by ${t.by}` : ''} until ${new Date(t.until).toLocaleTimeString()}`}>
+                    <span tabIndex={0} className="relative shrink-0 text-sm tabular-nums text-caution outline-none focus-visible:underline">
+                      <span className="sr-only">time left </span>
+                      {countdown(t.left)}
+                    </span>
+                  </Tooltip>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => void run(() => api.liftChatTimeout(name, t.name), `${t.name}'s timeout is lifted`)}
+                    className="shrink-0"
+                  >
+                    untimeout
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ))}
+      </div>
+    </section>
+  );
+}
+
 export function ModTab({ name }: { name: string }) {
   const client = useQueryClient();
   const jannies = useQuery({ queryKey: ['jannies', name], queryFn: () => api.streamJannies(name), retry: false });
@@ -282,8 +462,6 @@ export function ModTab({ name }: { name: string }) {
 
   const listed = [...(jannies.data ?? []).map((j) => j.name), ...(bans.data?.bans ?? []).map((b) => b.name), ...(bans.data?.timeouts ?? []).map((t) => t.name)];
   const faces = useFaces([...new Set(listed)]);
-  const skip = new Set([name, ...(jannies.data ?? []).map((j) => j.name)]);
-  const banCount = bans.data ? bans.data.bans.length + bans.data.timeouts.length : undefined;
   const live =
     filter === 'active'
       ? standing(
@@ -313,16 +491,7 @@ export function ModTab({ name }: { name: string }) {
   };
 
   const chip = (word: Filter) => (
-    <Button
-      key={word}
-      size="sm"
-      data-filter={word}
-      aria-pressed={filter === word}
-      onClick={() => setFilter(word)}
-      className={cn('shrink-0', word === 'deletes' && 'ml-auto', filter === word && 'border-primaryBlue bg-primaryBlue/10 text-primaryBlue')}
-    >
-      {word}
-    </Button>
+    <FilterChip key={word} word={word} picked={filter === word} onPick={() => setFilter(word)} className={cn(word === 'deletes' && 'ml-auto')} />
   );
 
   return (
@@ -330,92 +499,7 @@ export function ModTab({ name }: { name: string }) {
       <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2">
         <WelcomeSection />
 
-        <div className="flex min-w-0 flex-col gap-4">
-          <Card id="mod-jannies-card" title="jannies" tip={JANNIES_TIP} count={jannies.data?.length}>
-            <JannySearch skip={skip} busy={busy} onPick={(who) => run(() => api.addStreamJanny(name, who), `${who} is a janny now`)} />
-            {jannies.isError ? (
-              <p className="text-sm text-decrease">{messageOf(jannies.error)}</p>
-            ) : jannies.data && jannies.data.length === 0 ? (
-              <p className="text-sm text-textTertiary">no jannies yet.</p>
-            ) : (
-              <ul id="mod-jannies" aria-label="jannies" className={cn(ROWS, !jannies.data && 'hidden')}>
-                {(jannies.data ?? []).map((j) => (
-                  <li key={j.name} className={ROW}>
-                    <Face name={j.name} version={faces.get(j.name) ?? null} className={ROW_FACE} />
-                    <div className={ROW_TEXT}>
-                      <span className={ROW_NAME}>{j.name}</span>
-                      <span className={ROW_WHAT}>added {ago(j.added_at)}</span>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline-danger"
-                      disabled={busy}
-                      onClick={() => void run(() => api.removeStreamJanny(name, j.name), `${j.name} is not a janny any more`)}
-                      className="shrink-0"
-                    >
-                      remove
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-
-          <Card id="mod-bans-card" title="banned and timed out" tip={BANS_TIP} count={banCount}>
-            {bans.isError ? (
-              <p className="text-sm text-decrease">{messageOf(bans.error)}</p>
-            ) : banCount === 0 ? (
-              <p id="mod-bans-none" className="flex items-center justify-center gap-2 border border-dashed border-primaryStroke px-3 py-6 text-sm text-textSecondary">
-                <RiIndeterminateCircleLine aria-hidden size={16} className="shrink-0 text-textTertiary" />
-                no bans or timeouts
-              </p>
-            ) : (
-              <ul id="mod-bans" aria-label="banned and timed out" className={cn(ROWS, !bans.data && 'hidden')}>
-                {(bans.data?.bans ?? []).map((b) => (
-                  <li key={`ban-${b.name}`} className={ROW}>
-                    <Face name={b.name} version={faces.get(b.name) ?? null} className={ROW_FACE} />
-                    <div className={ROW_TEXT}>
-                      <span className={ROW_NAME}>{b.name}</span>
-                      <span className={ROW_WHAT}>
-                        banned{b.by ? ` by ${b.by}` : ''}
-                        {b.reason && <span className="text-textTertiary"> · {b.reason}</span>}
-                      </span>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busy}
-                      onClick={() => void run(() => api.unbanFromChat(name, b.name), `${b.name}'s ban is lifted`)}
-                      className="shrink-0"
-                    >
-                      unban
-                    </Button>
-                  </li>
-                ))}
-                {(bans.data?.timeouts ?? []).map((t) => (
-                  <li key={`timeout-${t.name}`} className={ROW}>
-                    <Face name={t.name} version={faces.get(t.name) ?? null} className={ROW_FACE} />
-                    <div className={ROW_TEXT}>
-                      <span className={ROW_NAME}>{t.name}</span>
-                      <span className={ROW_WHAT}>
-                        timed out{t.by ? ` by ${t.by}` : ''} · {left(t.until)}
-                      </span>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busy}
-                      onClick={() => void run(() => api.liftChatTimeout(name, t.name), `${t.name}'s timeout is lifted`)}
-                      className="shrink-0"
-                    >
-                      untimeout
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-        </div>
+        <ListsCard name={name} jannies={jannies} bans={bans} faces={faces} busy={busy} run={run} />
       </div>
 
       {status && (
