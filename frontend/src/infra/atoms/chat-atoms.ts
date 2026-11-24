@@ -153,6 +153,40 @@ export function setNick(raw: string) {
 }
 
 const rooms = new Map<string, ChatRoom>();
+
+const WARM_CHAT_MS = 5000;
+let warm: { name: string; ws: WebSocket; me: string | null | undefined; timer: ReturnType<typeof setTimeout> } | null = null;
+
+function dropWarm() {
+  if (!warm) return;
+  clearTimeout(warm.timer);
+  warm.ws.close();
+  warm = null;
+}
+
+export function warmChat(name: string) {
+  if (rooms.get(name)?.connected()) return;
+  if (warm?.name === name && warm.ws.readyState <= WebSocket.OPEN) {
+    clearTimeout(warm.timer);
+    warm.timer = setTimeout(dropWarm, WARM_CHAT_MS);
+    return;
+  }
+  dropWarm();
+  warm = { name, ws: new WebSocket(relayUrl(`/chat/${chatPath(name)}`)), me: store.get(meAtom), timer: setTimeout(dropWarm, WARM_CHAT_MS) };
+}
+
+function takeWarmChat(name: string): WebSocket | null {
+  const held = warm;
+  if (!held || held.name !== name) return null;
+  clearTimeout(held.timer);
+  warm = null;
+  const me = store.get(meAtom);
+  if (held.ws.readyState > WebSocket.OPEN || (held.me !== undefined && me !== undefined && held.me !== me)) {
+    held.ws.close();
+    return null;
+  }
+  return held.ws;
+}
 let shownServer: string | null = null;
 
 export function chatRoomKey(name: string, server: boolean): string {
@@ -349,6 +383,10 @@ export class ChatRoom {
     const last = tail[tail.length - 1];
     if (last) return last.id;
     return this.historyHeld ? NO_LINE_YET : undefined;
+  }
+
+  connected(): boolean {
+    return this.ws !== null;
   }
 
   reconnect() {
@@ -626,7 +664,7 @@ export class ChatRoom {
 
     this.loadHistory();
     store.set(this.phaseAtom, 'connecting');
-    const ws = new WebSocket(relayUrl(`/chat/${chatPath(this.key)}`));
+    const ws = (this.server ? null : takeWarmChat(this.key)) ?? new WebSocket(relayUrl(`/chat/${chatPath(this.key)}`));
     this.ws = ws;
     this.me = known;
     this.nick = me ? '' : nick;
@@ -634,7 +672,7 @@ export class ChatRoom {
     store.set(this.readerAtom, false);
     const source = `/chat/${this.key}`;
 
-    ws.onopen = async () => {
+    const greet = async () => {
       if (!this.server) await this.settled();
       if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) return;
       const speaker = store.get(meAtom);
@@ -656,6 +694,8 @@ export class ChatRoom {
       if (!this.server && this.wasOpen) void this.refreshLatest();
       this.wasOpen = true;
     };
+    if (ws.readyState === WebSocket.OPEN) void greet();
+    else ws.onopen = greet;
     ws.onmessage = (e) => {
       if (this.ws !== ws) return;
       let msg: {
