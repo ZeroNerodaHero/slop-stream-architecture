@@ -22,12 +22,14 @@ be asked for one (the PLIs video forwards when a watcher joins are read and drop
 `publish_on`), so a new watcher of a dummy waits for the next one on this schedule: half a
 second on average, at most one. docs/keyframes.md.
 
-`const GIFS_PER_STREAM`: How many gifs bounce around one stream. The frame is 480×270 and they are 90 to 120 tall.
+`const GIFS_PER_STREAM`: How many gifs bounce around one stream. The frame is 426×240 and they are 80 to 106 tall.
 
 `const CORNERS`: Where a stream's gifs start, in turn: top left, bottom right, top right, bottom left.
 `(from the right, from the bottom)`.
 
 `const HEIGHTS`: Heights the gifs are shown at, in turn. Even, so the chroma of the yuv420 frame lines up.
+
+`const BACKDROP_ROWS`, `const BACKDROP_TEXT`, `fn backdrop`: The words "this is 240p", five to a row, twelve rows 20px apart, every other row shifted left half a word, in a dim grey on the dark frame. `drawtext` filters on the first frame only (`trim=end_frame=1` before them, `loop=loop=-1:size=1` after), so they run once at start, not per frame.
 
 `const CLOCK`: drawtext's `%{pts}` as `HH:MM:SS` (the time of day of `pts` seconds past the epoch). The
 colons inside `%{}` are escaped once for drawtext and, the `\\\:` ones, once more for the
@@ -55,7 +57,9 @@ second. It starts at the far end, or at zero (half a period in) when `from_far` 
 `fn spawn_ffmpeg`: A dark frame, a few gifs bouncing around it like the old dvd logo, the name on top, a running
 clock at the bottom. Each gif starts in its own corner at its own speed and height, and the
 deal differs per stream, so you can tell them apart at a glance. Audio is a quiet tone, pitch
-per stream. Small and `FPS` (15) on purpose: each stream costs a slice of a core to encode.
+per stream. Small (426×240, 180 kbps, `-cpu-used 16`) and `FPS` (15) on purpose: the dummies share a small box with
+real streams. ffmpeg runs under `nice -n 19` (nice execs it, so `kill` still reaches ffmpeg),
+and the container has `cpu_shares: 128`.
 
 The gifs are inputs of their own, looped forever, and `overlay` moves them: its `x`/`y` are
 evaluated per frame with `t` the time. (`drawbox`, which the box used to be, evaluates once,
@@ -502,6 +506,6 @@ the peer connects, `dead` told when it fails or closes
 ### `video/Dockerfile.dummy`
 
 - the fake streams: the same `video` binary run as `video dummy`, plus ffmpeg, a font and the gifs. build context is the repo root (compose: context: ., dockerfile: video/Dockerfile.dummy). the build stage is byte-for-byte the one in video/Dockerfile, so docker reuses its layers. (at `FROM rust:1-bookworm AS build`)
-- the gifs that bounce around the fake streams (random-media/gifs), shrunk once here to the size and rate they are shown at: 144 tall, 15 fps, a palette of their own. the originals are up to 640px at 50 fps, and decoding three of those per stream cost more than encoding the stream. only the small ones go into the image (3 MB, not 24). (at `FROM debian:bookworm-slim AS gifs`)
+- the gifs that bounce around the fake streams (random-media/gifs), shrunk once here to the size and rate they are shown at: 128 tall (shown at 80 to 106), 15 fps, a palette of their own. the originals are up to 640px at 50 fps, and decoding three of those per stream cost more than encoding the stream. only the small ones go into the image (3 MB, not 24). (at `FROM debian:bookworm-slim AS gifs`)
 - a font for the name on the picture. ffmpeg itself is a static build, no libs needed. (at `RUN apt-get update \`)
 - the commit this was built from, same as the video image. compose passes it; unused here, but docker warns about a build arg nobody declares. (at `ARG BUILD=dev`)

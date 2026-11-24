@@ -49,7 +49,7 @@ the tests beside `KeyframeAsks` in `main.rs` pin these: a backup asking again wh
 
 ## a publisher that cannot be asked
 
-the dummy (`video dummy`, `video/src/dummy.rs`) is ffmpeg encoding to rtp, and ffmpeg takes no PLI: the dummy reads its peer's rtcp and drops it. so every request above goes nowhere for a dummy slot, and a joining watcher waits for ffmpeg's next scheduled keyframe. that schedule is `-g` = `-keyint_min` = the frame rate (`FPS`, 15): one keyframe a second, so half a second on average and a second at most. it was `-g 30` (2s, ~1s on average, up to 2s): most of the ~0.9-1.6s between `ice-connected` and `first-frame` that `watchperf` measured on prod, whose streams are all dummies. a browser publisher answers a PLI in one round trip and is not on a schedule.
+the dummy (`video dummy`, `video/src/dummy.rs`) is ffmpeg encoding to rtp, and ffmpeg takes no PLI: the dummy reads its peer's rtcp and drops it. so every request above goes nowhere for a dummy slot, and a joining watcher waits for ffmpeg's next scheduled keyframe. that schedule is `-g` = `-keyint_min` = the frame rate (`FPS`, 15): one keyframe a second, so half a second on average and a second at most. the dummy is 426×240 at 180 kbps (`-cpu-used 16`), so a keyframe a second is small and cheap; the 1s gop stays. it was `-g 30` (2s, ~1s on average, up to 2s): most of the ~0.9-1.6s between `ice-connected` and `first-frame` that `watchperf` measured on prod, whose streams are all dummies. a browser publisher answers a PLI in one round trip and is not on a schedule.
 
 ## why not a keyframe cache
 

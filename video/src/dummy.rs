@@ -33,7 +33,9 @@ const RETRY: Duration = Duration::from_secs(5);
 
 const GIFS_PER_STREAM: usize = 3;
 const CORNERS: [(bool, bool); 4] = [(false, false), (true, true), (true, false), (false, true)];
-const HEIGHTS: [u32; 3] = [120, 90, 104];
+const HEIGHTS: [u32; 3] = [106, 80, 92];
+const BACKDROP_ROWS: u32 = 12;
+const BACKDROP_TEXT: &str = "this is 240p";
 const CLOCK: &str = r"%{pts\:gmtime\:0\:%H\\\:%M\\\:%S}";
 
 #[derive(Clone)]
@@ -97,8 +99,15 @@ pub async fn run() -> anyhow::Result<()> {
         log::error!("DUMMY_PASSWORD is empty. set any word in .env (video and api read it too) and run: ./scripts/deploy.sh dummy");
         return wait_for_signal().await;
     }
-    if Command::new("ffmpeg").arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().await.is_err() {
-        return Err(anyhow!("ffmpeg not found"));
+    let found = Command::new("nice")
+        .args(["-n", "19", "ffmpeg", "-version"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .is_ok_and(|s| s.success());
+    if !found {
+        return Err(anyhow!("ffmpeg (or nice) not found"));
     }
 
     let prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
@@ -408,9 +417,20 @@ fn bounce(speed: usize, from_far: bool, span: &str) -> String {
     format!("abs(mod(t*{speed}{phase}\\,2*({span}))-({span}))")
 }
 
+fn backdrop(font: &str) -> String {
+    let row = [BACKDROP_TEXT; 5].join("      ");
+    (0..BACKDROP_ROWS)
+        .map(|r| {
+            let x = if r % 2 == 0 { 6 } else { -48 };
+            format!(",drawtext=fontfile={font}:text='{row}':fontcolor=0x2b313b:fontsize=12:x={x}:y={}", 4 + 20 * r)
+        })
+        .collect()
+}
+
 fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, cfg: &Config) -> anyhow::Result<Child> {
     let base = format!(
-        "color=c=0x0f1115:s=480x270:r={FPS}[out0];sine=frequency={freq}:sample_rate=48000,volume=0.15[out1]",
+        "color=c=0x0f1115:s=426x240:r={FPS},trim=end_frame=1{backdrop},loop=loop=-1:size=1[out0];sine=frequency={freq}:sample_rate=48000,volume=0.15[out1]",
+        backdrop = backdrop(&cfg.font),
         freq = 220 + 55 * (i % 8)
     );
     let sprites = sprites(cfg, i);
@@ -420,7 +440,7 @@ fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, cfg: &Co
     for (j, sprite) in sprites.iter().enumerate() {
         match sprite {
             Sprite::Gif(_) => graph.push_str(&format!("[{}:v]scale=-2:{}[s{j}];", j + 1, HEIGHTS[(i + j) % HEIGHTS.len()])),
-            Sprite::Box(color) => graph.push_str(&format!("color=c={color}:s=110x60:r={FPS}[s{j}];")),
+            Sprite::Box(color) => graph.push_str(&format!("color=c={color}:s=98x54:r={FPS}[s{j}];")),
         }
         let (from_right, from_bottom) = CORNERS[(i + j) % CORNERS.len()];
         let x = bounce(50 + 15 * ((i + 2 * j) % 5), from_right, "W-w");
@@ -429,13 +449,13 @@ fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, cfg: &Co
         last = format!("[v{j}]");
     }
     graph.push_str(&format!(
-        "{last}drawtext=fontfile={font}:text='{name}':fontcolor=white:fontsize=28:x=16:y=14:box=1:boxcolor=black@0.55:boxborderw=8,\
-         drawtext=fontfile={font}:text='{CLOCK}':fontcolor=0x9aa3b2:fontsize=22:x=16:y=h-36:box=1:boxcolor=black@0.55:boxborderw=6[vout]",
+        "{last}drawtext=fontfile={font}:text='{name}':fontcolor=white:fontsize=25:x=14:y=12:box=1:boxcolor=black@0.55:boxborderw=7,\
+         drawtext=fontfile={font}:text='{CLOCK}':fontcolor=0x9aa3b2:fontsize=20:x=14:y=h-32:box=1:boxcolor=black@0.55:boxborderw=5[vout]",
         font = cfg.font
     ));
 
-    let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-hide_banner", "-loglevel", "warning", "-nostdin"]).args(["-re", "-f", "lavfi", "-i", &base]);
+    let mut cmd = Command::new("nice");
+    cmd.args(["-n", "19", "ffmpeg"]).args(["-hide_banner", "-loglevel", "warning", "-nostdin"]).args(["-re", "-f", "lavfi", "-i", &base]);
     for sprite in &sprites {
         if let Sprite::Gif(path) = sprite {
             cmd.args(["-stream_loop", "-1", "-i"]).arg(path);
@@ -443,7 +463,7 @@ fn spawn_ffmpeg(name: &str, i: usize, video_port: u16, audio_port: u16, cfg: &Co
     }
     cmd.args(["-filter_threads", "1", "-filter_complex_threads", "1", "-threads", "1"])
         .args(["-filter_complex", &graph])
-        .args(["-map", "[vout]", "-c:v", "libvpx", "-b:v", "500k", "-deadline", "realtime", "-cpu-used", "8"])
+        .args(["-map", "[vout]", "-c:v", "libvpx", "-b:v", "180k", "-deadline", "realtime", "-cpu-used", "16"])
         .args(["-g", &FPS.to_string(), "-keyint_min", &FPS.to_string(), "-pix_fmt", "yuv420p"])
         .args(["-f", "rtp", "-rtpflags", "skip_rtcp", &format!("rtp://127.0.0.1:{video_port}?pkt_size=1200")])
         .args(["-map", "0:1", "-c:a", "libopus", "-b:a", "48k", "-ar", "48000", "-ac", "2"])
