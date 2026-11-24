@@ -505,6 +505,7 @@ async fn leave(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me)
         .await?;
     if done.rows_affected() > 0 {
         log::info!("{}: left {group}", me.name);
+        crate::voice::drop_from_voice(&s, &group, me.id).await;
         let members = member_count(&s.db, &group).await?;
         tell(&s, &group, "left", json!({ "who": me.name, "by": "leave", "members": members })).await;
     }
@@ -588,6 +589,7 @@ async fn remove(State(s): State<AppState>, Path(group): Path<String>, Me(me): Me
     if made_by != Some(who.id) && !owner && !s.admins.iter().any(|a| a.id == who.id) {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "not your group"));
     }
+    crate::voice::drop_channel_from_voice(&s, &group, None).await;
     crate::emotes::drop_group(&s, &group).await;
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/icon.jpg")).await;
     let _ = crate::s3::delete(&s.s3, &format!("groups/{group}/banner.jpg")).await;
@@ -1307,6 +1309,7 @@ async fn delete_channel(State(s): State<AppState>, Path((group, channel)): Path<
         return Err(ApiError::new(StatusCode::FORBIDDEN, "the last voice channel stays"));
     }
     log::info!("{}: removed #{channel} from {server}", who.name);
+    crate::voice::drop_channel_from_voice(&s, &server, Some(&channel)).await;
     tell(&s, &server, "unchannel", json!({ "channel": channel })).await;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -398,25 +398,52 @@ fn order_body(order: Order, user: Uuid, server: &str, tab: Option<&str>) -> Valu
     body
 }
 
+fn rename_body(server: &str, from: &str, to: &str) -> Value {
+    json!({ "action": "rename", "server": server, "channel": from, "to": to })
+}
+
 async fn tell_voice(s: &AppState, order: Order, user: Uuid, server: &str, tab: Option<&str>) -> Option<u64> {
+    ask_voice(s, order.word(), &order_body(order, user, server, tab)).await
+}
+
+async fn ask_voice(s: &AppState, word: &str, body: &Value) -> Option<u64> {
     let secret = secret()?;
-    let res = s
-        .http
-        .post(format!("{}/internal/voice", voice_url()))
-        .header("x-voice-secret", secret)
-        .json(&order_body(order, user, server, tab))
-        .send()
-        .await;
+    let res = s.http.post(format!("{}/internal/voice", voice_url())).header("x-voice-secret", secret).json(body).send().await;
     match res {
         Ok(res) if res.status().is_success() => res.json::<Value>().await.ok().and_then(|v| v["seats"].as_u64()),
         Ok(res) => {
-            log::warn!("voice {}: the voice server answered {}", order.word(), res.status());
+            log::warn!("voice {word}: the voice server answered {}", res.status());
             None
         }
         Err(e) => {
-            log::warn!("voice {}: voice server unreachable: {}", order.word(), e.without_url());
+            log::warn!("voice {word}: voice server unreachable: {}", e.without_url());
             None
         }
+    }
+}
+
+fn seated_in(fields: &HashMap<String, String>, channel: Option<&str>) -> Vec<Uuid> {
+    fields
+        .iter()
+        .filter(|(_, v)| channel.is_none_or(|c| serde_json::from_str::<Value>(v).ok().is_some_and(|v| v["channel"] == c)))
+        .filter_map(|(uid, _)| Uuid::parse_str(uid).ok())
+        .collect()
+}
+
+pub(crate) async fn drop_channel_from_voice(s: &AppState, server: &str, channel: Option<&str>) {
+    if secret().is_none() {
+        return;
+    }
+    let fields: Result<HashMap<String, String>, redis::RedisError> = redis::cmd("HGETALL").arg(voice_key(server)).query_async(&mut s.redis.clone()).await;
+    let fields = match fields {
+        Ok(fields) => fields,
+        Err(e) => {
+            log::warn!("voice drop {server}: {e}");
+            return;
+        }
+    };
+    for user in seated_in(&fields, channel) {
+        drop_from_voice(s, server, user).await;
     }
 }
 
@@ -535,9 +562,8 @@ async fn leave(s: &AppState, server: &str, user: Uuid, older_than: Option<i64>) 
 
 /// The voice channel `from` of `server` is called `to` now (groups.rs, `edit_channel`): whoever
 /// sits in it keeps their seat under the new name, in `voice:<server>` and in their `voiceof`.
-/// The voice server knows a seat by user and server only, so it carries on as it was; the room
-/// follows the `channel_renamed` fact.
 pub(crate) async fn follow_rename(s: &AppState, server: &str, from: &str, to: &str) -> Result<(), ApiError> {
+    ask_voice(s, "rename", &rename_body(server, from, to)).await;
     let mut redis = s.redis.clone();
     let moved: Vec<String> = redis::cmd("EVAL").arg(MOVE_SEATS).arg(1).arg(voice_key(server)).arg(from).arg(to).query_async(&mut redis).await?;
     for uid in moved {
@@ -738,6 +764,7 @@ mod tests {
         assert_eq!(order_body(Order::Unmute, user, "g", None)["action"], "unmute");
         assert_eq!(order_body(Order::Disconnect, user, "g", None)["action"], "disconnect");
         assert_eq!(order_body(Order::Count, user, "g", Some("t1")), json!({ "action": "count", "user_id": user, "server": "g", "tab": "t1" }));
+        assert_eq!(rename_body("g", "lounge", "hall"), json!({ "action": "rename", "server": "g", "channel": "lounge", "to": "hall" }));
     }
 
     #[test]
@@ -805,6 +832,20 @@ mod tests {
         assert_eq!(room_for(0), DEFAULT_LIMIT);
         assert_eq!(room_for(-1), DEFAULT_LIMIT);
         assert_eq!(room_for(3), 3);
+    }
+
+    #[test]
+    fn who_sits_in_a_channel_that_goes() {
+        let mut f = HashMap::new();
+        f.insert(Uuid::from_u128(2).to_string(), r#"{"name":"a","channel":"lounge"}"#.to_owned());
+        f.insert(Uuid::from_u128(3).to_string(), r#"{"name":"b","channel":"other"}"#.to_owned());
+        f.insert(Uuid::from_u128(4).to_string(), "not json".to_owned());
+        f.insert("not a uuid".to_owned(), r#"{"name":"c","channel":"lounge"}"#.to_owned());
+        assert_eq!(seated_in(&f, Some("lounge")), vec![Uuid::from_u128(2)]);
+        assert!(seated_in(&f, Some("gone")).is_empty());
+        let mut all = seated_in(&f, None);
+        all.sort();
+        assert_eq!(all, vec![Uuid::from_u128(2), Uuid::from_u128(3), Uuid::from_u128(4)]);
     }
 
     #[test]
