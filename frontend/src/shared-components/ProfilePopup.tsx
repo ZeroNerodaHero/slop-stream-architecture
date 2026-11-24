@@ -36,13 +36,10 @@ import { ViewerCount } from '@/shared-components/ViewerCount';
 import { useHeardUid, VoiceLevel } from '@/shared-components/VoiceLevel';
 import { cn } from '@/utils/cn';
 import { monthOf } from '@/utils/since';
-import { roveTabs } from '@/utils/tabs';
+import { roveTabs, TAB, TAB_OFF, TAB_ON } from '@/utils/tabs';
 
 type PopupTab = 'about' | 'calendar' | 'socials';
 const POPUP_TABS: readonly PopupTab[] = ['about', 'calendar', 'socials'];
-const TAB = '-mb-px border-b-2 px-3 py-1.5 font-semibold leading-tight transition-colors duration-150';
-const TAB_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
-const TAB_OFF = 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary';
 const WORDS = 'text-sm font-semibold text-primaryBlue underline-offset-2 hover:underline';
 const SMALL = 'px-3 py-1.5 text-sm max-md:min-h-11';
 
