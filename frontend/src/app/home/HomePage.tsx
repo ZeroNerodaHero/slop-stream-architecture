@@ -52,6 +52,16 @@ const PersonCard = lazy(() => import('@/shared-components/PersonCard').then((m) 
 
 const stills = stillPictures({ custom: api.streamThumbUrl, camera: api.thumbUrl });
 
+function LiveSince({ since: at }: { since: string | null }) {
+  const now = useAtomValue(homeNowAtom);
+  return <>{since(at, now) || 'live'}</>;
+}
+
+function TimeAgo({ at }: { at: string }) {
+  const now = useAtomValue(homeNowAtom);
+  return <>{ago(at, now)}</>;
+}
+
 function Thumb({ name, eager }: { name: string; eager: boolean }) {
   const [src, setSrc] = useState(() => stills.src(name, []));
   const [missing, setMissing] = useState(false);
@@ -133,7 +143,6 @@ function Face({ stream }: { stream: LiveStream }) {
 
 function Card({
   stream,
-  now,
   featured,
   playing,
   onEnter,
@@ -142,7 +151,6 @@ function Card({
   eager = false
 }: {
   stream: LiveStream;
-  now: number;
   featured: boolean;
   eager?: boolean;
   playing: boolean;
@@ -150,7 +158,6 @@ function Card({
   onLeave: () => void;
   idPrefix?: string;
 }) {
-  const age = since(stream.since, now);
   const thumbs = stream.thumbs ?? [];
   return (
     <article className={CARD_LINK} data-featured={featured ? stream.name : undefined} onPointerEnter={(event) => onEnter(event.pointerType)} onPointerLeave={onLeave}>
@@ -182,7 +189,7 @@ function Card({
           </div>
           <span className="absolute right-3 top-3 z-10 flex items-center gap-1.5 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
             <span aria-hidden className="h-2 w-2 animate-pulse bg-increase" />
-            {age || 'live'}
+            <LiveSince since={stream.since} />
           </span>
           {typeof stream.viewers === 'number' && (
             <span className="absolute bottom-3 right-3 z-10 border border-white/10 bg-black/70 px-2 py-0.5 text-sm font-semibold text-white backdrop-blur-sm">
@@ -228,14 +235,12 @@ function Part({ id, title, line, heading, aside, children }: { id: string; title
 
 function Followed({
   streams,
-  now,
   featuredNames,
   hover,
   onEnter,
   onLeave
 }: {
   streams: LiveStream[];
-  now: number;
   featuredNames: string[];
   hover: string | null;
   onEnter: (name: string, pointer: string) => void;
@@ -267,7 +272,6 @@ function Followed({
             <Card
               key={stream.name}
               stream={stream}
-              now={now}
               featured={false}
               playing={featuredNames.includes(stream.name) || hover === stream.name}
               onEnter={(pointer) => onEnter(stream.name, pointer)}
@@ -282,7 +286,7 @@ function Followed({
 }
 
 function People() {
-  const people = useQuery({ queryKey: ['people'], queryFn: homePeople, refetchInterval: PEOPLE_POLL_MS, refetchOnWindowFocus: false });
+  const people = useQuery({ queryKey: ['people'], queryFn: homePeople, refetchInterval: PEOPLE_POLL_MS });
   const list: Person[] = people.data ?? [];
   if (people.isPending) {
     return (
@@ -346,7 +350,7 @@ function People() {
   );
 }
 
-function RecentCard({ person: p, now }: { person: Recent; now: number }) {
+function RecentCard({ person: p }: { person: Recent }) {
   const peek = usePeek(PEEK_MS);
   const to = `/watch/${encodeURIComponent(p.name)}`;
   return (
@@ -381,7 +385,7 @@ function RecentCard({ person: p, now }: { person: Recent; now: number }) {
           <RiTimeLine aria-hidden size={12} className="shrink-0" />
           <Tooltip content={new Date(p.ended_at).toLocaleString()}>
             <span id={`recent-when-${p.name}`} className="relative z-10 whitespace-nowrap">
-              {ago(p.ended_at, now)}
+              <TimeAgo at={p.ended_at} />
             </span>
           </Tooltip>
           <span aria-hidden>·</span>
@@ -408,12 +412,11 @@ function RecentCard({ person: p, now }: { person: Recent; now: number }) {
   );
 }
 
-function RecentlyOffline({ liveKey, now }: { liveKey: string | null; now: number }) {
+function RecentlyOffline({ liveKey }: { liveKey: string | null }) {
   const recent = useQuery({
     queryKey: ['recent'],
     queryFn: api.recent,
-    refetchInterval: PEOPLE_POLL_MS,
-    refetchOnWindowFocus: false
+    refetchInterval: PEOPLE_POLL_MS
   });
   const seenKey = useRef<string | null>(null);
   const { refetch } = recent;
@@ -442,7 +445,7 @@ function RecentlyOffline({ liveKey, now }: { liveKey: string | null; now: number
     >
       <div className={RECENT_GRID}>
         {list.map((p) => (
-          <RecentCard key={p.name} person={p} now={now} />
+          <RecentCard key={p.name} person={p} />
         ))}
       </div>
     </Part>
@@ -452,7 +455,7 @@ function RecentlyOffline({ liveKey, now }: { liveKey: string | null; now: number
 function Groups() {
   const me = useAtomValue(meAtom);
   const [making, setMaking] = useState(false);
-  const query = useQuery({ queryKey: ['explore'], queryFn: homeGroups, refetchInterval: PEOPLE_POLL_MS, refetchOnWindowFocus: false });
+  const query = useQuery({ queryKey: ['explore'], queryFn: homeGroups, refetchInterval: PEOPLE_POLL_MS });
   const groups: Server[] = query.data ? [...query.data.yours, ...query.data.discover].filter((group) => group.mine || group.public !== false) : [];
   const loading = !query.data && !query.error;
   const canMake = !!me && !!query.data && mayMakeGroup(query.data);
@@ -526,7 +529,6 @@ function StreamsSkeleton() {
 export function HomePage() {
   const streams = useAtomValue(homeStreamsAtom);
   const error = useAtomValue(homeErrorAtom);
-  const now = useAtomValue(homeNowAtom);
   const list = error ? undefined : streams;
   const featured = list?.slice(0, FEATURED) ?? [];
   const rest = list?.slice(FEATURED) ?? [];
@@ -590,7 +592,7 @@ export function HomePage() {
           {featured.length > 0 && (
             <div id="featured" className={cn(FEATURED_GRID, rest.length > 0 && 'mb-6')}>
               {featured.map((stream) => (
-                <Card key={stream.name} stream={stream} now={now} featured eager playing onEnter={() => undefined} onLeave={() => undefined} />
+                <Card key={stream.name} stream={stream} featured eager playing onEnter={() => undefined} onLeave={() => undefined} />
               ))}
             </div>
           )}
@@ -600,7 +602,6 @@ export function HomePage() {
                 <Card
                   key={stream.name}
                   stream={stream}
-                  now={now}
                   featured={false}
                   playing={hover === stream.name}
                   onEnter={(pointer) => cardHover.enter(stream.name, pointer, hover)}
@@ -614,14 +615,13 @@ export function HomePage() {
       {list && (
         <Followed
           streams={list}
-          now={now}
           featuredNames={featured.map((stream) => stream.name)}
           hover={hover}
           onEnter={(name, pointer) => cardHover.enter(name, pointer, hover)}
           onLeave={(name) => cardHover.leave(name)}
         />
       )}
-      {!error && <RecentlyOffline liveKey={list ? namesKey : null} now={now} />}
+      {!error && <RecentlyOffline liveKey={list ? namesKey : null} />}
       {!error && <Groups />}
       {!error && <People />}
     </PageFrame>
