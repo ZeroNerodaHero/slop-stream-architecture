@@ -8,7 +8,17 @@ import { cropPicture } from '@/infra/atoms/crop-atoms';
 import { record } from '@/infra/atoms/inspector-atoms';
 import { publishPipAtom } from '@/infra/atoms/publish-state';
 import { endWatch, pipAtom } from '@/infra/atoms/watch-atoms';
-import { type FaceLines, type FaceMarks, type FaceState, type LoadStep, type ModelSession, type ModelStats, type RigInfo, startModel, warmModelFiles } from '@/infra/face';
+import {
+  type FaceLines,
+  type FaceMarks,
+  type FaceState,
+  type LoadStep,
+  type ModelSession,
+  type ModelStats,
+  type RigInfo,
+  startModel,
+  warmModelFiles
+} from '@/infra/face';
 import { type Mixer, openMixer } from '@/infra/mixer';
 import { readModel } from '@/infra/model-file';
 import { forgetKept, keepDemo, keepForGood, keepModel, type KeptModel, keptDemoFile, keptFile, listKept, listKeptDemos, pruneKeptDemos } from '@/infra/model-store';
