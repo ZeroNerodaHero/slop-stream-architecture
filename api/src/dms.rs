@@ -1,28 +1,3 @@
-//! Direct messages: a login writes a line to a friend (someone it follows who follows it
-//! back), and every device of either sees it at once. See docs/dms.md.
-//!
-//! One table of lines, `dms (from_id, to_id, text, image, sent_at)`, both ids (docs/ids.md): a
-//! renamed name keeps its threads, and a line is shown under whatever name its writer has
-//! now. A thread is the pair, whichever way round. The api is the one writer: a line is a
-//! row, then a `dm` fact on the `events` stream, and the gateway (events.rs) pushes it to
-//! the sockets of both names, the way `live` reaches a stream's watchers. Reading is http, a
-//! page at a time. `dm_reads` says how far into each thread a login has read, so the count
-//! of what is new holds across reloads and devices; a read on one device clears the others
-//! through a `dm_read` fact.
-//!
-//! A line may carry pictures, the room chat's way (chat_images.rs): the page shrinks each and
-//! `POST /api/chat-images` keeps it, the line names the ids (`images`, ten at most), and the
-//! row keeps them joined by commas in `image`, as a chat line does. The words may be empty
-//! when there is a picture. A video goes the same way (chat_videos.rs): `video` names the id
-//! `POST /api/chat-videos` handed back, and the row keeps it with its poster in `video`
-//! (`<video>,<poster>`, chat.rs `Video`), the line answering `video: { id, poster }`.
-//!
-//! A thread is searched the room chat's way too (`GET /api/dm/:name/search?q=`, history.rs
-//! `read_search`: the words, a quoted phrase, and the filters among them), over its own rows
-//! alone: the pair bounds a thread to a few thousand lines at most, so the words are matched
-//! as `to_tsvector` over the text and a link is the rooms' regex over it, with no column or
-//! index of their own.
-
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -41,26 +16,18 @@ use crate::presence::{self, Presence};
 use crate::{chat_videos, emotes, follows, notify, reactions};
 use crate::{ApiError, ApiResult, AppState, Name};
 
-/// Lines in one page of a thread. A shorter page is the start of the thread.
 const PAGE: i64 = 50;
-/// Hits a search of a thread answers, newest first: the room search's number (history.rs).
 const SEARCH_LIMIT: i64 = 50;
-/// Threads `GET /api/dms` lists, the newest first. More than a column of faces shows.
 const THREADS: i64 = 100;
-/// Lines per login per minute: a conversation, even a quick one, not a flood.
 const RATE_PER_MINUTE: i64 = 60;
 const RATE_WINDOW_SECS: i64 = 60;
 
-/// The one refusal of a line: the pages show it under the box as it is.
 const NOT_FRIENDS: &str = "not friends. a chat is with someone you follow who follows you back";
 
 fn not_logged_in() -> ApiError {
     ApiError::new(StatusCode::UNAUTHORIZED, "not logged in")
 }
 
-/// The account behind a name in the path: a held name answers for the account that left it
-/// (docs/ids.md), a free name is nobody's and cannot be written to. 403 in the friends' words
-/// either way: a name with no account is never a friend.
 async fn peer(db: &PgPool, me: &Account, name: String) -> Result<Account, ApiError> {
     let name = auth::renamed_to(db, &name).await?.unwrap_or(name);
     if name == me.name {
@@ -74,15 +41,8 @@ async fn peer(db: &PgPool, me: &Account, name: String) -> Result<Account, ApiErr
     Ok(Account { id, name })
 }
 
-/// id, from (the name now), text, sent at (ms), the pictures' ids joined by commas (null for none),
-/// then what it answers (`reply_to`) and that line as `QuoteRow` has it (nulls for one not there),
-/// then its reactions (json, reactions.rs `Reaction`s, `[]` for none), then its video and the quoted
-/// line's (`<video>,<poster>`, null for none)
 type LineRow = (i64, String, String, i64, Option<String>, Option<i64>, Option<String>, Option<String>, Option<i64>, Option<String>, Value, Option<String>, Option<String>);
 
-/// A thread's line as every read of it selects it (`LineRow`), the line it answers joined: of the
-/// same pair, so a reply never shows another thread's words. Its reactions with it, by the name
-/// each reactor has now (reactions.rs).
 const LINE_SELECT: &str = concat!(
     "SELECT d.id, f.name, d.text, (EXTRACT(EPOCH FROM d.sent_at) * 1000)::bigint, d.image,
                 d.reply_to, qf.name, left(q.text, 120), (EXTRACT(EPOCH FROM qf.avatar_at))::bigint, q.image, ",
@@ -97,7 +57,6 @@ const LINE_SELECT: &str = concat!(
 fn line_json((id, from, text, at, image, reply_to, quote_from, quote_text, quote_avatar, quote_image, reactions, video, quote_video): &LineRow) -> Value {
     let reply = reply_to.map(|reply_to| match quote_from {
         Some(quote_from) => quote_json(&(reply_to, quote_from.clone(), quote_text.clone().unwrap_or_default(), *quote_avatar, quote_image.clone(), quote_video.clone())),
-        // the line it answered is not there any more: the page says so
         None => json!({ "id": reply_to, "gone": true }),
     });
     let mut line = json!({ "id": id, "from": from, "text": text, "at": at, "images": split_pictures(image.clone()), "reply": reply, "reactions": reactions });
@@ -107,12 +66,8 @@ fn line_json((id, from, text, at, image, reply_to, quote_from, quote_text, quote
     line
 }
 
-/// The line a reply answers, as a quote: id, who wrote it (the name now), the start of its words
-/// (120 characters, the room chat's `Reply`), their picture's version, its pictures' ids, its video.
 type QuoteRow = (i64, String, String, Option<i64>, Option<String>, Option<String>);
 
-/// A quote as the pages read it, the room chat's `Reply` shape: `images` is how many pictures,
-/// `video` there when it had one.
 fn quote_json((id, from, text, avatar, image, video): &QuoteRow) -> Value {
     let mut quote = json!({ "id": id, "from": from, "text": text, "verified": true, "avatar": avatar, "images": split_pictures(image.clone()).len() });
     if video.is_some() {
@@ -121,8 +76,6 @@ fn quote_json((id, from, text, avatar, image, video): &QuoteRow) -> Value {
     quote
 }
 
-/// The line `id` of the thread between `a` and `b`, as a quote. None for a line of another
-/// thread, or none at all: a reply answers its own thread only.
 async fn quote(db: &PgPool, a: Uuid, b: Uuid, id: i64) -> Result<Option<QuoteRow>, sqlx::Error> {
     sqlx::query_as(
         "SELECT q.id, f.name, left(q.text, 120), (EXTRACT(EPOCH FROM f.avatar_at))::bigint, q.image, q.video
@@ -136,8 +89,6 @@ async fn quote(db: &PgPool, a: Uuid, b: Uuid, id: i64) -> Result<Option<QuoteRow
     .await
 }
 
-/// Every id a line names is a picture `POST /api/chat-images` kept for the writer (the say's
-/// check, chat.rs `pictures_exist`): 400 `no such picture` or `not your picture` otherwise.
 async fn pictures_exist(db: &PgPool, ids: &[String], who: Uuid) -> Result<(), ApiError> {
     for id in ids {
         match media::check(db, Kind::Image, id, Some(who)).await? {
@@ -154,11 +105,6 @@ struct BeforeQuery {
     before: Option<i64>,
 }
 
-/// `GET /api/dm/:name[?before=<id>]`: one page of the thread with `name`, oldest first, the
-/// newest page without `before`, the page before a line with it. A line is `id`, `from`,
-/// `text`, `at` and `images` (the pictures' ids, empty for none). `friends` says whether a
-/// line may be sent now; the thread reads either way, so an old conversation is not lost
-/// with the follow.
 async fn thread(State(s): State<AppState>, Name(name): Name, Me(me): Me, q: Result<Query<BeforeQuery>, QueryRejection>) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let Query(q) = q?;
@@ -181,14 +127,6 @@ struct SearchQuery {
     q: String,
 }
 
-/// `GET /api/dm/:name/search?q=`: the lines of the thread with `name` that match, newest first,
-/// 50 at most, `{ lines: [{ id, from, text, at, images }] }`, a line as the thread has it. The
-/// box is the room chat's (history.rs `read_search`): the words, a quoted phrase, and the filters
-/// among them, `from:<name>` (one of the two; anyone else finds nothing), `has:image`,
-/// `has:link`, `has:video`, `before:<day>`, `after:<day>`. 400 `say what to look for` for an
-/// empty box, `too long` past 200 characters, and a filter's own words when its value will not
-/// read; 401 nobody; 400 `that is you` and 403 for a name with no account, as the thread is. A
-/// thread reads whether or not the two are still friends, and so does its search.
 async fn search(State(s): State<AppState>, Name(name): Name, Me(me): Me, q: Result<Query<SearchQuery>, QueryRejection>) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let Query(q) = q?;
@@ -197,8 +135,6 @@ async fn search(State(s): State<AppState>, Name(name): Name, Me(me): Me, q: Resu
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "channel: is for a group's chat"));
     }
     let other = peer(&s.db, &me, name).await?;
-    // `from:` names one of the two, by the name they have now or one held for them after a rename
-    // (docs/ids.md). anyone else wrote nothing in this thread
     let from = match &search.from {
         Some(asked) => {
             let now = auth::renamed_to(&s.db, asked).await?.unwrap_or_else(|| asked.clone());
@@ -222,15 +158,9 @@ async fn search(State(s): State<AppState>, Name(name): Name, Me(me): Me, q: Resu
     Ok(Json(json!({ "lines": rows.iter().map(line_json).collect::<Vec<_>>() })))
 }
 
-/// The query for a search of a thread: the pair ($1, $2), then one clause per thing asked, each
-/// bound in the order returned, and the limit last. The thread index narrows the rows to the
-/// pair first; the rest is read off each row (`to_tsvector` over the words, the rooms' link
-/// regex, `history::LINK`, over the text for `has:link`, `VIDEO_LINK` for `has:video`), since
-/// a thread is a few thousand lines at most and a column for each would cost more than it saves.
 fn search_sql(search: &Search, from: Option<Uuid>) -> (String, Vec<Bind>) {
     let mut binds: Vec<Bind> = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
-    // the next placeholder: the pair is $1 and $2, so a bind pushed here is $(its count + 2)
     let mut placeholder = |bind: Bind| {
         binds.push(bind);
         format!("${}", binds.len() + 2)
@@ -251,7 +181,6 @@ fn search_sql(search: &Search, from: Option<Uuid>) -> (String, Vec<Bind>) {
         clauses.push(format!("d.text ~* {link}"));
     }
     if search.video {
-        // a video of the line's own, or a pasted link to one: a link first, then a video link
         let link = placeholder(Bind::Text(history::LINK.to_owned()));
         let hosts = placeholder(Bind::Text(history::VIDEO_LINK.to_owned()));
         clauses.push(format!("(d.video IS NOT NULL OR (d.text ~* {link} AND d.text ~* {hosts}))"));
@@ -281,27 +210,16 @@ fn search_sql(search: &Search, from: Option<Uuid>) -> (String, Vec<Bind>) {
 struct TextBody {
     #[serde(default)]
     text: String,
-    /// The pictures on the line, the ids `POST /api/chat-images` handed back. The say's shape
-    /// (chat.rs `In::Say`): `images` the set, or the one `image`.
     #[serde(default)]
     image: Option<String>,
     #[serde(default)]
     images: Vec<String>,
-    /// The video on the line, the id `POST /api/chat-videos` handed back. One at most.
     #[serde(default)]
     video: Option<String>,
-    /// The id of the line of this thread the line answers (docs/dms.md "replies").
     #[serde(default)]
     reply: Option<i64>,
 }
 
-/// `POST /api/dm/:name` with `{ text, images?, reply? }`: a line to a friend. 201 with the line as
-/// it was kept (`id`, `from`, `text`, `at`, `images`, `reply`: the quote of the line it answers, or
-/// null); the same line comes back through the events socket to every device of both, which is
-/// how the writer's other tabs hear it. 400 `too long` past 500 characters, `nothing to say` for
-/// nothing once cleaned and no picture, `bad picture`, `too many pictures` (ten is the cap) and
-/// `no such picture` for ids the upload never handed out, `no such line` for a reply to a line not
-/// in this thread; 403 in the friends' words for anyone who is not one; 429 past 60 a minute.
 async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Result<Json<TextBody>, JsonRejection>) -> Result<(StatusCode, Json<Value>), ApiError> {
     let me = me.ok_or_else(not_logged_in)?;
     let Json(body) = body?;
@@ -311,7 +229,6 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     if text.is_empty() && images.is_empty() && video.is_none() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "nothing to say"));
     }
-    // an emote counts as its `:name:`, as in a chat line (chat.rs `parse_say`)
     if emotes::shown_chars(&text) > MAX_TEXT_CHARS || text.chars().count() > emotes::max_raw_chars(MAX_TEXT_CHARS) {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "too long"));
     }
@@ -320,11 +237,8 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
         return Err(ApiError::new(StatusCode::FORBIDDEN, NOT_FRIENDS));
     }
     crate::auth::limit(&s, &format!("rl:dm:name:{}", me.name), RATE_WINDOW_SECS, RATE_PER_MINUTE, "slow down").await?;
-    // each emote the writer may not use (not in its group) goes back to plain `:name:` (emotes.rs)
     let text = emotes::settle(&s.db, Some(me.id), &text).await;
-    // the pictures must be ones the upload kept: a lookup each, paid for by the rate like the say's (chat.rs `accept`)
     pictures_exist(&s.db, &images, me.id).await?;
-    // the video too, the writer's own, with its poster, which the line carries beside it
     let video = match video {
         Some(id) => {
             match media::check(&s.db, Kind::Video, &id, Some(me.id)).await? {
@@ -348,13 +262,11 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
             return Err(ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, why));
         }
     }
-    // the line answered must be this thread's: a lookup, paid for by the rate like the pictures'
     let reply = match body.reply {
         Some(id) => Some(quote(&s.db, me.id, other.id, id).await?.ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, NO_SUCH_LINE))?),
         None => None,
     };
     let reply = reply.as_ref().map(quote_json);
-    // the uploads are this thread's now: for the two of them alone (media.rs)
     crate::chat::mark_posted(&s.db, &Place::dm(me.id, other.id), &images, video.as_ref()).await?;
     let image = if images.is_empty() { None } else { Some(images.join(",")) };
     let (id, at): (i64, i64) = sqlx::query_as(
@@ -369,10 +281,7 @@ async fn send(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     .bind(video.as_ref().map(Video::stored))
     .fetch_one(&s.db)
     .await?;
-    // the writer has read their own thread this far: a line of yours is never "new" to you
     mark_read(&s.db, me.id, other.id, id).await?;
-    // the inbox row before the frame: the open thread's read must find it already there. a line of
-    // pictures alone is a row with no words, and the list says `a picture` for it
     notify::messaged(&s, &other, &me, &text).await;
     let mut r = s.redis.clone();
     presence::publish_dm(&mut r, &me.name, &other.name, id, &text, &images, video.as_ref(), at, &me.id.to_string(), reply.as_ref()).await;
@@ -391,20 +300,11 @@ struct ReactBody {
     on: bool,
 }
 
-/// Reactions per login per minute, apart from the lines': a click on and off again is two.
 const REACT_PER_MINUTE: i64 = 120;
 
-/// `PUT /api/dm/:name/react` with `{ id, emoji, on }`: the login's `emoji` on line `id` of the
-/// thread with `name`, or off it (docs/dms.md "reactions"). 200 with the line's `reactions` as
-/// they are now; a change also goes out as a `dm_react` frame to every device of both. Putting on
-/// one already there, or taking off one that is not, is no change and no frame. 400 `not a
-/// reaction` for an emoji off the list (reactions.rs `EMOJIS`), `no such line` for a line not in
-/// this thread, `too many reactions` for a new emoji on a line with 20; 403 in the friends' words
-/// for anyone who is not one, the way a line is; 429 past 120 a minute.
 async fn react(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Result<Json<ReactBody>, JsonRejection>) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let Json(body) = body?;
-    // one off the list, or a custom emote's id written the api's way
     let Some(emoji) = reactions::shaped(&body.emoji) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, reactions::NOT_A_REACTION));
     };
@@ -413,11 +313,9 @@ async fn react(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Re
         return Err(ApiError::new(StatusCode::FORBIDDEN, NOT_FRIENDS));
     }
     crate::auth::limit(&s, &format!("rl:dmreact:name:{}", me.name), RATE_WINDOW_SECS, REACT_PER_MINUTE, "slow down").await?;
-    // the line must be this thread's: a lookup, paid for by the rate like a reply's
     if quote(&s.db, me.id, other.id, body.id).await?.is_none() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, NO_SUCH_LINE));
     }
-    // a custom emote is its group's members', in a thread as in a line (emotes.rs)
     if body.on && !reactions::may_put(&s.db, me.id, &emoji).await? {
         return Err(ApiError::new(StatusCode::FORBIDDEN, reactions::NOT_YOURS));
     }
@@ -436,8 +334,6 @@ async fn react(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Re
     Ok(Json(json!({ "id": body.id, "reactions": now })))
 }
 
-/// The reader has seen the thread with `peer` up to `id`. Never backwards: two devices
-/// reading at once settle on the further one.
 async fn mark_read(db: &PgPool, reader: Uuid, peer: Uuid, id: i64) -> Result<bool, sqlx::Error> {
     let moved = sqlx::query(
         "INSERT INTO dm_reads (reader_id, peer_id, last_read_id) VALUES ($1, $2, $3)
@@ -450,7 +346,6 @@ async fn mark_read(db: &PgPool, reader: Uuid, peer: Uuid, id: i64) -> Result<boo
     .execute(db)
     .await?;
     let moved = moved.rows_affected() > 0;
-    // what the peer wrote was in the reader's inbox too; read there with the thread
     if moved {
         notify::dm_read(db, reader, peer).await?;
     }
@@ -462,8 +357,6 @@ struct IdBody {
     id: i64,
 }
 
-/// `PUT /api/dm/:name/read` with `{ id }`: the login has seen the thread up to that line. 204.
-/// A `dm_read` fact tells the login's other devices, so their count drops too.
 async fn read(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Result<Json<IdBody>, JsonRejection>) -> Result<StatusCode, ApiError> {
     let me = me.ok_or_else(not_logged_in)?;
     let Json(body) = body?;
@@ -475,13 +368,8 @@ async fn read(State(s): State<AppState>, Name(name): Name, Me(me): Me, body: Res
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// peer id, name, verified, avatar, bio, status, last id, last from, last text, last at (ms), unread, last pictures (joined by commas), last video
 type ThreadRow = (Uuid, String, bool, Option<i64>, String, String, i64, String, String, i64, i64, Option<String>, Option<String>);
 
-/// `GET /api/dms`: every thread the login is in, the one with the newest line first, with the
-/// other side as the sidebar lists people (face, ✓, bio, how they are), their account `id`,
-/// the last line, and how many of their lines are past what the login has read. 100 at most.
-/// 401 for nobody.
 async fn list(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let me = me.ok_or_else(not_logged_in)?;
     let rows: Vec<ThreadRow> = sqlx::query_as(
@@ -556,7 +444,6 @@ mod tests {
         assert!(matches!(&binds[3], Bind::Text(re) if re == history::VIDEO_LINK));
         assert!(matches!(&binds[4], Bind::At(at) if *at == utc("2026-10-30")));
 
-        // pictures bind nothing: the pair and the limit alone. words and a day are a bind each
         let s = history::parse_search("has:image").unwrap();
         let (sql, binds) = search_sql(&s, None);
         assert!(sql.contains("AND d.image IS NOT NULL ORDER BY d.id DESC LIMIT $3"));

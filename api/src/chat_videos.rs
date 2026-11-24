@@ -1,26 +1,3 @@
-//! A short video on a chat line, the pictures' way (chat_images.rs): the page posts the file
-//! here, the say names the id, and the panel plays it back from the bucket. See docs/chat.md
-//! "videos".
-//!
-//! An mp4 of H.264 (with AAC, or no sound) or a webm of VP8 or VP9 (with Opus, or no sound),
-//! 10 mb and 30 seconds at most. The magic bytes say which container, and a walk of its header
-//! (`probe`) refuses the wrong codecs before anything is run. Then ffprobe reads the file itself
-//! (`prepare`): its streams' codecs again, and how long it really is, the container's word or its
-//! packets' last timestamp, whichever is longer. One it cannot tell the length of is refused, as
-//! is one over 30 seconds; the page's own reading is not asked for.
-//!
-//! What the bucket keeps is ffmpeg's copy, not the upload: the first video and sound stream
-//! remuxed as they are (`-c copy`), every other stream, the metadata and the chapters left out,
-//! an mp4's index at the front (`+faststart`). Only when that copy fails is it encoded again, an
-//! H.264/AAC mp4 at modest settings. The poster is a frame ffmpeg draws from that copy (a second
-//! in, or the first), kept as a chat picture of the uploader's. ffmpeg and ffprobe run on a
-//! blocking thread, two jobs at most at once, each with a timeout and, on linux, limits on its
-//! memory, cpu time and file size, reading only local files (`-protocol_whitelist file`) with the
-//! demuxer named, never guessed.
-//!
-//! Who is served one is media.rs's: a stream's are public, a group channel's and a direct
-//! message's are for those who may read them. A site admin may take one down (`take_down`).
-
 use std::io::Read as _;
 use std::path::{Path as FsPath, PathBuf};
 use std::process::{Command, Stdio};
@@ -44,37 +21,25 @@ use crate::media::{self, Kind};
 use crate::{chat_images, s3};
 use crate::{ApiError, ApiResult, AppState};
 
-/// A phone's half minute at a sensible bitrate. The bucket is on the box, and its disk is small.
 const MAX_BYTES: usize = 10 * 1024 * 1024;
-/// Half a minute, and half a second over for a container's rounding (a 30s recording reads 30.02).
 const MAX_MS: u64 = 30_000;
 const SLACK_MS: u64 = 500;
-/// Videos per login per ten minutes, on top of ratelimit.rs's `VIDEO_UPLOAD`. Stricter than the
-/// pictures' 30: each is up to forty times the bytes.
 const RATE_PER_WINDOW: i64 = 5;
 const RATE_WINDOW_SECS: i64 = 600;
-/// ffmpeg jobs at once, across every upload: the box has few cores and a stream to serve.
 static JOBS: Semaphore = Semaphore::const_new(2);
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
-        // the 10 mb is this route's alone: every other body keeps axum's 2 mb
         .route("/api/chat-videos", post(upload).layer(DefaultBodyLimit::max(MAX_BYTES)))
         .route("/api/chat-videos/{id}", get(show).delete(take_down))
 }
 
-/// The poster of the video `id`, when the api kept one by that id and it still has its poster.
-/// The say checks this before it keeps a line that names a video, and puts both ids on the line.
 pub(crate) async fn poster_of(db: &PgPool, id: &str) -> Result<Option<Uuid>, sqlx::Error> {
     let Ok(id) = Uuid::parse_str(id) else { return Ok(None) };
     let poster: Option<Option<Uuid>> = sqlx::query_scalar("SELECT poster FROM chat_videos WHERE id = $1").bind(id).fetch_optional(db).await?;
     Ok(poster.flatten())
 }
 
-/// `POST /api/chat-videos`, the file as the body: 200 `{ id, poster, duration_ms }`, the poster
-/// a chat picture the api drew. 401 for nobody; 413 `video too big`; 400 `not an mp4 or webm`,
-/// the codecs' words, `video too long` or `could not tell how long that video is`; 429 past five
-/// in ten minutes. A query (an older page's `?poster=` and `?duration=`) is not read.
 async fn upload(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, body: Result<Bytes, BytesRejection>) -> ApiResult {
     let me = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "log in to send a video"))?;
     let body = match body {
@@ -88,7 +53,6 @@ async fn upload(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, body:
     if body.len() > MAX_BYTES {
         return Err(too_big());
     }
-    // the header's word on the container and codecs, before anything is run
     let probe = probe(&body).map_err(|why| ApiError::new(StatusCode::BAD_REQUEST, why))?;
     if probe.duration_ms.is_some_and(|ms| ms > MAX_MS + SLACK_MS) {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, TOO_LONG));
@@ -115,7 +79,6 @@ async fn upload(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, body:
     }
     let ip = crate::ratelimit::forwarded_ip(&headers);
     let poster = chat_images::store(&s, &me, crate::moderate::UploadKind::VideoPoster, "image/jpeg", &ready.poster, ip.as_deref()).await?;
-    // the row first, as the pictures do; a failed save deletes it, and the poster with it
     let id: Uuid = match sqlx::query_scalar(
         "INSERT INTO chat_videos (id, mime, bytes, duration_ms, poster, created_by, sha256, uploader_ip)
          VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7) RETURNING id",
@@ -159,10 +122,6 @@ fn too_big() -> ApiError {
     ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "video too big. 10 mb at most")
 }
 
-/// `GET /api/chat-videos/:id`: the file, or the part of it a `Range` asks for (206, one range;
-/// several are answered with the whole, which the spec allows), so a player can seek, and
-/// Safari, which will not play a video it cannot ask for in parts, plays it at all. To whoever
-/// may see it (media.rs `access`): 401/403 for anyone else, 410 `removed` after a takedown.
 async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, headers: HeaderMap) -> Result<Response, ApiError> {
     let Ok(id) = Uuid::parse_str(id.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad video"));
@@ -228,9 +187,6 @@ async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, hea
     }
 }
 
-/// `DELETE /api/chat-videos/:id`: a site admin's takedown. The file out of the bucket, the row
-/// gone, its poster taken down with it, and the lines naming it say "removed". 204; 401 nobody,
-/// 403 anyone else, 404 no such video.
 async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
     let me = chat_images::admin(&s, me)?;
     let Ok(id) = Uuid::parse_str(id.trim()) else {
@@ -247,7 +203,6 @@ async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>
     }
     media::remember_removed(&s.db, Kind::Video, id, me.id).await?;
     sqlx::query("DELETE FROM chat_videos WHERE id = $1").bind(id).execute(&s.db).await?;
-    // a stream's is public, so the edge may hold it (cf_purge.rs); a group's or a DM's never was
     if posted.as_deref() == Some("stream") {
         crate::cf_purge::purge(vec![format!("/api/chat-videos/{id}")]);
     }
@@ -261,9 +216,6 @@ async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// The one range a `Range: bytes=…` header asks of a file `len` long, as `start..=end`.
-/// `Ok(None)`: the whole file (no header, one this does not read, or several ranges).
-/// `Err`: a range wholly past the end, the 416.
 fn range_of(asked: Option<&str>, len: u64) -> Result<Option<(u64, u64)>, ()> {
     let Some(spec) = asked.and_then(|a| a.trim().strip_prefix("bytes=")) else { return Ok(None) };
     if spec.contains(',') || len == 0 {
@@ -272,7 +224,6 @@ fn range_of(asked: Option<&str>, len: u64) -> Result<Option<(u64, u64)>, ()> {
     let Some((a, b)) = spec.trim().split_once('-') else { return Ok(None) };
     let (a, b) = (a.trim(), b.trim());
     if a.is_empty() {
-        // the last n bytes
         let Ok(n) = b.parse::<u64>() else { return Ok(None) };
         if n == 0 {
             return Err(());
@@ -299,9 +250,6 @@ fn key_of(id: Uuid, mime: &str) -> String {
     format!("chat-videos/{id}.{ext}")
 }
 
-// ---- ffmpeg -------------------------------------------------------------------------------------
-
-/// What `prepare` made of an upload: the file to keep, its type, its real length and a poster.
 #[derive(Debug)]
 struct Ready {
     mime: &'static str,
@@ -309,15 +257,12 @@ struct Ready {
     poster: Vec<u8>,
     duration_ms: u64,
     bytes_in: usize,
-    /// The copy failed and it was encoded again.
     encoded: bool,
 }
 
 #[derive(Debug, PartialEq)]
 enum Failed {
-    /// The file's fault: a 400 in these words.
     Refused(&'static str),
-    /// Ours (ffmpeg missing, a timeout, the disk): logged, a 500.
     Broken(String),
 }
 
@@ -329,17 +274,13 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const COPY_TIMEOUT: Duration = Duration::from_secs(30);
 const ENCODE_TIMEOUT: Duration = Duration::from_secs(120);
 const POSTER_TIMEOUT: Duration = Duration::from_secs(15);
-/// ffprobe's packet list, at most: a 30 second clip's is a few hundred kb.
 const MAX_PROBE_OUTPUT: u64 = 16 * 1024 * 1024;
-/// A chat picture's ceiling (chat_images.rs): the poster is one.
 const MAX_POSTER_BYTES: usize = 256 * 1024;
 
-/// ffmpeg's and ffprobe's paths: `FFMPEG`/`FFPROBE` when set, otherwise found on the PATH.
 fn bin(var: &str, name: &str) -> String {
     std::env::var(var).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| name.to_owned())
 }
 
-/// A directory of one upload's files, gone when this is.
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -365,8 +306,6 @@ impl Drop for Scratch {
     }
 }
 
-/// The upload made ready to keep, on a blocking thread: probed, its length checked, remuxed
-/// (or, when that fails, encoded again), and a poster drawn.
 fn prepare(body: &[u8], mime: &'static str) -> Result<Ready, Failed> {
     let (demuxer, ext) = if mime == "video/webm" { ("matroska", "webm") } else { ("mov", "mp4") };
     let scratch = Scratch::new().map_err(|e| Failed::Broken(format!("scratch dir: {e}")))?;
@@ -396,8 +335,6 @@ fn prepare(body: &[u8], mime: &'static str) -> Result<Ready, Failed> {
     Ok(Ready { mime: kept_mime, video, poster, duration_ms: duration_ms.min(MAX_MS + SLACK_MS), bytes_in: body.len(), encoded })
 }
 
-/// The length to go by: the longer of the container's word and the packets' last timestamp, so
-/// neither a header that lies short nor one that says nothing lets a long file by.
 fn length_of(header_ms: Option<u64>, packets_ms: Option<u64>) -> Result<u64, Failed> {
     let ms = match (header_ms.filter(|ms| *ms > 0), packets_ms.filter(|ms| *ms > 0)) {
         (None, None) => return Err(Failed::Refused(UNKNOWN_LENGTH)),
@@ -411,7 +348,6 @@ fn length_of(header_ms: Option<u64>, packets_ms: Option<u64>) -> Result<u64, Fai
 
 #[derive(Debug, Default)]
 struct Streams {
-    /// (codec_type, codec_name) of each stream.
     codecs: Vec<(String, String)>,
     duration_ms: Option<u64>,
 }
@@ -437,7 +373,6 @@ struct ProbeFormat {
     duration: Option<String>,
 }
 
-/// ffprobe's word on the streams and the container's length.
 fn probe_streams(scratch: &Scratch, input: &FsPath, demuxer: &str) -> Result<Streams, Failed> {
     let out = scratch.file("streams.json");
     let mut cmd = Command::new(bin("FFPROBE", "ffprobe"));
@@ -451,7 +386,6 @@ fn probe_streams(scratch: &Scratch, input: &FsPath, demuxer: &str) -> Result<Str
     })
 }
 
-/// The end of the last packet of any stream, in ms: `pts + duration`, read off every packet.
 fn packets_end_ms(scratch: &Scratch, input: &FsPath, demuxer: &str) -> Result<Option<u64>, Failed> {
     let out = scratch.file("packets.csv");
     let mut cmd = Command::new(bin("FFPROBE", "ffprobe"));
@@ -461,7 +395,6 @@ fn packets_end_ms(scratch: &Scratch, input: &FsPath, demuxer: &str) -> Result<Op
     Ok(last_packet_ms(&String::from_utf8_lossy(&raw)))
 }
 
-/// The packets' list as ffprobe writes it, `pts,duration[,…]` a line, `N/A` for one not known.
 fn last_packet_ms(csv: &str) -> Option<u64> {
     csv.lines()
         .filter_map(|line| {
@@ -480,9 +413,6 @@ fn seconds_ms(raw: &str) -> Option<u64> {
     raw.trim().parse::<f64>().ok().filter(|s| s.is_finite() && *s > 0.0).map(|s| (s * 1000.0).round() as u64)
 }
 
-/// The container's codecs, by ffprobe this time: every video stream H.264 (mp4) or VP8/VP9
-/// (webm), every sound stream AAC or Opus, and at least one video stream. Other streams (an
-/// iPhone's metadata track, subtitles) are left out of the copy, so they do not matter here.
 fn check_codecs(mime: &str, codecs: &[(String, String)]) -> Result<(), Failed> {
     let (videos, sounds, words): (&[&str], &[&str], &'static str) =
         if mime == "video/webm" { (&["vp8", "vp9"], &["opus"], WEBM_CODECS) } else { (&["h264"], &["aac"], MP4_CODECS) };
@@ -501,9 +431,6 @@ fn check_codecs(mime: &str, codecs: &[(String, String)]) -> Result<(), Failed> {
     Ok(())
 }
 
-/// The first video and sound stream copied as they are into a fresh file of the same container:
-/// no other stream, no metadata (the file's or a stream's), no chapters, no encoder's name, and
-/// an mp4's index at the front so it plays before it has all come.
 fn remux(input: &FsPath, demuxer: &str, out: &FsPath, mime: &str) -> Result<(), String> {
     let mut cmd = ffmpeg_reading(input, demuxer);
     cmd.args(["-map", "0:v:0", "-map", "0:a:0?", "-c", "copy"]);
@@ -521,8 +448,6 @@ fn remux(input: &FsPath, demuxer: &str, out: &FsPath, mime: &str) -> Result<(), 
     }
 }
 
-/// The copy's fallback: an H.264/AAC mp4, 1280 on its long side at most, a fast preset at a
-/// modest quality on two threads, cut at the 30 seconds.
 fn encode(input: &FsPath, demuxer: &str, out: &FsPath) -> Result<(), Failed> {
     let mut cmd = ffmpeg_reading(input, demuxer);
     cmd.args(["-map", "0:v:0", "-map", "0:a:0?", "-t", "30.5"])
@@ -534,8 +459,6 @@ fn encode(input: &FsPath, demuxer: &str, out: &FsPath) -> Result<(), Failed> {
     run(&mut cmd, None, ENCODE_TIMEOUT).map_err(|why| refused_or_broken(why, UNREADABLE))
 }
 
-/// A frame of the kept file as a jpeg, 640 on its long side at most: a second in, or the first
-/// frame for a clip shorter than that.
 fn poster(scratch: &Scratch, video: &FsPath, demuxer: &str) -> Result<Vec<u8>, Failed> {
     let out = scratch.file("poster.jpg");
     for at in [Some("1"), None] {
@@ -564,14 +487,12 @@ fn poster(scratch: &Scratch, video: &FsPath, demuxer: &str) -> Result<Vec<u8>, F
     Err(Failed::Refused("no picture in that video"))
 }
 
-/// ffmpeg, reading `input` as `demuxer` and nothing but the local file, writing over its output.
 fn ffmpeg_reading(input: &FsPath, demuxer: &str) -> Command {
     let mut cmd = Command::new(bin("FFMPEG", "ffmpeg"));
     cmd.args(["-nostdin", "-v", "error", "-y", "-protocol_whitelist", "file", "-f", demuxer, "-i"]).arg(input);
     cmd
 }
 
-/// No metadata out: the file's, each stream's, the chapters', and no encoder's name.
 fn strip(cmd: &mut Command) {
     cmd.args(["-map_metadata", "-1", "-map_metadata:s:v", "-1", "-map_metadata:s:a", "-1", "-map_chapters", "-1", "-fflags", "+bitexact"]);
 }
@@ -580,7 +501,6 @@ fn strip(cmd: &mut Command) {
 enum RunError {
     Spawn(std::io::Error),
     TimedOut,
-    /// It ran and said no: the exit and the start of what it wrote to stderr.
     Exit(String),
 }
 
@@ -594,7 +514,6 @@ impl std::fmt::Display for RunError {
     }
 }
 
-/// A file ffmpeg would not read is the file's fault; anything else is ours.
 fn refused_or_broken(why: RunError, words: &'static str) -> Failed {
     match why {
         RunError::Exit(said) => {
@@ -615,9 +534,6 @@ fn read_capped(path: &FsPath, cap: u64) -> Result<Vec<u8>, Failed> {
     Ok(raw)
 }
 
-/// One run of ffmpeg or ffprobe: stdin closed, stdout to `stdout` (or nowhere), stderr kept to
-/// say why, killed past `timeout`. On linux, at a lower priority and with limits on its memory,
-/// cpu seconds and the size of a file it writes, so one bad file cannot take the box.
 fn run(cmd: &mut Command, stdout: Option<&FsPath>, timeout: Duration) -> Result<(), RunError> {
     let dir = stdout.and_then(FsPath::parent).map(FsPath::to_path_buf).unwrap_or_else(std::env::temp_dir);
     let err_path = dir.join(format!("stderr-{}", Uuid::from_u128(rand::random())));
@@ -659,7 +575,6 @@ fn run(cmd: &mut Command, stdout: Option<&FsPath>, timeout: Duration) -> Result<
 #[cfg(target_os = "linux")]
 fn limit(cmd: &mut Command) {
     use std::os::unix::process::CommandExt as _;
-    // SAFETY: between fork and exec only async-signal-safe calls (setrlimit, setpriority), no allocation
     unsafe {
         cmd.pre_exec(|| {
             let cap = |what, n: libc::rlim_t| {
@@ -678,7 +593,6 @@ fn limit(cmd: &mut Command) {
 #[cfg(not(target_os = "linux"))]
 fn limit(_: &mut Command) {}
 
-/// What the header says about a file: its type and, when written there, its length.
 #[derive(Debug, PartialEq)]
 struct Probe {
     mime: &'static str,
@@ -690,12 +604,9 @@ const MP4_CODECS: &str = "an mp4 must be H.264 video with AAC sound";
 const WEBM_CODECS: &str = "a webm must be VP8 or VP9 video with Opus sound";
 const NO_VIDEO: &str = "no video in that file";
 
-/// The container by its magic bytes (`ftyp` at 4, or the EBML mark), then its header walked for
-/// the codecs and the length. Anything else is refused.
 fn probe(b: &[u8]) -> Result<Probe, &'static str> {
     if b.len() >= 12 && &b[4..8] == b"ftyp" {
         let brand = &b[8..12];
-        // sound alone, and quicktime's own: not the mp4 this takes
         if brand == b"M4A " || brand == b"M4B " || brand == b"qt  " {
             return Err(WRONG_TYPE);
         }
@@ -707,10 +618,6 @@ fn probe(b: &[u8]) -> Result<Probe, &'static str> {
     Err(WRONG_TYPE)
 }
 
-// ---- mp4 ----------------------------------------------------------------------------------------
-
-/// The boxes laid end to end in `b`: their four letters and their insides. A box that runs past
-/// the end is cut there and ends the walk (a file is whole here, so that is a broken one).
 fn boxes(mut b: &[u8]) -> Vec<([u8; 4], &[u8])> {
     let mut out = Vec::new();
     while b.len() >= 8 {
@@ -749,8 +656,6 @@ fn be64(b: &[u8], at: usize) -> Option<u64> {
     b.get(at..at + 8).map(|s| u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
 }
 
-/// `moov/mvhd` for the length, and each `trak`'s handler and first sample entry for the codecs:
-/// every video track `avc1`/`avc3`, every sound track `mp4a`, and at least one video track.
 fn probe_mp4(b: &[u8]) -> Result<Probe, &'static str> {
     let moov = child(b, b"moov").ok_or(WRONG_TYPE)?;
     let duration_ms = child(moov, b"mvhd").and_then(|mvhd| {
@@ -759,7 +664,6 @@ fn probe_mp4(b: &[u8]) -> Result<Probe, &'static str> {
         } else {
             (be32(mvhd, 12)? as u64, be32(mvhd, 16)? as u64)
         };
-        // 0 and all ones are "not said" (a fragmented file says it per fragment)
         if scale == 0 || duration == 0 || duration == u32::MAX as u64 || duration == u64::MAX {
             return None;
         }
@@ -794,10 +698,6 @@ fn probe_mp4(b: &[u8]) -> Result<Probe, &'static str> {
     Ok(Probe { mime: "video/mp4", duration_ms })
 }
 
-// ---- webm ---------------------------------------------------------------------------------------
-
-/// An EBML variable-length number at the start of `b`: its value and how many bytes it took.
-/// An id keeps its length mark (`0x1A45DFA3`); a size drops it, and all ones is `None`, unknown.
 fn vint(b: &[u8], id: bool) -> Option<(Option<u64>, usize)> {
     let first = *b.first()?;
     let len = first.leading_zeros() as usize + 1;
@@ -812,8 +712,6 @@ fn vint(b: &[u8], id: bool) -> Option<(Option<u64>, usize)> {
     Some((if all_ones { None } else { Some(value) }, len))
 }
 
-/// The elements laid end to end in `b`: id and insides. One of unknown size (a recorder's
-/// `Segment` and `Cluster`) runs to the end of `b`, and ends the walk after it.
 fn elements(mut b: &[u8]) -> Vec<(u64, &[u8])> {
     let mut out = Vec::new();
     while !b.is_empty() {
@@ -851,10 +749,6 @@ fn uint(b: &[u8]) -> u64 {
     b.iter().take(8).fold(0, |n, &byte| (n << 8) | byte as u64)
 }
 
-/// The header's doc type must be `webm`. `Segment/Info` says the length (in its timecode scale,
-/// a millionth of a second unless said), `Segment/Tracks` the codecs: every video track
-/// `V_VP8`/`V_VP9`, every sound track `A_OPUS`, and at least one video track. The walk stops at
-/// the first `Cluster`: the header is before the frames.
 fn probe_webm(b: &[u8]) -> Result<Probe, &'static str> {
     let top = elements(b);
     let header = top.iter().find(|(id, _)| *id == EBML).ok_or(WRONG_TYPE)?.1;
@@ -922,7 +816,6 @@ mod tests {
         out
     }
 
-    /// A trak of `handler` whose first sample entry is `entry`.
     fn trak(handler: &[u8; 4], entry: &[u8; 4]) -> Vec<u8> {
         let mut hdlr = vec![0u8; 8];
         hdlr.extend_from_slice(handler);
@@ -955,7 +848,6 @@ mod tests {
     fn an_h264_mp4_reads_its_length_and_codecs() {
         let file = mp4(b"isom", 12, &[trak(b"vide", b"avc1"), trak(b"soun", b"mp4a")]);
         assert_eq!(probe(&file), Ok(Probe { mime: "video/mp4", duration_ms: Some(12_000) }));
-        // no sound is fine
         assert_eq!(probe(&mp4(b"mp42", 3, &[trak(b"vide", b"avc3")])).map(|p| p.duration_ms), Ok(Some(3_000)));
     }
 
@@ -966,7 +858,6 @@ mod tests {
         assert_eq!(probe(&mp4(b"isom", 5, &[trak(b"soun", b"mp4a")])), Err(NO_VIDEO));
         assert_eq!(probe(&mp4(b"qt  ", 5, &[trak(b"vide", b"avc1")])), Err(WRONG_TYPE));
         assert_eq!(probe(&mp4(b"M4A ", 5, &[trak(b"soun", b"mp4a")])), Err(WRONG_TYPE));
-        // a long one is read as long; the upload refuses it
         assert_eq!(probe(&mp4(b"isom", 31, &[trak(b"vide", b"avc1")])).unwrap().duration_ms, Some(31_000));
     }
 
@@ -990,13 +881,11 @@ mod tests {
         }
         let mut segment = el(&[0x15, 0x49, 0xA9, 0x66], &info);
         segment.extend_from_slice(&el(&[0x16, 0x54, 0xAE, 0x6B], &tracks.concat()));
-        // a cluster of unknown size, the way a recorder writes them
         segment.extend_from_slice(&[0x1F, 0x43, 0xB6, 0x75, 0xFF, 0xE7, 0x81, 0x00]);
         if unknown_size {
             out.extend_from_slice(&[0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
             out.extend_from_slice(&segment);
         } else {
-            // an 8-byte size: 0x01 then seven bytes
             let mut sized = vec![0x18, 0x53, 0x80, 0x67, 0x01];
             sized.extend_from_slice(&(segment.len() as u64).to_be_bytes()[1..]);
             out.extend_from_slice(&sized);
@@ -1009,7 +898,6 @@ mod tests {
     fn a_vp9_webm_reads_its_length_and_codecs() {
         let file = webm(Some(9_500.0), &[track(1, b"V_VP9"), track(2, b"A_OPUS")], false);
         assert_eq!(probe(&file), Ok(Probe { mime: "video/webm", duration_ms: Some(9_500) }));
-        // a recorder's: no length in the header, a segment of unknown size
         let file = webm(None, &[track(1, b"V_VP8"), track(2, b"A_OPUS")], true);
         assert_eq!(probe(&file), Ok(Probe { mime: "video/webm", duration_ms: None }));
     }
@@ -1030,20 +918,16 @@ mod tests {
         assert_eq!(probe(&[0xFF, 0xD8, 0xFF, 0xE0]), Err(WRONG_TYPE));
         assert_eq!(probe(b"RIFF\0\0\0\0WEBPVP8 "), Err(WRONG_TYPE));
         assert_eq!(probe(b""), Err(WRONG_TYPE));
-        // an ftyp with nothing after it
         assert_eq!(probe(b"\x00\x00\x00\x10ftypisom\x00\x00\x02\x00"), Err(WRONG_TYPE));
     }
 
     #[test]
     fn the_length_is_the_longer_reading_and_must_be_known() {
         assert_eq!(length_of(Some(12_000), None), Ok(12_000));
-        // a recorder's webm: no word in the header, the packets say
         assert_eq!(length_of(None, Some(9_000)), Ok(9_000));
-        // a header that lies short does not let a long file by
         assert_eq!(length_of(Some(5_000), Some(45_000)), Err(Failed::Refused(TOO_LONG)));
         assert_eq!(length_of(Some(31_000), Some(2_000)), Err(Failed::Refused(TOO_LONG)));
         assert_eq!(length_of(Some(30_400), None), Ok(30_400), "the container's rounding");
-        // nothing known is refused: the page's own reading is not asked for any more
         assert_eq!(length_of(None, None), Err(Failed::Refused(UNKNOWN_LENGTH)));
         assert_eq!(length_of(Some(0), Some(0)), Err(Failed::Refused(UNKNOWN_LENGTH)));
     }
@@ -1067,8 +951,6 @@ mod tests {
         assert_eq!(check_codecs("video/webm", &c(&[("audio", "opus")])), Err(Failed::Refused(NO_VIDEO)));
     }
 
-    /// ffmpeg on this machine, or the ffmpeg tests skip (say so, and pass): the box's image has it,
-    /// a laptop may not. `FFMPEG_TESTS=off` skips them on purpose.
     fn have_ffmpeg() -> bool {
         if std::env::var("FFMPEG_TESTS").as_deref() == Ok("off") {
             return false;
@@ -1081,9 +963,6 @@ mod tests {
         have
     }
 
-    /// A test clip `seconds` long, made by ffmpeg: an H.264/AAC mp4, or a webm the way a browser's
-    /// recorder writes one (`-live 1`: no duration in the header, clusters of unknown size). It
-    /// carries a title, to see the copy leave it out.
     fn clip(scratch: &Scratch, seconds: u32, webm: bool) -> Vec<u8> {
         let out = scratch.file(if webm { "clip.webm" } else { "clip.mp4" });
         let mut cmd = Command::new(bin("FFMPEG", "ffmpeg"));
@@ -1113,12 +992,10 @@ mod tests {
         assert!(!ready.video.windows(12).any(|w| w == b"SECRET-TITLE"), "the copy keeps no metadata");
         assert!(mp4.windows(12).any(|w| w == b"SECRET-TITLE"), "the clip did have it");
         assert_eq!(&ready.poster[..3], &[0xFF, 0xD8, 0xFF], "the poster is a jpeg");
-        // faststart: the index before the frames
         let moov = ready.video.windows(4).position(|w| w == b"moov").unwrap();
         let mdat = ready.video.windows(4).position(|w| w == b"mdat").unwrap();
         assert!(moov < mdat, "moov first");
 
-        // the copy's fallback, run on its own: an H.264 mp4 of the clip, with no metadata
         let input = scratch.file("again-in.mp4");
         std::fs::write(&input, &mp4).unwrap();
         let out = scratch.file("again.mp4");
@@ -1127,7 +1004,6 @@ mod tests {
         assert_eq!(probe(&again).map(|p| p.mime), Ok("video/mp4"));
         assert!(!again.windows(12).any(|w| w == b"SECRET-TITLE"));
 
-        // a recorder's webm has no length in its header: the packets give it
         let webm = clip(&scratch, 3, true);
         assert_eq!(probe(&webm).unwrap().duration_ms, None);
         let ready = prepare(&webm, "video/webm").expect("a 3s recorder webm is fine");
@@ -1143,7 +1019,6 @@ mod tests {
         }
         let scratch = Scratch::new().unwrap();
         assert_eq!(prepare(&clip(&scratch, 32, false), "video/mp4").unwrap_err(), Failed::Refused(TOO_LONG));
-        // no length in the header, and long all the same: the packets tell
         let webm = clip(&scratch, 33, true);
         assert_eq!(probe(&webm).unwrap().duration_ms, None);
         assert_eq!(prepare(&webm, "video/webm").unwrap_err(), Failed::Refused(TOO_LONG));
@@ -1156,13 +1031,11 @@ mod tests {
         }
         let scratch = Scratch::new().unwrap();
         let webm = clip(&scratch, 3, true);
-        // the header, then one empty cluster (its timestamp alone): streams, and no length anywhere
         let cluster = webm.windows(4).position(|w| w == [0x1F, 0x43, 0xB6, 0x75]).unwrap();
         let mut bare = webm[..cluster].to_vec();
         bare.extend_from_slice(&[0x1F, 0x43, 0xB6, 0x75, 0x83, 0xE7, 0x81, 0x00]);
         assert_eq!(probe(&bare).map(|p| p.duration_ms), Ok(None), "the header walk is happy with it");
         assert_eq!(prepare(&bare, "video/webm").unwrap_err(), Failed::Refused(UNKNOWN_LENGTH));
-        // the header alone, cut before the cluster: ffprobe will not read it at all
         assert_eq!(prepare(&webm[..cluster], "video/webm").unwrap_err(), Failed::Refused(UNREADABLE));
     }
 
@@ -1185,7 +1058,6 @@ mod tests {
         assert_eq!(range_of(Some("bytes=-500"), 100), Ok(Some((0, 99))));
         assert_eq!(range_of(Some("bytes=100-"), 100), Err(()));
         assert_eq!(range_of(Some("bytes=-0"), 100), Err(()));
-        // not read: the whole file
         assert_eq!(range_of(Some("bytes=0-1,5-6"), 100), Ok(None));
         assert_eq!(range_of(Some("bytes=5-1"), 100), Ok(None));
         assert_eq!(range_of(Some("items=0-1"), 100), Ok(None));

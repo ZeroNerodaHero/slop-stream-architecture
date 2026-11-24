@@ -1,28 +1,3 @@
-//! `api chat`: the text chat next to a stream. See docs/chat.md.
-//!
-//! One websocket per viewer at /chat/<stream name>. Messages live in a redis
-//! stream per room (`chat:<name>`, last 500 kept). One task per room with
-//! viewers tails that stream with XREAD BLOCK and pushes new lines to every
-//! socket in the room; sending is just XADD, so everyone sees the same order.
-//! `CHAT_PERSIST` also inserts each line into postgres (history.rs): the scroll
-//! past this window, the search, and the jump to one line.
-//! A group's channel is the same room with two names: `/chat/<server>/<channel>`.
-//! Anyone may read it. Speaking takes a login that has joined the server. The room
-//! page opens `/chat/<server>/*` instead: every channel of the server on one socket,
-//! each line tagged with its channel, so switching channels opens nothing (`handle_server`).
-//! A line in a channel is also a row in the other members' inboxes (notify.rs
-//! `channel_line`, docs/notifications.md), written from here on a task of its own.
-//! The database is asked two things: is this socket really the streamer, and
-//! who does its login cookie say it is (auth.rs). A login names you; without
-//! one you pick a nick, as long as nobody owns that name. A login's groups
-//! (groups.rs) ride on its lines as badges; a hello that says `bot: true` wears
-//! the `bot` badge, whoever it is, so the panel can hide those lines. The picture
-//! of a login, or of the streamer, rides along too (`avatar`, its upload time),
-//! so the panel can draw a face by each line: the picture the row has *now*, read
-//! at the say and again whenever lines come back out of redis (`with_faces`), the
-//! way history.rs joins it for a line from postgres. A login's line carries its
-//! account (`uid`), so the face follows a rename the way the badges do not.
-
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -53,35 +28,17 @@ use crate::{owns_session, Name, Owner};
 
 const HISTORY_LINES: usize = 200;
 const KEEP_LINES: usize = 500;
-/// A line's length, in unicode scalars. A direct message (dms.rs) has the same.
 pub(crate) const MAX_TEXT_CHARS: usize = 500;
 const MAX_NICK_CHARS: usize = 24;
 const ROOM_TTL_SECS: i64 = 7 * 24 * 3600;
-/// The token bucket a line is paid from (`Limiter`), by who is speaking. Without an account:
-/// two lines at once, then one every thirty seconds. A login, or the one who went live (the
-/// grant is as good as a name in their own room): three at once, then one every 3⅓ seconds.
-/// The pages hold the same two numbers (chat-atoms.ts `TIERS`) and refuse a line over them
-/// before it is sent; the bucket itself is here, and the chat has the last word.
 const ANON_TIER: Tier = Tier { burst: 2.0, window: Duration::from_secs(60) };
 const LOGIN_TIER: Tier = Tier { burst: 3.0, window: Duration::from_secs(10) };
-/// A reaction's bucket (docs/chat.md "reactions"), apart from the lines': ten at once, then one a
-/// second. A click on and off again is two. Only a login reacts, so there is one tier.
 const REACT_TIER: Tier = Tier { burst: 10.0, window: Duration::from_secs(10) };
-/// How often the buckets that have refilled are forgotten: a full bucket is the same as none.
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
-/// The words of a refused line. The frame carries the wait too (`slow`).
 const SLOW_DOWN: &str = "slow down";
-/// Sockets one ip may hold in one room. The count is per socket; this keeps "open
-/// fifty tabs" from being fifty of it. (The rate is per speaker, so tabs share that.)
 const MAX_SOCKETS_PER_IP: usize = 8;
-/// The history is up to 200 lines in one frame: a slow link gets longer for that one.
 const HISTORY_TIMEOUT: Duration = Duration::from_secs(60);
-/// The channel of `/chat/<server>/<channel>` that means every channel of the server: one socket
-/// for the whole room page (docs/groups.md). Not a name, so no channel can be called it.
 const EVERY_CHANNEL: &str = "*";
-/// Lines sent after a `since` id, per channel. The page holds about this many per channel
-/// to begin with (`GET /api/groups/:group/messages`); a gap wider than this is a page that
-/// was away for a while, and older lines still scroll in through history.rs.
 const FILL_LIMIT: usize = 100;
 
 #[derive(Clone)]
@@ -90,18 +47,11 @@ pub(crate) struct ChatState {
     pub(crate) redis: ConnectionManager,
     client: redis::Client,
     rooms: Arc<Mutex<HashMap<String, Room>>>,
-    /// The token buckets, one per speaker per room, shared by every socket.
     limiter: Arc<Limiter>,
-    /// The reactions' own buckets (`REACT_TIER`): a reaction does not spend a line.
     reacts: Arc<Limiter>,
-    /// Flips to true on SIGTERM. Every socket then sends a close frame and leaves.
     shutdown: watch::Receiver<bool>,
-    /// Nicks starting with this are the fake streams' names: nobody's to wear.
     dummy_prefix: String,
-    /// `CHAT_PERSIST`. Off: redis only. On: each line is also a row in `chat_lines`.
     pub(crate) persist: bool,
-    /// The site admins (`ADMIN_NAMES`, as the api reads them): they see every channel of a
-    /// server, kept to a role or not (groups.rs `sees_sql`).
     admins: Vec<Uuid>,
 }
 
@@ -124,7 +74,6 @@ impl FromRef<ChatState> for PgPool {
 struct Room {
     tx: broadcast::Sender<Event>,
     count: usize,
-    /// Sockets per client ip, for MAX_SOCKETS_PER_IP.
     per_ip: HashMap<String, usize>,
 }
 
@@ -133,59 +82,34 @@ enum Event {
     Line(Arc<Line>),
     Count(usize),
     React(Arc<React>),
-    /// A line with this id went out of the room: a janny's (janny.rs `delete_line`), or a
-    /// channel's by its author or a moderator (group_mod.rs `delete_message`).
     Delete(Arc<str>),
 }
 
-/// Deserialize too: a pin keeps the line as this json (pins.rs), read back the same way.
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct Line {
     pub(crate) id: String,
     pub(crate) from: String,
     pub(crate) text: String,
     pub(crate) streamer: bool,
-    /// said by a login, so `from` really is that account
     pub(crate) verified: bool,
-    /// the speaker's groups as badges, `bot` first when it is one. empty for most lines
     pub(crate) groups: Vec<Badge>,
-    /// the speaker's picture: its upload time (the `?v=` the pages fetch it by), the same
-    /// `avatar` as everywhere in the api. only a `verified` or `streamer` line can have one.
-    /// as it is now, not as it was when the line was said: `with_faces` on the way out of redis
     pub(crate) avatar: Option<i64>,
-    /// the speaker's account has an outside login linked (oauth.rs `linked_sql!`): the second
-    /// mark. read with the face, and the same way: only a `verified` or `streamer` line can have
-    /// it, and it is the row's as it is now (`with_faces`, history.rs's join)
     pub(crate) oauth_verified: bool,
-    /// the account behind a `verified` line (`uid` in the stream, `user_id` on the row): what its
-    /// face is looked up by, so a rename keeps it. not on the wire: no page reads an id (docs/ids.md)
     #[serde(skip)]
     pub(crate) user_id: Option<Uuid>,
-    /// unix ms, from the stream id
     pub(crate) at: u64,
-    /// the first picture on the line. absent when there is none. `images` is the whole set
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) image: Option<String>,
-    /// every picture on the line, the ids `POST /api/chat-images` handed back. absent when there are none
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) images: Vec<String>,
-    /// the video on the line (`POST /api/chat-videos`) and its poster. absent when there is none
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) video: Option<Video>,
-    /// the line this one answers, as that line was when the reply was said (`Reply`). absent for
-    /// a line that answers nothing
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reply: Option<Reply>,
-    /// the emoji on the line and who put them there (reactions.rs), as they are now: never kept
-    /// with the line, read whenever lines go out (`reactions::with_reactions`). absent for none
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) reactions: Vec<Reaction>,
 }
 
-/// One login's emoji put on a line of the room, or taken off (docs/chat.md "reactions"): the
-/// `react` frame everyone in the room gets, each page adding `who` to the line's `emoji` or
-/// taking them off it. Through redis like a line (`react_key`), so every chat process's
-/// sockets hear it.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub(crate) struct React {
     pub(crate) id: String,
@@ -194,9 +118,6 @@ pub(crate) struct React {
     pub(crate) on: bool,
 }
 
-/// A video on a line (chat_videos.rs, docs/chat.md "videos"): its id and its poster's, a picture
-/// of `POST /api/chat-images`. Kept as `<video>,<poster>`: `vid` in the stream, `video` on the
-/// row (a room's and a direct message's), the way `image` keeps the pictures' ids.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub(crate) struct Video {
     pub(crate) id: String,
@@ -204,7 +125,6 @@ pub(crate) struct Video {
 }
 
 impl Video {
-    /// The stored `<video>,<poster>`; anything else is no video.
     pub(crate) fn parse(raw: Option<&str>) -> Option<Video> {
         let (id, poster) = raw?.split_once(',')?;
         let (id, poster) = (Uuid::parse_str(id.trim()).ok()?, Uuid::parse_str(poster.trim()).ok()?);
@@ -216,15 +136,9 @@ impl Video {
     }
 }
 
-/// The words of a quote: the start of the line answered, enough for the one row the panel draws.
 const REPLY_QUOTE_CHARS: usize = 120;
-/// The words for a reply whose line is not in this room (never said here, or long gone).
 pub(crate) const NO_SUCH_LINE: &str = "no such line";
 
-/// What a reply answers (docs/chat.md "replies"): the line's id, who said it with their marks and
-/// face, the start of its words and how many pictures it had, as it was when the reply was said.
-/// Kept with the reply (`r` in the stream, `reply` on the row, json both), so the quote outlives the
-/// room's stream trimming the line it points at; the panel finds the line itself by `id`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub(crate) struct Reply {
     pub(crate) id: String,
@@ -236,10 +150,8 @@ pub(crate) struct Reply {
     pub(crate) verified: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) avatar: Option<i64>,
-    /// how many pictures the line had, so a quote of pictures alone has something to say
     #[serde(default)]
     pub(crate) images: usize,
-    /// the line had a video, so a quote of a video alone says so
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) video: bool,
 }
@@ -265,30 +177,19 @@ enum In {
     Hello(Hello),
     Say {
         text: String,
-        /// The first id, so a page that sends one picture still does. A line may be pictures with no words.
         #[serde(default)]
         image: Option<String>,
-        /// Every id, when the page sent more than one. Empty means use `image`.
         #[serde(default)]
         images: Vec<String>,
-        /// The id `POST /api/chat-videos` handed back: one video, at most, on a line.
         #[serde(default)]
         video: Option<String>,
-        /// On a server socket (`/chat/<server>/*`): which channel the line is for. Ignored elsewhere.
         #[serde(default)]
         channel: Option<String>,
-        /// The id of the line in the same room this one answers (docs/chat.md "replies").
         #[serde(default)]
         reply: Option<String>,
     },
-    /// A server socket: follow one more channel, added since the socket opened (docs/groups.md).
     Join { channel: String },
-    /// A server socket: the newest line id the page has, per channel. Every line after each
-    /// is sent, so the page's picture of a channel has no hole between what the api gave it and
-    /// what this socket brings (`GET /api/groups/:group/messages`, then this).
     Since { since: HashMap<String, String> },
-    /// A login's `emoji` on the line `id` of the room, or off it (docs/chat.md "reactions"). On a
-    /// server socket, `channel` says which channel's line.
     React {
         id: String,
         emoji: String,
@@ -298,15 +199,11 @@ enum In {
     },
 }
 
-/// The first frame: a nick for a viewer, the go-live grant for the streamer. Kept for the
-/// socket's life, since a socket admitted with the database down is identified later.
 #[derive(Deserialize)]
 struct Hello {
     nick: Option<String>,
     session: Option<i64>,
     token: Option<i64>,
-    /// "I am a program": the fake streams' chatters say so. Anyone may; it only ever
-    /// costs the speaker (its lines can be hidden), so there is nothing to check.
     bot: Option<bool>,
 }
 
@@ -316,36 +213,27 @@ enum Out<'a> {
     History { messages: &'a [Line] },
     Message(&'a Line),
     Count { count: usize },
-    /// A server socket's line: the same `message`, with the channel it is in.
     #[serde(rename = "message")]
     ChannelMessage {
         channel: &'a str,
         #[serde(flatten)]
         line: &'a Line,
     },
-    /// A server socket's count: how many sockets are in that channel's room.
     #[serde(rename = "count")]
     ChannelCount { channel: &'a str, count: usize },
     Error { error: &'a str },
-    /// `slow down`, with how long until the next line may go, in ms: the same `error` frame,
-    /// so a page that does not read `wait` sees the words alone. The panel's countdown is this.
     #[serde(rename = "error")]
     Slow { error: &'a str, wait: u64 },
     React(&'a React),
-    /// A line a janny deleted (janny.rs): every page drops the line with this id.
     Delete { id: &'a str },
-    /// A server socket's deleted line (group_mod.rs `delete_message`): the same `delete`, with its channel.
     #[serde(rename = "delete")]
     ChannelDelete { channel: &'a str, id: &'a str },
-    /// A server socket's reaction: the same `react`, with the channel its line is in.
     #[serde(rename = "react")]
     ChannelReact {
         channel: &'a str,
         #[serde(flatten)]
         react: &'a React,
     },
-    /// A reaction that was not taken: the `error` frame, with the line it was for, so a page that
-    /// reads `react` knows it is not a line of its that went astray. `wait` with `slow down`.
     #[serde(rename = "error")]
     ReactRefused {
         error: &'a str,
@@ -355,7 +243,6 @@ enum Out<'a> {
     },
 }
 
-/// The frame for a line the bucket refused: `slow down`, and the wait rounded up to the ms.
 fn slow(wait: Duration) -> Out<'static> {
     Out::Slow { error: SLOW_DOWN, wait: (wait.as_secs_f64() * 1000.0).ceil() as u64 }
 }
@@ -367,7 +254,6 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
     let dummy_prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
     let persist = history::enabled();
     log::info!("chat history {}", if persist { "on" } else { "off" });
-    // the admins as main.rs reads them: the names with an account, by id from here on
     let admin_names: Vec<String> = std::env::var("ADMIN_NAMES")
         .unwrap_or_default()
         .split(',')
@@ -390,14 +276,11 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
     };
     let rooms = state.rooms.clone();
 
-    // the rooms only. the gateway (/events, presence and the pushes) is `api events`, a
-    // process and container of its own; see events.rs and docs/status.md
     let router = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/chat/{name}", get(ws))
         .route("/chat/{server}/{channel}", get(ws_channel))
         .merge(history::routes())
-        // opens and history reads per address (ratelimit.rs); the lines have their buckets below
         .route_layer(axum::middleware::from_fn_with_state(limits, crate::ratelimit::by_ip))
         .with_state(state);
 
@@ -407,12 +290,9 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             crate::wait_for_signal().await;
-            // axum does not wait for upgraded sockets: tell every handle to say goodbye
             let _ = stop.send(true);
         })
         .await?;
-    // ...and give them a moment to send the close frame and leave their rooms,
-    // instead of being cut mid-send when the runtime goes
     let deadline = Instant::now() + DRAIN_LIMIT;
     while !rooms.lock().await.is_empty() && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -420,10 +300,6 @@ pub async fn run(db: PgPool, redis_url: &str, port: u16) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The browser sends the login cookie with the websocket handshake; `handle` reads it from
-/// the headers when it needs it. Not through the `Me` extractor: that turns a database
-/// error into a 500 before the upgrade, and reading a room does not need the database (the
-/// faces on its history are looked up there, and stay as written when it does not answer).
 async fn ws(State(s): State<ChatState>, Name(name): Name, headers: HeaderMap, upgrade: WebSocketUpgrade) -> impl IntoResponse {
     let ip = client_ip(&headers);
     upgrade
@@ -432,9 +308,6 @@ async fn ws(State(s): State<ChatState>, Name(name): Name, headers: HeaderMap, up
         .on_upgrade(move |socket| handle(s, name, None, ip, headers, socket))
 }
 
-/// `/chat/<server>/<channel>`. Same room as a stream, named `server/channel`. A missing
-/// channel is said on the socket and the socket stops, so the panel does not reconnect.
-/// `/chat/<server>/*` is every channel of the server on one socket (`handle_server`).
 async fn ws_channel(State(s): State<ChatState>, Path((server, channel)): Path<(String, String)>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
     let upgrade = upgrade.max_message_size(MAX_FRAME_BYTES).max_frame_size(MAX_FRAME_BYTES);
     let ip = client_ip(&headers);
@@ -450,8 +323,6 @@ async fn ws_channel(State(s): State<ChatState>, Path((server, channel)): Path<(S
     }
 }
 
-/// The room cannot be: said on the socket once it is open, and nothing more. The panel
-/// reads these words as a reason not to reconnect.
 fn refuse(upgrade: WebSocketUpgrade, err: crate::ApiError) -> Response {
     let message = err.message().to_owned();
     upgrade.on_upgrade(move |mut socket| async move {
@@ -459,7 +330,6 @@ fn refuse(upgrade: WebSocketUpgrade, err: crate::ApiError) -> Response {
     })
 }
 
-/// The server a `/chat/<server>/*` socket is for: a group that is there, and not `bot`.
 async fn server_of(db: &PgPool, raw: &str) -> Result<String, crate::ApiError> {
     let (server, _) = crate::groups::channel_names(raw, "general")?;
     let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM groups WHERE name = $1)").bind(&server).fetch_one(db).await?;
@@ -469,18 +339,11 @@ async fn server_of(db: &PgPool, raw: &str) -> Result<String, crate::ApiError> {
     Ok(server)
 }
 
-/// Who a socket speaks as, once the database has said.
 struct Who {
     from: String,
-    /// The one who went live (session + token), or the account the room is named after.
     streamer: bool,
-    /// Said by a login, so `from` really is that account.
     verified: bool,
-    /// The account's groups (only when `verified`: the badges belong to the name on the
-    /// line, not to whoever holds the socket), plus `bot` when the hello said so.
     groups: Vec<Badge>,
-    /// The account, when `verified`. Null on the row otherwise. The picture is not here: it
-    /// is read at each say (`face_now`), so one changed mid-chat is on the next line.
     user_id: Option<Uuid>,
 }
 
@@ -491,20 +354,11 @@ impl Who {
 }
 
 enum Unknown {
-    /// A hello that can never do: said once, and the socket is closed.
     Refused(&'static str),
-    /// The database did not answer. A viewer for now, asked again when it wants to speak.
     Busy,
 }
 
-/// The hello and the cookie against the database. Every question in here is about
-/// speaking: whose line it would be and what marks it carries. Reading needs none of
-/// them, so a database that does not answer is `Busy`, not a refusal: the socket gets the
-/// room and its lines, and is asked again on its first `say` (docs/chat.md: a socket the
-/// database cannot vouch for is a plain viewer). What would be a lie is refused outright:
-/// a claimed name on an anonymous nick, a reserved one, a nick that is not one.
 async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello) -> Result<Who, Unknown> {
-    // (no cookie is `Ok(None)` without a query, so an error here is a cookie that could not be read)
     let me = match whoami(&s.db, headers).await {
         Ok(me) => me,
         Err(e) => {
@@ -532,8 +386,6 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
             return Err(Unknown::Refused("bad nick. 1 to 24 letters, digits, _ -"));
         };
         let lower = nick.to_lowercase();
-        // the fake streams' names are nobody's: they can never be claimed, so the check
-        // below would hand them to anyone, badge and all
         if lower.starts_with(&s.dummy_prefix) {
             return Err(Unknown::Refused("that nick belongs to the fake streams. pick another"));
         }
@@ -541,17 +393,12 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
             Ok(false) => nick,
             Ok(true) => return Err(Unknown::Refused(NICK_HAS_ACCOUNT)),
             Err(e) => {
-                // fail closed: with the database down a claimed name must not be borrowable
                 log::warn!("{room}: cannot check whether {nick} is claimed: {e}");
                 return Err(Unknown::Busy);
             }
         }
     };
-    // the login behind this socket is the name it speaks as. not just "logged in": the
-    // one who went live speaks as the room while logged in as somebody else, or as nobody
     let verified = me.as_ref().is_some_and(|a| a.name == from);
-    // the badges: the account's groups when the line is really the account's, and `bot`
-    // when asked for. read once, here; a group joined mid-chat shows after a reconnect
     let bot = hello.bot == Some(true);
     let groups = if verified || bot {
         match badges_of(&s.db, me.as_ref().filter(|_| verified).map(|a| a.id), bot).await {
@@ -568,12 +415,6 @@ async fn identify(s: &ChatState, room: &str, headers: &HeaderMap, hello: &Hello)
     Ok(Who { from, streamer, verified, groups, user_id })
 }
 
-/// The picture (and the oauth mark) of the name on the line, as it is now (its upload time, the `?v=`): the account's
-/// for a login (by id, so a rename keeps it), the room's for its streamer, nobody's for a nick,
-/// whoever's name it happens to be. Read at the say, not the hello, so a picture changed
-/// mid-chat is on the next line. The database not answering, or not in 2 s (awaited on the
-/// socket: bounded like `remember`'s insert), is a line with no face until it is read back
-/// (`with_faces`): a say does not fail for a picture.
 async fn face_now(db: &PgPool, room: &str, w: &Who) -> Face {
     const BY_ID: &str = concat!("SELECT (EXTRACT(EPOCH FROM s.avatar_at))::bigint, ", crate::oauth::linked_sql!("s"), " FROM streamers s WHERE s.id = $1");
     const BY_NAME: &str = concat!("SELECT (EXTRACT(EPOCH FROM s.avatar_at))::bigint, ", crate::oauth::linked_sql!("s"), " FROM streamers s WHERE s.name = $1");
@@ -596,23 +437,16 @@ async fn face_now(db: &PgPool, room: &str, w: &Who) -> Face {
     }
 }
 
-/// The picture's version and the oauth mark, as `face_now` reads them.
 type FaceRow = (Option<i64>, bool);
 
-/// A row `with_faces` reads: id, name, the picture's version, the names held for it, the oauth mark.
 type FacesRow = (Uuid, String, Option<i64>, Vec<String>, bool);
 
-/// What a line wears of its speaker's row, as the row is now: the picture's version and the
-/// oauth mark. The default: no picture, no mark (a nick, or the database not answering).
 #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
 struct Face {
     avatar: Option<i64>,
     oauth_verified: bool,
 }
 
-/// Whose picture a line wears: the account's for a login (`uid`, which every login's line in
-/// every stream has: the chat writes it on every line), the
-/// name's for the room's streamer, nobody's for a nick.
 enum FaceKey<'a> {
     Id(Uuid),
     Name(&'a str),
@@ -626,14 +460,6 @@ fn face_key(line: &Line) -> Option<FaceKey<'_>> {
     }
 }
 
-/// The faces on lines read back out of redis, as they are now. A line keeps who said it, not
-/// what they looked like: the picture is the row's today, the way history.rs joins `streamers`
-/// for a line from postgres, so a new picture shows on every old line and a rename keeps a
-/// login's for the hold's length; after it, the letter: the name leads elsewhere, and the page
-/// fetches the picture by it. One query for the batch, none for a batch of nicks. A row that is
-/// gone is no face, as the join would have it. The database not answering, or not in 2 s (the
-/// history frame and a `since` fill await this on the socket), leaves what each line was written
-/// with: faces a little behind, and the history still comes with the database down.
 pub(crate) async fn with_faces<'a>(db: &PgPool, lines: impl IntoIterator<Item = &'a mut Line>) {
     let lines: Vec<&mut Line> = lines.into_iter().collect();
     let mut ids: Vec<Uuid> = Vec::new();
@@ -648,8 +474,6 @@ pub(crate) async fn with_faces<'a>(db: &PgPool, lines: impl IntoIterator<Item = 
     if ids.is_empty() && names.is_empty() {
         return;
     }
-    // each row with the names still held for it: a login's line wears the row's face only while
-    // `from` leads to the row, which is for as long as `/api/streamers/<from>/avatar` answers for it
     let rows: Vec<FacesRow> = match tokio::time::timeout(
         Duration::from_secs(2),
         sqlx::query_as(concat!(
@@ -683,14 +507,12 @@ pub(crate) async fn with_faces<'a>(db: &PgPool, lines: impl IntoIterator<Item = 
             Some(FaceKey::Name(name)) => rows.iter().find(|(_, row, _, _, _)| row == name),
             None => continue,
         };
-        // no row (gone, or the name leads elsewhere now): no picture and no mark, as the join has it
         line.avatar = row.and_then(|(_, _, v, _, _)| *v);
         line.oauth_verified = row.is_some_and(|(_, _, _, _, linked)| *linked);
     }
 }
 
 async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, headers: HeaderMap, mut socket: WebSocket) {
-    // 1. hello: who is talking
     let Some(first) = first_text(&mut socket).await else { return };
     let Ok(In::Hello(hello)) = serde_json::from_str::<In>(&first) else {
         let _ = send(&mut socket, &Out::Error { error: "say hello first" }).await;
@@ -704,9 +526,6 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
         }
         Err(Unknown::Busy) => None,
     };
-    // a server's channel kept to roles this login does not hold, or a voice channel, is no chat
-    // to them (groups.rs `may_see_text`): the same words as one that is not there, so the panel
-    // does not reconnect
     if let Some(server) = &server {
         let channel = name.strip_prefix(server.as_str()).and_then(|rest| rest.strip_prefix('/')).unwrap_or("");
         let user = who.as_ref().and_then(|w| w.user_id);
@@ -724,15 +543,12 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
         }
     }
 
-    // 2. subscribe first, then load history, so nothing can fall between the two.
-    //    Lines the history already covers are dropped from the live feed by id.
     let Some(mut rx) = s.join(&name, &ip).await else {
         let _ = send(&mut socket, &Out::Error { error: "too many tabs" }).await;
         return;
     };
     let history = history(&s, &name, viewer_of(&who)).await.unwrap_or_default();
     let mut last_seen = history.last().map(|l| id_parts(&l.id)).unwrap_or((0, 0));
-    // the one frame that can be big: 200 lines, so a slow link gets longer than for one line
     if send_within(&mut socket, &Out::History { messages: &history }, HISTORY_TIMEOUT).await.is_err() {
         s.leave(&name, &ip).await;
         return;
@@ -743,13 +559,11 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
     };
     log::info!("{name}: {} joined", shown(&who));
 
-    // 3. the loop: lines from the room out, lines from the viewer in, a ping now
-    //    and then so a peer that vanished without a close frame is found out
     let mut speaker = Speaker::of(who.as_ref(), &hello, &ip);
     let mut last_heard = Instant::now();
     let mut ping = tokio::time::interval(PING_EVERY);
-    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay); // never a burst of pings
-    ping.tick().await; // the first tick is immediate
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ping.tick().await;
     let mut shutdown = s.shutdown.clone();
     loop {
         tokio::select! {
@@ -770,8 +584,6 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     if send(&mut socket, &Out::Delete { id: &id }).await.is_err() { break; }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    // this socket is slower than the room: n events went by unseen. say so
-                    // rather than hide it; the next count event sets the number right again
                     let missed = format!("missed {n} lines");
                     if send(&mut socket, &Out::Error { error: &missed }).await.is_err() { break; }
                 }
@@ -819,7 +631,6 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
                     let _ = send(&mut socket, &slow(wait)).await;
                     continue;
                 }
-                // admitted while the database was down: whose line this would be is asked now
                 if who.is_none() {
                     match identify(&s, &name, &headers, &hello).await {
                         Ok(w) => {
@@ -850,9 +661,6 @@ async fn handle(s: ChatState, name: String, server: Option<String>, ip: String, 
     log::info!("{name}: {} left", shown(&who));
 }
 
-/// A token bucket's size and pace: `burst` lines at once, refilling at `burst` per `window`,
-/// one token every `window / burst`. Not a sliding window: three said at once are three gone,
-/// and the next goes when one token is back, not when the oldest of the three is a window old.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Tier {
     burst: f64,
@@ -865,7 +673,6 @@ impl Tier {
     }
 }
 
-/// One bucket: the tokens in it as of `at`. Refilled by the time passed whenever it is read.
 struct Bucket {
     tokens: f64,
     at: Instant,
@@ -881,7 +688,6 @@ impl Bucket {
         self.at = now;
     }
 
-    /// A token out, or how long until there is one.
     fn take(&mut self, tier: Tier, now: Instant) -> Result<(), Duration> {
         self.refill(tier, now);
         if self.tokens >= 1.0 {
@@ -891,28 +697,19 @@ impl Bucket {
         Err(Duration::from_secs_f64((1.0 - self.tokens) / tier.per_sec()))
     }
 
-    /// Would be full if read now: the same as no bucket at all.
     fn is_full(&self, tier: Tier, now: Instant) -> bool {
         self.tokens + now.duration_since(self.at).as_secs_f64() * tier.per_sec() >= tier.burst
     }
 }
 
-/// Whose bucket a line is paid from. The speaker, not the socket: another tab, or a reconnect,
-/// draws on the same one, so neither is a fresh burst.
 #[derive(Hash, PartialEq, Eq, Clone, Debug)]
 enum Speaker {
-    /// A login, by account, so a rename keeps the bucket.
     Account(Uuid),
-    /// The one who went live with no login: the room's name.
     Streamer(String),
-    /// A nick: the ip and the nick, lowercased. One browser's tabs share the nick (localstorage),
-    /// and a household shares the ip, so two people behind one router with two nicks are two.
     Nick(String, String),
 }
 
 impl Speaker {
-    /// Before the database has said who this is (`who` is None), the hello's nick on the anonymous
-    /// tier; a login whose cookie could not be read is that until its first accepted line.
     fn of(who: Option<&Who>, hello: &Hello, ip: &str) -> Speaker {
         match who {
             Some(Who { user_id: Some(id), .. }) => Speaker::Account(*id),
@@ -930,15 +727,8 @@ impl Speaker {
     }
 }
 
-/// The buckets, one per speaker per room, shared by every socket in the process. A token is paid
-/// before the database or redis is asked anything about the line: a `say` the database cannot
-/// vouch for yet costs like any other dropped line, so a socket admitted read-only cannot turn
-/// every frame into a query, and a refused line costs nothing but this lock. Nothing awaits under
-/// it, so it is std's. A bucket that has refilled is the same as none, so those are forgotten
-/// once a minute (`SWEEP_EVERY`): the map is the speakers of the last minute or so.
 struct Limiter {
     inner: std::sync::Mutex<Buckets>,
-    /// The size and pace of a speaker's bucket: the lines' (`Speaker::tier`), or the reactions'.
     tier: fn(&Speaker) -> Tier,
 }
 
@@ -952,12 +742,10 @@ impl Limiter {
         Limiter { inner: std::sync::Mutex::new(Buckets { by_speaker: HashMap::new(), swept: Instant::now() }), tier: Speaker::tier }
     }
 
-    /// The reactions' buckets: `REACT_TIER` for everyone.
     fn for_reactions() -> Self {
         Limiter { tier: |_| REACT_TIER, ..Limiter::new() }
     }
 
-    /// A token out of this speaker's bucket in this room, or how long until there is one.
     fn take(&self, speaker: &Speaker, room: &str) -> Result<(), Duration> {
         self.take_at(speaker, room, Instant::now())
     }
@@ -974,15 +762,11 @@ impl Limiter {
     }
 }
 
-/// A `say` as it came: the words cleaned, the pictures' and the video's ids checked for shape.
-/// `Ok(None)` is an empty line, dropped without a word. `Err` is what the socket hears. Nothing
-/// here asks redis or the database, so it costs no token.
 #[allow(clippy::type_complexity)]
 fn parse_say(text: String, image: Option<String>, images: Vec<String>, video: Option<String>) -> Result<Option<(String, Vec<String>, Option<String>)>, &'static str> {
     let text = clean_text(&text);
     let images = picture_ids(image, images)?;
     let video = video_id(video)?;
-    // an emote's token counts as its `:name:`, the words the reader sees (emotes.rs); written out it is longer, to a ceiling a frame holds
     let chars = crate::emotes::shown_chars(&text);
     if chars == 0 && images.is_empty() && video.is_none() {
         return Ok(None);
@@ -993,7 +777,6 @@ fn parse_say(text: String, image: Option<String>, images: Vec<String>, video: Op
     Ok(Some((text, images, video)))
 }
 
-/// The video a say named, read as a uuid; none for an empty one. dms.rs reads a line's the same way.
 pub(crate) fn video_id(video: Option<String>) -> Result<Option<String>, &'static str> {
     match video.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
         None => Ok(None),
@@ -1001,8 +784,6 @@ pub(crate) fn video_id(video: Option<String>) -> Result<Option<String>, &'static
     }
 }
 
-/// The video `id` the api kept, with its poster, uploaded by `who` (media.rs `check`): `no such
-/// video` or `not your video` otherwise.
 async fn video_of(db: &sqlx::PgPool, name: &str, id: Option<&str>, who: Option<Uuid>) -> Result<Option<Video>, &'static str> {
     let Some(id) = id else { return Ok(None) };
     let busy = |e: sqlx::Error| {
@@ -1020,24 +801,16 @@ async fn video_of(db: &sqlx::PgPool, name: &str, id: Option<&str>, who: Option<U
     }
 }
 
-/// The words for a picture or a video somebody else uploaded: only its uploader may post it.
 pub(crate) const NOT_YOUR_PICTURE: &str = "not your picture";
 pub(crate) const NOT_YOUR_VIDEO: &str = "not your video";
 
-/// Videos on a stream's chat (docs/chat.md "videos"): off until a stream's chat has moderation.
-/// A group channel's and a direct message's (dms.rs) take them as ever. `true` turns them back
-/// on; the pages hold the same flag (ChatAttach.tsx `STREAM_CHAT_VIDEO`).
 const STREAM_CHAT_VIDEO: bool = false;
-/// The words for a video on a stream's line while `STREAM_CHAT_VIDEO` is off.
 const NO_STREAM_VIDEO: &str = "videos are off in stream chat for now";
 
-/// A line naming a video in a stream's room (no `server`) while they are off there (`on`).
 fn stream_video_refusal(server: Option<&str>, video: Option<&str>, on: bool) -> Option<&'static str> {
     (server.is_none() && video.is_some() && !on).then_some(NO_STREAM_VIDEO)
 }
 
-/// The line's pictures, video and poster are posted `place` now (media.rs `mark_posted`): the
-/// first line to name each says who may see it.
 pub(crate) async fn mark_posted(db: &sqlx::PgPool, place: &crate::media::Place, images: &[String], video: Option<&Video>) -> Result<(), sqlx::Error> {
     use crate::media::{mark_posted, Kind};
     let mut pictures: Vec<&str> = images.iter().map(String::as_str).collect();
@@ -1048,8 +821,6 @@ pub(crate) async fn mark_posted(db: &sqlx::PgPool, place: &crate::media::Place, 
     mark_posted(db, Kind::Image, &pictures, place).await
 }
 
-/// Why a line was not taken: the words alone (`error`), or words with how long until one would
-/// be, in ms, the `slow down` frame's shape, which the panel counts down on the send button.
 enum Refused {
     Words(&'static str),
     Wait(&'static str, u64),
@@ -1070,34 +841,15 @@ impl From<&'static str> for Refused {
     }
 }
 
-/// The words for a login timed out of a server (docs/groups.md), with the ms until it ends.
 const TIMED_OUT: &str = "timed out";
-/// The words for a login whose role has a cooldown, with the ms until the next line may go.
 const COOLDOWN: &str = "cooldown";
-/// The words for a channel with a cooldown, with the ms until this login's next line in it may go.
 const CHANNEL_COOLDOWN: &str = "channel cooldown";
 
-/// A member's standing in a server, for one line: whether they own it, whether they hold the
-/// channels power, the ms left on a timeout that is running, the longest cooldown of their
-/// roles and the channel's own, in seconds (0: none). None: not a member.
 type Standing = (bool, bool, Option<i64>, i32, i32);
 
-/// An identified socket's line into `room`: in a server's channel only a member may speak, one
-/// who is not timed out (`timeouts`, the kick power's), and whose cooldowns have passed: their
-/// roles' (the longest; a key in redis, `cd:<server>:<account>`, alive the cooldown long since
-/// their last line in the server) and the channel's own (`cdc:<room>:<account>`, since their
-/// last line in the channel); the line waits for whichever is longer. An owner and a site
-/// admin wait for nobody; the channels power, which sets a channel's cooldown, is not held by
-/// one, but waits on its roles' like anyone. The pictures must be ones the api kept;
-/// then the line and the room's ttl in one atomic round trip (a room whose first line landed
-/// but whose expire did not would otherwise live forever), and the row for history on its own
-/// task. A reply's line must be in the same room (`reply_to`). `Err` is what the socket hears,
-/// and the line is not kept.
 #[allow(clippy::too_many_arguments)]
 async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: &str, images: &[String], video: Option<&str>, reply: Option<&str>) -> Result<(), Refused> {
-    // the cooldown keys this line sets, with their life in ms and the words when one is still alive
     let mut cooldowns: Vec<(String, i64, &'static str)> = Vec::new();
-    // a channel is open to read. talking is for people in the server.
     if let Some(server) = server {
         let Some(id) = w.user_id else { return Err("join the server first".into()) };
         let channel = room.strip_prefix(server).and_then(|rest| rest.strip_prefix('/')).unwrap_or("");
@@ -1128,7 +880,6 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
         if let Some(ms) = timed_out {
             return Err(Refused::Wait(TIMED_OUT, ms.max(1) as u64));
         }
-        // an owner and a site admin wait for nobody; the channels power, which sets a channel's cooldown, is not held by it
         let free = owner || s.is_admin(Some(w));
         if role_secs > 0 && !free {
             cooldowns.push((format!("cd:{server}:{id}"), i64::from(role_secs) * 1000, COOLDOWN));
@@ -1145,24 +896,19 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
     if let Some(words) = stream_video_refusal(server, video, STREAM_CHAT_VIDEO) {
         return Err(words.into());
     }
-    // only the uploader may put an upload on a line; a nick has none
     let uploader = w.user_id.filter(|_| w.verified);
     pictures_exist(&s.db, room, images, uploader).await?;
     let video = video_of(&s.db, room, video, uploader).await?;
     pictures_allowed(&s.db, room, server, images, video.as_ref()).await?;
-    // the emotes: each token the speaker may not use (not in its group, a nick) goes back to plain `:name:` (emotes.rs)
     let settled = crate::emotes::settle(&s.db, w.user_id.filter(|_| w.verified), text).await;
     let text = settled.as_str();
     let reply = match reply {
         Some(id) => Some(reply_to(s, room, id).await?),
         None => None,
     };
-    // the face as the row has it this moment, so the line fanned out now wears the right one
     let face = face_now(&s.db, room, w).await;
     let avatar = face.avatar.map(|v| v.to_string());
     let mut r = s.redis.clone();
-    // the cooldowns: a key still alive from the last line is the wait (the longest, when both are);
-    // none alive, the keys are set for this line, each to live its cooldown long
     if !cooldowns.is_empty() {
         let mut look = redis::pipe();
         for (key, _, _) in &cooldowns {
@@ -1187,15 +933,12 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
             return Err("chat is down, try again".into());
         }
     }
-    // the line is going out: its uploads are this room's now, a group channel's for its members (media.rs)
     if !images.is_empty() || video.is_some() {
         if let Err(e) = mark_posted(&s.db, &crate::media::Place::room(room, server), images, video.as_ref()).await {
             log::warn!("{room}: posted: {e}");
             return Err("chat is busy, try again".into());
         }
     }
-    // the badges as json, the picture's version and the account as text, and no field at
-    // all for the common case of none
     let groups = if w.groups.is_empty() { String::new() } else { serde_json::to_string(&w.groups).unwrap_or_default() };
     let uid = w.user_id.map(|id| id.to_string());
     let mut fields = vec![("from", w.from.as_str()), ("text", text), ("streamer", if w.streamer { "1" } else { "0" }), ("v", if w.verified { "1" } else { "0" })];
@@ -1240,28 +983,19 @@ async fn accept(s: &ChatState, room: &str, server: Option<&str>, w: &Who, text: 
             return Err("chat is down, try again".into());
         }
     };
-    // redis already has the line, and the room will fan it out. the insert
-    // follows on its own, so a slow database does not hold this socket.
     if s.persist {
         if let Some(id) = id {
             remember(s, room, &id, w, text, images, vid.as_deref(), reply);
         }
     }
-    // a channel's line is news to the server's other members (docs/notifications.md): their
-    // inbox rows, on a task of their own like the row above. the speaker is a member, so a login
     if let (Some(server), Some(actor)) = (server, w.user_id) {
         notify_members(s, server, room, actor, text);
     }
     Ok(())
 }
 
-/// The words for a login banned from a stream's chat (janny.rs). No `nick` or `account` in them:
-/// the pages read those as a dead login and hang up (auth.rs `NICK_HAS_ACCOUNT`).
 const BANNED: &str = "you are banned from this chat";
 
-/// A stream's chat bans and timeouts (janny.rs), for a login's line or reaction in `room`: None
-/// when they may speak. The streamer's socket and a nick are never asked (a ban is an account's).
-/// The database not answering is `chat is busy`, so a ban is never skipped.
 async fn stream_refusal(s: &ChatState, room: &str, w: &Who) -> Option<Refused> {
     let user = w.user_id.filter(|_| w.verified && !w.streamer)?;
     let standing: Result<(bool, Option<i64>), sqlx::Error> = sqlx::query_as(
@@ -1284,10 +1018,6 @@ async fn stream_refusal(s: &ChatState, room: &str, w: &Who) -> Option<Refused> {
     }
 }
 
-/// A line out of a room for good (a stream's: janny.rs `delete_line`; a channel's: group_mod.rs
-/// `delete_message`): out of redis and postgres,
-/// its reactions with it (its pictures stay in the bucket), and a `del` into the room's reactions
-/// stream, which every chat process's reader turns into a `delete` frame for its sockets.
 pub(crate) async fn remove_line(db: &PgPool, r: &mut ConnectionManager, room: &str, id: &str) -> Result<(), crate::ApiError> {
     let _: i64 = r.xdel(room_key(room), &[id]).await?;
     sqlx::query("DELETE FROM chat_lines WHERE room = $1 AND id = $2").bind(room).bind(id).execute(db).await?;
@@ -1302,9 +1032,6 @@ pub(crate) async fn remove_line(db: &PgPool, r: &mut ConnectionManager, room: &s
     Ok(())
 }
 
-/// The line a reply answers, by its id, from this room only: redis while the stream has it, else
-/// the kept rows (history.rs `line_at`). Another room's id, a junk one, or a line long gone with
-/// nothing kept is `no such line`; a quote of a quote is the line alone, not its own quote.
 async fn reply_to(s: &ChatState, room: &str, id: &str) -> Result<Reply, Refused> {
     if !is_stream_id(id) {
         return Err(NO_SUCH_LINE.into());
@@ -1316,10 +1043,6 @@ async fn reply_to(s: &ChatState, room: &str, id: &str) -> Result<Reply, Refused>
     }
 }
 
-/// A `react` frame, whole (docs/chat.md "reactions"): the id and the emoji checked for shape first,
-/// at no cost; then a token from the reactions' bucket (`REACT_TIER`, keyed by `at`, the socket's
-/// room as a line's is) before anything is asked; a socket admitted with the database down is
-/// asked who it is now; then `react`. `Err` is the refusal's words, with the wait for `slow down`.
 #[allow(clippy::too_many_arguments)]
 async fn on_react(
     s: &ChatState,
@@ -1334,7 +1057,6 @@ async fn on_react(
     if !is_stream_id(id) {
         return Err((NO_SUCH_LINE, None));
     }
-    // one off the list, or a custom emote's id written the api's way (whether this login may use it is `react`'s)
     let Some(emoji) = reactions::shaped(emoji) else {
         return Err((reactions::NOT_A_REACTION, None));
     };
@@ -1351,11 +1073,6 @@ async fn on_react(
     react(s, room, server, w, id, &emoji, on).await.map_err(|why| (why, None))
 }
 
-/// A login's `emoji` on the line `id` of `room`, or off it. Only a login reacts (the row is an
-/// account); in a server's channel only a member who is not timed out, as only one speaks. The
-/// line must be the room's to put one on (`history::line_at`, the reply's check: redis, then the
-/// kept rows), never to take one off. A change goes into the room's reactions stream, and every
-/// reader of the room fans it out; one that was so already says nothing. `Err` is what the socket hears.
 async fn react(s: &ChatState, room: &str, server: Option<&str>, w: &Who, id: &str, emoji: &str, on: bool) -> Result<(), &'static str> {
     let Some(user) = w.user_id.filter(|_| w.verified) else { return Err(reactions::LOG_IN) };
     if let Some(server) = server {
@@ -1383,7 +1100,6 @@ async fn react(s: &ChatState, room: &str, server: Option<&str>, w: &Who, id: &st
             Some(Refused::Wait(words, _) | Refused::Words(words)) => return Err(words),
         }
     }
-    // a custom emote is its group's members' (emotes.rs), here as in a line
     if on {
         match reactions::may_put(&s.db, user, emoji).await {
             Ok(true) => {}
@@ -1418,22 +1134,15 @@ async fn react(s: &ChatState, room: &str, server: Option<&str>, w: &Who, id: &st
         .expire(&key, ROOM_TTL_SECS)
         .query_async(&mut s.redis.clone())
         .await;
-    // the row is in: a page that reads the line again has it, only the live frame is lost
     if let Err(e) = added {
         log::warn!("{room}: reaction xadd: {e}");
     }
     Ok(())
 }
 
-/// The inbox rows for a channel's line are written within this long, or not at all.
 const NOTIFY_LIMIT: Duration = Duration::from_secs(5);
 
-/// The inbox rows for a line in a server's channel (notify.rs `channel_line`), once redis has it:
-/// one unread row a channel for every other member who keeps the kind and has not muted the
-/// channel, and the fact that pushes them. Its own task, bounded like `remember`'s insert: a
-/// database that is slow or away costs the members a row, never the room its line.
 fn notify_members(s: &ChatState, server: &str, room: &str, actor: Uuid, text: &str) {
-    // the room is `<server>/<channel>` (groups.rs `channel_room`); the writer wants the two apart
     let Some(channel) = room.strip_prefix(server).and_then(|rest| rest.strip_prefix('/')) else { return };
     let db = s.db.clone();
     let redis = s.redis.clone();
@@ -1448,13 +1157,8 @@ fn notify_members(s: &ChatState, server: &str, room: &str, actor: Uuid, text: &s
     });
 }
 
-/// What one of a server socket's channels says, tagged with the channel, into the socket's one
-/// queue. `Err(n)` is a room that ran ahead of this socket by n events.
 type Tagged = (Arc<str>, Result<Event, u64>);
 
-/// A server socket follows one more channel: its room joined (counted, capped per ip like
-/// any socket) and a task forwarding its events, tagged, into the socket's queue. The task
-/// ends with the socket (the queue's receiver dropped) or with the room. False at the cap.
 async fn follow(s: &ChatState, server: &str, channel: &str, ip: &str, tx: &mpsc::UnboundedSender<Tagged>, joined: &mut Vec<Arc<str>>) -> bool {
     if joined.iter().any(|c| c.as_ref() == channel) {
         return true;
@@ -1466,7 +1170,6 @@ async fn follow(s: &ChatState, server: &str, channel: &str, ip: &str, tx: &mpsc:
     tokio::spawn(async move {
         loop {
             let event = tokio::select! {
-                // the socket is gone: let go of the room's receiver, so a quiet room's reader can end too
                 _ = tx.closed() => return,
                 event = rx.recv() => match event {
                     Ok(event) => Ok(event),
@@ -1482,16 +1185,12 @@ async fn follow(s: &ChatState, server: &str, channel: &str, ip: &str, tx: &mpsc:
     true
 }
 
-/// `digits-digits`, a redis stream id, so a `since` the page sends cannot be anything else.
 fn is_stream_id(id: &str) -> bool {
     let mut parts = id.split('-');
     let (Some(ms), Some(seq), None) = (parts.next(), parts.next(), parts.next()) else { return false };
     !ms.is_empty() && !seq.is_empty() && ms.bytes().all(|b| b.is_ascii_digit()) && seq.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// The lines of a channel after `id`, oldest first, FILL_LIMIT at most: what the page missed
-/// between the api's answer and this socket, or across a drop. Taken after the room is joined,
-/// so a line in both arrives twice and is dropped by id, never in neither.
 async fn after(s: &ChatState, room: &str, id: &str, viewer: Option<Uuid>) -> Vec<Line> {
     let mut r = s.redis.clone();
     let reply: Result<StreamRangeReply, _> = r.xrange_count(room_key(room), format!("({id}"), "+", FILL_LIMIT).await;
@@ -1509,16 +1208,8 @@ async fn after(s: &ChatState, room: &str, id: &str, viewer: Option<Uuid>) -> Vec
     }
 }
 
-/// `/chat/<server>/*`: every channel of a server on one socket (docs/groups.md). The room page
-/// opens this one and switches channels on screen, with no other socket and no history frame:
-/// it drew every channel from `GET /api/groups/:group/messages`, and says in `since` the newest
-/// id it has per channel, so the lines after each are sent and nothing falls between the api's
-/// answer and this socket (or across a drop, on the reconnect). Lines go out as `message` with
-/// `channel`, the count as `count` with `channel`; a `say` names its `channel`; `join` follows a
-/// channel added since. Nobody is the streamer of a server, so the hello's grant means nothing here.
 async fn handle_server(s: ChatState, server: String, ip: String, headers: HeaderMap, mut socket: WebSocket) {
     let name = format!("{server}/{EVERY_CHANNEL}");
-    // 1. hello: who is talking
     let Some(first) = first_text(&mut socket).await else { return };
     let Ok(In::Hello(hello)) = serde_json::from_str::<In>(&first) else {
         let _ = send(&mut socket, &Out::Error { error: "say hello first" }).await;
@@ -1537,15 +1228,9 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
         None => "somebody (database down, reading only)".to_owned(),
     };
 
-    // 2. every text channel of the server this login sees (groups.rs `visible_text_channels`: a
-    //    voice one, or one kept to roles they do not hold, is not followed, and a say in it is
-    //    `say which channel`), joined.
-    //    no history: the page has the api's. what they see is read now: a role given or taken
-    //    while the socket is up reaches it on the next connect, and the page reconnects on its own
     let channels: Vec<String> = match crate::groups::visible_text_channels(&s.db, &server, who.as_ref().and_then(|w| w.user_id), s.is_admin(who.as_ref())).await {
         Ok(channels) => channels,
         Err(e) => {
-            // a server with no channels to follow is no use: the panel is back in 3s
             log::warn!("{name}: cannot list the channels: {e}");
             let _ = send(&mut socket, &Out::Error { error: "chat is busy, try again" }).await;
             return;
@@ -1564,8 +1249,6 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
     }
     log::info!("{name}: {} joined, {} channels", shown(&who), joined.len());
 
-    // 3. the loop: every channel's lines out with the channel on them, a say in for one of
-    //    them, a ping now and then so a peer that vanished without a close frame is found out
     let mut last_seen: HashMap<Arc<str>, (u64, u64)> = HashMap::new();
     let mut speaker = Speaker::of(who.as_ref(), &hello, &ip);
     let mut last_heard = Instant::now();
@@ -1588,7 +1271,6 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                 Some((channel, Ok(Event::React(react)))) => {
                     if send(&mut socket, &Out::ChannelReact { channel: &channel, react: &react }).await.is_err() { break; }
                 }
-                // its author or a moderator deleted a channel's line (group_mod.rs `delete_message`)
                 Some((channel, Ok(Event::Delete(id)))) => {
                     if send(&mut socket, &Out::ChannelDelete { channel: &channel, id: &id }).await.is_err() { break; }
                 }
@@ -1619,8 +1301,6 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                 };
                 match serde_json::from_str::<In>(&text) {
                     Ok(In::Since { since }) => {
-                        // the page's newest id per channel: the lines after each, in order, dropped
-                        // again by id if the room already sent one of them
                         for (channel, id) in since {
                             let Some(channel) = joined.iter().find(|c| c.as_ref() == channel).cloned() else { continue };
                             if !is_stream_id(&id) { continue; }
@@ -1639,9 +1319,6 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                         }
                     }
                     Ok(In::Join { channel }) => {
-                        // a channel added since the socket opened, or unlocked for this login since (the
-                        // events socket said so). it asks the database whether the channel is there and
-                        // theirs to see, so it costs a token like a line
                         let channel = channel.trim().to_lowercase();
                         if joined.iter().any(|c| c.as_ref() == channel) { continue; }
                         if let Err(wait) = s.limiter.take(&speaker, &name) {
@@ -1656,7 +1333,6 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
                         }
                     }
                     Ok(In::React { id, emoji, on, channel }) => {
-                        // a channel this socket follows: one it does not see is no channel to it
                         let Some(channel) = channel.map(|c| c.trim().to_lowercase()).filter(|c| joined.iter().any(|j| j.as_ref() == c)) else {
                             let _ = send(&mut socket, &Out::ReactRefused { error: "say which channel", react: &id, wait: None }).await;
                             continue;
@@ -1720,7 +1396,6 @@ async fn handle_server(s: ChatState, server: String, ip: String, headers: Header
     log::info!("{name}: {} left", shown(&who));
 }
 
-/// The row for a line redis already accepted. Its own task: the socket goes back to the room.
 #[allow(clippy::too_many_arguments)]
 fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[String], video: Option<&str>, reply: Option<Reply>) {
     let db = s.db.clone();
@@ -1749,18 +1424,10 @@ fn remember(s: &ChatState, room: &str, id: &str, w: &Who, text: &str, images: &[
 }
 
 impl ChatState {
-    /// Subscribe to a room. The first viewer starts the room's reader task. None
-    /// when this ip already has MAX_SOCKETS_PER_IP sockets in the room.
     async fn join(&self, name: &str, ip: &str) -> Option<broadcast::Receiver<Event>> {
         if let Some(room) = self.rooms.lock().await.get_mut(name) {
             return room.subscribe(ip);
         }
-        // First viewer, most likely. The reader's start id is taken here, before the
-        // history this viewer loads next, so no line can fall between the two: one
-        // in both arrives twice and is dropped by id. Not under the lock: a slow
-        // redis must not stall every other room's join and leave.
-        // the reactions' stream the same way: one put on a line between the history and the first
-        // read arrives on the line twice, and a page adding a name it has already is no change
         let start = last_id(&mut self.redis.clone(), &room_key(name)).await;
         let react_start = last_id(&mut self.redis.clone(), &react_key(name)).await;
         let mut rooms = self.rooms.lock().await;
@@ -1783,7 +1450,6 @@ impl ChatState {
             }
         }
         if room.count == 0 {
-            // dropping the last sender ends the reader task on its next loop
             rooms.remove(name);
         } else {
             let _ = room.tx.send(Event::Count(room.count));
@@ -1805,22 +1471,15 @@ impl Room {
     }
 }
 
-/// The newest id in a room's stream, "0-0" for an empty room, None when redis does not answer.
 async fn last_id<C: AsyncCommands>(r: &mut C, key: &str) -> Option<String> {
     let reply: StreamRangeReply = r.xrevrange_count(key, "+", "-", 1).await.ok()?;
     Some(reply.ids.first().map(|id| id.id.clone()).unwrap_or_else(|| "0-0".to_owned()))
 }
 
-/// Tails one room's stream and fans every new line out to the room's sockets, and its reactions'
-/// stream (`react_key`) in the same XREAD, every reaction to them too.
-/// Own connection: XREAD BLOCK would stall the shared multiplexed one, and the
-/// default 500ms response timeout would cut every block short.
 async fn reader(client: redis::Client, name: String, start: Option<String>, react_start: Option<String>, tx: broadcast::Sender<Event>) {
     let key = room_key(&name);
     let rkey = react_key(&name);
     let config = crate::socket::blocking_config(READ_BLOCK_MS);
-    // Keep trying while the room has viewers. Giving up on the first failure
-    // would leave a room that gets history but never a live line.
     let mut con = loop {
         match client.get_multiplexed_async_connection_with_config(&config).await {
             Ok(con) => break con,
@@ -1834,9 +1493,6 @@ async fn reader(client: redis::Client, name: String, start: Option<String>, reac
             }
         }
     };
-    // Start where join() looked, just before the first viewer's history. Anything
-    // between that and the first XREAD arrives twice and is dropped by id. When
-    // join() could not look (redis was down), start at the newest line now.
     let mut last = match start {
         Some(id) => id,
         None => last_id(&mut con, &key).await.unwrap_or_else(|| "0-0".to_owned()),
@@ -1881,12 +1537,10 @@ async fn reader(client: redis::Client, name: String, start: Option<String>, reac
     log::info!("{name}: room empty, reader done");
 }
 
-/// The account a socket's lines go to, for their reactions' `me`: a login's, none for a nick.
 fn viewer_of(who: &Option<Who>) -> Option<Uuid> {
     who.as_ref().and_then(|w| w.user_id.filter(|_| w.verified))
 }
 
-/// The last lines of a room, oldest first, with the faces and the reactions as they are now.
 async fn history(s: &ChatState, name: &str, viewer: Option<Uuid>) -> Result<Vec<Line>, redis::RedisError> {
     let mut r = s.redis.clone();
     let reply: StreamRangeReply = r.xrevrange_count(room_key(name), "+", "-", HISTORY_LINES).await?;
@@ -1897,12 +1551,8 @@ async fn history(s: &ChatState, name: &str, viewer: Option<Uuid>) -> Result<Vec<
     Ok(lines)
 }
 
-/// Ten pictures on one line. The bytes stay in the bucket; the line names the ids. A direct
-/// message (dms.rs) keeps the same cap, through `picture_ids`.
 const MAX_IMAGES: usize = 10;
 
-/// The ids a say named. `images` when it sent the set, otherwise the one `image`. Each must
-/// read as a uuid; a repeat is one picture. dms.rs reads a line's pictures with the same rule.
 pub(crate) fn picture_ids(image: Option<String>, images: Vec<String>) -> Result<Vec<String>, &'static str> {
     let raw = if images.is_empty() { image.into_iter().collect::<Vec<_>>() } else { images };
     if raw.len() > MAX_IMAGES {
@@ -1919,7 +1569,6 @@ pub(crate) fn picture_ids(image: Option<String>, images: Vec<String>) -> Result<
     Ok(out)
 }
 
-/// Every picture is one the api kept, uploaded by `who` (media.rs `check`).
 async fn pictures_exist(db: &sqlx::PgPool, name: &str, ids: &[String], who: Option<Uuid>) -> Result<(), &'static str> {
     for id in ids {
         match crate::media::check(db, crate::media::Kind::Image, id, who).await {
@@ -1961,7 +1610,6 @@ async fn pictures_allowed(db: &sqlx::PgPool, name: &str, server: Option<&str>, i
     }
 }
 
-/// Ids in a stored field: one id, or several joined by commas.
 pub(crate) fn split_pictures(raw: Option<String>) -> Vec<String> {
     let Some(raw) = raw.filter(|s| !s.is_empty()) else { return Vec::new() };
     raw.split(',').map(|part| part.trim().to_string()).filter(|part| !part.is_empty()).collect()
@@ -1972,13 +1620,9 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
     let text: String = entry.get("text")?;
     let streamer: String = entry.get("streamer").unwrap_or_else(|| "0".to_owned());
     let verified: String = entry.get("v").unwrap_or_else(|| "0".to_owned());
-    // no `g` field, or one this build cannot read, is a line with no badges
     let groups: Vec<Badge> = entry.get::<String>("g").and_then(|g| serde_json::from_str(&g).ok()).unwrap_or_default();
-    // no `a` field is a line with no picture (as written; `with_faces` has the last word)
     let avatar: Option<i64> = entry.get::<String>("a").and_then(|a| a.parse().ok());
-    // the account behind a login's line: what its face is looked up by
     let user_id: Option<Uuid> = entry.get::<String>("uid").and_then(|u| Uuid::parse_str(&u).ok());
-    // no `o` field is no oauth mark (as written; `with_faces` has the last word here too)
     let oauth_verified = entry.get::<String>("o").as_deref() == Some("1");
     let images = {
         let mut images = split_pictures(entry.get::<String>("img"));
@@ -1990,9 +1634,7 @@ pub(crate) fn line_from(entry: StreamId) -> Option<Line> {
         images
     };
     let image = images.first().cloned();
-    // no `vid` field (or one this build cannot read) is a line with no video
     let video = Video::parse(entry.get::<String>("vid").as_deref());
-    // no `r` field (or one this build cannot read) is a line that answers nothing
     let reply: Option<Reply> = entry.get::<String>("r").and_then(|r| serde_json::from_str(&r).ok());
     Some(Line {
         at: id_parts(&entry.id).0,
@@ -2017,14 +1659,10 @@ pub(crate) fn room_key(name: &str) -> String {
     format!("chat:{name}")
 }
 
-/// The room's reactions as they happen (`React`): `l` the line, `e` the emoji, `w` who, `on` 1 or 0.
-/// Not the lines' stream, which is the room's last 500 lines and nothing else. A janny's delete
-/// rides here too, `del` the line's id (`remove_line`), so the readers tail no third stream.
 fn react_key(name: &str) -> String {
     format!("chatr:{name}")
 }
 
-/// Reactions a room's stream keeps: enough for a reader that fell a little behind, never history.
 const KEEP_REACTS: usize = 200;
 
 fn react_from(entry: &StreamId) -> Option<React> {
@@ -2043,19 +1681,12 @@ pub(crate) fn valid_nick(nick: &str) -> bool {
     !nick.is_empty() && nick.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-/// A run of combining marks longer than this is "zalgo", not spelling.
 const MAX_COMBINING: usize = 4;
 
-/// Trim; keep newlines, but at most two between visible characters; drop control
-/// characters and the invisible format ones (zero-width space, bidi marks and
-/// overrides, word joiner, byte order mark); cap a run of combining marks.
-/// No unicode tables in this binary, so the sets are the explicit code points
-/// that make a line lie about its direction, pad it invisibly, or climb the screen.
-/// groups.rs cleans a badge and a group's description the same way.
 pub(crate) fn clean_text(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
-    let mut newlines = 0; // since the last visible character
-    let mut marks = 0; // combining marks in a row
+    let mut newlines = 0;
+    let mut marks = 0;
     for c in raw.chars() {
         if c == '\n' {
             newlines += 1;
@@ -2080,10 +1711,6 @@ pub(crate) fn clean_text(raw: &str) -> String {
     out.trim().to_owned()
 }
 
-/// Soft hyphen, zero-width space, the bidi marks (200E 200F), bidi embeddings and
-/// overrides (202A-202E), word joiner and invisible operators (2060-2064), bidi
-/// isolates (2066-2069), byte order mark. Not the zero-width (non-)joiner: emoji
-/// sequences and several scripts spell with those.
 fn is_invisible(c: char) -> bool {
     matches!(
         c,
@@ -2091,7 +1718,6 @@ fn is_invisible(c: char) -> bool {
     )
 }
 
-/// The combining diacritical mark blocks.
 fn is_combining(c: char) -> bool {
     matches!(c, '\u{0300}'..='\u{036F}' | '\u{1AB0}'..='\u{1AFF}' | '\u{1DC0}'..='\u{1DFF}' | '\u{20D0}'..='\u{20FF}' | '\u{FE20}'..='\u{FE2F}')
 }
@@ -2100,7 +1726,6 @@ fn is_combining(c: char) -> bool {
 mod tests {
     use super::*;
 
-    /// Building the router is what notices two patterns that can be the same url.
     #[test]
     fn a_channel_sits_beside_a_stream_room() {
         let _ = Router::<ChatState>::new()
@@ -2109,7 +1734,6 @@ mod tests {
             .merge(history::routes());
     }
 
-    /// A server socket's line is the same `message`, with `channel` beside the line's own fields.
     #[test]
     fn a_server_sockets_line_carries_its_channel() {
         let line = Line {
@@ -2136,15 +1760,11 @@ mod tests {
         assert_eq!(frame["id"], "1729000000000-0");
         assert_eq!(frame["from"], "bob");
         assert_eq!(frame["verified"], true);
-        // the account is the face's key, not a thing a page reads
         assert!(frame.get("user_id").is_none());
         assert_eq!(serde_json::to_string(&Out::ChannelCount { channel: "general", count: 3 }).unwrap(), r#"{"type":"count","channel":"general","count":3}"#);
-        // the channel of `*` is no channel: the name rule keeps it free
         assert!(!crate::valid_name(EVERY_CHANNEL));
     }
 
-    /// A reply's quote is the start of the line it answers, kept beside the reply on the wire and
-    /// in the stream, and a say names the line by id alone.
     #[test]
     fn a_reply_carries_a_short_quote_of_its_line() {
         let long: String = "a".repeat(400);
@@ -2174,7 +1794,6 @@ mod tests {
         assert_eq!(frame["reply"]["from"], "ann");
         let plain: serde_json::Value = serde_json::to_value(&line).unwrap();
         assert!(plain.get("reply").is_none(), "a line that answers nothing has no reply key");
-        // a pin keeps the line as json: one with a reply reads back the same, and one kept before replies too
         let back: Line = serde_json::from_value(frame).unwrap();
         assert_eq!(back.reply, Some(quote));
         let old: Line = serde_json::from_str(r#"{"id":"1-0","from":"bob","text":"hi","streamer":false,"verified":false,"groups":[],"avatar":null,"oauth_verified":false,"at":1}"#).unwrap();
@@ -2196,7 +1815,6 @@ mod tests {
         assert!(!is_stream_id(""));
     }
 
-    /// The words are cleaned and the pictures' ids checked before a line costs a token.
     #[test]
     fn a_say_is_cleaned_before_it_costs() {
         assert_eq!(parse_say("  hi  ".into(), None, Vec::new(), None), Ok(Some(("hi".into(), Vec::new(), None))));
@@ -2207,11 +1825,9 @@ mod tests {
         assert_eq!(parse_say(String::new(), None, Vec::new(), Some("not-an-id".into())), Err("bad video"));
         let id = "6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e";
         assert_eq!(parse_say(String::new(), Some(id.into()), Vec::new(), None), Ok(Some((String::new(), vec![id.into()], None))));
-        // a video alone is a line
         assert_eq!(parse_say(String::new(), None, Vec::new(), Some(id.to_uppercase())), Ok(Some((String::new(), Vec::new(), Some(id.into())))));
     }
 
-    /// A video on a stream's line is refused while they are off there; a group channel's is not.
     #[test]
     fn videos_are_off_in_a_streams_chat() {
         let id = Some("6b1e0c3a-7c2d-4e5f-9a10-11b12c13d14e");
@@ -2239,8 +1855,6 @@ mod tests {
         (wait.as_secs_f64() - secs).abs() < 0.01
     }
 
-    /// Without an account: two at once, then one every thirty seconds, and a token is a token: the
-    /// third waits for the next one back, not for the first of the two to be a minute old.
     #[test]
     fn a_nick_has_two_lines_then_one_every_thirty_seconds() {
         let now = Instant::now();
@@ -2249,18 +1863,14 @@ mod tests {
         assert!(b.take(ANON_TIER, now).is_ok());
         assert!(b.take(ANON_TIER, now).is_ok());
         assert!(about(b.take(ANON_TIER, now).unwrap_err(), 30.0));
-        // ten seconds on: still no, and the wait has come down by that much
         assert!(about(b.take(ANON_TIER, at(10)).unwrap_err(), 20.0));
-        // one is back at thirty seconds, and one only
         assert!(b.take(ANON_TIER, at(30)).is_ok());
         assert!(about(b.take(ANON_TIER, at(30)).unwrap_err(), 30.0));
-        // a long quiet is a full bucket again, and not more than full
         assert!(b.take(ANON_TIER, at(600)).is_ok());
         assert!(b.take(ANON_TIER, at(600)).is_ok());
         assert!(b.take(ANON_TIER, at(600)).is_err());
     }
 
-    /// A login: three at once, then one every 3⅓ seconds.
     #[test]
     fn a_login_has_three_lines_then_one_every_three_and_a_third_seconds() {
         let now = Instant::now();
@@ -2273,7 +1883,6 @@ mod tests {
         assert!(b.take(LOGIN_TIER, now + Duration::from_millis(3334)).is_err());
     }
 
-    /// The bucket is the speaker's in the room, whatever socket the line came on.
     #[test]
     fn the_bucket_is_the_speakers_not_the_sockets() {
         let limiter = Limiter::new();
@@ -2281,12 +1890,9 @@ mod tests {
         let alice = Speaker::Nick("1.2.3.4".into(), "alice".into());
         assert!(limiter.take_at(&alice, "room", now).is_ok());
         assert!(limiter.take_at(&alice, "room", now).is_ok());
-        // the same nick from another socket, spelled with a capital: the same bucket, empty
         assert!(limiter.take_at(&Speaker::of(None, &Hello { nick: Some("Alice".into()), session: None, token: None, bot: None }, "1.2.3.4"), "room", now).is_err());
-        // another room is another bucket, and so is another nick behind the same ip
         assert!(limiter.take_at(&alice, "other", now).is_ok());
         assert!(limiter.take_at(&Speaker::Nick("1.2.3.4".into(), "bob".into()), "room", now).is_ok());
-        // a login's is by account, so two tabs of one login are one speaker
         let bob = Speaker::Account(Uuid::nil());
         for _ in 0..3 {
             assert!(limiter.take_at(&bob, "room", now).is_ok());
@@ -2294,7 +1900,6 @@ mod tests {
         assert!(limiter.take_at(&bob, "room", now).is_err());
     }
 
-    /// Once a minute the buckets that have refilled go; one still owed a token stays.
     #[test]
     fn full_buckets_are_forgotten() {
         let limiter = Limiter::new();
@@ -2305,10 +1910,8 @@ mod tests {
             limiter.take_at(&alice, "room", now).unwrap();
         }
         limiter.take_at(&bob, "room", now).unwrap();
-        // alice spends the one she got back at thirty seconds, so at the sweep she has one, not two
         limiter.take_at(&alice, "room", now + Duration::from_secs(30)).unwrap();
         assert_eq!(limiter.inner.lock().unwrap().by_speaker.len(), 2);
-        // the sweep rides on the next take, a minute after the first
         let carol = Speaker::Nick("5.6.7.8".into(), "carol".into());
         limiter.take_at(&carol, "room", now + SWEEP_EVERY).unwrap();
         let kept: Vec<Speaker> = limiter.inner.lock().unwrap().by_speaker.keys().map(|(s, _)| s.clone()).collect();
@@ -2316,18 +1919,14 @@ mod tests {
         assert!(kept.contains(&alice) && kept.contains(&carol), "{kept:?}");
     }
 
-    /// Who draws on which bucket: a login by account, the streamer by the room, a nick by ip and nick,
-    /// and somebody the database has not named yet by the hello's nick.
     #[test]
     fn who_draws_on_which_bucket() {
         let hello = Hello { nick: Some(" Bob ".into()), session: None, token: None, bot: None };
         let id = Uuid::nil();
         let login = Who { from: "bob".into(), streamer: false, verified: true, groups: Vec::new(), user_id: Some(id) };
         assert_eq!(Speaker::of(Some(&login), &hello, "1.2.3.4"), Speaker::Account(id));
-        // the one who went live while logged in as somebody else, or as nobody: the room's
         let streamer = Who { from: "room".into(), streamer: true, verified: false, groups: Vec::new(), user_id: None };
         assert_eq!(Speaker::of(Some(&streamer), &hello, "1.2.3.4"), Speaker::Streamer("room".into()));
-        // the streamer logged in as the room's name: the account, like any login
         let own = Who { from: "room".into(), streamer: true, verified: true, groups: Vec::new(), user_id: Some(id) };
         assert_eq!(Speaker::of(Some(&own), &hello, "1.2.3.4"), Speaker::Account(id));
         let nick = Who { from: "Bob".into(), streamer: false, verified: false, groups: Vec::new(), user_id: None };
@@ -2339,15 +1938,12 @@ mod tests {
         assert_eq!(Speaker::Nick("1.2.3.4".into(), "bob".into()).tier(), ANON_TIER);
     }
 
-    /// The refusal is the `error` frame every page knows, with the wait beside the words, rounded up.
     #[test]
     fn a_refused_line_says_how_long() {
         assert_eq!(serde_json::to_string(&slow(Duration::from_micros(1_234_500))).unwrap(), r#"{"type":"error","error":"slow down","wait":1235}"#);
         assert_eq!(serde_json::to_string(&slow(Duration::from_secs(30))).unwrap(), r#"{"type":"error","error":"slow down","wait":30000}"#);
     }
 
-    /// The server socket's frames parse beside the stream's: a say names its channel, and
-    /// `join` and `since` are only its.
     #[test]
     fn server_socket_frames_parse() {
         match serde_json::from_str::<In>(r#"{"type":"say","text":"hi","channel":"clips"}"#).unwrap() {
@@ -2368,8 +1964,6 @@ mod tests {
         }
     }
 
-    /// A reaction is a frame of its own both ways: in, the line, the emoji and on or off (and the
-    /// channel on a server socket); out, the same with who, and a refusal names the line it was for.
     #[test]
     fn a_delete_frame_names_the_line() {
         assert_eq!(serde_json::to_string(&Out::Delete { id: "1-0" }).unwrap(), r#"{"type":"delete","id":"1-0"}"#);
@@ -2377,7 +1971,6 @@ mod tests {
             serde_json::to_string(&Out::ChannelDelete { channel: "general", id: "1-0" }).unwrap(),
             r#"{"type":"delete","channel":"general","id":"1-0"}"#
         );
-        // a ban's words must not read as a dead login to the pages (`/nick|account/`)
         assert!(!BANNED.contains("nick") && !BANNED.contains("account"));
     }
 
@@ -2400,13 +1993,11 @@ mod tests {
             serde_json::to_string(&Out::ReactRefused { error: SLOW_DOWN, react: "1-0", wait: Some(900) }).unwrap(),
             r#"{"type":"error","error":"slow down","react":"1-0","wait":900}"#
         );
-        // the room's reactions stream entry reads back as the frame
         let mut entry = StreamId { id: "5-0".into(), ..StreamId::default() };
         for (k, v) in [("l", "1-0"), ("e", "🔥"), ("w", "bob"), ("on", "0")] {
             entry.map.insert(k.into(), redis::Value::BulkString(v.as_bytes().to_vec()));
         }
         assert_eq!(react_from(&entry), Some(React { on: false, ..react.clone() }));
-        // a reaction is not a line: its key is not a room's
         assert_ne!(react_key("bob"), room_key("bob"));
         assert!(!react_key("bob").starts_with("chat:"));
     }
@@ -2435,7 +2026,6 @@ mod tests {
     #[test]
     fn text_newlines_are_capped_at_two() {
         assert_eq!(clean_text("a\n\n\n\n\nb"), "a\n\nb");
-        // blank lines made of spaces do not reset the count
         assert_eq!(clean_text("a\n \n \n \nb").matches('\n').count(), 2);
         let tall = format!("a{}b", "\n".repeat(498));
         assert_eq!(clean_text(&tall), "a\n\nb");
@@ -2445,7 +2035,6 @@ mod tests {
     fn text_invisible_format_characters_go() {
         assert_eq!(clean_text("\u{202E}abc\u{200B}\u{FEFF}"), "abc");
         assert_eq!(clean_text("\u{200F}\u{2066}x\u{2069}\u{00AD}"), "x");
-        // the zero-width joiner stays: that is how this family is spelled
         let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
         assert_eq!(clean_text(family), family);
     }
@@ -2454,7 +2043,6 @@ mod tests {
     fn text_combining_marks_are_capped() {
         let zalgo = format!("e{}x", "\u{0301}".repeat(40));
         assert_eq!(clean_text(&zalgo), format!("e{}x", "\u{0301}".repeat(MAX_COMBINING)));
-        // two marks on each of two letters are spelling, not zalgo
         assert_eq!(clean_text("e\u{0301}\u{0308}a\u{0300}\u{0302}"), "e\u{0301}\u{0308}a\u{0300}\u{0302}");
     }
 
@@ -2476,13 +2064,10 @@ mod tests {
         assert_eq!(id_parts("0-0"), (0, 0));
         assert_eq!(id_parts("garbage"), (0, 0));
         assert_eq!(id_parts(""), (0, 0));
-        // numeric, not lexicographic: "-10" comes after "-9"
         assert!(id_parts("1729000000000-10") > id_parts("1729000000000-9"));
         assert!(id_parts("1729000000001-0") > id_parts("1729000000000-99"));
     }
 
-    /// A pool that can never connect. sqlx retries a refused connection until the pool's
-    /// acquire timeout (5 s, as in main.rs), so a lookup with no bound of its own takes all of it.
     fn pool_that_never_answers() -> PgPool {
         sqlx::postgres::PgPoolOptions::new()
             .acquire_timeout(Duration::from_secs(5))
@@ -2490,8 +2075,6 @@ mod tests {
             .expect("a pool that is never connected")
     }
 
-    /// `face_now` is awaited on the socket at each say: a database that does not answer is a
-    /// line with no face within 2 s, like `remember`'s insert, not the pool's 5 s.
     #[tokio::test]
     async fn a_face_at_the_say_waits_two_seconds_at_most() {
         let pool = pool_that_never_answers();
@@ -2503,8 +2086,6 @@ mod tests {
         assert!(took < Duration::from_secs(3), "face_now held the socket for {took:?}");
     }
 
-    /// `with_faces` is awaited on the socket before the history frame and a `since` fill: a
-    /// database that does not answer leaves the lines as written, within 2 s, not the pool's 5 s.
     #[tokio::test]
     async fn faces_on_the_way_out_wait_two_seconds_at_most() {
         let pool = pool_that_never_answers();
@@ -2533,11 +2114,6 @@ mod tests {
         assert!(took < Duration::from_secs(3), "with_faces held the socket for {took:?}");
     }
 
-    /// A login's old lines keep its face through a rename for the hold's length, while
-    /// `/api/streamers/<old>/avatar` still answers for the account (profile.rs). After it the
-    /// old name leads elsewhere, and the page fetches by `from`: the letter, not the account's
-    /// current version (a 404 on the page) and not whoever took the name.
-    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored for_the_hold_and_then` against a throwaway postgres (see auth.rs's `test_db`).
     #[tokio::test]
     #[ignore]
     async fn a_face_follows_a_rename_for_the_hold_and_then_is_the_letter() {
@@ -2565,11 +2141,9 @@ mod tests {
             reply: None,
             reactions: Vec::new(),
         }];
-        // her own name: her picture
         with_faces(&pool, &mut lines).await;
         assert_eq!(lines[0].avatar, Some(1690000000));
         assert!(!lines[0].oauth_verified, "nothing linked: no oauth mark");
-        // she links a provider: her lines wear the mark, read back as the row is now
         sqlx::query("INSERT INTO oauth_identities (user_id, provider, provider_user_id) VALUES ($1, 'google', $2)")
             .bind(alice)
             .bind(format!("face-{run}"))
@@ -2579,7 +2153,6 @@ mod tests {
         with_faces(&pool, &mut lines).await;
         assert!(lines[0].oauth_verified, "linked: the mark, on her old lines too");
 
-        // what change_name leaves behind: the row is bob, and alice is held for it. the face follows
         let bob_name = format!("bob5-{run}");
         sqlx::query("UPDATE streamers SET name = $2, renamed_at = now() WHERE id = $1").bind(alice).bind(&bob_name).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO held_names (name, user_id, until) VALUES ($1, $2, now() + interval '30 days')")
@@ -2593,14 +2166,11 @@ mod tests {
         assert_eq!(lines[0].avatar, Some(1690000000), "the face follows a rename for the hold's length");
         assert!(lines[0].oauth_verified, "and the mark with it");
 
-        // the hold runs out: the old name is nobody's, so the line is the letter, not an <img> that 404s
         sqlx::query("UPDATE held_names SET until = now() - interval '1 second' WHERE name = $1").bind(&alice_name).execute(&pool).await.unwrap();
         with_faces(&pool, &mut lines).await;
         assert_eq!(lines[0].avatar, None, "after the hold the old name is not the account's: the letter");
         assert!(!lines[0].oauth_verified, "nor the mark");
 
-        // a stranger signs up as alice and uploads a picture: still the letter, not theirs and not bob's.
-        // the line comes out of redis with the `a` the say wrote, and must be overwritten
         let stranger = row(&pool, &alice_name, Some("stranger-hash")).await;
         sqlx::query("UPDATE streamers SET avatar_at = to_timestamp(1700000000) WHERE id = $1").bind(stranger).execute(&pool).await.unwrap();
         lines[0].avatar = Some(1690000000);

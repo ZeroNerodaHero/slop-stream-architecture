@@ -1,12 +1,3 @@
-//! A picture on a chat line. The page shrinks it first and posts the bytes here;
-//! the say names the id, and the panel fetches it back. See docs/chat.md.
-//!
-//! Webp, or jpeg when the browser cannot write webp. Profile pictures, group
-//! pictures, thumbnails and the offline picture stay jpeg and do not come through here.
-//!
-//! Who may post one and who is served one is media.rs's: a stream's are public, a group
-//! channel's and a direct message's are for those who may read them.
-
 use axum::body::Bytes;
 use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
@@ -24,9 +15,7 @@ use crate::moderate::{self, UploadKind};
 use crate::s3;
 use crate::{ApiError, ApiResult, AppState};
 
-/// About five lines, drawn at two pixels per screen pixel, is still a small file.
 const MAX_BYTES: usize = 256 * 1024;
-/// Pictures per login per ten minutes. A chat, not a gallery.
 const RATE_PER_WINDOW: i64 = 30;
 const RATE_WINDOW_SECS: i64 = 600;
 
@@ -58,9 +47,6 @@ async fn upload(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, body:
     Ok(Json(json!({ "id": id })))
 }
 
-/// A chat picture kept: the row (postgres makes the id, the same as every other id, with the
-/// bytes' sha256 and the uploader's address), then the bytes; a failed save deletes the row.
-/// The upload's way in, and a chat video's poster's (chat_videos.rs), which the api drew itself.
 pub(crate) async fn store(s: &AppState, me: &crate::auth::Account, kind: UploadKind, mime: &str, body: &[u8], ip: Option<&str>) -> Result<Uuid, ApiError> {
     let sha = media::sha256_hex(body);
     let passed = moderate::check(s, moderate::Upload { kind, who: Some(me.id), ip, mime, key: None, sha: Some(&sha) }, body).await?;
@@ -149,9 +135,6 @@ async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, q: 
     Ok((out, bytes).into_response())
 }
 
-/// `DELETE /api/chat-images/:id`: a site admin's takedown. The bytes out of the bucket, the row
-/// gone (a video it was the poster of keeps no poster), and the lines naming it say "removed".
-/// 204; 401 nobody, 403 anyone else, 404 no such picture.
 async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
     let me = admin(&s, me)?;
     let Ok(id) = Uuid::parse_str(id.trim()) else {
@@ -166,9 +149,6 @@ async fn take_down(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// The picture `id` out of the bucket, then its row; a failed delete in the bucket keeps the row,
-/// so the takedown can be tried again. chat_videos.rs takes a video's poster down this way too.
-/// A stream's (the only public ones) is purged from Cloudflare after (cf_purge.rs).
 pub(crate) async fn remove(s: &AppState, me: &crate::auth::Account, id: Uuid, mime: &str) -> Result<(), ApiError> {
     let posted: Option<String> = sqlx::query_scalar("SELECT posted_kind FROM chat_images WHERE id = $1").bind(id).fetch_optional(&s.db).await?.flatten();
     if let Err(e) = s3::delete(&s.s3, &key_of(id, mime)).await {
@@ -183,8 +163,6 @@ pub(crate) async fn remove(s: &AppState, me: &crate::auth::Account, id: Uuid, mi
     Ok(())
 }
 
-/// A picture of the api's own that is not wanted after all (a video's poster whose video was not
-/// saved): out of the bucket and its row gone, no note kept.
 pub(crate) async fn discard(s: &AppState, id: Uuid, mime: &str) {
     if let Err(e) = s3::delete(&s.s3, &key_of(id, mime)).await {
         log::warn!("discard chat picture {id}: {e}");
@@ -192,7 +170,6 @@ pub(crate) async fn discard(s: &AppState, id: Uuid, mime: &str) {
     let _ = sqlx::query("DELETE FROM chat_images WHERE id = $1").bind(id).execute(&s.db).await;
 }
 
-/// The site admins (`ADMIN_NAMES`), the same check as emotes.rs's and janny.rs's.
 pub(crate) fn admin(s: &AppState, me: Option<crate::auth::Account>) -> Result<crate::auth::Account, ApiError> {
     let me = me.ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "not logged in"))?;
     if s.admins.iter().any(|a| a.id == me.id) {
@@ -207,7 +184,6 @@ fn key_of(id: Uuid, mime: &str) -> String {
     format!("chat/{id}.{ext}")
 }
 
-/// Webp (`RIFF….WEBP`) or jpeg (`FF D8 FF`). Anything else is refused: the page is meant to send one of these.
 fn kind(body: &[u8]) -> Option<&'static str> {
     if body.len() >= 3 && body[0] == 0xFF && body[1] == 0xD8 && body[2] == 0xFF {
         return Some("image/jpeg");
