@@ -33,7 +33,7 @@ export type GroupChange =
   | { what: 'about'; about: string }
   | { what: 'color'; color: string }
   | { what: 'access'; public: boolean }
-  | { what: 'adult'; adult: boolean }
+  | { what: 'adult'; adult: boolean; locked?: boolean }
   | { what: 'order'; order: string }
   | { what: 'icon'; icon: number }
   | { what: 'banner'; banner: number }

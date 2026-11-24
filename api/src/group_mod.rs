@@ -421,18 +421,18 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
     let group = server(&s.db, &group).await?;
     let user = me.as_ref().map(|a| a.id);
     #[allow(clippy::type_complexity)]
-    let row: (String, String, String, i64, Option<i64>, Option<i64>, bool, Option<String>, Option<i32>, String, String, bool) = sqlx::query_as(
+    let row: (String, String, String, i64, Option<i64>, Option<i64>, bool, Option<String>, Option<i32>, String, String, bool, bool) = sqlx::query_as(
         "SELECT g.badge, g.color, g.about,
                 (SELECT count(*) FROM memberships m WHERE m.group_name = g.name),
                 (EXTRACT(EPOCH FROM g.icon_at))::bigint,
                 (EXTRACT(EPOCH FROM g.banner_at))::bigint,
-                g.public, g.title, g.tag, g.member_order, g.owner_role, g.adult_content
+                g.public, g.title, g.tag, g.member_order, g.owner_role, g.adult_content, g.adult_locked_by IS NOT NULL
          FROM groups g WHERE g.name = $1",
     )
     .bind(&group)
     .fetch_one(&s.db)
     .await?;
-    let (badge, color, about, members, icon, banner, public, title, tag, member_order, owner_role, adult) = row;
+    let (badge, color, about, members, icon, banner, public, title, tag, member_order, owner_role, adult, adult_locked) = row;
     let mine = match user {
         Some(id) => groups::member(&s.db, id, &group).await?,
         None => false,
@@ -453,13 +453,8 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
     let pins = crate::pins::pinned_ids(&s.db, &group, &seen).await?;
     // who is in voice, in the channels this login sees (voice.rs). An extra and not the room: redis down reads as nobody
     let voice = voice_in(&s, &group, &seen).await;
-    // the roster is anyone's on a public group (the lines say who talks there anyway), and a member's or a
-    // site admin's on a private one, whose people chose not to be listed; the bans are the ban power's. null otherwise
-    // `?roster=` asks for its first page alone (`limit`, as `GET .../members` reads it), and
-    // `roster_next` is where the next one starts: null when the roster came whole
     let first = page_of(q.roster, None, None)?;
-    // `holders` is the roster's too: who holds which role, the whole group's
-    let (roster, roster_next, holders) = if public || mine || admin {
+    let (roster, roster_next, holders) = if crate::moderate::roster_public(public, adult) || mine || admin {
         let (list, next) = members_of(&s.db, &group, &member_order, first.as_ref()).await?;
         (Some(list), next, Some(holders_of(&s.db, &group).await?))
     } else {
@@ -478,6 +473,7 @@ pub(crate) async fn room(State(s): State<AppState>, Path(group): Path<String>, Q
         "admin": admin,
         "public": public,
         "adult": adult,
+        "adult_locked": adult_locked,
         "title": title,
         "tag": tag,
         "member_order": member_order,
@@ -571,13 +567,27 @@ async fn set_adult(State(s): State<AppState>, Path(group): Path<String>, Me(me):
     let who = me.ok_or_else(login)?;
     let Json(body) = body?;
     let group = server(&s.db, &group).await?;
-    if !is_owner(&s.db, who.id, &group).await? {
-        return Err(ApiError::new(StatusCode::FORBIDDEN, "only an owner changes this"));
+    let owner = is_owner(&s.db, who.id, &group).await?;
+    let site_admin = s.admins.iter().any(|a| a.id == who.id);
+    let locked: bool = sqlx::query_scalar("SELECT adult_locked_by IS NOT NULL FROM groups WHERE name = $1").bind(&group).fetch_one(&s.db).await?;
+    let lock = crate::moderate::adult_change(body.adult, owner, site_admin, locked).map_err(|why| ApiError::new(StatusCode::FORBIDDEN, why))?;
+    let done = sqlx::query(
+        "UPDATE groups SET adult_content = $2, adult_locked_by = CASE WHEN $3 THEN $4 ELSE adult_locked_by END
+         WHERE name = $1 AND (NOT $2 OR adult_locked_by IS NULL)",
+    )
+    .bind(&group)
+    .bind(body.adult)
+    .bind(lock)
+    .bind(who.id)
+    .execute(&s.db)
+    .await?;
+    if done.rows_affected() == 0 {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, crate::moderate::ADULT_LOCKED));
     }
-    sqlx::query("UPDATE groups SET adult_content = $2 WHERE name = $1").bind(&group).bind(body.adult).execute(&s.db).await?;
-    log::info!("{}: adult content {} in {group}", who.name, if body.adult { "on" } else { "off" });
-    groups::tell(&s, &group, "adult", json!({ "adult": body.adult })).await;
-    Ok(Json(json!({ "adult": body.adult })))
+    let locked = locked || lock;
+    log::info!("{}: adult content {} in {group}{}", who.name, if body.adult { "on" } else { "off" }, if lock { " (site admin, locked)" } else { "" });
+    groups::tell(&s, &group, "adult", json!({ "adult": body.adult, "locked": locked })).await;
+    Ok(Json(json!({ "adult": body.adult, "locked": locked })))
 }
 
 /// `PUT /api/groups/:group/order` `{order}`: how the member list sorts after the owners. Appearance.
@@ -1243,17 +1253,12 @@ async fn members_where(db: &sqlx::PgPool, group: &str, order: &str, page: Option
     Ok((out.collect(), next))
 }
 
-/// `GET /api/groups/:group/members`: the roster on its own, the room's rule: anyone's on a
-/// public group; on a private one a member's or a site admin's (401 for nobody, 403 otherwise).
-/// Bare, the whole roster as an array, as before there were pages. With `limit` (1..=100; 50
-/// when only `after` or `q` is given), `after` (the page before's `next`) or `q` (words in a
-/// member's name or a role they hold), one page: `{ members, next }`, `next` null at the end.
-/// 400 `bad cursor`.
 async fn list_members(State(s): State<AppState>, Path(group): Path<String>, Query(q): Query<MembersQuery>, Me(me): Me) -> ApiResult {
     let group = server(&s.db, &group).await?;
     let page = page_of(q.limit, q.after.as_deref(), q.q.as_deref())?;
-    let (public, order): (bool, String) = sqlx::query_as("SELECT public, member_order FROM groups WHERE name = $1").bind(&group).fetch_one(&s.db).await?;
-    if !public {
+    let (public, adult, order): (bool, bool, String) =
+        sqlx::query_as("SELECT public, adult_content, member_order FROM groups WHERE name = $1").bind(&group).fetch_one(&s.db).await?;
+    if !crate::moderate::roster_public(public, adult) {
         let who = me.ok_or_else(login)?;
         if !groups::member(&s.db, who.id, &group).await? && !s.admins.iter().any(|a| a.id == who.id) {
             return Err(ApiError::new(StatusCode::FORBIDDEN, "join the group first"));
@@ -1512,10 +1517,9 @@ pub(crate) async fn moderated(s: &AppState, who: &crate::auth::Account, group: &
     Ok((user, name))
 }
 
-/// The roster's rule (`list_members`): anyone on a public group, a member or a site admin on a private one.
 async fn sees_roster(s: &AppState, group: &str, me: Option<&crate::auth::Account>) -> Result<(), ApiError> {
-    let public: bool = sqlx::query_scalar("SELECT public FROM groups WHERE name = $1").bind(group).fetch_one(&s.db).await?;
-    if public {
+    let (public, adult): (bool, bool) = sqlx::query_as("SELECT public, adult_content FROM groups WHERE name = $1").bind(group).fetch_one(&s.db).await?;
+    if crate::moderate::roster_public(public, adult) {
         return Ok(());
     }
     let who = me.ok_or_else(login)?;
@@ -1747,7 +1751,7 @@ async fn read_picture(s: &AppState, group: &str, key: &str, column: &str) -> Res
 #[allow(clippy::too_many_arguments)]
 async fn write_picture(s: &AppState, who: crate::auth::Account, headers: &HeaderMap, kind: crate::moderate::UploadKind, group: &str, key: &str, column: &str, body: Bytes) -> Result<i64, ApiError> {
     let ip = crate::ratelimit::forwarded_ip(headers);
-    crate::moderate::check(s, crate::moderate::Upload { kind, who: Some(who.id), ip: ip.as_deref(), mime: "image/jpeg", key: Some(key) }, &body).await?;
+    crate::moderate::check(s, crate::moderate::Upload { kind, who: Some(who.id), ip: ip.as_deref(), mime: "image/jpeg", key: Some(key), sha: None }, &body).await?;
     if let Err(e) = s3::put(&s.s3, key, &body, "image/jpeg").await {
         log::error!("s3 group picture {group}: {e}");
         return Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not save the picture"));

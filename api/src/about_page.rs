@@ -557,7 +557,7 @@ async fn put_file(
     let row = ensure_row(&s.db, &name).await?;
     let looked = if kind.kind == "image" {
         let ip = crate::ratelimit::forwarded_ip(&headers);
-        let up = crate::moderate::Upload { kind: crate::moderate::UploadKind::AboutFile, who: Some(me.0.as_ref().map_or(row, |a| a.id)), ip: ip.as_deref(), mime: kind.mime, key: None };
+        let up = crate::moderate::Upload { kind: crate::moderate::UploadKind::AboutFile, who: Some(me.0.as_ref().map_or(row, |a| a.id)), ip: ip.as_deref(), mime: kind.mime, key: None, sha: None };
         crate::moderate::check(&s, up, &body).await?
     } else {
         crate::moderate::Passed::default()

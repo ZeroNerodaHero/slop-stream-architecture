@@ -62,13 +62,14 @@ async fn upload(State(s): State<AppState>, Me(me): Me, headers: HeaderMap, body:
 /// bytes' sha256 and the uploader's address), then the bytes; a failed save deletes the row.
 /// The upload's way in, and a chat video's poster's (chat_videos.rs), which the api drew itself.
 pub(crate) async fn store(s: &AppState, me: &crate::auth::Account, kind: UploadKind, mime: &str, body: &[u8], ip: Option<&str>) -> Result<Uuid, ApiError> {
-    let passed = moderate::check(s, moderate::Upload { kind, who: Some(me.id), ip, mime, key: None }, body).await?;
+    let sha = media::sha256_hex(body);
+    let passed = moderate::check(s, moderate::Upload { kind, who: Some(me.id), ip, mime, key: None, sha: Some(&sha) }, body).await?;
     let id: Uuid = match sqlx::query_scalar(
         "INSERT INTO chat_images (id, mime, created_by, sha256, uploader_ip, nsfw, graphic, moderated) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7) RETURNING id",
     )
     .bind(mime)
     .bind(me.id)
-    .bind(media::sha256_hex(body))
+    .bind(&sha)
     .bind(ip)
     .bind(passed.nsfw)
     .bind(passed.graphic)
@@ -98,9 +99,6 @@ struct ShowQuery {
 
 const SENSITIVE: &str = "sensitive";
 
-/// `GET /api/chat-images/:id`: the picture, to whoever may see it (media.rs `access`): anyone for
-/// a stream's, cached a day; a member or one of the two for a group's or a direct message's, not
-/// cached. 401/403 for anyone else, 410 `removed` for one an admin took down.
 async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, q: Result<Query<ShowQuery>, axum::extract::rejection::QueryRejection>) -> Result<Response, ApiError> {
     let Ok(id) = Uuid::parse_str(id.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad picture"));
@@ -112,13 +110,25 @@ async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, q: 
     if let Some(no) = media::refused(&access) {
         return Err(no);
     }
-    let row: Option<(String, bool, Option<Uuid>)> =
-        sqlx::query_as("SELECT mime, nsfw OR graphic, created_by FROM chat_images WHERE id = $1").bind(id).fetch_optional(&s.db).await?;
-    let Some((mime, sensitive, by)) = row else {
+    #[allow(clippy::type_complexity)]
+    let row: Option<(String, bool, bool, Option<Uuid>, bool, Option<bool>)> = sqlx::query_as(
+        "SELECT i.mime, i.nsfw, i.graphic, i.created_by, i.posted_kind IS NOT DISTINCT FROM 'group',
+                (SELECT g.adult_content FROM groups g WHERE g.name = i.posted_group)
+         FROM chat_images i WHERE i.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&s.db)
+    .await?;
+    let Some((mime, nsfw, graphic, by, in_group, adult_now)) = row else {
         return Err(media::missing(&s.db, Kind::Image, id).await);
     };
+    let uploader = viewer.is_some() && by == viewer;
+    let site_admin = viewer.is_some_and(|v| s.admins.iter().any(|a| a.id == v));
+    if moderate::hidden(nsfw, in_group, adult_now.unwrap_or(false), uploader || site_admin) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, moderate::HIDDEN));
+    }
     let shown = q.ok().and_then(|Query(q)| q.show).is_some_and(|v| v == "1");
-    if sensitive && !shown && (viewer.is_none() || by != viewer) {
+    if (nsfw || graphic) && !shown && !uploader {
         return Err(ApiError::new(StatusCode::CONFLICT, SENSITIVE));
     }
     let bytes = match s3::get(&s.s3, &key_of(id, &mime)).await {

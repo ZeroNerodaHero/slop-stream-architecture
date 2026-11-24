@@ -16,13 +16,22 @@ page side is `ChatImages` (ChatPanel.tsx) and `ChatVideoPlayer.tsx`.
   and `docker-compose.yml` default it to off.
 - **The http client:** if reqwest cannot build the client with the timeout, the check does not
   fall back to a client without one. It fails closed: 503 like any other outage.
-- **Size:** a picture over 20 MB is never sent to OpenAI. `check` answers 413 `picture too big to
-  check. 20 mb at most` before the count or the call. Every upload route has a smaller limit of
+- **Size:** a picture over 20,000,000 bytes (`MAX_ASK_BYTES`) is never sent to OpenAI. `check`
+  answers 413 `picture too big to check. 20 mb at most` before the count or the call. Every upload route has a smaller limit of
   its own today, so this is a guard for later routes.
 - **The bytes checked are the bytes kept.** An emote is checked after `redraw` turns it into a
   webp. A chat video's poster is checked as the frame ffmpeg drew. Everything else is stored as
   the page sent it, so the upload itself is checked. Video bytes are never checked (see
   follow-ups). Stream chat videos stay off (`STREAM_CHAT_VIDEO = false`).
+- **At most 4 calls at once:** one api process sends at most `MAX_ASKS_AT_ONCE` (4) moderation
+  calls to OpenAI at the same time (a tokio `Semaphore` in `ask`). A check that waits more than 3
+  seconds (`QUEUE_WAIT`) for a turn fails closed with the usual 503 `image checks are down, try
+  again later`, and the log says how many were running. This bounds what a burst of uploads
+  costs and keeps us under OpenAI's per-minute limits.
+- **The sha256 is computed once per upload.** Chat pictures, video posters and emotes hash the
+  bytes once and pass it to `check` (`Upload.sha`), which uses it for the log and the `uploads`
+  row, and the caller uses it for its own table. Other kinds pass `None` and `check` hashes the
+  bytes itself, only when moderation is on.
 - **The api acts only on OpenAI's `categories` booleans.** There are no score thresholds of our
   own. `category_scores` is stored as it came back, on the `uploads` row.
 - **Rate limit:** before each call, a per-uploader count in redis (`rl:moderate:acct:<id>`, or the
@@ -55,9 +64,10 @@ page side is `ChatImages` (ChatPanel.tsx) and `ChatVideoPlayer.tsx`.
 | refused by policy | 422 | `image rejected by moderation` (nothing stored) |
 | animated picture on a public kind | 422 | `animated images aren't allowed` |
 | video on the about page | 422 | `videos can't be added to the about page while image checks are on` |
-| over 20 MB | 413 | `picture too big to check. 20 mb at most` |
+| over 20,000,000 bytes | 413 | `picture too big to check. 20 mb at most` |
 | stream chat line naming a picture that was never checked | error frame | `this picture was never checked, send it again` |
-| no key, timeout, 429 from OpenAI, 5xx, any other non-2xx, unreadable answer | 503 | `image checks are down, try again later` |
+| no key, timeout, 429 from OpenAI, 5xx, any other non-2xx, unreadable answer, no free slot within 3 s | 503 | `image checks are down, try again later` |
+| `GET` of a sexual picture posted in a group whose adult content is now off | 403 | `hidden` |
 | over the per-uploader count | 429 | `too many uploads, slow down` |
 
 When moderation is on, any failure of the check refuses the upload (fail closed). The pages
@@ -86,7 +96,7 @@ outage: 503, and the upload is refused.
 | `about_file` (pictures only) | about_page.rs `put_file` | block | block | log |
 | `group_icon`, `group_banner` | group_mod.rs `write_picture` | block | block | log |
 | `emote` | emotes.rs `screen` | block | block | log |
-| `model_thumb` | models.rs `upload` (`api models`, the CLI: no row, no count) | block (the run stops) | block | allowed |
+| `model_thumb` | models.rs `upload` (`api models`, the CLI: no row, no count, animated refused) | block (the run stops) | block | allowed |
 | `chat_image`, `video_poster` in a **stream's chat** | chat.rs `accept`, checked when the line is said | block | block | log |
 | `chat_image`, `video_poster` in a **group channel**, adult content off (the default) | chat.rs `accept` | block | log, blurred | log |
 | `chat_image`, `video_poster` in a **group channel**, adult content on | chat.rs `accept` | allowed, `nsfw=true`, blurred | log, blurred | log |
@@ -113,16 +123,28 @@ answer, a stream or group line is refused with `chat is busy, try again`.
 
 **Blur.** `GET /api/chat-images/:id` answers 409 `sensitive` for a picture with `nsfw` or
 `graphic` set, unless the request has `?show=1` or comes from the uploader. Only DMs and group
-channels can have such a picture, because a stream's chat refuses both flags. A group without
-adult content can still hold `graphic` pictures, and `nsfw` ones posted while adult content was
-on: turning it off refuses new ones and leaves the old lines as they are, still blurred. When a picture
-fails to load, the page asks why (`whyGone` in `chat-video.ts`) and draws it blurred with a
-`show` button (`ChatImages` in ChatPanel.tsx). On click it loads the `?show=1` address (`shownSrc`)
-and draws it like any other picture, full-size view included. In the full-size view
-(`PictureView`), a flagged picture not shown yet is blurred too when the arrows reach it. A
-video's poster works the same way (`ChatVideoPlayer.tsx`): the player is covered, its poster
-blurred, until `show` is pressed. The player is measured again after that, so the chat scroll
-stays right.
+channels can have such a picture, because a stream's chat refuses both flags. When a picture
+fails to load, the page asks why (`whyGone` in `chat-video.ts`) and draws a plain `sensitive`
+box with a `show` button in its place (`ChatImages` in ChatPanel.tsx). The box is a placeholder,
+not the picture blurred by CSS: no byte of the picture reaches the browser before the click, so
+it cannot be pulled out of the page, the cache or devtools. On click it loads the `?show=1`
+address (`shownSrc`) and draws it like any other picture, full-size view included. In the
+full-size view (`PictureView`), a flagged picture not shown yet is the same box, with its own
+`show` button, when the arrows reach it. A video's poster works the same way
+(`ChatVideoPlayer.tsx`): the player is replaced by the box until `show` is pressed, and no poster
+is loaded before. The player is measured again after that, so the chat scroll stays right.
+
+**Hidden.** A group without adult content can still hold `graphic` pictures (blurred, as above),
+and `nsfw` ones posted while adult content was on. Turning adult content off (by the owner or by
+a site admin) refuses new ones and hides the old ones: `GET /api/chat-images/:id` answers 403
+`hidden` for a picture with `nsfw` set, posted in a group (`posted_kind = 'group'`) whose
+`adult_content` is false now, even with `?show=1`. The uploader and the site admins
+(`ADMIN_NAMES`) still get it. Nothing is deleted: turning adult content back on shows them again
+(blurred). A group that no longer exists counts as off. A chat video whose poster is such a
+picture is hidden the same way on `GET /api/chat-videos/:id`. The page reads the 403's `error`
+(`whyGone` asks again with a `GET`, since a `HEAD` has no body) and draws `hidden: adult content is
+off in this group` in the picture's or the video's place (`MediaGoneNote`). The rule is
+`moderate::hidden`.
 
 **Animated pictures.** While moderation is on, an animated picture is refused with 422 `animated
 images aren't allowed` on the public kinds that keep the bytes as sent: scene assets (profile.rs
@@ -132,12 +154,18 @@ images aren't allowed` on the public kinds that keep the bytes as sent: scene as
 
 - GIF: it walks the blocks (header, global color table, extensions and their sub-blocks, image
   descriptors with their local color table and data). More than one image descriptor means
-  animated. A `0x2C` byte inside a color table or frame data is not counted.
+  animated. A `0x2C` byte inside a color table or frame data is not counted. It fails closed:
+  only the `0x3B` trailer is a clean end. Any other byte where a block should start, and any
+  file that runs out once the first frame has begun, counts as animated, because a decoder may
+  skip the junk and find more frames after it. A file that runs out before any frame is not
+  animated (it has nothing to show).
 - WebP: the `VP8X` animation flag (`0x02`), or an `ANIM` or `ANMF` chunk.
 - PNG: an `acTL` chunk before the first `IDAT`. An `acTL` after `IDAT` is ignored, as the APNG
   spec says.
 
-Emotes are exempt, because `redraw` turns every emote into one still webp. Avatars, offline
+Model thumbnails (`api models`) are refused when animated too, with `animated images aren't
+allowed`, while `MODERATION_ENABLED` is set in the CLI's shell. Emotes are exempt, because
+`redraw` turns every emote into one still webp. Avatars, offline
 pictures, thumbnails and group pictures are JPEG only. When moderation is off, animated pictures
 are accepted as before.
 
@@ -176,12 +204,29 @@ the next section.
 
 ## Adult content in groups
 
-Each group has `groups.adult_content` (migration 0015), false by default. Only an owner of the
-group changes it: `PUT /api/groups/:group/adult` `{"adult": true|false}` answers `{"adult": ...}`,
-401 for nobody, 404 for no such group, 403 `only an owner changes this` for anyone else, site
-admins included (they are not owners). The room's members hear it as the `adult` fact, and
-`GET /api/groups/:group` says `adult`. The page's switch is the `adult content` section of the
-manage dialog's about tab (ServerRoom.tsx `AdultSection`), drawn for owners only.
+Each group has `groups.adult_content` (migration 0015), false by default.
+`PUT /api/groups/:group/adult` `{"adult": true|false}` changes it and answers
+`{"adult": ..., "locked": ...}`. 401 for nobody, 404 for no such group. Who may do what
+(`moderate::adult_change`):
+
+- An owner turns it on or off, unless a site admin locked it (below).
+- A site admin (`ADMIN_NAMES`) who is not an owner can only turn it off: 403 `site admins can only
+  turn adult content off` for on. Turning it off records the admin's id in
+  `groups.adult_locked_by` (uuid, no foreign key, so the lock stays if that account goes).
+- While `adult_locked_by` is set, turning it on is refused for everyone with 403 `a site admin
+  turned adult content off for this group, so it can't be turned back on`. The update checks the
+  lock in the same statement, so a race with the admin cannot slip past it. Owners can still
+  turn it off (it already is). Only the database lifts a lock:
+  `UPDATE groups SET adult_locked_by = NULL WHERE name = '<group>'`.
+- An owner who is also a site admin acts as the owner: turning it off does not lock.
+- Anyone else: 403 `only an owner changes this`.
+
+Turning it off, by anyone, hides the sexual pictures already posted (see Hidden). The room's
+members hear it as the `adult` fact (`{adult, locked}`), and `GET /api/groups/:group` says `adult`
+and `adult_locked`. The page's switch is the `adult content` section of the manage dialog's about
+tab (ServerRoom.tsx `AdultSection`), drawn for owners and site admins. When a change is not
+allowed, the `turn on` button is disabled and a line under it says why (locked by a site admin,
+or site admins can only turn it off), and the state reads `off, locked`.
 
 While it is on:
 
@@ -191,10 +236,17 @@ While it is on:
   which the explore page, the home page's groups and the friends panel's search read). Members
   still see it in their own lists (`yours`). These two are the only api routes that list groups; there is no sitemap.
   Anyone with the address or an invite can open the room and join, as with a private group.
+- the member list is not public, whatever `public` says (`moderate::roster_public`: public only
+  when `public && !adult_content`). The room's `roster`, `GET /api/groups/:group/members` and
+  `GET /api/groups/:group/members/:name` (`sees_roster`) answer it only to members and site admins.
+- its badge is never worn on public surfaces. `groups::badges_of` (chat lines in every chat,
+  chat.rs) and `groups::badges_by_name` / `badge_of` (the home list's cards, home.rs, and a
+  name's card, main.rs) skip groups with adult content on: a member whose primary group is one
+  wears their next group's badge (primary first, then by join date), or none. `badges_named`
+  (the inbox's channel rows, notify.rs) is only shown to members and still includes it.
 
 The group's own icon and banner are public kinds and stay blocked for sexual and graphic
-pictures either way. A member's badge still shows the group's name on their lines and card;
-the badge does not link to the group.
+pictures either way.
 
 ## Cloudflare CSAM Scanning Tool (a step for Billy)
 
@@ -214,7 +266,7 @@ count, the animated and about-video refusals, the `moderated` gate on stream cha
 `uploads` rows all stop, and every upload is kept as before. Flags already set
 stay: `nsfw` and `graphic` pictures are still blurred in DMs and groups, and the say still refuses flagged
 pictures in a stream's chat and in groups without adult content. A group's `adult_content` stays
-as its owner set it, so it stays off the lists. To clear the flags too:
+as its owner set it, so it stays off the lists, and an admin's lock (`adult_locked_by`) stays too. To clear the flags too:
 `UPDATE chat_images SET nsfw = false, graphic = false`. The migration is additive, so it can stay.
 
 ## Follow-ups (not in this PR)
@@ -234,8 +286,6 @@ as its owner set it, so it stays off the lists. To clear the flags too:
 - Billy's calls to confirm: DM pictures are blurred, not refused; group pictures follow the
   group's adult content switch (off by default: sexual refused); violence/graphic in DMs and
   groups is only logged and blurred.
-- Should a site admin be able to turn a group's adult content off? Today only owners can.
-- Should an adult content group's badge be hidden on members' lines in public chats?
 - Is 40 checks per uploader per 10 minutes right?
 - Should a `sexual/minors` true get special handling (an alert, holding the evidence) before
   the CSAM workflow lands?

@@ -25,3 +25,4 @@ ALTER TABLE chat_images ADD COLUMN graphic boolean NOT NULL DEFAULT false;
 ALTER TABLE chat_images ADD COLUMN moderated boolean NOT NULL DEFAULT false;
 
 ALTER TABLE groups ADD COLUMN adult_content boolean NOT NULL DEFAULT false;
+ALTER TABLE groups ADD COLUMN adult_locked_by uuid;

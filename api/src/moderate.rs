@@ -1,9 +1,11 @@
+use std::borrow::Cow;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use axum::http::StatusCode;
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::{ApiError, AppState};
@@ -13,7 +15,11 @@ const MODEL: &str = "omni-moderation-latest";
 const TIMEOUT: Duration = Duration::from_secs(5);
 const RATE_PER_WINDOW: i64 = 40;
 const RATE_WINDOW_SECS: i64 = 600;
-const MAX_ASK_BYTES: usize = 20 * 1024 * 1024;
+const MAX_ASK_BYTES: usize = 20_000_000;
+const MAX_ASKS_AT_ONCE: usize = 4;
+const QUEUE_WAIT: Duration = Duration::from_secs(3);
+
+static ASKS: Semaphore = Semaphore::const_new(MAX_ASKS_AT_ONCE);
 
 pub(crate) const REJECTED: &str = "image rejected by moderation";
 pub(crate) const IMAGE_CHECKS_DOWN: &str = "image checks are down, try again later";
@@ -21,6 +27,7 @@ pub(crate) const SLOW_DOWN: &str = "too many uploads, slow down";
 pub(crate) const UNCHECKED: &str = "this picture was never checked, send it again";
 pub(crate) const ANIMATED: &str = "animated images aren't allowed";
 pub(crate) const TOO_BIG_TO_CHECK: &str = "picture too big to check. 20 mb at most";
+pub(crate) const HIDDEN: &str = "hidden";
 pub(crate) const ABOUT_VIDEO_OFF: &str = "videos can't be added to the about page while image checks are on";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,6 +111,29 @@ pub(crate) fn refusal_at(place: PlaceKind, nsfw: bool, graphic: bool, unchecked:
     refused.then_some(REJECTED)
 }
 
+pub(crate) fn hidden(nsfw: bool, posted_in_group: bool, group_adult_now: bool, exempt: bool) -> bool {
+    nsfw && posted_in_group && !group_adult_now && !exempt
+}
+
+pub(crate) const fn roster_public(public: bool, adult: bool) -> bool {
+    public && !adult
+}
+
+pub(crate) const ONLY_OWNER: &str = "only an owner changes this";
+pub(crate) const ADMIN_ONLY_OFF: &str = "site admins can only turn adult content off";
+pub(crate) const ADULT_LOCKED: &str = "a site admin turned adult content off for this group, so it can't be turned back on";
+
+pub(crate) fn adult_change(want: bool, owner: bool, site_admin: bool, locked: bool) -> Result<bool, &'static str> {
+    match (want, owner, site_admin) {
+        (false, true, _) => Ok(false),
+        (false, false, true) => Ok(true),
+        (true, true, _) if locked => Err(ADULT_LOCKED),
+        (true, true, _) => Ok(false),
+        (true, false, true) => Err(ADMIN_ONLY_OFF),
+        (_, false, false) => Err(ONLY_OWNER),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Flags {
     pub(crate) sexual: bool,
@@ -119,6 +149,7 @@ pub(crate) enum Down {
     NoKey,
     NoClient,
     TooBig(usize),
+    Busy,
     Unreachable(String),
     Status(u16),
     Malformed(&'static str),
@@ -220,6 +251,10 @@ pub(crate) async fn ask(mime: &str, bytes: &[u8]) -> Result<Flags, Down> {
     }
     let key = std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.trim().is_empty()).ok_or(Down::NoKey)?;
     let client = client().ok_or(Down::NoClient)?;
+    let _turn = match tokio::time::timeout(QUEUE_WAIT, ASKS.acquire()).await {
+        Ok(Ok(turn)) => turn,
+        _ => return Err(Down::Busy),
+    };
     let body = json!({
         "model": MODEL,
         "input": [{ "type": "image_url", "image_url": { "url": format!("data:{mime};base64,{}", base64(bytes)) } }],
@@ -236,6 +271,7 @@ pub(crate) struct Upload<'a> {
     pub(crate) ip: Option<&'a str>,
     pub(crate) mime: &'a str,
     pub(crate) key: Option<&'a str>,
+    pub(crate) sha: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -273,7 +309,7 @@ pub(crate) async fn check(s: &AppState, up: Upload<'_>, bytes: &[u8]) -> Result<
         (None, None) => "anon".to_owned(),
     };
     crate::auth::limit(s, &format!("rl:moderate:{subject}"), RATE_WINDOW_SECS, RATE_PER_WINDOW, SLOW_DOWN).await?;
-    let sha = crate::media::sha256_hex(bytes);
+    let sha = up.sha.map_or_else(|| Cow::Owned(crate::media::sha256_hex(bytes)), Cow::Borrowed);
     let answer = ask(up.mime, bytes).await;
     let decision = decide(policy(up.kind), &answer);
     let ip = up.ip.unwrap_or("?");
@@ -307,6 +343,9 @@ pub(crate) async fn check_offline(kind: UploadKind, mime: &str, bytes: &[u8]) ->
         return Ok(());
     }
     let sha = crate::media::sha256_hex(bytes);
+    if is_animated(bytes) {
+        return Err(format!("{} {sha}: {ANIMATED}", kind.word()));
+    }
     let answer = ask(mime, bytes).await;
     match (decide(policy(kind), &answer), answer) {
         (Decision::Accept { .. }, _) => Ok(()),
@@ -321,6 +360,7 @@ fn down_words(why: &Down) -> String {
         Down::NoKey => "OPENAI_API_KEY is not set".to_owned(),
         Down::NoClient => "no http client".to_owned(),
         Down::TooBig(len) => format!("{len} bytes, over {MAX_ASK_BYTES}"),
+        Down::Busy => format!("{MAX_ASKS_AT_ONCE} checks already running for {}s", QUEUE_WAIT.as_secs()),
         Down::Unreachable(e) => format!("unreachable: {e}"),
         Down::Status(code) => format!("status {code}"),
         Down::Malformed(what) => format!("malformed answer: {what}"),
@@ -384,7 +424,7 @@ pub(crate) async fn may_post(db: &PgPool, ids: &[&str], place: PlaceKind) -> Res
 
 pub(crate) fn is_animated(bytes: &[u8]) -> bool {
     if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        return gif_frames(bytes) > 1;
+        return gif_animated(bytes);
     }
     if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
         return webp_animated(bytes);
@@ -414,31 +454,32 @@ fn skip_sub_blocks(b: &[u8], mut at: usize) -> Option<usize> {
     }
 }
 
-fn gif_frames(b: &[u8]) -> usize {
-    let Some(&packed) = b.get(10) else { return 0 };
+fn gif_animated(b: &[u8]) -> bool {
+    let Some(&packed) = b.get(10) else { return false };
     let mut at = 13 + color_table_len(packed);
     let mut frames = 0;
-    while let Some(&intro) = b.get(at) {
+    loop {
+        let Some(&intro) = b.get(at) else { return frames > 0 };
         match intro {
+            0x3B => return false,
             0x21 => match skip_sub_blocks(b, at + 2) {
                 Some(next) => at = next,
-                None => break,
+                None => return frames > 0,
             },
             0x2C => {
-                let Some(&packed) = b.get(at + 9) else { break };
                 frames += 1;
                 if frames > 1 {
-                    break;
+                    return true;
                 }
+                let Some(&packed) = b.get(at + 9) else { return true };
                 match skip_sub_blocks(b, at + 10 + color_table_len(packed) + 1) {
                     Some(next) => at = next,
-                    None => break,
+                    None => return true,
                 }
             }
-            _ => break,
+            _ => return true,
         }
     }
-    frames
 }
 
 fn webp_animated(b: &[u8]) -> bool {
@@ -617,6 +658,50 @@ mod tests {
         assert_eq!(refusal_at(PlaceKind::Stream, false, false, false), None);
     }
 
+    #[test]
+    fn a_roster_is_public_only_on_a_public_group_without_adult_content() {
+        assert!(roster_public(true, false));
+        assert!(!roster_public(true, true));
+        assert!(!roster_public(false, false));
+        assert!(!roster_public(false, true));
+    }
+
+    #[test]
+    fn site_admins_turn_adult_content_off_and_lock_it() {
+        assert_eq!(adult_change(false, false, true, false), Ok(true));
+        assert_eq!(adult_change(false, false, true, true), Ok(true));
+        assert_eq!(adult_change(true, false, true, false), Err(ADMIN_ONLY_OFF));
+        assert_eq!(adult_change(true, false, true, true), Err(ADMIN_ONLY_OFF));
+    }
+
+    #[test]
+    fn owners_change_adult_content_until_an_admin_locks_it() {
+        assert_eq!(adult_change(true, true, false, false), Ok(false));
+        assert_eq!(adult_change(false, true, false, false), Ok(false));
+        assert_eq!(adult_change(true, true, false, true), Err(ADULT_LOCKED));
+        assert_eq!(adult_change(false, true, false, true), Ok(false));
+        assert_eq!(adult_change(false, true, true, false), Ok(false), "an owner who is a site admin acts as the owner");
+        assert_eq!(adult_change(true, true, true, true), Err(ADULT_LOCKED));
+    }
+
+    #[test]
+    fn anyone_else_changes_nothing() {
+        for want in [true, false] {
+            for locked in [true, false] {
+                assert_eq!(adult_change(want, false, false, locked), Err(ONLY_OWNER));
+            }
+        }
+    }
+
+    #[test]
+    fn nsfw_in_a_group_whose_adult_content_went_off_is_hidden() {
+        assert!(hidden(true, true, false, false));
+        assert!(!hidden(true, true, true, false));
+        assert!(!hidden(true, true, false, true), "the uploader and site admins still see it");
+        assert!(!hidden(true, false, false, false), "a dm's picture is only blurred");
+        assert!(!hidden(false, true, false, false), "graphic alone is only blurred");
+    }
+
     fn gif(frames: &[&[u8]], global_table: bool) -> Vec<u8> {
         let mut b = b"GIF89a".to_vec();
         b.extend_from_slice(&[1, 0, 1, 0, if global_table { 0x80 } else { 0 }, 0, 0]);
@@ -673,7 +758,36 @@ mod tests {
         assert!(is_animated(&gif(&[&[0x4C], &[0x4C], &[0x4C]], true)));
         let mut cut = gif(&[&[0x4C, 0x01]], false);
         cut.pop();
-        assert!(!is_animated(&cut));
+        assert!(is_animated(&cut), "no trailer after the first frame fails closed");
+    }
+
+    #[test]
+    fn gif_only_ends_clean_on_a_trailer() {
+        let one = gif(&[&[0x4C, 0x01]], false);
+        let mut stray = one.clone();
+        stray.insert(stray.len() - 1, 0x00);
+        assert!(is_animated(&stray));
+        let two = gif(&[&[0x4C, 0x01], &[0x4C, 0x01]], false);
+        let second = two.windows(3).rposition(|w| w == [0x21, 0xF9, 4]).unwrap();
+        let mut between = two.clone();
+        between.insert(second, 0x00);
+        assert!(is_animated(&between));
+        let mut junk = one.clone();
+        junk.insert(junk.len() - 1, 0x99);
+        assert!(is_animated(&junk));
+        let mut short = one.clone();
+        short.truncate(short.len() - 3);
+        assert!(is_animated(&short));
+        assert!(!is_animated(&one));
+    }
+
+    #[test]
+    fn a_gif_cut_before_any_frame_is_not_animated() {
+        let mut head = b"GIF89a".to_vec();
+        head.extend_from_slice(&[1, 0, 1, 0, 0, 0, 0]);
+        assert!(!is_animated(&head));
+        head.extend_from_slice(&[0x21, 0xFF, 11]);
+        assert!(!is_animated(&head));
     }
 
     #[test]

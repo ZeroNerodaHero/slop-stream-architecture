@@ -222,7 +222,7 @@ async fn lift_object(s: &AppState, from: &str, to: &str) -> Result<Option<Vec<u8
 async fn look(s: &AppState, me: &Me, row: Uuid, headers: &HeaderMap, kind: UploadKind, mime: &str, key: Option<&str>, body: &[u8]) -> Result<moderate::Passed, ApiError> {
     let ip = crate::ratelimit::forwarded_ip(headers);
     let who = me.0.as_ref().map_or(row, |a| a.id);
-    moderate::check(s, moderate::Upload { kind, who: Some(who), ip: ip.as_deref(), mime, key }, body).await
+    moderate::check(s, moderate::Upload { kind, who: Some(who), ip: ip.as_deref(), mime, key, sha: None }, body).await
 }
 
 async fn get_avatar(State(s): State<AppState>, Name(name): Name) -> Result<Response, ApiError> {

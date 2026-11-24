@@ -22,8 +22,7 @@ export function posterSrc(id: string): string {
   return `/api/chat-images/${encodeURIComponent(id)}`;
 }
 
-/** Why a chat picture or video did not load: taken down by an admin (410, or 404 for one long gone), or a group channel's or a direct message's that this viewer may not see (401, 403). Null when it was something else (the network). */
-export type MediaGone = 'removed' | 'members only';
+export type MediaGone = 'removed' | 'members only' | 'hidden';
 
 export type MediaSensitive = 'sensitive';
 
@@ -31,17 +30,24 @@ export function shownSrc(src: string): string {
   return `${src}?show=1`;
 }
 
-/** Asks the api why `src` did not load: an `<img>`'s error does not say. */
 export async function whyGone(src: string): Promise<MediaGone | MediaSensitive | null> {
   try {
     const res = await fetch(src, { method: 'HEAD', credentials: 'same-origin' });
     if (res.status === 409) return 'sensitive';
     if (res.status === 410 || res.status === 404) return 'removed';
+    if (res.status === 403 && (await errorWord(src)) === 'hidden') return 'hidden';
     if (res.status === 401 || res.status === 403) return 'members only';
   } catch {
-    // the network: say nothing
+    return null;
   }
   return null;
+}
+
+async function errorWord(src: string): Promise<string | null> {
+  const res = await fetch(src, { credentials: 'same-origin' });
+  if (res.ok) return null;
+  const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+  return typeof body?.error === 'string' ? body.error : null;
 }
 
 /** A video the picker, a paste or a drop brought: anything the browser calls one, or a video's file name. */

@@ -167,16 +167,29 @@ async fn show(State(s): State<AppState>, Me(me): Me, Path(id): Path<String>, hea
     let Ok(id) = Uuid::parse_str(id.trim()) else {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad video"));
     };
-    let Some(access) = media::access(&s.db, Kind::Video, id, me.map(|m| m.id)).await? else {
+    let viewer = me.map(|m| m.id);
+    let Some(access) = media::access(&s.db, Kind::Video, id, viewer).await? else {
         return Err(media::missing(&s.db, Kind::Video, id).await);
     };
     if let Some(no) = media::refused(&access) {
         return Err(no);
     }
-    let row: Option<(String, i32)> = sqlx::query_as("SELECT mime, bytes FROM chat_videos WHERE id = $1").bind(id).fetch_optional(&s.db).await?;
-    let Some((mime, len)) = row else {
+    #[allow(clippy::type_complexity)]
+    let row: Option<(String, i32, Option<Uuid>, bool, bool, Option<bool>)> = sqlx::query_as(
+        "SELECT v.mime, v.bytes, v.created_by, COALESCE(p.nsfw, false), v.posted_kind IS NOT DISTINCT FROM 'group',
+                (SELECT g.adult_content FROM groups g WHERE g.name = v.posted_group)
+         FROM chat_videos v LEFT JOIN chat_images p ON p.id = v.poster WHERE v.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&s.db)
+    .await?;
+    let Some((mime, len, by, nsfw, in_group, adult_now)) = row else {
         return Err(media::missing(&s.db, Kind::Video, id).await);
     };
+    let exempt = viewer.is_some_and(|v| by == Some(v) || s.admins.iter().any(|a| a.id == v));
+    if crate::moderate::hidden(nsfw, in_group, adult_now.unwrap_or(false), exempt) {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, crate::moderate::HIDDEN));
+    }
     let len = len.max(0) as u64;
     let key = key_of(id, &mime);
     let mut out = HeaderMap::new();

@@ -342,7 +342,6 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
                     many ? 'min-w-0 flex-1' : small ? 'h-20 w-32 max-w-full' : 'h-[7.5rem] w-48 max-w-full'
                   )}
                 >
-                  <img src={srcOf(id)} alt="" aria-hidden draggable={false} className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl" />
                   <span className="relative bg-background/70 px-1 text-xs text-textPrimary">sensitive</span>
                   <Button size="sm" className="relative" aria-label="show sensitive picture" onClick={() => setSensitive((all) => ({ ...all, [id]: true }))}>
                     show
@@ -376,6 +375,7 @@ export function ChatImages({ ids, small = false }: { ids: string[]; small?: bool
             ids={ids}
             srcOf={srcOf}
             blurred={(id) => sensitive[id] === false}
+            onShow={(id) => setSensitive((all) => ({ ...all, [id]: true }))}
             at={view.at}
             onStep={(by) => setView((cur) => (cur ? { ...cur, at: (cur.at + by + ids.length) % ids.length } : cur))}
             onClose={() => setView(null)}
@@ -390,6 +390,7 @@ interface PictureViewProps {
   ids: string[];
   srcOf: (id: string) => string;
   blurred: (id: string) => boolean;
+  onShow: (id: string) => void;
   /** Which of `ids` is up. */
   at: number;
   /** The arrows and the arrow keys: one on, or one back, round the end. */
@@ -408,7 +409,7 @@ const PICTURE_EDGE = 3;
  * closes it too, and so does a click on the grey beside the picture. Several on the line get
  * arrows at the edges, and the arrow keys.
  */
-function PictureView({ ids, srcOf, blurred, at, onStep, onClose }: PictureViewProps) {
+function PictureView({ ids, srcOf, blurred, onShow, at, onStep, onClose }: PictureViewProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   /** The press that began this click was beside the picture too: a drag off the picture is not a close. */
   const pressedBeside = useRef(false);
@@ -432,7 +433,7 @@ function PictureView({ ids, srcOf, blurred, at, onStep, onClose }: PictureViewPr
   // already the whole window, a phone's page over the page: the back button shuts it too (MobileSheet.tsx)
   useSheetBack(close);
   /** On the grey: not on a button, and not on the picture (the <img> is drawn at exactly the picture's size). */
-  const beside = (target: EventTarget) => target instanceof Element && !target.closest('button, img');
+  const beside = (target: EventTarget) => target instanceof Element && !target.closest('button, img, [data-sensitive]');
   const span = 100 - 2 * PICTURE_EDGE;
 
   return (
@@ -457,7 +458,15 @@ function PictureView({ ids, srcOf, blurred, at, onStep, onClose }: PictureViewPr
       className="fixed inset-0 m-0 hidden h-auto w-auto max-h-none max-w-none flex-col overflow-hidden border-0 bg-neutral-700/85 p-0 backdrop:bg-transparent open:flex [container-type:size]"
     >
       <div className="flex-1" />
-      {shown && (
+      {shown && blurred(shown) && (
+        <span data-sensitive={shown} className="flex shrink-0 flex-col items-center gap-2 self-center bg-backgroundTertiary px-8 py-10 text-sm text-textPrimary">
+          sensitive
+          <Button size="sm" aria-label="show sensitive picture" onClick={() => onShow(shown)}>
+            show
+          </Button>
+        </span>
+      )}
+      {shown && !blurred(shown) && (
         <img
           key={shown}
           src={srcOf(shown)}
@@ -469,7 +478,7 @@ function PictureView({ ids, srcOf, blurred, at, onStep, onClose }: PictureViewPr
           }}
           // as wide as the window less the edge, or as tall as that, whichever comes first; the height follows from the ratio. unseen until the ratio is known
           style={ratio === undefined ? undefined : { width: `min(${span}cqw, calc(${span}cqh * ${ratio}))` }}
-          className={cn('shrink-0 self-center', ratio === undefined && 'invisible', blurred(shown) && 'blur-2xl')}
+          className={cn('shrink-0 self-center', ratio === undefined && 'invisible')}
         />
       )}
       {/* everything under the picture: the grey with a little of the blue in it */}

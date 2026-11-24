@@ -52,7 +52,6 @@ export function ChatVideoPlayer({ video, small = false }: { video: ChatVideo; sm
         data-sensitive={video.id}
         className={cn('relative mt-1 flex flex-col items-center justify-center gap-1 overflow-hidden bg-black', small ? 'h-20 w-32' : 'h-[7.5rem] w-48', 'max-w-full')}
       >
-        <img src={poster} alt="" aria-hidden draggable={false} className="absolute inset-0 h-full w-full scale-110 object-cover blur-xl" />
         <span className="relative bg-background/70 px-1 text-xs text-textPrimary">sensitive</span>
         <Button size="sm" className="relative" aria-label="show sensitive video" onClick={() => setSensitive(true)}>
           show
@@ -75,11 +74,16 @@ export function ChatVideoPlayer({ video, small = false }: { video: ChatVideo; sm
   );
 }
 
-/** What stands where a picture or a video was: `removed`, or `members only`. */
+const GONE_WORDS: Record<MediaGone, string> = {
+  removed: 'removed',
+  'members only': 'members only',
+  hidden: 'hidden: adult content is off in this group',
+};
+
 export function MediaGoneNote({ why, className }: { why: MediaGone; className?: string }) {
   return (
     <span data-media-gone={why} className={cn('mt-1 inline-flex items-center bg-backgroundTertiary px-2 py-1 text-xs italic text-textSecondary', className)}>
-      {why}
+      {GONE_WORDS[why]}
     </span>
   );
 }
