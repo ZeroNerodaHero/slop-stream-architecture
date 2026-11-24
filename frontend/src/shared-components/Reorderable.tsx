@@ -4,7 +4,6 @@ import { type FocusEvent, type KeyboardEvent, type PointerEvent, useCallback, us
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/** `order` with `key` taken out and put back at `to`, stopped at the two ends. The same array when nothing moves. */
 export function movedTo<K>(order: readonly K[], key: K, to: number): K[] {
   const from = order.indexOf(key);
   if (from < 0) return [...order];
@@ -15,7 +14,6 @@ export function movedTo<K>(order: readonly K[], key: K, to: number): K[] {
   return next;
 }
 
-/** `draft` over the list as it is now: a key gone since is dropped, one added since goes after. */
 function settle<K>(draft: readonly K[], keys: readonly K[]): K[] {
   return [...draft.filter((key) => keys.includes(key)), ...keys.filter((key) => !draft.includes(key))];
 }
@@ -27,44 +25,22 @@ interface Box {
 
 interface Grab<K> {
   key: K;
-  /** The order when it was picked up: escape goes back to it. */
   start: K[];
-  /** The order where the pointer or the keys have it. */
   now: K[];
-  /** The pointer that holds it, or null for the keyboard. */
   pointerId: number | null;
-  /** Where the press began, and each row's top and bottom then: the held row's middle past a row's near edge has passed it. */
   y: number;
   boxes: Map<K, Box>;
 }
 
 export interface ReorderOptions<K extends string> {
-  /** The items' keys in the order they are kept. */
   keys: readonly K[];
-  /** What the screen reader calls an item: `move <name>`, `<name>, position 2 of 5`. */
   name: (key: K) => string;
-  /** Put `key` at `to` (an index into `keys`). Called on the drop; with `live`, on every step too, and on escape to put it back. */
   onMove: (key: K, to: number) => void;
-  /** Every step is kept as it happens (a preview that must follow the row). Without it the rows move on a draft and the drop keeps it. */
   live?: boolean;
-  /** The keys are the items' indexes (a list with no ids): after a keyboard drop the focus goes to the handle at the new place, not the old key's. */
   keyedByIndex?: boolean;
-  /** An item taken hold of, by the pointer or the keys. */
   onPickUp?: (key: K) => void;
 }
 
-/**
- * A list reordered by a drag handle at each row's left end (reorder.mdc). The pointer drags a
- * row (mouse and touch alike: the handle is `touch-action: none`, so a finger on it does not
- * scroll the page), and the keyboard does the same on the handle: space picks the row up, the
- * up and down arrows move it, space drops it, escape puts it back where it was. A polite live
- * region says where it is. The list element takes `list`, each row `item(key)`, each handle
- * `<DragHandle {...handle(key)} />`, and `status` goes beside the list in a `relative` parent.
- *
- * The list holds the pointer, not the handle: a dragged row is taken out of the document and
- * put back by the reorder, and the browser lets go of a node that leaves. The drag ends with
- * the capture, whatever ends it. One drag at a time, by the pointer that began it.
- */
 export function useReorder<K extends string>({ keys, name, onMove, live = false, keyedByIndex = false, onPickUp }: ReorderOptions<K>) {
   const [draft, setDraft] = useState<K[] | null>(null);
   const [held, setHeld] = useState<K | null>(null);
@@ -73,7 +49,6 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
   const listEl = useRef<HTMLElement | null>(null);
   const handles = useRef(new Map<K, HTMLButtonElement>());
   const grab = useRef<Grab<K> | null>(null);
-  /** The handle to give the focus back to after a render: a keyboard step or drop moves its node, and a moved node loses the focus. */
   const refocus = useRef<{ key: K; at: number } | null>(null);
   const latest = useRef({ keys, name, onMove, live, keyedByIndex, onPickUp });
   useLayoutEffect(() => {
@@ -119,7 +94,6 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
     finishRef.current = finish;
   });
 
-  // escape lets go of a pointer drag too, the row back where it was
   useEffect(() => {
     if (!byPointer) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
@@ -141,12 +115,10 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
   };
 
   const onPointerDown = (e: PointerEvent<HTMLButtonElement>, key: K) => {
-    // the primary button only, and one drag at a time: a second finger on another handle takes nothing over
     if (e.button !== 0 || grab.current) return;
     const el = listEl.current;
     if (!el) return;
     e.preventDefault();
-    // measured once, at the press: rows of any height, and the draft moving them does not move the measure
     const boxes = new Map<K, Box>();
     for (const row of Array.from(el.querySelectorAll<HTMLElement>(':scope > [data-reorder-item]'))) {
       const r = row.getBoundingClientRect();
@@ -159,10 +131,7 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
 
   const onPointerMove = (e: PointerEvent<HTMLElement>) => {
     const g = grab.current;
-    // the drag is the pointer's that began it: another finger resting on the list neither steers nor ends it
     if (!g || e.pointerId !== g.pointerId) return;
-    // against where the press began, whole and not step by step: a pointer that went past the list's end and came back finds its row under it again.
-    // a row above is passed when the held row's middle is over its bottom edge, one below when under its top edge
     const own = g.boxes.get(g.key);
     if (!own) return;
     const mid = (own.top + own.bottom) / 2 + e.clientY - g.y;
@@ -199,7 +168,6 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
       refocus.current = { key, at: to };
       step(g, movedTo(g.now, key, to));
     } else if (e.key === 'Escape') {
-      // the row goes back, not the dialog it is in
       e.preventDefault();
       e.stopPropagation();
       finish(false);
@@ -208,9 +176,7 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
 
   const onBlur = (e: FocusEvent<HTMLButtonElement>, key: K) => {
     const g = grab.current;
-    // a step moved the handle's node and it is about to get the focus back
     if (refocus.current || !g || g.pointerId !== null || g.key !== key || e.relatedTarget === e.currentTarget) return;
-    // the focus went elsewhere: the row stays where the keys put it
     finish(true);
   };
 
@@ -219,15 +185,10 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
   }, []);
 
   return {
-    /** The rows to draw, in this order: the draft while one is held, else `keys`. */
     order,
-    /** The key held by the pointer or the keys, or null. */
     held,
-    /** Spread on the list element (the rows' direct parent). */
     list: { ref: setList, onPointerMove, onPointerUp: onPointerEnd, onPointerCancel: onPointerEnd, onLostPointerCapture: onPointerEnd },
-    /** Spread on each row. */
     item: (key: K) => ({ 'data-reorder-item': key }),
-    /** Spread on each row's `DragHandle`. */
     handle: (key: K) => ({
       label: name(key),
       held: held === key,
@@ -239,7 +200,6 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
       onKeyDown: (e: KeyboardEvent<HTMLButtonElement>) => onKeyDown(e, key),
       onBlur: (e: FocusEvent<HTMLButtonElement>) => onBlur(e, key)
     }),
-    /** The live region: put it beside the list, in a `relative` parent (relative-parent.mdc). */
     status: (
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {message}
@@ -250,7 +210,6 @@ export function useReorder<K extends string>({ keys, name, onMove, live = false,
 
 export interface DragHandleProps {
   id?: string;
-  /** The item's name: the handle is `move <label>`. */
   label: string;
   held: boolean;
   handleRef: (el: HTMLButtonElement | null) => void;
@@ -260,7 +219,6 @@ export interface DragHandleProps {
   className?: string;
 }
 
-/** The handle at a reorderable row's left end (reorder.mdc): `useReorder`'s `handle(key)`, spread on. */
 export function DragHandle({ id, label, held, handleRef, onPointerDown, onKeyDown, onBlur, className }: DragHandleProps) {
   return (
     <Tooltip content={held ? null : 'drag to move'}>

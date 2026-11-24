@@ -46,13 +46,10 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { Block, CHECKBOX, Info, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
-/** A picker's options: the default first, then the devices by name. */
 const optionsOf = (list: readonly VoiceDevice[]) => [{ value: DEFAULT_DEVICE, label: 'default' }, ...list.map((d) => ({ value: d.id, label: d.label }))];
 
-/** A pick's value as the picker shows it: one of its options, else the default. */
 const shownOf = (id: string, list: readonly VoiceDevice[]) => (list.some((d) => d.id === id) ? id : DEFAULT_DEVICE);
 
-/** The words for a getUserMedia that failed. */
 function refusal(err: unknown, what: string): string {
   const name = (err as { name?: string } | null)?.name;
   if (name === 'NotAllowedError') return `not allowed: the browser blocked the ${what}`;
@@ -60,25 +57,15 @@ function refusal(err: unknown, what: string): string {
   return `not available: the ${what} could not be opened`;
 }
 
-/**
- * The devices a call uses: the mic it talks with, the speakers it plays through, and the camera
- * it shows (voice-video.ts); then what is done to the mic (isolation, echo cancellation, auto
- * gain) and how it opens (voice activity's gate, or push to talk). Everything applies at once,
- * to a call that is on too, and keeps in this browser (voice-atoms.ts). The mic's level shows
- * live while the tab is open: the tab holds the one mic a call would use (the call's own while
- * in one), and lets go of it when it shuts.
- */
 export function VoiceTab() {
   const devices = useAtomValue(voiceDevicesAtom);
   const input = useAtomValue(voiceInputAtom);
   const output = useAtomValue(voiceOutputAtom);
   const camera = useAtomValue(voiceCameraAtom);
   const [note, setNote] = useState('');
-  // how many times the mic was asked for: once it was allowed on an earlier visit, on the allow click, again on the next click after a refusal
   const [asks, setAsks] = useState(0);
   const [held, setHeld] = useState(false);
 
-  // the lists as they are, and once the mic was allowed on an earlier visit, the mic itself (which names them: safari forgets the names per page)
   useEffect(() => {
     void refreshVoiceDevices();
     navigator.permissions
@@ -87,7 +74,6 @@ export function VoiceTab() {
       .catch(() => undefined);
   }, []);
 
-  // the browser named the mics already (a call, or a browser that keeps names): no need to wait on the permissions api
   const ask = asks || (devices.micNamed ? 1 : 0);
 
   useEffect(() => {
@@ -118,7 +104,6 @@ export function VoiceTab() {
 
   return (
     <div className="divide-y divide-primaryStroke">
-      {/* input and output side by side from sm up, a rule between; stacked on a phone */}
       <div className="grid grid-cols-1 divide-y divide-primaryStroke py-4 first:pt-0 last:pb-0 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
         <div className="min-w-0 pb-4 sm:pb-0 sm:pr-4">
           <Block title="input" tip="the mic a voice call talks with">
@@ -196,13 +181,6 @@ export function VoiceTab() {
   );
 }
 
-/**
- * How loud the mic is, live: a bar that rises with every word and falls more slowly
- * (mic-level.ts), read off the one mic the tab holds (voice-atoms.ts), so a new pick or new
- * settings move it with no new stream here. Painted from a frame loop, never through react: a
- * transform, so no frame lays the page out again. In voice activity the gate's threshold is a
- * mark on it, and the bar is green while the voice is over it.
- */
 function InputMeter() {
   const mode = useAtomValue(voiceModeAtom);
   const gateDb = useAtomValue(voiceGateAtom);
@@ -250,7 +228,6 @@ function InputMeter() {
   );
 }
 
-/** One setting as a box to tick, its name, and an ⓘ for what it does. */
 function Toggle({ id, label, tip, checked, onChange }: { id: string; label: string; tip: string; checked: boolean; onChange: (on: boolean) => void }) {
   return (
     <div className="flex items-center justify-between gap-4 py-1.5">
@@ -263,7 +240,6 @@ function Toggle({ id, label, tip, checked, onChange }: { id: string; label: stri
   );
 }
 
-/** What is done to the mic before it leaves. Each opens the mic again with the new settings and swaps it into a call that is on (voice-atoms.ts). */
 function InputProcessing() {
   const isolation = useAtomValue(voiceIsolationAtom);
   const failed = useAtomValue(voiceIsolationFailedAtom);
@@ -306,7 +282,6 @@ const MODES: { mode: VoiceMode; label: string }[] = [
   { mode: 'ptt', label: 'push to talk' }
 ];
 
-/** How the mic opens in a call: on your voice (over the gate's threshold), or while a key is held. Mute is over both. */
 function InputMode() {
   const mode = useAtomValue(voiceModeAtom);
   const gateDb = useAtomValue(voiceGateAtom);
@@ -393,7 +368,6 @@ function InputMode() {
   );
 }
 
-/** Push to talk's key: a click, then the next key pressed. Esc leaves it as it was. The key goes to nothing else while it listens, the modal's Esc included. */
 function KeyRecorder({ code, onPick }: { code: string; onPick: (code: string) => void }) {
   const [listening, setListening] = useState(false);
 
@@ -430,11 +404,6 @@ function KeyRecorder({ code, onPick }: { code: string; onPick: (code: string) =>
   );
 }
 
-/**
- * The picked camera's picture, on a click: a camera's light coming on is the user's to ask for.
- * The box keeps its size off and on; the picker (children) and the button sit beside it from sm up,
- * under it on a phone. Off when the tab shuts.
- */
 function CameraPreview({ deviceId, children }: { deviceId: string; children: ReactNode }) {
   const video = useRef<HTMLVideoElement>(null);
   const [on, setOn] = useState(false);
@@ -452,7 +421,6 @@ function CameraPreview({ deviceId, children }: { deviceId: string; children: Rea
         }
         stream = s;
         if (video.current) video.current.srcObject = s;
-        // the camera is allowed now, so the browser names them
         void refreshVoiceDevices();
       },
       (err: unknown) => {

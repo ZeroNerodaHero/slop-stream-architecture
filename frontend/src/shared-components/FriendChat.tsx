@@ -76,28 +76,21 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
-/** The smallest the window goes: room for the column of faces, a few lines, and the box with its button. */
 const MIN_W = 300;
 const MIN_H = 260;
-/** How long the pointer rests on a face before its card shows. */
 const PEEK_MS = 100;
-/** Within this many px of the newest line counts as "at the bottom": a new line keeps the view there. */
 const STUCK_PX = 40;
-/** A line may be this long, the api's rule. */
 const MAX_CHARS = 500;
 
-/** The square a face sits in, in the column and in the grid: a stroke, blue on the one that is on. */
 const SQUARE = 'relative block shrink-0 border transition-[border-color] duration-150 focus-visible:outline-none';
 const SQUARE_OFF = 'border-transparent hover:border-primaryStroke focus-visible:border-primaryBlue';
 const SQUARE_ON = 'border-primaryBlue';
-/** An icon on the header, the search and the ×: a stroke on hover and on focus, the colour its own. */
 const HEADER_BUTTON =
   'shrink-0 border border-transparent p-0.5 transition-colors duration-150 hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const room = () => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight });
 
-/** Slid along with the pointer, stopped at the edges. */
 function moved(rect: DOMRect, dx: number, dy: number): Box {
   const r = room();
   return {
@@ -108,7 +101,6 @@ function moved(rect: DOMRect, dx: number, dy: number): Box {
   };
 }
 
-/** A corner pulled. The opposite corner stays put, and the box stops at the screen edge. */
 function resized(rect: DOMRect, dx: number, dy: number, sx: number, sy: number): Box {
   const r = room();
   let x = rect.left;
@@ -128,7 +120,6 @@ function resized(rect: DOMRect, dx: number, dy: number, sx: number, sy: number):
   return { x, y, w, h };
 }
 
-/** The same box, back on screen: the browser window shrank, the chat was left somewhere while hidden, or it was kept from a bigger window. No smaller than the smallest, unless the screen is. */
 function fitted(box: Box): Box {
   const r = room();
   const w = Math.min(Math.max(box.w, MIN_W), r.w);
@@ -136,7 +127,6 @@ function fitted(box: Box): Box {
   return { w, h, x: clamp(box.x, 0, Math.max(0, r.w - w)), y: clamp(box.y, 0, Math.max(0, r.h - h)) };
 }
 
-/** The corner handles, the stream chat window's. `sx`/`sy`: which way the box grows when that corner is pulled outward. */
 const CORNERS = [
   { id: 'nw', sx: -1, sy: -1, className: '-left-px -top-px cursor-nwse-resize border-l-2 border-t-2' },
   { id: 'ne', sx: 1, sy: -1, className: '-right-px -top-px cursor-nesw-resize border-r-2 border-t-2' },
@@ -146,28 +136,19 @@ const CORNERS = [
 
 const tabId = (name: string) => `friend-chat-tab-${name}`;
 
-/** The presence square on a face's corner (PresenceSquare.tsx), ringed in the window's background. */
 const RING = 'border-backgroundSecondary';
 
 interface TabProps {
   dm: Dm;
   selected: boolean;
-  /** Reachable by the tab key: the shown face, else the first. */
   reachable: boolean;
   side: PanelSide;
   onKey: (e: KeyboardEvent<HTMLButtonElement>) => void;
 }
 
-/**
- * One face on the column, with its presence square, how many of their lines are new, and the
- * × in its corner that takes the chat off the column. Pointing at it, or tabbing onto it, puts
- * the person's card (PersonCard.tsx, the sidebar's) beside the column. A click on another face
- * shows that chat; a click on the shown one shows them (the popup, or their page: ProfileLink.tsx).
- */
 function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
   const peek = usePeek(PEEK_MS);
   const profile = useShowProfile();
-  // the shown one's tab goes to their page on a click while the popup is off: asked for on the press
   const prefetch = usePrefetchOnPointerDown(selected && !profile.popup ? profilePath(dm.name) : null);
   return (
     <span
@@ -190,13 +171,11 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
         data-unread={dm.unread || undefined}
         {...prefetch}
         onClick={() => {
-          // the shown one's face is them, the roster's way: the popup, or their page (ProfileLink.tsx)
           if (selected) {
             profile.show(dm, dm.presence === 'streaming');
             return;
           }
           selectDm(dm.name);
-          // a click means "talk to them": straight into the box (the same node for every tab, so it is there already)
           document.getElementById('friend-chat-text')?.focus();
         }}
         onKeyDown={onKey}
@@ -204,7 +183,6 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
       >
         <Face name={dm.name} version={dm.avatar} />
         <PresenceSquare status={dm.presence} className={RING} />
-        {/* how many of their lines came while this was not on screen: the sidebar's number, in the other corner */}
         {dm.unread > 0 && (
           <span
             id={`friend-chat-unread-${dm.name}`}
@@ -215,7 +193,6 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
           </span>
         )}
       </button>
-      {/* this chat off the column, from the face's corner. there while the pointer is on the face, or the tab key reaches it */}
       <Tooltip content="close this chat (it is back when a line comes)">
         <button
           id={`friend-chat-remove-${dm.name}`}
@@ -235,12 +212,6 @@ function Tab({ dm, selected, reachable, side, onKey }: TabProps) {
   );
 }
 
-/**
- * The column down the side of the window that faces the sidebar: the open chats, a face each
- * with its presence square, and a + under the last for a new one. The shown one wears the
- * blue stroke (the + does, while the friends to pick from are showing); a click shows another,
- * and the arrow keys walk the faces.
- */
 function Rail({ dms, active, side }: { dms: Dm[]; active: string | null; side: PanelSide }) {
   function onKey(e: KeyboardEvent<HTMLButtonElement>, at: number) {
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
@@ -253,7 +224,6 @@ function Rail({ dms, active, side }: { dms: Dm[]; active: string | null; side: P
   return (
     <div
       id="friend-chat-rail"
-      // no bar: it would take width from the faces. the column scrolls all the same
       className={cn(
         'flex shrink-0 flex-col gap-2 overflow-y-auto p-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
         side === 'right' ? 'border-l border-primaryStroke' : 'border-r border-primaryStroke'
@@ -284,14 +254,6 @@ function Rail({ dms, active, side }: { dms: Dm[]; active: string | null; side: P
   );
 }
 
-/**
- * The friends to pick from, where a thread would be: everyone who follows you back, a face
- * with its presence square and the name under it, the ones with a chat on the column in the
- * blue stroke. A pick opens their chat, or shows the one they have. Friends alone: a line can
- * only go to somebody who chose you back. A phone's sheet (`list`) has them as a list instead:
- * a row each, the face with its presence square, the name, and the last line said when there
- * is one to hand (the thread on screen before, or the list of threads).
- */
 function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
   const following = useAtomValue(followingAtom);
   const threads = useAtomValue(dmThreadsAtom);
@@ -362,7 +324,6 @@ function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
   return (
     <div id="friend-chat-pick" className="min-h-0 flex-1 overflow-y-auto p-3">
       {following === undefined ? (
-        // the grid of squares in grey before the list has answered: a face and a name's worth each
         <Skeleton id="friend-chat-pick-loading" className="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-2">
           {Array.from({ length: 4 }, (_, i) => (
             <div key={i} className="flex flex-col items-center gap-1.5 p-2">
@@ -404,35 +365,19 @@ function Picker({ dms, list = false }: { dms: Dm[]; list?: boolean }) {
   );
 }
 
-/** How far up a phone's sheet comes: this share of the window's height, its top 20% down. */
 const SHEET = 0.8;
-/** At least this much of the dimmed page stays above the sheet while the keyboard is up, to tap it shut. */
 const SHEET_GAP = 24;
-/** The keyboard up, the sheet keeps its top while it is at least this tall; a shorter window moves its top up instead. */
 const SHEET_MIN = 200;
 const SHEET_SLIDE = 'duration-200 ease-out motion-reduce:transition-none';
-/** How dark the page behind the sheet gets. */
 const SHEET_DIM = 0.6;
 
-/** The handlers a drag down by the grabber or the sheet's head goes through. */
 type SheetGrip = Pick<DOMAttributes<HTMLElement>, 'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel'>;
 
-/**
- * A phone's chat sheet, while `active` (a phone, the chat open): the slide up once it is on
- * screen, the slide down before `onDismiss` takes it off (a tap on the dim page, a drag down
- * let go past `SHEET_SNAP` of its height or flicked, Escape, the browser's back button), and the
- * keyboard's place (`useKeyboard`, keyboard.ts: while its box has the focus the document is pinned,
- * so iOS cannot scroll the page to bring the box over the keyboard).
- * `grip` goes on the grabber and on the head: the sheet follows the finger. The drag's numbers and
- * the back button are every phone sheet's (MobileSheet.tsx).
- */
 function useSheet(active: boolean, onDismiss: () => void) {
   const kb = useKeyboard();
   const view = active && kb.height ? kb : null;
-  // in: a frame after it is on screen, so the slide up has a place to start from. leaving: sliding down, then gone
   const [entered, setEntered] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  // px pulled down while a finger holds it; null while nobody does
   const [drag, setDrag] = useState<number | null>(null);
   const [wasActive, setWasActive] = useState(active);
   if (wasActive !== active) {
@@ -459,12 +404,10 @@ function useSheet(active: boolean, onDismiss: () => void) {
     return () => window.clearTimeout(done);
   }, [leaving]);
 
-  // the back button slides it down too
   useSheetBack(() => setLeaving(true), active);
 
   useEffect(() => {
     if (!active) return;
-    // not while a modal dialog is over it (that one's escape is its own). a panel that is merely shown (the notifications) does not count
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === 'Escape' && !document.querySelector('dialog:modal')) setLeaving(true);
     };
@@ -508,22 +451,12 @@ function useSheet(active: boolean, onDismiss: () => void) {
 
 type Sheet = ReturnType<typeof useSheet>;
 
-/**
- * A phone's chat (below 768px, mobile.ts): a sheet up from the foot of the window to 20% from its
- * top, over the page dimmed, with a grabber at its head (`useSheet`). It sits on the keyboard
- * while one is up: its top stays where it was if it can, and it shrinks so the box's row sits
- * flush on the keyboard (the foot of the visual viewport, `useKeyboard`); on a window too
- * short for that its top comes up too, never past `SHEET_GAP` from the top. The page under it
- * does not scroll (globals.css's `data-sheet-open`, and keyboard.ts's pin while typing). Drawn into the
- * body, over the drawers.
- */
 function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; label: string; with?: string; children: ReactNode }) {
   const { view, drag, up, grip } = sheet;
   const full = window.innerHeight * SHEET;
   let height = full;
   let bottom: number | undefined;
   if (view) {
-    // the keyboard's top, from the layout viewport's top
     const foot = view.top + view.height;
     const top = Math.min(window.innerHeight - full, Math.max(view.top + SHEET_GAP, foot - SHEET_MIN));
     height = Math.max(0, foot - top);
@@ -532,7 +465,6 @@ function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; lab
   const shown = up ? 1 - Math.min(1, (drag ?? 0) / Math.max(1, height)) : 0;
   return createPortal(
     <div data-sheet-open="" className="fixed inset-0 z-[55] overflow-hidden">
-      {/* the page, dimmed: a tap shuts the sheet. no panning on it, so the page under does not scroll */}
       <div
         aria-hidden
         onClick={sheet.leave}
@@ -551,7 +483,6 @@ function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; lab
         )}
         style={{ ...(view ? { bottom, height } : {}), transform: up ? `translateY(${drag ?? 0}px)` : 'translateY(100%)' }}
       >
-        {/* the grabber: a bar to pull the sheet down by */}
         <div aria-hidden {...grip} className={cn('flex shrink-0 justify-center pb-1 pt-2', GRIP)}>
           <span className="h-1 w-10 bg-primaryStroke" />
         </div>
@@ -562,28 +493,6 @@ function MobileSheet({ sheet, label, with: name, children }: { sheet: Sheet; lab
   );
 }
 
-/**
- * Direct chats with friends (docs/dms.md), opened from the sidebar: one window, a tab per
- * friend down its side, dragged by its header, resized from a corner. The lines are the
- * api's: a page on opening a thread, older pages as you scroll up, new ones as they come on
- * the events socket, from either side and from your other devices. A thread keeps its
- * half-typed draft, and the pictures picked for its next line, while another tab is shown. The
- * header is the name alone, the glass and the ×: the glass opens a search box under it
- * (`#friend-chat-search`, the room chat's words and filter chips, `ChatSearch.tsx`) that asks
- * the thread on screen (`searchDm`); the hits take the lines' whole place (`#friend-chat-results`,
- * `SearchResults`, the lines kept under it unseen), and one clicked puts the lines back with
- * it in view, the pages back to it loaded as needed (`openDmLine`); `close` puts them back as
- * they were. The ×
- * hides the window and keeps everything; a friend's chat button in the sidebar brings it back. With no tab
- * shown, the friends to pick from are where the thread would be, under `no chat` when there
- * are no tabs at all (a phone's sheet: under `friends`, as a list, and its back button and the
- * browser's back come to it from a chat). The lines take the shape the chat tab picked for every chat
- * (settings.chatStyle, drawn by ChatLine.tsx as the rooms' are): a log, bubbles, or blocks;
- * the log carries it as `data-style`, and your name is the blue one. A line may carry
- * pictures, the room chat's way: the picture button beside the box (`#friend-chat-picture`)
- * picks files, each is shrunk and put up at once and waits in a strip over the box with its ×
- * until the line goes; a line may be pictures alone.
- */
 export function FriendChat() {
   const me = useAtomValue(meAtom);
   const dms = useAtomValue(dmsAtom);
@@ -597,30 +506,20 @@ export function FriendChat() {
   const shape = useAtomValue(chatStyleAtom);
   const myAvatar = useAtomValue(myAvatarVersionAtom);
   const following = useAtomValue(followingAtom);
-  /** A phone: the chat is a sheet up from the foot (MobileSheet), not the window. */
   const mobile = useIsMobile();
   const sheet = useSheet(mobile && open, hideDms);
-  // a phone's chat in the sheet: the browser's back goes to the friends to pick from first, and the sheet's own back after.
-  // declared after the sheet's, so it is the newer on the back button's stack (MobileSheet.tsx)
   useSheetBack(pickDm, mobile && open && active !== null);
   const { pathname } = useLocation();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  /** The search box is under the header. One box for the window: its words stay through a change of tab, the hits are the thread's they were asked of. */
   const [searching, setSearching] = useState(false);
-  /** Each thread's pictures waiting to go with its next line: the ids `POST /api/chat-images` handed back, kept like the draft while another tab is shown. */
   const [pending, setPending] = useState<Record<string, string[]>>({});
-  /** Each thread's video waiting to go with its next line (`POST /api/chat-videos`), kept like the pictures. One at most. */
   const [pendingVideo, setPendingVideo] = useState<Record<string, ChatVideo | null>>({});
   const videoUp = useVideoUpload();
-  /** Each thread's line the next send answers (the action bar's reply), kept like the draft while another tab is shown. */
   const [replies, setReplies] = useState<Record<string, DmLine | null>>({});
-  /** The line a reply's quote just jumped to, lit for a moment. */
   const [flash, setFlash] = useState<number | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sending, setSending] = useState(false);
-  /** A picked picture is being shrunk and put up: the picture button waits, and so does send, so a line does not go without the picture meant for it. */
   const [uploading, setUploading] = useState(false);
-  /** Where the window was left and its size, kept over a refresh (chat-layout-atoms.ts). `null` is the default, the bottom corner beside the sidebar at 400 by 440, until the first move or resize. */
   const [box, setBox] = useState<Box | null>(() => {
     const kept = keptDmBox();
     return kept && fitted(kept);
@@ -630,23 +529,14 @@ export function FriendChat() {
   const searchInput = useRef<HTMLInputElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const log = useRef<HTMLDivElement | null>(null);
-  /** Ends the drag in progress: its window listeners go. `null` between drags. */
   const stop = useRef<(() => void) | null>(null);
-  /** The view sits on the newest line. Someone who scrolled up to read is left there. */
   const stuck = useRef(true);
-  /** The log's height before the last paint, so prepending older lines can put the same pixels back. */
   const hold = useRef(0);
-  /** Older lines are on their way: the next paint keeps the view where it was instead of jumping to the bottom. */
   const prepending = useRef(false);
-  /** The thread a line of yours is on its way to: its next paint that brings lines goes to the newest, wherever the reader had scrolled. */
   const sentJump = useRef<string | null>(null);
-  /** The thread the log last showed: a change of thread starts at the bottom. */
   const shownThread = useRef<string | undefined>(undefined);
-  /** The oldest line the log last drew: one older than it next time is a page put above (the scroll's, or a hit's). */
   const oldestShown = useRef<number | undefined>(undefined);
-  /** The jump last made (`dmJumpAtom`'s `n`): a tab shown again does not jump to its old hit. */
   const jumped = useRef(0);
-  // each tab's person with the sidebar's current words over the ones it opened with: the list is asked again on every open of the sidebar
   const people = dms.map((d) => {
     const now = following?.find((f) => f.name === d.name);
     return now ? { ...d, avatar: now.avatar, verified: now.verified, bio: now.bio, presence: now.presence } : d;
@@ -659,11 +549,8 @@ export function FriendChat() {
   const pictures = (name && pending[name]) || [];
   const video = (name && pendingVideo[name]) || null;
   const replyTo = (name && replies[name]) || null;
-  // the box's `:` list of the login's emotes, a drop-up over the box (EmoteComplete.tsx)
   const emotes = useEmoteComplete({ value: draft, onChange: (next) => setDraft(next), input, id: 'friend-chat-emotes' });
-  // the hits over the lines: a search's, while the thread it asked is the one on screen
   const hits = results?.name === name ? results : null;
-  // the box's words and filter chips, the room chat's; submitting asks the thread on screen. `from:` is one of the two, each with their face
   const search = useChatSearch(
     searchInput,
     (q) => {
@@ -679,9 +566,6 @@ export function FriendChat() {
           : []
     }
   );
-  // a logout, or a change of login, drops everything (docs/dms.md). the box and its words are this component's
-  // own state, out of `closeAllDms`'s reach, so they go here, in the render that sees the new login (not an
-  // effect: no pass with the old words first)
   const [lastMe, setLastMe] = useState(me);
   if (me !== lastMe) {
     setLastMe(me);
@@ -694,8 +578,6 @@ export function FriendChat() {
     keepDmBox(box);
   }, [box]);
 
-  // A moved or resized window is pulled back on screen when the browser window shrinks, and on showing, in case it did while this was hidden.
-  // not on a phone: the sheet has no box, and the kept one is the desktop's
   useEffect(() => {
     if (!open || mobile) return;
     const fit = () =>
@@ -709,8 +591,6 @@ export function FriendChat() {
     return () => window.removeEventListener('resize', fit);
   }, [open, mobile]);
 
-  // a phone: the sheet opens in place of the sidebar's drawer (a chat button in it, most often), and a page change
-  // (a name in the sheet tapped) takes it down, so the page it went to is not under it
   useEffect(() => {
     if (mobile && open) store.set(friendsOpenAtom, false);
   }, [mobile, open]);
@@ -721,8 +601,6 @@ export function FriendChat() {
     if (mobile && open) hideDms();
   }, [pathname, mobile, open]);
 
-  // a tab shown: the box takes focus. not while the arrow keys walk the tabs: focus stays on the face they landed on.
-  // not on a phone either: the keyboard would come up over the lines before they were read
   useEffect(() => {
     if (!name || !open || mobile) return;
     const focused = document.activeElement;
@@ -730,7 +608,6 @@ export function FriendChat() {
     input.current?.focus();
   }, [name, open]);
 
-  // the tab comes back to the front with a thread on screen: what came meanwhile has been seen
   useEffect(() => {
     if (!name || !open) return;
     const onShow = () => {
@@ -740,18 +617,13 @@ export function FriendChat() {
     return () => document.removeEventListener('visibilitychange', onShow);
   }, [name, open]);
 
-  // Keep the newest line in view, unless the reader has scrolled up; older lines prepended keep the same pixels on screen.
-  // A layout effect: before the paint, so nothing flashes at the wrong place.
   useLayoutEffect(() => {
     const el = log.current;
     if (!el) return;
     const oldest = lines[0]?.id;
-    // a page put above the lines on screen: the scroll asked for it, or a hit is loading its way back (`openDmLine`)
     const older = shownThread.current === name && oldestShown.current !== undefined && oldest !== undefined && oldest < oldestShown.current;
-    // another thread on screen since the send: that one starts at its bottom anyway
     if (sentJump.current !== name) sentJump.current = null;
     if (sentJump.current && shownThread.current === name) {
-      // your own send: to the bottom. a page of older lines still on its way keeps its flag, and holds its place when it lands
       sentJump.current = null;
       el.scrollTop = el.scrollHeight;
       stuck.current = true;
@@ -767,10 +639,6 @@ export function FriendChat() {
     oldestShown.current = oldest;
   }, [lines.length, name, open]);
 
-  // A hit clicked (`openDmLine`): its line is among the drawn ones by now, and the log centres it by its own
-  // scroll, not scrollIntoView, which would scroll the page under the window too. The view is off the
-  // newest line then and stays where it was put, as one scrolled up to read is. After the effect above, so
-  // the page the hit loaded does not move it after it has landed.
   useLayoutEffect(() => {
     const el = log.current;
     if (!el || !jump || jump.name !== name || jump.n === jumped.current) return;
@@ -781,20 +649,14 @@ export function FriendChat() {
     stuck.current = false;
   }, [jump, name]);
 
-  // the glass pressed: the box takes the focus, so the words can be typed at once
   useEffect(() => {
     if (searching) searchInput.current?.focus();
   }, [searching]);
 
-  // The newest line stays in view when the log changes shape after the lines did: a picture on a
-  // line finishes loading and the line grows, the strip of picked pictures opens under the log, or
-  // a phone's keyboard comes up and the sheet shrinks over it (keyboard.ts)
   useBottomPin(log, stuck, `${name}:${open}`);
 
-  // the window going while a drag is on: its listeners go with it
   useEffect(() => () => stop.current?.(), []);
 
-  // a reply begun (the action bar's reply): the box takes the focus, so the words go straight in
   useEffect(() => {
     if (replyTo) input.current?.focus();
   }, [replyTo]);
@@ -820,7 +682,6 @@ export function FriendChat() {
     if (name) setReplies((prev) => ({ ...prev, [name]: line }));
   }
 
-  /** A reply's quote clicked: its line in view (`openDmLine`, the pages back to it asked for), lit for a moment; or, when the thread has no such line, a word under the box. */
   async function jumpTo(id: number) {
     if (!name) return;
     if (!(await openDmLine(name, id))) {
@@ -832,7 +693,6 @@ export function FriendChat() {
     flashTimer.current = setTimeout(() => setFlash(null), 1600);
   }
 
-  /** The search box down, its words and the hits with it: the glass pressed again, or escape in the box. The focus back to the text box, where it was. */
   function closeSearch() {
     setSearching(false);
     search.setQuery('');
@@ -840,11 +700,6 @@ export function FriendChat() {
     input.current?.focus();
   }
 
-  /**
-   * The files picked for the thread on screen, each shrunk and put up (`compressChatImage`,
-   * `POST /api/chat-images`) and its id kept for the next line; past the cap the rest are left,
-   * with a word under the box. The room chat's `pickPictures` (ChatPanel.tsx).
-   */
   function pickFiles(list: FileList | File[] | null) {
     const { pictures: still, videos } = splitFiles(list ? [...list] : []);
     if (fileRef.current) fileRef.current.value = '';
@@ -853,7 +708,6 @@ export function FriendChat() {
       const forThread = name;
       if (video || videos.length > 1 || videoUp.progress !== null) showDmNotice('one video at a time');
       if (!video && videoUp.progress === null) {
-        // into the thread the pick was for, even if another tab is shown by the time the upload lands
         void videoUp.upload(first, (v) => setPendingVideo((prev) => ({ ...prev, [forThread]: v })), showDmNotice);
       }
     }
@@ -872,7 +726,6 @@ export function FriendChat() {
       for (const file of batch) {
         const blob = await compressChatImage(file);
         const saved = await api.uploadChatImage(blob);
-        // into the thread the pick was for, even if another tab is shown by the time the upload lands
         setPending((prev) => {
           const have = prev[forThread] ?? [];
           return have.includes(saved.id) || have.length >= MAX_CHAT_IMAGES ? prev : { ...prev, [forThread]: [...have, saved.id] };
@@ -891,7 +744,6 @@ export function FriendChat() {
     e?.preventDefault();
     if (!name || (!draft.trim() && pictures.length === 0 && !video) || sending || uploading || videoUp.progress !== null) return;
     setSending(true);
-    // the thread's lines are one run from the newest back (dm-atoms.ts), so the newest is always loaded: the line just goes on the bottom, and the view with it
     sentJump.current = name;
     const sent = await sendDm(name, draft, pictures, replyTo?.id ?? null, video?.id ?? null);
     setSending(false);
@@ -917,10 +769,6 @@ export function FriendChat() {
     }
   }
 
-  /**
-   * A press on the header (a move) or on a corner (a resize): the window follows the pointer,
-   * through window listeners so leaving the handle loses nothing, and stops at the screen's edges.
-   */
   function press(e: ReactPointerEvent, kind: 'move' | 'resize', sx = 0, sy = 0) {
     const el = ref.current;
     if (e.button !== 0 || stop.current || !el) return;
@@ -953,10 +801,8 @@ export function FriendChat() {
   const style: CSSProperties | undefined = box ? { left: box.x, top: box.y, width: box.w, height: box.h } : undefined;
   const rail = <Rail dms={people} active={name ?? null} side={side} />;
   const left = MAX_CHARS - [...draft.trim()].length;
-  // a phone's header buttons are a finger's 44px square, their icons a size up
   const headerButton = mobile ? cn(HEADER_BUTTON, 'flex h-11 w-11 items-center justify-center p-0') : HEADER_BUTTON;
   const headerIcon = mobile ? 20 : 16;
-  // a phone's sheet is the thread alone: the column of faces is the window's, and the drawer's chat buttons pick another
   const tabbed = Boolean(name) && !mobile;
 
   const content = (
@@ -968,15 +814,12 @@ export function FriendChat() {
         aria-labelledby={tabbed && name ? tabId(name) : undefined}
         className={cn('flex min-w-0 flex-1 flex-col', mobile && 'min-h-0')}
       >
-        {/* the name alone: the face, with how they are on its corner, is in the column beside it. no tab shown: what the window is doing instead.
-            a phone's is the sheet's head, under the grabber: a drag on it pulls the sheet down, and it moves nothing */}
         <header
           {...(mobile ? sheet.grip : { onPointerDown: (e: ReactPointerEvent) => press(e, 'move'), title: 'drag to move' })}
           className={cn('flex cursor-move items-center gap-2 border-b border-primaryStroke px-3 py-2', GRIP, mobile && 'shrink-0 cursor-auto gap-1 py-0.5 pr-1', mobile && name && 'pl-1')}
         >
           {name && dm ? (
             <>
-              {/* a phone's sheet has no column of faces or +: back to the friends to pick from, in the same sheet */}
               {mobile && (
                 <Tooltip content="back to friends">
                   <button
@@ -990,8 +833,6 @@ export function FriendChat() {
                   </button>
                 </Tooltip>
               )}
-              {/* the name is a way to them: the popup, or their page (ProfileLink.tsx). a link, so a press on it is not a move.
-                  a phone's carries their face with how they are on its corner, which the window's column does */}
               <span className="flex min-w-0 flex-1">
                 <ProfileLink
                   id="friend-chat-profile"
@@ -1008,7 +849,6 @@ export function FriendChat() {
                   <Who name={name} verified={dm.verified} />
                 </ProfileLink>
               </span>
-              {/* the search box under the header, up and down. blue while it is up: a pressed state is colour (buttons.mdc) */}
               <Tooltip content={searching ? 'close the search' : 'search this chat'}>
                 <button
                   id="friend-chat-search-open"
@@ -1041,7 +881,6 @@ export function FriendChat() {
         </header>
         {name ? (
           <>
-            {/* the search box: the filter chips and the words, search, and the filter buttons under them, the room chat's (ChatSearch.tsx). escape takes it down */}
             {searching && (
               <form id="friend-chat-search-form" onSubmit={search.submit} className="shrink-0 border-b border-primaryStroke px-2.5 py-1.5">
                 <div className="flex items-center gap-2">
@@ -1051,7 +890,6 @@ export function FriendChat() {
                     input={searchInput}
                     label={`search the chat with ${name}`}
                     onKeyDown={(e) => {
-                      // the box's keys first: escape takes the list down before it takes the box down
                       if (e.key === 'Escape') {
                         e.stopPropagation();
                         closeSearch();
@@ -1071,10 +909,7 @@ export function FriendChat() {
                 <SearchFilters id="friend-chat-search-filters" search={search} className="mt-1" />
               </form>
             )}
-            {/* the lines, and over them the hits while there are any. `relative`: the pane is `absolute` in it (relative-parent.mdc) */}
             <div className="relative flex min-h-0 flex-1 flex-col">
-              {/* the lines in the shape picked: a log is a line each at an even gap; bubbles stand close within a minute and apart between minutes, blocks close within a run and apart between runs (ChatLine.tsx).
-                  under the hits they keep their place unseen (`invisible`), so the scroll, the refs and the listeners hold and a line coming meanwhile lands at the bottom */}
               <div
                 id="friend-chat-log"
                 ref={log}
@@ -1106,13 +941,11 @@ export function FriendChat() {
                           {line.from}
                         </ProfileLink>
                       }
-                      // the head's face is the same way to them as the name (blocks, ChatLine.tsx), for the pointer: the name is the key's and the reader's
                       face={
                         <ProfileLink person={person} twin className="flex">
                           <Face name={line.from} version={person.avatar} className={mobile && shape === 'log' ? 'h-5 w-5 text-[10px]' : 'h-8 w-8 text-sm'} />
                         </ProfileLink>
                       }
-                      // a phone's sheet has no column of faces: each line carries its writer's, whatever the shape
                       faced={mobile}
                       words={
                         line.text ? (
@@ -1153,7 +986,6 @@ export function FriendChat() {
                   );
                 })}
               </div>
-              {/* the hits, newest first, where the lines were, while the thread they are of is the one on screen (ChatSearch.tsx): the name (yours in blue) and the words, the picture mark for pictures. one clicked puts the lines back with it in view; close puts them back as they were, the focus in the box for the next words */}
               {hits && (
                 <SearchResults
                   id="friend-chat-results"
@@ -1183,16 +1015,13 @@ export function FriendChat() {
                 </SearchResults>
               )}
             </div>
-            {/* a phone's foot: room for the home bar under the box, unless the keyboard is up and has taken that place */}
             <form
               onSubmit={(e) => void send(e)}
-              // a picture or a video dropped on the box, or pasted into it, goes where the picker's would
               onDragOver={dragFiles}
               onDrop={(e) => dropFiles(e, pickFiles)}
               onPaste={(e) => pasteFiles(e, pickFiles)}
               className={cn('border-t border-primaryStroke p-2', mobile && 'shrink-0', mobile && !sheet.raised && 'pb-[calc(0.5rem+env(safe-area-inset-bottom))]')}
             >
-              {/* the line the next send answers, the room chat's bar over the box (ChatPanel.tsx `#chat-replying`): who, and the × (escape in the box too) */}
               {replyTo && (
                 <div id="friend-chat-replying" data-reply-to={replyTo.id} className="mb-1.5 flex items-center gap-2 border-l-2 border-primaryBlue bg-backgroundTertiary py-0.5 pl-2 text-xs">
                   <span className="min-w-0 flex-1 truncate text-textSecondary">
@@ -1215,7 +1044,6 @@ export function FriendChat() {
                   </Tooltip>
                 </div>
               )}
-              {/* the pictures going with the next line, each with its × (the room chat's strip, ChatPanel.tsx) */}
               {videoUp.progress !== null && <VideoProgress progress={videoUp.progress} idPrefix="friend-chat" />}
               {(pictures.length > 0 || video) && (
                 <div id="friend-chat-picture-preview" className="mb-2 flex flex-wrap gap-2">
@@ -1276,11 +1104,9 @@ export function FriendChat() {
                     emotes.box.onSelect(e);
                   }}
                   onKeyDown={(e) => {
-                    // the emote list's keys first, while it is up: enter and tab pick there, and do not send
                     if (emotes.box.onKeyDown(e)) return;
                     if (e.key === 'Escape') {
                       e.stopPropagation();
-                      // a reply is let go of first; the window goes on the next
                       if (replyTo) setReply(null);
                       else hideDms();
                     }
@@ -1289,15 +1115,11 @@ export function FriendChat() {
                   aria-label={`message ${name}`}
                   maxLength={MAX_CHARS + 50}
                   autoComplete="off"
-                  // a phone's box is 16px text: a smaller one zooms the page in when it takes focus (ios; globals.css keeps
-                  // it at 16px under a smaller text size too). it takes the row's room and gives it back, so send never leaves the row.
-                  // a desktop's is text-sm like the lines, pinned at the 30px box
                   className={cn(INPUT, mobile ? 'h-11 min-w-0 flex-1 py-0' : 'h-[1.875rem] text-sm')}
                 />
                 <Button
                   id="friend-chat-send"
                   type="submit"
-                  // a finger's press keeps the box's focus, so a phone's keyboard stays up through the send
                   onPointerDown={keepFocus}
                   variant="primary"
                   className={cn(INPUT_BUTTON, mobile ? 'h-11 min-w-[44px] shrink-0 py-0' : 'h-[1.875rem] text-sm')}
@@ -1306,8 +1128,6 @@ export function FriendChat() {
                   send
                 </Button>
               </div>
-              {/* the api's words when a line was not kept (not friends, too long, too fast) or a picture would not go up, and the countdown once it matters.
-                  the row stays mounted so a screen reader hears a notice as it lands, but takes no room while there's nothing in it */}
               <div className={cn('flex items-center justify-between gap-2 text-xs', (notice || left < 50) && 'mt-1')}>
                 <span id="friend-chat-notice" className={cn('text-decrease', notice && 'min-h-[1em]')} aria-live="polite">
                   {notice}
@@ -1347,13 +1167,11 @@ export function FriendChat() {
       className={panelClassName(
         cn(
           'group fixed z-50 flex text-base',
-          // until moved or resized: 400 by 440, just inside the page, clear of the open sidebar (300px, UserPanel.tsx, and 1.5rem)
           !box && cn('bottom-6 h-[min(440px,70vh)] w-[min(400px,calc(100vw-3rem))]', side === 'right' ? 'right-[324px]' : 'left-[324px]')
         )
       )}
     >
       {content}
-      {/* the corners show while the pointer is over the window: pull one, and the opposite corner stays put */}
       {CORNERS.map((c) => (
         <div
           key={c.id}

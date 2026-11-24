@@ -23,23 +23,14 @@ import { INPUT } from '@/shared-components/input';
 import { SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { cn } from '@/utils/cn';
 
-/** An arrow key moves the box this much of the picture; with shift, five times that. */
 const NUDGE = 0.01;
 const ARROWS: Record<string, readonly [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
-/** A notch of the wheel, or `+`/`-`, scales the box by this much. */
 const STEP = 1.1;
-/** The parts you take hold of: no text selection, no page scroll on touch, no long-press menu. */
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
-/**
- * The pane that dims everything but the box at x, y, w, h: the picture's edge, then the box's edge
- * wound the other way, which the nonzero rule makes a hole. A spread shadow would do it in one
- * class; the site has none (no-box-shadow.mdc).
- */
 function cutOut(x: number, y: number, w: number, h: number): string {
   const [l, t, r, b] = [`${x}px`, `${y}px`, `${x + w}px`, `${y + h}px`];
   return `polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${l} ${t}, ${l} ${b}, ${r} ${b}, ${r} ${t}, ${l} ${t})`;
 }
-/** The corner handles, the scene editor's. `sx`/`sy`: which way the box grows when that corner is pulled outward. */
 const CORNERS = [
   { id: 'nw', sx: -1, sy: -1, className: '-left-px -top-px cursor-nwse-resize border-l-2 border-t-2' },
   { id: 'ne', sx: 1, sy: -1, className: '-right-px -top-px cursor-nesw-resize border-r-2 border-t-2' },
@@ -47,57 +38,33 @@ const CORNERS = [
   { id: 'se', sx: 1, sy: 1, className: '-bottom-px -right-px cursor-nwse-resize border-b-2 border-r-2' }
 ] as const;
 
-/** The picture decoded: its pixels for the cut and its size for the geometry, and a url for the `<img>` that shows it. */
 interface Loaded {
   picture: ImageBitmap;
   url: string;
 }
 
-/**
- * The crop dialog (infra/picture.ts): every picture the pages put up passes through it. Mounted
- * by the Shell; it renders nothing until `cropPicture` asks, and remounts per request. A native
- * <dialog> opened modal on mount, the way ConfirmDialog is: the browser keeps focus in it, closes
- * it on escape and hands focus back to the button that picked the file. Over the user modal it
- * sits on top, in the top layer.
- */
 export function CropDialog() {
   const request = useAtomValue(cropRequestAtom);
   return request ? <CropBox key={request.id} request={request} /> : null;
 }
 
-/**
- * The picture fit inside a black stage, a box of the upload's shape over it (the rest dimmed),
- * started as big as fits in the middle: what the pages used to cut on their own. The box is
- * dragged to move, its corners pulled to scale (the shape kept), the wheel, the slider and
- * `+`/`-` scale it about its centre, arrow keys nudge it (shift five times as far). `use it`
- * makes the bytes (`pictureFor`) and closes; a ceiling missed says so and stays open for a
- * smaller part. Every way out goes through the element's `close`, which hands over the answer.
- */
 function CropBox({ request }: { request: CropRequest }) {
   const { id, file, spec, named } = request;
-  /** The name box's words, for a picture that goes up with a name (an emote). */
   const [name, setName] = useState(named?.initial ?? '');
   const aspect = aspectOf(spec);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
-  /** The press that began this click was on the backdrop too: a drag that ends outside is not a close. */
   const pressedBackdrop = useRef(false);
-  /** What `close` hands over: the bytes once `use it` made them, else null. */
   const answer = useRef<Blob | null>(null);
-  /** Ends the press in progress: its window listeners go. `null` between presses. */
   const stop = useRef<(() => void) | null>(null);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [rect, setRect] = useState<Rect | null>(null);
-  /** Screen pixels per picture pixel: the picture fit inside the stage. 0 until measured. */
   const [k, setK] = useState(0);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  /** The hidden picker behind `pick another image`. */
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  // A layout effect: its cleanup runs while the node is still in the document, which is when
-  // close() hands focus back. Taken away still open (a second request on top), the answer is no.
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
@@ -109,8 +76,6 @@ function CropBox({ request }: { request: CropRequest }) {
     };
   }, []);
 
-  // Mount only: decode the file once, for the cut and the geometry; the `<img>` shows the same
-  // file by url. The box starts as the biggest of its shape, in the middle.
   useEffect(() => {
     let gone = false;
     let picture: ImageBitmap | null = null;
@@ -137,7 +102,6 @@ function CropBox({ request }: { request: CropRequest }) {
     };
   }, []);
 
-  // The picture fit inside the stage, and again whenever the stage changes size.
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage || !loaded) return;
@@ -151,7 +115,6 @@ function CropBox({ request }: { request: CropRequest }) {
     return () => watcher.disconnect();
   }, [loaded]);
 
-  // The wheel scales the box. A native listener: react's wheel is passive, and the dialog would scroll instead.
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage || !loaded) return;
@@ -164,7 +127,6 @@ function CropBox({ request }: { request: CropRequest }) {
     return () => stage.removeEventListener('wheel', onWheel);
   }, [loaded]);
 
-  // Once the box is there, the keys are its: arrows and +/- work right away.
   useEffect(() => {
     if (rect && k > 0) boxRef.current?.focus();
   }, [rect !== null && k > 0]);
@@ -172,7 +134,6 @@ function CropBox({ request }: { request: CropRequest }) {
   const close = () => dialogRef.current?.close();
   useSheetBack(close);
 
-  /** A press on the box (a move) or a corner (a resize): the pointer is followed through window listeners, captured, until it lifts. */
   const press = (e: ReactPointerEvent<HTMLElement>, kind: 'move' | 'resize', sx = 0, sy = 0) => {
     if (!loaded || !rect || e.button !== 0 || stop.current || k === 0) return;
     const { width, height } = loaded.picture;
@@ -182,7 +143,6 @@ function CropBox({ request }: { request: CropRequest }) {
     node.setPointerCapture(pointerId);
     const move = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
-      // the delta against the press, whole and not step by step: a pointer that went past the edge and came back finds the box under it again
       const dx = (ev.clientX - startX) / k;
       const dy = (ev.clientY - startY) / k;
       setRect(kind === 'move' ? movedRect(from, dx, dy, width, height) : cornerRect(from, sx, sy, dx, dy, aspect, width, height));
@@ -222,7 +182,6 @@ function CropBox({ request }: { request: CropRequest }) {
     try {
       const picture = await pictureFor(spec, file, loaded.picture, rect);
       if (named) {
-        // the name's rule first, here; then the save, whose refusal (the name taken, the group full) keeps the dialog up
         const fault = named.fault(name);
         if (fault) throw new Error(fault);
         await named.save(picture, name);
@@ -242,7 +201,6 @@ function CropBox({ request }: { request: CropRequest }) {
     if (pressedBackdrop.current && e.target === e.currentTarget) close();
   };
 
-  // the line under the stage: what goes up, at what size, in what format
   let goes = '';
   let zoom = 1;
   let zoomMost = 1;
@@ -250,7 +208,6 @@ function CropBox({ request }: { request: CropRequest }) {
     const { width, height } = loaded.picture;
     const out = outputSize(spec, rect, width, height);
     const whole = !spec.size && isWhole(rect, width, height) && file.size <= spec.max;
-    // a file the browser gave no type goes up as whatever its first bytes say: no word for it here
     goes = spec.size
       ? `goes up as a ${out.width}×${out.height} ${formatWord(spec.type ?? 'image/jpeg')}`
       : whole
@@ -270,8 +227,6 @@ function CropBox({ request }: { request: CropRequest }) {
       onPointerDown={onBackdropDown}
       onClick={onBackdropClick}
       onClose={() => answerCrop(id, answer.current)}
-      // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
-      // a phone's is a sheet up from the foot (MobileSheet.tsx)
       className={cn(
         'm-auto max-h-[calc(100dvh-2rem)] w-[min(720px,calc(100vw-2rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-5 text-base text-textPrimary backdrop:bg-black/60 sm:p-6',
         SHEET_DIALOG
@@ -289,7 +244,6 @@ function CropBox({ request }: { request: CropRequest }) {
         {loaded && rect && k > 0 ? (
           <div className="relative overflow-hidden" style={{ width: loaded.picture.width * k, height: loaded.picture.height * k }}>
             <img src={loaded.url} alt="" draggable={false} className="block h-full w-full" />
-            {/* the dimming of everything outside the box: one pane over the picture with the box cut out of it */}
             <div aria-hidden className="pointer-events-none absolute inset-0 bg-black/60" style={{ clipPath: cutOut(rect.x * k, rect.y * k, rect.w * k, rect.h * k) }} />
             <div
               ref={boxRef}
@@ -358,7 +312,6 @@ function CropBox({ request }: { request: CropRequest }) {
       </p>
 
       {named && (
-        // the name it goes up under: `:name:` in the chat. enter is `save`
         <div className="mt-3 flex flex-col gap-1">
           <label htmlFor="crop-name" className="text-sm font-semibold">
             name
@@ -389,8 +342,6 @@ function CropBox({ request }: { request: CropRequest }) {
         </div>
       )}
 
-      {/* left: another picture (the same request again over the new file, so it starts fresh; a picker shut with
-          nothing keeps this one) and what went wrong. right: cancel and use it */}
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <input

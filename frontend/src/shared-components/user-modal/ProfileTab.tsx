@@ -57,11 +57,6 @@ import { Block, OptionCard, PasswordInput, Status } from '@/shared-components/us
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/**
- * A new name for the account (docs/ids.md): the name rule, the password (a stolen cookie must
- * not walk off with the name), a `sure?` because every shared link changes, and a 30 day wait
- * after. On a 200 `me` is already the new name; `identityChanged` tells the rest of the page.
- */
 function Rename({ me }: { me: string }) {
   const busy = useAtomValue(renameBusyAtom);
   const status = useAtomValue(renameStatusAtom);
@@ -72,13 +67,11 @@ function Rename({ me }: { me: string }) {
   const [password, setPassword] = useState('');
   const [sure, setSure] = useState(false);
 
-  // Mount only: the last visit's "changed" should not still be there.
   useEffect(() => {
     clearRenameStatus();
   }, []);
 
   const wanted = cleanName(next);
-  // going back onto one of my own held names never waits (docs/ids.md)
   const again = held.includes(wanted) ? null : wait;
   const ready = !busy && !again && isValidName(wanted) && !isDummyName(wanted) && wanted !== me && (!hasPassword || password.length >= 8);
 
@@ -100,7 +93,6 @@ function Rename({ me }: { me: string }) {
 
   return (
     <form onSubmit={(e) => void submit(e)}>
-      {/* for password managers: which account the password belongs to */}
       <input type="text" name="username" value={me} autoComplete="username" readOnly tabIndex={-1} aria-hidden className="sr-only" />
       <div className="flex flex-wrap gap-1.5">
         <input
@@ -153,10 +145,8 @@ function Rename({ me }: { me: string }) {
   );
 }
 
-/** The api caps the status here (in characters, the way `chars` counts; main.rs `MAX_BIO_CHARS`). `bio` on the wire: the word `status` is the presence choice's (docs/status.md). */
 const MAX_BIO_CHARS = 200;
 
-/** The three choices as cards. `invisible` shows as `offline` to everyone else. */
 const PRESENCE_OPTIONS: readonly { choice: PresenceChoice; label: string; icon: ReactNode }[] = [
   {
     choice: 'online',
@@ -175,19 +165,10 @@ const PRESENCE_OPTIONS: readonly { choice: PresenceChoice; label: string; icon: 
   }
 ];
 
-/**
- * Who I am, as others see it: the picture, the name, the status. For a login the name is the
- * account's and fixed; for a guest it is the nick, kept in this browser, and changing it is
- * becoming somebody else (the old name keeps its status and picture). Everything saves under the
- * name I am now, through the api's one rule: a free name is anyone's, a claimed one its login's.
- * The links are not here: they are edited on my own page, where they show
- * (SocialsEditor.tsx); this tab points there.
- */
 export function ProfileTab() {
   const me = useAtomValue(meAtom);
   const oauthVerified = useAtomValue(oauthVerifiedAtom);
   const oauthProviders = useAtomValue(oauthProvidersAtom);
-  // which providers are on here: the line that says how to get verified names them
   useEffect(() => {
     if (me) void loadOAuthProviders();
   }, [me]);
@@ -206,11 +187,8 @@ export function ProfileTab() {
   const offlineStatus = useAtomValue(profileOfflineStatusAtom);
   const offlineNote = useAtomValue(profileOfflineNoteAtom);
   const offlineNoteStatus = useAtomValue(profileOfflineNoteStatusAtom);
-  // the nick as it was when its box got focus: leaving the box tells the chat only on a real change
   const nickAtFocus = useRef('');
 
-  // Mount only: the status and picture of the name I am (the same name again keeps the draft),
-  // and the groups, for the badges on the card (a login's; a guest has none).
   useEffect(() => {
     void loadMyProfile();
     if (me) void loadGroups();
@@ -226,8 +204,6 @@ export function ProfileTab() {
 
   return (
     <div className="divide-y divide-primaryStroke">
-      {/* the card: the face, the name, the way to my page. the face itself is the way to a new picture, as a
-          group's picture is: a camera sits on its corner, and the crop dialog takes it from there */}
       <section className="flex flex-wrap items-center gap-3 pb-4">
         <div className="group/avatar relative flex shrink-0">
           <Face name={name} version={avatar} className="h-14 w-14 text-2xl" />
@@ -263,7 +239,6 @@ export function ProfileTab() {
               <span className="shrink-0 border border-primaryStroke px-1.5 text-xs font-semibold uppercase leading-5 tracking-wider text-textTertiary">guest</span>
             )}
             {me && oauthVerified && <OAuthMark id="profile-oauth-verified" size={14} />}
-            {/* the badges my chat lines wear: one only: my primary group's, else my first group's. the groups tab changes them */}
             {me &&
               badges.map((group) => {
                 const words = groupWords(group);
@@ -299,8 +274,6 @@ export function ProfileTab() {
         )}
       </section>
 
-      {/* the presence choice (docs/status.md): three cards in a row. the chosen one is what the server has;
-          the square in the corner follows the `me` frame */}
       <Block title="presence" tip="live shows streaming, whatever you pick">
         <fieldset disabled={!canEdit} className="relative m-0 border-0 p-0 disabled:opacity-60">
           <legend className="sr-only">presence</legend>
@@ -359,8 +332,6 @@ export function ProfileTab() {
         )}
       </Block>
 
-      {/* the status: one line about me, the way a custom status is. under my name on my page, beside it on home,
-          in the sidebar and in the preview of my link. `bio` on the wire (the word `status` is the presence choice's) */}
       <Block title="status">
         <div className="flex gap-1.5">
           <input
@@ -391,13 +362,9 @@ export function ProfileTab() {
         <Status id="profile-bio-status" text={bioStatus || (canEdit ? '' : whyNot)} quiet />
       </Block>
 
-      {/* what the stream's page shows while I am not live: a picture where the player would be (the
-          way twitch has an offline banner) and a line under the word. the picture is the card of a
-          shared link too while I am off (docs/spec.md, "the watch document") */}
       <Block title="offline screen" tip="where the player goes while you're not live">
         <div className="flex flex-wrap items-start gap-3">
           <div className="flex shrink-0 flex-col gap-1.5">
-            {/* the picture, or the dashed box where it would go, is the click for a new one, the way a group's banner is */}
             <div className="group/offline relative w-40">
               {offline !== null ? (
                 <img
@@ -461,7 +428,6 @@ export function ProfileTab() {
         <Status id="profile-offline-note-status" text={offlineNoteStatus} quiet />
       </Block>
 
-      {/* the chat welcome (WelcomeEditor.tsx), the same editor as my page's mod tab */}
       <Block id="profile-welcome-block" title="welcome message" tip={WELCOME_TIP}>
         <WelcomeEditor id="profile-welcome" />
       </Block>

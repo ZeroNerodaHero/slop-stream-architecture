@@ -3,16 +3,6 @@ import { RiCameraLine } from '@remixicon/react';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/**
- * The way to a new picture, on the picture itself: the whole picture is the click. Sits over a
- * picture in a `relative` parent with a named group (`group/x`). With the pointer over it
- * (`reveal`: the parent's `group-hover/x:opacity-100`), or the input in keyboard focus, the
- * picture greys and a camera sits in the middle of it. A screen with no hover gets the camera
- * small in the corner instead, all the time, and no grey (`icon` is the camera's size: smaller
- * on a small face, so it does not cover it). `label` is the input's name and the tooltip. The
- * crop dialog takes the file from here. The group's pictures, your own picture and the offline
- * picture are all changed this way; a remove, where there is one, is a word beside the picture.
- */
 export function PicturePick({
   id,
   label,

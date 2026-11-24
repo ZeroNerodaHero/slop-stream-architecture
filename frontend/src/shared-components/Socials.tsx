@@ -25,7 +25,6 @@ import { buttonClassName } from '@/shared-components/Button';
 import { ExternalLink } from '@/shared-components/ExternalLink';
 import { cn } from '@/utils/cn';
 
-/** The icon for each kind: the brand's mark, filled, the way it is recognised small; a globe for any other site. */
 export const SOCIAL_ICON: Record<SocialKind, typeof RiGlobalLine> = {
   tiktok: RiTiktokFill,
   youtube: RiYoutubeFill,
@@ -48,15 +47,12 @@ export const SOCIAL_ICON: Record<SocialKind, typeof RiGlobalLine> = {
   web: RiGlobalLine
 };
 
-/** The icon at each size. 16 and 28 are the scale the rest of the page uses; 40 is the one size past it, for a row of buttons a thumb can hit. */
 export const SOCIAL_ICON_PX: Record<SocialsSize, number> = { small: 16, medium: 28, large: 40 };
-/** A chip of the row layout: the icon and the word side by side. Whole class strings: tailwind reads the source. */
 const CHIP: Record<SocialsSize, string> = {
   small: 'gap-1.5 px-2 py-1 text-sm',
   medium: 'gap-2.5 px-3 py-2 text-base',
   large: 'gap-3 px-4 py-3 text-lg'
 };
-/** A square of the grid layout: the icon over the word. The grid fills the width with as many as fit. */
 const GRID: Record<SocialsSize, string> = {
   small: 'grid-cols-[repeat(auto-fill,minmax(6rem,1fr))] gap-2',
   medium: 'grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-3',
@@ -67,29 +63,17 @@ const CARD: Record<SocialsSize, string> = {
   medium: 'gap-2.5 p-4 text-base',
   large: 'gap-3 p-6 text-lg'
 };
-/** A link, in either layout: a box with the stroke, blue when pointed at or focused. Hard edges, no shadow: a box in a box. */
 const LINK =
   'border border-primaryStroke bg-backgroundSecondary text-textPrimary transition-colors duration-150 hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none';
 
 interface SocialsProps {
-  /** Whose: the words of an empty tab. */
   name: string;
-  /** The document, already through `cleanSocials`: every url http(s), every kind known. */
   doc: SocialsDoc;
-  /** My own page: the way into the editor (SocialsEditor.tsx, under the strip). An empty tab offers it as a button, the links get an `edit` at the end. */
   onEdit?: () => void;
-  /** The box's id. The watch page's tab is `socials`, the tests' handle. */
   id?: string;
   className?: string;
 }
 
-/**
- * Where else to find them (docs/socials.md): their links as icons, in a line that wraps or as
- * a grid of squares, at the size they picked. Every link leaves this origin through
- * `ExternalLink` (a new tab, the word first while the links setting asks), its host in the title so
- * a hover says where a `twitch` icon really goes. The watch page's tab, where the owner's
- * editor opens under it on the draft. `data-layout` and `data-size` are for the tests.
- */
 export function Socials({ name, doc, onEdit, id = 'socials', className }: SocialsProps) {
   const px = SOCIAL_ICON_PX[doc.size];
   if (doc.links.length === 0) {

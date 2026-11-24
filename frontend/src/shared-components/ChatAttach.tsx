@@ -5,37 +5,20 @@ import { api, messageOf } from '@/infra/api';
 import { type ChatVideo, isVideoFile, posterSrc, readVideo } from '@/infra/chat-video';
 import { Tooltip } from '@/shared-components/Tooltip';
 
-/**
- * What the box's file picker (`accept`), a paste and a drop take: pictures, and the two videos
- * the chat plays. Anything the browser calls a video may be picked, so a `.mov` hears why not.
- */
 export const ATTACH_ACCEPT = 'image/*,video/mp4,video/webm,video/*';
 
-/**
- * Videos in a stream's chat (docs/chat.md "videos"): off until a stream's chat has moderation, so
- * its box takes pictures alone (`PICTURE_ACCEPT`) and a video dropped or pasted there hears
- * `STREAM_VIDEO_OFF`. A group channel and a direct message keep them. `true` turns them back on;
- * the chat holds the same flag and has the last word (chat.rs `STREAM_CHAT_VIDEO`).
- */
 export const STREAM_CHAT_VIDEO = false;
 export const STREAM_VIDEO_OFF = 'videos are off in stream chat for now';
 export const PICTURE_ACCEPT = 'image/*';
 
-/** The files a paste or a drop carries, pictures and videos alike; none for words alone. */
 export function filesOf(data: DataTransfer | null): File[] {
   return data ? [...data.files] : [];
 }
 
-/** Pictures and videos apart: each goes up its own way. */
 export function splitFiles(files: File[]): { pictures: File[]; videos: File[] } {
   return { pictures: files.filter((f) => !isVideoFile(f)), videos: files.filter(isVideoFile) };
 }
 
-/**
- * A box's drop and paste (`dragFiles`, `dropFiles`, `pasteFiles`): files dropped on it or pasted
- * into it go where the picker's would (`take`). A paste of words alone is the browser's as ever;
- * a drag of words is left alone too. Here, a drag of files over the box may drop there.
- */
 export function dragFiles(e: DragEvent) {
   if (![...e.dataTransfer.types].includes('Files')) return;
   e.preventDefault();
@@ -56,11 +39,6 @@ export function pasteFiles(e: ClipboardEvent, take: (files: File[]) => void) {
   take(files);
 }
 
-/**
- * One video going up (docs/chat.md "videos"): checked here first (`readVideo`: the type, 10 mb,
- * 30 seconds), then the file itself (the api draws its poster) with its progress, 0 to 1 (`progress`, null when nothing is going up). `done` gets the video;
- * a refusal is `fail`'s, in the words the box shows.
- */
 export function useVideoUpload() {
   const [progress, setProgress] = useState<number | null>(null);
   async function upload(file: File, done: (video: ChatVideo) => void, fail: (words: string) => void) {
@@ -79,7 +57,6 @@ export function useVideoUpload() {
   return { progress, upload };
 }
 
-/** The bar over the box while a video goes up: how much of it has gone. `idPrefix` keeps a direct message window's ids apart from a room's. */
 export function VideoProgress({ progress, idPrefix = 'chat' }: { progress: number; idPrefix?: string }) {
   const percent = Math.round(progress * 100);
   return (
@@ -99,7 +76,6 @@ export function VideoProgress({ progress, idPrefix = 'chat' }: { progress: numbe
   );
 }
 
-/** The video waiting to go with the next line, among the pictures' strip: its poster with a play mark, and its ×. */
 export function PendingVideo({ video, onRemove, idPrefix = 'chat' }: { video: ChatVideo; onRemove: () => void; idPrefix?: string }) {
   return (
     <span id={`${idPrefix}-video-preview`} data-video={video.id} className="relative">

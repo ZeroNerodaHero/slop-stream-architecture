@@ -12,7 +12,6 @@ const PANEL_SIDE_OPTIONS: readonly { side: PanelSide; label: string }[] = [
   { side: 'right', label: 'right of the page' }
 ];
 
-/** The page in miniature: the open column covering the streams from one side. */
 function YouPreview({ side }: { side: PanelSide }) {
   return (
     <span aria-hidden className="relative flex h-36 min-w-0 flex-1 border border-primaryStroke bg-background">
@@ -32,24 +31,16 @@ function YouPreview({ side }: { side: PanelSide }) {
   );
 }
 
-/** The column's three lists (Friends.tsx), each with the icon it stands under there. */
 const SIDEBAR_LIST_WORDS: Record<SidebarList, { icon: typeof RiUserHeartLine; label: string }> = {
   friends: { icon: RiUserHeartLine, label: 'friends' },
   following: { icon: RiUserFollowLine, label: 'following' },
   groups: { icon: RiGroupLine, label: 'groups' }
 };
 
-/**
- * The column's lists, top to bottom, each with a switch (`settings.sidebarLists`). A row is
- * dragged by its handle (Reorderable: space and the arrow keys on it do the same), and the
- * column behind follows at once. The last switch on is disabled: one list stays, so the
- * column is never empty by setting.
- */
 function SidebarLists() {
   const choices = useAtomValue(sidebarListsAtom);
   const shown = choices.filter((c) => c.on).length;
   const byList = new Map(choices.map((c) => [c.list, c]));
-  // live: the column behind the modal follows the row as it goes
   const reorder = useReorder({
     keys: choices.map((c) => c.list),
     name: (list) => SIDEBAR_LIST_WORDS[list].label,
@@ -110,14 +101,8 @@ function SidebarLists() {
   );
 }
 
-/**
- * This browser's settings for the column beside every page (Friends.tsx, docs/follows.md):
- * which side it sits on, and which of its lists it shows in what order. The column behind the
- * modal follows every change at once, so the cards are their own preview.
- */
 export function SidebarTab() {
   const panelSide = useAtomValue(panelSideAtom);
-  // a phone's column is a drawer from the left (SwipeDrawer.tsx), whichever side is picked: only its lists apply there
   const mobile = useIsMobile();
   return (
     <div className="divide-y divide-primaryStroke">

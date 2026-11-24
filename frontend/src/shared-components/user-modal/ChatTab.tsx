@@ -27,21 +27,18 @@ import { GeneratedAvatar } from '@/shared-components/GeneratedAvatar';
 import { CHECKBOX, FIELDSET, Info, OptionCard, SECTION_TITLE } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
-/** The places the stream's chat can sit. The card's picture is the page. */
 const CHAT_SIDE_OPTIONS: readonly { side: ChatSide; label: string }[] = [
   { side: 'left', label: 'left of the stream' },
   { side: 'right', label: 'right of the stream' },
   { side: 'modal', label: 'in a window' }
 ];
 
-/** The three places the corner player's chat can open. The card's picture is the player. */
 const PIP_CHAT_OPTIONS: readonly { place: PipChatPlace; label: string }[] = [
   { place: 'bottom', label: 'under the video' },
   { place: 'left', label: 'left of the video' },
   { place: 'right', label: 'right of the video' }
 ];
 
-/** The chat block in a miniature: the word, and two lines. */
 function PreviewChat({ className }: { className?: string }) {
   return (
     <span className={cn('flex min-h-0 flex-col gap-1 overflow-hidden bg-backgroundTertiary px-1.5 py-1', className)}>
@@ -52,7 +49,6 @@ function PreviewChat({ className }: { className?: string }) {
   );
 }
 
-/** The watch page in miniature: the picture, and the chat in a column or in a window over it. */
 function StreamChatPreview({ side }: { side: ChatSide }) {
   if (side === 'modal') {
     return (
@@ -75,11 +71,6 @@ function StreamChatPreview({ side }: { side: ChatSide }) {
   );
 }
 
-/**
- * The corner player in miniature, with its chat where this choice puts it. The picture is
- * 16:9 with a footer, the chat a column beside it or a strip under it, so the card shows
- * the arrangement and not just its name.
- */
 function PipChatPreview({ place }: { place: PipChatPlace }) {
   const side = place === 'left' || place === 'right';
   return (
@@ -103,7 +94,6 @@ function PipChatPreview({ place }: { place: PipChatPlace }) {
   );
 }
 
-/** The bots' lines: on screen, or not. */
 const BOT_OPTIONS: readonly { hide: boolean; id: string; label: string; icon: ReactNode }[] = [
   {
     hide: false,
@@ -119,7 +109,6 @@ const BOT_OPTIONS: readonly { hide: boolean; id: string; label: string; icon: Re
   }
 ];
 
-/** Every link that leaves this site (ExternalLink.tsx): a word first, or the new tab at once. */
 const LINK_OPTIONS: readonly { ask: boolean; id: string; label: string; icon: ReactNode }[] = [
   {
     ask: true,
@@ -135,7 +124,6 @@ const LINK_OPTIONS: readonly { ask: boolean; id: string; label: string; icon: Re
   }
 ];
 
-/** A click on somebody, a member in a group's roster or a name in a chat: them in a popup over the page (ProfilePopup.tsx), or where the click went before there was one. */
 const PEOPLE_OPTIONS: readonly { popup: boolean; id: string; label: string; icon: ReactNode }[] = [
   {
     popup: true,
@@ -151,7 +139,6 @@ const PEOPLE_OPTIONS: readonly { popup: boolean; id: string; label: string; icon
   }
 ];
 
-/** The three shapes every chat's lines can take (docs/chat.md, ChatLine.tsx). The card's picture is the chat. */
 const STYLE_OPTIONS: readonly { style: ChatStyle; label: string }[] = [
   { style: 'log', label: 'a log' },
   {
@@ -164,35 +151,26 @@ const STYLE_OPTIONS: readonly { style: ChatStyle; label: string }[] = [
   }
 ];
 
-/** The three lines the cards draw: who said each (ann, or you), and a width for the words. Your two in a row are one run, one minute. */
 const PREVIEW_LINES: readonly { mine: boolean; words: string }[] = [
   { mine: false, words: 'w-3/5' },
   { mine: true, words: 'w-2/5' },
   { mine: true, words: 'w-1/2' }
 ];
 
-/** A bar for a time, the gutter's width; blank where the shape shows no time on that line. */
 function PreviewClock({ shown = true }: { shown?: boolean }) {
   return <span className={cn('h-1 w-4 shrink-0', shown && 'bg-textTertiary')} />;
 }
 
-/** A bar for a name: yours in blue, the way the window draws it. */
 function PreviewName({ mine }: { mine: boolean }) {
   return <span className={cn('h-1.5 w-8 shrink-0', mine ? 'bg-primaryBlue' : 'bg-textSecondary')} />;
 }
 
-/**
- * A chat in miniature, in one of its three shapes: a bar for the words, a shorter one for a
- * name, a face where the shape has one, a box where it has one. The same three lines on every
- * card, so the shapes are compared and not the words.
- */
 function StylePreview({ style }: { style: ChatStyle }) {
   if (style === 'bubbles') {
     return (
       <span aria-hidden className="flex h-24 min-w-0 flex-1 flex-col justify-center gap-1.5 border border-primaryStroke bg-background px-3">
         {PREVIEW_LINES.map(({ mine, words }, i) => (
           <span key={i} className="flex items-center gap-1.5">
-            {/* the time at the left, on the first line of a minute: your second line is in the same minute as your first */}
             <PreviewClock shown={PREVIEW_LINES[i - 1]?.mine !== mine} />
             <span className={cn('flex min-w-0 flex-1', mine ? 'justify-end' : 'justify-start')}>
               <span
@@ -246,14 +224,6 @@ function StylePreview({ style }: { style: ChatStyle }) {
   );
 }
 
-/**
- * This browser's settings for the chat: where it sits on the watch page and the go live page,
- * where it opens on the corner player, whether the bots' lines show, the shape of the lines in
- * every chat (a stream's, a group channel's, a friend's), what a click on somebody in a chat or
- * in a group's roster does, whether a link asks before it opens, whether a video link gets a
- * player. The chat behind the modal
- * follows every change at once, so the cards are their own preview.
- */
 export function ChatTab() {
   const chatSide = useAtomValue(chatSideAtom);
   const pipChat = useAtomValue(pipChatPlaceAtom);
@@ -263,7 +233,6 @@ export function ChatTab() {
   const linkWarning = useAtomValue(linkWarningAtom);
   const showWelcomes = useAtomValue(showWelcomesAtom);
   const showEmbeds = useAtomValue(showEmbedsAtom);
-  // a phone's watch page and go live page are the window, the chat in a tab under the player (mobile.ts): no side to pick
   const mobile = useIsMobile();
   return (
     <div className="divide-y divide-primaryStroke">
@@ -368,7 +337,6 @@ export function ChatTab() {
         </div>
       </fieldset>
 
-      {/* a video link in a line gets a player under it, loaded on a click (ChatEmbeds.tsx): this browser's, on to start */}
       <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>embeds</legend>
         <div className="flex items-center gap-2 py-1.5 text-sm font-semibold text-textPrimary">
@@ -378,7 +346,6 @@ export function ChatTab() {
         </div>
       </fieldset>
 
-      {/* the bot Eques's line at the top of a stream's chat when it opens (welcome-atoms.ts): this browser's, on to start */}
       <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>welcome</legend>
         <div className="flex items-center gap-2 py-1.5 text-sm font-semibold text-textPrimary">

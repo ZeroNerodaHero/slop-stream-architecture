@@ -8,40 +8,25 @@ import { SHEET_CLOSE, SHEET_DIALOG, SheetGrab, focusOnOpen, useSheetBack } from 
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/**
- * Log in or sign up over the page you are on, instead of a page of its own: the sidebar's two
- * words, "log in to create" on the groups page, "log in to join" in a group, and the /login and
- * /signup links (AuthPage.tsx lands you on their `next` with this open). Mounted by the Shell;
- * it renders nothing until `openAuthDialog`. A logged in form closes it and you stay where you
- * were. The ConfirmDialog and UserModal recipe: a native <dialog>, so the browser keeps focus
- * in it, closes it on escape and hands focus back to what opened it; a click on the backdrop
- * closes it too.
- */
 export function AuthDialog() {
   const mode = useAtomValue(authDialogAtom);
   return mode ? <AuthBox mode={mode} /> : null;
 }
 
-/** Mounted = shown. Switching between log in and sign up is a new `mode`, not a remount: the typed name stays. */
 function AuthBox({ mode }: { mode: AuthMode }) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
-  /** The press that began this click was on the backdrop too: a text drag that ends outside is not a close. */
   const pressedBackdrop = useRef(false);
 
-  // A layout effect: its cleanup runs while the node is still in the document, which is when
-  // close() hands focus back to the opener. (A passive cleanup would run after the removal.)
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
     dialog.showModal();
-    // the name, not the first focusable (that is the close in the corner); not on a phone, whose keyboard waits for a tap
     focusOnOpen(dialog, '#auth-name');
     return () => {
       if (dialog.open) dialog.close();
     };
   }, []);
 
-  // every way out goes through the element: close() restores focus, then fires `close`
   const close = () => dialogRef.current?.close();
   useSheetBack(close);
 
@@ -62,8 +47,6 @@ function AuthBox({ mode }: { mode: AuthMode }) {
         if (event.target !== event.currentTarget) return;
         closeAuthDialog();
       }}
-      // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
-      // a phone's is a sheet up from the foot (MobileSheet.tsx)
       className={cn(
         'm-auto w-[min(420px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary px-5 py-4 text-textPrimary backdrop:bg-black/60 backdrop:backdrop-blur-sm',
         SHEET_DIALOG

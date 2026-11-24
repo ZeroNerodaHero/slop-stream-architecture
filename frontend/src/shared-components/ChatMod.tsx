@@ -8,17 +8,10 @@ import { ConfirmDialog } from '@/shared-components/ConfirmDialog';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/** The timeout a line's button hands out. Longer, or shorter, from the mod tab's lists is not a thing yet: lift it and give another. */
 export const LINE_TIMEOUT_SECS = 600;
 
 type Ask = 'delete' | 'timeout' | 'ban';
 
-/**
- * A janny's buttons on a stream chat's line (docs/jannies.md): delete, and for a login's line time
- * out (10 minutes) and ban, each after a yes. Not on the streamer's lines, nor on my own: the api
- * refuses anyone of my rank or above anyway, and says so under the box. A nick has no account to
- * ban, so their lines get the delete alone.
- */
 export function ChatModActions({ name, line, me }: { name: string; line: ChatLine; me: string | null }) {
   const [ask, setAsk] = useState<Ask | null>(null);
   if (line.streamer || (me !== null && line.verified && line.from === me)) return null;
@@ -27,7 +20,6 @@ export function ChatModActions({ name, line, me }: { name: string; line: ChatLin
     try {
       if (what === 'delete') {
         await api.deleteChatLine(name, line.id);
-        // the room's `delete` frame says the same a moment later; gone from here now
         room.removeLine(line.id);
       } else if (what === 'timeout') {
         await api.timeoutInChat(name, line.from, LINE_TIMEOUT_SECS);
