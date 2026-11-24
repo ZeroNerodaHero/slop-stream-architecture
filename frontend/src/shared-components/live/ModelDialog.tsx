@@ -29,11 +29,6 @@ import { cn } from '@/utils/cn';
 const SECTION_TITLE = 'text-xs font-semibold uppercase tracking-wider text-textTertiary';
 const mb = (bytes: number) => `${(bytes / 1_000_000).toFixed(bytes < 10_000_000 ? 1 : 0)} mb`;
 
-/**
- * Where a model can be had, for someone who has none: the site, the kind of file it hands out,
- * and a line about what is there. Each was open, and gave what is said here, in november 2026.
- * A model's terms are its maker's, on its own page: nothing here says a model may be worn.
- */
 const PLACES: readonly { id: string; name: string; href: string; file: string; about: string }[] = [
   { id: 'vroid-hub', name: 'vroid hub', href: 'https://hub.vroid.com/en', file: '.vrm', about: 'characters made in vroid studio. each says who may wear it' },
   { id: 'booth', name: 'booth', href: 'https://booth.pm/en', file: '.vrm', about: 'a market of avatars, many of them free' },
@@ -52,23 +47,14 @@ const PLACES: readonly { id: string; name: string; href: string; file: string; a
 interface CardProps {
   id: string;
   name: string;
-  /** The line under the name: who made it, the licence it names, how big it is. */
   detail: string;
   picture: ReactNode;
-  /** It is the one on the stream now. */
   on: boolean;
-  /** It is the one on its way on, and how far along it is. `null`: it is not. */
   load: ModelLoad | null;
   disabled: boolean;
   onPick: () => void;
 }
 
-/**
- * One model: its picture, its name, a line about it. The whole card is the pick. While it is
- * the one loading, its picture is under a veil with how far along it is (a percentage when
- * there are bytes to count, a bar either way) and its line says what is happening in a word
- * or two (the picker's last line has the sentence); the other cards wait, dimmed.
- */
 function Card({ id, name, detail, picture, on, load, disabled, onPick }: CardProps) {
   const fraction = load ? loadFraction(load) : null;
   return (
@@ -102,20 +88,9 @@ function Card({ id, name, detail, picture, on, load, disabled, onPick }: CardPro
   );
 }
 
-/** A demo model's line: who made it, its licence, and its size to download, or that there is nothing to download. */
 const demoDetail = (model: DemoModel, kept: boolean) => [model.author, model.licence, kept ? 'downloaded' : mb(model.bytes)].filter(Boolean).join(' · ');
 const keptDetail = (model: KeptModel) => [model.author, mb(model.bytes)].filter(Boolean).join(' · ');
 
-/**
- * The model picker (docs/vtuber.md): the site's demo models, out of the bucket with one fetch
- * (a name, who made it, its licence and a thumbnail each), the streamer's own models that this
- * browser keeps, and a file of their own: a .vrm, a .glb or an .fbx. A pick loads the model and
- * puts it where the camera's picture goes; its card shows how far along it is, and the dialog
- * closes once it is on. A demo model comes down once: this browser keeps it, its card says
- * `downloaded`, and after that it opens with nothing to wait for. Their own file is read here
- * and kept here: it is not put up anywhere. Under that, a few sites that have models to
- * download, for someone with no file to pick.
- */
 export function ModelDialog({ onClose }: { onClose: () => void }) {
   const demos = useAtomValue(demoModelsAtom);
   const kept = useAtomValue(keptModelsAtom);
@@ -136,12 +111,10 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
       if (dialog.open) dialog.close();
     };
   }, []);
-  // mount only: the two shelves, asked for once per opening
   useEffect(() => {
     void loadModelLibrary();
   }, []);
 
-  /** A pick that worked closes the dialog; one that did not says why and leaves it open. */
   const pick = (picked: Promise<boolean>) => void picked.then((ok) => ok && onClose());
   const onPointerDown = (e: PointerEvent<HTMLDialogElement>) => {
     pressedBackdrop.current = e.target === e.currentTarget;
@@ -160,7 +133,6 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
       onPointerDown={onPointerDown}
       onClick={onClick}
       onClose={onClose}
-      // a phone's is a sheet up from the foot (MobileSheet.tsx)
       className={cn(
         'm-auto max-h-[calc(100dvh-2rem)] w-[min(640px,calc(100vw-3rem))] overflow-y-auto border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60',
         SHEET_DIALOG
@@ -192,7 +164,6 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
           ) : (
             <ul id="model-demos" className="m-0 mt-2 grid list-none grid-cols-2 gap-3 p-0 sm:grid-cols-4">
               {demos.map((model) => (
-                // `data-kept`: this browser has the file (the test reads it; the card's line says it)
                 <li key={model.id} data-kept={keptDemos.get(model.id) === model.v} className="min-w-0">
                   <Card
                     id={`model-demo-${model.id}`}
@@ -291,7 +262,6 @@ export function ModelDialog({ onClose }: { onClose: () => void }) {
           </ul>
         </section>
 
-        {/* what the pick is doing, or why it did not come. not read out as it changes: the megabytes would be a sentence a second */}
         <p
           id="model-status"
           data-step={load?.step}

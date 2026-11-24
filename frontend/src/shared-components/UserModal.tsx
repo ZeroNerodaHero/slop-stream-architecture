@@ -52,9 +52,7 @@ const TABS: Record<UserTab, { label: string; group: string; icon: ReactNode }> =
 const GROUP_LABEL = 'hidden px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wider text-textTertiary first:pt-0 sm:block';
 const TAB = cn(
   'flex shrink-0 items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-sm font-semibold leading-tight transition-colors duration-150',
-  // the mark: under the tab in the phone strip, at its left in the rail
   'border-b-2 sm:w-full sm:border-b-0 sm:border-l-2',
-  // keyboard focus: a 1px square inside the edge (no radius in this theme, no ring)
   'focus-visible:outline focus-visible:outline-1 focus-visible:-outline-offset-1 focus-visible:outline-primaryBlue'
 );
 const TAB_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
@@ -62,62 +60,43 @@ const TAB_OFF = 'border-transparent text-textSecondary hover:bg-backgroundTertia
 
 const STEP: Record<string, number | undefined> = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
 
-/** Arrows walk the tabs and show the one under focus; home and end jump. The buttons carry tabIndex 0/-1 themselves. */
 function roveTabs(e: KeyboardEvent<HTMLDivElement>, order: readonly UserTab[]) {
   const tabs = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
   const i = tabs.indexOf(e.target as HTMLButtonElement);
   if (i < 0) return;
   const step = STEP[e.key];
   const next = step !== undefined ? (i + step + tabs.length) % tabs.length : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : -1;
-  const target = order[next]; // the rail renders from `order`, so dom order and this order agree
+  const target = order[next];
   const button = tabs[next];
   if (next < 0 || !target || !button) return;
   e.preventDefault();
   pickTab(target);
-  // works on tabIndex -1; the attribute flips on the next render. no scroll: the strip brings the open tab into sight itself (`useStripPlace`)
   button.focus({ preventScroll: true });
 }
 
-/**
- * The user modal: who you are and how this browser shows things, the way discord does its
- * settings. A rail of tabs down the left (the account: profile, stats, groups, security,
- * notifications; this browser: appearance, chat, voice, sidebar, advanced; a phone has no advanced,
- * `tabsFor`), the open one's pane on the right. Mounted by the Shell; it renders nothing until `openUserModal`, and the page
- * behind follows every change at once, so the layout and theme cards are their own preview.
- * A native <dialog>: the browser keeps focus in it, closes it on escape and hands focus back
- * to what opened it; a click on the backdrop closes it too.
- */
 export function UserModal() {
   const open = useAtomValue(userModalOpenAtom);
   return open ? <UserDialog /> : null;
 }
 
-/** Mounted = shown. The one effect is mount-only: open the dialog, and close it on the way out. */
 function UserDialog() {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
-  /** The press that began this click was on the backdrop too: a text drag that ends outside is not a close. */
   const pressedBackdrop = useRef(false);
   const kept = useAtomValue(userTabAtom);
-  // read as it renders (useIsMobile), so a phone never draws a desktop tab for a frame
   const phone = useIsMobile();
   const tabs = tabsFor(phone);
-  // a tab kept on a desktop that a phone has not: the default there, and the kept one is not forgotten
   const tab = tabs.includes(kept) ? kept : DEFAULT_TAB;
 
-  // A layout effect: its cleanup runs while the node is still in the document, which is when
-  // close() hands focus back to the opener. (A passive cleanup would run after the removal.)
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
     dialog.showModal();
-    // the tab that is open, not the first focusable: the gear lands you where you left off
     dialog.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true });
     return () => {
       if (dialog.open) dialog.close();
     };
   }, []);
 
-  // every way out goes through the element: close() restores focus, then fires `close`
   const close = () => dialogRef.current?.close();
   useSheetBack(close);
 
@@ -133,19 +112,13 @@ function UserDialog() {
         if (pressedBackdrop.current && e.target === e.currentTarget) close();
       }}
       onClose={(event) => {
-        // a question asked from inside here (delete a group) closes itself. that close walks the
-        // react tree and would shut this too.
         if (event.target !== event.currentTarget) return;
         closeUserModal();
       }}
       className={cn(
-        // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
         'overflow-hidden bg-backgroundSecondary p-0 text-base text-textPrimary',
         'open:flex flex-col sm:flex-row',
-        // full bleed on a phone: the browser's margins and size caps of a modal dialog go. it is what the keyboard leaves
-        // of the window (keyboard.ts, --vvt and --vvh), so a box in it stays over the keyboard
         'm-0 h-dvh max-h-none w-full max-w-none border-0 max-md:mt-[var(--vvt,0px)] max-md:h-[var(--vvh,100dvh)]',
-        // past a phone (mobile.ts), the box in the middle. below it a page over the page, its × a finger's (MobileSheet.tsx)
         'md:m-auto md:h-[min(680px,calc(100dvh-3rem))] md:w-[min(960px,calc(100vw-3rem))] md:border md:border-primaryStroke',
         'backdrop:bg-black/60 md:backdrop:backdrop-blur-sm'
       )}
@@ -156,17 +129,8 @@ function UserDialog() {
   );
 }
 
-/** A finger's or a wheel's scroll of the strip counts this long after it lets go (the glide after a flick). */
 const HAND_MS = 400;
 
-/**
- * A phone's strip of tabs (below `sm`) moves sideways under a finger or a wheel and nothing else: the
- * keyboard coming and going, the visual viewport resizing, iOS bringing a focused thing into sight, all
- * put it back where it was. The open tab is the one in the state (`aria-selected`), never the one the
- * strip happens to show, and it is brought into sight by scrolling the strip alone (never
- * `scrollIntoView`, which scrolls every pane up to the window). A tab that kept the focus after another
- * was opened (a click does not move it) hands it to the open one, so no outline marks the wrong tab.
- */
 function useStripPlace(ref: RefObject<HTMLDivElement | null>, tab: UserTab, on: boolean) {
   const kept = useRef(0);
   const { height, keyboard } = useKeyboard();
@@ -178,7 +142,6 @@ function useStripPlace(ref: RefObject<HTMLDivElement | null>, tab: UserTab, on: 
     if (!open) return;
     const at = document.activeElement;
     if (at instanceof HTMLElement && at !== open && strip.contains(at)) open.focus({ preventScroll: true });
-    // with the strip's own padding kept beside it, so the first tab goes all the way back to the start
     const pad = parseFloat(getComputedStyle(strip).paddingLeft) || 0;
     const s = strip.getBoundingClientRect();
     const t = open.getBoundingClientRect();
@@ -205,7 +168,7 @@ function useStripPlace(ref: RefObject<HTMLDivElement | null>, tab: UserTab, on: 
     const scrolled = () => {
       const now = performance.now();
       if (touching || now - at < HAND_MS) {
-        if (!touching) at = now; // the glide goes on, and so does the hand's say
+        if (!touching) at = now;
         kept.current = strip.scrollLeft;
       } else if (strip.scrollLeft !== kept.current) {
         strip.scrollLeft = kept.current;
@@ -225,7 +188,6 @@ function useStripPlace(ref: RefObject<HTMLDivElement | null>, tab: UserTab, on: 
     };
   }, [ref, on]);
 
-  // the keyboard up or down, the visual viewport resized: where the hand left it
   useLayoutEffect(() => {
     const strip = ref.current;
     if (on && strip && strip.scrollLeft !== kept.current) strip.scrollLeft = kept.current;
@@ -241,12 +203,9 @@ function Rail({ tab, tabs, phone }: { tab: UserTab; tabs: readonly UserTab[]; ph
   const presence = useAtomValue(myPresenceAtom);
   return (
     <div className="flex shrink-0 flex-col border-b border-primaryStroke bg-background sm:w-56 sm:border-b-0 sm:border-r">
-      {/* the corner panel again, at the head of the rail: who this is about (the phone strip has no room for it) */}
       <div className="hidden items-center gap-3 border-b border-primaryStroke px-3 py-3 sm:flex">
         <span className="relative block shrink-0" title={name ? PRESENCE_WORD[presence] : undefined}>
           <Face name={name} version={avatar} className="h-9 w-9 text-base" />
-          {/* the presence square in the picture's corner, the corner panel's way (PresenceSquare.tsx). the word is in
-              the title; the ✓ keeps meaning login */}
           {name && <PresenceSquare id="modal-presence" status={presence} className="border-background" />}
         </span>
         <span className="min-w-0">
@@ -262,7 +221,6 @@ function Rail({ tab, tabs, phone }: { tab: UserTab; tabs: readonly UserTab[]; ph
         aria-orientation="vertical"
         aria-label="sections"
         onKeyDown={(e) => roveTabs(e, tabs)}
-        // on a phone the strip stops short of the × at its end (Pane), so no tab sits under it
         className="flex flex-row gap-1 overflow-x-auto p-2 max-sm:mr-12 sm:flex-col sm:gap-0 sm:overflow-visible"
       >
         {tabs.map((t, i) => {
@@ -272,7 +230,6 @@ function Rail({ tab, tabs, phone }: { tab: UserTab; tabs: readonly UserTab[]; ph
           const newGroup = before === undefined || TABS[before].group !== group;
           return (
             <Fragment key={t}>
-              {/* a tablist may hold only tabs, so the group words are decoration; the tab names carry the meaning */}
               {newGroup && (
                 <span aria-hidden className={GROUP_LABEL}>
                   {group}
@@ -306,9 +263,6 @@ function Rail({ tab, tabs, phone }: { tab: UserTab; tabs: readonly UserTab[]; ph
 function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col sm:relative">
-      {/* pinned over the pane, discord's esc: the pane scrolls under it. on a phone it is in the head row instead, at the
-          end of the tab strip (the dialog is what it hangs from there, the strip stops short of it), so nothing in the
-          pane ever sits under it */}
       <div className="absolute right-4 top-4 z-10 flex flex-col items-center gap-1 max-sm:right-1 max-sm:top-px">
         <Tooltip content="close" at="left">
           <button
@@ -330,7 +284,6 @@ function Pane({ tab, onClose }: { tab: UserTab; onClose: () => void }) {
         </span>
       </div>
 
-      {/* keyed on the tab: a fresh pane starts at the top with its own form state */}
       <div
         key={tab}
         id={`panel-${tab}`}

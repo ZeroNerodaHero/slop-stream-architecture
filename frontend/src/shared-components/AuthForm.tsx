@@ -14,20 +14,12 @@ import { cn } from '@/utils/cn';
 
 interface AuthFormProps {
   mode: AuthMode;
-  /** The "new here? sign up" / "have one? log in" words: the other form, in the same place. */
   onMode: (mode: AuthMode) => void;
-  /** Logged in (or already were, and said carry on). */
   onDone: () => void;
 }
 
 const LABEL = 'text-sm font-semibold text-textSecondary';
 
-/**
- * Log in and sign up, one form: a name, a password, a button. The password goes to the api as
- * typed, over https; the api hashes it. See docs/accounts.md. The autocomplete values are what
- * make password managers offer to save it. Shown in the auth dialog (AuthDialog.tsx), over
- * whatever page you were on; the security tab has its own.
- */
 export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
   const me = useAtomValue(meAtom);
   const busy = useAtomValue(authBusyAtom);
@@ -36,14 +28,10 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const signingUp = mode === 'signup';
-  // a new password's rule, ticked off under the box as it is typed; logging in asks none of it
   const checks = signingUp ? passwordChecks(password) : null;
   const unmet = checks !== null && !passwordOk(checks);
-  // the human check (Turnstile.tsx): nothing while the api has it off
   const human = useTurnstile('auth-turnstile');
 
-  // Mount only: a stale error from a previous try should not greet you here.
-  // The switch between the two modes clears it too (same component, no remount).
   useEffect(() => {
     clearAuthError();
   }, []);
@@ -52,12 +40,8 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
     e.preventDefault();
     if (unmet || !human.ready) return;
     const ok = await (signingUp ? signup(name, password, human.token) : login(name, password, human.token));
-    // the token is single-use, spent or not
     human.spent();
     if (ok) {
-      // the events socket is who the browser is: say hello again as the login, so the name reads
-      // online to everyone (the security tab's login does the same). without it the socket stays
-      // nobody until the next full page load
       identityChanged('login');
       onDone();
     }
@@ -173,7 +157,6 @@ export function AuthForm({ mode, onMode, onDone }: AuthFormProps) {
   );
 }
 
-/** One part of the new password's rule: a box, ticked once the password meets it. */
 function Rule({ ok, children }: { ok: boolean; children: string }) {
   return (
     <li className={`flex items-center gap-2 text-sm leading-5 ${ok ? 'text-textPrimary' : 'text-textSecondary'}`}>

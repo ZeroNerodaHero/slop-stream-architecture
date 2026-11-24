@@ -13,20 +13,12 @@ import { COUNT } from '@/shared-components/Notifications';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/** How far a finger moves before the sheet decides it is a swipe up and not a scroll. */
 const LOCK_PX = 10;
-/** How dark the page under it gets, fully down: a drawer's (SwipeDrawer.tsx). */
 const DIM = 0.6;
 const SLIDE = 'duration-200 ease-out motion-reduce:transition-none';
 
-/** A line's buttons in the sheet: a 44px square each, stacked in the line's own right column (ChatLine.tsx `side`), never over its words. */
 const ACTION = 'flex h-11 w-11 items-center justify-center text-textSecondary focus-visible:text-primaryBlue focus-visible:outline-none';
 
-/**
- * A phone's pin in a group's title row (between the back caret and the drawer's opener): a
- * 44px square, the count on its glyph's corner in the bell's blue square while there are any.
- * It opens and shuts the sheet (`PinSheet`); lit while that is down.
- */
 export function PinSheetButton({ count, open, onClick }: { count: number; open: boolean; onClick: () => void }) {
   return (
     <Tooltip content={open ? null : 'pinned messages'}>
@@ -43,7 +35,6 @@ export function PinSheetButton({ count, open, onClick }: { count: number; open: 
           open ? 'text-primaryBlue' : 'text-textSecondary'
         )}
       >
-        {/* `relative`: the count sits on the glyph's corner, not the 44px box's */}
         <span className="relative flex">
           <RiPushpinLine aria-hidden size={22} />
           {count > 0 && (
@@ -57,20 +48,6 @@ export function PinSheetButton({ count, open, onClick }: { count: number; open: 
   );
 }
 
-/**
- * A group channel's pins on a phone (docs/groups.md "pins"): a sheet from the top, straight
- * under the title row, 60% of the window tall, the row over it whole and still pressed. The
- * pinned lines, newest pin first, drawn as the chat draws them (`RoomLines`: the shape this
- * browser picked, the faces, the badges, the pictures), with a jump to the line in the channel
- * on each and, for the channels power, an unpin: 44px each, in a column of their own at the
- * line's right, so they never sit on its words. The first line clears the sheet's top edge. It
- * scrolls in itself; the grabber at its foot. A swipe up shuts it, on the grabber, or on the
- * lines once they are scrolled to their end (or fit); so do the pin again, a tap on the dim
- * page under it, Escape and the back button. The slide is 200ms, none for reduced motion. Drawn into the body under the title row (z-20, the
- * row is z-30) and clipped to the window below it, so it slides out from under the row; a
- * drawer (SwipeDrawer.tsx, z-50) and its dim go over it. The list is asked as it opens and
- * again on each pin or unpin while it is (`pinsTickAtom`).
- */
 export function PinSheet({
   server,
   channel,
@@ -86,7 +63,6 @@ export function PinSheet({
   canPin: boolean;
   onUnpin: (id: string) => void;
 }) {
-  // what was asked, and for which channel: another channel's is no list for this one
   const here = `${server}/${channel}`;
   const [got, setGot] = useState<{ for: string; pins: PinnedLine[] | null; error: string }>({ for: here, pins: null, error: '' });
   const list = got.for === here ? got.pins : null;
@@ -96,10 +72,8 @@ export function PinSheet({
   const panel = useRef<HTMLDivElement | null>(null);
   const lines = useRef<HTMLDivElement | null>(null);
   const grab = useRef<HTMLDivElement | null>(null);
-  // how far up a finger has it, in px (0 or less); null while nobody does
   const [drag, setDrag] = useState<number | null>(null);
   const [height, setHeight] = useState(1);
-  // still on screen while it slides shut
   const [sliding, setSliding] = useState(false);
   const change = useRef(onOpenChange);
   useLayoutEffect(() => {
@@ -124,7 +98,6 @@ export function PinSheet({
     };
   }, [open, here, server, channel, tick]);
 
-  // shut: on screen until the slide is over, then gone (and so out of the tab order)
   const [wasOpen, setWasOpen] = useState(open);
   if (wasOpen !== open) {
     setWasOpen(open);
@@ -136,13 +109,11 @@ export function PinSheet({
     return () => window.clearTimeout(done);
   }, [open]);
 
-  // open: the focus goes in, and Escape shuts it. shut: the focus back where it was
   useEffect(() => {
     if (!open) return;
     const before = document.activeElement;
     panel.current?.focus({ preventScroll: true });
     const onKey = (e: KeyboardEvent) => {
-      // not while a modal dialog is over it, nor a drawer: that escape is theirs
       if (e.key === 'Escape' && !document.querySelector('dialog:modal, [data-drawer-open]')) change.current(false);
     };
     window.addEventListener('keydown', onKey);
@@ -152,7 +123,6 @@ export function PinSheet({
     };
   }, [open]);
 
-  // the finger, shutting it: a swipe up on the grabber, or on the lines with nothing more under them to scroll to
   useEffect(() => {
     const el = panel.current;
     if (!el) return;
@@ -187,7 +157,6 @@ export function PinSheet({
       const dy = touch.clientY - start.y;
       if (!up) {
         if (Math.abs(dx) < LOCK_PX && Math.abs(dy) < LOCK_PX) return;
-        // down, or across: a scroll, not this sheet's
         if (dy > 0 || Math.abs(dx) > Math.abs(dy)) {
           start = null;
           return;
@@ -238,7 +207,6 @@ export function PinSheet({
       data-sheet-open={open || undefined}
       className={cn('fixed inset-x-0 bottom-0 top-[var(--title-row,4rem)] z-20 overflow-hidden', !shown && 'invisible', !open && 'pointer-events-none')}
     >
-      {/* the page, dimmed: a tap shuts the sheet. no panning on it, so the page under does not scroll */}
       <div
         aria-hidden
         id="pin-sheet-scrim"
@@ -310,7 +278,6 @@ export function PinSheet({
             )
           )}
         </div>
-        {/* the grabber: a swipe up on it shuts the sheet (a sheet's bar, MobileSheet.tsx `SheetGrab`, at the foot) */}
         <div
           ref={grab}
           aria-hidden

@@ -1,14 +1,7 @@
 import { useEffect, useState } from 'react';
 
-/** On with `?kbddebug=1` in the url, and only then. */
 const ON = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('kbddebug') === '1';
 
-/**
- * Temporary: what a phone page that is the window (WatchPage.tsx, LivePage.tsx) sees while its chat is
- * typed in, read every frame, so the strip (mobile.ts, `keyboardStrip`) can be checked on a real iOS
- * Safari. A small box over the page: the focus, the visual viewport, `innerHeight`, and the height
- * the player's box (`data-kbd-video`) has right now.
- */
 export function KbdDebug({ typing }: { typing: boolean }) {
   const [text, setText] = useState('');
   useEffect(() => {

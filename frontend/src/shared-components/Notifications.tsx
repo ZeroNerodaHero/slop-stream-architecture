@@ -35,50 +35,35 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 import { ago } from '@/utils/since';
 
-/** The list is this wide at most, and at least this far from the window's edge. */
 const WIDTH = 400;
-/** How many grey rows stand in the list before the inbox has answered. */
 const ROWS_GUESS = 4;
 const EDGE = 8;
-/** Between the bell and the list. */
 const GAP = 8;
-/** The clock the rows' `3 min ago` runs on. */
 const TICK_MS = 30_000;
 
 const ICON_BUTTON =
   'flex h-7 w-7 shrink-0 items-center justify-center border border-transparent text-textSecondary hover:border-primaryBlue hover:text-primaryBlue focus-visible:border-primaryBlue focus-visible:outline-none';
-/** The number on the bell: the sidebar's blue square, as its counts have it. */
 export const COUNT =
   'absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center border border-background bg-primaryBlue px-0.5 text-[10px] font-semibold leading-none text-background';
 
-/** The × on a row: up while the pointer or the focus is on the row, always on a phone or a screen with no hover. */
 const REMOVE_BUTTON = cn(
   ICON_BUTTON,
   'absolute right-2 top-2 bg-backgroundSecondary opacity-0 transition-opacity duration-150 focus-visible:opacity-100',
   'group-hover/notification:opacity-100 group-focus-within/notification:opacity-100 max-md:h-9 max-md:w-9 max-md:opacity-100 [@media(hover:none)]:opacity-100'
 );
 
-/** The small mark in the corner of the face: what kind of thing this is. */
 const KIND_ICON: Record<NotificationKind, typeof RiBroadcastLine> = { live: RiBroadcastLine, follow: RiUserFollowLine, dm: RiChat3Line, chat: RiHashtag };
-/** The words after the name. A dm's are its own text; a channel line's say where, then its text. */
 const KIND_WORDS: Record<NotificationKind, string> = { live: 'went live', follow: 'followed you', dm: '', chat: '' };
 
-/** Where a channel's row leads: the room page, on that channel (`general` is the room itself). */
 function channelPath(at: { server: string; channel: string }): string {
   const server = encodeURIComponent(at.server);
   return at.channel === 'general' ? `/groups/${server}` : `/groups/${server}/${encodeURIComponent(at.channel)}`;
 }
 
-/**
- * The bell at the right end of every page's title row, before go live: the login's inbox
- * (docs/notifications.md), with how many are new on its corner. A click opens the list under
- * it (Notifications, mounted by the Shell) and closes it again.
- */
 export function NotificationsBell() {
   const open = useAtomValue(notificationsOpenAtom);
   const unread = useAtomValue(unreadNotificationsAtom);
   return (
-    // the name while the panel is shut; open, the panel's title says it
     <Tooltip content={open ? null : unread > 0 ? `notifications: ${unread} new` : 'notifications'}>
       <button
         id="notifications"
@@ -102,21 +87,18 @@ export function NotificationsBell() {
   );
 }
 
-/** The list under the bell. Renders nothing until the bell is pressed. */
 export function Notifications() {
   const open = useAtomValue(notificationsOpenAtom);
   const mobile = useIsMobile();
   if (!open) return null;
   return (
     <>
-      {/* a phone's: the page dimmed under the sheet, and kept still (globals.css). its click shuts the list, and lands nowhere else */}
       {mobile && <div id="notifications-dim" aria-hidden data-sheet-open="" onClick={closeNotifications} className="fixed inset-0 z-50 touch-none bg-black/60" />}
       <NotificationsList />
     </>
   );
 }
 
-/** The person a dm row opens a chat with: as the chat window or the sidebar has them now, else what the row knows. */
 function personOf(n: Notification) {
   const dm = store.get(dmsAtom).find((d) => d.name === n.name);
   if (dm) return { id: dm.id, name: dm.name, avatar: dm.avatar, verified: dm.verified, bio: dm.bio, presence: dm.presence };
@@ -127,27 +109,19 @@ function personOf(n: Notification) {
 
 interface RowProps {
   n: Notification;
-  /** New when the list opened, or since: the blue square at the row's end. */
   fresh: boolean;
   now: number;
   onPick: () => void;
 }
 
-/**
- * One row: the face with the kind in its corner, the name and what happened, when. A go-live
- * and a follow are links to the person's page; a dm opens the chat with them; a channel's
- * line is a link to that channel of the room.
- */
 function Row({ n, fresh, now, onPick }: RowProps) {
   const Icon = KIND_ICON[n.kind];
   const when = new Date(n.at);
   const at = roomOf(n);
-  // the list's rows carry the group's badge; a pushed one finds it among the sidebar's servers (a chat row's group is one of mine)
   const servers = useAtomValue(myServersAtom);
   const found = at ? (n.badge ?? servers?.find((s) => s.name === at.server)) : null;
   const group = found?.badge ? found : null;
   const className = cn(
-    // `pr-11`: room for the × on the row's right (RemoveButton), so it never covers the words or the new mark
     'flex w-full items-start gap-3 border border-transparent py-2 pl-3 pr-11 text-left transition-colors duration-150 max-md:pr-12',
     'group-hover/notification:border-primaryStroke group-hover/notification:bg-backgroundTertiary/60 focus-visible:border-primaryBlue focus-visible:outline-none'
   );
@@ -174,7 +148,6 @@ function Row({ n, fresh, now, onPick }: RowProps) {
                 in #{at.channel}
                 {!group && ` of ${at.server}`}
               </span>
-              {/* the group's badge in place of its name: one picture to a screen reader, named, and its title on hover */}
               {group && (
                 <span role="img" aria-label={`of ${at.server}`} className="inline-flex shrink-0">
                   <Badge group={group} />
@@ -185,14 +158,12 @@ function Row({ n, fresh, now, onPick }: RowProps) {
           {n.kind !== 'dm' && n.kind !== 'chat' && <span className="text-textSecondary">{KIND_WORDS[n.kind]}</span>}
         </span>
         {(n.kind === 'dm' || n.kind === 'chat') && (
-          // a line of pictures (or a video) alone, in a channel or a direct message, has no words: say so, rather than draw an empty line
           <span className="truncate text-sm text-textSecondary [overflow-wrap:anywhere]">{plainEmotes(n.text) || 'a picture or a video'}</span>
         )}
         <span className="text-xs text-textTertiary" title={when.toLocaleString()}>
           {ago(when.toISOString(), now)}
         </span>
       </span>
-      {/* new: the blue square, the colour the counts wear; it stays while the list is open, so what was new can be told apart */}
       {fresh && <span aria-label="new" className="mt-2 h-2 w-2 shrink-0 bg-primaryBlue" />}
     </>
   );
@@ -245,12 +216,6 @@ function Row({ n, fresh, now, onPick }: RowProps) {
   );
 }
 
-/**
- * The × at a row's right: the row goes, here and on the login's other devices
- * (`dismissNotification`). A sibling of the row's link, not inside it, so a press on it never
- * opens what the row leads to; the events stop here too, so the row's hover and the list's
- * outside-press do not see them as theirs.
- */
 function RemoveButton({ id }: { id: number }) {
   return (
     <Tooltip content="remove">
@@ -261,7 +226,6 @@ function RemoveButton({ id }: { id: number }) {
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          // the focus would be lost with the row: the list keeps it, on the next row's × or the close
           const li = e.currentTarget.closest('li');
           const next = (li?.nextElementSibling ?? li?.previousElementSibling)?.querySelector<HTMLElement>('[id^="notification-remove-"]');
           (next ?? document.getElementById('notifications-close'))?.focus();
@@ -275,15 +239,6 @@ function RemoveButton({ id }: { id: number }) {
   );
 }
 
-/**
- * The login's inbox under the bell: the last 30 things that happened to them, newest first,
- * each a row (above). Opening it reads everything on it (the number on the bell goes, the api
- * is told, the other devices follow); the rows that were new keep their mark for as long as
- * the list is open, and so does one that comes while it is. A `<dialog>` shown, not modal: the
- * page stays usable, and a click anywhere else, escape, the ×, or a page change closes it.
- * For nobody it says what an account would get. The gear in its header is the notifications
- * tab of the user modal, where the kinds are switched.
- */
 function NotificationsList() {
   const me = useAtomValue(meAtom);
   const list = useAtomValue(notificationsAtom);
@@ -291,15 +246,11 @@ function NotificationsList() {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [style, setStyle] = useState<CSSProperties | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
-  /** The rows the list has shown. A row not here is new, whatever its `read` says (the store reads it as it comes). */
   const known = useRef<Set<number> | null>(null);
   const [fresh, setFresh] = useState<ReadonlySet<number>>(() => new Set());
   const openedAt = useRef(pathname);
   const mobile = useIsMobile();
 
-  // Mount only: shown under the bell (and kept there through a resize), the list asked for when
-  // this tab has none yet (a load that failed; the rows otherwise come by push), the clock.
-  // Closed on the way out, and focus back on the bell when it was in here.
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (dialog && !dialog.open) dialog.show();
@@ -310,7 +261,6 @@ function NotificationsList() {
         setStyle(undefined);
         return;
       }
-      // `left: auto`: the browser's own dialog style pins both edges, and with a width the left one would win
       const right = Math.max(EDGE, room - bell.right);
       setStyle({ top: bell.bottom + GAP, left: 'auto', right, width: Math.min(WIDTH, room - right - EDGE) });
     };
@@ -326,13 +276,10 @@ function NotificationsList() {
     };
   }, []);
 
-  // a press anywhere outside the list (the bell has its own toggle) closes it, and so does escape
-  // wherever the focus is (a box that stops the key for itself, the chat window's, keeps it)
   useEffect(() => {
     const onDown = (e: PointerEvent) => {
       const target = e.target as Node | null;
       if (!target || dialogRef.current?.contains(target)) return;
-      // a phone's dim page shuts it on its click: closed on the press, the click would land on the page under it
       if (target instanceof Element && target.closest('#notifications, #drawer-notifications, #notifications-dim')) return;
       closeNotifications();
     };
@@ -347,13 +294,10 @@ function NotificationsList() {
     };
   }, []);
 
-  // a page change closes it: a row was clicked, or the back button
   useEffect(() => {
     if (pathname !== openedAt.current) closeNotifications();
   }, [pathname]);
 
-  // the rows that are new: the unread ones when the list first shows, and every row that comes after. then
-  // everything on it has been seen (the store marks the rows read; the bell's number goes; the api is told)
   useEffect(() => {
     if (!list) return;
     if (!known.current) {
@@ -374,8 +318,6 @@ function NotificationsList() {
     openUserModal('notifications');
   };
 
-  // a phone's list is a sheet up from the foot over the page dimmed (`Notifications`, MobileSheet.tsx), not hung from a bell: a
-  // tap on the dim page shuts it, and so do a drag down by its grabber and the back button
   useSheetBack(closeNotifications);
 
   return (
@@ -389,7 +331,6 @@ function NotificationsList() {
       className={panelClassName(
         cn(
           'fixed z-50 m-0 flex max-h-[min(560px,calc(100dvh-5.5rem))] flex-col overflow-hidden p-0 text-base text-textPrimary open:flex',
-          // until the bell is measured: the top right of the window
           !style && !mobile && 'left-auto right-5 top-[4.5rem] w-[min(400px,calc(100vw-2.5rem))]',
           mobile && 'inset-x-0 bottom-0 top-auto w-full max-w-none max-h-[85dvh] border-x-0 border-b-0 pb-[env(safe-area-inset-bottom)]'
         )
@@ -431,7 +372,6 @@ function NotificationsList() {
           .
         </p>
       ) : list === undefined ? (
-        // a few rows' worth of grey, the rows' shape: the face, the name and what happened, when
         <Skeleton id="notifications-loading" className="py-1">
           {Array.from({ length: ROWS_GUESS }, (_, i) => (
             <div key={i} className="flex items-start gap-3 px-3 py-2">

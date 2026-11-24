@@ -9,40 +9,20 @@ import { DrawerOpener } from '@/shared-components/UserPanel';
 import { cn } from '@/utils/cn';
 
 interface PageFrameProps {
-  /** Without one (and without `aside`) the row is just the bell and go live, and the page starts at its top: home, whose part headings stand in it. */
   title?: ReactNode;
   titleId?: string;
   aside?: ReactNode;
-  /** Room for a side panel next to the video. */
   wide?: boolean;
-  /** On a phone, the title in the row instead of `title`, which may be too much for one line: a stream's name, a group's channel. */
   mobileTitle?: ReactNode;
-  /** On a phone, a small line under the title, which then reads smaller so both fit the row: a stream's followers and watchers (WatchPage.tsx, LivePage.tsx). */
   mobileSub?: ReactNode;
-  /** On a phone, the right end of the row instead of the bell and go live, the back caret just left of it: a group's pins and its drawer's opener (ServerRoom.tsx). */
   mobileEnd?: ReactNode;
-  /** On a phone, beside the menu at the row's left: the streamer's face, yours on go live (LivePage.tsx, WatchPage.tsx). */
   mobileStart?: ReactNode;
-  /** On a phone, the page runs to the window's edges: no side padding, no gap under the row, no foot. A group's room (ServerRoom.tsx). */
   bleed?: boolean;
-  /** On a phone, the page is its parent's height: a column, the row on top and the rest the page's to share out. The go live page, which is the window (LivePage.tsx). */
   fill?: boolean;
-  /**
-   * The desktop's row is a phone's too: `mobileStart`, `mobileTitle` over `mobileSub` and `mobileEnd`, one
-   * row 56px tall, between the back caret and the bell and go live. A stream's page (WatchPage.tsx).
-   */
   person?: boolean;
   children: ReactNode;
 }
 
-/**
- * Back to the stream list, to the left of a page's title: a caret alone, named `home` for
- * screen readers and for nobody else. The one icon without a tooltip (tooltips.mdc): the row
- * is pinned to the window's top edge, so above the caret there is no room for one, and under
- * it is the page. A crash reloads the document, because the router may be what broke. The
- * tests click `header a[href="/"]`. `square`: a 40px box, the size of the face beside it in a
- * stream's row (`person`).
- */
 export function HomeLink({ reload = false, square = false, className }: { reload?: boolean; square?: boolean; className?: string }) {
   return (
     <Link
@@ -58,11 +38,6 @@ export function HomeLink({ reload = false, square = false, className }: { reload
   );
 }
 
-/**
- * A phone's way home, where the desktop has the back caret: the house, a 44px square, beside
- * the menu (a group's row, by its pins, draws it as a back caret). Named `home` and no tooltip, the caret's way (tooltips.mdc): the row is pinned to
- * the window's top edge. The tests click `header a[href="/"]`.
- */
 function MobileHomeLink({ caret = false }: { caret?: boolean }) {
   return (
     <Link
@@ -76,19 +51,11 @@ function MobileHomeLink({ caret = false }: { caret?: boolean }) {
   );
 }
 
-/** The go live page: its own row has no go live. */
 function useOnLivePage(): boolean {
   const { pathname } = useLocation();
   return pathname.replace(/\/$/, '') === '/live';
 }
 
-/**
- * The right end of every page's title row: the notifications bell (Notifications.tsx, the
- * inbox opens under it), then go live, absent on its own page. Search is the sidebar's
- * (Friends.tsx), and so is the settings gear, at the far end of your line in it (UserPanel.tsx).
- * A phone's home goes just before go live (`home`). Both are the follow button's height
- * (FollowButton.tsx): `py-1.5` around a 20px line, so a stream's row is one height across.
- */
 function TopActions({ bell = true, home = false }: { bell?: boolean; home?: boolean }) {
   const onLivePage = useOnLivePage();
   return (
@@ -104,12 +71,6 @@ function TopActions({ bell = true, home = false }: { bell?: boolean; home?: bool
   );
 }
 
-/**
- * The part of an untitled page (home) the reader is in, for a phone's row to say: the
- * `data-title` of the last `<section>` of the page whose top has reached the row's foot, the
- * first one's before any has. Read again on a scroll, a resize, and a part coming or going
- * (following, once who you follow is known). null while off, or with no parts.
- */
 function useCurrentPart(on: boolean, main: RefObject<HTMLElement | null>, row: RefObject<HTMLElement | null>): string | null {
   const [part, setPart] = useState<string | null>(null);
   useEffect(() => {
@@ -144,31 +105,6 @@ function useCurrentPart(on: boolean, main: RefObject<HTMLElement | null>, row: R
   return on ? part : null;
 }
 
-/**
- * The page's title row and its width. One row: back and the title on the left, the bell and
- * go live on the right. Sticky: the row stays at the top of the window while the page scrolls
- * under it (the page's own colour, so what scrolls under is hidden). The row is 4rem, and more
- * when the title and the actions do not fit on one line (a phone, a tablet with a long title,
- * a laptop at a larger text size): its height is measured into `--title-row` on <html>, which
- * globals.css makes the page's `scroll-padding-top`, so scrolled-to things land under the row
- * and not behind it, and which the room page sizes itself by (ServerRoom.tsx). Without a title
- * (home) the row is the bell and go live alone, exactly 4rem (the variable is not set; 4rem is
- * its fallback), and the page starts at the row's top rather than under it: home's part
- * headings are sticky and 4rem tall too (HomePage.tsx), so the one for the part you are in
- * stands at the row's left end, and the next part's pushes it out. Who you are is not here:
- * the sidebar is mounted once by the router's Shell, beside this column.
- *
- * A phone's row is its own (below 768px, mobile.ts): the menu (the sidebar's drawer) at the left
- * on every page, `mobileStart` beside it, then where you are on one line, cut with an ellipsis
- * when it is long: `mobileTitle` or the title, or on home the part you have scrolled to
- * (`useCurrentPart`), whose headings then scroll with the page under the row; with `mobileSub`
- * the title is smaller and that line sits under it, in the same height. Then home (every
- * page but home) just left of go live, or just left of `mobileEnd` (a group's pins and drawer opener), as a back caret;
- * on a page with neither, and no go live of its own, home stays beside the menu (go live passes an empty
- * `mobileEnd`: its home is at the right end). No bell: a phone's is in the sidebar's drawer, beside the gear
- * (UserPanel.tsx). Always measured into `--title-row`, home's too: the page starts under it.
- * `bleed` takes the page's padding away, so what is under the row reaches the window's edges.
- */
 export function PageFrame({
   title,
   titleId,
@@ -190,9 +126,6 @@ export function PageFrame({
   const headerRef = useRef<HTMLElement | null>(null);
   const part = useCurrentPart(mobile && !titled, mainRef, headerRef);
 
-  // the row's height, read rather than assumed: once before the first paint (a layout effect,
-  // so a page's own landing scroll already sees it), then on every change of its size (the
-  // title wrapping or not as the window or the text size changes). gone with the row
   useLayoutEffect(() => {
     const header = headerRef.current;
     if (!(titled || mobile) || !header) return;
@@ -212,13 +145,10 @@ export function PageFrame({
   if (mobile) {
     const named = mobileTitle ?? title;
     const headed = mobileTitle !== undefined || title !== undefined;
-    // home just left of go live when the row has go live, else beside the menu
     const homeByGoLive = Boolean(title) && mobileEnd === undefined && !onLivePage;
-    // a mobileEnd (a group's pins and drawer opener) gets home just left of it, on the right
     const homeByEnd = Boolean(title) && mobileEnd !== undefined;
     return (
       <main ref={mainRef} className={cn('mx-auto', bleed ? 'px-0' : 'px-4 pb-8', width, fill && 'flex h-full min-h-0 w-full flex-col')}>
-        {/* the buttons are 44px; the notch or the status bar is over them */}
         <header
           ref={headerRef}
           className={cn(
@@ -230,7 +160,6 @@ export function PageFrame({
           {mobileStart}
           {title && !homeByGoLive && !homeByEnd && <MobileHomeLink />}
           {mobileSub !== undefined ? (
-            // a stream's row: the name over its numbers, both cut with an ellipsis, in the row's own height
             <div className="ml-1 min-w-0 flex-1">
               <h1 id={titleId} className="truncate text-base font-medium leading-tight">
                 {named}
@@ -242,7 +171,6 @@ export function PageFrame({
               {named}
             </h1>
           ) : (
-            // home: the part's own heading is the page's, under the row. this says it again while that one is scrolled away
             <p aria-hidden className="min-w-0 flex-1 truncate text-xl font-semibold leading-tight">
               {part}
             </p>
@@ -263,10 +191,7 @@ export function PageFrame({
   }
 
   if (person) {
-    // a stream's row, the phone's shape at full width: their face, the name over its numbers (both cut
-    // with an ellipsis), their buttons, then the bell and go live every page ends in
     return (
-      // --page-top: where the page under the row starts (the row and its margin), for a column that fills the window (ChatSlot.tsx)
       <main ref={mainRef} className={cn('mx-auto px-5 pb-10 [--page-top:calc(var(--title-row,3.5rem)+0.5rem)]', width)}>
         <header ref={headerRef} className="sticky top-0 z-30 mb-2 flex min-h-14 items-center gap-3 border-b border-primaryStroke bg-background py-2">
           <HomeLink square />

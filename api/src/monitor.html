@@ -1,8 +1,4 @@
 <!doctype html>
-<!-- the monitor's one page. built into the api binary (monitor.rs), polls /api/monitor every 10s.
-     plain html and js on purpose: the monitor box has no node, no vite, no caddy. every piece
-     of text goes in through textContent, never innerHTML: error reports come from strangers'
-     browsers. the colours are the frontend's tokens (globals.css). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -110,7 +106,6 @@
       if (t.status === 'down' && t.reason) top.append(el('span', 'no', t.reason));
       card.append(top);
 
-      // the last 24 hours, newest on the right. an empty block is an hour with no checks yet
       const bar = el('div', 'bar');
       const hours = (t.hours || []).slice().reverse();
       for (let i = hours.length; i < 24; i++) bar.append(el('i'));

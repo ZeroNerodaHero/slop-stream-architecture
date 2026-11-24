@@ -15,20 +15,13 @@ import { cn } from '@/utils/cn';
 
 const SQUARES = 'grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3';
 const SECTION_TITLE = 'mb-4 text-sm font-semibold uppercase tracking-wider text-textTertiary';
-/** How many stand-in squares are drawn; the row shows as many as fit across and hides the rest. */
 const SQUARES_GUESS = 6;
 
-/**
- * The groups you are in, then the public ones you are not. `bot` is a badge, not one of these.
- * `create` is for a login under the cap on owned groups (the api's `groups_per_owner`), so
- * one at the cap is not offered another.
- */
 export function ExplorePage() {
   const query = useQuery({ queryKey: ['explore'], queryFn: api.explore });
   const me = useAtomValue(meAtom);
   const [text, setText] = useState('');
   const [making, setMaking] = useState(false);
-  // the letters the lists and the people query actually use: a beat after the last key
   const [q, setQ] = useState('');
   const [people, setPeople] = useState<SearchHit[] | null>([]);
 
@@ -58,7 +51,6 @@ export function ExplorePage() {
   }, [q]);
   const yours = (query.data?.yours ?? []).filter((server) => groupMatches(server, q));
   const listed = (query.data?.discover ?? []).filter((server) => server.public !== false && groupMatches(server, q));
-  // a login may make one once the list has said how many it owns, and how many it may
   const canMake = !!me && !!query.data && mayMakeGroup(query.data);
 
   return (
@@ -93,7 +85,6 @@ export function ExplorePage() {
           {messageOf(query.error)}
         </p>
       )}
-      {/* before the first answer: both headings, each over a row of grey squares, so the page has its shape and the squares land where the grey was */}
       {!query.data && !query.error && (
         <Skeleton id="groups-loading" className="flex flex-col gap-10">
           {['yours', 'public'].map((title) => (
@@ -150,11 +141,6 @@ export function ExplorePage() {
   );
 }
 
-/**
- * One row of stand-in squares on the real squares' grid and box: as many as fit across, the
- * rest cut off (extra rows are 0 tall, with no gap between rows). Still when a list is empty;
- * breathing, where motion is welcome, while the lists are on their way.
- */
 function SquaresRow({ pulse = false }: { pulse?: boolean }) {
   return (
     <div aria-hidden className={cn(SQUARES, 'grid-rows-1 auto-rows-[0] gap-y-0 overflow-hidden')}>
@@ -170,7 +156,6 @@ function Section({ id, title, empty, servers }: { id: string; title: string; emp
     <section id={id} aria-label={title}>
       <h2 className={SECTION_TITLE}>{title}</h2>
       {servers.length === 0 ? (
-        // the words over the middle of the empty row
         <div className="relative">
           <SquaresRow />
           <p className="absolute inset-0 flex items-center justify-center px-4 text-center text-sm text-textSecondary">

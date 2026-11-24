@@ -1,27 +1,3 @@
-//! Durable chat lines. The chat process, and only when `CHAT_PERSIST` is on.
-//!
-//! Redis stays the live tail: the last 500, the join history, the fan-out. Postgres
-//! (`chat_lines`, created by the api process with the other tables) is the record you
-//! scroll into and search. A line is written to redis first and inserted here after,
-//! so a slow database never holds up the room.
-//!
-//! Reads take one side or the other. Anything still inside the redis window comes from
-//! redis. A request older than the oldest id redis still has comes from postgres, strictly
-//! older than the id the client sent, so a line kept in both is not returned twice.
-//!
-//! `GET /chat/<name>/before?id=`  older lines, oldest first. redis, then postgres.
-//! `GET /chat/<name>/search?q=`   matching lines in this room, newest first. off: history is not kept.
-//!                                 the box takes filters among the words (`parse_search`): `from:<name>`,
-//!                                 `has:image`, `has:link`, `has:video`, `before:<day>`, `after:<day>`.
-//! `GET /chat/<name>/by/<name>`   that account's verified lines in this room, newest first.
-//! `GET /chat/<name>/around/<id>` a window around one line. redis when the id is still in
-//! the stream, otherwise postgres. the panel scrolls to that id.
-//!
-//! A server channel is the same four reads with the room `server/channel`:
-//! `/chat/<server>/<channel>/before`, `search`, `by/<account>`, `around/<id>`. Its search is
-//! the server's: every text channel the caller sees at once (groups.rs `visible_text_channels`),
-//! each hit saying which channel it is in, unless `channel:<name>` among the words names one.
-
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::routing::get;
@@ -42,37 +18,13 @@ use crate::{valid_name, ApiError, Name};
 
 use axum::http::StatusCode;
 
-/// How many older lines one scroll asks for. The panel treats a short page as the end.
 const PAGE: i64 = 50;
-/// Lines on each side of the one a search hit opens on.
 const WINDOW: usize = 40;
 const SEARCH_LIMIT: i64 = 50;
-/// A search's box, in unicode scalars: filters and words together.
 pub(crate) const SEARCH_CHARS: usize = 200;
-/// A link, for `has:link`, as the panel draws one (LinkedText.tsx): `http(s)://` or `www.` at the
-/// start of a word. The rooms keep it as a column (`has_link`, schema.sql, this same regex);
-/// a direct message thread, too small for a column of its own, reads it over the text (dms.rs).
 pub(crate) const LINK: &str = r"(^|[^[:alnum:]])(https?://|www\.)[^[:space:]]";
-/// A link to a video, for `has:video`: a postgres regex (case-insensitive) over the text of the
-/// lines that have a link (`has_link`, schema.sql). The host or the file type has to sit
-/// inside a link of that same shape, so a video-looking word beside an unrelated link
-/// (`a.mov … https://example.com`) is not one. A file link may end a sentence: the punctuation
-/// the panel leaves out of a link (`LinkedText.tsx`) is allowed before a space or the end, so
-/// `clip.mp4.` and `(…/clip.mp4)` are videos and `x.movie` and `clip.mp4.example.com/a` are not.
-/// This is the pasted kind: the hosts people paste, and the file types a browser plays. A video
-/// uploaded to the chat (`video` on the row) matches `has:video` too, apart from this. Not the
-/// schema's: a host is added here. The same providers the panel draws a player for
-/// (`ChatEmbeds.tsx`: youtube, vimeo, a twitch channel, vod or clip, streamable, dailymotion,
-/// tiktok, a file), and kick's clips and `.m3u8`, which it draws none for.
 pub(crate) const VIDEO_LINK: &str = r"(^|[^[:alnum:]])(https?://|www\.)[^[:space:]]*(youtube\.com/(watch|shorts|live|embed)|youtu\.be/|youtube-nocookie\.com/embed/|twitch\.tv/[[:alnum:]_]|vimeo\.com/([^[:space:]]*/)?[0-9]|streamable\.com/|dailymotion\.com/(video|embed)/|dai\.ly/|kick\.com/[^[:space:]]*/clips?/|tiktok\.com/|\.(mp4|webm|mov|m3u8)([?#]|[[:punct:]]*([[:space:]]|$)))";
 
-/// A line's columns, with its speaker's picture as it is now (`LineRow`), and its room last (a
-/// server's search spans channels, and says which one a hit is in). The row keeps no picture:
-/// a read joins `streamers` for it, by account for a verified line (so a rename keeps it for
-/// the hold's length; after it, the letter: the name the page fetches by leads elsewhere) and
-/// by name for the streamer's. A nick's line joins nothing: it is nobody's picture, whoever
-/// holds that name later. A line out of redis gets the same from `chat::with_faces`, so the
-/// two sides of the window agree.
 const LINE_COLUMNS: &str = concat!(
     "l.id, l.at, l.speaker, l.user_id, l.\"text\", l.streamer, l.verified, l.badges, l.image,
      (EXTRACT(EPOCH FROM COALESCE(u.avatar_at, r.avatar_at)))::bigint, l.room, (",
@@ -98,18 +50,12 @@ pub(crate) fn routes() -> Router<ChatState> {
         .route("/chat/{server}/{channel}/around/{id}", get(around_channel))
 }
 
-/// Who is reading: the login the cookie names (or nobody), and whether they are a site admin,
-/// who sees every channel.
 async fn viewer(s: &ChatState, headers: &HeaderMap) -> Result<(Option<Uuid>, bool), ApiError> {
     let me = crate::auth::whoami_readonly(&s.db, headers).await?;
     let user = me.as_ref().map(|a| a.id);
     Ok((user, user.is_some_and(|id| s.is_admin_id(id))))
 }
 
-/// The room key of a server's channel, once it is there and this viewer sees it (groups.rs
-/// `may_see_text`: a voice channel, or one kept to roles they do not hold, reads `no such
-/// channel`, like one that is not there). `server` and `channel` as the url has them; the
-/// clean server name comes back with the room.
 async fn seen_room(s: &ChatState, viewer: (Option<Uuid>, bool), server: &str, channel: &str) -> Result<(String, String), ApiError> {
     let (server, room) = crate::groups::channel_room(&s.db, server, channel).await?;
     let channel = room.strip_prefix(server.as_str()).and_then(|rest| rest.strip_prefix('/')).unwrap_or("");
@@ -119,15 +65,11 @@ async fn seen_room(s: &ChatState, viewer: (Option<Uuid>, bool), server: &str, ch
     Ok((server, room))
 }
 
-/// The room key of a server's channel for the login the cookie names (`seen_room`).
-/// With the viewer's account, for the lines' reactions (`reactions::Reaction::me`).
 async fn room_of_channel(s: &ChatState, headers: &HeaderMap, server: &str, channel: &str) -> Result<(String, Option<Uuid>), ApiError> {
     let who = viewer(s, headers).await?;
     Ok((seen_room(s, who, server, channel).await?.1, who.0))
 }
 
-/// Who reads a stream's room, for the lines' reactions (`reactions::Reaction::me`) alone: anyone
-/// may read one, so a cookie that does not read is a nick, not a refusal.
 async fn reader(s: &ChatState, headers: &HeaderMap) -> Option<Uuid> {
     crate::auth::whoami_readonly(&s.db, headers).await.ok().flatten().map(|a| a.id)
 }
@@ -143,9 +85,6 @@ async fn before_channel(
     Ok(json_lines(&s, &room, me, older(&s, &room, &id).await?).await)
 }
 
-/// A server's search, from the channel on screen: every channel this viewer sees, or the one
-/// `channel:<name>` names (`no such channel` for one they do not see, like one that is not
-/// there). The channel in the path must be one they see, as for every read of it.
 async fn search_channel(
     State(s): State<ChatState>,
     Path((server, channel)): Path<(String, String)>,
@@ -183,8 +122,6 @@ async fn around_channel(State(s): State<ChatState>, Path((server, channel, id)):
     window(&s, &room, &id, me).await
 }
 
-/// `CHAT_PERSIST=1` (also true, on, yes). Anything else, including unset, is off.
-/// Read from `chat::run` only, so the api process never turns this on.
 pub(crate) fn enabled() -> bool {
     flag_on(std::env::var("CHAT_PERSIST").ok().as_deref())
 }
@@ -195,8 +132,6 @@ fn flag_on(raw: Option<&str>) -> bool {
     matches!(raw.as_str(), "1" | "true" | "on" | "yes")
 }
 
-/// One accepted line, after its XADD. A conflict (the same id twice) is fine.
-/// The caller logs a failure and does not tell the sender: the line is already in the room.
 pub(crate) async fn store(
     db: &PgPool,
     room: &str,
@@ -215,8 +150,6 @@ pub(crate) async fn store(
         log::warn!("{room}: history id {id} is not a redis stream id");
         return Ok(());
     };
-    // verified is the only thing that earns an account id. a nick, and a streamer logged
-    // in as somebody else, are null, so "this user's lines" cannot be a guess.
     let user_id = user_id.filter(|_| verified);
     let badges = serde_json::to_value(groups).unwrap_or_else(|_| json!([]));
     let reply = reply.and_then(|r| serde_json::to_value(r).ok());
@@ -263,10 +196,6 @@ async fn search(State(s): State<ChatState>, Name(room): Name, headers: HeaderMap
     search_room(&s, &room, &q.q, &headers).await
 }
 
-/// The box as a search: trimmed, at most `SEARCH_CHARS`, its filters taken out from among the
-/// words (`parse_search`), and asking for something. 400 `too long`, `say what to look for`,
-/// or a filter's own words when its value will not read. A room's box and a direct message
-/// thread's (dms.rs) are read the same way.
 pub(crate) fn read_search(q: &str) -> Result<Search, ApiError> {
     let q = q.trim();
     if q.chars().count() > SEARCH_CHARS {
@@ -279,7 +208,6 @@ pub(crate) fn read_search(q: &str) -> Result<Search, ApiError> {
     Ok(search)
 }
 
-/// A stream's room: one room, and `channel:` has nothing to name.
 async fn search_room(s: &ChatState, room: &str, q: &str, headers: &HeaderMap) -> Result<JsonLines, ApiError> {
     if !s.persist {
         return Err(not_kept());
@@ -291,11 +219,7 @@ async fn search_room(s: &ChatState, room: &str, q: &str, headers: &HeaderMap) ->
     search_rooms(s, &[room.to_owned()], &search, None, reader(s, headers).await).await
 }
 
-/// The lines of `rooms` that match, newest first, 50 at most. `server`: the rooms are its
-/// channels, and each hit says which (`Hit::channel`); a stream's room says none.
 async fn search_rooms(s: &ChatState, rooms: &[String], search: &Search, server: Option<&str>, viewer: Option<Uuid>) -> Result<JsonLines, ApiError> {
-    // `from:` is the name's account too, when it has one: a login's line is its account's
-    // whatever name it was said under (a rename), and the account's lines are all its names'
     let account: Option<Uuid> = match &search.from {
         Some(name) => {
             sqlx::query_scalar("SELECT id FROM streamers WHERE name = $1 AND password_hash IS NOT NULL")
@@ -321,8 +245,6 @@ async fn search_rooms(s: &ChatState, rooms: &[String], search: &Search, server: 
     Ok(json_hits(hits))
 }
 
-/// A search hit: the line, and for a server's search the channel it is in, so the page can
-/// open it there. A stream's hits say no channel.
 #[derive(Serialize)]
 struct Hit {
     #[serde(flatten)]
@@ -331,7 +253,6 @@ struct Hit {
     channel: Option<String>,
 }
 
-/// The row as a hit: its room's channel when the search is a server's (the room is `server/channel`).
 fn hit_of(row: LineRow, server: Option<&str>) -> Hit {
     let channel = server.and_then(|server| row.10.strip_prefix(server).and_then(|rest| rest.strip_prefix('/')).map(str::to_owned));
     Hit { line: line_of(row), channel }
@@ -341,28 +262,15 @@ fn json_hits(hits: Vec<Hit>) -> JsonLines {
     axum::Json(json!({ "lines": hits }))
 }
 
-/// What the one box asked for: the words looked for, and the filters taken out from among them.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct Search {
-    /// The words as typed, filters removed, for `websearch_to_tsquery`. Empty with filters alone.
     pub(crate) words: String,
-    /// `from:<name>`, lower case: lines said under that name, and its account's under any name.
     pub(crate) from: Option<String>,
-    /// `channel:<name>` (or `in:`), a group's: lines in that one channel, where without it a
-    /// server's search spans every channel the caller sees. Nothing to name in a stream's room
-    /// or a friend's thread, which refuse it. Not a search on its own: a channel's lines are
-    /// its tail, not a thing looked for.
     pub(crate) channel: Option<String>,
-    /// `has:image` (or `picture`): a line with a picture on it.
     pub(crate) image: bool,
-    /// `has:link` (or `url`): a line with a link in its words.
     pub(crate) link: bool,
-    /// `has:video` (or `clip`): a line with a video of its own (`POST /api/chat-videos`), or a
-    /// link to one (`VIDEO_LINK`).
     pub(crate) video: bool,
-    /// `before:<day>`: said before that day began (utc).
     pub(crate) before: Option<DateTime<Utc>>,
-    /// `after:<day>`: said once that day was over (utc), so the day itself is out, as on discord.
     pub(crate) after: Option<DateTime<Utc>>,
 }
 
@@ -372,11 +280,6 @@ impl Search {
     }
 }
 
-/// The box's text apart: a `key:value` word with a key this knows is a filter; the rest are the
-/// words, kept in their order. Inside a quoted phrase nothing is a filter, so `"from: the top"`
-/// is still a phrase; the phrase ends at its closing `"` even mid-word (`world",`), as
-/// `websearch_to_tsquery` reads it. A known key with nothing after the colon, or a value it
-/// cannot read, is a 400 that says what the key wants.
 pub(crate) fn parse_search(q: &str) -> Result<Search, ApiError> {
     let mut search = Search::default();
     let mut words: Vec<&str> = Vec::new();
@@ -384,7 +287,6 @@ pub(crate) fn parse_search(q: &str) -> Result<Search, ApiError> {
     for token in q.split_whitespace() {
         if quoted || token.starts_with('"') {
             words.push(token);
-            // each `"` opens or closes a phrase, so `"a"` and `"gg"!` are whole and `world",` closes
             if token.matches('"').count() % 2 == 1 {
                 quoted = !quoted;
             }
@@ -405,7 +307,6 @@ pub(crate) fn parse_search(q: &str) -> Result<Search, ApiError> {
                 search.from = Some(name);
             }
             "channel" | "in" => {
-                // `#general` as the page writes a channel, or bare
                 let name = value.trim_start_matches('#').to_lowercase();
                 if !valid_name(&name) {
                     return Err(bad(&format!("a channel, like {key}:general")));
@@ -419,8 +320,6 @@ pub(crate) fn parse_search(q: &str) -> Result<Search, ApiError> {
                 _ => return Err(bad("image, link or video")),
             },
             "before" | "after" => {
-                // `%Y` reads a signed year of any length (`-5000`), which postgres cannot hold as an
-                // `at`; and no line is at a day before the epoch (`at_seq`), so 1970 is the floor
                 let day = NaiveDate::parse_from_str(value, "%Y-%m-%d").ok().filter(|day| day.year() >= 1970);
                 let Some(day) = day else {
                     return Err(bad(&format!("a day, like {key}:2026-10-30")));
@@ -432,7 +331,6 @@ pub(crate) fn parse_search(q: &str) -> Result<Search, ApiError> {
                     search.after = Some(next.and_time(NaiveTime::MIN).and_utc());
                 }
             }
-            // `https://…`, `re:…`: a word with a colon in it
             _ => words.push(token),
         }
     }
@@ -440,25 +338,17 @@ pub(crate) fn parse_search(q: &str) -> Result<Search, ApiError> {
     Ok(search)
 }
 
-/// A value the search binds after the room ($1), in the order `search_sql` named them. A thread's
-/// search (dms.rs) binds the same three kinds after its pair.
 pub(crate) enum Bind {
     Text(String),
     Id(Uuid),
     At(DateTime<Utc>),
 }
 
-/// The next placeholder: the room is $1, so a bind pushed here is $(its count + 1).
 fn placeholder(binds: &mut Vec<Bind>, bind: Bind) -> String {
     binds.push(bind);
     format!("${}", binds.len() + 1)
 }
 
-/// The query for a search: the rooms (one, or a server's channels, as a text array), then one
-/// clause per thing asked, each bound in the order returned, and the limit last. `simple`: the
-/// words as written, not stems; websearch so a quoted phrase stays a phrase. `has:image` and
-/// `has:link` are the partial indexes of schema.sql; `has:video` is a regex over the linked
-/// lines; the dates are the room index.
 fn search_sql(search: &Search, account: Option<Uuid>) -> (String, Vec<Bind>) {
     let mut binds = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
@@ -467,7 +357,6 @@ fn search_sql(search: &Search, account: Option<Uuid>) -> (String, Vec<Bind>) {
         clauses.push(format!("l.search @@ websearch_to_tsquery('simple', {words})"));
     }
     if let Some(name) = &search.from {
-        // a nick is stored as typed (`Bob`); an account name is lower case already
         let name = placeholder(&mut binds, Bind::Text(name.clone()));
         match account {
             Some(id) => {
@@ -484,7 +373,6 @@ fn search_sql(search: &Search, account: Option<Uuid>) -> (String, Vec<Bind>) {
         clauses.push("l.has_link".to_owned());
     }
     if search.video {
-        // an uploaded one (the partial index on `video`), or a pasted link to one
         let hosts = placeholder(&mut binds, Bind::Text(VIDEO_LINK.to_owned()));
         clauses.push(format!("(l.video IS NOT NULL OR (l.has_link AND l.\"text\" ~* {hosts}))"));
     }
@@ -561,10 +449,6 @@ async fn window(s: &ChatState, room: &str, id: &str, viewer: Option<Uuid>) -> Re
     Ok(json_lines(s, room, viewer, lines).await)
 }
 
-/// Lines strictly older than `id`, oldest first, one page.
-/// A full page from redis is still inside the window, and postgres is not asked.
-/// A short page is the end of redis: the rest, older than the oldest redis line
-/// returned (or older than `id` when redis had none), comes from postgres.
 async fn older(s: &ChatState, room: &str, id: &str) -> Result<Vec<Line>, ApiError> {
     let mut from_redis = redis_older(s, room, id, PAGE as usize).await?;
     if from_redis.len() == PAGE as usize || !s.persist {
@@ -584,18 +468,14 @@ async fn older(s: &ChatState, room: &str, id: &str) -> Result<Vec<Line>, ApiErro
     Ok(from_pg)
 }
 
-/// Newest first, strictly older than `id`, at most `limit`. Empty when redis has none
-/// (the id is already past the window, or the room's stream does not have it).
 async fn redis_older(s: &ChatState, room: &str, id: &str, limit: usize) -> Result<Vec<Line>, ApiError> {
     let mut r = s.redis.clone();
-    // `(` is exclusive. XREVRANGE's first bound is the newest end.
     let reply: StreamRangeReply = r.xrevrange_count(room_key(room), format!("({id}"), "-", limit).await?;
     let mut lines: Vec<Line> = reply.ids.into_iter().filter_map(line_from).collect();
     with_faces(&s.db, &mut lines).await;
     Ok(lines)
 }
 
-/// The window from redis when `id` is still in the stream. None when it has been trimmed.
 async fn redis_window(s: &ChatState, room: &str, id: &str) -> Result<Option<Vec<Line>>, ApiError> {
     let mut r = s.redis.clone();
     let key = room_key(room);
@@ -613,10 +493,6 @@ async fn redis_window(s: &ChatState, room: &str, id: &str) -> Result<Option<Vec<
     Ok(Some(lines))
 }
 
-/// One line of `room` by its id: from redis while the stream has it, else from `chat_lines`
-/// (asked whatever this process's `CHAT_PERSIST`: the chat process is the one that writes it).
-/// None when neither has it (never said here, or trimmed with nothing kept). Not faced: the
-/// caller keeps it as said (a channel's pins, pins.rs). 400 `bad id` for a junk id.
 pub(crate) async fn line_at(db: &PgPool, redis: &mut redis::aio::ConnectionManager, room: &str, id: &str) -> Result<Option<Line>, ApiError> {
     let id = stream_id(id)?;
     let hit: StreamRangeReply = redis.xrange_count(room_key(room), &id, &id, 1).await?;
@@ -628,9 +504,6 @@ pub(crate) async fn line_at(db: &PgPool, redis: &mut redis::aio::ConnectionManag
     Ok(row.map(line_of))
 }
 
-/// One account's verified lines in any of `rooms`, newest first, `limit` at most, from the kept
-/// rows: strictly before `before` (`(ms, seq, room)`, the order they come in) when given. → each
-/// with its room. A group's member log (group_mod.rs `member_messages`) adds what redis has.
 pub(crate) async fn by_account(db: &PgPool, rooms: &[String], user: Uuid, before: Option<(i64, i64, &str)>, limit: i64) -> Result<Vec<(String, Line)>, sqlx::Error> {
     let sql = format!(
         "SELECT {LINE_COLUMNS} FROM {LINE_TABLES}
@@ -671,7 +544,6 @@ async fn pg_side(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, side: Sid
         Side::Before => ("<", "DESC"),
         Side::After => (">", "ASC"),
     };
-    // order is one of the two literals above, never a value
     let sql = format!(
         "SELECT {LINE_COLUMNS} FROM {LINE_TABLES}
          WHERE l.room = $1 AND (l.at, l.seq) {cmp} ($2, $3)
@@ -685,11 +557,6 @@ async fn pg_side(db: &PgPool, room: &str, at: DateTime<Utc>, seq: i64, side: Sid
     Ok(lines)
 }
 
-/// `LINE_COLUMNS`, in order: `image` is the picture ids on the line (one, or several joined by
-/// commas), then the speaker's face the join found, the room, and the oauth mark of the row the
-/// join found (false when it found none: `u.id` and `r.id` are null, and so is no EXISTS), and
-/// what the line answers (`chat::Reply` as json, null for nothing), and its video (`<video>,<poster>`,
-/// `chat::Video`, null for none).
 type LineRow = (String, DateTime<Utc>, String, Option<Uuid>, String, bool, bool, Value, Option<String>, Option<i64>, String, bool, Option<Value>, Option<String>);
 
 fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, avatar, _room, oauth_verified, reply, video): LineRow) -> Line {
@@ -717,7 +584,6 @@ fn line_of((id, at, speaker, user_id, text, streamer, verified, badges, image, a
 
 type JsonLines = axum::Json<Value>;
 
-/// Lines of `room` as the reads answer them, with their reactions as they are now, `viewer`'s own marked.
 async fn json_lines(s: &ChatState, room: &str, viewer: Option<Uuid>, mut lines: Vec<Line>) -> JsonLines {
     with_reactions(&s.db, viewer, lines.iter_mut().map(|l| (room, l))).await;
     axum::Json(json!({ "lines": lines }))
@@ -735,8 +601,6 @@ fn room_of(raw: &str) -> Result<String, ApiError> {
     Ok(name)
 }
 
-/// A redis stream id, `milliseconds-sequence`. Anything else is a 400, so a junk
-/// id cannot become (0, 0) and read the whole table.
 pub(crate) fn stream_id(raw: &str) -> Result<String, ApiError> {
     if at_seq(raw).is_none() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "bad id"));
@@ -755,7 +619,6 @@ fn at_seq(id: &str) -> Option<(DateTime<Utc>, i64)> {
     if !head.bytes().all(|b| b.is_ascii_digit()) || !tail.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    // id_parts already parsed these. reject a value that does not fit the column.
     let ms = i64::try_from(ms).ok()?;
     let seq = i64::try_from(seq).ok()?;
     Some((DateTime::from_timestamp_millis(ms)?, seq))
@@ -787,7 +650,6 @@ mod tests {
         let s = parse_search("hello world").unwrap();
         assert_eq!(s.words, "hello world");
         assert!(!s.filtered());
-        // a colon with a key this does not know is a word, so a pasted link is looked for
         let s = parse_search("https://example.com/x re:that").unwrap();
         assert_eq!(s.words, "https://example.com/x re:that");
         assert!(!s.filtered());
@@ -799,7 +661,6 @@ mod tests {
         assert_eq!(s.from.as_deref(), Some("bob"), "a name is lower case, as nicks are compared");
         assert!(s.image && s.link && !s.video);
         assert_eq!(s.words, "hello there");
-        // filters alone are a search
         let s = parse_search("has:video").unwrap();
         assert!(s.video && s.words.is_empty() && s.filtered());
         assert!(parse_search("has:picture").unwrap().image);
@@ -848,8 +709,6 @@ mod tests {
 
     #[test]
     fn a_phrase_ends_at_its_closing_quote_even_mid_word() {
-        // the sentence's punctuation after a closing quote is not part of the phrase, as
-        // websearch_to_tsquery reads it, so what follows is a filter again
         let s = parse_search("\"hello world\", from:bob").unwrap();
         assert_eq!(s.words, "\"hello world\",");
         assert_eq!(s.from.as_deref(), Some("bob"));
@@ -858,7 +717,6 @@ mod tests {
         assert!(s.video);
         let s = parse_search("\"hello world\") from:bob").unwrap();
         assert_eq!(s.from.as_deref(), Some("bob"));
-        // a phrase that opens and closes in one word
         let s = parse_search("\"a\" from:bob").unwrap();
         assert_eq!(s.words, "\"a\"");
         assert_eq!(s.from.as_deref(), Some("bob"));
@@ -880,8 +738,6 @@ mod tests {
         assert_eq!(want("from:b!b"), "from: wants a name, like from:bob");
         assert_eq!(want("before:yesterday"), "before: wants a day, like before:2026-10-30");
         assert_eq!(want("after:2026-13-01"), "after: wants a day, like after:2026-10-30");
-        // chrono's `%Y` reads a signed year of any length, which postgres cannot hold; and no
-        // line is at a day before the epoch, so the floor is 1970 and a shorter year is out too
         assert_eq!(want("before:-5000-01-01"), "before: wants a day, like before:2026-10-30");
         assert_eq!(want("after:-9999-01-01"), "after: wants a day, like after:2026-10-30");
         assert_eq!(want("before:1969-12-31"), "before: wants a day, like before:2026-10-30");
@@ -906,7 +762,6 @@ mod tests {
         assert!(matches!(&binds[3], Bind::Text(re) if re == VIDEO_LINK));
         assert!(matches!(&binds[4], Bind::At(at) if *at == utc("2026-10-30")));
 
-        // a name with no account is the speaker alone; pictures bind nothing
         let s = parse_search("from:guest has:image").unwrap();
         let (sql, binds) = search_sql(&s, None);
         assert!(sql.contains("lower(l.speaker) = $2 AND l.image IS NOT NULL"));
@@ -927,7 +782,6 @@ mod tests {
         assert!(at_seq("1729-0 ").is_none());
     }
 
-    /// The one line in `room`, read the way a scroll reads it (`pg_older`, so `LINE_TABLES`), and its face.
     async fn face_of_the_line_in(pool: &PgPool, room: &str, speaker: &str) -> Option<i64> {
         let (at, seq) = at_seq("1729000000001-0").unwrap();
         let lines = pg_older(pool, room, at, seq, PAGE).await.unwrap();
@@ -936,10 +790,6 @@ mod tests {
         lines[0].avatar
     }
 
-    /// The postgres side of `chat::with_faces`'s rule, so the two sides of the window agree: a
-    /// verified line wears its account's face while the name it was said under is the account's
-    /// or held for it; after the hold, the letter, whoever holds that name later.
-    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored a_stored_lines_face` against a throwaway postgres (see auth.rs's `test_db`).
     #[tokio::test]
     #[ignore]
     async fn a_stored_lines_face_follows_a_rename_for_the_hold_and_then_is_the_letter() {
@@ -952,7 +802,6 @@ mod tests {
         let alice = row(&pool, &alice_name, Some("alice-hash")).await;
         sqlx::query("UPDATE streamers SET avatar_at = to_timestamp(1690000000) WHERE id = $1").bind(alice).execute(&pool).await.unwrap();
         store(&pool, &room, "1729000000000-0", &alice_name, Some(alice), "hi", None, None, false, true, &[], None).await.unwrap();
-        // her own name: her picture
         assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, Some(1690000000));
         let mark = |pool: PgPool, room: String| async move {
             let (at, seq) = at_seq("1729000000001-0").unwrap();
@@ -967,7 +816,6 @@ mod tests {
             .unwrap();
         assert!(mark(pool.clone(), room.clone()).await, "linked: the stored line wears the mark, as the row is now");
 
-        // what change_name leaves behind: the row is bob, and alice is held for it. the face follows
         let bob_name = format!("bob6-{run}");
         sqlx::query("UPDATE streamers SET name = $2, renamed_at = now() WHERE id = $1").bind(alice).bind(&bob_name).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO held_names (name, user_id, until) VALUES ($1, $2, now() + interval '30 days')")
@@ -978,19 +826,14 @@ mod tests {
             .unwrap();
         assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, Some(1690000000), "the face follows a rename for the hold's length");
 
-        // the hold runs out: the old name is nobody's, so the line is the letter, not an <img> that 404s
         sqlx::query("UPDATE held_names SET until = now() - interval '1 second' WHERE name = $1").bind(&alice_name).execute(&pool).await.unwrap();
         assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, None, "after the hold the old name is not the account's: the letter");
 
-        // a stranger signs up as alice and uploads a picture: still the letter, not theirs and not bob's
         let stranger = row(&pool, &alice_name, Some("stranger-hash")).await;
         sqlx::query("UPDATE streamers SET avatar_at = to_timestamp(1700000000) WHERE id = $1").bind(stranger).execute(&pool).await.unwrap();
         assert_eq!(face_of_the_line_in(&pool, &room, &alice_name).await, None, "a stranger on the freed name is nobody's picture on the account's words");
     }
 
-    /// A group member's log (group_mod.rs `member_messages`): only their verified lines, only in
-    /// the rooms asked, newest first by (ms, seq, room), and a cursor goes on strictly after it.
-    /// `TEST_DATABASE_URL=… cargo test -p api -- --ignored a_members_kept_lines` against a throwaway postgres.
     #[tokio::test]
     #[ignore]
     async fn a_members_kept_lines_come_newest_first_from_the_rooms_asked() {
@@ -1008,9 +851,7 @@ mod tests {
         store(&pool, &general, "1729000000001-0", &al_name, Some(al), "one", None, None, false, true, &[], Some(&quote)).await.unwrap();
         store(&pool, &clips, "1729000000002-0", &al_name, Some(al), "two", None, None, false, true, &[], None).await.unwrap();
         store(&pool, &general, "1729000000002-0", &al_name, Some(al), "three", None, None, false, true, &[], None).await.unwrap();
-        // a nick wearing the name: not theirs
         store(&pool, &general, "1729000000003-0", &al_name, None, "nick", None, None, false, false, &[], None).await.unwrap();
-        // a channel the moderator does not see
         store(&pool, &hidden, "1729000000004-0", &al_name, Some(al), "secret", None, None, false, true, &[], None).await.unwrap();
 
         let rooms = vec![general.clone(), clips.clone()];
@@ -1020,7 +861,6 @@ mod tests {
         let reply = all[2].1.reply.as_ref().expect("the reply's quote rides along");
         assert_eq!((reply.from.as_str(), reply.text.as_str()), ("bo", "hi al"));
 
-        // a page of one, then on from its last line
         let first = by_account(&pool, &rooms, al, None, 1).await.unwrap();
         assert_eq!(first[0].1.text, "three");
         let rest = by_account(&pool, &rooms, al, Some((1729000000002, 0, general.as_str())), 50).await.unwrap();
@@ -1029,7 +869,6 @@ mod tests {
         assert!(last.is_empty());
     }
 
-    /// The ids a search of `room` finds, through the query `search_room` runs, newest first.
     async fn found(pool: &PgPool, room: &str, q: &str) -> Vec<String> {
         let search = parse_search(q).unwrap();
         let account: Option<Uuid> = match &search.from {
@@ -1049,9 +888,6 @@ mod tests {
         rows.into_iter().map(|row| line_of(row).id).collect()
     }
 
-    /// The filters against the database: the generated `has_link` (schema.sql), the video
-    /// regex as postgres reads it, `from:` by name and by account, and the days.
-    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored the_filters` against a throwaway postgres (see auth.rs's `test_db`).
     #[tokio::test]
     #[ignore]
     async fn the_filters_find_the_lines_they_name() {
@@ -1062,38 +898,25 @@ mod tests {
         let room = format!("room7-{run}");
         let ann_name = format!("ann7-{run}");
         let ann = row(&pool, &ann_name, Some("ann-hash")).await;
-        // ids are redis stream ids: 2026-10-29 is 1793232000000 ms, 2026-10-30 is 1793318400000
         let oct29 = 1_793_232_000_000u64;
         let oct30 = 1_793_318_400_000u64;
         let line = |ms: u64, seq: u64| format!("{ms}-{seq}");
-        // ann, logged in: plain words
         store(&pool, &room, &line(oct29, 0), &ann_name, Some(ann), "morning everyone", None, None, false, true, &[], None).await.unwrap();
-        // a nick, Bob as typed, with a link
         store(&pool, &room, &line(oct29, 1), "Bob", None, "look https://example.com/page.", None, None, false, false, &[], None).await.unwrap();
-        // ann with a picture and no words
         store(&pool, &room, &line(oct30, 0), &ann_name, Some(ann), "", Some("11111111-1111-1111-1111-111111111111"), None, false, true, &[], None).await.unwrap();
-        // a nick with a video link, scheme-less
         store(&pool, &room, &line(oct30, 1), "cy", None, "this one www.youtube.com/watch?v=abc", None, None, false, false, &[], None).await.unwrap();
-        // a nick with a link to a video file
         store(&pool, &room, &line(oct30, 2), "cy", None, "or http://files.test/clip.mp4?x=1 later", None, None, false, false, &[], None).await.unwrap();
-        // "example.com" in words is not a link
         store(&pool, &room, &line(oct30, 3), "Bob", None, "example.com is a domain not a link", None, None, false, false, &[], None).await.unwrap();
-        // a video file link that ends a sentence: the period, the bracket and the exclamation are
-        // the sentence's, not the link's, as the panel draws it (LinkedText.tsx)
         store(&pool, &room, &line(oct30, 4), "cy", None, "watch this https://files.test/clip.mp4.", None, None, false, false, &[], None).await.unwrap();
         store(&pool, &room, &line(oct30, 5), "cy", None, "clip (https://files.test/clip.mp4)", None, None, false, false, &[], None).await.unwrap();
         store(&pool, &room, &line(oct30, 6), "cy", None, "lol https://x.test/a.webm!", None, None, false, false, &[], None).await.unwrap();
-        // a video-looking word beside a link that is not one: linked, not a video
         store(&pool, &room, &line(oct30, 7), "cy", None, "I saw a.mov yesterday https://example.com", None, None, false, false, &[], None).await.unwrap();
         store(&pool, &room, &line(oct30, 8), "cy", None, "x.movie https://example.com", None, None, false, false, &[], None).await.unwrap();
         store(&pool, &room, &line(oct30, 9), "cy", None, "the youtube.com/watch page is slow, see https://example.com/help", None, None, false, false, &[], None).await.unwrap();
-        // the extension inside a host is not a video file
         store(&pool, &room, &line(oct30, 10), "cy", None, "see https://clip.mp4.example.com/a", None, None, false, false, &[], None).await.unwrap();
-        // the hosts the panel draws a player for: a twitch channel, dailymotion, vimeo's player
         store(&pool, &room, &line(oct30, 11), "cy", None, "live now https://www.twitch.tv/somebody", None, None, false, false, &[], None).await.unwrap();
         store(&pool, &room, &line(oct30, 12), "cy", None, "https://dai.ly/x8abc12 and https://www.dailymotion.com/video/x8abc12", None, None, false, false, &[], None).await.unwrap();
         store(&pool, &room, &line(oct30, 13), "cy", None, "https://player.vimeo.com/video/76979871", None, None, false, false, &[], None).await.unwrap();
-        // ann's own uploaded video, no words: a video with no link at all
         store(&pool, &room, &line(oct30, 14), &ann_name, Some(ann), "", None, Some("22222222-2222-2222-2222-222222222222,33333333-3333-3333-3333-333333333333"), false, true, &[], None).await.unwrap();
 
         assert_eq!(found(&pool, &room, "everyone").await, vec![line(oct29, 0)], "the words alone, as before");
@@ -1114,7 +937,6 @@ mod tests {
         assert_eq!(found(&pool, &room, "after:2026-10-29").await.len(), 15, "after a day is from the next day on");
         assert_eq!(found(&pool, &room, "after:2026-10-29 before:2026-10-30").await, Vec::<String>::new());
 
-        // the account's lines follow a rename: ann is now dee, and `from:dee` finds what ann said
         let dee_name = format!("dee7-{run}");
         sqlx::query("UPDATE streamers SET name = $2, renamed_at = now() WHERE id = $1").bind(ann).bind(&dee_name).execute(&pool).await.unwrap();
         assert_eq!(found(&pool, &room, &format!("from:{dee_name}")).await, vec![line(oct30, 14), line(oct30, 0), line(oct29, 0)]);

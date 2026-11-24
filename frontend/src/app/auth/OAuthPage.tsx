@@ -16,7 +16,6 @@ import { BUTTON, Field, Status } from '@/shared-components/user-modal/parts';
 
 const label = providerLabel;
 
-/** Back where the trip to the provider started (infra/oauth.ts `rememberReturn`), the settings open on security when it started there. */
 function useGoBack() {
   const navigate = useNavigate();
   return useCallback(() => {
@@ -26,13 +25,6 @@ function useGoBack() {
   }, [navigate]);
 }
 
-/**
- * Where the api sends the browser back after Google or Discord (api/src/oauth.rs):
- * `?done=<p>` logged in, `?linked=<p>` attached to this account, `?pick=<p>` new here and
- * picking a name, `?error=<words>` it did not work. Logged in or linked, the page goes back to
- * where the trip started (a link from the security tab opens it again, showing the new login
- * and the verified mark). See docs/accounts.md.
- */
 export function OAuthPage() {
   const [params] = useSearchParams();
   const me = useAtomValue(meAtom);
@@ -44,7 +36,6 @@ export function OAuthPage() {
 
   useEffect(() => {
     if (done === null && linked === null) return;
-    // the login cookie is new (done) or the account gained a login (linked): who am i, again
     void reloadMe().then(() => {
       identityChanged('login');
       goBack();
@@ -86,7 +77,6 @@ export function OAuthPage() {
   );
 }
 
-/** New here through a provider: a name first, under the same rules as any signup. */
 function PickName() {
   const me = useAtomValue(meAtom);
   const navigate = useNavigate();
@@ -95,7 +85,6 @@ function PickName() {
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [gone, setGone] = useState(false);
-  // the human check (Turnstile.tsx) is on this step, not the trip to the provider: no account exists before it
   const human = useTurnstile('oauth-turnstile');
 
   useEffect(() => {
@@ -120,7 +109,6 @@ function PickName() {
     setBusy(true);
     setStatus('');
     const token = human.token;
-    // the token is single-use, spent or not
     human.spent();
     try {
       await api.oauthSignup(wanted, token);

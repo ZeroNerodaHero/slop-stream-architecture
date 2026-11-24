@@ -1,17 +1,3 @@
-//! One s3 bucket.
-//!
-//! `S3_ENDPOINT=off` (or empty) is the seaweedfs container in docker-compose: `http://s3:8333`,
-//! bucket from `S3_BUCKET`, login `stream` / `stream-s3`. Those two are the literals on
-//! the `s3` service, not `S3_ACCESS_KEY`. Startup waits until the bucket answers, the
-//! same way postgres is waited on. The container creates the bucket; a missing one is
-//! created here too.
-//!
-//! A url is someone else's bucket (aws, r2, another s3). The key and secret are
-//! required, the bucket is not created here, and a miss is a warning: the api still
-//! serves. `S3_PATH_STYLE` empty means path-style, except `*.amazonaws.com`, which
-//! wants virtual-hosted. Profile pictures are `avatars/<name>.jpg`. Stream
-//! thumbnails are `thumbs/<name>/<id>.jpg`.
-
 use std::time::Duration;
 
 use chrono::Utc;
@@ -20,7 +6,6 @@ use sha2::{Digest, Sha256};
 
 use crate::OPTIONAL_PROBE;
 
-/// Same literals as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` on the `s3` service.
 const LOCAL_ENDPOINT: &str = "http://s3:8333";
 const LOCAL_ACCESS_KEY: &str = "stream";
 const LOCAL_SECRET_KEY: &str = "stream-s3";
@@ -37,13 +22,11 @@ pub(crate) struct Store {
     access_key: String,
     secret_key: String,
     path_style: bool,
-    /// The seaweedfs container. Startup waits until the bucket answers.
     local: bool,
 }
 
 struct Target {
     url: String,
-    /// The Host header the signature covers. Includes a non-default port.
     host: String,
     canonical_uri: String,
 }
@@ -152,8 +135,6 @@ fn resolve(
     })
 }
 
-/// Create the container's bucket if it is missing, and do not return until it answers.
-/// A real endpoint is checked once: a miss is logged and the api still starts.
 pub(crate) async fn ensure(store: &Store) {
     if store.local {
         log::info!(
@@ -195,7 +176,6 @@ pub(crate) async fn ensure(store: &Store) {
     }
 }
 
-/// 2xx from a HEAD of the bucket, inside the caller's timeout.
 pub(crate) async fn ready(store: &Store) -> bool {
     matches!(head_bucket(store).await, Ok(status) if (200..300).contains(&status))
 }
@@ -218,7 +198,6 @@ pub(crate) async fn put(
     ))
 }
 
-/// `Ok(None)` is a missing key.
 pub(crate) async fn get(store: &Store, key: &str) -> Result<Option<Vec<u8>>, String> {
     check_key(key)?;
     let res = send(store, "GET", Some(key), b"", None).await?;
@@ -239,9 +218,6 @@ pub(crate) async fn get(store: &Store, key: &str) -> Result<Option<Vec<u8>>, Str
     ))
 }
 
-/// Bytes `start..=end` of a key (`Range: bytes=start-end`), for a chat video's seek
-/// (chat_videos.rs). `Ok(None)` is a missing key. A bucket that ignores the range and sends
-/// the whole object is cut here, so the caller always gets the part it asked for.
 pub(crate) async fn get_range(store: &Store, key: &str, start: u64, end: u64) -> Result<Option<Vec<u8>>, String> {
     check_key(key)?;
     let res = send_with(store, "GET", Some(key), b"", None, Some(format!("bytes={start}-{end}"))).await?;
@@ -264,7 +240,6 @@ pub(crate) async fn get_range(store: &Store, key: &str, start: u64, end: u64) ->
     ))
 }
 
-/// A missing key is fine.
 pub(crate) async fn delete(store: &Store, key: &str) -> Result<(), String> {
     check_key(key)?;
     let res = send(store, "DELETE", Some(key), b"", None).await?;
@@ -284,7 +259,6 @@ async fn head_bucket(store: &Store) -> Result<u16, String> {
 }
 
 async fn create_bucket(store: &Store) -> Result<(), String> {
-    // us-east-1 takes an empty body. the container signs as that region.
     let res = send(store, "PUT", None, b"", None).await?;
     let status = res.status().as_u16();
     if (200..300).contains(&status) || status == 409 {
@@ -306,8 +280,6 @@ async fn send(
     send_with(store, method, key, body, content_type, None).await
 }
 
-/// `send`, with a `Range` header. Not one of the signed headers: sigv4 signs what it lists, and
-/// a header it does not list rides along unsigned.
 async fn send_with(
     store: &Store,
     method: &str,
@@ -358,7 +330,6 @@ async fn send_with(
 }
 
 impl Store {
-    /// A bucket at `endpoint` (a stand-in on this machine), for a test that needs one.
     #[cfg(test)]
     pub(crate) fn for_test(endpoint: &str) -> Store {
         Store {
@@ -373,8 +344,6 @@ impl Store {
         }
     }
 
-    /// The same bucket with a longer wait per request. The usual 10 s is for pictures; a demo
-    /// model is tens of megabytes on its way to a bucket that may be far away (models.rs).
     pub(crate) fn with_timeout(mut self, timeout: Duration) -> Store {
         self.http = reqwest::Client::builder().timeout(timeout).build().expect("http client");
         self
@@ -467,7 +436,6 @@ fn clip(s: &str) -> String {
     s.chars().take(200).collect()
 }
 
-/// AWS sigv4, header auth, service `s3`. `headers` are lowercase names; this sorts them.
 fn authorization(
     method: &str,
     canonical_uri: &str,
@@ -529,7 +497,6 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
-/// Encode one path segment the way sigv4 wants. `/` is left to the caller.
 fn uri_encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
@@ -556,8 +523,6 @@ mod tests {
         assert_eq!(sha256_hex(b""), EMPTY_SHA256);
     }
 
-    /// The GET Object example in the sigv4 docs.
-    /// https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html
     #[test]
     fn signs_the_aws_get_object_example() {
         let headers = vec![
@@ -719,7 +684,6 @@ mod tests {
         assert!(check_key("").is_err());
     }
 
-    /// `cargo test -p api -- --ignored roundtrip` with the container published on 127.0.0.1:8333.
     #[tokio::test]
     #[ignore]
     async fn roundtrip_against_a_bucket() {

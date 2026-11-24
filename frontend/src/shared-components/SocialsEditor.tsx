@@ -44,23 +44,18 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 import { monthOf } from '@/utils/since';
 
-/** The two ways the links can sit. The card's picture is the strip in miniature. */
 const LAYOUT_OPTIONS: readonly { layout: SocialsLayout; label: string; detail: string }[] = [
   { layout: 'row', label: 'a row', detail: 'the icon and the word side by side, in a line that wraps' },
   { layout: 'grid', label: 'a grid', detail: 'squares, the icon over the word, as many across as fit' }
 ];
-/** The three sizes. The card's picture is an icon at that very size. */
 const SIZE_OPTIONS: readonly { size: SocialsSize; label: string; detail: string }[] = [
   { size: 'small', label: 'small', detail: 'a line of text tall' },
   { size: 'medium', label: 'medium', detail: 'the usual' },
   { size: 'large', label: 'large', detail: 'buttons a thumb can hit' }
 ];
-/** The kinds a sample strip shows while the list is empty. */
 const SAMPLE_KINDS: readonly SocialKind[] = ['twitch', 'youtube', 'discord', 'x', 'web'];
-/** A small label over a group inside the editor: Field's label type, since the box already wears the title. */
 const GROUP_LABEL = 'text-sm font-semibold text-textSecondary';
 
-/** The strip in miniature, for the layout cards: the owner's own kinds (or a sample), as a line or as squares. */
 function LayoutPreview({ layout, kinds }: { layout: SocialsLayout; kinds: readonly SocialKind[] }) {
   const shown = (kinds.length > 0 ? kinds : SAMPLE_KINDS).slice(0, 6);
   return (
@@ -89,11 +84,6 @@ function LayoutPreview({ layout, kinds }: { layout: SocialsLayout; kinds: readon
   );
 }
 
-/**
- * One row of the draft: the handle it is dragged by, the kind's icon, the url and the words as
- * typed, the ×. All of it edits the draft; nothing here reaches the api until `save links`. A
- * url that is not a link is marked (red stroke) but kept: the save names the row instead of a 400.
- */
 function LinkRow({ link, i, focus, handle, item }: { link: SocialLink; i: number; focus: boolean; handle: DragHandleProps; item: { 'data-reorder-item': string } }) {
   const Icon = SOCIAL_ICON[link.kind];
   const word = link.label.trim() || link.kind;
@@ -158,31 +148,18 @@ function LinkRow({ link, i, focus, handle, item }: { link: SocialLink; i: number
 }
 
 interface SocialsEditorProps {
-  /** The api's rule, known before a save: a claimed name that is not my login, or a reserved one, has the boxes off. */
   canEdit: boolean;
-  /** Why they are off, for the status. '' while they are on. */
   whyNot: string;
-  /** `done`, or a `save links` the api kept: the editor folds away. The draft stays where it is, saved or not. */
   onDone: () => void;
 }
 
-/**
- * The links' editor (docs/socials.md), on the owner's own page under the strip it edits: the
- * rows, the places to add one from (a square per kind: click it and a row of that kind appears
- * with its url box focused), how the links sit and how big, and one `save links`. The strip
- * above follows the draft as it is typed, so there is no preview of its own. The draft lives
- * in profile-atoms, so the editor can fold away and open again on it; one `disabled` over the
- * whole thing with `whyNot` in the status, the presence block's shape.
- */
 export function SocialsEditor({ canEdit, whyNot, onDone }: SocialsEditorProps) {
   const draft = useAtomValue(profileSocialsAtom);
   const status = useAtomValue(profileSocialsStatusAtom);
   const dirty = useAtomValue(profileSocialsDirtyAtom);
-  // the row added last: its url box takes focus as it appears
   const [focusRow, setFocusRow] = useState(-1);
   const kinds = useMemo(() => draft.links.map((l) => l.kind), [draft]);
   const full = draft.links.length >= MAX_SOCIALS;
-  // the links have no ids: a row's key is its place, and the drop moves the draft
   const keys = useMemo(() => draft.links.map((_, i) => String(i)), [draft]);
   const reorder = useReorder({
     keys,
@@ -219,7 +196,6 @@ export function SocialsEditor({ canEdit, whyNot, onDone }: SocialsEditorProps) {
             </div>
           )}
 
-          {/* the places: a square per kind. not a form: a click makes a row, the row is where the typing goes */}
           <div className="flex flex-col gap-1.5">
             <span id="socials-kinds-label" className={GROUP_LABEL}>
               add a link
@@ -295,7 +271,6 @@ export function SocialsEditor({ canEdit, whyNot, onDone }: SocialsEditorProps) {
         </div>
       </fieldset>
 
-      {/* outside the fieldset: `done` works whether or not the boxes are on */}
       <div className="mt-5 flex flex-wrap items-center gap-3">
         <Button id="socials-save" size="sm" variant="outline" disabled={!canEdit} onClick={() => void saveMySocials().then((kept) => kept && onDone())}>
           save links
@@ -309,11 +284,6 @@ export function SocialsEditor({ canEdit, whyNot, onDone }: SocialsEditorProps) {
   );
 }
 
-/**
- * The draft as the strip draws it while the editor is open: every url as the save will send it
- * (`https://` in front of a bare host, `saveMySocials`'s rule), a row that is not a link yet
- * left out, then the page's own check, as for a document the api sent.
- */
 function draftAsShown(draft: SocialsDoc): SocialsDoc {
   const links: SocialLink[] = [];
   for (const link of draft.links) {
@@ -324,36 +294,21 @@ function draftAsShown(draft: SocialsDoc): SocialsDoc {
 }
 
 interface SocialsTabProps {
-  /** Whose page. */
   name: string;
-  /** Their links as the grant gave them (watch-atoms), already through `cleanSocials`. */
   doc: SocialsDoc;
-  /** When the account behind the name was made (rfc3339), as the grant gave it. `null`: a free name, nothing to say. */
   joined: string | null;
-  /** My own page: the strip offers the editor, which opens under it. */
   mine: boolean;
 }
 
-/**
- * The socials tab under the player (docs/socials.md): a line saying when they joined (an
- * account's `created_at`, the month; the day on hover; nothing for a free name, which nobody
- * joined), the strip, and on my own page the editor under it. While the editor is open the
- * strip is the draft as the save will keep it (a row that is not a link yet is left out), so
- * what is being edited is what is on the page; `done` folds the editor and the strip is the
- * saved document again (the draft is kept for the next time). Opening it loads my profile, so
- * the draft and the api's rule are the name's I am.
- */
 export function SocialsTab({ name, doc, joined, mine }: SocialsTabProps) {
   const [opened, setOpened] = useState(false);
   const draft = useAtomValue(profileSocialsAtom);
   const canEdit = useAtomValue(canEditProfileAtom);
   const whyNot = useAtomValue(whyNotEditAtom);
-  // not my page any more (a log out, a new nick): the editor goes with it
   const editing = opened && mine;
   const shown = useMemo(() => (editing ? draftAsShown(draft) : doc), [editing, draft, doc]);
 
   const open = () => {
-    // the page's document seeds an untouched draft, so the strip does not blink out while my profile loads
     if (socialsKey(store.get(profileSocialsAtom)) === socialsKey(EMPTY_SOCIALS)) store.set(profileSocialsAtom, doc);
     void loadMyProfile();
     setOpened(true);
@@ -362,7 +317,6 @@ export function SocialsTab({ name, doc, joined, mine }: SocialsTabProps) {
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-3">
-        {/* here since when: the month, in the viewer's time zone; the whole date on hover and in `dateTime` */}
         {joined && (
           <p id="socials-joined" className="text-sm text-textSecondary">
             joined{' '}
@@ -371,7 +325,6 @@ export function SocialsTab({ name, doc, joined, mine }: SocialsTabProps) {
             </time>
           </p>
         )}
-        {/* an empty draft while editing: the editor's own box says so, not two of them */}
         {(!editing || shown.links.length > 0) && <Socials name={name} doc={shown} onEdit={mine && !editing ? open : undefined} />}
       </div>
       {editing && <SocialsEditor canEdit={canEdit} whyNot={whyNot} onDone={() => setOpened(false)} />}

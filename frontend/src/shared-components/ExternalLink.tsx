@@ -9,10 +9,8 @@ import { SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/Mobil
 import { CHECKBOX } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
-/** What every link out of this origin wears: a new tab that gets nothing of this page (about.md's rule for a link). */
 export const EXTERNAL_REL = 'noopener noreferrer nofollow';
 
-/** The site a link goes to, for the words: its host, without a `www.`. */
 export function siteOf(href: string): string {
   try {
     return new URL(href).hostname.replace(/^www\./, '');
@@ -21,19 +19,10 @@ export function siteOf(href: string): string {
   }
 }
 
-/** The links setting as it is at the click, not as it was when the link was drawn. */
 function asks(href: string): boolean {
   return !isSameOrigin(href) && store.get(linkWarningAtom);
 }
 
-/**
- * The one way a link leaves this site (.cursor/rules/external-links.mdc): while the links
- * setting asks for it (the chat tab, `settings.linkWarning`), a click on it, a cmd/ctrl/shift
- * click or a middle click included, shows the word first (`LeaveDialog`) in place of the tab. A
- * link on this origin is let through as it is. `from` is who put the link there, the word's
- * first sentence. Spread the handlers on the `<a>` and draw `dialog` beside it; or take
- * `ExternalLink`, which does both.
- */
 export function useExternalLink(href: string, from?: string) {
   const [asking, setAsking] = useState(false);
   const ask = (e: MouseEvent<HTMLAnchorElement>) => {
@@ -43,7 +32,6 @@ export function useExternalLink(href: string, from?: string) {
   };
   return {
     onClick: ask,
-    // the middle button opens a tab on auxclick, not click
     onAuxClick: (e: MouseEvent<HTMLAnchorElement>) => {
       if (e.button === 1) ask(e);
     },
@@ -53,12 +41,10 @@ export function useExternalLink(href: string, from?: string) {
 
 type ExternalLinkProps = Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href' | 'target' | 'rel'> & {
   href: string;
-  /** Who put the link there: the word's first sentence. */
   from?: string;
   children?: ReactNode;
 };
 
-/** An `<a>` to another site: a new tab with `EXTERNAL_REL`, through the word while the links setting asks. */
 export function ExternalLink({ href, from, onClick, onAuxClick, children, ...rest }: ExternalLinkProps) {
   const link = useExternalLink(href, from);
   return (
@@ -86,20 +72,10 @@ export function ExternalLink({ href, from, onClick, onAuxClick, children, ...res
 
 interface LeaveDialogProps {
   href: string;
-  /** Who put the link there. Unsaid: another site, nothing more. */
   from?: string;
-  /** Closed any way: gone through, stayed, escape, the backdrop. */
   onClose: () => void;
 }
 
-/**
- * The word before a link out: which site it goes to, the whole address, and the way on or back.
- * On the page's body, not inside whatever drew the link (a modal inside a modal closes the outer
- * one with it), and in the link's own window: the popped-out player's when the chat is there.
- * The way on is the link itself, so the browser opens the tab the way it opens any link;
- * `don't ask again` turns the links setting off as it goes through, and the chat tab turns it
- * back on.
- */
 export function LeaveDialog({ href, from, onClose }: LeaveDialogProps) {
   const anchor = useRef<HTMLSpanElement>(null);
   const [host, setHost] = useState<HTMLElement | null>(null);
@@ -116,14 +92,10 @@ export function LeaveDialog({ href, from, onClose }: LeaveDialogProps) {
 
 function LeaveBox({ href, from = 'this link goes to another site.', onClose }: LeaveDialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
-  /** The press that began this click was on the backdrop too: a drag that ends outside is not a stay. */
   const pressedBackdrop = useRef(false);
   const [dontAsk, setDontAsk] = useState(false);
   const site = siteOf(href);
 
-  // A layout effect, as ConfirmDialog: its cleanup runs while the node is still in the
-  // document, which is when close() hands focus back to the link. "stay" has focus to begin
-  // with: a stray enter goes nowhere.
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
@@ -140,7 +112,6 @@ function LeaveBox({ href, from = 'this link goes to another site.', onClose }: L
     pressedBackdrop.current = e.target === e.currentTarget;
   };
   const onClick = (e: MouseEvent<HTMLDialogElement>) => {
-    // the second click of a double-click on the link lands on the backdrop the first one opened: not a stay
     if (e.detail > 1) return;
     if (pressedBackdrop.current && e.target === e.currentTarget) close();
   };
@@ -163,8 +134,6 @@ function LeaveBox({ href, from = 'this link goes to another site.', onClose }: L
         event.stopPropagation();
         onClose();
       }}
-      // the dialog box is the panel: a click whose target is the dialog element landed on the backdrop
-      // a phone's is a sheet up from the foot (MobileSheet.tsx)
       className={cn(
         'm-auto w-[min(440px,calc(100vw-3rem))] border border-primaryStroke bg-backgroundSecondary p-6 text-base text-textPrimary backdrop:bg-black/60',
         SHEET_DIALOG
@@ -188,7 +157,6 @@ function LeaveBox({ href, from = 'this link goes to another site.', onClose }: L
         <button id="leave-site-stay" type="button" className="text-base font-semibold text-textTertiary" onClick={close}>
           stay
         </button>
-        {/* the link itself, dressed as the button: the browser opens the tab, and the box closes behind it */}
         <a
           id="leave-site-go"
           href={href}

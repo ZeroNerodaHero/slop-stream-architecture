@@ -6,7 +6,6 @@ import { INPUT } from '@/shared-components/input';
 import { SHEET_DIALOG, SheetGrab, useSheetBack } from '@/shared-components/MobileSheet';
 import { cn } from '@/utils/cn';
 
-/** Short plain words for the phrase: two of them, picked fresh on each open. */
 const WORDS = [
   'amber',
   'falcon',
@@ -62,31 +61,19 @@ const WORDS = [
 
 function pickPhrase(): string {
   const first = Math.floor(Math.random() * WORDS.length);
-  // the second from the rest, so the two are never the same word
   const second = (first + 1 + Math.floor(Math.random() * (WORDS.length - 1))) % WORDS.length;
   return `${WORDS[first]} ${WORDS[second]}`;
 }
 
 interface TypeToConfirmProps {
-  /** The ids the tests key on: `<id>`, `<id>-title`, `<id>-message`, `<id>-phrase`, `<id>-input`, `<id>-yes`, `<id>-no`. */
   id: string;
-  /** The question, as the heading. */
   title: string;
-  /** What a yes does, spelled out. */
   message: string;
-  /** The yes button's word ("delete"). The other one says "cancel". */
   yes: string;
   onYes: () => void;
-  /** Cancel, escape, a click on the backdrop, or the question taken away unanswered. */
   onNo: () => void;
 }
 
-/**
- * ConfirmDialog for the worst of them (deleting a group): the yes stays off until two random
- * words are typed back. The words are new on every open and cannot be copied or pasted, so
- * the yes takes reading them. Mounted = asked, portalled onto the page like ConfirmDialog: a
- * modal inside a modal closes the outer one with it.
- */
 export function TypeToConfirm(props: TypeToConfirmProps) {
   const anchor = useRef<HTMLSpanElement>(null);
   const [host, setHost] = useState<HTMLElement | null>(null);
@@ -105,15 +92,12 @@ const stop = (e: ClipboardEvent | DragEvent | MouseEvent) => e.preventDefault();
 
 function TypeBox({ id, title, message, yes, onYes, onNo }: TypeToConfirmProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
-  /** Yes was pressed: the `close` that follows is a yes. Anything else is a no. */
   const saidYes = useRef(false);
-  /** The press that began this click was on the backdrop too: a drag that ends outside is not a no. */
   const pressedBackdrop = useRef(false);
   const [phrase] = useState(pickPhrase);
   const [typed, setTyped] = useState('');
   const matches = typed.trim() === phrase;
 
-  // as ConfirmDialog's: the cleanup runs while the node is still in the document, and a question taken away unanswered is a no
   useLayoutEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog || dialog.open) return;
@@ -134,7 +118,6 @@ function TypeBox({ id, title, message, yes, onYes, onNo }: TypeToConfirmProps) {
   const onClick = (e: MouseEvent<HTMLDialogElement>) => {
     if (pressedBackdrop.current && e.target === e.currentTarget) close();
   };
-  // enter, or the yes button: only once the words match
   const onSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!matches) return;

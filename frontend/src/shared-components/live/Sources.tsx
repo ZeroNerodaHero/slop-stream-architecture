@@ -70,27 +70,17 @@ import { VideoFrame } from '@/shared-components/VideoFrame';
 import { cn } from '@/utils/cn';
 import { ViewerCount } from '@/shared-components/ViewerCount';
 
-/** A row: the selected one wears the rail's mark, a blue edge on a lifted ground. Its handle sits against that edge, so the row's own inset there is thin. */
 const ROW = 'group/row flex h-10 w-full min-w-0 items-center gap-2 border-l-2 pl-0.5 pr-1 text-left text-sm leading-tight transition-colors duration-150';
 const ROW_ON = 'border-primaryBlue bg-backgroundTertiary text-textPrimary';
 const ROW_OFF = 'border-transparent text-textSecondary hover:bg-backgroundTertiary/60 hover:text-textPrimary';
-/** A row's handle: an icon button as narrow as its dots, taken hold of rather than pressed (a finger on it scrolls no page and selects no words). */
 const MENU_ITEM =
   'flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-textSecondary transition-colors duration-150 hover:bg-backgroundTertiary hover:text-textPrimary focus-visible:bg-backgroundTertiary focus-visible:text-textPrimary focus-visible:outline-none disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-textSecondary';
 
-/** A row's little picture of its source: the slot's stream, muted. */
 function Thumb({ id, streamAtom }: { id: string; streamAtom: Atom<MediaStream | null> }) {
   const ref = useRef<HTMLVideoElement | null>(null);
   return <VideoFrame id={id} streamAtom={streamAtom} videoRef={ref} muted className="h-7 w-12 shrink-0 border-primaryStroke object-cover" />;
 }
 
-/**
- * The `+`: a menu with what can be added, before start or live. The camera, while it is off
- * (mic only); a model (docs/vtuber.md: a 3d model in the camera's place, moved by the
- * streamer's face; `onModel` opens its picker); the avatar (the streamer's picture, moving with
- * their voice; one), a screen or window (three at most), a picture, and the pictures this name
- * put up before, offered again under the upload. Escape and a press outside close it.
- */
 function AddMenu({ onModel }: { onModel: () => void }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement | null>(null);
@@ -119,7 +109,6 @@ function AddMenu({ onModel }: { onModel: () => void }) {
 
   return (
     <div ref={root} className="relative mr-1">
-      {/* the name while the menu is shut; open, the menu says what is there */}
       <Tooltip content={open ? null : 'add a source'}>
         <button
           id="add-source"
@@ -267,7 +256,6 @@ const ICONS = { camera: RiVidiconLine, screen: RiComputerLine, image: RiImageLin
 interface RowProps {
   source: Source;
   hasCamera: boolean;
-  /** The list's `handle(id)` (Reorderable): the row's way through the stack. */
   handle: DragHandleProps;
   item: { 'data-reorder-item': string };
 }
@@ -278,13 +266,11 @@ function Row({ source, hasCamera, handle, item }: RowProps) {
   const name = useAtomValue(streamNameAtom);
   const avatar = useAtomValue(myAvatarVersionAtom);
   const hasMic = useAtomValue(hasMicAtom);
-  // a model in the camera's place (docs/vtuber.md): the camera's row is the model's, under the model's name
   const model = useAtomValue(modelAtom);
   const worn = source.kind === 'camera' ? model : null;
   const label = worn ? worn.name : source.label;
   const Icon = worn ? RiUserSmileLine : ICONS[source.kind];
   const fill = source.fit ? source.fit === 'cover' : source.kind === 'camera';
-  // the camera's × turns it off (mic only); not without a mic, since nothing would be left to stream
   const canRemove = source.kind !== 'camera' || hasMic;
   const removeWords =
     source.kind === 'screen'
@@ -300,7 +286,6 @@ function Row({ source, hasCamera, handle, item }: RowProps) {
               : 'turn the camera off: mic only, your avatar stands in';
   return (
     <li {...item} className={cn(ROW, selected ? ROW_ON : ROW_OFF)}>
-      {/* the handle says a row can be moved, so like the eye it is always there */}
       <DragHandle id={`source-drag-${source.id}`} {...handle} />
       <button
         id={`source-${source.id}`}
@@ -323,7 +308,6 @@ function Row({ source, hasCamera, handle, item }: RowProps) {
           {label}
         </span>
       </button>
-      {/* the eye reports state, so it is always there; the rest comes up with the pointer or the keys */}
       <Tooltip
         content={
           source.shown ? (source.kind === 'image' ? 'on the stream. click to hide it' : 'on the stream. click to put it beside') : 'off the stream. click to put it on'
@@ -384,23 +368,11 @@ function Row({ source, hasCamera, handle, item }: RowProps) {
   );
 }
 
-/**
- * The rows, top of the stack first (the sources are kept bottom first). A row is taken by the
- * handle at its left end and dragged up or down the stack: it follows the pointer a row at a
- * time, and the frame follows it, here at once and for the watchers within a beat. On the
- * handle, space picks the row up, the arrow keys move it a row a press, space drops it and
- * escape puts it back (Reorderable). A row taken hold of is the selected one, as a
- * layer of the preview is. The drag is this list's own, so it goes with the list (the last
- * source gone, the panel folded) and a new list starts with none.
- */
 function SourceList({ sources }: { sources: Source[] }) {
   const hasCamera = sources.some((s) => s.kind === 'camera');
   const byId = new Map(sources.map((s) => [s.id, s]));
-  // the camera's row is the model's when one is worn, under the model's name (Row)
   const model = useAtomValue(modelAtom);
   const sourceLabel = (s: Source | undefined) => (s?.kind === 'camera' && model ? model.name : (s?.label ?? 'source'));
-  // the rows are the stack top first; a row's place in the list is `length - 1 - at` in the stack (0 the bottom).
-  // live: the frame follows the row as it goes, and escape puts it back
   const reorder = useReorder({
     keys: [...sources].reverse().map((s) => s.id),
     name: (id) => sourceLabel(byId.get(id)),
@@ -422,15 +394,6 @@ function SourceList({ sources }: { sources: Source[] }) {
   );
 }
 
-/**
- * The foot of the panel: start, or stop once the stream is up, the width of the panel. A guest
- * with no name yet is told so under it, with the way to the profile tab, where the name is
- * picked (there is no name box on this page: a login streams as its account, anyone else as
- * the nick in the corner panel). While live, `share screen` beside stop, the same press as the
- * `+` menu's `screen or window`; not where the browser has no screen capture (phones). A
- * phone's go live page puts it beside the status under the preview instead (LivePage.tsx), in
- * a box of its own `className`.
- */
 export function StartStop({ className = 'flex flex-col gap-2 p-2', status = false }: { className?: string; status?: boolean }) {
   const publishing = useAtomValue(isPublishingAtom);
   const message = useAtomValue(publishMessageAtom);
@@ -472,8 +435,6 @@ export function StartStop({ className = 'flex flex-col gap-2 p-2', status = fals
           share screen
         </button>
       )}
-      {/* the stream's status and who is watching, small, under stop and share screen (the desktop page's;
-          a phone's page has its own beside start/stop). #status and #viewers keep their ids (docs/spec.md) */}
       {status && message && (
         <p
           id="status"
@@ -494,17 +455,6 @@ export function StartStop({ className = 'flex flex-col gap-2 p-2', status = fals
   );
 }
 
-/**
- * The sources, beside the preview: the camera (or the avatar standing in for it, mic only),
- * the shared screens and the pictures, top of the stack first (the row order is the reverse
- * of the array, the way a layers panel reads). Each row selects its layer; the handle at its
- * left end drags it up or down the stack; the eye puts it on or off the stream; `×` stops a
- * share, removes a picture or the avatar, turns the camera off. The `+` adds. Folded, it is a
- * rail, with start (or stop) still at its foot. With a model in the camera's place
- * (docs/vtuber.md) its face reader's words and controls sit under the list, and the picker is
- * this panel's to open: from the `+`, and from `another model`. `startStop={false}`: no foot,
- * the page has start and stop somewhere else (a phone's, LivePage.tsx).
- */
 export function Sources({ startStop = true }: { startStop?: boolean }) {
   const sources = useAtomValue(sourcesAtom);
   const open = useAtomValue(livePanelsAtom).sources;
@@ -512,7 +462,6 @@ export function Sources({ startStop = true }: { startStop?: boolean }) {
   const phase = useAtomValue(publishPhaseAtom);
   const modelLoading = useAtomValue(modelLoadingAtom);
   const [picking, setPicking] = useState(false);
-  // nothing opened: the camera was refused or is missing, or the mic was (mic only, kept from last time). the way out is the other start
   const cameraRefused = phase === 'camera-blocked' || phase === 'no-camera';
   const micRefused = phase === 'mic-blocked' || phase === 'no-mic';
   return (
@@ -531,11 +480,9 @@ export function Sources({ startStop = true }: { startStop?: boolean }) {
       >
         {sources.length === 0 ? (
           <div className="px-3 py-3 text-sm text-textTertiary">
-            {/* a visit that comes back to a model has no camera on its way: the preview says how far along the model is */}
             <p>
               {modelLoading ? 'your model shows up here once it is on' : micRefused ? 'the mic shows up here once it is on' : 'the camera shows up here once it is on'}
             </p>
-            {/* the camera refused, or missing: the mic alone still makes a stream, with the avatar for a face. the other way round, the camera */}
             {cameraRefused && (
               <button id="mic-only" type="button" className="mt-2 text-sm font-semibold text-primaryBlue" onClick={() => void startMic()}>
                 go mic only: your avatar, moving with your voice
@@ -558,7 +505,6 @@ export function Sources({ startStop = true }: { startStop?: boolean }) {
           </p>
         )}
       </Collapsible>
-      {/* outside the panel: a folded panel has no body, and the picker is asked for from its header's + */}
       {picking && <ModelDialog onClose={() => setPicking(false)} />}
     </aside>
   );

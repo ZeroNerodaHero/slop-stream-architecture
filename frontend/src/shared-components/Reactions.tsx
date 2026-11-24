@@ -8,32 +8,18 @@ import { EMOJI_NAMES, EMOJIS, MAX_KINDS, QUICK, type Reaction, reacted, whoReact
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/**
- * A reaction's name, for its label and its tooltip: the emoji's word (the glyph itself when the
- * list has none), or a custom emote's `:name:` (`emotes`, what the api said the ids are).
- */
 function nameOf(emoji: string, emotes?: Map<string, Emote | null>): string {
   if (!isEmoteId(emoji)) return EMOJI_NAMES[emoji] ?? emoji;
   const emote = emotes?.get(emoji.toLowerCase());
   return emote ? `:${emote.name}:` : emote === null ? 'a deleted emote' : 'an emote';
 }
 
-/** A reaction drawn: the emoji, or a custom emote's picture (a `?` for one that is gone). `size` is the picture's, in px. */
 function Glyph({ emoji, emote, size }: { emoji: string; emote: Emote | null | undefined; size: number }) {
   if (!isEmoteId(emoji)) return <>{emoji}</>;
   if (emote === null) return <>?</>;
   return <img src={emoteSrc(emoji)} alt="" draggable={false} className="inline-block object-contain" style={{ width: size, height: size }} />;
 }
 
-/**
- * The button that opens the reaction picker, and the picker: a quick row of the first `QUICK`
- * emoji, then the whole grid (reaction-list.ts `EMOJIS`, the api's list). Drawn into the body (or the
- * open `<dialog>`), under the button or over it when the window's foot is too near, the `more`
- * menu's way (ChatLine.tsx `MoreMenu`). The arrows walk the grid, escape closes it, a pick closes
- * it. An emoji already yours is lit, and picking it takes it off; with `MAX_KINDS` different on the
- * line, the ones not there yet are out of reach and the picker says why. `trigger` is the button's
- * look: the action bar's icon (`className`) or the chip row's add chip.
- */
 export function ReactionPicker({
   reactions,
   me,
@@ -48,7 +34,6 @@ export function ReactionPicker({
   onPick: (emoji: string) => void;
   label?: string;
   className: string;
-  /** `data-line-action` on the button, for the tests and the pages. */
   id?: string;
   children?: ReactNode;
 }) {
@@ -59,12 +44,10 @@ export function ReactionPicker({
   const full = reactions.length >= MAX_KINDS;
   const there = new Set(reactions.map((r) => r.emoji));
   const mine = new Set(reactions.filter((r) => reacted(r, me)).map((r) => r.emoji));
-  // the login's custom emotes, a section per group after the list (emotes.ts); none for a login in no group with any
   const myEmotes = useMyEmotes();
   const byGroup = new Map<string, Emote[]>();
   for (const e of myEmotes) byGroup.set(e.group, [...(byGroup.get(e.group) ?? []), e]);
 
-  // placed before paint (`left-0 top-0` until then), kept in the window, again on a scroll or a resize
   useLayoutEffect(() => {
     const el = panel.current;
     if (!open || !el) return;
@@ -108,7 +91,6 @@ export function ReactionPicker({
     if (e.key === 'ArrowLeft') to = i - 1;
     else if (e.key === 'ArrowRight') to = i + 1;
     else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      // a row is the cells at one height: the nearest in the next row up or down, by where they stand
       const here = at.getBoundingClientRect();
       const down = e.key === 'ArrowDown';
       const rows = cells.map((c) => c.getBoundingClientRect()).map((r, j) => ({ j, top: r.top, x: Math.abs(r.left - here.left) }));
@@ -151,7 +133,6 @@ export function ReactionPicker({
 
   return (
     <>
-      {/* its name is a tooltip while it is shut; open, the picker says what it is */}
       <Tooltip content={open ? null : label}>
         <button
           ref={button}
@@ -172,7 +153,6 @@ export function ReactionPicker({
       {open &&
         host &&
         createPortal(
-          // `data-line-menu`: a press in here is the line's own, and leaves a long press's bar up (ChatLine.tsx)
           <div
             ref={panel}
             role="dialog"
@@ -185,7 +165,6 @@ export function ReactionPicker({
             <div role="group" aria-label="quick" className="flex gap-0.5 border-b border-primaryStroke pb-1">
               {EMOJIS.slice(0, QUICK).map((e) => cell(e, true))}
             </div>
-            {/* the list, then a section per group of the login's emotes: one scroll when that is more than the window holds */}
             <div className={cn('flex flex-col gap-1', byGroup.size > 0 && 'max-h-[min(50dvh,360px)] overflow-y-auto overscroll-contain')}>
               <div role="group" aria-label="every reaction" className="grid grid-cols-8 gap-0.5 max-md:grid-cols-6">
                 {EMOJIS.map((e) => cell(e, false))}
@@ -213,13 +192,6 @@ export function ReactionPicker({
   );
 }
 
-/**
- * The reactions under a line, discord's chips: the emoji and how many, lit (`outline`, the blue)
- * where one is yours. A click puts yours on or takes it off; the tooltip says who reacted. `onReact`
- * absent (a nick in a stream's chat): the chips still say who, and a click asks to log in through
- * `onBlocked`. The last chip is the picker again, there while the line is pointed at (always on a
- * screen with no hover).
- */
 export function ReactionChips({
   reactions,
   me,
@@ -231,7 +203,6 @@ export function ReactionChips({
   onReact?: (emoji: string) => void;
   onBlocked?: () => void;
 }) {
-  // what the custom emotes on the line are: their names for the words, and whether one is gone
   const emotes = useEmotes(reactions.flatMap((r) => (isEmoteId(r.emoji) ? [r.emoji] : [])));
   if (reactions.length === 0) return null;
   return (
@@ -262,7 +233,6 @@ export function ReactionChips({
         );
       })}
       {onReact && (
-        // up while the line is pointed at, or the picker is open, or it has the keyboard; always on a screen with no hover
         <ReactionPicker
           reactions={reactions}
           me={me}

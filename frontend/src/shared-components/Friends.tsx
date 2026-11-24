@@ -35,77 +35,35 @@ import { INPUT } from '@/shared-components/input';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/** How long the pointer rests on a row before the person's card shows: past the panel's 100ms widening (UserPanel.tsx), so the card is measured against the open panel. */
 const PEEK_MS = 200;
 const ICON_BUTTON = 'shrink-0 border border-transparent p-0.5 text-textTertiary hover:border-primaryStroke focus-visible:border-primaryBlue focus-visible:outline-none';
-/** A line of words where a list would be: nobody yet, a list that is switched off. */
 const NOTE = 'px-3 py-3 text-sm text-textSecondary';
-/** How many grey squares stand in the face column before the list has answered. */
 const FACES_GUESS = 4;
 
-/**
- * The column of faces: 2rem squares with a 1px border around each, 0.75rem less that border
- * in from the panel's edge (11px at the browser's size), which centers them in the closed 3.5rem
- * panel at every text size and lines them up with you at the bottom. The panel grows away from
- * that edge (docs/follows.md), so on the right side each row is mirrored and the faces stay
- * put there too. A phone's drawer keeps its roomier column: 2.5rem faces, 1.25rem in (`max-md:`).
- */
 const INSET: Record<PanelSide, string> = {
   left: 'pl-[calc(0.75rem-1px)] pr-2 max-md:pl-[calc(1.25rem-1px)]',
   right: 'pr-[calc(0.75rem-1px)] pl-2 max-md:pr-[calc(1.25rem-1px)]'
 };
-/** The face column alone, for a line that has nothing beside the column: the icon, the divider. */
 const COLUMN = 'px-[calc(0.75rem-1px)] max-md:px-[calc(1.25rem-1px)]';
-/** A face in the column: 2rem (`FACE_REM`), 2.5rem on a phone (`MOBILE_FACE_REM`). */
 export const RAIL_FACE = 'h-8 w-8 text-sm max-md:h-10 max-md:w-10 max-md:text-lg';
-/** The column's width: a face and its row's border. The closed search box and the icon lines are this wide. */
 const FACE_COLUMN_W = 'w-[calc(2rem+2px)] max-md:w-[calc(2.5rem+2px)]';
 
-/**
- * The column is a stack of blocks, each followed by the same gap, whole pixels: the box, then
- * for each list its icon line and its faces, with a line between one list and the next. Their
- * sizes, and the gap nothing goes under. The face and the box are in rems and so follow the
- * root font size (`Sizes`); the icon line, the line and the gap are px and do not.
- */
-/** A face is `h-8`, 2rem (`RAIL_FACE`), and so is the search box. A group's square is the same. */
 const FACE_REM = 2;
-/** A phone's drawer keeps the 2.5rem face, so its rows are still a finger's 44px (`ROW_TAP`). */
 const MOBILE_FACE_REM = 2.5;
-/** The row around a face: a 1px border above it and below it. The box's own border is inside its rems. */
 const ROW_BORDER_PX = 2;
-/**
- * On a phone (mobile.ts) the row has a pixel more above the face and below it (`ROW_TAP`), so it
- * is a finger's 44px at the browser's size (with its 2.5rem face, `MOBILE_FACE_REM`). The desktop's column keeps its 34.
- */
 const ROW_TAP_PX = 2;
 const ROW_TAP = 'max-md:py-px';
-/**
- * A row's link, pinned to `Sizes.face` (the face and its border; on a phone the tap pixels too), so
- * opening the panel, which puts the name beside the face, cannot make it taller and move the faces.
- * `relative`: the sr-only word inside it has its place there.
- */
 const ROW_H = 'relative h-[calc(2rem+2px)] max-md:h-[calc(2.5rem+4px)]';
-/** The icon line over a list: the icon, and the word in text-xs, are both 16px. */
 const HEAD_PX = 16;
-/** The line between two lists. The room to grab it reaches into the gaps on either side. */
 const LINE_PX = 1;
 const MIN_GAP = 4;
-/** Extra room above the search box only, so it clears the panel's top edge: the top gap is the spread gap plus this. */
 const TOP_EXTRA_PX = 4;
 
-/**
- * The face and the box in px, for one root font size. The text size setting sets that size
- * (settings-atoms.ts puts `font-size: N%` on <html>, and every rem follows), so `Friends` reads
- * it again when the setting changes; the 1px borders are px and stay.
- */
 interface Sizes {
-  /** A face, 2rem, and the row's border above and below it: the pitch of a list less its gap. 34 at the browser's size; on a phone 2.5rem and the tap pixels, 44. */
   face: number;
-  /** The search box, the face's rems: 32 at the browser's size, 40 on a phone. */
   search: number;
 }
 
-/** A rem in px: the root font size the document has now. 16, the browsers' own, should it not be readable. */
 function rootPx(): number {
   const px = parseFloat(getComputedStyle(document.documentElement).fontSize);
   return Number.isFinite(px) && px > 0 ? px : 16;
@@ -116,47 +74,24 @@ function sizesOf(rem: number, mobile: boolean): Sizes {
   return { face: faceRem * rem + ROW_BORDER_PX + (mobile ? ROW_TAP_PX : 0), search: faceRem * rem };
 }
 
-/**
- * The lists scroll with no bar: a bar takes width from the box, and on the right side that
- * would move the faces, which are the column. Whole rows, so what shows is never half a face.
- */
 const SCROLL = 'overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden';
-/**
- * How the stack moves when a list folds, a name comes or goes, or the room changes: every
- * height, gap, margin and padding in it over the same beat, easing out, so a folded list's rows
- * slide away as the others take the room and the heads and lines follow. The heights are
- * numbers already (`measure`, `splitRows`), so a folded list is a list at no height. Still for
- * anyone who asked for less motion.
- */
 const SLIDE = 'duration-150 ease-out motion-reduce:transition-none';
 const LIST = cn('flex shrink-0 snap-y snap-mandatory flex-col transition-[height,gap]', SLIDE, SCROLL);
 
-/**
- * The gaps that are not between two faces, top to bottom: `top` and `search` around the box,
- * then `head-<i>` under each list's icon line and `line-<i>` under the line before list i+1,
- * only the ones the column has (`gapNames`).
- */
 type GapName = string;
 
-/** The room, measured: how many faces fit, and the gap that spends it. */
 interface Fit {
-  /** The faces there is room for, every list together. 0 until the room is measured: then nothing is cut. */
   rows: number;
-  /** The gap everywhere, before the pixels that did not divide are handed out. */
   gap: number;
-  /** Those pixels: fewer than there are gaps. */
   left: number;
-  /** The gaps that are not between faces, the ones the column has, in stack order. */
   names: GapName[];
 }
 
-/** The gaps as laid out, whole pixels each: between the faces of each list, by its place in the stack, and the rest by name. */
 interface Spacing {
   lists: number[];
   gaps: Record<GapName, number>;
 }
 
-/** The gaps a column of `lists` lists has, in stack order: the box's two, then a head for each list and a line before each but the first. */
 function gapNames(lists: number): GapName[] {
   const names: GapName[] = ['top', 'search'];
   for (let i = 0; i < lists; i++) {
@@ -166,20 +101,11 @@ function gapNames(lists: number): GapName[] {
   return names;
 }
 
-/**
- * The math of the column. With `rows` faces at the smallest gap the stack still fits the room;
- * the room left over is then spread over every gap, the same whole number of pixels each, and
- * what does not divide (fewer pixels than there are gaps) is `left` for `spend`. Nothing to
- * lay out (a note, nobody yet): the smallest gap, and no stretching. `lists`: how many lists
- * the stack has, each with its icon line; a search has none, its hits are one list with no line.
- * `sizes`: the face and the box at the root font size of the moment.
- */
 function measure(room: number, lists: number, faces: boolean, { face, search }: Sizes): Fit {
   const names = gapNames(lists);
   if (room <= 0 || !faces) return { rows: 0, gap: MIN_GAP, left: 0, names };
   const blocks = TOP_EXTRA_PX + search + lists * HEAD_PX + Math.max(0, lists - 1) * LINE_PX;
   const rows = Math.floor((room - blocks - names.length * MIN_GAP) / (face + MIN_GAP));
-  // a window too short for one row: one row anyway, cut off by the panel
   if (rows < 1) return { rows: 1, gap: MIN_GAP, left: 0, names };
   const spare = room - blocks - rows * face;
   const count = names.length + rows;
@@ -187,15 +113,6 @@ function measure(room: number, lists: number, faces: boolean, { face, search }: 
   return { rows, gap, left: spare - gap * count, names };
 }
 
-/**
- * The pixels that did not divide, handed out a pixel a gap so that no gap is more than a pixel
- * or two from another, and the faces inside a list keep one pitch: first a pixel on every gap
- * of a whole list, the longest lists first, each that still fits, then one each on the gaps
- * that are not between faces, top first. Only when the lists fill the room (`rows` sums to all
- * the rows): with fewer, the room left is at the bottom, and stretching a short column to meet
- * the footer would spread it thin. The sum is then the room exactly: the last row ends where
- * the footer begins.
- */
 function spend(fit: Fit, rows: number[]): Spacing {
   const gaps: Record<GapName, number> = {};
   const lists = rows.map(() => fit.gap);
@@ -219,22 +136,15 @@ function spend(fit: Fit, rows: number[]): Spacing {
   return { lists, gaps };
 }
 
-/** Enough of somebody for a row: a followed name and a search hit both have it. */
 interface Person {
   name: string;
   verified: boolean;
-  /** The verified mark (a provider linked). Absent: not. */
   oauth_verified?: boolean;
   avatar: number | null;
   bio: string;
   presence: Presence;
 }
 
-/**
- * The picture and the presence square in its bottom right corner, the way the closed panel
- * shows everyone (PresenceSquare.tsx): grey, green, the accent streaming. Closed, the
- * column has no words; the word is in the row's label, and the square says it on hover.
- */
 export function RailFace({ name, avatar, presence }: { name: string; avatar: number | null; presence: Presence }) {
   return (
     <span className="relative block shrink-0">
@@ -251,25 +161,11 @@ interface RowProps {
   person: Person;
   side: PanelSide;
   open: boolean;
-  /** In a list folded to its icon line (`Lists`): the row stays mounted so the fold can slide, but it is off screen, so it asks for no frame. */
   folded?: boolean;
   onPick: () => void;
-  /** The buttons past the name while open: chat and unfollow, or follow. */
   children?: ReactNode;
 }
 
-/**
- * One person, closed and open alike: the face is in the same place either way, and opening
- * puts the name and the buttons beside it instead of moving anything: the row is one height
- * open and closed (`ROW_H`), and how they are is the square's colour (the word is for readers).
- * Streaming, a frame of the stream (StreamStill.tsx, a few seconds old and kept so)
- * stands between the name and the buttons, the row's height, so the open column says what each
- * of them is streaming at a glance; closed, the column has no room for it, and the blue square on
- * the face says that they are. The face and the name are one link to their page, and so is
- * the frame. The pointer resting on the row, or the focus landing in it, puts the person's
- * card (PersonCard.tsx, the chat window's too) beside the panel: the face, the name, how they
- * are, the frame big, the bio.
- */
 function Row({ id, person, side, open, folded = false, onPick, children }: RowProps) {
   const mirrored = side === 'right';
   const peek = usePeek(PEEK_MS);
@@ -286,10 +182,8 @@ function Row({ id, person, side, open, folded = false, onPick, children }: RowPr
       <Link
         id={id}
         to={`/watch/${encodeURIComponent(person.name)}`}
-        // streaming: the page holds the player's box from its first paint (WatchPage.tsx)
         state={person.presence === 'streaming' ? { live: true } : undefined}
         onClick={onPick}
-        // not draggable: the face must not lift off the row as a ghost link
         draggable={false}
         aria-label={`${person.name} · ${PRESENCE_WORD[person.presence]}`}
         className={cn(
@@ -300,14 +194,12 @@ function Row({ id, person, side, open, folded = false, onPick, children }: RowPr
         )}
       >
         <RailFace name={person.name} avatar={person.avatar} presence={person.presence} />
-        {/* the name alone, one line centered on the face: the word is the square's colour and the label's, and a reader's here */}
         <span className="sr-only">{PRESENCE_WORD[person.presence]}</span>
         {open && (
           <span className={cn('flex min-w-0 flex-1 leading-tight', mirrored && 'justify-end')}>
             <Who name={person.name} verified={person.verified} oauthVerified={person.oauth_verified} className="max-w-full text-sm" />
           </span>
         )}
-        {/* the face's height: 32px (40 on a phone), and 16:9 of that. not in a folded list: the still asks video for a frame every 5s while mounted, and a folded row shows nothing */}
         {open && !folded && person.presence === 'streaming' && <StreamStill name={person.name} className="h-8 max-md:h-10" />}
       </Link>
       {open && children}
@@ -326,7 +218,6 @@ function Unfollow({ id, name }: { id: string; name: string }) {
   );
 }
 
-/** The chat button on a friend's row, with how many of their lines are new (docs/dms.md) on its corner in blue, matched by name as `openDm` keeps the tabs. */
 function Chat({ id, person }: { id: string; person: Person }) {
   const unread = useAtomValue(dmsAtom).find((d) => d.name === person.name)?.unread ?? 0;
   return (
@@ -339,7 +230,6 @@ function Chat({ id, person }: { id: string; person: Person }) {
         className={cn(ICON_BUTTON, 'relative hover:text-textPrimary')}
       >
         <RiChat3Line aria-hidden size={16} />
-        {/* on the icon's corner, out of the flow, so the button is one size with a number or without */}
         {unread > 0 && (
           <span aria-hidden className="absolute -right-1.5 -top-1.5 bg-background px-px text-xs font-semibold leading-none tabular-nums text-primaryBlue">
             {unread > 99 ? '99+' : unread}
@@ -356,48 +246,27 @@ interface ListProps {
   onPick: () => void;
 }
 
-/**
- * Where the caret goes: right before the icon, its 16px box ending 2px short of the icon's,
- * which is 9px into the face column (34px at the browser's size; 13px into a phone's 42). So the fold button reaches
- * 9px (5px) into the panel's edge inset and pads the same back: the icon stands where the closed column has it, and
- * the caret hangs off its edge side.
- */
 const CARET_ROOM: Record<PanelSide, string> = {
   left: '-ml-[9px] pl-[9px] max-md:-ml-[5px] max-md:pl-[5px]',
   right: '-mr-[9px] pr-[9px] max-md:-mr-[5px] max-md:pr-[5px]'
 };
-/** The fold button: caret, icon and word in one, the far end of the line left to the action. Hover and focus are a colour, like the line between two lists. */
 const FOLD = 'relative flex min-w-0 flex-1 items-center gap-2 outline-none transition-colors duration-150 hover:text-textPrimary focus-visible:text-primaryBlue';
 
 interface HeadProps {
   icon: typeof RiUserHeartLine;
   word: string;
-  /** How many the list holds, folded or not. */
   count: number;
-  /** The list's own `id`, which the fold button says it controls. */
   listId: string;
   kind: SidebarList;
   open: boolean;
   side: PanelSide;
-  /** The gap under it. */
   below: number;
-  /** Folded to this line: no rows under it. */
   folded: boolean;
-  /** A button at the end of the line, away from the icon. Open only, like the word. */
   action?: ReactNode;
 }
 
-/**
- * The icon over a list; open, the caret before it, the word and how many after it, and `action`
- * at the far end of the line. Caret, icon and word are one button (`#sidebar-fold-<list>`,
- * `aria-expanded`) that folds the list to this line and unfolds it, kept per browser
- * (settings.sidebarFolds); the caret points down at the rows, and turns to point along the line
- * when they are folded away. Closed, the icon alone, where it always is; no list, no icon.
- */
 function Head({ icon: Icon, word, count, listId, kind, open, side, below, folded, action }: HeadProps) {
   const mirrored = side === 'right';
-  // the icon says what the word says, so readers skip it
-  // the column is a face wide (`Sizes.face`: the face's rems and the row's border), so the icon stands centered under the faces
   const icon = (
     <span aria-hidden className={cn('flex shrink-0 justify-center', FACE_COLUMN_W)}>
       <Icon size={16} />
@@ -425,7 +294,6 @@ function Head({ icon: Icon, word, count, listId, kind, open, side, below, folded
               className={cn('absolute top-0 transition-transform', SLIDE, folded && '-rotate-90', mirrored ? 'right-0' : 'left-0')}
             />
             {icon}
-            {/* the word takes the room, so the action sits at the far end on either side */}
             <span className={cn('min-w-0 flex-1 truncate text-xs font-semibold uppercase leading-none tracking-wider', mirrored && 'text-right')}>
               {word} {count}
             </span>
@@ -439,18 +307,10 @@ function Head({ icon: Icon, word, count, listId, kind, open, side, below, folded
   );
 }
 
-/**
- * How the room is shared: the rows each list gets, in stack order. Each list takes the rows it
- * needs; the weights decide only when together they are longer than the room, and then no list
- * goes under one row. A list shorter than its share takes what it has, and the rows it leaves
- * go to the others by the same weights (settled one at a time: each list settled changes the
- * others' shares), whole rows by largest remainder. Room not measured yet: everything, uncut.
- */
 function splitRows(lengths: number[], weights: number[], capacity: number | null): number[] {
   if (capacity === null) return [...lengths];
   const n = Math.max(lengths.length, capacity);
   if (lengths.reduce((sum, l) => sum + l, 0) <= n) return [...lengths];
-  /** A list still to be shared out: its place, its length, its weight. */
   type Open = { i: number; len: number; w: number };
   const rows = lengths.map(() => 0);
   let open: Open[] = lengths.map((len, i) => ({ i, len, w: weights[i] ?? 1 }));
@@ -475,7 +335,6 @@ function splitRows(lengths: number[], weights: number[], capacity: number | null
     spare--;
   }
   for (const s of shares) rows[s.i] = s.whole;
-  // one row at least: a list given none takes one from the list with the most (the room has a row a list: n is at least the count)
   for (const s of shares) {
     if ((rows[s.i] ?? 0) > 0) continue;
     const most = rows.reduce((best, r, j) => (r > (rows[best] ?? 0) ? j : best), 0);
@@ -488,29 +347,18 @@ function splitRows(lengths: number[], weights: number[], capacity: number | null
 }
 
 interface DividerProps {
-  /** The rows the list above has, and the fewest and the most it may take: the line moves between them. Equal: nothing to drag. */
   value: number;
   min: number;
   max: number;
-  /** The words of the two lists, for the label. */
   above: string;
   below: string;
-  /** Dragged or stepped to `want` rows for the list above; the one below gets what the pair has left. */
   onMove: (want: number) => void;
-  /** A row, face and gap: the two lists' averaged. */
   pitch: number;
-  /** The gap under the line. */
   gap: number;
   open: boolean;
   side: PanelSide;
 }
 
-/**
- * The line between one list and the next. Both longer than the room: drag it, and a row moves
- * from one list to the other, whole rows only (arrow keys do the same, one row a press). The
- * shares it sets are this browser's (settings.sidebarShares). One pixel in the stack; the room
- * to grab it reaches 8px into the gaps above and below.
- */
 function Divider({ value, min, max, above, below, onMove, pitch, gap, open, side }: DividerProps) {
   const drag = useRef<{ y: number; from: number } | null>(null);
   const draggable = min < max;
@@ -560,15 +408,6 @@ function Divider({ value, min, max, above, below, onMove, pitch, gap, open, side
   );
 }
 
-/**
- * One group you are in (docs/groups.md), the shape of a person's row: its square where the face
- * goes (the picture, or its letter on its colour, the size of a face), and open, the title with
- * its four digits on one line, the row's height closed (`ROW_H`); how many are in it, or live, is
- * in its label. Live members are the
- * number on the square's corner, closed or open, in blue. The whole
- * row is the way to the group's page. No card: the page is a click away and says it all. The
- * same row stands in the search's hits (`Results`), under its own `id`.
- */
 function GroupRow({ id, server, side, open, onPick }: { id: string; server: Server; side: PanelSide; open: boolean; onPick: () => void }) {
   const mirrored = side === 'right';
   const words = groupWords(server);
@@ -606,7 +445,6 @@ function GroupRow({ id, server, side, open, onPick }: { id: string; server: Serv
           )}
         </span>
         <span className="sr-only">{count}</span>
-        {/* the title alone, one line like a person's: the count is the label's, and live members the number on the square */}
         {open && (
           <span className={cn('flex min-w-0 flex-1 items-baseline gap-1 text-sm leading-tight', mirrored && 'flex-row-reverse')}>
             <span className="truncate font-semibold">{words.title}</span>
@@ -618,14 +456,12 @@ function GroupRow({ id, server, side, open, onPick }: { id: string; server: Serv
   );
 }
 
-/** One of the column's lists with what it holds: people (friends, the rest you follow) or the groups you are in. */
 type Block = { kind: 'friends' | 'following'; people: Followed[] } | { kind: 'groups'; servers: Server[] };
 
 function lengthOf(block: Block): number {
   return block.kind === 'groups' ? block.servers.length : block.people.length;
 }
 
-/** The icon over each list, its word, and its id. The tests read `#mutual-list` (friends) and `#friends-list` (the rest). */
 const LIST_WORDS: Record<SidebarList, { icon: typeof RiUserHeartLine; word: string; id: string }> = {
   friends: { icon: RiUserHeartLine, word: 'friends', id: 'mutual-list' },
   following: { icon: RiUserFollowLine, word: 'following', id: 'friends-list' },
@@ -633,49 +469,28 @@ const LIST_WORDS: Record<SidebarList, { icon: typeof RiUserHeartLine; word: stri
 };
 
 interface ListsProps extends ListProps {
-  /** The lists shown, top to bottom: the ones settings switched on that hold something, in the order it put them. */
   stack: Block[];
-  /** The rows each has, in the same order. A folded list has none. */
   rows: number[];
-  /** A row's face in px (`Sizes.face`), which with the list's gap is its pitch. */
   face: number;
   spacing: Spacing;
-  /** The weights the rows were shared by, which the lines between the lists move. */
   shares: SidebarShares;
-  /** Which lists are folded to their icon line. */
   folds: SidebarFolds;
 }
 
-/**
- * The lists under their icons, a line between one and the next: friends (they follow you back),
- * everyone else you follow, each streaming first as the api sent them, and the groups you are
- * in, in the order settings put them (settings.sidebarLists). A friend gets a chat button as
- * well as unfollow, with how many of their lines are new on its corner; a group's row is the way to its page. Each list is cut at whole rows (`rows`) and scrolls inside,
- * at the pitch `spacing` worked out for the room; the line between two lists says how the rows
- * are shared, and dragging it trades a row between them, keeping every list's weight as the rows
- * then stand (as fractions of the room, so a taller window keeps the proportion). The caret
- * before an icon folds its list to the icon line (settings.sidebarFolds): its rows slide away
- * (`SLIDE`) as the other lists take the room, the word keeps its count, and the line beside it
- * stands still. A list nobody is in has no icon either. Closed, the words have no room: only
- * the faces.
- */
 function Lists({ side, open, onPick, stack, rows, face, spacing, shares, folds }: ListsProps) {
   const { gaps } = spacing;
   const all = rows.reduce((sum, r) => sum + r, 0);
-  // each list with its numbers, so a place in the stack is read once: what it holds, the rows it may show (none, folded), the rows it has
   const laid = stack.map((block, i) => {
     const folded = folds[block.kind];
     const held = lengthOf(block);
     return { block, folded, held, length: folded ? 0 : held, rows: rows[i] ?? 0, gap: spacing.lists[i] ?? MIN_GAP };
   });
 
-  // the line under list i dragged to `want` rows for it: the pair trades rows, the others keep theirs
   const moveLine = (i: number, want: number) => {
     const upper = laid[i];
     const lower = laid[i + 1];
     if (!upper || !lower || all === 0) return;
     const pair = upper.rows + lower.rows;
-    // the list above keeps one row at least and takes no more than it has; the one below likewise, from what the pair has
     const lo = Math.max(1, pair - lower.length);
     const hi = Math.min(upper.length, pair - 1);
     const a = Math.min(hi, Math.max(lo, want));
@@ -692,7 +507,6 @@ function Lists({ side, open, onPick, stack, rows, face, spacing, shares, folds }
         const pitch = face + gap;
         const before = laid[i - 1];
         const pair = before ? before.rows + count : 0;
-        // a folded list on either side of the line has no rows to trade: the line stands where it is
         const fixed = before !== undefined && (before.folded || folded);
         return (
           <Fragment key={block.kind}>
@@ -721,7 +535,6 @@ function Lists({ side, open, onPick, stack, rows, face, spacing, shares, folds }
               below={gaps[`head-${i}`] ?? MIN_GAP}
               folded={folded}
             />
-            {/* folded, the list has no rows (`count` is 0) and slides to no height; it stays in the document, inert, so its rows are out of the tab order and off a reader */}
             <ul id={id} aria-label={word} inert={folded ? true : undefined} className={LIST} style={{ height: count * pitch, gap }}>
               {block.kind === 'groups'
                 ? block.servers.map((server) => (
@@ -741,11 +554,6 @@ function Lists({ side, open, onPick, stack, rows, face, spacing, shares, folds }
   );
 }
 
-/**
- * The exact title (or the address, or the title with its digits, `gaming #0042` as the row
- * shows it or `gaming#0042`) before the titles that start with the letters, before the rest:
- * the api's own order for names, for the groups the page matches itself.
- */
 function groupRank(server: Server, query: string): number {
   const { title, tag } = groupWords(server);
   const t = title.toLowerCase();
@@ -753,12 +561,6 @@ function groupRank(server: Server, query: string): number {
   return t.startsWith(query) ? 1 : 2;
 }
 
-/**
- * The groups the letters find, the ones you are in first, then the public ones you are not;
- * inside each, `groupRank`, then as the explorer sent them (someone live first). The letters
- * count anywhere in the title, the digits, the address, the badge or the about, the groups
- * page's rule (`groupMatches`). The lists are small, so this runs on every letter.
- */
 function groupHits(mine: Server[], others: Server[], query: string): Server[] {
   return [mine, others].flatMap((list) =>
     list
@@ -769,17 +571,6 @@ function groupHits(mine: Server[], others: Server[], query: string): Server[] {
   );
 }
 
-/**
- * What the box found, in place of the lists while it holds letters: the groups first, the rows
- * their list gives them (`groupHits`: yours, then the public ones, matched here from the
- * explorer's answer as it stands, so they are up on the letter), then the people: what the box
- * has in hand for these very letters (`searchResultsAtom`: the api's answer to them, or one to
- * fewer letters cut down while it is asked), each with the buttons its list would give it. A
- * friend has chat and the ×, someone else you follow the × alone, and a name you do not follow
- * the follow button. Who you follow is `followingAtom`, the same answer the lists and the follow
- * button read, so a click moves a row from one shape to the next in place. Nothing of either
- * kind: `searching` until the api has answered these letters, `nothing called that` once it has.
- */
 function Results({ side, open, onPick, gap }: ListProps & { gap: number }) {
   const query = useAtomValue(searchQueryAtom);
   const { hits, settled } = useAtomValue(searchResultsAtom);
@@ -794,7 +585,6 @@ function Results({ side, open, onPick, gap }: ListProps & { gap: number }) {
   const known = new Map((following ?? []).map((f) => [f.name, f] as const));
   return (
     <ul id="friends-results" className={cn('flex min-h-0 flex-1 flex-col', SCROLL)} style={{ gap, paddingBottom: gap }}>
-      {/* a group and a person may share a name: the keys say which is which */}
       {groups.map((server) => (
         <GroupRow key={`group ${server.name}`} id={`result-group-${server.name}`} server={server} side={side} open={open} onPick={onPick} />
       ))}
@@ -811,18 +601,12 @@ function Results({ side, open, onPick, gap }: ListProps & { gap: number }) {
   );
 }
 
-/**
- * The column before the list has answered: a face's worth of grey where each face goes, in the
- * face column, with a name's worth beside it while the panel is open. The smallest gap, like a
- * column with nothing to stretch; the faces land on the squares.
- */
 function FollowingSkeleton({ side, open }: { side: PanelSide; open: boolean }) {
   const mirrored = side === 'right';
   return (
     <Skeleton id="friends-loading" className="flex flex-col gap-2">
       {Array.from({ length: FACES_GUESS }, (_, i) => (
         <div key={i} className={cn('flex items-center gap-2', mirrored && 'flex-row-reverse', INSET[side])}>
-          {/* a face's square: `Sizes.face`, the face's rems and the row's border */}
           <Bone className={cn('h-[calc(2rem+2px)] shrink-0 max-md:h-11', FACE_COLUMN_W)} />
           {open && <Bone className="h-3.5 w-24" />}
         </div>
@@ -832,35 +616,11 @@ function FollowingSkeleton({ side, open }: { side: PanelSide; open: boolean }) {
 }
 
 interface FriendsProps {
-  /** Widened over the page (hover or focus), or the column of faces. */
   open: boolean;
   side: PanelSide;
-  /** A click on a name: the panel closes. */
   onPick: () => void;
 }
 
-/**
- * The body of the sidebar (docs/follows.md), in both of its states: the search box, then the
- * lists, each under its icon with a line between one and the next: friends, the rest of who you
- * follow, the groups you are in, in the order settings put them and only the ones it switched
- * on (settings.sidebarLists). Closed, each is a square in one column (the box is its icon, the
- * icons stand alone); open, the same squares stay where they are and the words and buttons
- * come out beside them, so what you were pointing at is still under the pointer. The whole
- * column is one stack with one gap between everything, sized (`measure`) so that the lists,
- * cut at whole rows, spend the room exactly; the lines between them, which drag, say how the
- * rows are shared, and the caret before each icon folds its list to the icon line, this
- * browser's choice (settings.sidebarFolds). The site's one search: letters in the box put what they find where the
- * lists were, the groups first (yours, then the public ones; a group is matched here, from the
- * explorer's answer), then the people (the api's answer to the letters as they stand, asked a
- * beat after the last one and kept a short while, `setSearchQuery`), each row with the buttons
- * its list would give it, a follow button for a name you do not follow; closing the panel
- * empties it. Every open asks `GET /api/following` again, and `GET /api/explore` for the
- * groups while they are shown, so the words are now; the first letter asks the explorer too
- * unless that open just did (nobody's too: the public groups are theirs to find). A guest has
- * the following list alone: the names this browser keeps (follow-atoms.ts), each with what its
- * profile read says, asked on every open as a login's list is; nobody in it is a friend, and
- * the groups are a login's.
- */
 export function Friends({ open, side, onPick }: FriendsProps) {
   const me = useAtomValue(meAtom);
   const all = useAtomValue(followingAtom);
@@ -872,19 +632,14 @@ export function Friends({ open, side, onPick }: FriendsProps) {
   const note = useAtomValue(followNoteAtom);
   const textSize = useAtomValue(textSizeAtom);
   const stack = useRef<HTMLDivElement | null>(null);
-  // the room for the stack, box included. 0 until measured: then nothing is cut
   const [room, setRoom] = useState(0);
   const mirrored = side === 'right';
   const groupsOn = choices.some((c) => c.list === 'groups' && c.on);
   const searching = query.trim() !== '';
 
-  // the face and the box in px, off the document: read again when the text size changes, which the room's observer below does not see (the stack's
-  // height stays, its rows grow). the setting's own subscriber (settings-atoms.ts) has put the size on <html> by then: the store tells every
-  // subscriber in the same call, and react renders after it
   const mobile = useIsMobile();
   const sizes = useMemo(() => sizesOf(rootPx(), mobile), [textSize, mobile]);
 
-  // the room follows the window (and the note under the lists, when there is one)
   useEffect(() => {
     const el = stack.current;
     if (!el) return;
@@ -893,8 +648,6 @@ export function Friends({ open, side, onPick }: FriendsProps) {
     return () => watch.disconnect();
   }, []);
 
-  // every open: the lists again, fresh words (the groups only while the column shows them). every close: the box
-  // empty, so the column is who you follow and not the last search
   useEffect(() => {
     if (open) {
       void loadFollowing();
@@ -902,40 +655,29 @@ export function Friends({ open, side, onPick }: FriendsProps) {
     } else setSearchQuery('');
   }, [open, groupsOn]);
 
-  // the first letter: the groups again, the public ones with them, so the hits have every group the letters could find. one ask a search, not a letter,
-  // and none when the open just before it asked (`SERVERS_FRESH_MS`); nobody's open asks nothing (`loadMyServers`), but their search does: the
-  // public groups are on their lists too
   useEffect(() => {
     if (searching) void loadServers(SERVERS_FRESH_MS);
   }, [searching]);
 
-  // a guest's list is this browser's own (follow-atoms.ts): names it keeps, none of them a friend, and the groups are a login's
   const friends = all?.filter((f) => f.mutual) ?? [];
   const rest = all?.filter((f) => !f.mutual) ?? [];
   const groups = me ? (servers ?? []) : [];
   const holds: Record<SidebarList, number> = { friends: friends.length, following: rest.length, groups: groups.length };
-  // the lists in the stack: the ones switched on that hold something, in the order settings put them
   const blocks: Block[] = choices
     .filter((c) => c.on && holds[c.list] > 0)
     .map((c): Block => (c.list === 'groups' ? { kind: 'groups', servers: groups } : { kind: c.list, people: c.list === 'friends' ? friends : rest }));
   const faces = searching || blocks.length > 0;
   const fit = measure(room, searching ? 0 : blocks.length, faces, sizes);
   const rows = splitRows(
-    // a folded list shows no rows: its share of the room goes to the others
     blocks.map((block) => (folds[block.kind] ? 0 : lengthOf(block))),
     blocks.map((block) => shares[block.kind]),
     room > 0 ? fit.rows : null
   );
   const spacing = spend(fit, searching ? [] : rows);
 
-  // the lists have not answered (a login's groups only while shown; a guest's names, until each has been asked about once): grey squares where
-  // the faces go, closed and open alike
   const loading = all === undefined || (!!me && groupsOn && servers === undefined);
-  // where the lists would be, when there are none to show: words, open only
   let words: ReactNode = null;
   if (!loading && blocks.length === 0) {
-    // everyone is in a list that is switched off; or nobody yet, and the way to someone (or to a group, when the people lists are off: a login's
-    // way, a guest joins none)
     if (choices.some((c) => !c.on && holds[c.list] > 0)) {
       words = (
         <p className={NOTE}>
@@ -946,7 +688,6 @@ export function Friends({ open, side, onPick }: FriendsProps) {
         </p>
       );
     } else if (!me || choices.some((c) => c.on && c.list !== 'groups')) {
-      // a guest is told where the list lives: no account holds it, so another browser has another
       words = <p className={NOTE}>nobody yet. find someone above.{!me && ' who you follow is kept in this browser.'}</p>;
     } else {
       words = (
@@ -967,7 +708,6 @@ export function Friends({ open, side, onPick }: FriendsProps) {
           <label htmlFor="friends-search" className="sr-only">
             find someone or a group
           </label>
-          {/* closed, the box is a square the size of a face (the face column's width) with the icon in it; open, it runs the width of the panel and the icon stays where it was */}
           <div className={cn('relative', open ? 'w-full' : FACE_COLUMN_W, mirrored && 'ml-auto')}>
             <RiSearchLine
               aria-hidden

@@ -10,11 +10,9 @@ import { Block, Status } from '@/shared-components/user-modal/parts';
 import { cn } from '@/utils/cn';
 
 const RANGES: readonly StatsDays[] = [7, 30];
-/** A chip that is on: colour, not a new outline (buttons.mdc). */
 const CHIP_ON = 'border-primaryBlue text-primaryBlue';
 const TILES = 'grid grid-cols-2 gap-2 md:grid-cols-4';
 
-/** `1h 23m`, `12m`, `40s`. */
 export function lengthWords(secs: number): string {
   const s = Math.max(0, Math.round(secs));
   const h = Math.floor(s / 3600);
@@ -24,7 +22,6 @@ export function lengthWords(secs: number): string {
   return `${s}s`;
 }
 
-/** Watch time is people × time: hours past the first, minutes before. */
 function watchWords(secs: number): string {
   return secs >= 3600 ? `${(secs / 3600).toFixed(1)}h` : `${Math.round(secs / 60)}m`;
 }
@@ -41,12 +38,6 @@ function clock(ms: number): string {
   return new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
-/**
- * Stats: what my streams did, for me alone (docs/analytics.md). The range's numbers as tiles (7 or 30
- * days, boxed chips), the viewers of one stream over time as a line (the last one, or the one picked
- * from the list under it), and that stream's tiles. Nobody logged in: a stream with no account is
- * not recorded, so the tab says to make one, with the security tab's sign up as the way.
- */
 export function StatsTab() {
   const me = useAtomValue(meAtom);
   if (!me)
@@ -69,7 +60,6 @@ function MyStats() {
   const [days, setDays] = useState<StatsDays>(7);
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState('');
-  /** The stream the graph is of: null for the last one, which `stats` carries already. */
   const [picked, setPicked] = useState<number | null>(null);
   const [detail, setDetail] = useState<StreamDetail | null>(null);
 
@@ -84,7 +74,6 @@ function MyStats() {
     };
   }, [days]);
 
-  // a picked stream other than the last is asked for; the last one came with the stats
   const wantDetail = picked !== null && picked !== stats?.last?.id;
   useEffect(() => {
     if (!wantDetail || picked === null) return;
@@ -227,7 +216,6 @@ const W = 600;
 const H = 180;
 const PAD = { left: 32, right: 8, top: 8, bottom: 22 };
 
-/** A round step for the y axis: 1, 2, 5 × 10ⁿ, about four lines up the height. */
 function niceMax(max: number): { top: number; step: number } {
   const raw = Math.max(1, max) / 4;
   const mag = 10 ** Math.floor(Math.log10(raw));
@@ -235,11 +223,6 @@ function niceMax(max: number): { top: number; step: number } {
   return { top: Math.max(step, Math.ceil(Math.max(1, max) / step) * step), step: Math.max(1, Math.round(step)) };
 }
 
-/**
- * Viewers over time, one line, inline svg (no chart library). One series: the title names it, no
- * legend. The line is the theme's blue at 2px, the grid recessive. A hover or a finger shows the
- * minute and its count with a crosshair; a screen reader gets the same points as a table.
- */
 export function ViewerGraph({ points }: { points: [number, number][] }) {
   const [at, setAt] = useState<number | null>(null);
   const titleId = useId();
@@ -316,7 +299,6 @@ export function ViewerGraph({ points }: { points: [number, number][] }) {
           <span className="text-textSecondary">{clock(hovered[0])}</span> <span className="font-semibold tabular-nums text-textPrimary">{hovered[1]} watching</span>
         </div>
       )}
-      {/* in a div: a table grows to its rows whatever height it is given, so sr-only on the table alone stretches the pane */}
       <div className="sr-only">
         <table>
           <caption>viewers each minute</caption>

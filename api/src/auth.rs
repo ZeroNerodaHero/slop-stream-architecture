@@ -1,17 +1,3 @@
-//! Accounts: username + password. See docs/accounts.md.
-//!
-//! The password is hashed with argon2id and forgotten. A login is 32 random
-//! bytes in an httponly cookie; the database keeps their sha256. Nobody has to
-//! log in: a name without an account is free for anyone, like before. A name
-//! with one (a "claimed" name) can only go live, save a bio or talk in chat
-//! when the cookie says it is them.
-//!
-//! Behind every name is a row id, a uuid that never changes (docs/ids.md). The
-//! cookie resolves to the id and the name together (`Account`); logins point at
-//! the id, so `POST /api/name` can change the name and every device stays logged
-//! in. The old name is held for the account for a while, and a signup as it is
-//! refused like a taken one.
-
 use std::sync::OnceLock;
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
@@ -39,30 +25,17 @@ use crate::{is_live, live_key, presence, profile, unique_violation, valid_name, 
 
 const COOKIE: &str = "login";
 const LOGIN_DAYS: i64 = 30;
-/// A name changes once in this many days, and the old one is held for the account as long:
-/// nobody else can sign up as it or rename onto it, and `/watch/<old>` leads to the new one.
 const RENAME_DAYS: i64 = 30;
 const HOLD_DAYS: i64 = 30;
 const MIN_PASSWORD_CHARS: usize = 8;
 const MAX_PASSWORD_CHARS: usize = 128;
-/// Password tries in a window: per name from one ip (a right one clears that count),
-/// and per ip over every name. Keyed on the ip too, so a stranger's wrong guesses
-/// cannot lock the owner out; an attacker has to bring many ips.
 const LOGIN_PER_NAME: i64 = 10;
 const LOGIN_PER_IP: i64 = 100;
 const LOGIN_WINDOW_SECS: i64 = 15 * 60;
 const SIGNUP_PER_IP: i64 = 20;
 const SIGNUP_WINDOW_SECS: i64 = 3600;
-/// argon2 runs at once, process-wide. Each takes 19 MiB, so a burst of logins must
-/// queue here rather than allocate n × 19 MiB on the blocking pool. A wait, never an error.
 const HASH_SLOTS: usize = 4;
 
-// ---- passwords ---------------------------------------------------------------
-
-/// argon2id with owasp's numbers: 19 MiB, 2 passes, 1 lane. About 50ms on a small vps.
-/// The salt and these settings travel inside the stored string, so they can change later:
-/// raise them here and every account moves onto the new ones at its next right password
-/// (`needs_rehash`, `upgrade_hash`). The one place they are written down.
 const ARGON2_ALGORITHM: Algorithm = Algorithm::Argon2id;
 const ARGON2_VERSION: Version = Version::V0x13;
 const ARGON2_M_COST_KIB: u32 = 19_456;
@@ -79,17 +52,12 @@ fn hash_password(password: &str) -> Option<String> {
     hasher().hash_password(password.as_bytes(), &salt).ok().map(|h| h.to_string())
 }
 
-/// The algorithm, version and cost are read from the stored string, so a hash made
-/// on older settings still checks.
 fn verify_password(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash)
         .map(|h| Argon2::default().verify_password(password.as_bytes(), &h).is_ok())
         .unwrap_or(false)
 }
 
-/// Was this stored hash made on other settings than `hasher`'s: another algorithm or
-/// version, other costs, another output length. A string that does not parse is not
-/// rehashed here: it never verifies, so there is no right password to rehash it with.
 fn needs_rehash(hash: &str) -> bool {
     let Ok(parsed) = PasswordHash::new(hash) else { return false };
     let same_algorithm = Algorithm::try_from(parsed.algorithm).is_ok_and(|a| a == ARGON2_ALGORITHM);
@@ -101,25 +69,17 @@ fn needs_rehash(hash: &str) -> bool {
     !(same_algorithm && same_version && same_params && same_len)
 }
 
-/// What `password_hash` holds for an account made with a provider (google, discord) and no
-/// password yet (oauth.rs). Not a hash: `PasswordHash::new` refuses it, so no typed password
-/// ever verifies against it. Not null either: null means "a name with no account", and every
-/// `password_hash IS NOT NULL` in the api (is_claimed, the ✓, dms, ...) must count this account.
 pub(crate) const NO_PASSWORD: &str = "!no-password";
 
-/// A stored value that is a real password, not `NO_PASSWORD`.
 pub(crate) fn is_password(stored: &str) -> bool {
     stored != NO_PASSWORD
 }
 
-/// Does this account have a password (it may have only a provider login).
 pub(crate) async fn has_password(db: &PgPool, id: Uuid) -> Result<bool, sqlx::Error> {
     let stored: Option<Option<String>> = sqlx::query_scalar("SELECT password_hash FROM streamers WHERE id = $1").bind(id).fetch_optional(db).await?;
     Ok(stored.flatten().as_deref().is_some_and(is_password))
 }
 
-/// Checked against when the name does not exist, so that takes as long as a wrong
-/// password. Made the first time it is needed, on the blocking thread that needs it.
 fn decoy_hash() -> &'static str {
     static DECOY: OnceLock<String> = OnceLock::new();
     DECOY.get_or_init(|| hash_password("not a password").unwrap_or_default())
@@ -127,10 +87,6 @@ fn decoy_hash() -> &'static str {
 
 static HASHING: Semaphore = Semaphore::const_new(HASH_SLOTS);
 
-/// Hashing blocks a thread for tens of milliseconds. Never on the async runtime,
-/// and never more than HASH_SLOTS at a time. The slot travels into the blocking job
-/// and is freed when the hash is done: a request future dropped mid-wait cannot stop
-/// the job, so freeing the slot with the future would let the next one start a fifth.
 async fn hash_blocking(password: String) -> Result<String, ApiError> {
     let slot = HASHING.acquire().await.ok();
     tokio::task::spawn_blocking(move || {
@@ -143,18 +99,12 @@ async fn hash_blocking(password: String) -> Result<String, ApiError> {
     .ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "could not hash"))
 }
 
-/// What checking a typed password found.
 #[derive(Debug)]
 enum Verdict {
     Wrong,
-    /// Right. `upgraded` is the same password hashed on today's settings when the stored
-    /// hash was made on older ones, to put in its place (`upgrade_hash`).
     Right { upgraded: Option<String> },
 }
 
-/// `None` is a name with no account: the decoy is checked instead, so the answer
-/// takes as long as a wrong password, and is wrong. A right password on an old hash is
-/// hashed again in the same blocking job, under the same slot: never on the runtime.
 async fn verify_blocking(password: String, hash: Option<String>) -> Verdict {
     let slot = HASHING.acquire().await.ok();
     tokio::task::spawn_blocking(move || {
@@ -174,9 +124,6 @@ async fn verify_blocking(password: String, hash: Option<String>) -> Verdict {
     .unwrap_or(Verdict::Wrong)
 }
 
-/// Swaps an account's old-settings hash for `new`, only while `old` is still the one
-/// stored: a password change or an `api passwd` in between wins, and this does nothing.
-/// Best effort: a failure is logged and the login goes on; the next one tries again.
 async fn upgrade_hash(db: &PgPool, id: Uuid, old: &str, new: &str) {
     let result = sqlx::query("UPDATE streamers SET password_hash = $3 WHERE id = $1 AND password_hash = $2")
         .bind(id)
@@ -191,31 +138,21 @@ async fn upgrade_hash(db: &PgPool, id: Uuid, old: &str, new: &str) {
     }
 }
 
-/// The same string from a phone and a laptop: compatibility normalisation.
 fn normalize(raw: &str) -> String {
     raw.nfkc().collect()
 }
 
-/// Normalised, then 8 to 128 characters. The length rule is one rule for a new
-/// password and for a typed one, measured the same way, or what signup takes
-/// could never log in (`e` + combining acute is two chars raw, one after nfkc).
-/// Only the length: a password made before the number-and-symbol rule still logs in.
 fn clean_password(raw: &str) -> Option<String> {
     let password = normalize(raw);
     (MIN_PASSWORD_CHARS..=MAX_PASSWORD_CHARS).contains(&password.chars().count()).then_some(password)
 }
 
-/// The words a refused new password gets. frontend/src/infra/password.ts says the same.
 const NEW_PASSWORD_RULE: &str = "password: 8 to 128 characters, with at least one number and one symbol";
 
-/// A symbol is anything not a letter, a number or a space. The frontend's check
-/// (frontend/src/infra/password.ts) uses the same unicode classes, on the same nfkc string.
 fn is_symbol(c: char) -> bool {
     !c.is_alphanumeric() && !c.is_whitespace()
 }
 
-/// For a new password (signup, change): the length rule, plus at least one number and
-/// one symbol, with the reason as a 400. Never asked of a password being typed to log in.
 fn clean_new_password(raw: &str) -> Result<String, ApiError> {
     let refused = || ApiError::new(StatusCode::BAD_REQUEST, NEW_PASSWORD_RULE);
     let password = clean_password(raw).ok_or_else(refused)?;
@@ -228,15 +165,12 @@ fn clean_new_password(raw: &str) -> Result<String, ApiError> {
     }
 }
 
-// ---- login tokens and the cookie ----------------------------------------------
-
 fn new_token() -> String {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// What the database keeps. The token itself only ever lives in the browser.
 fn token_hash(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
@@ -252,8 +186,6 @@ pub(crate) fn cookie_token(headers: &HeaderMap) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Httponly: scripts never see it. Secure: https only (browsers allow it on localhost too).
-/// Lax: a form on another site cannot post with it. No Domain: it sticks to this host.
 pub(crate) fn set_cookie(token: &str) -> String {
     format!("{COOKIE}={token}; Path=/; Max-Age={}; HttpOnly; Secure; SameSite=Lax", LOGIN_DAYS * 86400)
 }
@@ -262,10 +194,6 @@ fn clear_cookie() -> String {
     format!("{COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax")
 }
 
-/// A new login row, pointing at the account's id. The account's expired rows go at
-/// the same time: nothing else ever sweeps them. Live ones stay; a phone and a laptop
-/// are both you. The `name` column is still written while it exists (docs/ids.md): the
-/// previous image reads it, and a rename cascades into it.
 pub(crate) async fn open_login(db: &PgPool, account: &Account) -> Result<String, sqlx::Error> {
     let token = new_token();
     sqlx::query(
@@ -281,9 +209,6 @@ pub(crate) async fn open_login(db: &PgPool, account: &Account) -> Result<String,
     Ok(token)
 }
 
-// ---- who is this ----------------------------------------------------------------
-
-/// An account: the row id that never changes, and the name it has right now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Account {
     pub(crate) id: Uuid,
@@ -296,9 +221,6 @@ fn account(row: Option<AccountRow>) -> Option<Account> {
     row.map(|(id, name)| Account { id, name })
 }
 
-/// The account behind the cookie, if the login is real and not expired. A read; the
-/// row's last_seen moves at most once an hour (the cte, in the same round trip),
-/// so a logged-in page does not turn every request into a write.
 pub(crate) async fn whoami(db: &PgPool, headers: &HeaderMap) -> Result<Option<Account>, sqlx::Error> {
     let Some(token) = cookie_token(headers) else { return Ok(None) };
     let row: Option<AccountRow> = sqlx::query_as(
@@ -315,8 +237,6 @@ pub(crate) async fn whoami(db: &PgPool, headers: &HeaderMap) -> Result<Option<Ac
     Ok(account(row))
 }
 
-/// whoami that never writes. For the error reports: a sick main database must
-/// not make a report wait, and a report is not a visit.
 pub(crate) async fn whoami_readonly(db: &PgPool, headers: &HeaderMap) -> Result<Option<Account>, sqlx::Error> {
     let Some(token) = cookie_token(headers) else { return Ok(None) };
     let row: Option<AccountRow> = sqlx::query_as(
@@ -329,9 +249,6 @@ pub(crate) async fn whoami_readonly(db: &PgPool, headers: &HeaderMap) -> Result<
     Ok(account(row))
 }
 
-/// Is `name` held for an account that renamed away from it (and not for `except`, when
-/// given: an account may take its own old name back). A hold is a claim in waiting: a
-/// signup or a rename onto it gets `name taken`, the same words as for an account's name.
 pub(crate) async fn is_held(db: &PgPool, name: &str, except: Option<Uuid>) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM held_names WHERE name = $1 AND until > now() AND ($2::uuid IS NULL OR user_id <> $2))",
@@ -342,7 +259,6 @@ pub(crate) async fn is_held(db: &PgPool, name: &str, except: Option<Uuid>) -> Re
     .await
 }
 
-/// The name a held name became, while the hold lasts: `/watch/<old>` leads there.
 pub(crate) async fn renamed_to(db: &PgPool, name: &str) -> Result<Option<String>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT s.name FROM held_names h JOIN streamers s ON s.id = h.user_id WHERE h.name = $1 AND h.until > now()",
@@ -352,10 +268,6 @@ pub(crate) async fn renamed_to(db: &PgPool, name: &str) -> Result<Option<String>
     .await
 }
 
-/// Is this name somebody's: it has an account, or an account renamed away from it and the
-/// hold is still on (`is_held`; a claim in waiting). The one answer for the write gates and
-/// both socket hellos, in one statement, so nobody can go live as, write or wear a held
-/// name while `/watch/<name>` leads to the account that left it (docs/ids.md).
 pub(crate) async fn is_claimed(db: &PgPool, name: &str) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM streamers WHERE name = $1 AND password_hash IS NOT NULL)
@@ -366,19 +278,9 @@ pub(crate) async fn is_claimed(db: &PgPool, name: &str) -> Result<bool, sqlx::Er
     .await
 }
 
-/// The refusals for a name that is somebody's, the http one and the sockets' one. The word
-/// `account` is the wire contract: the pages recognise a refused nick by regex on this text
-/// (`/nick|account|fake/` in frontend/src/infra/events.worker.ts and events.ts,
-/// `/nick|account/` in frontend/src/infra/atoms/chat-atoms.ts) and only then stop re-sending
-/// it; docs/status.md, chat.md, accounts.md, spec.md and test/auth.js, presence.js quote it.
-/// A held name is held for an account, so the words hold for it too. Change them together
-/// with all of those, or not at all.
 pub(crate) const NAME_HAS_ACCOUNT: &str = "that name has an account. log in as it";
 pub(crate) const NICK_HAS_ACCOUNT: &str = "that name has an account. log in as it, or pick another";
 
-/// The one rule the rest of the api asks: may whoever holds `me` act as `name`?
-/// A free name: anyone. A claimed name: only its own login. A held name: nobody, not even
-/// the account that left it (its login is under the new name; it renames back instead).
 pub(crate) async fn may_act_as(db: &PgPool, name: &str, me: Option<&str>) -> Result<(), ApiError> {
     if me == Some(name) || !is_claimed(db, name).await? {
         return Ok(());
@@ -386,16 +288,12 @@ pub(crate) async fn may_act_as(db: &PgPool, name: &str, me: Option<&str>) -> Res
     Err(ApiError::new(StatusCode::FORBIDDEN, NAME_HAS_ACCOUNT))
 }
 
-/// Who the cookie says this is. `None` for everyone without a (valid) login.
 pub(crate) struct Me(pub(crate) Option<Account>);
 
-/// The login the rate limiter already looked up for this request (ratelimit.rs), so `Me`
-/// does not ask postgres a second time.
 #[derive(Clone)]
 pub(crate) struct Seen(pub(crate) Option<Account>);
 
 impl Me {
-    /// The login's name, the one thing most of the api compares against (a stream name, a room).
     pub(crate) fn name(&self) -> Option<&str> {
         self.0.as_ref().map(|a| a.name.as_str())
     }
@@ -416,11 +314,6 @@ where
     }
 }
 
-// ---- rate limits ------------------------------------------------------------------
-
-/// One more in redis, window from the first. Returns the count. One atomic round
-/// trip: INCR and EXPIRE NX (a ttl only when the key has none, redis 7) together,
-/// so a crash between them can never leave a counter that never expires.
 pub(crate) async fn bump(s: &AppState, key: &str, window_secs: i64) -> Result<i64, ApiError> {
     let (n,): (i64,) = redis::pipe()
         .atomic()
@@ -431,7 +324,6 @@ pub(crate) async fn bump(s: &AppState, key: &str, window_secs: i64) -> Result<i6
     Ok(n)
 }
 
-/// `bump`, and past `max` a 429 with `message` that says how long is left (`Retry-After`).
 pub(crate) async fn limit(s: &AppState, key: &str, window_secs: i64, max: i64, message: &str) -> Result<(), ApiError> {
     let (n, ttl) = crate::ratelimit::hit(&s.redis, key, window_secs).await?;
     if n > max {
@@ -440,7 +332,6 @@ pub(crate) async fn limit(s: &AppState, key: &str, window_secs: i64, max: i64, m
     Ok(())
 }
 
-/// Caddy sets X-Forwarded-For and nothing else reaches this port, so it is trusted.
 pub(crate) fn client_ip(headers: &HeaderMap) -> String {
     headers
         .get("x-forwarded-for")
@@ -451,21 +342,16 @@ pub(crate) fn client_ip(headers: &HeaderMap) -> String {
         .unwrap_or_else(|| "?".to_owned())
 }
 
-// ---- routes --------------------------------------------------------------------------
-
 #[derive(Deserialize)]
 struct Credentials {
     name: String,
     password: String,
-    /// The widget's single-use token (turnstile.rs). Left out while the check is off.
     #[serde(default)]
     turnstile_token: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct PasswordChange {
-    /// Ignored, and may be left out, when the account has no password yet (made with a
-    /// provider, oauth.rs): this sets its first one.
     #[serde(default)]
     old: String,
     new: String,
@@ -474,13 +360,10 @@ struct PasswordChange {
 #[derive(Deserialize)]
 struct NameChange {
     name: String,
-    /// Left out by an account with no password (oauth.rs): its login cookie is all it has.
     #[serde(default)]
     password: String,
 }
 
-/// One answer for a wrong name and a wrong password, so a guess learns nothing about
-/// which it was. Not a secret that the name exists: GET /api/streamers/<name> says so.
 fn wrong() -> ApiError {
     ApiError::new(StatusCode::UNAUTHORIZED, "wrong name or password")
 }
@@ -493,7 +376,6 @@ fn too_many() -> ApiError {
     ApiError::new(StatusCode::TOO_MANY_REQUESTS, "too many tries. wait 15 minutes")
 }
 
-/// Another account's, or held for one. One answer for both: a hold is a claim in waiting.
 fn name_taken() -> ApiError {
     ApiError::new(StatusCode::CONFLICT, "name taken")
 }
@@ -502,15 +384,10 @@ fn wrong_password() -> ApiError {
     ApiError::new(StatusCode::FORBIDDEN, "wrong password")
 }
 
-/// The counter a guess at this name's password from this ip lands on: login and
-/// a password change share it.
 fn login_key(ip: &str, name: &str) -> String {
     format!("rl:login:name:{ip}:{name}")
 }
 
-/// Did the browser send this from one of our own pages? Browsers put Sec-Fetch-Site
-/// on every request; a form on another site says `cross-site`. Nothing without the
-/// header (curl, the tests, old browsers) is held back by it.
 fn from_here(headers: &HeaderMap) -> bool {
     match headers.get("sec-fetch-site") {
         None => true,
@@ -522,7 +399,6 @@ fn with_cookie(status: StatusCode, cookie: String, body: Value) -> Response {
     (status, [(header::SET_COOKIE, cookie)], Json(body)).into_response()
 }
 
-/// The signups from one address in an hour, a password one or a provider one (oauth.rs).
 pub(crate) async fn limit_signup(s: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
     limit(s, &format!("rl:signup:ip:{}", client_ip(headers)), SIGNUP_WINDOW_SECS, SIGNUP_PER_IP, "too many signups from here. try later").await
 }
@@ -537,16 +413,12 @@ async fn signup(State(s): State<AppState>, headers: HeaderMap, body: Result<Json
         return Err(ApiError::new(StatusCode::FORBIDDEN, "reserved name"));
     }
     let password = clean_new_password(&body.password)?;
-    // after the free checks, before the signup counter and the hash
     crate::turnstile::verify(&s, body.turnstile_token.as_deref(), &client_ip(&headers)).await?;
     limit_signup(&s, &headers).await?;
-    // a name somebody renamed away from is theirs for a while yet (docs/ids.md)
     if is_held(&s.db, &name, None).await? {
         return Err(name_taken());
     }
     let hash = hash_blocking(password).await?;
-    // A row with no hash is a name someone used without an account. The first
-    // signup claims it, bio and all (the row keeps its id). A row with a hash is somebody's.
     let claimed: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO streamers (name, password_hash) VALUES ($1, $2)
          ON CONFLICT (name) DO UPDATE SET password_hash = EXCLUDED.password_hash
@@ -569,19 +441,14 @@ async fn signup(State(s): State<AppState>, headers: HeaderMap, body: Result<Json
 async fn login(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<Credentials>, JsonRejection>) -> Result<Response, ApiError> {
     let Json(body) = body?;
     let name = body.name.trim().to_lowercase();
-    // a name or a password no account can have is wrong at once: nothing to verify, nothing to count
     if !valid_name(&name) {
         return Err(wrong());
     }
     let Some(password) = clean_password(&body.password) else { return Err(wrong()) };
     let ip = client_ip(&headers);
-    // before the counters and argon2: a bot without a token spends neither
     crate::turnstile::verify(&s, body.turnstile_token.as_deref(), &ip).await?;
     let name_key = login_key(&ip, &name);
     let ip_key = format!("rl:login:ip:{ip}");
-    // counted before the verify, not after: a parallel burst would otherwise all read
-    // zero, all run argon2, and all get through. INCR is atomic, so each try gets its own
-    // number and exactly the first LOGIN_PER_NAME of them are checked.
     let (tries, name_ttl) = crate::ratelimit::hit(&s.redis, &name_key, LOGIN_WINDOW_SECS).await?;
     let (from_ip, ip_ttl) = crate::ratelimit::hit(&s.redis, &ip_key, LOGIN_WINDOW_SECS).await?;
     if tries > LOGIN_PER_NAME || from_ip > LOGIN_PER_IP {
@@ -599,7 +466,6 @@ async fn login(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<
     let Verdict::Right { upgraded } = verify_blocking(password, hash.clone()).await else {
         return Err(wrong());
     };
-    // a verified password means the row was there
     let Some(id) = id else { return Err(wrong()) };
     if let (Some(new), Some(old)) = (upgraded, hash) {
         upgrade_hash(&s.db, id, &old, &new).await;
@@ -612,8 +478,6 @@ async fn login(State(s): State<AppState>, headers: HeaderMap, body: Result<Json<
 }
 
 async fn logout(State(s): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
-    // the one route that acts without the cookie (it clears it), so SameSite does not
-    // cover it: a form on another site could log you out. the browser says where it came from
     if !from_here(&headers) {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "not from this site"));
     }
@@ -635,11 +499,6 @@ async fn logout_all(State(s): State<AppState>, Me(me): Me) -> Result<Response, A
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, clear_cookie())]).into_response())
 }
 
-/// `{ id, name, renamed_at, has_password, held }`; every field null (`held` empty) for nobody.
-/// `has_password` is false for an account made with a provider that has not set one
-/// (oauth.rs). `held`: this account's old names still held for it (it may go back any time). The one place a person can read
-/// their own id; no page needs it. `renamed_at` is when the name last changed, for the
-/// profile tab to say when it may change again.
 async fn me(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     let Some(me) = me else {
         return Ok(Json(json!({ "id": null, "name": null, "renamed_at": null, "has_password": null, "oauth_verified": null, "held": [] })));
@@ -651,7 +510,6 @@ async fn me(State(s): State<AppState>, Me(me): Me) -> ApiResult {
             .await?;
     let (renamed_at, hash, oauth_verified) = row.unwrap_or((None, None, false));
     let has_password = hash.as_deref().is_some_and(is_password);
-    // the names held for me: going back onto one is allowed any time (rename_wait)
     let held: Vec<String> = sqlx::query_scalar("SELECT name FROM held_names WHERE user_id = $1 AND until > now() ORDER BY name")
         .bind(me.id)
         .fetch_all(&s.db)
@@ -659,8 +517,6 @@ async fn me(State(s): State<AppState>, Me(me): Me) -> ApiResult {
     Ok(Json(json!({ "id": me.id, "name": me.name, "renamed_at": renamed_at, "has_password": has_password, "oauth_verified": oauth_verified, "held": held })))
 }
 
-/// The login's own password, counted on the login limiter first: a stolen cookie is not
-/// unlimited guesses. The counter clears on a right one. `None` when the account is gone.
 async fn check_password(s: &AppState, headers: &HeaderMap, me: &Account, raw: &str) -> Result<(), ApiError> {
     let Some(password) = clean_password(raw) else { return Err(wrong_password()) };
     let key = login_key(&client_ip(headers), &me.name);
@@ -689,14 +545,10 @@ async fn change_password(
     let me = me.ok_or_else(not_logged_in)?;
     let Json(body) = body?;
     let new = clean_new_password(&body.new)?;
-    // an account made with a provider sets its first password with its login alone, the way
-    // it renames; one with a password needs it
     if has_password(&s.db, me.id).await? {
         check_password(&s, &headers, &me, &body.old).await?;
     }
     let hash = hash_blocking(new).await?;
-    // every other login is out, this one stays: in the one statement with the new hash,
-    // so a failure between the two cannot leave the password changed and the others in
     let keep = cookie_token(&headers).map(|t| token_hash(&t)).unwrap_or_default();
     sqlx::query(
         "WITH changed AS (UPDATE streamers SET password_hash = $2 WHERE id = $1)
@@ -711,10 +563,6 @@ async fn change_password(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// May an account whose name last changed at `last` rename now? Always when it goes back to a
-/// name held for it (`returning`): the hold is its own, and waiting out RENAME_DAYS would end
-/// the hold at the same moment, a race with everyone else for the name. Otherwise once in
-/// RENAME_DAYS.
 fn rename_wait(last: Option<DateTime<Utc>>, returning: bool, now: DateTime<Utc>) -> Result<(), ApiError> {
     let Some(at) = last.filter(|_| !returning) else { return Ok(()) };
     let again = at + chrono::Duration::days(RENAME_DAYS);
@@ -727,11 +575,6 @@ fn rename_wait(last: Option<DateTime<Utc>>, returning: bool, now: DateTime<Utc>)
     Ok(())
 }
 
-/// Takes the free row (no account) under `new` for `me`, who is about to be renamed onto it:
-/// its followers move to `me` (they followed the name, docs/follows.md), then its thumbs and
-/// the row go. Returns its picture keys in the bucket, to drop after the commit. `name taken`
-/// when the row is not free any more: a signup claimed it between the check and here, and the
-/// caller's early return rolls the transaction back.
 pub(crate) async fn take_free_row(conn: &mut PgConnection, free: Uuid, me: Uuid, new: &str) -> Result<Vec<String>, ApiError> {
     let thumbs: Vec<i64> = sqlx::query_scalar("SELECT id FROM stream_thumbs WHERE name = $1").bind(new).fetch_all(&mut *conn).await?;
     let assets: Vec<(i64, String)> = sqlx::query_as("SELECT id, mime FROM stream_assets WHERE name = $1").bind(new).fetch_all(&mut *conn).await?;
@@ -744,8 +587,6 @@ pub(crate) async fn take_free_row(conn: &mut PgConnection, free: Uuid, me: Uuid,
     sqlx::query("DELETE FROM stream_thumbs WHERE name = $1").bind(new).execute(&mut *conn).await?;
     sqlx::query("DELETE FROM stream_assets WHERE name = $1").bind(new).execute(&mut *conn).await?;
     sqlx::query("DELETE FROM about_files WHERE name = $1").bind(new).execute(&mut *conn).await?;
-    // the name's followers are mine now, from when they followed. not my own edge to it (no
-    // self edges), and one who follows me already keeps the one edge
     sqlx::query(
         "INSERT INTO follows (follower_id, followed_id, followed_at)
          SELECT follower_id, $2, followed_at FROM follows WHERE followed_id = $1 AND follower_id <> $2
@@ -755,7 +596,6 @@ pub(crate) async fn take_free_row(conn: &mut PgConnection, free: Uuid, me: Uuid,
     .bind(me)
     .execute(&mut *conn)
     .await?;
-    // only while it is still free: a signup that claimed it since the check keeps the row
     let gone = sqlx::query("DELETE FROM streamers WHERE id = $1 AND password_hash IS NULL").bind(free).execute(&mut *conn).await?;
     if gone.rows_affected() == 0 {
         return Err(name_taken());
@@ -763,12 +603,6 @@ pub(crate) async fn take_free_row(conn: &mut PgConnection, free: Uuid, me: Uuid,
     Ok(orphaned)
 }
 
-/// `POST /api/name` `{ name, password }`: the login's name changes; its logins, groups and
-/// pictures stay, because they point at the id. Once in RENAME_DAYS (but back onto a name held
-/// for this account at any time, `rename_wait`), with the password (a stolen cookie must not
-/// walk off with the name; an account with no password, made with a provider, has only its
-/// cookie), never while live (the stream's url, key and room are the name). The old name is
-/// held HOLD_DAYS for this account. See docs/ids.md.
 async fn change_name(
     State(s): State<AppState>,
     headers: HeaderMap,
@@ -790,32 +624,24 @@ async fn change_name(
     if has_password(&s.db, me.id).await? {
         check_password(&s, &headers, &me, &body.password).await?;
     }
-    // the stream's url, its live key and its chat room are the name: it ends first. the key
-    // too, not only video's word: a go-live whose page has not reached video yet holds it
     let keyed: bool = s.redis.clone().exists(live_key(&me.name)).await?;
     if keyed || is_live(&s, &me.name).await? {
         return Err(ApiError::new(StatusCode::CONFLICT, "stop the stream first"));
     }
-    // pictures saved before ids sit at the name's keys. at the id's now, so nothing in
-    // the bucket says the name when it changes (profile.rs does the same lazily on read)
     profile::lift_pictures(&s, me.id, &me.name).await;
 
     let mut tx = s.db.begin().await?;
-    // the account's row, locked: two renames at once (two tabs) take turns, and the second
-    // sees the first's renamed_at. the once-in-RENAME_DAYS check is here, in the transaction
     let last: Option<Option<DateTime<Utc>>> = sqlx::query_scalar("SELECT renamed_at FROM streamers WHERE id = $1 FOR UPDATE")
         .bind(me.id)
         .fetch_optional(&mut *tx)
         .await?;
     sqlx::query("DELETE FROM held_names WHERE until < now()").execute(&mut *tx).await?;
-    // a name of mine, held for me: going back to it is always allowed (rename_wait)
     let own_hold: Option<DateTime<Utc>> = sqlx::query_scalar("SELECT until FROM held_names WHERE name = $1 AND user_id = $2 AND until > now()")
         .bind(&new)
         .bind(me.id)
         .fetch_optional(&mut *tx)
         .await?;
     rename_wait(last.flatten(), own_hold.is_some(), Utc::now())?;
-    // another account's name, or held for another account: the same answer for both
     let taken: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM streamers WHERE name = $1 AND password_hash IS NOT NULL)
              OR EXISTS (SELECT 1 FROM held_names WHERE name = $1 AND user_id <> $2)",
@@ -827,16 +653,11 @@ async fn change_name(
     if taken {
         return Err(name_taken());
     }
-    // a free row under the new name: its bio and picture were anyone's, and yours arrive
-    // with you; its followers come along. the row goes, and its pictures in the bucket after the commit
     let free: Option<Uuid> = sqlx::query_scalar("SELECT id FROM streamers WHERE name = $1").bind(&new).fetch_optional(&mut *tx).await?;
     let orphaned = match free {
         Some(free) => take_free_row(&mut tx, free, me.id, &new).await?,
         None => Vec::new(),
     };
-    // the one statement the id is for. logins.name, memberships.name and groups.created_by
-    // follow by ON UPDATE CASCADE while those columns live; stream_thumbs has no key and is told
-    // going back is not a new rename: renamed_at stays, so the 30 days still run from the real one
     let renamed_at: Option<DateTime<Utc>> = match sqlx::query_scalar(
         "UPDATE streamers SET name = $2, renamed_at = CASE WHEN $3 THEN renamed_at ELSE now() END WHERE id = $1 RETURNING renamed_at",
     )
@@ -847,17 +668,13 @@ async fn change_name(
         .await
     {
         Ok(at) => at,
-        // a signup or another rename took the name between the check and here
         Err(e) if unique_violation(&e) => return Err(name_taken()),
         Err(e) => return Err(e.into()),
     };
     sqlx::query("UPDATE stream_thumbs SET name = $2 WHERE name = $1").bind(&me.name).bind(&new).execute(&mut *tx).await?;
     sqlx::query("UPDATE stream_assets SET name = $2 WHERE name = $1").bind(&me.name).bind(&new).execute(&mut *tx).await?;
     sqlx::query("UPDATE about_files SET name = $2 WHERE name = $1").bind(&me.name).bind(&new).execute(&mut *tx).await?;
-    // going back to a name of mine ends its hold; the name I leave is held from now
     sqlx::query("DELETE FROM held_names WHERE name = $1 AND user_id = $2").bind(&new).bind(me.id).execute(&mut *tx).await?;
-    // a fresh rename holds the name I leave HOLD_DAYS. going back holds it only as long as the
-    // hold I went back from had left: flipping between two names never stretches a hold
     sqlx::query(
         "INSERT INTO held_names (name, user_id, until) VALUES ($1, $2, COALESCE($4, now() + make_interval(days => $3)))
          ON CONFLICT (name) DO UPDATE SET user_id = EXCLUDED.user_id, until = EXCLUDED.until",
@@ -871,8 +688,6 @@ async fn change_name(
     tx.commit().await?;
 
     profile::drop_pictures(&s, &orphaned).await;
-    // the fact, for the gateway: its sockets of the old name are the new name now, and every
-    // tab and device of mine, and every page on /watch/<old>, is told (docs/ids.md)
     presence::publish_renamed(&mut s.redis.clone(), &me.name, &new).await;
     log::info!("{}: renamed to {new}", me.name);
     Ok(Json(json!({ "id": me.id, "name": new, "renamed_at": renamed_at })))
@@ -889,17 +704,11 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/name", post(change_name))
 }
 
-// ---- `api passwd <name>` ---------------------------------------------------------------
-
-/// A new random password for a name, printed once. The reset, since there is no
-/// email. Works on a name with no account too: it becomes one.
 pub(crate) async fn passwd(db: &PgPool, name: &str) -> anyhow::Result<()> {
     let name = name.trim().to_lowercase();
     anyhow::ensure!(valid_name(&name), "bad name. use a-z 0-9 _ - (1 to 32)");
-    // the same rule as signup: a reserved name stays with the dummy box, an account on it would claim it
     let prefix = std::env::var("DUMMY_PREFIX").unwrap_or_else(|_| "dummy-".into());
     anyhow::ensure!(!name.starts_with(&prefix), "reserved name: {prefix}* belongs to the fake streams");
-    // a name somebody renamed away from is still theirs: an account on it now would be a stranger's claim
     anyhow::ensure!(!is_held(db, &name, None).await?, "{name} is held for the account that renamed away from it. wait for the hold to end, or use their new name");
     let password = random_password();
     let hash = hash_password(&password).ok_or_else(|| anyhow::anyhow!("could not hash"))?;
@@ -918,7 +727,6 @@ pub(crate) async fn passwd(db: &PgPool, name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 16 symbols from a 32-letter alphabet (no 0 o 1 l): 80 bits.
 fn random_password() -> String {
     const ALPHABET: &[u8] = b"abcdefghijkmnpqrstuvwxyz23456789";
     let mut bytes = [0u8; 16];
@@ -930,9 +738,6 @@ fn random_password() -> String {
 pub(crate) mod tests {
     use super::*;
 
-    /// The pages stop re-sending a refused nick only when the error matches `/nick|account|fake/`
-    /// (events.worker.ts, events.ts) or `/nick|account/` (chat-atoms.ts); without the word a
-    /// guest with a claimed nick reconnects every 3 s for ever. test/auth.js and presence.js match `/account/`.
     #[test]
     fn the_refusals_carry_the_word_the_pages_match_on() {
         assert!(NAME_HAS_ACCOUNT.contains("account"));
@@ -960,14 +765,12 @@ pub(crate) mod tests {
         assert!(refused("abcd efg1"), "a space is not a symbol");
         assert!(refused(&format!("{}1!", "a".repeat(127))), "129 is too long");
         assert!(!refused(&format!("{}1!", "a".repeat(126))), "128 is fine");
-        // nfkc first: a fullwidth digit is a digit, and `e` + combining acute is one character
         assert!(!refused("abcdef\u{ff11}!"));
         assert!(refused("abcde\u{0301}1!"), "7 characters after nfkc");
     }
 
     #[test]
     fn logging_in_asks_only_the_length() {
-        // passwords made before the number-and-symbol rule still go through to the verify
         assert!(clean_password("correct horse battery").is_some());
         assert!(clean_password("short").is_none());
     }
@@ -1004,16 +807,12 @@ pub(crate) mod tests {
         assert!(!needs_rehash(&new), "the new one is on today's settings: {new}");
         assert!(verify_password(pw, &new), "and it is the same password");
 
-        // a wrong password on an old hash: wrong, and nothing is hashed
         assert!(matches!(verify_blocking("wrong guess 1!".into(), Some(old)).await, Verdict::Wrong));
-        // a right password on a current hash: right, nothing to upgrade
         let current = hash_password(pw).unwrap();
         assert!(matches!(verify_blocking(pw.into(), Some(current)).await, Verdict::Right { upgraded: None }));
-        // no account: the decoy, wrong
         assert!(matches!(verify_blocking(pw.into(), None).await, Verdict::Wrong));
     }
 
-    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored upgrade_only_replaces` against a throwaway postgres (see `test_db`).
     #[tokio::test]
     #[ignore]
     async fn an_upgrade_only_replaces_the_hash_it_was_made_from() {
@@ -1029,14 +828,10 @@ pub(crate) mod tests {
         };
         upgrade_hash(&pool, id, "old-hash", "new-hash").await;
         assert_eq!(stored(pool.clone()).await.as_deref(), Some("new-hash"));
-        // the password changed in between: the stale upgrade leaves the change alone
         upgrade_hash(&pool, id, "old-hash", "stale-hash").await;
         assert_eq!(stored(pool.clone()).await.as_deref(), Some("new-hash"));
     }
 
-    /// A throwaway postgres, with api/schema.sql in it. For example
-    /// `docker run -d --name test-pg -e POSTGRES_PASSWORD=x -e POSTGRES_DB=t -p 55434:5432 postgres:17-alpine`
-    /// and `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t`. follows.rs's tests use it too.
     pub(crate) async fn test_db() -> PgPool {
         let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL: the postgres to run this against");
         let pool = sqlx::postgres::PgPoolOptions::new().max_connections(2).connect(&url).await.expect("connect");
@@ -1044,7 +839,6 @@ pub(crate) mod tests {
         pool
     }
 
-    /// A row with a hash is an account; without one, a name somebody used (a follow, a bio).
     pub(crate) async fn row(pool: &PgPool, name: &str, hash: Option<&str>) -> Uuid {
         sqlx::query_scalar("INSERT INTO streamers (name, password_hash) VALUES ($1, $2) RETURNING id")
             .bind(name)
@@ -1072,7 +866,6 @@ pub(crate) mod tests {
             .expect("edges")
     }
 
-    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored keeps_its_followers` against a throwaway postgres (see `test_db`).
     #[tokio::test]
     #[ignore]
     async fn taking_a_free_name_keeps_its_followers() {
@@ -1085,24 +878,19 @@ pub(crate) mod tests {
         let nova = row(&pool, &name, None).await;
         let then: DateTime<Utc> = "2024-01-02T03:04:05Z".parse().unwrap();
         let later: DateTime<Utc> = "2024-06-07T08:09:10Z".parse().unwrap();
-        // fan follows the free name; both follows it and alice; alice follows it herself
         edge(&pool, fan, nova, then).await;
         edge(&pool, both, nova, later).await;
         edge(&pool, both, alice, then).await;
         edge(&pool, alice, nova, then).await;
 
-        // what change_name does: take the row, then rename onto the name
         let mut tx = pool.begin().await.unwrap();
         let orphaned = take_free_row(&mut tx, nova, alice, &name).await.expect("the free row is taken");
         sqlx::query("UPDATE streamers SET name = $2 WHERE id = $1").bind(alice).bind(&name).execute(&mut *tx).await.unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(orphaned, profile::picture_keys(nova, &[], &[]));
-        // fan's one edge points at alice now, from when it was made
         assert_eq!(edges_of(&pool, fan).await, vec![(alice, then)]);
-        // one edge for somebody who followed alice already, the one they had
         assert_eq!(edges_of(&pool, both).await, vec![(alice, then)]);
-        // alice's own edge to the free name is gone, not a self edge
         assert_eq!(edges_of(&pool, alice).await, vec![]);
         assert_eq!(
             crate::follows::stats(&pool, &name, Some(fan)).await.unwrap(),
@@ -1110,7 +898,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored claimed_meanwhile` against a throwaway postgres (see `test_db`).
     #[tokio::test]
     #[ignore]
     async fn a_free_name_claimed_meanwhile_is_taken_not_deleted() {
@@ -1119,7 +906,6 @@ pub(crate) mod tests {
         let bob = row(&pool, &format!("bob-{run}"), Some("bob-hash")).await;
         let name = format!("nova2-{run}");
         let nova = row(&pool, &name, None).await;
-        // bob's rename has read the free row's id; a signup claims the row before it is deleted
         let claimed: Option<Uuid> = sqlx::query_scalar(
             "INSERT INTO streamers (name, password_hash) VALUES ($1, $2)
              ON CONFLICT (name) DO UPDATE SET password_hash = EXCLUDED.password_hash
@@ -1142,7 +928,6 @@ pub(crate) mod tests {
         assert_eq!(hash.as_deref(), Some("carol-hash"));
     }
 
-    /// `TEST_DATABASE_URL=postgres://postgres:x@127.0.0.1:55434/t cargo test -p api -- --ignored held_name_is_somebodys` against a throwaway postgres (see `test_db`).
     #[tokio::test]
     #[ignore]
     async fn a_held_name_is_somebodys_while_the_hold_lasts() {
@@ -1151,7 +936,6 @@ pub(crate) mod tests {
         let nova_name = format!("nova3-{run}");
         let nova = row(&pool, &nova_name, Some("nova-hash")).await;
         let alice = format!("alice3-{run}");
-        // what change_name leaves behind: nova renamed away from alice, and alice is held for her
         sqlx::query("INSERT INTO held_names (name, user_id, until) VALUES ($1, $2, now() + interval '30 days')")
             .bind(&alice)
             .bind(nova)
@@ -1162,13 +946,11 @@ pub(crate) mod tests {
         assert!(is_claimed(&pool, &alice).await.unwrap(), "a held name is somebody's");
         assert!(is_claimed(&pool, &nova_name).await.unwrap(), "an account's name is somebody's");
         assert!(!is_claimed(&pool, &format!("nobody3-{run}")).await.unwrap(), "a name nobody used is free");
-        // nobody acts as the held name: not a guest, and not the account it is held for (it renames back)
         let guest = may_act_as(&pool, &alice, None).await.expect_err("a guest is refused");
         assert_eq!(guest.into_response().status(), StatusCode::FORBIDDEN);
         let holder = may_act_as(&pool, &alice, Some(&nova_name)).await.expect_err("the account that left it is refused");
         assert_eq!(holder.into_response().status(), StatusCode::FORBIDDEN);
 
-        // the hold runs out: the name is anyone's again
         sqlx::query("UPDATE held_names SET until = now() - interval '1 second' WHERE name = $1").bind(&alice).execute(&pool).await.unwrap();
         assert!(!is_claimed(&pool, &alice).await.unwrap(), "a lapsed hold holds nothing");
         may_act_as(&pool, &alice, None).await.expect("free again");
@@ -1190,7 +972,6 @@ pub(crate) mod tests {
     fn no_password_is_not_a_password() {
         assert!(!is_password(NO_PASSWORD));
         assert!(is_password("$argon2id$v=19$m=19456,t=2,p=1$abc$def"));
-        // nothing typed verifies against it, and it is never "rehashed"
         assert!(!verify_password("!no-password", NO_PASSWORD));
         assert!(!verify_password("", NO_PASSWORD));
         assert!(!needs_rehash(NO_PASSWORD));
@@ -1205,7 +986,6 @@ pub(crate) mod tests {
         let id = row(&pool, &boss, Some("boss-hash")).await;
         let admins = crate::debug::admins_with_accounts(&pool, vec![boss.clone()]).await.unwrap();
         assert_eq!(admins, vec![Account { id, name: boss.clone() }]);
-        // the admin renames, and a stranger signs up as the released name
         sqlx::query("UPDATE streamers SET name = $2 WHERE id = $1").bind(id).bind(format!("boss2-{run}")).execute(&pool).await.unwrap();
         let stranger = row(&pool, &boss, Some("stranger-hash")).await;
         let admins = crate::debug::admins_with_accounts(&pool, vec![boss.clone()]).await.unwrap();

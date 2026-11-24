@@ -29,13 +29,6 @@ import { cn } from '@/utils/cn';
 
 const GRID = 'grid grid-cols-2 gap-2 md:grid-cols-4 md:gap-3';
 
-/**
- * Groups: the ones I am in, as home's squares. A click makes one my primary (my name then wears
- * its badge alone), a second click unsets it. On a desktop a hovered or focused square has an x
- * to leave; a phone leaves from the group's page. Joining, making, deleting and the public or
- * private switch are the groups pages' (MakeGroupDialog.tsx, ServerRoom.tsx); `bot` is automatic,
- * so it is not here. Every change says hello to the open chat again, so the badges follow at once.
- */
 export function GroupsTab() {
   const me = useAtomValue(meAtom);
   const groups = useAtomValue(groupsAtom);
@@ -45,8 +38,6 @@ export function GroupsTab() {
   const status = useAtomValue(groupsStatusAtom);
   const mobile = useIsMobile();
 
-  // Mount only: the list as the server has it (`mine`, `primary`), the pictures from the sidebar's
-  // list of my servers, and no status left over from an earlier open.
   useEffect(() => {
     clearGroupsStatus();
     void loadGroups();
@@ -69,7 +60,6 @@ export function GroupsTab() {
   return (
     <div className="divide-y divide-primaryStroke">
       <Block title="groups" tip={mobile ? 'tap one to wear its badge. leave from the group page' : 'click one to wear its badge in chat'}>
-        {/* before the list has answered: the squares' boxes with grey in them */}
         {loaded === undefined && (
           <Skeleton id="group-list-loading" className={GRID}>
             {Array.from({ length: 4 }, (_, i) => (
@@ -104,16 +94,10 @@ export function GroupsTab() {
   );
 }
 
-/**
- * One of my groups as home's square, and a radio: a click makes it my primary, a click on the
- * primary one unsets it. The pictures come from my servers' list; a group not on it yet (just
- * joined) shows its colour until it is.
- */
 function GroupPick({ group, server, busy, mobile }: { group: Group; server: Server | undefined; busy: boolean; mobile: boolean }) {
   const [leaving, setLeaving] = useState(false);
   const words = groupWords(group);
   const primary = group.primary === true;
-  // an older api has no `primary`: nothing to pick
   const pickable = group.primary !== undefined;
   const shown: Server = {
     ...group,

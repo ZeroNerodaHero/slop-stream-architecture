@@ -1,8 +1,3 @@
--- The baseline: the whole database as of 2026-11-19. The api applies this file at boot to an
--- empty database (one with no `streamers` table) in one transaction, then the migrations after
--- it (api/migrations, listed in api/src/schema.rs `MIGRATIONS`). Do not edit it: a change to the
--- tables is a new migration, which reaches an existing database at its next boot, no reset.
-
 CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
 
 CREATE TABLE streamers (
@@ -317,6 +312,5 @@ CREATE TABLE timeouts (
     FOREIGN KEY (user_id) REFERENCES streamers(id) ON DELETE CASCADE
 );
 
--- the one group every database has: the fake streams' pretend chatters wear its badge
 INSERT INTO groups (name, badge, color, about)
     VALUES ('bot', 'BOT', '#5865f2', 'automatic. the fake streams'' pretend chatters, and any chat socket that says it is one. nobody joins it.');

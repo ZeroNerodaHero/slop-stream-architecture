@@ -23,7 +23,6 @@ const TOKEN_LABEL: Record<TokenName, string> = {
 
 const css = (c: readonly number[]) => `rgb(${c.join(' ')})`;
 
-/** A palette in one picture: its page with a box on it, the site's title motif inside: a blue bar and `Aa` in its text. */
 function Swatch({ palette }: { palette: Palette }) {
   return (
     <span
@@ -47,11 +46,9 @@ function Swatch({ palette }: { palette: Palette }) {
   );
 }
 
-/** The browser's colour box, squared off: no padding, no inner border, no corners. */
 const COLOR_INPUT =
   'h-11 w-11 shrink-0 cursor-pointer appearance-none border border-primaryStroke bg-transparent p-0 [&::-moz-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-0 disabled:cursor-default disabled:opacity-40';
 
-/** The five sizes, smallest first, each with its word. */
 const SIZE_WORDS: Record<TextSize, string> = {
   80: 'smallest',
   90: 'small',
@@ -60,10 +57,6 @@ const SIZE_WORDS: Record<TextSize, string> = {
   125: 'largest'
 };
 
-/**
- * A size in one picture: `Aa` at that share of the page's, on the page. In rems, so the cards
- * shrink and grow with the pick and keep their steps apart from one another.
- */
 function SizeSwatch({ size }: { size: TextSize }) {
   return (
     <span aria-hidden className="flex h-16 w-full items-center justify-center border border-primaryStroke bg-background [--aa:1.75rem] max-md:h-9 max-md:[--aa:0.95rem]">
@@ -74,25 +67,17 @@ function SizeSwatch({ size }: { size: TextSize }) {
   );
 }
 
-/**
- * The theme: a preset, or colours of their own. Picking applies and keeps at once, so the page
- * behind is the preview; the derivation keeps the text readable whatever the picks, and dark
- * is one click away. And the size: how big the whole page is, in five steps. Kept in this
- * browser, like the layout.
- */
 export function AppearanceTab() {
   const theme = useAtomValue(themeAtom);
   const palette = useAtomValue(paletteAtom);
   const size = useAtomValue(textSizeAtom);
   const custom = theme.kind === 'custom';
-  // the custom card's picture: the colours it would start from, or the ones it has
   const customPalette = custom ? palette : null;
 
   return (
     <div className="divide-y divide-primaryStroke">
       <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>theme</legend>
-        {/* one row of five on a desktop; a phone has the three presets in thirds, then midnight and custom in halves */}
         <div role="presentation" className="mt-2 grid grid-cols-6 gap-2 md:grid-cols-5 md:gap-3">
           {PRESET_NAMES.map((name, i) => (
             <div key={name} className={cn('grid min-w-0 md:col-span-1', i < 3 ? 'col-span-2' : 'col-span-3')}>
@@ -167,7 +152,6 @@ export function AppearanceTab() {
               </Field>
             </div>
 
-            {/* what the three make: the twelve, so a nudge for readability is seen, not suffered */}
             <ul className="flex flex-wrap gap-2" aria-label="the colours these make">
               {TOKENS.map((token) => (
                 <li key={token} className="flex flex-col items-center gap-1" title={`${TOKEN_LABEL[token]} ${hex(palette[token])}`}>
@@ -191,8 +175,6 @@ export function AppearanceTab() {
         </Block>
       )}
 
-      {/* the root font size as a percentage (settings.textSize): every rem in the stylesheet follows it,
-          so the words and the room around them shrink and grow together, the way the browser's zoom does */}
       <fieldset className={FIELDSET}>
         <legend className={SECTION_TITLE}>size</legend>
         <div role="presentation" className="mt-2 grid grid-cols-5 gap-1.5 md:gap-3">

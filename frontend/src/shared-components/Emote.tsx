@@ -4,18 +4,9 @@ import { emoteSrc, type Emote as EmoteInfo } from '@/infra/emotes';
 import { Tooltip } from '@/shared-components/Tooltip';
 import { cn } from '@/utils/cn';
 
-/** An emote in a line: 1.375em, on the words' baseline. */
 const INLINE = 'h-[1.375em] w-[1.375em] align-[-0.35em]';
-/** A line of emotes alone: discord's jumbo. */
 const JUMBO = 'h-[3em] w-[3em] align-bottom';
 
-/**
- * One emote token drawn (docs/chat.md "emotes"): its picture, with `:name:` and its group in the
- * tooltip and `:name:` for a reader (and a copy). `info` is what the api said the id is: undefined
- * while it is being asked (the picture is drawn already, under the token's name), null for one
- * that is gone, which is the plain `:name:` it was written as. A picture that will not load is
- * that too.
- */
 export function Emote({
   id,
   name,

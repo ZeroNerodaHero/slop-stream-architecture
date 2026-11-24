@@ -1,22 +1,3 @@
-//! A limit on every route, per caller (docs/rate-limits.md has the table).
-//!
-//! Each route belongs to one tier: a count per window, kept in redis (`hit`: INCR and
-//! EXPIRE NX in one trip, like `auth::bump`). The caller is the login when the cookie is a
-//! real one, else the address caddy saw. Past the count: 429, `Retry-After` the seconds
-//! left in the window. The handlers' own tighter limits (signup, login, dms, follows,
-//! search, chat images, error reports) still apply on top of these.
-//!
-//! What is not counted: a request with no X-Forwarded-For. Caddy sets it on everything it
-//! passes, so one without it came from inside the compose network (video's heartbeat and
-//! `attached` for its publishers, the tests, the dummy box's internal calls). And a
-//! reserved-name request carrying the dummy password, the fake streams' box.
-//!
-//! `RATE_LIMITS=off` in the environment turns the route limits off (a load test, a seed run
-//! against a dev box). The handlers' own counts stay.
-//!
-//! Redis down: the request goes through and a warning is logged. A limiter must not be
-//! the reason the site is down; the handlers that need redis fail on their own.
-
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -32,15 +13,10 @@ use serde_json::json;
 
 use crate::{auth, AppState};
 
-/// Who a count is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Key {
-    /// The login when there is one, else the address.
     Who,
-    /// The address, logged in or not.
     Ip,
-    /// The stream name in the path, from this address: a stranger beating at a name
-    /// fills his own count, never the streamer's.
     NameIp,
 }
 
@@ -56,57 +32,27 @@ const fn rule(tier: &'static str, max: i64, window_secs: i64, key: Key) -> Rule 
     Rule { tier, max, window_secs, key }
 }
 
-// ---- the tiers ----------------------------------------------------------------------------
-// generous on purpose: a person clicking around never sees one. each is a ceiling for a
-// script, not a pace for a page.
-
-/// `/api/health` asks postgres, redis, video and the bucket each time.
 pub(crate) const HEALTH: Rule = rule("health", 60, 60, Key::Ip);
-/// `/watch/<name>`: html with a preview card, for people and link unfurlers.
 pub(crate) const PAGE: Rule = rule("page", 120, 60, Key::Ip);
-/// Every other GET of the api.
 pub(crate) const READ: Rule = rule("read", 600, 60, Key::Who);
-/// Full-text searches: a dm thread's, a chat's history.
 pub(crate) const SEARCH: Rule = rule("search", 60, 60, Key::Who);
-/// Every other write: a bio, a follow, a dm, a read marker, join, leave.
 pub(crate) const WRITE: Rule = rule("write", 120, 60, Key::Who);
-/// Signup, login, logout, password and name changes, on top of their own counts.
 pub(crate) const AUTH: Rule = rule("auth", 30, 60, Key::Ip);
-/// Logging in with google or discord: starting one, the provider's redirect back, the
-/// pick-a-name step, unlinking. By address: a start is a redis write each, a callback two
-/// outbound https calls. A person needs a handful.
 pub(crate) const OAUTH: Rule = rule("oauth", 30, 60, Key::Ip);
-/// A group's moderation and setup: kick, timeout, ban, roles, owners, channels, access.
 pub(crate) const MODERATE: Rule = rule("moderate", 120, 600, Key::Who);
-/// Anything that puts a file in the bucket: avatar, card pictures, offline picture,
-/// scene assets, about page and its files, a group's icon and banner, a chat image, a group's emote.
 pub(crate) const UPLOAD: Rule = rule("upload", 60, 3600, Key::Who);
-/// A chat video (chat_videos.rs): up to 10 mb each into a bucket on the box's own disk, so far
-/// fewer than the other uploads, on top of the handler's own 5 per 10 minutes.
 pub(crate) const VIDEO_UPLOAD: Rule = rule("video-upload", 12, 3600, Key::Who);
-/// Going live: a video probe and a session row each.
 pub(crate) const GO_LIVE: Rule = rule("go-live", 10, 600, Key::Who);
-/// The publisher's own calls on its stream: heartbeat (every 15s), stop, attached, viewers.
 pub(crate) const STREAM: Rule = rule("stream", 120, 60, Key::NameIp);
-/// A page's error reports, on top of debug.rs's own 60 per 10 minutes.
 pub(crate) const REPORT: Rule = rule("report", 120, 60, Key::Ip);
-/// Free names one caller may write to in an hour (a bio, a picture, a status on a name
-/// nobody has written yet makes its row). A name already written this hour is free.
 pub(crate) const NEW_NAMES: Rule = rule("new-names", 20, 3600, Key::Who);
 
-// the other processes, by address alone
-/// Opening a chat room's socket (`api chat`), on top of its 8 per room per address.
 pub(crate) const CHAT_SOCKET: Rule = rule("chat-socket", 60, 60, Key::Ip);
-/// A chat's older lines, a speaker's lines, the lines around one.
 pub(crate) const HISTORY: Rule = rule("history", 300, 60, Key::Ip);
-/// Opening the events socket (`api events`), on top of its open-at-once cap.
 pub(crate) const EVENTS_SOCKET: Rule = rule("events-socket", 60, 60, Key::Ip);
-/// The home list (`api home`).
 pub(crate) const HOME: Rule = rule("home", 300, 60, Key::Ip);
-/// A container's `/health`.
 pub(crate) const PING: Rule = rule("ping", 600, 60, Key::Ip);
 
-/// The tier of an api route, by its method and the path as written in the router.
 pub(crate) fn api_rule(method: &Method, path: &str) -> Rule {
     let read = method == Method::GET || method == Method::HEAD;
     match path {
@@ -118,7 +64,6 @@ pub(crate) fn api_rule(method: &Method, path: &str) -> Rule {
         "/api/errors" if !read => REPORT,
         "/api/oauth/{provider}/start" | "/api/oauth/{provider}/callback" | "/api/oauth/{provider}/unlink" => OAUTH,
         "/api/oauth/signup" if !read => OAUTH,
-        // `/api/search` is the people search, typed into: READ, with its own 180 a minute
         p if read && p != "/api/search" && p.ends_with("/search") => SEARCH,
         _ if read => READ,
         "/api/chat-videos" => VIDEO_UPLOAD,
@@ -146,11 +91,9 @@ fn is_upload(method: &Method, path: &str) -> bool {
 }
 
 fn is_moderation(method: &Method, path: &str) -> bool {
-    // a site admin's takedown of a chat picture or video (chat_images.rs, chat_videos.rs)
     if method == Method::DELETE && matches!(path, "/api/chat-images/{id}" | "/api/chat-videos/{id}") {
         return true;
     }
-    // a stream chat's jannies (janny.rs): deleting a line, bans, timeouts, naming jannies
     if path.starts_with("/api/jannies") {
         return true;
     }
@@ -159,19 +102,14 @@ fn is_moderation(method: &Method, path: &str) -> bool {
     }
     let Some(rest) = path.strip_prefix("/api/groups/{group}") else { return false };
     match rest {
-        // deleting the group itself
         "" => method == Method::DELETE,
-        // a member's own: join, leave, a channel's read marker and mute
         "/join" | "/leave" => false,
         r if r.ends_with("/read") || r.ends_with("/mute") => false,
-        // joining a voice channel is a member's own too (voice.rs)
         r if r.starts_with("/voice/") => false,
         _ => true,
     }
 }
 
-/// Paths whose `{name}` a write may bring into being (`INSERT INTO streamers ... ON CONFLICT`).
-/// Following makes a row for the followed name too, but follows.rs counts those already.
 fn may_make_name(method: &Method, path: &str) -> bool {
     if method == Method::GET || method == Method::HEAD {
         return false;
@@ -183,7 +121,6 @@ fn may_make_name(method: &Method, path: &str) -> bool {
     }
 }
 
-/// Off only when RATE_LIMITS=off. Read once.
 pub(crate) fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
@@ -195,12 +132,10 @@ pub(crate) fn enabled() -> bool {
     })
 }
 
-/// The address caddy saw. None: nobody went through caddy (see the module's words).
 pub(crate) fn forwarded_ip(headers: &HeaderMap) -> Option<String> {
     headers.get("x-forwarded-for")?.to_str().ok()?.split(',').next().map(|ip| ip.trim().to_owned()).filter(|ip| !ip.is_empty())
 }
 
-/// The third segment of `/api/stream(er)s/<name>/...`, lowercased like `Name` does.
 fn path_name(path: &str) -> String {
     path.split('/').nth(3).unwrap_or("").trim().to_lowercase()
 }
@@ -230,7 +165,6 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// One more for `key`. The count, and the seconds left in its window.
 pub(crate) async fn hit(redis: &ConnectionManager, key: &str, window_secs: i64) -> redis::RedisResult<(i64, i64)> {
     let (n, ttl): (i64, i64) = redis::pipe()
         .atomic()
@@ -242,8 +176,6 @@ pub(crate) async fn hit(redis: &ConnectionManager, key: &str, window_secs: i64) 
     Ok((n, ttl))
 }
 
-/// `name` among the names `key` wrote this window. Refused (with the seconds left) when it
-/// is a new one past `max`; a name already in is always fine.
 async fn note_name(redis: &ConnectionManager, key: &str, name: &str, max: i64, window_secs: i64) -> redis::RedisResult<Result<(), i64>> {
     let (added, count, ttl): (i64, i64, i64) = redis::pipe()
         .atomic()
@@ -260,7 +192,6 @@ async fn note_name(redis: &ConnectionManager, key: &str, name: &str, max: i64, w
     Ok(Ok(()))
 }
 
-/// The answer past a limit: 429, `Retry-After`, and words a person can read.
 pub(crate) fn too_many(retry_after: i64, message: &str) -> Response {
     let secs = retry_after.max(1);
     let mut res = (StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": message, "retry_after": secs }))).into_response();
@@ -273,8 +204,6 @@ fn slow_down(rule: Rule, ttl: i64) -> Response {
     too_many(ttl, &format!("too many requests. try again in {ttl}s"))
 }
 
-/// Count and check one request against its rule, for `subject` (already "acct:<id>",
-/// "ip:<ip>" or "name:<n>:ip:<ip>"). Some(response) when it is over.
 async fn check(redis: &ConnectionManager, rule: Rule, subject: &str) -> Option<Response> {
     let key = format!("rl:route:{}:{subject}", rule.tier);
     match hit(redis, &key, rule.window_secs).await {
@@ -287,7 +216,6 @@ async fn check(redis: &ConnectionManager, rule: Rule, subject: &str) -> Option<R
     }
 }
 
-/// The api's limiter: `route_layer`ed onto the main router, so the path is the matched one.
 pub(crate) async fn api(State(s): State<AppState>, mut req: Request, next: Next) -> Response {
     if !enabled() {
         return next.run(req).await;
@@ -297,14 +225,12 @@ pub(crate) async fn api(State(s): State<AppState>, mut req: Request, next: Next)
     let method = req.method().clone();
     let rule = api_rule(&method, &path);
 
-    // the fake streams' box, with the one password that opens a reserved name
     if let (Some(given), Some(want)) = (query_password(req.uri().query()), s.dummy_password.as_deref()) {
         if given == want {
             return next.run(req).await;
         }
     }
 
-    // the login, once: handed on to `Me` so the handler does not ask postgres again
     let mut account = None;
     if (matches!(rule.key, Key::Who) || may_make_name(&method, &path)) && auth::cookie_token(req.headers()).is_some() {
         match auth::whoami(&s.db, req.headers()).await {
@@ -343,7 +269,6 @@ pub(crate) async fn api(State(s): State<AppState>, mut req: Request, next: Next)
     next.run(req).await
 }
 
-/// The limiter for the processes that only know the address: `api chat`, `api events`, `api home`.
 #[derive(Clone)]
 pub(crate) struct ByIp {
     pub(crate) redis: ConnectionManager,
@@ -363,7 +288,6 @@ pub(crate) async fn by_ip(State(l): State<ByIp>, req: Request, next: Next) -> Re
     next.run(req).await
 }
 
-/// `api chat`'s routes: the two sockets, the history, `/health`.
 pub(crate) fn chat_rule(_: &Method, path: &str) -> Rule {
     match path {
         "/health" => PING,
@@ -373,7 +297,6 @@ pub(crate) fn chat_rule(_: &Method, path: &str) -> Rule {
     }
 }
 
-/// `api events`'s routes: the socket, `/online` (inside only), `/health`.
 pub(crate) fn events_rule(_: &Method, path: &str) -> Rule {
     match path {
         "/events" => EVENTS_SOCKET,
@@ -381,7 +304,6 @@ pub(crate) fn events_rule(_: &Method, path: &str) -> Rule {
     }
 }
 
-/// `api home`'s routes: the list and `/health`.
 pub(crate) fn home_rule(_: &Method, path: &str) -> Rule {
     match path {
         "/api/streams" => HOME,
@@ -389,14 +311,10 @@ pub(crate) fn home_rule(_: &Method, path: &str) -> Rule {
     }
 }
 
-// ---- in memory, for `api monitor` (a box with no redis) -----------------------------------
-
-/// Counts per address for one process, a fixed window each. Forgotten once their window is over.
 #[derive(Clone, Default)]
 pub(crate) struct Local(Arc<Mutex<HashMap<String, (Instant, i64)>>>);
 
 impl Local {
-    /// One more for `key`: Err(seconds left) once past `max` in `window`.
     pub(crate) fn hit(&self, key: &str, max: i64, window: Duration, now: Instant) -> Result<(), i64> {
         let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if m.len() > 10_000 {
@@ -415,7 +333,6 @@ impl Local {
     }
 }
 
-/// The monitor's page and its json: 120 a minute per address (the page asks every few seconds).
 pub(crate) const MONITOR: Rule = rule("monitor", 120, 60, Key::Ip);
 
 pub(crate) async fn local(State(l): State<Local>, req: Request, next: Next) -> Response {
@@ -445,7 +362,6 @@ mod tests {
         assert_eq!(api_rule(&get, "/watch/{*rest}"), PAGE);
         assert_eq!(api_rule(&post, "/api/streams/{name}/go-live"), GO_LIVE);
         assert_eq!(api_rule(&post, "/api/streams/{name}/heartbeat"), STREAM);
-        // a watcher's beat (analytics.rs) is a write of theirs, not the publisher's
         assert_eq!(api_rule(&post, "/api/streams/{name}/watching"), WRITE);
         assert_eq!(api_rule(&get, "/api/stats"), READ);
         assert_eq!(api_rule(&get, "/api/stats/streams/{id}"), READ);
@@ -473,7 +389,6 @@ mod tests {
         assert_eq!(api_rule(&del, "/api/chat-videos/{id}"), MODERATE);
         assert_eq!(api_rule(&del, "/api/chat-images/{id}"), MODERATE);
         assert!(VIDEO_UPLOAD.max < UPLOAD.max && VIDEO_UPLOAD.window_secs >= UPLOAD.window_secs, "videos are counted tighter than pictures");
-        // a group's emote: the upload is a file; a rename and a delete are the group's setup; the lists are reads
         assert_eq!(api_rule(&post, "/api/groups/{group}/emotes"), UPLOAD);
         assert_eq!(api_rule(&Method::PATCH, "/api/groups/{group}/emotes/{id}"), MODERATE);
         assert_eq!(api_rule(&del, "/api/groups/{group}/emotes/{id}"), MODERATE);
@@ -481,7 +396,6 @@ mod tests {
         assert_eq!(api_rule(&get, "/api/emotes/mine"), READ);
         assert_eq!(api_rule(&get, "/api/emotes/{id}"), READ);
         assert_eq!(api_rule(&post, "/api/groups/{group}/ban"), MODERATE);
-        // a channel's line deleted, a voice mute and a disconnect are moderation; a member's log is a read
         assert_eq!(api_rule(&del, "/api/groups/{group}/channels/{channel}/messages/{id}"), MODERATE);
         assert_eq!(api_rule(&post, "/api/groups/{group}/voice-mute"), MODERATE);
         assert_eq!(api_rule(&post, "/api/groups/{group}/voice-disconnect"), MODERATE);
@@ -565,8 +479,6 @@ mod tests {
         rule("test-tiny", 3, 60, Key::Ip)
     }
 
-    /// Through a real listener and a real redis: `REDIS_URL`, else a local one on 6379 db 15.
-    /// `cargo test -- --ignored ratelimit` with `redis-server` running.
     #[tokio::test]
     #[ignore]
     async fn a_route_answers_429_with_retry_after_past_its_count() {
@@ -590,7 +502,6 @@ mod tests {
         assert_eq!(res.status(), 429);
         let wait: i64 = res.headers()["retry-after"].to_str().unwrap().parse().unwrap();
         assert!((1..=60).contains(&wait), "{wait}");
-        // another address, and the inside of the network, are not held back
         assert_eq!(http.get(&url).header("x-forwarded-for", "192.0.2.1").send().await.unwrap().status(), 200);
         for _ in 0..5 {
             assert_eq!(http.get(&url).send().await.unwrap().status(), 200);

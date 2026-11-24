@@ -20,7 +20,6 @@ import { Tooltip } from '@/shared-components/Tooltip';
 import { ChatIcon, IconButton } from '@/shared-components/VideoControls';
 import { cn } from '@/utils/cn';
 
-/** The settings dialog, when it is open. The chat window must not cover it. */
 function settingsOpen(): boolean {
   const el = document.getElementById('user-modal');
   return el instanceof HTMLDialogElement && el.open;
@@ -28,9 +27,7 @@ function settingsOpen(): boolean {
 
 const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-/** How long the window fades. Matches `duration-200` on the dialog. */
 const WINDOW_MS = 200;
-/** How long a column slides. Matches `duration-300` on the page grid and the dialog. */
 const COLUMN_MS = 300;
 
 const GRIP = 'touch-none select-none [-webkit-touch-callout:none]';
@@ -40,7 +37,6 @@ const MIN_H = 320;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const room = () => ({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight });
 
-/** Slid along with the pointer, stopped at the edges. */
 function moved(rect: DOMRect, dx: number, dy: number): Box {
   const r = room();
   return {
@@ -51,7 +47,6 @@ function moved(rect: DOMRect, dx: number, dy: number): Box {
   };
 }
 
-/** A corner pulled. The opposite corner stays put, and the box stops at the screen edge. */
 function resized(rect: DOMRect, dx: number, dy: number, sx: number, sy: number): Box {
   const r = room();
   let x = rect.left;
@@ -71,7 +66,6 @@ function resized(rect: DOMRect, dx: number, dy: number, sx: number, sy: number):
   return { x, y, w, h };
 }
 
-/** The same box, back on screen: the window shrank, it was left somewhere while hidden, or it was kept from a bigger window. No smaller than the smallest, unless the screen is. */
 function fitted(box: Box): Box {
   const r = room();
   const w = Math.min(Math.max(box.w, MIN_W), r.w);
@@ -79,39 +73,29 @@ function fitted(box: Box): Box {
   return { w, h, x: clamp(box.x, 0, Math.max(0, r.w - w)), y: clamp(box.y, 0, Math.max(0, r.h - h)) };
 }
 
-/** In a window, what the chat's own header needs to be the window's one bar: a press on it moves the window, and at its right end the see-through toggle and the close. */
 interface ChatWindowBar {
   grip: (e: ReactPointerEvent) => void;
   clear: ReactNode;
   close: ReactNode;
 }
 
-/** The window bar's buttons: a 28px box, the glyph in the secondary text, blue on hover. */
 const BAR_BUTTON = '-my-1 flex h-7 w-7 shrink-0 items-center justify-center text-textSecondary hover:text-primaryBlue';
 
 const ChatWindowContext = createContext<ChatWindowBar | null>(null);
 
-/** The window's bar, for the chat's header (ChatPanel.tsx) to be it. `null` beside the video, as a tab, and anywhere outside a ChatSlot. */
 export function useChatWindowBar(): ChatWindowBar | null {
   return useContext(ChatWindowContext);
 }
 
 export const CHAT_GRIP = GRIP;
 
-/**
- * Where the stream's chat is: the layout setting, except that a phone (mobile.ts) has no window
- * floating over the page. There the "window" is the column under the video, as left and right
- * are: still the one dialog (`#chat-modal`), never shown over anything.
- */
 export function useChatSide(): ChatSide {
   const side = useAtomValue(chatSideAtom);
   return useIsMobile() && side === 'modal' ? 'right' : side;
 }
 
-/** The window is the setting and the screen is not a phone's, read outside a render. */
 const windowNow = () => store.get(chatSideAtom) === 'modal' && !window.matchMedia(MOBILE_QUERY).matches;
 
-/** The corner handles. `sx`/`sy`: which way the box grows when that corner is pulled outward. */
 const CORNERS = [
   { id: 'nw', sx: -1, sy: -1, className: '-left-px -top-px cursor-nwse-resize border-l-2 border-t-2' },
   { id: 'ne', sx: 1, sy: -1, className: '-right-px -top-px cursor-nesw-resize border-r-2 border-t-2' },
@@ -119,12 +103,6 @@ const CORNERS = [
   { id: 'se', sx: 1, sy: 1, className: '-bottom-px -right-px cursor-nwse-resize border-b-2 border-r-2' }
 ] as const;
 
-/**
- * The page grid for a chat column. The column width and the gap ease shut when the chat is
- * closed, so the video takes the row; the dialog inside keeps its own height until that slide
- * is done, or the panel would squash instead of leaving to the side. A window is no grid: the
- * dialog floats.
- */
 export function chatLayoutClass(side: ChatSide, open: boolean): string {
   if (side !== 'left' && side !== 'right') return '';
   return cn(
@@ -135,55 +113,27 @@ export function chatLayoutClass(side: ChatSide, open: boolean): string {
   );
 }
 
-/**
- * The stream's chat, in whichever place the layout setting says. One `<dialog>` for the life
- * of the page, so a change of the setting never remounts the panel inside (a remount is a
- * reconnect). Left or right, the dialog is just the column: it is not open, and it is drawn
- * in the page, sliding out to that side when the chat button closes it. In a window, `show`
- * (not `showModal`) puts that same dialog over the page without freezing it: drag the chat's
- * header (its one bar, with the close at its right), pull a corner. Closing fades it and leaves the room connected; the chat button on
- * the video opens it again.
- *
- * `tabbed`: the column is a tab under the video instead (the watch page's body is too narrow to
- * stand it beside, WatchPage.tsx). There is no chat button then, so it is open whatever the
- * button last said; the page hides it while another tab is up. Its height runs from where it starts
- * to the window's foot (`--chat-top`, measured here), so the send row is on screen without
- * scrolling the page; the page keeps the video short enough to leave it room.
- */
 export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; children: ReactNode }) {
   const side = useChatSide();
   const open = useAtomValue(chatModalOpenAtom) || (tabbed && side !== 'modal');
   const ref = useRef<HTMLDialogElement | null>(null);
-  /** Set for the close that happens because the page is going away, so that close does not count as the viewer shutting the window. */
   const leaving = useRef(false);
-  /** Ends the press in progress: its window listeners go. `null` between presses. */
   const stop = useRef<(() => void) | null>(null);
-  /** The first time a column is shown it is already open: there is no slide to clip for. */
   const skipOpenClip = useRef(true);
   const modal = side === 'modal';
-  /** The window is see-through (settings-atoms.ts). Only the window: a column stays solid. */
   const clear = useAtomValue(chatClearAtom) && modal;
-  /**
-   * Where the window was put, kept over a refresh (chat-layout-atoms.ts). Watch and go live each
-   * mount their own slot; the next one starts where the last one was left. `null` is the
-   * default, the top right, until the first move or resize.
-   */
   const [box, setBox] = useState<Box | null>(() => {
     const kept = keptStreamBox();
     return kept && fitted(kept);
   });
-  /** The window has finished fading in. While false it is invisible, so the first paint is the start of the fade. */
   const [shown, setShown] = useState(false);
-  /** The column keeps its height through the slide, then drops it, so the page below does not jump while the panel is still on screen. */
   const [held, setHeld] = useState(open);
-  /** Clip the column while it slides, so a fixed-width panel is revealed by the growing cell. Settled, the clip comes off. */
   const [clip, setClip] = useState(false);
 
   useEffect(() => {
     keepStreamBox(box);
   }, [box]);
 
-  // A moved window is pulled back on screen when the window shrinks.
   useEffect(() => {
     if (!modal) return;
     const fit = () =>
@@ -197,8 +147,6 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
     return () => window.removeEventListener('resize', fit);
   }, [modal]);
 
-  // The column's slide. Height stays until the width has gone, and the clip stays until the
-  // width has come back. Not on the way into the page: it is already open, and there is nothing to slide.
   useLayoutEffect(() => {
     if (modal) return;
     if (reduceMotion()) {
@@ -222,9 +170,6 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
     return () => clearTimeout(t);
   }, [open, modal]);
 
-  // A tab fills from its top to the window's foot. Its top is in the page (the scroll counted out),
-  // so it moves only when something above it changes size, and any such change resizes the body.
-  // Written straight onto the dialog, before the paint, with no render.
   useLayoutEffect(() => {
     const dialog = ref.current;
     if (!tabbed || modal || !dialog) return;
@@ -240,10 +185,6 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
     };
   }, [tabbed, modal]);
 
-  // Opening and closing the window. Not in the cleanup: that close would run on every change
-  // and the dialog's own `close` event would take the window straight back down. `show`, not
-  // `showModal`: a modal would freeze the page, and the point of the window is that the stream
-  // behind it still plays.
   useLayoutEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
@@ -281,8 +222,6 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
     };
   }, [modal, open]);
 
-  // The settings window was on top, so the chat window waited. When settings closes, it comes up.
-  // `close` does not bubble; the capture on the document still hears it.
   useEffect(() => {
     const onClose = (e: Event) => {
       if (!(e.target instanceof Element) || e.target.id !== 'user-modal') return;
@@ -301,8 +240,6 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
     return () => document.removeEventListener('close', onClose, true);
   }, []);
 
-  // Escape closes the window, the way the old modal did, except while typing in the page
-  // (the stream behind the window is usable now, and a status box should keep the key).
   useEffect(() => {
     if (!modal || !open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -319,8 +256,6 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
     return () => window.removeEventListener('keydown', onKey);
   }, [modal, open]);
 
-  // Leaving the page while the window is up: close it while the node is still here, so the
-  // top layer goes with it.
   useLayoutEffect(() => {
     const dialog = ref.current;
     return () => {
@@ -330,10 +265,6 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
     };
   }, []);
 
-  /**
-   * A press on the top edge (a move) or on a corner (a resize). Followed through window
-   * listeners, so leaving the box loses nothing.
-   */
   const press = (e: ReactPointerEvent, kind: 'move' | 'resize', sx = 0, sy = 0) => {
     const el = ref.current;
     if (e.button !== 0 || stop.current || !el) return;
@@ -364,7 +295,6 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
   };
 
   const tall = open || held;
-  // default position is the right. once dragged, the fade leaves toward whichever half it sits in.
   const fromLeft = box !== null && box.x + box.w / 2 < room().w / 2;
   const style: CSSProperties | undefined = modal && box ? { left: box.x, top: box.y, width: box.w, height: box.h } : undefined;
 
@@ -378,7 +308,6 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
               type="button"
               aria-label="see-through"
               aria-pressed={clear}
-              // a press here is the button's, not the start of a drag
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => setChatClear(!clear)}
               className={cn(BAR_BUTTON, clear && 'text-primaryBlue')}
@@ -390,12 +319,9 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
         close: (
           <button
             id="chat-modal-close"
-            // the window's `show` focuses its first button, and the toggle now comes before this: keep the opening focus here,
-            // where it always was, not on a toggle whose tooltip would come up each time. the attribute, which `show` reads (react's `autoFocus` sets none)
             ref={(el) => el?.setAttribute('autofocus', '')}
             type="button"
             aria-label="close the chat"
-            // a press here is the button's, not the start of a drag
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => {
               setChatModalOpen(false);
@@ -424,11 +350,9 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
       className={cn(
         modal
           ? cn(
-              // the stroke marks the edge: no shadow, here or anywhere (no-box-shadow.mdc)
       'group fixed z-40 m-0 hidden max-h-none max-w-none flex-col overflow-hidden border border-primaryStroke bg-backgroundSecondary p-0 text-base text-textPrimary open:flex',
               'origin-center transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none',
               shown ? 'translate-x-0 scale-100 opacity-100' : cn('pointer-events-none scale-[0.98] opacity-0', fromLeft ? '-translate-x-3' : 'translate-x-3'),
-              // see-through: the fill and the stroke come off, the words wear a shadow (globals.css)
               clear && 'chat-clear',
               !box && 'left-auto right-6 top-20 h-[min(720px,calc(100dvh-6rem))] w-[min(420px,calc(100vw-3rem))]'
             )
@@ -437,21 +361,17 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
               'transition-[height,margin-top,opacity] duration-300 ease-out motion-reduce:transition-none beside:relative beside:transition-none',
               'beside:row-span-2',
               side === 'left' && 'beside:col-start-1 beside:row-start-1',
-              // placed, not left to the flow: the watch page puts the chat after its tabs
               side === 'right' && 'beside:col-start-2 beside:row-start-1',
-              // a tab is always open: down to the window's foot less the page's bottom padding (pb-10), no slide
               tabbed
                 ? 'mt-4 h-[calc(100dvh-var(--chat-top,0px)-2.5rem)] min-h-60 transition-none'
                 : open
                   ? 'mt-4 h-[min(50vh,560px)] opacity-100'
                   : 'mt-0 h-0 overflow-hidden opacity-0',
-              // beside the video: from the top of the page to the window's foot less its bottom padding (pb-10), no taller than 720px
               tall ? 'beside:mt-0 beside:h-[min(720px,calc(100dvh-var(--page-top,100px)-2.5rem))] beside:max-h-[720px] beside:opacity-100' : 'beside:mt-0 beside:h-0 beside:max-h-0 beside:opacity-0',
               clip && 'overflow-hidden'
             )
       )}
     >
-      {/* a fixed width, pinned to the outer edge, so the shrinking cell uncovers it from the video side instead of squashing the lines */}
       <div
         className={cn(
           'flex min-h-0 flex-col',
@@ -487,7 +407,6 @@ export function ChatSlot({ tabbed = false, children }: { tabbed?: boolean; child
   );
 }
 
-/** On the video: opens the chat, or closes it. A column slides out to its side; a window fades. */
 export function ChatOpenButton({ className }: { className?: string }) {
   const open = useAtomValue(chatModalOpenAtom);
   return (

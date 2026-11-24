@@ -1,8 +1,3 @@
-/**
- * How long a stream has been live, in words: "just started", "live for 12 min", "live for 3 hr",
- * "live for 2 days". Whole units, rounded down: "1 hr" means at least an hour, not 31 minutes.
- * `now` is the caller's clock in ms (a render must not read one). Skew clamps to zero.
- */
 export function since(iso: string | null, now: number): string {
   if (!iso) return '';
   const mins = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 60000));
@@ -14,11 +9,6 @@ export function since(iso: string | null, now: number): string {
   return `live for ${days} ${days === 1 ? 'day' : 'days'}`;
 }
 
-/**
- * How long ago something was, in words: "just now", "12 min ago", "3 hr ago", "2 days ago".
- * The units and the rounding of `since`, and the same `now`. The recently offline cards on
- * home say when the last stream ended with it.
- */
 export function ago(iso: string, now: number): string {
   const mins = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 60000));
   if (mins < 1) return 'just now';
@@ -29,13 +19,8 @@ export function ago(iso: string, now: number): string {
   return `${days} ${days === 1 ? 'day' : 'days'} ago`;
 }
 
-/** The site's own words, lowercase like the calendar's (`infra/calendar.ts`), not the locale's: the page reads the same everywhere. */
 const LONG_MONTH = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
 
-/**
- * The month something happened, in the viewer's time zone: "october 2026". No clock: a month
- * does not age the way `ago` does. The socials tab says when an account was made with it.
- */
 export function monthOf(iso: string): string {
   const d = new Date(iso);
   return `${LONG_MONTH[d.getMonth()]} ${d.getFullYear()}`;
