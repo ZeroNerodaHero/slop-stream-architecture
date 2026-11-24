@@ -147,6 +147,7 @@ the `https://stats.nodentity.xyz` block (`docs/metrics.md`):
 
 - the same self-signed cert as `:443`, named by hand (`tls /certs/cert.pem /certs/key.pem`): with `auto_https off` a host block would otherwise have none. cloudflare's "full" mode accepts it.
 - `header` sets `Cache-Control: private, no-store` (and noindex, `DENY` framing, `nosniff`, `no-referrer`) before anything else runs, so the 401s and 503s carry it too. the proxy drops the monitor's own `Cache-Control` (`header_down -Cache-Control`) so there is one.
+- `@public` (`STATS_PUBLIC` exactly `true`) comes first and proxies to the monitor with no `basic_auth`. the `header` above still applies.
 - `@off` is an `expression` on the runtime env: `STATS_BASIC_AUTH_USER` or `STATS_BASIC_AUTH_HASH` empty or `statsoff` answers 503 and proxies nothing. compose passes `statsoff` for a blank key, because `basic_auth` reads the two at parse time (`{$VAR:statsoff}`), caddy only uses that default for an unset variable, and an empty user or hash would stop caddy loading the file, the main site with it. `statsoff` is also valid base64, which caddy wants of any hash at load.
 - everything else goes through `basic_auth` to `stats:3002`, on the compose network `stats` that only caddy and the monitor are on.
 
@@ -217,6 +218,7 @@ every knob in the root `.env.example`, with what its comment said. `./scripts/de
 | `CHAT_PERSIST` | (empty) | keep chat lines in postgres, so a room can be scrolled past the last 500, searched, and jumped to. empty or 0: redis only (the last 500, gone a week after the last line). 1 turns it on. the chat process reads this. the api process does not. |
 | `GROUPS_PER_OWNER` | (empty) | how many groups one login may own: the ones it made plus the ones it was named owner of. empty: 2. at most 8, the groups a login may be in (its own included); more is read as 8. the pages offer create under it, and the api refuses at it. see docs/groups.md |
 | `STATS_BASIC_AUTH_USER`<br>`STATS_BASIC_AUTH_HASH` | (empty)<br>(empty) | https://stats.nodentity.xyz, the monitor page behind caddy's basic auth (docs/metrics.md). the hash from `docker compose exec frontend caddy hash-password`, in single quotes: `STATS_BASIC_AUTH_HASH='$2a$14$...'`. either empty: the site answers 503 and the stats container is not started. `deploy.sh` refuses a user with other than letters, digits and `. _ @ -`, and a hash that is not a quoted bcrypt hash, before it changes anything |
+| `STATS_PUBLIC` | (empty) | `true`: https://stats.nodentity.xyz with no password (docs/metrics.md). the page and its read-only `/api/monitor*` only; the monitor leaves the pages' error reports out, the agent's `/api/metrics` keeps its token. anything else: the two values above decide, and blank is a 503 |
 | `STATS_TARGETS`<br>`STATS_TOKENS`<br>`STATS_ALERT_WEBHOOK` | (empty)<br>(empty)<br>(empty) | what the stats monitor watches: `name=url` pairs, comma separated (empty: this box alone, `<ENV_NAME>=https://frontend`); `name=token` for a box whose `OPS_TOKEN` differs from this one's; where down and up are posted. the monitor's `TARGETS`, `OPS_TOKENS` and `ALERT_WEBHOOK` under other names |
 | `VOICE_SECRET` | (empty) | voice channels (the voice container, docker-compose.yml). the api signs grants with it and the voice container redeems them with it. make one: openssl rand -hex 32 stays empty until voice is turned on; empty, the api answers voice joins with a 503. |
 
@@ -291,7 +293,7 @@ not in `.env.example`; `docker-compose.yml` passes it to the api and home contai
 
 - `agent`: the api image as `api agent`, on every box, no profile. root (`user: "0:0"`) for the docker socket and the host's `/proc`, both read-only, with `read_only`, every capability dropped, `no-new-privileges` and 64 pids. `/proc` is bind-mounted at `/host/proc` rather than `pid: host`, which would let it signal host processes. the named volume `agent-disk` at `/disk` is there for its `statvfs`: a volume lives on docker's own filesystem, so its size is that disk's, on any host. no port; caddy reaches it at `agent:4300` (at `agent:`)
 - `stats`: the api image as `api monitor`, profile `stats`, `container_name: stats`. on the network `stats` alone, which caddy also joins, so neither the api containers nor a host port can reach it. its memory is the `stats-data` volume. the env maps the `STATS_*` keys onto the monitor's own names (at `stats:`)
-- caddy gets `STATS_BASIC_AUTH_USER` and `STATS_BASIC_AUTH_HASH` with `statsoff` for a blank value (see the Caddyfile's stats block) (at `STATS_BASIC_AUTH_USER: ${STATS_BASIC_AUTH_USER:-statsoff}`)
+- caddy gets `STATS_BASIC_AUTH_USER` and `STATS_BASIC_AUTH_HASH` with `statsoff` for a blank value (see the Caddyfile's stats block), and `STATS_PUBLIC`; the monitor gets `STATS_PUBLIC` as `PUBLIC` (at `STATS_BASIC_AUTH_USER: ${STATS_BASIC_AUTH_USER:-statsoff}`)
 
 ## `Cargo.toml`
 

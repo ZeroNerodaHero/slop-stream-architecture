@@ -31,9 +31,17 @@ https://stats.nodentity.xyz {
 		Referrer-Policy no-referrer
 	}
 
+	@public expression `{env.STATS_PUBLIC} == "true"`
+	handle @public {
+		reverse_proxy stats:3002 {
+			import real_ip
+			header_down -Cache-Control
+		}
+	}
+
 	@off expression `{env.STATS_BASIC_AUTH_USER} in ["", "statsoff"] || {env.STATS_BASIC_AUTH_HASH} in ["", "statsoff"]`
 	handle @off {
-		respond "stats is off: STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH are not set on this box" 503
+		respond "stats is off: STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH are not set on this box, and STATS_PUBLIC is not true" 503
 	}
 
 	handle {

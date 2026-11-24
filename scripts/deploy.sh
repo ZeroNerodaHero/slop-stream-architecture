@@ -845,15 +845,25 @@ env_file_raw() {
   sed -n "s/^[[:space:]]*$1=//p" "$ENV_FILE" | tail -n 1 | tr -d '\r'
 }
 
-stats_on() { [ -n "$(env_file_value STATS_BASIC_AUTH_USER)" ] && [ -n "$(env_file_value STATS_BASIC_AUTH_HASH)" ]; }
+stats_public() { [ "$(env_file_value STATS_PUBLIC)" = "true" ]; }
+
+stats_on() { stats_public || { [ -n "$(env_file_value STATS_BASIC_AUTH_USER)" ] && [ -n "$(env_file_value STATS_BASIC_AUTH_HASH)" ]; }; }
 
 check_stats_env() {
   local user hash raw re
   user="$(env_file_value STATS_BASIC_AUTH_USER)"
   hash="$(env_file_value STATS_BASIC_AUTH_HASH)"
   raw="$(env_file_raw STATS_BASIC_AUTH_HASH)"
+  case "$(env_file_value STATS_PUBLIC)" in
+    true)
+      warn "STATS_PUBLIC=true in $ENV_FILE: https://$STATS_HOST is public, no password. the agent's /api/metrics keeps its token; error reports are left off the page"
+      [ -z "$user$hash" ] || note "STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH are ignored while STATS_PUBLIC=true"
+      return 0 ;;
+    ""|false) ;;
+    *) warn "STATS_PUBLIC=$(env_file_value STATS_PUBLIC) in $ENV_FILE: only true makes https://$STATS_HOST public. going by the password settings" ;;
+  esac
   if [ -z "$user" ] && [ -z "$hash" ]; then
-    note "https://$STATS_HOST is off: no STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH in $ENV_FILE, so it answers 503 (docs/metrics.md)"
+    note "https://$STATS_HOST is off: no STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH (or STATS_PUBLIC=true) in $ENV_FILE, so it answers 503 (docs/metrics.md)"
     return 0
   fi
   if [ -z "$user" ] || [ -z "$hash" ]; then
@@ -873,15 +883,15 @@ check_stats_env() {
 
 up_stats() {
   if ! stats_on; then
-    note "stats is off (no STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH in $ENV_FILE), so no stats container"
+    note "stats is off (no STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH, and no STATS_PUBLIC=true, in $ENV_FILE), so no stats container"
     return 0
   fi
-  say "bringing the stats monitor up to the api image (https://$STATS_HOST, behind the password)"
+  say "bringing the stats monitor up to the api image (https://$STATS_HOST, $(if stats_public; then echo "public"; else echo "behind the password"; fi))"
   "${DOCKER[@]}" compose --profile stats up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} stats
 }
 
 redeploy_stats() {
-  say "applying the stats settings from $ENV_FILE: caddy (recreated when its password changed) and the agent"
+  say "applying the stats settings from $ENV_FILE: caddy (recreated when its password or STATS_PUBLIC changed) and the agent"
   "${DOCKER[@]}" compose up -d --no-deps ${UP_FLAGS[@]+"${UP_FLAGS[@]}"} frontend agent
   sync_caddy
 }
@@ -1036,7 +1046,7 @@ ${B}what to deploy${N}
   ${B}frontend api video dummy voice${N}
                             just these: get (or build) their image, swap their containers (chat, events,
                             home and agent move with api), then check them: running and healthy, or exit non-zero
-  ${B}stats${N}                     apply STATS_BASIC_AUTH_USER / STATS_BASIC_AUTH_HASH from .env: caddy is recreated
+  ${B}stats${N}                     apply STATS_BASIC_AUTH_USER / STATS_BASIC_AUTH_HASH / STATS_PUBLIC from .env: caddy is recreated
                             when they changed (open websockets drop, browsers reconnect), then the agent and
                             the stats monitor come up. https://stats.nodentity.xyz (docs/metrics.md)
   ${B}PUBLIC_IP${N}                 use this ip (full deploy only). otherwise: \$PUBLIC_IP > .env > auto-detect
@@ -1077,7 +1087,8 @@ ${B}notes${N}
   with VOICE_SECRET in .env (docs/voice.md); without it voice is skipped. whenever video is redeployed (a
   full deploy, video, a changed docker-compose.yml) voice is brought to the same image, which drops every voice call.
   stats = https://stats.nodentity.xyz, the monitor page behind caddy's basic auth: the api image as the compose
-  service stats under the profile stats. on only with STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH in .env;
+  service stats under the profile stats. on only with STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH in .env,
+  or with STATS_PUBLIC=true (no password: the page and /api/monitor are public, /api/metrics keeps its token);
   without them the site answers 503. the agent (the box's own numbers, /api/metrics) runs on every box.
   new knobs from .env.example are appended to .env with their defaults on every run
   (also a --pull that finds nothing to redeploy). passwd touches nothing.
@@ -1256,7 +1267,7 @@ show_result() {
 
   Watch logs:   ${DOCKER[*]} compose logs -f video api
   Health:       https://${PUBLIC_IP}/api/health     errors from the pages: https://${PUBLIC_IP}/admin  (ADMIN_NAMES in .env)
-  Stats:        $(if stats_on; then echo "https://$STATS_HOST   (user $(env_file_value STATS_BASIC_AUTH_USER); STATS_BASIC_AUTH_* in .env)"; else echo "off: https://$STATS_HOST answers 503 until STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH are in .env (docs/metrics.md)"; fi)
+  Stats:        $(if stats_public; then echo "https://$STATS_HOST   PUBLIC, no password (STATS_PUBLIC=true in .env)"; elif stats_on; then echo "https://$STATS_HOST   (user $(env_file_value STATS_BASIC_AUTH_USER); STATS_BASIC_AUTH_* in .env)"; else echo "off: https://$STATS_HOST answers 503 until STATS_BASIC_AUTH_USER and STATS_BASIC_AUTH_HASH are in .env (docs/metrics.md)"; fi)
   Env name:     ${ENV_NAME:-unnamed}       (ENV_NAME in .env; in every health answer and stored error)   release: ${RELEASE:-none}   build: ${BUILD:-dev}
   Accounts:     optional, https://${PUBLIC_IP}/signup     forgot one: ./scripts/deploy.sh passwd <name>
   Stop:         ${DOCKER[*]} compose down        (add -v to also drop the database)

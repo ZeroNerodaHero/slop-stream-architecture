@@ -48,6 +48,7 @@ struct Config {
     data_dir: PathBuf,
     port: u16,
     build: String,
+    public: bool,
 }
 
 #[derive(Clone)]
@@ -650,7 +651,7 @@ async fn state(State(app): State<App>) -> Json<Value> {
         .targets
         .iter()
         .map(|t| {
-            let mut v = view(t);
+            let mut v = view(t, app.cfg.public);
             v["metrics"] = metrics.get(&t.name).map(History::summary).unwrap_or(Value::Null);
             v
         })
@@ -665,6 +666,7 @@ async fn state(State(app): State<App>) -> Json<Value> {
             "metrics_every_secs": app.cfg.metrics_every.as_secs(),
             "down_after": app.cfg.down_after,
             "webhook": app.cfg.webhook.is_some(),
+            "public": app.cfg.public,
         },
         "targets": targets,
     }))
@@ -697,7 +699,12 @@ async fn series(State(app): State<App>, Query(q): Query<SeriesQuery>) -> Respons
     Json(out).into_response()
 }
 
-fn view(t: &TargetState) -> Value {
+fn view(t: &TargetState, public: bool) -> Value {
+    let (errors, errors_status) = if public {
+        (Vec::new(), Some(format!("{} stored, hidden: this page is public (STATS_PUBLIC), and a report names the visitor's ip and login", t.errors.len())))
+    } else {
+        (t.errors.iter().take(ERRORS_PULL).collect::<Vec<_>>(), t.errors_status.clone())
+    };
     json!({
         "name": t.name,
         "url": t.url,
@@ -713,8 +720,8 @@ fn view(t: &TargetState) -> Value {
         "uptime_7d": uptime(&t.hours, KEEP_HOURS),
         "hours": t.hours.iter().rev().take(24).collect::<Vec<_>>(),
         "events": t.events.iter().rev().take(30).collect::<Vec<_>>(),
-        "errors": t.errors.iter().take(ERRORS_PULL).collect::<Vec<_>>(),
-        "errors_status": t.errors_status,
+        "errors": errors,
+        "errors_status": errors_status,
         "errors_at": t.errors_at,
     })
 }
@@ -762,6 +769,7 @@ fn config() -> Config {
         data_dir: PathBuf::from(env::var("DATA_DIR").unwrap_or_else(|_| "/data".into())),
         port: env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(3002),
         build: env::var("BUILD").ok().filter(|b| !b.trim().is_empty()).unwrap_or_else(|| "dev".into()),
+        public: env::var("PUBLIC").is_ok_and(|p| p.trim() == "true"),
     }
 }
 
@@ -773,6 +781,9 @@ pub async fn run() -> anyhow::Result<()> {
     }
     for t in cfg.targets.iter().filter(|t| t.token.is_none()) {
         log::info!("{}: no OPS_TOKEN, so no error reports from it", t.name);
+    }
+    if cfg.public {
+        log::warn!("PUBLIC=true: this page has no password in front of it, so error reports are left out of /api/monitor");
     }
     if cfg.webhook.is_none() {
         log::info!("no ALERT_WEBHOOK: down and up are logged here and shown on the page, nothing is posted");
@@ -882,6 +893,17 @@ mod tests {
         merge_errors(&mut t, vec![json!({ "id": 3 }), json!({ "id": 2 })]);
         let ids: Vec<i64> = t.errors.iter().map(|r| r["id"].as_i64().unwrap()).collect();
         assert_eq!(ids, vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn a_public_page_shows_no_error_reports() {
+        let mut t = TargetState::default();
+        merge_errors(&mut t, vec![json!({ "id": 1, "ip": "203.0.113.9", "name": "billy" })]);
+        assert_eq!(view(&t, false)["errors"][0]["ip"], "203.0.113.9");
+        let public = view(&t, true);
+        assert_eq!(public["errors"], json!([]));
+        assert!(public["errors_status"].as_str().unwrap().starts_with("1 stored, hidden"));
+        assert!(!public.to_string().contains("203.0.113.9"));
     }
 
     #[test]
